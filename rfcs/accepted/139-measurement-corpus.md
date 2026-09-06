@@ -368,6 +368,24 @@ wall-clock and peak RSS against sealed depth, out to the depth the curve itself 
 and **a stated depth target confirmed or revised against it.** This increment ends with a number, and
 the number may be unwelcome.
 
+**Handoff issued for increment 2, 2026-09-07:**
+`rfcs/handoffs/139-measurement-corpus/builder-and-build-cost-handoff-v1.md`.
+
+**It resolves two obstacles in §7's own wording, verified rather than assumed.** §7 says the builder
+must drive the CLI "through the existing `tests/support` surface". **It cannot**: that module is
+test-only inside `crates/prikk-cli/tests/`, not a library, and it locates the binary with
+`env!("CARGO_BIN_EXE_prikk")`, which Cargo defines only for the test targets of the crate declaring
+that binary. **§7's actual requirement — drive the real CLI, not `prikk-store` — is unaffected**; the
+`tests/support` reference was precedent, not a dependency. The executor takes the binary path
+explicitly and **records its identity**, which §4's provenance discipline requires anyway: a corpus
+built by one binary is not comparable to one built by another.
+
+**And §5a's ruling turns out to buy more than it was made for.** Because determinism is a property of
+the builder's **action manifest**, and a manifest can be computed without executing anything, the
+determinism test needs **no binary and no repository** — which is what makes §5's "in the ordinary
+suite rather than joining the `#[ignore]`d instruments" achievable at all. **Separating planning from
+execution is therefore structural, not stylistic**, and the handoff says so.
+
 **Increment 3 — the two measurements the corpus was held for.**
 RFC 136 §9 item 1 (checkout cost at realistic depth — the quantity the reviewer confirmed has no
 honest git proxy) and item 2 (baseline reconstruction on the **merge** path, which DC-64 never
