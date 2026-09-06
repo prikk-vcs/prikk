@@ -12,6 +12,7 @@ const KEYWORDS: &[&str] = &[
     "$ref",
     "$defs",
     "title",
+    "description",
     "type",
     "additionalProperties",
     "required",

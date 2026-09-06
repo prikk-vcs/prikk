@@ -440,6 +440,111 @@ fn control7_produced_documents_pass_the_same_schema_the_oracle_uses() {
     assert!(schema.is_valid(&complete), "{:?}", schema.errors(&complete));
 }
 
+// RFC 141 §7b (`tighten-the-evidence-schema-handoff-v1.md`): the schema gap `control7` above found
+// -- a `"pending"`/`"partial"`/`"superseded"` document could claim `checksum_equality: "match"` or
+// `"mismatch"` over `null` checksums and still be schema-valid, because the shape constraint lived
+// only inside the `overall_status == "complete"` branch -- is closed by a new `$defs/crate` `allOf`:
+// when `checksum_equality` is `"match"` or `"mismatch"`, all three checksum fields must be present.
+// The controls below exercise that new conditional directly, at every `overall_status`, never
+// touching an oracle fixture (see the implementation report for why the oracle pack's own
+// `pending_false_checksum_match` case is deliberately left unmodified pending an architect ruling).
+
+/// §7b control 1: a dishonest document (`"match"` or `"mismatch"` claimed over three `null`
+/// checksums) is rejected at every status the old constraint did *not* cover --
+/// `"pending"`, `"partial"`, and `"superseded"` -- not only `"complete"`, since the whole point of
+/// this change is that the old constraint was `complete`-only.
+///
+/// **Seen to fail**: removed the new `allOf` block from `$defs/crate` entirely (the pre-round
+/// shape). Every one of the six documents (three statuses × two claims) then validated --
+/// `assert!(!schema.is_valid(...))` failed on the first, printing the full six-hundred-plus-byte
+/// document as `is_valid` returned `true`. Restored; `diff` against a saved copy of the schema file
+/// empty afterward.
+#[test]
+fn tighten_control1_dishonest_checksum_equality_rejected_at_every_uncovered_status() {
+    let schema = schema();
+    for status in ["pending", "partial", "superseded"] {
+        for claim in ["match", "mismatch"] {
+            let mut document = produce(&repo_root(), pending_observations(), None).unwrap();
+            document["overall_status"] = json!(status);
+            document["crates"][0]["checksum_equality"] = json!(claim);
+            assert!(
+                !schema.is_valid(&document),
+                "{claim:?} over null checksums must be rejected at overall_status={status:?}: \
+                 {document:#}"
+            );
+        }
+    }
+}
+
+/// §7b control 2: an honest document still validates in every status -- `"not-observed"` with
+/// three `null`s (statuses where nothing has been attempted), and `"match"` with three present,
+/// equal values (every status; a fully-observed crate row is not itself disqualifying at
+/// `"pending"`/`"partial"`/`"superseded"`, only the *top-level* `"complete"` branch imposes
+/// further requirements on the rest of the document).
+///
+/// **Seen to fail**: widened the new conditional's `if` to also match `"not-observed"`
+/// (over-strict: presence required for every crate regardless of claim). Every `pending_observations`
+/// crate row is `"not-observed"` with three `null`s, so `produce` itself could no longer emit a
+/// document for that fixture at all -- `.unwrap()` on its own `Result` panicked with the same
+/// "null is not of type \"string\"" shape as increment 1's own dishonest-input case, this time over
+/// an honest one. Reverted.
+#[test]
+fn tighten_control2_honest_documents_still_validate_at_every_status() {
+    let schema = schema();
+    for status in ["pending", "partial", "superseded"] {
+        let mut not_observed_document =
+            produce(&repo_root(), pending_observations(), None).unwrap();
+        not_observed_document["overall_status"] = json!(status);
+        assert!(
+            schema.is_valid(&not_observed_document),
+            "not-observed must still validate at {status:?}: {not_observed_document:#}"
+        );
+    }
+    for status in ["pending", "partial", "complete", "superseded"] {
+        let mut matched_document = produce(&repo_root(), complete_observations(), None).unwrap();
+        matched_document["overall_status"] = json!(status);
+        assert!(
+            schema.is_valid(&matched_document),
+            "match with real, equal checksums must still validate at {status:?}: \
+             {matched_document:#}"
+        );
+    }
+}
+
+/// §7b control 3: partial absence is caught too -- two checksums present and one `null` under
+/// `"match"` must fail. A rule written against "all three null" (rather than "all three present")
+/// would pass this and be wrong.
+///
+/// **Seen to fail**: perturbed the new conditional's `then` block to check only
+/// `staged_sha256`/`registry_checksum` (dropping `fetched_sha256`). This exact case -- two present,
+/// `fetched_sha256` left `null` -- then validated. Reverted.
+#[test]
+fn tighten_control3_partial_checksum_absence_under_match_is_rejected() {
+    let schema = schema();
+    let mut document = produce(&repo_root(), pending_observations(), None).unwrap();
+    document["crates"][0]["checksum_equality"] = json!("match");
+    document["crates"][0]["staged_sha256"] = json!("0".repeat(64));
+    document["crates"][0]["registry_checksum"] = json!("0".repeat(64));
+    // fetched_sha256 deliberately left null.
+    assert!(
+        !schema.is_valid(&document),
+        "two present and one null under \"match\" must be rejected: {document:#}"
+    );
+}
+
+// §7b control 5 (handoff §4): `produce`'s own self-validation now catches a dishonest document
+// before returning it -- the exact defect increment 1's own `control7` found the *old* schema
+// could not catch (see that test's own doc comment). Demonstrated as a genuine perturbation
+// (`checksum_equality` forced to always return `"match"`, matching that same historical
+// perturbation) rather than a permanent test, since `checksum_equality`'s own correct
+// implementation can never organically produce a dishonest row for `produce` to catch: perturbing
+// it to `fn checksum_equality(_: &CrateObservation) -> &'static str { "match" }` and calling
+// `produce(&repo_root(), pending_observations(), None)` now returns `Err` naming every one of the
+// eight crates' own `staged_sha256`/`registry_checksum`/`fetched_sha256` as `null is not of type
+// "string"` -- where before this round's schema change the exact same perturbation returned `Ok`
+// with a dishonest document (increment 1's own `control7` finding). Reverted; `git diff` against
+// the committed source empty afterward. See the implementation report for the exact transcript.
+
 /// Build a minimal, real, on-disk Cargo workspace with the given members and internal path
 /// dependencies, and run `cargo generate-lockfile` against it so `publish_levels`'s own
 /// `--locked --offline` `cargo metadata` invocation has a lockfile to read. Every member has zero

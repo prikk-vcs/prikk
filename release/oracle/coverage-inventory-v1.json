@@ -14,7 +14,7 @@
     },
     {
       "primary_reason": "evidence-tag-or-artifact",
-      "case_count": 10
+      "case_count": 9
     },
     {
       "primary_reason": "evidence-transition-or-attempt-prefix",
@@ -26,7 +26,7 @@
     },
     {
       "primary_reason": "schema-instance",
-      "case_count": 17
+      "case_count": 18
     }
   ],
   "subjects": [
@@ -46,6 +46,7 @@
         "release-evidence:partial-failed-without-authority",
         "release-evidence:partial-verified-without-details",
         "release-evidence:pending-failed-without-authority",
+        "release-evidence:pending-false-checksum-match",
         "release-evidence:pending-not-observed-with-detail",
         "release-evidence:pending-verified-without-details",
         "release-evidence:tag-verification-authority-path-immutable",

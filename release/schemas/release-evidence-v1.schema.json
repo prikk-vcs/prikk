@@ -346,7 +346,23 @@
         "checksum_equality": { "enum": ["match", "mismatch", "not-observed"] },
         "published": { "type": "boolean" },
         "registry_visible": { "type": "boolean" }
-      }
+      },
+      "allOf": [
+        {
+          "description": "Shape only: when checksum_equality is match or mismatch, all three checksums must be present (not null). Whether the present values actually agree (match) or disagree (mismatch) is a cross-field value comparison JSON Schema cannot express -- that equality is enforced only by tools/release-policy/src/policy/evidence.rs::crate_checksum_state_valid, not by this schema. A checksum_equality of not-observed carries no presence requirement here.",
+          "if": {
+            "properties": { "checksum_equality": { "enum": ["match", "mismatch"] } },
+            "required": ["checksum_equality"]
+          },
+          "then": {
+            "properties": {
+              "staged_sha256": { "$ref": "#/$defs/sha256" },
+              "registry_checksum": { "$ref": "#/$defs/sha256" },
+              "fetched_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      ]
     },
     "approval": {
       "type": "object",

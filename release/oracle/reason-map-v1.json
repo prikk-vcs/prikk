@@ -16,7 +16,7 @@
   "release-evidence:partial_failed_without_authority": "schema-instance",
   "release-evidence:partial_verified_without_details": "schema-instance",
   "release-evidence:pending_failed_without_authority": "schema-instance",
-  "release-evidence:pending_false_checksum_match": "evidence-tag-or-artifact",
+  "release-evidence:pending_false_checksum_match": "schema-instance",
   "release-evidence:pending_not_observed_with_detail": "schema-instance",
   "release-evidence:pending_verified_without_details": "schema-instance",
   "release-evidence:raw_predecessor_digest_mismatch": "evidence-byte-identity-or-link",

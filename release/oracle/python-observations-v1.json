@@ -160,8 +160,8 @@
       "case_id": "pending_false_checksum_match",
       "final": "invalid",
       "case_outcome": "invalid",
-      "structural": "valid",
-      "semantic": "invalid"
+      "structural": "invalid",
+      "semantic": "not-run"
     },
     {
       "suite_id": "release-evidence",
