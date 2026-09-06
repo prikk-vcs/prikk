@@ -308,6 +308,18 @@ agree. **One case still exercises that half** (`complete_checksum_mismatch`: `"m
 three present-but-unequal values, which no JSON Schema can reject). Coverage is thin but real, and the
 layer split holds. **Had that case not existed, this ruling would have required adding one.**
 
+**DELIVERED and ACCEPTED 2026-09-07** (`2e93f9f`). `$defs/crate` now carries the presence
+conditional with a `description` naming where the equality half lives and why the schema cannot hold
+it. **Verified end to end rather than asserted:** `check` passes with `pending_false_checksum_match`
+expected as `structural: "invalid"` — the same document the pre-round schema called structurally
+valid. `complete-checksum-mismatch` is unchanged and still reaches the semantic layer, so the equality
+half retains live coverage, as §7b.1 required.
+
+**One thing the round established beyond its own scope:** the oracle's cross-checked files
+(`reason-map`, `python-observations`, `coverage-inventory`) are **tamper-evident, not merely
+cross-checked** — perturbing one trips `input-identity:length` before any derivation check runs.
+Worth knowing for increment 4, which will edit them again.
+
 **Not done here, and not folded into increment 4.** It changes the contract the oracle's 73 cases are
 written against, and it is DC-35 material — governance, not plumbing. **It gets its own increment and
 its own review**, and the existing fixtures must be re-checked against it rather than assumed
