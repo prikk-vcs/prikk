@@ -270,6 +270,44 @@ architect's own pre-check: **all ten fixtures and all 146 oracle entries were sc
 the dishonest pattern**, so the constraint should break nothing — and the handoff turns that into an
 instruction, that a fixture which does start failing is **a finding, not a fixture to edit**.
 
+### 7b.1 RULED 2026-09-07 — the one oracle case is updated, and the architect's pre-check was wrong
+
+**The handoff's §3 pre-check claimed all 146 oracle entries were clean. It was wrong, and the error
+was the architect's method, not the dev team's reading.** The pack stores each document as a JSON
+**string** in `content`; the architect's recursive scan walked dicts and lists only, descended into
+nothing, and reported *"crate rows scanned: 0"*. **Zero findings over a zero denominator is not a
+measurement**, and the denominator was printed in the same line that was misread as absence.
+Re-scanned correctly: **623 crate rows, exactly one dishonest** —
+`release/oracle/vectors/release-evidence/pending_false_checksum_match/current.json`, precisely as the
+implementing round reported.
+
+**RULED: updating that case's `structural`, `semantic` and `primary_reason` is IN SCOPE, and is the
+correct completion of this change rather than an accommodation of it.**
+
+**The distinction §3 was protecting, stated so it is not over-read next time.** What is forbidden is
+editing a fixture's **content** or its **verdict** to accommodate a new rule — that hides a real
+problem. What is required here is updating the recorded **layer attribution** when a constraint
+deliberately moves between layers. **The document's verdict does not change: invalid before, invalid
+now.** The case still asserts exactly what it was written to assert — that a dishonest `pending`
+document is rejected — and now asserts it one layer earlier. **That case is the visible proof the
+tightening worked**; before this round the schema called that document structurally valid, and it was
+right to, because no constraint said otherwise.
+
+**The alternative is worse and worth naming**: refusing the edit would mean keeping the schema loose so
+a test fixture's bookkeeping stays accurate — letting the oracle's record dictate the product's
+integrity contract instead of the other way round.
+
+**The values are not invented.** `structural: "invalid"` + `semantic: "not-run"` +
+`primary_reason: "schema-instance"` is an existing, well-populated category — **17 of the 57 cases
+already carry exactly that triple**. This case joins them.
+
+**One requirement attached to the ruling, and it is the reason this needed checking at all: tightening
+the schema must not orphan the Rust equality check.** Verified before ruling — the schema can only
+constrain *presence*; `crate_checksum_state_valid` additionally checks that present values actually
+agree. **One case still exercises that half** (`complete_checksum_mismatch`: `"match"` claimed over
+three present-but-unequal values, which no JSON Schema can reject). Coverage is thin but real, and the
+layer split holds. **Had that case not existed, this ruling would have required adding one.**
+
 **Not done here, and not folded into increment 4.** It changes the contract the oracle's 73 cases are
 written against, and it is DC-35 material — governance, not plumbing. **It gets its own increment and
 its own review**, and the existing fixtures must be re-checked against it rather than assumed
