@@ -36,13 +36,14 @@
   .wrap{max-width:1000px;margin:0 auto;padding:0 28px}
   a{color:inherit}
   h1,h2,h3,p{margin-top:0}
-  /* Universal, not scoped to a/button: `.panels` is `overflow-x:auto`, which makes Chromium/
-     Firefox put it in the tab order for keyboard scrolling even with no `tabindex` -- without
-     this rule it shows the browser's own default outline instead of this page's, discovered by
-     tabbing through the real page rather than assumed from the CSS alone. (`pre.term` lost its
-     own `overflow-x:auto` in the visual finishing pass -- §5 wraps its content instead -- but the
-     rule stays universal since `.panels` alone still needs it, and a future scrollable region
-     would too.) */
+  /* Universal, not scoped to a/button. Originally earned its keep on `.panels`, which was
+     `overflow-x:auto` and so in Chromium/Firefox's own tab order for keyboard scrolling even with
+     no `tabindex` -- without this rule it showed the browser's own default outline instead of
+     this page's, discovered by tabbing through the real page rather than assumed from the CSS
+     alone. Neither `.panels` (regridded, §2.2a) nor `pre.term` (wrapped, §5) is `overflow-x:auto`
+     any more -- nothing on the page needs this rule today -- but it is left universal rather than
+     removed, for the next scrollable region rather than reasoned out from under one that no
+     longer exists. */
   :focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:3px}
 
   /* ---- header ---- */
@@ -150,14 +151,30 @@
   .term .p{color:var(--sage)}
   .term .c{color:var(--ink-soft)}
 
-  /* ---- story (split panels, real HTML text) ---- */
-  .panels{list-style:none;margin:38px 0 0;padding:0;display:flex;gap:28px;overflow-x:auto}
-  .panels li{flex:0 0 auto;width:170px;text-align:center}
+  /* ---- story (five re-cropped panels, one shared ground and scale, RFC 137 §2.2a) ---- */
+  /* The panels are photographs of one artwork's own cream ground -- making it transparent would
+     also remove the glow that IS the "shining" stage (§2.2a's own ruling). Fixed, not swapped by
+     theme, so the artwork sits on deliberately matching paper in both themes instead of punching
+     five bright holes in a dark page -- the one CSS rule that ruling asked for. */
+  .story{background:#fdf6ee}
+  /* A CSS grid of five equal cells not a scrolling flex row, and there is no `overflow-x` left to
+     hide anything behind. The shared baseline comes from the crops themselves (each was cropped
+     and padded against the source's own ground line, not centered blindly) plus every chip and
+     image being the same fixed size regardless of column -- **not** from `align-items:end` on the
+     grid, which was tried and measured to make things worse: two captions wrap to one line and
+     three wrap to two, so end-aligning each `<li>` as a whole pushes the *shorter*-captioned tiles'
+     images down to match, misaligning the artwork by exactly one caption line to "fix" the
+     captions. Left at the default (`stretch`/`start`), the fixed-size chip+image stack lands at
+     the same position in every column regardless of what its own caption does below it. */
+  .panels{list-style:none;margin:38px 0 0;padding:0;display:grid;grid-template-columns:repeat(5,1fr);gap:20px}
+  .panels li{text-align:center}
   .panels .chip{
     display:inline-block; margin:0 0 12px; font-size:.72rem; letter-spacing:.06em;
     color:var(--ink-soft); border:1px solid var(--rule); border-radius:999px; padding:4px 12px; background:var(--paper);
   }
-  .panels img{display:block;max-width:100%;height:auto;margin:0 auto}
+  /* Every crop is exported at the same 1:1 canvas (padded, never stretched, to reach it) --
+     `aspect-ratio` here is a frame the image already fills exactly, not a corrective one. */
+  .panels img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain}
   .panels .caption{margin:14px 0 0;font-size:13.5px;color:var(--ink-soft);line-height:1.5}
 
   /* ---- feature strip ---- */
@@ -201,10 +218,10 @@
     .principle-grid{grid-template-columns:1fr}
     .principle-grid article,.principle-grid article + article{padding:20px 0}
     .feature-strip{grid-template-columns:1fr}
-    /* Direction §16: the sequence must read without a horizontal diagram on mobile, so the row
-       becomes a stack rather than an overflow-x strip -- each panel keeps its own natural size
-       instead of being squeezed to fit a fixed track width. */
-    .panels{flex-direction:column;overflow-x:visible;align-items:center;gap:32px}
+    /* Direction §16: the sequence must read without a horizontal diagram on mobile, so the grid
+       collapses to one ordered column -- still the numbered progression the chips carry, not a
+       gallery -- instead of five equal-width cells too narrow to read. */
+    .panels{grid-template-columns:1fr;justify-items:center;gap:32px}
     .panels li{width:100%;max-width:260px}
   }
   @media (max-width:460px){
@@ -340,31 +357,31 @@ note: the message is validated but not stored -- it will not appear in `prikk lo
       <ol class="panels">
         <li>
           <p class="chip">Start</p>
-          <img src="assets/panel-1-start.webp" width="270" height="170"
+          <img src="assets/panel-1-start.webp" width="420" height="420"
             alt="A small flat platform holding a few scattered blocks.">
           <p class="caption">A new project begins.</p>
         </li>
         <li>
           <p class="chip">Patches</p>
-          <img src="assets/panel-2-patches.webp" width="150" height="310"
+          <img src="assets/panel-2-patches.webp" width="420" height="420"
             alt="Four small cards, each one a focused change, feeding toward the project.">
           <p class="caption">Small, focused patches flow in.</p>
         </li>
         <li>
           <p class="chip">Integrated</p>
-          <img src="assets/panel-3-integrated.webp" width="240" height="300"
+          <img src="assets/panel-3-integrated.webp" width="420" height="420"
             alt="The blocks assembled into one connected, glowing stack.">
           <p class="caption">Prikk integrates and validates with confidence.</p>
         </li>
         <li>
           <p class="chip">Growing</p>
-          <img src="assets/panel-4-growing.webp" width="265" height="400"
+          <img src="assets/panel-4-growing.webp" width="420" height="420"
             alt="The stack taller, with new shoots growing from it.">
           <p class="caption">The project grows steadily.</p>
         </li>
         <li>
           <p class="chip">Shining</p>
-          <img src="assets/panel-5-shining.webp" width="340" height="400"
+          <img src="assets/panel-5-shining.webp" width="420" height="420"
             alt="The full stack, lit from within, surrounded by growth.">
           <p class="caption">A robust project shines its value.</p>
         </li>
