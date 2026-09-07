@@ -6,6 +6,21 @@ input.** §9's exclusion of visual design is lifted for this pass only.
 **Origin:** an external visual/UX review commissioned by the project owner. Its diagnosis was
 re-derived by the architect and reproduces exactly.
 
+> **SPLIT 2026-09-07, before this reached the dev team. §2 (the story section) is HELD; everything
+> else proceeds now.**
+>
+> **§2 cannot be built by the dev team.** Both options §2 permits — one re-rendered whole artwork, or
+> five re-rendered panels — are **illustration work**, not markup work, and the original artwork is the
+> project owner's. A handoff whose first section can only end in "stop and report" is not ready to
+> issue.
+>
+> **Do §3, §4, §5 now** — the hero animation, the chrome warmth pass, the terminal notes, the contrast
+> measurement. All are HTML/CSS/SVG and all are independent of how §2 resolves.
+> **Leave the story section exactly as it is** — do not apply the grid to the existing crops (§2.2),
+> and do not narrow the panels to hide the overflow. **The ragged strip stays until the asset exists.**
+>
+> **The asset needed is specified in §2.3.**
+
 **Read §2 before touching the story section. The obvious fix reintroduces three false claims.**
 
 **Every change here should make the page *smaller*.** The reviewer's own rule, and the owner's: when in
@@ -90,6 +105,31 @@ deliverable.
 
 **Either way `overflow-x:auto` goes.** A horizontal scrollbar at ordinary desktop width is the symptom;
 do not fix it by narrowing the panels.
+
+### 2.3 The asset that unblocks §2 — a specification, not a request for "a nicer picture"
+
+**Who supplies it is the project owner's call** (the original artwork is theirs). This section exists so
+that whoever makes it has a checkable brief rather than an impression.
+
+**One image. Artwork only.**
+
+| | |
+|---|---|
+| **Content** | the five stages, left to right, **on one shared ground line** |
+| **Connections** | the arrows and light paths **between** stages, intact and resolving — nothing running off an edge |
+| **Progression** | the glow building left→right, which is the "shine" the section title promises |
+| **Text** | **none at all** — no wordmark, no headline, no stage chips, no captions, and **no feature strip** |
+| **Aspect** | landscape, close to the original's `1536×1024` (3:2), so one responsive `<img>` fits the 944px content column without cropping |
+| **Format** | `.webp`, to match the existing assets |
+| **Budget** | the whole `docs/landing/assets/` directory is **60 KB today**. The original PNG is **1.5 MB**. **A 1.39 MB GIF was already dropped from this page for weight** (RFC 137 §3) — do not reintroduce the problem in a new form. Target tens of KB, not hundreds |
+
+**The "no text" row is the load-bearing one and it is not stylistic.** The original's baked feature
+strip carries three claims RFC 137 §4.1 catalogued as **false** (§2 above). **An image with text in it
+cannot be checked by the gate that keeps this page honest** — the truth mechanism reads HTML, not
+pixels. Text in the artwork is how a false claim gets back onto the page without anything noticing.
+
+**If five separate panels are supplied instead of one image**, each must satisfy the same standard on
+its own: complete composition, own ground, nothing severed (§2.2).
 
 ## 3. The hero mark
 

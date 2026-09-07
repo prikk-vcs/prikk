@@ -323,6 +323,23 @@ own ground, its own resolved framing, nothing running off an edge — and then l
 reviewer's grid. **The grid is the layout fix; it was never the picture fix, and presenting it as a
 standalone option was the architect's error.**
 
+### 10.1b The story section is BLOCKED on an asset, and the rest is not
+
+**Both options §10.1 permits are illustration work, and the original artwork is the owner's.** The dev
+team writes markup; neither a whole re-render nor five re-rendered panels is theirs to produce.
+
+**So the pass is split** (`visual-finishing-pass-handoff-v1.md`): the hero animation, the chrome warmth
+pass, the terminal notes and the contrast measurement proceed now — all HTML/CSS/SVG, all independent
+of how the story section resolves. **The story section is held, and the ragged strip stays until the
+asset exists**, because every available interim is worse: the grid over the existing crops leaves them
+unnatural (§10.1a), and narrowing the panels hides the overflow rather than fixing it.
+
+**The asset is specified in the handoff's §2.3** — artwork only, one shared ground line, connections
+intact, landscape near the original's `1536×1024`, `.webp`, tens of KB. **And no text of any kind.**
+That last requirement is not stylistic: the original's baked feature strip is where three of §4.1's
+false claims live, and **an image cannot be checked by the gate that keeps this page honest.** Text in
+artwork is the route by which a removed claim returns without anything noticing.
+
 ### 10.2 RULED — the rest
 
 - **Finding B — the hero animation is a defect, not a preference.** Blocks that arrive and then fade to
