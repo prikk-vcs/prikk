@@ -422,6 +422,27 @@ RFC 136 §9 item 1 (checkout cost at realistic depth — the quantity the review
 honest git proxy) and item 2 (baseline reconstruction on the **merge** path, which DC-64 never
 covered). Both reported into RFC 136, which is where the decision they inform lives.
 
+**Handoff issued for increment 3, 2026-09-07:**
+`rfcs/handoffs/139-measurement-corpus/two-measurements-handoff-v1.md`.
+
+**It carries two findings that reshape the increment, both verified before writing.**
+
+**Item 1 can only measure the replay path.** `prepare_snapshot_checkout_plan`
+(`prikk-store/src/checkout.rs:89-98`) **errors** — `"checkout target ... does not contain a snapshot
+blob"` — whenever `snapshot_blob_ref` is `None`, which RFC 136 §5 established is always. **There is no
+repository on which the snapshot path runs.** That is not an obstacle: RFC 136 §9 item 1 asks for
+checkout cost *today*, the baseline Option A claims to cut. The comparison comes later, when something
+writes a snapshot.
+
+**Item 2 needs a builder capability that does not exist, and the profile cannot supply its shape.**
+The corpus builds one linear history — `execute.rs:34` hardcodes `REF_NAME = "heads/main"` — so there
+is nothing to merge. **And the profile carries no merge data by construction**: its own recorded
+extraction command includes `--no-merges` (`profiles/prikk-self.toml:7`). **The depth is profiled; the
+divergence shape cannot be, and must be invented and declared as such.** The builder extension is
+explicitly in scope, because without it item 2 cannot be done at all — and the alternative the handoff
+forbids is shrinking item 2 into a shallow one-off, which is the incomparable measurement this RFC
+exists to retire.
+
 **Increment 4 — the second profile.**
 A structurally different project per §4, chosen for the opposite change-concentration property, so
 §9.1's limit 2 stops bounding every conclusion this project draws.
