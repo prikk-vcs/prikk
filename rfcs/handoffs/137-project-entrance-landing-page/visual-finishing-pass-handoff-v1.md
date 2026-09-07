@@ -9,10 +9,11 @@ re-derived by the architect and reproduces exactly.
 > **SPLIT 2026-09-07, before this reached the dev team. §2 (the story section) is HELD; everything
 > else proceeds now.**
 >
-> **§2 cannot be built by the dev team.** Both options §2 permits — one re-rendered whole artwork, or
-> five re-rendered panels — are **illustration work**, not markup work, and the original artwork is the
-> project owner's. A handoff whose first section can only end in "stop and report" is not ready to
-> issue.
+> **AMENDED 2026-09-07 — §2 is no longer blocked.** The original framing said it needed new
+> illustration. **It does not**: §2.2a rules that re-cropping the existing `1536×1024` source to one
+> aspect ratio at one scale, with the background extended, is sufficient. **Whether the dev team takes
+> it depends on whether image editing is within their remit — if it is not, say so and it returns to
+> the owner.** What is no longer true is that new artwork must be commissioned.
 >
 > **Do §3, §4, §5 now** — the hero animation, the chrome warmth pass, the terminal notes, the contrast
 > measurement. All are HTML/CSS/SVG and all are independent of how §2 resolves.
@@ -105,6 +106,31 @@ deliverable.
 
 **Either way `overflow-x:auto` goes.** A horizontal scrollbar at ordinary desktop width is the symptom;
 do not fix it by narrowing the panels.
+
+### 2.2a CORRECTED — re-cropping the existing image is enough; §2.1's "re-render" overstated it
+
+**The source is one `1536×1024` image already containing all five stages at one scale on one ground
+line.** Producing five clean panels from it is **image editing — crop and extend the background — not
+illustration.** The architect framed a smaller task as a larger one; this corrects it.
+
+**Three requirements, and the first is the root cause of everything in §1 item 1:**
+
+1. **One aspect ratio for all five.** The committed crops range from **0.48 to 1.59** — a 3.3× spread,
+   which is what produces heights of 107px to 351px at a uniform width. Crop every stage to **one**
+   frame. This alone fixes the raggedness, the floating captions and the 962-vs-944 overflow.
+2. **One subject scale.** The stages sit at consistent size in the source; tight cropping destroyed
+   that. **They must read as one sequence, not five zoom levels.**
+3. **Nothing severed.** The arrows and light paths live **between** stages in the source. **Crop to
+   exclude them entirely**, rather than clipping mid-curve as `panel-2-patches.webp` does. Extend the
+   background where a crop needs breathing room.
+
+**With those three, the five-cell grid in §2.2 is the right layout** — equal cells, `align-items:end`,
+ordered single-column collapse — rather than the tidying of fragments §2.2 refused.
+
+**Dark mode, ruled:** the source's cream ground is part of the picture, and making it transparent would
+remove the glow that *is* the "shining" stage. **Give the story section a fixed paper background in
+both themes** — one CSS rule — so the artwork sits on paper deliberately instead of punching five
+bright holes in a dark page. **Do not** produce two asset variants.
 
 ### 2.3 The asset that unblocks §2 — a specification, not a request for "a nicer picture"
 

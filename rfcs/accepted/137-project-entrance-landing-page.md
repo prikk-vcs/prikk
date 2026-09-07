@@ -340,6 +340,49 @@ That last requirement is not stylistic: the original's baked feature strip is wh
 false claims live, and **an image cannot be checked by the gate that keeps this page honest.** Text in
 artwork is the route by which a removed claim returns without anything noticing.
 
+### 10.1b-i CORRECTED 2026-09-07 — the architect overstated the requirement; re-cropping is enough
+
+**The project owner: *"we have complete story image as a single file... Is what to do just to crop
+naturally and then fill in the surrounding areas to create a clean, seamless look?"*** **Yes. That is
+sufficient, and §10.1's framing was wrong to imply otherwise.**
+
+§10.1 called for the artwork to be **"re-rendered"**, and §10.1a extended that to the panels. **That
+overstated it.** The source is a single `1536×1024` image that already contains all five stages at one
+scale on one ground line. **Producing five clean panels from it is image editing — crop and extend the
+background — not illustration.** The architect framed a smaller task as a larger one and then declared
+himself unable to do it.
+
+**What "naturally" has to mean, though, is more than "don't cut things", and this is the part worth
+being precise about.** Measured across the five committed crops:
+
+| panel | source px | aspect ratio | height at a uniform 170px width |
+|---|---|---:|---:|
+| 1 start | 270×170 | **1.59** | 107px |
+| 2 patches | 150×310 | **0.48** | 351px |
+| 3 integrated | 240×300 | 0.80 | 212px |
+| 4 growing | 265×400 | 0.66 | 257px |
+| 5 shining | 340×400 | 0.85 | 200px |
+
+**A 3.3× spread in aspect ratio is the single root cause** of the ragged heights, the floating captions
+and the inconsistent apparent scale. So the re-crop must satisfy three things:
+
+1. **One aspect ratio for all five.** Pick one frame and crop every stage to it. This alone fixes the
+   raggedness, the floating captions, and the 962-vs-944 overflow.
+2. **One subject scale.** The stages sit at consistent size in the source; the tight crops destroyed
+   that, so at equal display width panel 1's plinth looks small and panel 5's cube fills its frame.
+   **They must read as one sequence, not five zoom levels.**
+3. **Nothing severed — and the connectors are the reason.** The arrows and light paths live *between*
+   stages in the source. **Crop to exclude them entirely** rather than clipping them mid-curve, which
+   is what left `panel-2-patches.webp` with curves running off its right edge into nothing. Extend the
+   background where a crop needs breathing room.
+
+**With those three, the reviewer's five-cell grid becomes the right layout** rather than the tidying of
+unnatural fragments §10.1a refused: equal cells, shared baseline, ordered single-column collapse.
+
+**§10.1d's option C (a hand-authored SVG) is therefore no longer the only thing available without new
+illustration**, and is demoted to what it always was — an alternative aesthetic direction, not an
+escape from a block that turned out not to exist.
+
 ### 10.1c A third defect, and a gap in the architect's own asset spec
 
 **Found 2026-09-07 while answering "who can make the artwork": the story panels do not theme-adapt.**
@@ -350,11 +393,15 @@ the ragged strip is in light mode. The header logo has the same problem.
 **Neither the external review nor the architect named this.** The review's dark-mode note was about
 `--beige` as a card fill; the panels' own non-adaptation went unremarked in both light-mode analyses.
 
-**It is also a gap in §10.1b's asset spec, which is the architect's.** That spec asks for artwork only,
-no text, landscape, `.webp`, tens of KB — **and says nothing about background or theme.** A re-render
-following it exactly would still glow white on the dark page. **Amended: the artwork must either carry
-a transparent background, or be supplied as two variants (light and dark), or be built in a form that
-adapts.**
+**It is also a gap in §10.1b's asset spec, which is the architect's.** That spec says nothing about
+background or theme, so art following it exactly would still glow white on the dark page.
+
+**And under §10.1b-i's re-crop route this needs the simplest answer, not the most thorough one.** The
+source artwork's cream ground is part of the picture; making it transparent would mean removing the
+glow that is the point of the "shining" stage. **Ruled: give the story section a fixed paper background
+in both themes** — one CSS rule — so the artwork sits on paper deliberately rather than punching five
+bright holes in a dark page. Two asset variants are not required, and a transparent background is not
+required.
 
 ### 10.1d The three ways to unblock §2, and the third is available now
 
