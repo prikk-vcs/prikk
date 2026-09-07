@@ -14,7 +14,11 @@ identity-bearing objects, see the [data model](./data-model.md). For persistence
 - Cargo APIs, CLI behavior, object schemas, and repository formats are not generally stable.
 - No migration path, support window, LTS line, or 1.0 schedule is promised.
 - The workspace version alone does not identify an official release.
-- Current release checks are partly manual. `cargo audit` and `cargo deny` are not configured gates.
+- Current release checks are partly manual. `cargo deny` is not a configured gate. **`cargo audit`
+  is**: it runs as a standing release gate locally (`--no-fetch`, `rfcs/EXECUTION-ORDER.md` §6 rule 9)
+  and as a scheduled CI job every Monday against a **freshly fetched** advisory database
+  (`.github/workflows/security-audit.yml`), so an advisory that arrives without any code change is
+  still caught.
 - The committed release-signer set is empty, so no release currently satisfies the DC-35 signer gate.
 - Tags through 0.17.7 predate this policy and must not be reported as passing its signer-authority
   audit.
