@@ -405,6 +405,28 @@ about 300px of dead space per panel. **The evidence was in the implementing roun
 `imgTop`→`capTop` gap of 434px where a square image in a 172.8px column gives ~187px. One line:
 `height:auto`.
 
+### 10.1b-iii §2 COMPLETE 2026-09-07 (`bae123f`) — and the pass with it
+
+`height:auto` added; the box is square, and the ~300px of dead space per panel is gone. **Measured
+independently from the renders**, not read from the report: the chip→artwork gap fell from **168px to
+36px** and the artwork→caption gap from **135px to 19px** (the caption's own margin), while the artwork
+band itself is unchanged at ~150px — **nothing was shrunk to achieve it.** The section is ~250px
+smaller than when the pass began.
+
+**The comment shipped around the one-line fix is worth more than the fix**, because it records *how it
+was found* — the previous round's render measurements not matching the 1:1 model. A future reader who
+deletes `height:auto` as redundant beside `aspect-ratio` will find the reason it is not.
+
+**The §2 thread took four corrections, each catching what the previous party could not see:**
+
+| | |
+|---|---|
+| The external review's diagnosis | accepted; every checkable claim re-derived |
+| Its recommended fix (use the image whole) | **refused** — that artwork bakes in three claims §4.1 removed, which their own content scope hid from them |
+| The architect's "must be re-rendered" framing | **corrected by the owner** — re-cropping the existing source was enough, and the architect had invented a block |
+| The architect's `align-items:end` instruction | **corrected by the dev team** — it misaligns the artwork in this markup order |
+| The architect's review of the result | **found the 420px box** that the round's own reported numbers had already shown |
+
 ### 10.1c A third defect, and a gap in the architect's own asset spec
 
 **Found 2026-09-07 while answering "who can make the artwork": the story panels do not theme-adapt.**
