@@ -159,6 +159,68 @@ than none.
 - **§3's "four middle-hubs" is one short.** `active` is now a declared hub in its own right, not merely
   one end of the `active ↔ refs` cycle.
 
+## 6b. DELIVERED 2026-09-08 (`544cc6c`, `4acd7e8`, `971e664`) — and §6a's ruling was too narrow
+
+**125 → 100 top-level entries, 69 → 52 modules, and the first 27 `pub(in crate::…)` in the crate's
+history.** §1's readability complaint is materially addressed.
+
+### 6b.1 CORRECTED — merge-induced cycles are not limited to the constrained seven
+
+**§6a ruled that no two of the constrained seven may share a group. That was right and insufficient.**
+Merging *any* two modules collapses their distinct edge targets onto one node, and a cycle can appear
+between modules none of which is constrained. Verified against the real edge set:
+
+```
+patch_exchange -> tag_travel ;  tag_travel -> patch_set_digest
+   separate : three nodes, a path, no cycle
+   merged   : patch -> tag_travel -> patch      == a 2-cycle, from consolidation alone
+```
+
+**Merging all seven name families produced 13 undeclared cycle-forming edges**, and four families
+(`patch`, `worktree`, `rollback`, `merge`) were left ungrouped rather than declared as debt.
+
+**RULED: the constraint generalizes. A grouping may not create a coupling-graph cycle that did not
+exist before it**, whether or not a constrained module is involved. §2's own principle extends to a
+case it did not have in mind: **a group whose members' combined reach is worse than their separate
+reach is worse than no group.** Declaring new cycles to buy filesystem tidiness inverts what RFC 130
+and this RFC exist to do.
+
+### 6b.2 RULED — §6a's own ruling forecloses §3's stated target, and the gate is now the blocker
+
+**`pub(in crate::<path>)` requires `path` to be an ancestor of the item.** The constrained seven sit
+directly under the crate root, and **§6a forbids giving them a shared parent.** So an item declared
+*directly* in `refs.rs`, `active.rs`, `wal.rs`, `patch_replay.rs` or `lifecycle_cache.rs` **has no
+expressible scope narrower than `pub(crate)` at all** — and §3 named exactly those modules as where to
+start.
+
+**Neither half saw this**: §3 predates the coupling gate, and §6a predates anyone trying to narrow
+against it.
+
+**Consequence: teaching the coupling gate qualified module names is no longer "the principled
+alternative" (§6a) — it is the prerequisite for §3's stated goal.** Until the gate can name
+`group::module`, the SCC and hub edges §3 exists to narrow cannot be narrowed at all. **That is the
+next decision this RFC needs, and it belongs to RFC 130's gate.**
+
+### 6b.3 What the round delivered under those constraints
+
+- **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
+- **Five groups formed** (`foundation`, `author`, `node`, `received`, plus the test group), each
+  verified to create no new cycle.
+- **`active` and `wal` retired from `DECLARED_HUBS`** — dropped below threshold by `foundation`'s
+  consolidation, **with the cause recorded in the constant's own doc comment.** A hub retirement caused
+  by consolidation rather than decoupling could easily have been reported as an improvement; it was not.
+- **The SCC is untouched** — `the_scc_has_exactly_this_edge_set` still pins 8 entries, 13 edges, six
+  modules.
+- **27 `pub(in crate::refs)`**, one module's internal machinery, with four resisting cases recorded
+  rather than widened back.
+
+### 6b.4 A cost this RFC now owes RFC 130
+
+RFC 130 §6 argued against a crate split partly on `fsutil` being *"the one genuinely clean seam, 0
+production out-edges"*. **After grouping, `fsutil`'s own figure is no longer separately checkable** —
+only `foundation`'s aggregate. The conclusion holds; the evidence is one level less granular, and the
+implementing round disclosed this against its own result.
+
 ## 7. Revisit triggers
 
 Inherited from RFC 130 §6, restated because they bound this RFC too: **watch coupling, not lines.** A
