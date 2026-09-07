@@ -114,6 +114,51 @@ Two consequences to plan for rather than discover:
    mechanical and reviewable by inspection, while each `pub(in ...)` narrowing is a claim about who
    should reach what.
 
+## 6a. RULED 2026-09-08 — the constraint the coupling gate imposes, which this RFC predates
+
+**Handoff issued:** `rfcs/handoffs/131-module-grouping-and-visibility-scoping/grouping-and-scoping-handoff-v1.md`.
+
+**This RFC was written before RFC 130's gate existed, and grouping turns out not to be neutral with
+respect to it.** The gate's graph node is the **top-level `mod` declared in `lib.rs`**
+(`coupling/graph.rs:334`), and every descendant file's text is concatenated into that same node
+(`:363`). There is no qualified naming.
+
+**So grouping merges nodes** — and a cycle wholly inside one group **disappears from the graph**. The
+gate would report no cycle, not because the coupling was resolved but because the grouping hid it.
+**RFC 130's ledger of structural debt could be erased by work whose stated purpose is to reduce
+coupling**, and the gate would call it green.
+
+**RULED: no two of these seven may share a group** — the six-module SCC plus the one hub outside it,
+taken from the gate rather than from RFC 130 §2.2's superseded table:
+`active`, `lifecycle_cache`, `patch_replay`, `refs`, `trust`, `worktree_patch`, and `wal`.
+Each may have its own directory; they may not be collected together. **Teaching the gate qualified
+names is the principled alternative and is out of scope** — it changes RFC 130's gate and deserves its
+own decision, not a side effect of a file move.
+
+### 6a.1 §2's central question, part-ruled and part-delegated
+
+**Two groupings the data now settles**, which it did not on 2026-09-01:
+
+- **The eight `#[cfg(test)]` modules** (`lib.rs:84-99`) are gates, evidence harnesses and fixtures, and
+  `lib.rs` already declares them as one contiguous block. **A directory documents a fact rather than
+  inventing one**, and removes eight entries from the listing with no design argument. It does **not**
+  violate §4 — that constraint protects `foo/tests.rs` beside `foo.rs`, and these are standalone.
+  (`rfc111_seal_simulation` is production, `lib.rs:63`, and stays.)
+- **The eleven name families**, per the owner's own sketch.
+
+**The remaining ~30 singletons stay delegated**, with §2's own constraint governing: a singleton left
+at the top level is honest, and a group whose members share only the need to be somewhere is worse
+than none.
+
+### 6a.2 Two corrections to this RFC's own numbers and citations
+
+- **§2/§3's counts are a week stale.** Re-derived at `7cd06ab`: **125** top-level entries (was 123),
+  **679** `pub(crate)` (was 641), 273 `pub(super)`, and still **zero** `pub(in crate::…)`. **The
+  `pub(crate)` count rose by 38 in the week this RFC waited** — the problem is getting worse, not
+  holding still.
+- **§3's "four middle-hubs" is one short.** `active` is now a declared hub in its own right, not merely
+  one end of the `active ↔ refs` cycle.
+
 ## 7. Revisit triggers
 
 Inherited from RFC 130 §6, restated because they bound this RFC too: **watch coupling, not lines.** A
