@@ -295,10 +295,33 @@ wordmark, no headline, no chips, no captions, no feature strip. Chips and captio
 it, as they are now. **This keeps the flow, the truth mechanism, and accessibility at once**, which
 neither the current page nor the review's recommendation does.
 
-**If no re-render is available, the fallback is the reviewer's own**: a CSS grid of five equal cells,
-`align-items:end` for a shared baseline, each image in a fixed-ratio frame (`aspect-ratio` +
-`object-fit:contain`), collapsing to an ordered single column. **It fixes the raggedness and the
-overflow with the assets already committed**, and it is strictly better than today.
+### 10.1a OWNER'S FINDING 2026-09-07 — the crops are unnatural, and layout alone cannot fix them
+
+**The project owner: *"the current cropped images are ugly because unnatural to human. They should be
+beautified following the original image."*** Confirmed at the assets, and it is the more fundamental
+half of finding A.
+
+**`panel-2-patches.webp` (150×310) is the clearest case.** The original's connector curves — which
+flowed from the four patch cards into the "Integrated" cube — **are cut off mid-stroke at the right
+edge and lead nowhere**. The patch cards themselves are clipped mid-shape. A pale rectangular backdrop
+survives the crop and reads on the page as an accidental card, matching nothing around it. Every panel
+is a **fragment of one scene**, not a composed picture: the original's shared ground line is cut
+through, and its left-to-right light path is severed four times.
+
+**This corrects the architect's own framing of the fallback.** §10.1 offered the reviewer's five-cell
+grid as an adequate alternative. **It is not, on its own.** Aligning fragments to a shared baseline
+fixes the *geometry* and leaves **severed connectors, clipped cards and mismatched backdrops exactly
+where they are.** A tidy row of unnatural pictures is still unnatural.
+
+**RULED — the standard, whichever option is taken: every image on the page must be complete in itself
+and must follow the original artwork's composition, warmth and light.** No crop of a larger scene
+qualifies, however well it is framed by CSS.
+
+**So the fallback is amended:** if the single whole-artwork re-render is not available, the five panels
+may stay **only if each is re-rendered as a properly composed picture in the original's style** — its
+own ground, its own resolved framing, nothing running off an edge — and then laid out in the
+reviewer's grid. **The grid is the layout fix; it was never the picture fix, and presenting it as a
+standalone option was the architect's error.**
 
 ### 10.2 RULED — the rest
 

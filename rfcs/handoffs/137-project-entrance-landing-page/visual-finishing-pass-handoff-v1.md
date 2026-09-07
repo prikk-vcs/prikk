@@ -55,13 +55,38 @@ rendered beneath the single figure.
 **This is what the split was reaching for and missed.** Whole artwork keeps the flow and the glow;
 HTML text keeps the truth mechanism and accessibility. Both, not one.
 
-**Fallback if no re-render is available — and it is a good fallback, not a consolation.** Keep the five
-committed panels, but as a **CSS grid of five equal cells** with:
+### 2.2 The crops are unnatural pictures, and CSS cannot fix that
 
-- `align-items:end` — one shared baseline, which is what the original artwork had;
-- each image in a fixed-ratio frame (`aspect-ratio` + `object-fit:contain`), so unequal sources stop
-  producing unequal cells;
+**The project owner's finding, and it is the more fundamental half of this section:** *"the current
+cropped images are ugly because unnatural to human. They should be beautified following the original
+image."*
+
+**Open `docs/landing/assets/panel-2-patches.webp` before you do anything else.** Its connector curves —
+which in the original flowed from the four patch cards into the "Integrated" cube — **are cut off
+mid-stroke at the right edge and lead nowhere.** The cards are clipped mid-shape. A pale rectangular
+backdrop survives the crop and reads on the page as an accidental card. Every panel is a **fragment of
+one scene**, not a picture: the shared ground line is cut through and the left-to-right light path is
+severed four times.
+
+**THE STANDARD, whichever option you take: every image on the page must be complete in itself and
+follow the original artwork's composition, warmth and light.** A crop of a larger scene does not
+qualify, however well CSS frames it.
+
+**This amends the fallback below, and the amendment is the architect's correction of his own
+handoff.** A five-cell grid fixes *geometry*. It leaves severed connectors, clipped cards and
+mismatched backdrops exactly where they are. **A tidy row of unnatural pictures is still unnatural.**
+
+**Amended fallback:** the five panels may stay **only if each is re-rendered as a properly composed
+picture in the original's style** — its own ground, its own resolved framing, nothing running off an
+edge — and then laid out as a **CSS grid of five equal cells**:
+
+- `align-items:end` — one shared baseline, which the original artwork had;
+- each image in a fixed-ratio frame (`aspect-ratio` + `object-fit:contain`);
 - collapsing to an **ordered single column** that keeps the numbered progression, not a gallery.
+
+**Do not ship the existing crops in a grid and call the section fixed.** If neither a whole re-render
+nor five re-rendered panels is available, **stop and report** — the layout change alone is not the
+deliverable.
 
 **Either way `overflow-x:auto` goes.** A horizontal scrollbar at ordinary desktop width is the symptom;
 do not fix it by narrowing the panels.
@@ -122,6 +147,9 @@ preserved them.
 
 ## 8. Controls
 
+0. **No image is a fragment.** Open every image the story section ships and confirm nothing runs off an
+   edge — no severed connector, no clipped card, no backdrop that does not resolve. **This is the
+   control the owner's finding exists to force**, and it cannot be satisfied by CSS.
 1. **No horizontal overflow at 1280px, 1024px and 390px.** Measure the story section's rendered width
    against its container; do not eyeball it.
 2. **Captions share a baseline** (or there is one image and one caption row).
@@ -160,6 +188,7 @@ A styling pass on a web page that ships in no release artifact. **Ruled here rat
 - **before/after renders** at 1280px and 390px, both colour schemes;
 - the measured widths from control 1 and the contrast ratios from control 6;
 - **§6's list, re-verified item by item**;
-- **whether you took the re-render or the grid fallback** (§2.1), and why;
+- **whether you took the whole re-render or five re-rendered panels** (§2.1, §2.2), and why — **and
+  confirmation that no image on the page is a crop of a larger scene**;
 - **anything that made the page feel richer rather than calmer** (§4) — that is the owner's call, not
   something to resolve quietly.
