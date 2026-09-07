@@ -443,6 +443,12 @@ sync is artifact-based, any existing host — object storage, a web server, a sh
 serve prikk artifacts as dumb bytes with no prikk-specific code, which is exactly what RFC 116 §4
 anticipates (*"with no network code at all"*).
 
+**Owed outward, held: the stikk reply.** Drafted and answering both their letters, **held until
+0.36.0 ships** (owner's ruling 2026-09-07) even though both letters' subjects shipped in 0.35.0. **It
+carries a re-verification checklist in its own header** — it went stale within a day of drafting
+(§5 said the content surface was unscheduled hours before it was scheduled), so the cut that releases
+it must run that checklist rather than send it as written.
+
 **Possible inbound, unscheduled:** the stikk project's standing feature asks — a per-patch/-file
 content surface (`show`/`diff`, or content in `--format json`) and queued-patch enumeration — if they
 send the written list our reply invited.
