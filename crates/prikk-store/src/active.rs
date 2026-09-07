@@ -14,8 +14,10 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectEnvelope;
 
-use crate::fsutil::{append_file_required, read_file_if_exists, truncate_file_empty_required};
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::foundation::fsutil::{
+    append_file_required, read_file_if_exists, truncate_file_empty_required,
+};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::refs::{ensure_no_incomplete_publication, validate_local_branch_ref};
 use crate::wal::Wal;

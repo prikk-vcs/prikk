@@ -50,7 +50,7 @@ use prikk_object::{
 };
 
 use super::{assert_stage_failed, assert_wal_item_failed};
-use crate::test_support::{
+use crate::test_gates::test_support::{
     rollback_author_signature, rollback_patch_blob_envelope, sample_object_id,
     signed_patch_blob_envelope, unique_temp_dir,
 };
@@ -349,7 +349,7 @@ fn verify_repository_detects_rollback_draft_legacy_marker_key_id() -> Result<()>
         rollback_payload_with_operations(vec![create_file_operation(1, blob.object_id())?]);
     let mut envelope =
         ObjectEnvelope::unsigned(ObjectType::Patch, 1, payload.to_canonical_bytes()?);
-    envelope.add_signature(crate::test_support::legacy_rollback_marker_signature())?;
+    envelope.add_signature(crate::test_gates::test_support::legacy_rollback_marker_signature())?;
 
     Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME).append_patch(&envelope)?;
 

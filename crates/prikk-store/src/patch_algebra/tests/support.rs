@@ -21,7 +21,7 @@ pub(super) use super::super::types::{
     ConfluenceWitnessKind, PairClass, RequiredOrder, UnknownReason,
 };
 use super::super::witness::operand_path;
-pub(super) use crate::node_lifecycle::NodeLifecycleState;
+pub(super) use crate::node::node_lifecycle::NodeLifecycleState;
 pub(super) use crate::patch_replay::decode::DecodedOperationKind;
 pub(super) use prikk_object::{BlobKind, NodeKind, ObjectId, ObjectType};
 pub(super) use std::collections::BTreeMap;

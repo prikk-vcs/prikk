@@ -22,8 +22,8 @@ mod read;
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
-use crate::layout::RepositoryLayout;
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::foundation::layout::RepositoryLayout;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::path::RepoPath;
 use crate::refs::RefStore;

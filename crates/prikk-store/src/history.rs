@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayload};
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::decode_patch_message;
 use crate::refs::RefStore;

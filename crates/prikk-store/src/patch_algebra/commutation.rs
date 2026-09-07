@@ -7,7 +7,7 @@ use super::types::{
     ConfluenceProof, ConfluenceResult, ConfluenceWitness, ConfluenceWitnessKind, PairClass,
     UnknownReason,
 };
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::patch_replay::decode::DecodedPatchOperation;
 
 pub(crate) fn commute_pair<R: PatchAlgebraEvidence>(

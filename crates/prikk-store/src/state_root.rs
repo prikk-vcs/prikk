@@ -6,7 +6,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
 use prikk_object::{MerkleRoot, NodeId, NodeKind, ObjectId};
 
-use crate::node_lifecycle::{NodeContent, NodeLifecycleState};
+use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::path::{RepoPath, validate_no_path_collisions};
 
 const LEAF_DOMAIN: &[u8] = b"PRIKK-STATE-LEAF-v2";

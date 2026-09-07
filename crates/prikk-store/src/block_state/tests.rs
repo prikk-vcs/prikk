@@ -8,7 +8,7 @@ use super::{
     verify_block_v2_state, verify_blocks_topological,
 };
 use crate::lifecycle_cache::replay::{TextCache, apply_candidate_patches};
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::state_root::entries_from_state;
 use crate::{MemoryObjectStore, ObjectWriter, compute_state_root};
 

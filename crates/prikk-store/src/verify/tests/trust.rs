@@ -3,7 +3,7 @@
 use prikk_object::{ObjectEnvelope, ObjectType};
 
 use super::super::trust::PublicationTrustVerifier;
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout, add_trusted_maintainer,
     maintainer_signature,
@@ -96,7 +96,7 @@ fn assert_invalid_policy_sequence(
     let layout = RepositoryLayout::init(root.clone())?;
     if let Some(policy) = malformed_policy {
         std::fs::write(
-            layout.trust_policy_container_slot_path(crate::layout::ContainerSlot::A),
+            layout.trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A),
             policy,
         )?;
     }

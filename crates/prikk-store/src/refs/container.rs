@@ -45,11 +45,13 @@ use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
 use prikk_object::{ObjectEnvelope, ObjectType, RefUpdatePayload};
 
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{decode_envelope_file, encode_envelope_file, push_u16, push_u64};
-use crate::frame_resync::resync_to_next_magic;
-use crate::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
-use crate::layout::RepositoryLayout;
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{
+    decode_envelope_file, encode_envelope_file, push_u16, push_u64,
+};
+use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
+use crate::foundation::layout::RepositoryLayout;
 use crate::refs::require_signed_type;
 
 /// One decoded ref-log record, scoped to one ref's own subsequence. Was `refs/log.rs`'s own type
@@ -185,7 +187,7 @@ pub(crate) fn encode_ref_container_record_for_test(
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
     require_signed_type(envelope, ObjectType::RefUpdate)?;
-    let body = crate::file_codec::encode_envelope_file_structural(envelope)?;
+    let body = crate::foundation::file_codec::encode_envelope_file_structural(envelope)?;
     frame_record(ref_name_key, &body)
 }
 
@@ -385,7 +387,7 @@ pub(crate) fn append_ref_container_record(
         ));
     }
     let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     // Idempotency, preserved from `refs/log.rs::append_log_record`'s exact behavior (retired, not
     // dropped): a retry whose own ref-scoped subsequence already ends in this exact envelope is a
@@ -422,7 +424,7 @@ pub(crate) fn replay_ref_subsequence(
     ref_name_key: [u8; 32],
 ) -> Result<RefLogReplay> {
     let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(RefLogReplay {
@@ -510,7 +512,7 @@ pub(crate) fn incomplete_tail_matches(
     expected: &ObjectEnvelope,
 ) -> Result<bool> {
     let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     let bytes =
         read_file_if_exists(layout.repository_mutation_root(), &relative)?.unwrap_or_default();
@@ -538,7 +540,7 @@ pub(crate) fn incomplete_tail_matches(
 /// per-ref file to the shared container.
 pub(crate) fn truncate_incomplete_tail(layout: &RepositoryLayout) -> Result<usize> {
     let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     let bytes =
         read_file_if_exists(layout.repository_mutation_root(), &relative)?.unwrap_or_default();
@@ -552,7 +554,7 @@ pub(crate) fn truncate_incomplete_tail(layout: &RepositoryLayout) -> Result<usiz
         .ok_or_else(|| {
             PrikkError::Integrity("ref container retained length underflow".to_string())
         })?;
-    crate::fsutil::truncate_existing_file_required(
+    crate::foundation::fsutil::truncate_existing_file_required(
         layout.repository_mutation_root(),
         &relative,
         u64::try_from(retained)
@@ -577,14 +579,18 @@ pub(crate) fn append_torn_ref_log_tail_for_test(
     envelope: &ObjectEnvelope,
 ) -> Result<()> {
     let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     let full = encode_ref_container_record_for_test(ref_name_key, envelope)?;
     let torn_len = (REF_CONTAINER_HEADER_LEN + 8).min(full.len().saturating_sub(1));
     let torn = full.get(..torn_len).ok_or_else(|| {
         PrikkError::Integrity("torn tail length exceeds encoded record".to_string())
     })?;
-    crate::fsutil::append_file_required(layout.repository_mutation_root(), &relative, torn)
+    crate::foundation::fsutil::append_file_required(
+        layout.repository_mutation_root(),
+        &relative,
+        torn,
+    )
 }
 
 struct RefContainerHeader {

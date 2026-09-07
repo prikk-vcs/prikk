@@ -9,9 +9,9 @@
 use prikk_error::Result;
 use prikk_object::{BlockKind, CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType, TagPayload};
 
-use crate::fsutil::read_file_if_exists;
-use crate::layout::ContainerSlot;
-use crate::test_support::{
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::ContainerSlot;
+use crate::test_gates::test_support::{
     maintainer_signature, signed_block, signed_ref_state_envelope, signed_ref_update_envelope,
     unique_temp_dir,
 };
@@ -169,9 +169,9 @@ pub(super) fn container_bytes(
 
 /// Every persisted object type's own container bytes, in `persisted_object_types()`'s own fixed
 /// order -- row 1's "changes no state" must hold for every kind of object this repository can ever
-/// write, not only the ones a healthy read path happens to touch (`crate::layout::persisted_object_types`).
+/// write, not only the ones a healthy read path happens to touch (`crate::foundation::layout::persisted_object_types`).
 pub(super) fn all_container_bytes(layout: &RepositoryLayout) -> Result<Vec<Vec<u8>>> {
-    crate::layout::persisted_object_types()
+    crate::foundation::layout::persisted_object_types()
         .into_iter()
         .map(|object_type| container_bytes(layout, object_type))
         .collect()

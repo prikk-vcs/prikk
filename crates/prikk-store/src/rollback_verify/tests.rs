@@ -11,12 +11,14 @@ use crate::{
     verify_active_rollback_draft, verify_repository,
 };
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     legacy_rollback_marker_signature, rollback_patch_blob_envelope, rollback_patch_envelope,
     signed_block_with_state_root, signed_patch_blob_envelope, signed_patch_envelope,
     signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
 };
-use crate::test_support::{publish_snapshot_then_patch_block, publish_text_create_then_edit_block};
+use crate::test_gates::test_support::{
+    publish_snapshot_then_patch_block, publish_text_create_then_edit_block,
+};
 use crate::{RefPublication, RefStore};
 
 fn test_signer() -> Ed25519AuthorSigner {
@@ -268,7 +270,7 @@ fn legacy_key_id_without_payload_purpose_is_not_classified() {
         legacy.signatures.clear();
         assert!(
             legacy
-                .add_signature(crate::test_support::legacy_rollback_marker_signature())
+                .add_signature(crate::test_gates::test_support::legacy_rollback_marker_signature())
                 .is_ok()
         );
         assert_eq!(

@@ -16,10 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectType, RefKind, RefStatePayload};
 
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{push_string_u16, push_u64};
-use crate::fsutil::len_to_u64;
-use crate::layout::RepositoryLayout;
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{push_string_u16, push_u64};
+use crate::foundation::fsutil::len_to_u64;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_set_digest::{
     PatchSetDigest, compute_patch_set_digest, compute_patch_set_digest_for_ref,

@@ -5,7 +5,7 @@ use super::types::{
     MergeEvidenceProofPhase, MergeEvidenceReasonCode, MergeEvidenceScope, MergeEvidenceSequence,
     MergeEvidenceSide,
 };
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::patch_algebra::evidence_types::{EvidenceError, EvidenceScope, PatchAlgebraEvidence};
 use crate::patch_algebra::facts::operation_facts;
 use crate::patch_algebra::replay_oracle::{OracleFailure, replay_operations};

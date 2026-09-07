@@ -10,7 +10,7 @@ use prikk_object::{
     ObjectEnvelope, ObjectId, RefKind, RefStatePayload, RefUpdatePayload, TagPayload,
 };
 
-use crate::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
 use crate::object_store::ObjectReader;
 use crate::refs::container::{
     RefContainerRecordStatus, RefLogRecordStatus, RefLogReplay, decode_ref_container_records,
@@ -202,8 +202,10 @@ pub(super) fn read_logs(
 )> {
     let relative =
         layout.repository_relative(&layout.ref_log_container_slot_path(ContainerSlot::A))?;
-    let Some(bytes) =
-        crate::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)?
+    let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
     else {
         return Ok((BTreeMap::new(), 0, Vec::new(), BTreeMap::new(), Vec::new()));
     };
@@ -314,7 +316,7 @@ fn validate_log_replay(
         // Coherence: this record's own header claimed `ref_name_key`; its decoded payload's own
         // `ref_name` must hash to the same key, the log-side equivalent of `read_one_pointer_entry`'s
         // own check.
-        if crate::layout::ref_name_key_bytes(&update.ref_name) != ref_name_key {
+        if crate::foundation::layout::ref_name_key_bytes(&update.ref_name) != ref_name_key {
             return Err(PrikkError::Integrity(
                 "ref container record header ref_name_key does not match its own envelope"
                     .to_string(),

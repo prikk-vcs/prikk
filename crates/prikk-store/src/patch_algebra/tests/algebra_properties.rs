@@ -56,7 +56,7 @@ use std::collections::BTreeMap;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 
-use crate::node_lifecycle::{LiveNode, NodeContent};
+use crate::node::node_lifecycle::{LiveNode, NodeContent};
 use crate::patch_replay::decode::{DecodedDeletePreimage, DecodedPatchOperation};
 use crate::patch_replay::tests::proptest_round_trip::{
     ascii_text_strategy, canonical_mode_strategy, object_id_strategy,

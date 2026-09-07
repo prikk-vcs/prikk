@@ -25,7 +25,7 @@ use crate::{
     write_active_ref_metadata,
 };
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, rollback_patch_envelope, sample_object_id,
     signed_patch_envelope, signed_ref_state_envelope, unique_temp_dir,
 };
@@ -858,24 +858,29 @@ fn verify_repository_detects_index_entry_resolving_to_a_different_object() -> Re
     let layout = RepositoryLayout::init(root.clone())?;
     let real_envelope = signed_patch_envelope();
     let real_id = real_envelope.object_id();
-    let record_bytes =
-        crate::container::encode_container_record_for_test(ObjectType::Patch, &real_envelope)?;
+    let record_bytes = crate::foundation::container::encode_container_record_for_test(
+        ObjectType::Patch,
+        &real_envelope,
+    )?;
     std::fs::write(
-        layout.container_slot_path(ObjectType::Patch, crate::layout::ContainerSlot::A),
+        layout.container_slot_path(
+            ObjectType::Patch,
+            crate::foundation::layout::ContainerSlot::A,
+        ),
         &record_bytes,
     )?;
     let wrong_id = sample_object_id("not-this-patch-s-real-id");
-    let bad_entry = crate::index::IndexEntry {
+    let bad_entry = crate::foundation::index::IndexEntry {
         object_id: wrong_id,
         object_type: ObjectType::Patch,
-        slot: crate::layout::ContainerSlot::A,
+        slot: crate::foundation::layout::ContainerSlot::A,
         offset: 0,
         length: record_bytes.len() as u64,
         container_checksum: [0_u8; 32],
     };
     std::fs::write(
         layout.container_index_path(),
-        crate::index::encode_index_record(&bad_entry)?,
+        crate::foundation::index::encode_index_record(&bad_entry)?,
     )?;
     assert_ne!(wrong_id, real_id);
 
@@ -913,9 +918,12 @@ fn verify_repository_detects_envelope_type_mismatch() -> Result<()> {
     let patch_envelope = signed_patch_envelope();
     assert_eq!(patch_envelope.object_type, ObjectType::Patch);
     let record_bytes =
-        crate::container::encode_container_record(ObjectType::Blob, &patch_envelope)?;
+        crate::foundation::container::encode_container_record(ObjectType::Blob, &patch_envelope)?;
     std::fs::write(
-        layout.container_slot_path(ObjectType::Blob, crate::layout::ContainerSlot::A),
+        layout.container_slot_path(
+            ObjectType::Blob,
+            crate::foundation::layout::ContainerSlot::A,
+        ),
         &record_bytes,
     )?;
 
@@ -970,9 +978,13 @@ fn write_author_signed_patch(
         }
     }
     envelope.add_signature(signature)?;
-    let record_bytes = crate::container::encode_container_record(ObjectType::Patch, &envelope)?;
+    let record_bytes =
+        crate::foundation::container::encode_container_record(ObjectType::Patch, &envelope)?;
     std::fs::write(
-        layout.container_slot_path(ObjectType::Patch, crate::layout::ContainerSlot::A),
+        layout.container_slot_path(
+            ObjectType::Patch,
+            crate::foundation::layout::ContainerSlot::A,
+        ),
         &record_bytes,
     )?;
     Ok((signer.key_id().to_string(), object_id))
@@ -1010,7 +1022,7 @@ fn verify_repository_fails_a_tampered_author_signature_against_recorded_key_mate
     let layout = RepositoryLayout::init(root.clone())?;
     let signer = Ed25519AuthorSigner::from_seed("fails-author", &[0x61; 32])?;
     let active_lock = crate::lock::ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)?;
-    crate::author_key_index::record_author_key_material(
+    crate::author::author_key_index::record_author_key_material(
         &layout,
         signer.key_id(),
         signer.public_key_bytes(),
@@ -1042,13 +1054,13 @@ fn verify_repository_fails_for_a_key_id_with_conflicting_recorded_keys() -> Resu
     let layout = RepositoryLayout::init(root.clone())?;
     let signer = Ed25519AuthorSigner::from_seed("conflict-author", &[0x91; 32])?;
     let active_lock = crate::lock::ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)?;
-    crate::author_key_index::record_author_key_material(
+    crate::author::author_key_index::record_author_key_material(
         &layout,
         signer.key_id(),
         signer.public_key_bytes(),
         &active_lock,
     )?;
-    crate::author_key_index::force_conflicting_author_key_entry_for_test(
+    crate::author::author_key_index::force_conflicting_author_key_entry_for_test(
         &layout,
         signer.key_id(),
         [0xee; 32],
@@ -1063,7 +1075,7 @@ fn verify_repository_fails_for_a_key_id_with_conflicting_recorded_keys() -> Resu
 
 /// DC-53 Stage 1 implementation review v1, B2: the production authoring path and production
 /// verification must agree. Records material the same way `author_signature()`'s real callers do
-/// (`crate::author_key_index::record_author_key_material`, not a shortcut), signs through
+/// (`crate::author::author_key_index::record_author_key_material`, not a shortcut), signs through
 /// `author_signature()` itself, and asserts `verify_repository` reports `Sound` -- not merely that it
 /// passes, which `Unverifiable` would also do.
 #[test]
@@ -1073,7 +1085,7 @@ fn verify_repository_reports_sound_for_a_signature_verifying_against_recorded_ma
     let layout = RepositoryLayout::init(root.clone())?;
     let signer = Ed25519AuthorSigner::from_seed("sound-author", &[0x71; 32])?;
     let active_lock = crate::lock::ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)?;
-    crate::author_key_index::record_author_key_material(
+    crate::author::author_key_index::record_author_key_material(
         &layout,
         signer.key_id(),
         signer.public_key_bytes(),
@@ -1412,10 +1424,15 @@ fn verify_repository_rejects_malformed_signature_shape() -> Result<()> {
         signer_role: prikk_object::SignerRole::Maintainer,
     }];
 
-    let record_bytes =
-        crate::container::encode_container_record_for_test(ObjectType::Blob, &envelope)?;
+    let record_bytes = crate::foundation::container::encode_container_record_for_test(
+        ObjectType::Blob,
+        &envelope,
+    )?;
     std::fs::write(
-        layout.container_slot_path(ObjectType::Blob, crate::layout::ContainerSlot::A),
+        layout.container_slot_path(
+            ObjectType::Blob,
+            crate::foundation::layout::ContainerSlot::A,
+        ),
         &record_bytes,
     )?;
 
@@ -1480,7 +1497,7 @@ fn verify_repository_detects_invalid_trust_policy() -> Result<()> {
     let malformed_root = unique_temp_dir("verify-trust-policy-malformed");
     let layout = RepositoryLayout::init(malformed_root.clone())?;
     std::fs::write(
-        layout.trust_policy_container_slot_path(crate::layout::ContainerSlot::A),
+        layout.trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A),
         b"not a valid trust policy container at all",
     )?;
     let mut store = FileObjectStore::new(layout.clone());

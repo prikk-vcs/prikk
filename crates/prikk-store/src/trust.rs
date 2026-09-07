@@ -15,7 +15,7 @@ use prikk_crypto::{ED25519_KEY_LEN, verify_ed25519};
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, Signature, SignatureAlgorithm, SignerRole, ascii_fold};
 
-use crate::layout::{
+use crate::foundation::layout::{
     DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout,
     validate_maintainer_key_id_storage_safety,
 };

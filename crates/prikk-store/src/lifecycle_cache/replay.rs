@@ -20,7 +20,7 @@ use prikk_object::{
 };
 
 use super::{BlobContentResolver, BlobKindResolver, StoreBackedResolver};
-use crate::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
+use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::object_store::ObjectReader;
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,

@@ -5,7 +5,7 @@ use super::facts::deferred_reason;
 use super::text_preimage::{TextPreimage, validate_text_preimage};
 use super::types::{Action, ConflictWitnessKind, OperationFacts, PairClass, UnknownReason};
 use super::witness::{conflict, unknown_from_facts};
-use crate::node_lifecycle::{NodeContent, NodeLifecycleState};
+use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::path::RepoPath;
 
 pub(super) fn invalid_preimage_class<R: PatchAlgebraEvidence>(

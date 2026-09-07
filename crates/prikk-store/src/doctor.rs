@@ -7,8 +7,8 @@
 use prikk_error::{PrikkError, Result};
 
 use crate::block_state::BlockStateStatus;
-use crate::fsutil::{EntryKind, inspect_entry};
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::foundation::fsutil::{EntryKind, inspect_entry};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::refs::{RefFileStatus, RefItemStatus};
 use crate::verify::{

@@ -23,10 +23,10 @@ use std::path::Path;
 use prikk_error::Result;
 use prikk_object::{BlobKind, CanonicalEncode, ObjectId};
 
-use crate::fsutil::{
+use crate::foundation::fsutil::{
     RootFileStat, read_file_if_exists, stat_file_state_if_exists, write_file_atomically,
 };
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 
 const INDEX_FILE_NAME: &str = "commit-index.v1";
 const INDEX_MAGIC: &str = "PRIKK-COMMIT-INDEX-V1";

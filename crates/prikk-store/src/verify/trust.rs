@@ -3,7 +3,7 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectEnvelope;
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::trust::{
     MaintainerTrustPolicy, PublicationTrustIssue, load_maintainer_trust_policy,
     verify_trusted_publication_envelope,

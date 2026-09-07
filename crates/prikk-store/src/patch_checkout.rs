@@ -8,8 +8,10 @@ use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
 
-use crate::fsutil::{EntryKind, inspect_entry, read_file_required, remove_worktree_file_required};
-use crate::layout::RepositoryLayout;
+use crate::foundation::fsutil::{
+    EntryKind, inspect_entry, read_file_required, remove_worktree_file_required,
+};
+use crate::foundation::layout::RepositoryLayout;
 use crate::patch_replay::{PatchReplayDeletedFile, replay_supported_patch_chain};
 use crate::path::join_repo_path_to_root;
 use crate::worktree::materialize_replay_manifest_entries;

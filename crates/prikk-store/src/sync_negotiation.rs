@@ -47,7 +47,7 @@ use std::collections::BTreeSet;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectId, ObjectType, RefKind, RefStatePayload};
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_set_digest::patch_ids_reachable_from_block;
 use crate::refs::{RefStore, validate_local_branch_ref};

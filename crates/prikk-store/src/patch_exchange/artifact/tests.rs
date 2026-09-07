@@ -13,7 +13,7 @@ use crate::patch_exchange::exchange_test_support::{
     author_signer, maintainer_signer, signed_author_patch_envelope, signed_blob_envelope,
     signed_tag_envelope,
 };
-use crate::test_support::{signed_block, unique_temp_dir};
+use crate::test_gates::test_support::{signed_block, unique_temp_dir};
 use crate::{FileObjectStore, ObjectWriter, RepositoryLayout};
 
 /// Build a repository holding one AUTHOR-signed patch (and its blob), returning the layout and the

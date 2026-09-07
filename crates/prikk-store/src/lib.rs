@@ -16,26 +16,21 @@
 //! plugin execution, and remote sync remain separate increments.
 
 mod active;
-mod author_key_index;
-mod author_signing;
+// RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
+mod author;
 mod blob_access;
 mod block_state;
 mod bundle;
-mod byte_cursor;
 mod checkout;
 mod commit_index;
 mod compact;
-mod container;
 mod doctor;
-mod file_codec;
+// RFC 131 §2 / RFC 130 §2.3's "foundation" grouping: layout, fsutil, byte_cursor, file_codec,
+// frame_resync, container, index, generation -- a wide, one-directional base, grouped by role.
 mod format;
-mod frame_resync;
-mod fsutil;
-mod generation;
+mod foundation;
 mod history;
 mod ignore;
-mod index;
-mod layout;
 mod lifecycle_cache;
 mod lock;
 mod maintainer_signing;
@@ -43,12 +38,14 @@ mod memory_store;
 mod merge_evidence;
 mod merge_execute;
 // Production node-id minting (DC-09 Phase 4.4a-1), consumed by node-addressed worktree authoring
-// (4.4a-2) for fresh-node creation.
-mod node_id_gen;
-mod node_lifecycle;
+// (4.4a-2) for fresh-node creation. RFC 131 §2.2a ruling (b): the `node` name family (node_id_gen,
+// node_lifecycle).
+mod node;
 mod object_store;
 // Patch algebra foundation and evidence contract (DC-16/DC-21), now production-compiled through the
-// DC-22 read-only merge-evidence store boundary.
+// DC-22 read-only merge-evidence store boundary. RFC 131 §2.2a: the `patch` name family is NOT
+// grouped -- measured to introduce new coupling-graph cycles (patch<->merge, patch<->tag_travel);
+// see the report.
 mod patch_algebra;
 mod patch_checkout;
 mod patch_exchange;
@@ -56,11 +53,13 @@ mod patch_inverse;
 mod patch_replay;
 mod patch_set_digest;
 mod path;
+// RFC 131 §2.2a ruling (b): the `received` name family (received, received_index).
 mod received;
-mod received_index;
 mod recognition_claim;
 mod refs;
 mod rfc111_seal_simulation;
+// RFC 131 §2.2a: the `rollback` name family is NOT grouped -- measured to introduce a new
+// verify<->rollback coupling-graph cycle via a shared `patch` dependency; see the report.
 mod rollback_draft;
 mod rollback_preview;
 mod rollback_verify;
@@ -76,34 +75,27 @@ mod trust_index;
 mod unlock;
 mod verify;
 mod wal;
+// RFC 131 §2.2a: the `worktree` name family is NOT grouped -- measured to reconnect into the
+// coupling gate's own SCC (worktree_patch -> worktree -> active/patch_replay/lifecycle_cache ->
+// ... -> active); see the report. `worktree_patch` is one of §2's constrained modules regardless.
 mod worktree;
 mod worktree_marker;
 mod worktree_patch;
 mod worktree_status;
 
+// RFC 131 §2.2a ruling (a): these eight were already one contiguous #[cfg(test)] run above --
+// gates, evidence harnesses and shared fixtures, not production code -- and are now one directory
+// (`test_gates/`) rather than eight top-level entries. `rfc111_seal_simulation` is production and
+// stays where it was.
 #[cfg(test)]
-mod dc55_identity_evidence;
-#[cfg(test)]
-mod format_stability_gate;
-#[cfg(test)]
-mod release_compatibility_gate;
-#[cfg(test)]
-mod rfc111_index_decode_cost_gate;
-#[cfg(test)]
-mod rfc111_seal_decode_cost_gate;
-#[cfg(test)]
-mod signature_contract_tests;
-#[cfg(test)]
-mod test_support;
-#[cfg(test)]
-mod trust_gated_operations_binding_gate;
+mod test_gates;
 
 pub use active::{
     ActiveCommitResult, ActiveRefMetadata, ActiveRefOwnership, ActiveSession, active_ref_ownership,
     finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
     require_active_ref_for_non_empty_wal, write_active_ref_metadata,
 };
-pub use author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
+pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 pub use block_state::{
     BlockStateOutcome, BlockStateStatus, derive_next_state_root, validate_block_v2_shape,
 };
@@ -125,11 +117,11 @@ pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
     DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_repository,
 };
+pub use foundation::layout::{
+    ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
+};
 pub use history::{
     DEFAULT_HISTORY_LIMIT, HistoryEntry, RefHistory, load_received_ref_history, load_ref_history,
-};
-pub use layout::{
-    ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
 };
 pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
 pub use lock::{ActiveLock, ContainerLockGuard, RefLock, acquire_container_locks};

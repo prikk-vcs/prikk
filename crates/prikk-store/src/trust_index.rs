@@ -35,12 +35,12 @@ use prikk_crypto::ED25519_KEY_LEN;
 use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
 
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{push_string_u16, push_u16, push_u32};
-use crate::frame_resync::resync_to_next_magic;
-use crate::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
-use crate::generation::resolve_live_slot;
-use crate::layout::RepositoryLayout;
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{push_string_u16, push_u16, push_u32};
+use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
+use crate::foundation::generation::resolve_live_slot;
+use crate::foundation::layout::RepositoryLayout;
 
 const TRUST_KEY_MAGIC: &[u8; 8] = b"PTRUKEY1";
 const TRUST_KEY_VERSION: u16 = 1;

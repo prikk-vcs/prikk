@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::patch_inverse::prepare_patch_inverse_plan;
 use crate::patch_replay::{ReplayManifest, replay_supported_patch_chain};
 use crate::snapshot::SnapshotManifest;

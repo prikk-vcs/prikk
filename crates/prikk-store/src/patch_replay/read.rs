@@ -9,7 +9,7 @@ use prikk_object::{
     ObjectType, RefStatePayload,
 };
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReader;
 use crate::path::RepoPath;
 use crate::refs::RefStore;

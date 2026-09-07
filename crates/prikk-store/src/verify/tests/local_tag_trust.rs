@@ -12,7 +12,7 @@ use prikk_object::{
 
 use crate::maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner};
 use crate::patch_set_digest::compute_patch_set_digest_and_count_from_block;
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
     add_trusted_maintainer, maintainer_signature, verify_repository,

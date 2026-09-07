@@ -19,12 +19,17 @@
 //! received ref's own name doesn't exist at `init` either — the same architecturally-forced shape
 //! Stage 4 hit with refs). Replaced the old one-file-per-ref directory entirely, not layered on top of
 //! it.
+//!
+//! RFC 131 §2.2a ruling (b): the `received` name family. This module's own bare name is the
+//! family's, so it is the group's root; `received_index` is its child, below.
+
+pub(crate) mod received_index;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
-use crate::layout::{RepositoryLayout, ref_name_key_bytes};
-use crate::received_index::{
+use crate::foundation::layout::{RepositoryLayout, ref_name_key_bytes};
+use crate::received::received_index::{
     ReceivedIndexEntry, append_received_index_entry, list_resolved_received_entries,
     lookup_received_index_entry,
 };

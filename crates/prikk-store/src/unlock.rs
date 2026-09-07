@@ -36,10 +36,10 @@ use std::path::{Path, PathBuf};
 
 use prikk_error::Result;
 
-use crate::fsutil::{
+use crate::foundation::fsutil::{
     EntryKind, list_directory_tolerating_absence, read_file_if_exists, remove_file_required,
 };
-use crate::layout::{LockableContainer, RepositoryLayout};
+use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 
 /// Best-effort, advisory-only liveness of a lock's recorded `pid=`. See the module doc for why a
 /// negative or unknown result must never be treated as authorization to clear the lock.

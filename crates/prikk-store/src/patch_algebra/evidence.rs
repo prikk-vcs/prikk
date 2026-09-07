@@ -6,7 +6,7 @@ use super::evidence_types::{
 #[cfg(test)]
 use crate::lifecycle_cache::replay_derived_state;
 use crate::lifecycle_cache::{ReplayDerivedLifecycleState, materialize_edited_text};
-use crate::node_lifecycle::{NodeContent, NodeLifecycleState};
+use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::object_store::ObjectReader;
 
 #[derive(Debug)]

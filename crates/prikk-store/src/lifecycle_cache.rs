@@ -26,7 +26,7 @@
 use prikk_error::Result;
 use prikk_object::{BlobKind, ObjectId};
 
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::ObjectReader;
 
 #[cfg(test)]

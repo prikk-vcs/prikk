@@ -13,8 +13,8 @@ use std::fmt;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{CanonicalWriter, NodeId, NodeKind, ObjectId, WireType};
 
-use crate::byte_cursor::ByteCursor;
-use crate::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState, Tombstone};
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState, Tombstone};
 use crate::object_store::ObjectReader;
 
 use super::{
@@ -269,7 +269,7 @@ impl DecodedLifecycleCache {
         let mut prev_seen: Option<NodeId> = None;
         let mut seen_set = std::collections::BTreeSet::new();
         for id in &self.seen_ids {
-            crate::node_lifecycle::ensure_node_id_nonzero(*id)?;
+            crate::node::node_lifecycle::ensure_node_id_nonzero(*id)?;
             if let Some(previous) = prev_seen {
                 if id.as_bytes() <= previous.as_bytes() {
                     return Err(malformed("seen_ids not strictly ascending".to_string()));
@@ -372,8 +372,8 @@ fn validate_node_record_shape(
     kind: NodeKind,
     content: &NodeContent,
 ) -> Result<()> {
-    crate::node_lifecycle::ensure_node_id_nonzero(node_id)?;
-    crate::node_lifecycle::validate_kind_content_shape(kind, content)?;
+    crate::node::node_lifecycle::ensure_node_id_nonzero(node_id)?;
+    crate::node::node_lifecycle::validate_kind_content_shape(kind, content)?;
     Ok(())
 }
 

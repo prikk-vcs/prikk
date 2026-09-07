@@ -23,10 +23,10 @@ use crate::{
     load_maintainer_trust_policy, remove_trusted_maintainer, verify_signer_trusted,
 };
 
-use crate::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
-use crate::layout::LockableContainer;
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
+use crate::foundation::layout::LockableContainer;
 use crate::maintainer_signing::Ed25519MaintainerSigner;
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 
 fn public_key_hex(seed: &[u8; 32]) -> String {
     let key_pair = Ed25519KeyPair::from_seed(seed);
@@ -210,7 +210,8 @@ fn a_corrupt_policy_container_fails_closed_rather_than_resolving_stale_or_empty(
         assert!(add_trusted_maintainer(&layout, "alice", &key).is_ok());
         assert!(
             std::fs::write(
-                layout.trust_policy_container_slot_path(crate::layout::ContainerSlot::A),
+                layout
+                    .trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A),
                 b"not a valid trust policy container at all",
             )
             .is_ok()

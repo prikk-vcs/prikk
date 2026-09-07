@@ -8,7 +8,7 @@ use prikk_object::{BlockKind, BlockPayload, MerkleRoot, ObjectId, ObjectType};
 use crate::lifecycle_cache::replay::{
     LifecycleReplayError, TextCache, apply_candidate_patches, apply_one_block_with_text_cache,
 };
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::ObjectReader;
 use crate::state_root::{compute_state_root, entries_from_state};
 

@@ -46,7 +46,7 @@ use prikk_object::{
     ObjectEnvelope, ObjectId, ObjectType, RefKind, RefStatePayload, RefUpdatePayload, TagPayload,
 };
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::lock::ActiveLock;
 use crate::object_store::{FileObjectStore, ObjectReader, ObjectWriter};
 
@@ -61,7 +61,7 @@ pub(crate) fn append_log_record_for_signature_test(
 ) -> Result<()> {
     container::append_ref_container_record(
         layout,
-        crate::layout::ref_name_key_bytes(ref_name),
+        crate::foundation::layout::ref_name_key_bytes(ref_name),
         envelope,
     )
 }
@@ -74,7 +74,7 @@ pub(crate) fn append_log_record_for_signature_test(
 pub(crate) fn encode_log_record_for_test(envelope: &ObjectEnvelope) -> Result<Vec<u8>> {
     let update = RefUpdatePayload::decode_canonical(&envelope.canonical_payload)?;
     container::encode_ref_container_record_for_test(
-        crate::layout::ref_name_key_bytes(&update.ref_name),
+        crate::foundation::layout::ref_name_key_bytes(&update.ref_name),
         envelope,
     )
 }
@@ -332,7 +332,7 @@ impl RefStore {
 
     /// Read the current RefState object ID for a ref name.
     pub fn read_current_ref_state_id(&self, ref_name: &str) -> Result<Option<ObjectId>> {
-        let key = crate::layout::ref_name_key_bytes(ref_name);
+        let key = crate::foundation::layout::ref_name_key_bytes(ref_name);
         let Some(entry) = pointer_index::lookup_ref_pointer(&self.layout, key)? else {
             return Ok(None);
         };
@@ -347,7 +347,7 @@ impl RefStore {
 
     /// Replay the inline ref-update log for a ref name.
     pub fn replay_log(&self, ref_name: &str) -> Result<RefLogReplay> {
-        let key = crate::layout::ref_name_key_bytes(ref_name);
+        let key = crate::foundation::layout::ref_name_key_bytes(ref_name);
         container::replay_ref_subsequence(&self.layout, key)
     }
 

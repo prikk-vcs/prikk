@@ -13,8 +13,8 @@ use prikk_object::{
 };
 
 use crate::active::prepare_empty_active_ref_for_append;
-use crate::author_signing::{AuthorSigner, author_signature};
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::author::author_signing::{AuthorSigner, author_signature};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_inverse::{PatchInverseOperationSummary, prepare_patch_inverse_plan};
@@ -183,7 +183,7 @@ pub fn append_rollback_draft(
     // undetected, since a rejected conflict here is unrecoverable (no prune/rewrite path exists for
     // this container). `worktree_patch/node_authoring.rs` already does this under its own lock; this
     // matches that shape.
-    crate::author_key_index::record_author_key_material(
+    crate::author::author_key_index::record_author_key_material(
         layout,
         signer.key_id(),
         signer.public_key_bytes(),

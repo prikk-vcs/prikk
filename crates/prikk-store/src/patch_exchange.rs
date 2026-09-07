@@ -20,9 +20,9 @@ use std::collections::BTreeSet;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectId, ObjectType};
 
-use crate::container::decode_container_records;
-use crate::fsutil::read_file_if_exists;
-use crate::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
+use crate::foundation::container::decode_container_records;
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_set_digest::patch_ids_reachable_from_block;
 use crate::refs::{RefStore, resolve_ref_tip_block};

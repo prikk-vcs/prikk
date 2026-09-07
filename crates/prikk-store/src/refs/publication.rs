@@ -8,7 +8,7 @@ use super::{
     RefPublication, RefStore, container, validate_local_branch_ref, validate_local_tag_ref,
     validate_publication,
 };
-use crate::layout::{LockableContainer, RepositoryFormat, ref_name_key_bytes};
+use crate::foundation::layout::{LockableContainer, RepositoryFormat, ref_name_key_bytes};
 use crate::lock::{RefLock, acquire_container_locks};
 use crate::object_store::ObjectWriter;
 

@@ -7,8 +7,10 @@ use super::{
     encode_ref_container_record, incomplete_tail_matches, replay_ref_subsequence,
     truncate_incomplete_tail,
 };
-use crate::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
-use crate::test_support::{sample_object_id, signed_ref_update_envelope, unique_temp_dir};
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
+use crate::test_gates::test_support::{
+    sample_object_id, signed_ref_update_envelope, unique_temp_dir,
+};
 
 #[test]
 fn round_trips_a_single_record() -> Result<()> {

@@ -48,7 +48,7 @@ use prikk_object::{
     RefStatePayload, TagPayload,
 };
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::merge_evidence::ancestors_inclusive;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter};

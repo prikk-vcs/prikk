@@ -1,6 +1,6 @@
 use prikk_object::NodeId;
 
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::patch_replay::decode::DecodedPatchOperation;
 use crate::path::RepoPath;
 

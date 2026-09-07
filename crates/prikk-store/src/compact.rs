@@ -41,11 +41,11 @@
 
 use prikk_error::{PrikkError, Result};
 
-use crate::fsutil::{append_file_required, truncate_file_empty_required};
-use crate::generation::{self, GenerationRecord};
-use crate::layout::{LockableContainer, RepositoryLayout};
+use crate::foundation::fsutil::{append_file_required, truncate_file_empty_required};
+use crate::foundation::generation::{self, GenerationRecord};
+use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 use crate::lock::acquire_container_locks;
-use crate::received_index::{
+use crate::received::received_index::{
     ReceivedIndexEntry, encode_received_index_record, replay_received_index,
 };
 use crate::refs::{PointerIndexEntry, encode_pointer_index_record, replay_pointer_index};

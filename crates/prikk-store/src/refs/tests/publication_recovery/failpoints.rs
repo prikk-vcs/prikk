@@ -1,8 +1,8 @@
 //! Candidate, pointer-promotion, and truncation failpoint cases.
 
 use super::root_publication;
-use crate::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
-use crate::test_support::unique_temp_dir;
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{FileObjectStore, ObjectReader, RefStore, RepositoryLayout};
 
 #[test]
@@ -61,7 +61,7 @@ fn partial_tail_truncate_failure_preserves_state_for_retry() -> prikk_error::Res
     assert!(store.publish(&publication).is_err());
     super::super::super::append_torn_ref_log_tail_for_test(
         &layout,
-        crate::layout::ref_name_key_bytes("heads/main"),
+        crate::foundation::layout::ref_name_key_bytes("heads/main"),
         &publication.ref_update,
     )?;
     fail_once_for_test(TestFailPoint::Truncate);

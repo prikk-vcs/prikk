@@ -10,11 +10,11 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectType;
 
 use crate::checkout::prepare_snapshot_checkout_plan;
-use crate::fsutil::{
+use crate::foundation::fsutil::{
     ensure_directory_required, read_file_if_exists, set_regular_file_mode_required,
     stat_file_state_if_exists, sync_directory_required, write_worktree_file_atomically,
 };
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::patch_replay::{ReplayManifest, ReplayManifestEntry};
 use crate::path::join_repo_path_to_root;

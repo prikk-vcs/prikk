@@ -11,7 +11,7 @@ use prikk_object::{
 
 use super::{MergeEvidenceTarget, prepare_merge_evidence};
 use crate::received::write_received_pointer;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, signed_block, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };

@@ -9,7 +9,7 @@ use crate::{
     RepositoryLayout, prepare_checkout_plan,
 };
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     maintainer_signature, signed_patch_envelope, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };

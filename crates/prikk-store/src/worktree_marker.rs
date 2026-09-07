@@ -30,8 +30,10 @@
 
 use prikk_error::Result;
 
-use crate::fsutil::{append_file_required, read_file_if_exists, truncate_file_empty_required};
-use crate::layout::RepositoryLayout;
+use crate::foundation::fsutil::{
+    append_file_required, read_file_if_exists, truncate_file_empty_required,
+};
+use crate::foundation::layout::RepositoryLayout;
 
 /// Fixed sentinel appended on each dirty-set. Content is never parsed -- only "the file has any
 /// bytes" is meaningful -- but a recognizable magic makes the file self-explanatory to inspection.

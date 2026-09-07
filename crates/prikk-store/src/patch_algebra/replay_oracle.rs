@@ -6,7 +6,7 @@ use super::evidence_types::{
     Evidence, EvidenceError, EvidenceFact, EvidenceScope, PatchAlgebraEvidence,
 };
 use super::types::UnknownReason;
-use crate::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
+use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation,
 };

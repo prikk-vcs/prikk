@@ -2,7 +2,7 @@ use prikk_error::Result;
 use prikk_object::{BlockKind, ChangePerm, CreateFile, NodeId, ObjectId, OperationKind};
 
 use super::{write_blob, write_block, write_create_block, write_operation_block};
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     MergeEvidenceDisplay, MergeEvidenceDisplaySelector, MergeEvidenceTarget, MergePlanDisplay,
     RepositoryLayout, prepare_merge_plan,

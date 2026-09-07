@@ -10,7 +10,7 @@ use prikk_object::{
     ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
 };
 
-use crate::author_signing::author_signature;
+use crate::author::author_signing::author_signature;
 use crate::maintainer_signing::{
     Ed25519MaintainerSigner, MaintainerSigner as _, maintainer_signature,
 };

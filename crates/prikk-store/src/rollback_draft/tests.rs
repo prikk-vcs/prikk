@@ -10,11 +10,11 @@ use crate::{
     RefPublication, RefStore, RepositoryLayout, Wal, append_rollback_draft,
 };
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block,
     publish_text_edit_then_unsupported_rename_path_block,
 };
-use crate::test_support::{
+use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_patch_envelope, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };

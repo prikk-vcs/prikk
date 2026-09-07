@@ -12,8 +12,8 @@ use prikk_object::{
     PatchPurpose, RefStatePayload, SignatureAlgorithm, SignerRole,
 };
 
-use crate::node_id_gen::{NodeIdGenerator, SequenceEntropySource};
-use crate::test_support::{
+use crate::node::node_id_gen::{NodeIdGenerator, SequenceEntropySource};
+use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, signed_block, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };
@@ -684,11 +684,14 @@ fn active_session_append_patch_enforces_its_own_limit() {
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     let session = crate::ActiveSession::new(layout.clone());
     session
-        .append_patch(&crate::test_support::signed_patch_envelope(), 1)
+        .append_patch(&crate::test_gates::test_support::signed_patch_envelope(), 1)
         .unwrap();
 
     let err = session
-        .append_patch(&crate::test_support::rollback_patch_envelope(), 1)
+        .append_patch(
+            &crate::test_gates::test_support::rollback_patch_envelope(),
+            1,
+        )
         .unwrap_err();
     assert!(
         err.to_string().contains("at or above the configured limit"),
@@ -1820,14 +1823,14 @@ fn second_commit_report_is_identical_whether_the_commit_index_cache_is_warm_cold
 
     let warm = run_two_commits("commit-index-warm", |_layout| {});
     let cold = run_two_commits("commit-index-cold", |layout| {
-        crate::fsutil::remove_file_required(
+        crate::foundation::fsutil::remove_file_required(
             layout.repository_mutation_root(),
             &cache_relative(layout),
         )
         .unwrap();
     });
     let corrupt = run_two_commits("commit-index-corrupt", |layout| {
-        crate::fsutil::write_file_atomically(
+        crate::foundation::fsutil::write_file_atomically(
             layout.repository_mutation_root(),
             &cache_relative(layout),
             b"not a valid commit index at all",
@@ -1894,14 +1897,14 @@ fn second_commit_report_is_identical_whether_the_lifecycle_cache_is_warm_cold_or
 
     let warm = run_two_commits("lifecycle-cache-warm", |_layout| {});
     let cold = run_two_commits("lifecycle-cache-cold", |layout| {
-        crate::fsutil::remove_file_required(
+        crate::foundation::fsutil::remove_file_required(
             layout.repository_mutation_root(),
             &cache_relative(layout),
         )
         .unwrap();
     });
     let corrupt = run_two_commits("lifecycle-cache-corrupt", |layout| {
-        crate::fsutil::write_file_atomically(
+        crate::foundation::fsutil::write_file_atomically(
             layout.repository_mutation_root(),
             &cache_relative(layout),
             b"not a valid lifecycle cache at all",
@@ -2000,7 +2003,7 @@ fn genesis_missing_pointer_with_log_fails_closed() {
     publish_node_baseline(&layout, &[("readme.txt", b"hello\n", BlobKind::Text)]);
     crate::refs::remove_pointer_entries_for_test(
         &layout,
-        crate::layout::ref_name_key_bytes("heads/main"),
+        crate::foundation::layout::ref_name_key_bytes("heads/main"),
     )
     .unwrap();
     std::fs::write(root.join("readme.txt"), b"changed\n").unwrap();

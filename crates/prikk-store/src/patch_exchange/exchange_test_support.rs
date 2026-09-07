@@ -1,5 +1,5 @@
 //! Shared fixtures for `patch_exchange`'s own test modules (`artifact::tests`, `accept::tests`,
-//! `tests`). Unlike `crate::test_support`'s fixed dummy signatures, these build **real** Ed25519
+//! `tests`). Unlike `crate::test_gates::test_support`'s fixed dummy signatures, these build **real** Ed25519
 //! signatures -- the accept path's own security properties (§7) are about signature verification,
 //! so a fixture that cannot fail to verify would not exercise the thing being tested.
 
@@ -10,7 +10,7 @@ use prikk_object::{
     RecognitionClaimPayload, TagPayload,
 };
 
-use crate::author_signing::author_signature;
+use crate::author::author_signing::author_signature;
 use crate::maintainer_signing::maintainer_signature;
 use crate::{Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner};
 
@@ -141,7 +141,7 @@ pub(super) fn reencode_artifact(
     claims: Option<Vec<ObjectEnvelope>>,
     tags: Option<Vec<ObjectEnvelope>>,
 ) -> Result<Vec<u8>> {
-    use crate::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
+    use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 
     let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(bytes, 10_000_000)?;
     let patches = patches.unwrap_or(decoded.patches);

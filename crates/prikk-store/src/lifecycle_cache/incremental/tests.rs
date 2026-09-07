@@ -11,8 +11,8 @@ use prikk_object::{
 
 use super::*;
 use crate::RepositoryLayout;
-use crate::node_lifecycle::LiveNode;
-use crate::test_support::unique_temp_dir;
+use crate::node::node_lifecycle::LiveNode;
+use crate::test_gates::test_support::unique_temp_dir;
 
 /// A reader whose id -> object mapping is set by hand, mirroring
 /// `lifecycle_cache/replay/tests.rs`'s `MockReader` (kept as an independent copy rather than shared
@@ -216,7 +216,7 @@ fn load_treats_a_corrupt_cache_file_as_absent() {
         let relative = layout.repository_relative(&cache_path(&layout));
         assert!(relative.is_ok());
         if let Ok(relative) = relative {
-            let write = crate::fsutil::write_file_atomically(
+            let write = crate::foundation::fsutil::write_file_atomically(
                 layout.repository_mutation_root(),
                 &relative,
                 b"not a valid incremental cache",

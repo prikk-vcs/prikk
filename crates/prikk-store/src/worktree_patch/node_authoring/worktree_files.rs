@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use prikk_error::PrikkError;
 
 use super::{AuthorError, EXECUTABLE_FILE_MODE, REGULAR_FILE_MODE, RepoPath, RepositoryLayout};
-use crate::fsutil::{EntryKind, RootFileStat, list_directory, stat_file_state_if_exists};
+use crate::foundation::fsutil::{
+    EntryKind, RootFileStat, list_directory, stat_file_state_if_exists,
+};
 use crate::ignore::{IgnoreRules, should_skip_discovery};
 use crate::path::pathbuf_to_slash_string;
 

@@ -307,7 +307,7 @@ use prikk_object::{BlockPayload, ObjectId, ObjectType, RefKind, RefStatePayload}
 use crate::active::ActiveRefMetadata;
 use crate::block_state::{BlockStateOutcome, BlockStateStatus};
 use crate::commit_index::{CommitIndexDivergence, verify_divergence};
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
 use crate::lifecycle_cache::incremental::{
     LifecycleCacheDivergence, verify_divergence as verify_lifecycle_cache_divergence,
 };

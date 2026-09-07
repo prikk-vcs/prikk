@@ -9,11 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RecognitionClaimPayload, SignerRole};
 
-use crate::author_key_index::{
+use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
     verify_author_signature_against_material,
 };
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::object_store::{ObjectReadSnapshot, ObjectWriteSession, ObjectWriter};
 use crate::patch_replay::decode::{

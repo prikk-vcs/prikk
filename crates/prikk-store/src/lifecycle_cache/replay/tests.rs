@@ -11,7 +11,7 @@ use prikk_object::{
 };
 
 use super::{LifecycleReplayError, replay_lineage, walk_lineage};
-use crate::node_lifecycle::NodeContent;
+use crate::node::node_lifecycle::NodeContent;
 use crate::object_store::ObjectReader;
 use crate::path::RepoPath;
 use crate::text_span;
@@ -180,7 +180,7 @@ fn nid(byte: u8) -> NodeId {
 fn replay_single_patch(
     kinds: Vec<OperationKind>,
     blob: Option<(ObjectId, BlobKind)>,
-) -> std::result::Result<crate::node_lifecycle::NodeLifecycleState, LifecycleReplayError> {
+) -> std::result::Result<crate::node::node_lifecycle::NodeLifecycleState, LifecycleReplayError> {
     let (genesis, patch) = (oid(1), oid(2));
     let mut reader = MockReader::new();
     if let Some((blob_id, kind)) = blob {
@@ -624,7 +624,7 @@ fn replay_text_node(
     ops: Vec<OperationKind>,
 ) -> (
     MockReader,
-    std::result::Result<crate::node_lifecycle::NodeLifecycleState, LifecycleReplayError>,
+    std::result::Result<crate::node::node_lifecycle::NodeLifecycleState, LifecycleReplayError>,
 ) {
     let (genesis, patch) = (oid(1), oid(2));
     let mut reader = MockReader::new();
@@ -1028,7 +1028,7 @@ fn replace_binary_non_binary_old_blob_fails_closed() {
 fn replay_with_blobs(
     kinds: Vec<OperationKind>,
     blobs: &[(ObjectId, BlobKind)],
-) -> std::result::Result<crate::node_lifecycle::NodeLifecycleState, LifecycleReplayError> {
+) -> std::result::Result<crate::node::node_lifecycle::NodeLifecycleState, LifecycleReplayError> {
     let (genesis, patch) = (oid(1), oid(2));
     let mut reader = MockReader::new();
     for (id, kind) in blobs {
@@ -1158,7 +1158,7 @@ fn create_then_delete(
     path: &str,
     old_node_kind: NodeKind,
     preimage: DeleteNodePreimage,
-) -> std::result::Result<crate::node_lifecycle::NodeLifecycleState, LifecycleReplayError> {
+) -> std::result::Result<crate::node::node_lifecycle::NodeLifecycleState, LifecycleReplayError> {
     let blob = oid(20);
     replay_single_patch(
         vec![
@@ -1351,7 +1351,7 @@ use crate::lifecycle_cache::{
     ReplayDerivedLifecycleState, certified_compared_cache, compute_window_hash,
     replay_derived_state,
 };
-use crate::node_lifecycle::LiveNode;
+use crate::node::node_lifecycle::LiveNode;
 
 /// A genesis-only repo with one live text node (0x11 a.txt -> `blob`).
 fn single_node_reader(blob: ObjectId, content: &[u8]) -> (MockReader, ObjectId) {

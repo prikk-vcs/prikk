@@ -11,14 +11,14 @@ use prikk_object::{
 };
 
 use super::{SealFromAcceptedOutcome, seal_from_accepted_claim};
-use crate::author_signing::author_signature;
-use crate::fsutil::read_file_if_exists;
-use crate::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME};
+use crate::author::author_signing::author_signature;
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME};
 use crate::maintainer_signing::{
     Ed25519MaintainerSigner, MaintainerSigner as _, maintainer_signature,
 };
 use crate::recognition_claim::ClaimSignatureVerification;
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::wal::Wal;
 use crate::{
     Ed25519AuthorSigner, FileObjectStore, ObjectWriter, RefStore, RepositoryLayout,

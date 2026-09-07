@@ -2,8 +2,8 @@
 
 use crate::{RepositoryLayout, RollbackPreviewChangeKind, prepare_rollback_preview};
 
-use crate::test_support::unique_temp_dir;
-use crate::test_support::{
+use crate::test_gates::test_support::unique_temp_dir;
+use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block,
     publish_text_edit_then_unsupported_rename_path_block,
 };

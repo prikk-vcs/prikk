@@ -4,7 +4,7 @@ use prikk_error::Result;
 use prikk_object::BlockKind;
 
 use super::accepted_but_unsealed_patch_ids;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     signed_block, signed_patch_blob_envelope, signed_patch_envelope, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };

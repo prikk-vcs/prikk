@@ -12,8 +12,8 @@ use crate::{
     materialize_patch_checkout_with_deletions, plan_patch_checkout_deletions,
 };
 
-use crate::fsutil::{TestFailPoint, fail_once_for_test};
-use crate::test_support::{
+use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
+use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, publish_text_create_then_edit_block,
     signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
 };

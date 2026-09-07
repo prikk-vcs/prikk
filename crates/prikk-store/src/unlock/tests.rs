@@ -6,10 +6,10 @@ use prikk_error::Result;
 
 use super::{PidLiveness, clear_lock, find_held_lock, list_held_locks, read_lock_if_present};
 use crate::RepositoryLayout;
-use crate::fsutil::{EntryKind, list_directory};
-use crate::layout::{DEFAULT_ACTIVE_NAME, LockableContainer};
+use crate::foundation::fsutil::{EntryKind, list_directory};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer};
 use crate::lock::{ActiveLock, RefLock, acquire_container_locks};
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 
 #[test]
 fn a_fresh_repository_holds_no_locks() -> Result<()> {

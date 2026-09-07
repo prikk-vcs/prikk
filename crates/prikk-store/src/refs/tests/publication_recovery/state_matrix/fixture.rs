@@ -8,9 +8,9 @@ use prikk_object::{
     RefUpdatePayload,
 };
 
-use crate::fsutil::{TestFailPoint, fail_after_for_test};
-use crate::layout::ContainerSlot;
-use crate::test_support::{
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
+use crate::foundation::layout::ContainerSlot;
+use crate::test_gates::test_support::{
     rollback_patch_blob_envelope, rollback_patch_envelope, signed_patch_blob_envelope,
     signed_patch_envelope, unique_temp_dir,
 };
@@ -123,7 +123,7 @@ fn construct_state(
             assert!(store.publish(publication).is_err());
             super::super::super::super::append_torn_ref_log_tail_for_test(
                 layout,
-                crate::layout::ref_name_key_bytes("heads/main"),
+                crate::foundation::layout::ref_name_key_bytes("heads/main"),
                 &publication.ref_update,
             )?;
         }

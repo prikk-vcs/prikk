@@ -1,6 +1,6 @@
 //! Retained-format mutation-boundary tests.
 
-use crate::test_support::{signed_patch_envelope, unique_temp_dir};
+use crate::test_gates::test_support::{signed_patch_envelope, unique_temp_dir};
 use crate::{
     ActiveLock, DEFAULT_ACTIVE_NAME, RepositoryLayout, Wal, finish_active_publication_cleanup,
     remove_active_ref_metadata, write_active_ref_metadata,

@@ -1,7 +1,7 @@
 use prikk_object::{ObjectEnvelope, ObjectType, Signature, SignatureAlgorithm, SignerRole};
 
 use super::{validate_format2_schema, validate_read_schema};
-use crate::layout::RepositoryFormat;
+use crate::foundation::layout::RepositoryFormat;
 
 fn test_signature(key_id: &str, byte: u8) -> Signature {
     Signature {

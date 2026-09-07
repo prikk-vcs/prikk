@@ -4,8 +4,10 @@ mod proptest_framing;
 
 use crate::{DEFAULT_ACTIVE_NAME, RepositoryLayout, Wal};
 
-use crate::fsutil::{TestFailPoint, fail_once_for_test};
-use crate::test_support::{rollback_patch_envelope, signed_patch_envelope, unique_temp_dir};
+use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
+use crate::test_gates::test_support::{
+    rollback_patch_envelope, signed_patch_envelope, unique_temp_dir,
+};
 
 /// RFC 102 Stage 1 acceptance criterion 4: the WAL exists after `init`, not only after the first
 /// append. Behaviour-neutral per RFC 101 §5.1's inherited evidence -- `Wal::replay()` on a freshly

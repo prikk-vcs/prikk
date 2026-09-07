@@ -1,7 +1,7 @@
 //! Candidate cleanup recognizes only atomic-write names generated for the target ref.
 
 use super::root_publication;
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{RefStore, RepositoryLayout, verify_repository};
 
 #[test]

@@ -76,14 +76,18 @@ use prikk_object::{
     BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload, Signature, SignerRole,
 };
 
-use crate::author_key_index::{
+use crate::author::author_key_index::{
     AuthorKeyEntry, check_author_key_conflict, lookup_author_key_entries,
     record_author_key_material,
 };
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64};
-use crate::fsutil::len_to_u64;
-use crate::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout};
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{
+    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64,
+};
+use crate::foundation::fsutil::len_to_u64;
+use crate::foundation::layout::{
+    DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
+};
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_replay::decode::{

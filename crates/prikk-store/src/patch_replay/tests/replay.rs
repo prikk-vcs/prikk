@@ -1,6 +1,6 @@
 //! Patch replay planning tests.
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block, unique_temp_dir,
 };
 use crate::{RepositoryLayout, prepare_patch_replay_plan};

@@ -8,8 +8,10 @@ use crate::{
     remove_active_ref_metadata, write_active_ref_metadata,
 };
 
-use crate::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
-use crate::test_support::{rollback_patch_envelope, signed_patch_envelope, unique_temp_dir};
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
+use crate::test_gates::test_support::{
+    rollback_patch_envelope, signed_patch_envelope, unique_temp_dir,
+};
 
 mod format_transition;
 

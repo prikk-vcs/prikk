@@ -11,9 +11,9 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
-use crate::author_signing::AuthorSigner;
-use crate::layout::RepositoryLayout;
-use crate::node_id_gen::NodeIdGenerator;
+use crate::author::author_signing::AuthorSigner;
+use crate::foundation::layout::RepositoryLayout;
+use crate::node::node_id_gen::NodeIdGenerator;
 
 mod node_authoring;
 
@@ -194,7 +194,7 @@ pub(crate) fn commit_worktree_changes_with_generator<S, A>(
     signer: &A,
 ) -> Result<WorktreePatchCommitReport>
 where
-    S: crate::node_id_gen::NodeIdEntropySource,
+    S: crate::node::node_id_gen::NodeIdEntropySource,
     A: AuthorSigner,
 {
     node_authoring::author_worktree_patch(layout, ref_name, message, options, generator, signer)

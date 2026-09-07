@@ -23,7 +23,7 @@ use crate::trust::load_maintainer_trust_policy_or_empty;
 
 /// §5 row 1: reading a summary, a have-list, or the delta changes no state at all. Checked against
 /// **every** persisted object type's own container bytes
-/// (`crate::layout::persisted_object_types`) -- not only Block/RefState, so a mutation that writes
+/// (`crate::foundation::layout::persisted_object_types`) -- not only Block/RefState, so a mutation that writes
 /// through any object type (e.g. a stray Blob) is still caught -- the ref pointer index (via the
 /// ref's own current RefState id), and the trust policy: the same properties
 /// `seal_from_accepted`'s own no-op test pins.

@@ -15,7 +15,7 @@ use proptest::prelude::*;
 
 use prikk_object::{ObjectEnvelope, ObjectType, Signature, SignatureAlgorithm, SignerRole};
 
-use crate::author_key_index::AuthorKeyEntry;
+use crate::author::author_key_index::AuthorKeyEntry;
 
 use super::super::{
     BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle,

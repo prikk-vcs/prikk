@@ -16,7 +16,7 @@ use crate::maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner};
 use crate::object_store::ObjectWriteSession;
 use crate::patch_exchange::{AcceptOptions, accept_exchange_artifact, export_exchange_artifact};
 use crate::patch_set_digest::compute_patch_set_digest_and_count_from_block;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     signed_block, signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
 };
 use crate::trust::{add_trusted_maintainer, load_maintainer_trust_policy};

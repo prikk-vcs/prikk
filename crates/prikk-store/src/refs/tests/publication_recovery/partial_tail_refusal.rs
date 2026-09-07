@@ -5,9 +5,11 @@ use std::io::Write;
 use prikk_object::RefUpdatePayload;
 
 use super::root_publication;
-use crate::fsutil::{TestFailPoint, fail_after_for_test};
-use crate::layout::ContainerSlot;
-use crate::test_support::{sample_object_id, signed_ref_update_envelope, unique_temp_dir};
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
+use crate::foundation::layout::ContainerSlot;
+use crate::test_gates::test_support::{
+    sample_object_id, signed_ref_update_envelope, unique_temp_dir,
+};
 use crate::{RefStore, RepositoryLayout};
 
 #[derive(Clone, Copy)]
@@ -90,7 +92,7 @@ fn divergent_complete_prefix_with_partial_tail_is_preserved_byte_for_byte()
         }
         super::super::super::append_torn_ref_log_tail_for_test(
             &layout,
-            crate::layout::ref_name_key_bytes("heads/main"),
+            crate::foundation::layout::ref_name_key_bytes("heads/main"),
             &divergent,
         )?;
         let before = std::fs::read(&container_path)?;

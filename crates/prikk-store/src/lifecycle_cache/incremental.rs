@@ -15,10 +15,10 @@
 use prikk_error::Result;
 use prikk_object::{CanonicalWriter, ObjectId, WireType};
 
-use crate::byte_cursor::ByteCursor;
-use crate::fsutil::{read_file_if_exists, write_file_atomically};
-use crate::layout::RepositoryLayout;
-use crate::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState, Tombstone};
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::fsutil::{read_file_if_exists, write_file_atomically};
+use crate::foundation::layout::RepositoryLayout;
+use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState, Tombstone};
 use crate::object_store::ObjectReader;
 use crate::path::RepoPath;
 

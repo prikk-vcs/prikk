@@ -13,10 +13,10 @@ use super::{
     PublicationTrustVerifier, verify_block_payload,
 };
 use crate::block_state::{BlockStateOutcome, LineageStateMemo, verify_blocks_topological};
-use crate::container::{self, ContainerRecordStatus};
-use crate::fsutil::{EntryKind, inspect_entry, list_directory, read_file_if_exists};
-use crate::index::replay_index;
-use crate::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
+use crate::foundation::container::{self, ContainerRecordStatus};
+use crate::foundation::fsutil::{EntryKind, inspect_entry, list_directory, read_file_if_exists};
+use crate::foundation::index::replay_index;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use crate::object_store::ObjectReader;
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
@@ -148,7 +148,7 @@ pub(super) fn verify_objects(
     // wrong id* is a genuine index-integrity defect, not merely a damaged record the index happens to
     // point at.
     for entry in &index_replay.entries {
-        let Ok(envelope) = crate::index::read_object_envelope_at(layout, entry) else {
+        let Ok(envelope) = crate::foundation::index::read_object_envelope_at(layout, entry) else {
             continue;
         };
         let computed = envelope.object_id();
@@ -308,7 +308,7 @@ fn verify_object_record(
     // below -- it never reaches `author_verification` -- because that outcome is a genuine
     // authorship-integrity defect (forgery or corruption), not a trust opinion (D3).
     let author_verification = if object_type == ObjectType::Patch {
-        crate::author_key_index::verify_author_signature(layout, envelope)?.map(
+        crate::author::author_key_index::verify_author_signature(layout, envelope)?.map(
             |(key_id, sound)| {
                 if sound {
                     AuthorSignatureVerification::Sound { key_id }

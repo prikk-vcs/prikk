@@ -8,22 +8,22 @@ use prikk_object::{
     RefUpdatePayload, TagPayload,
 };
 
-use crate::author_key_index::{
+use crate::author::author_key_index::{
     AuthorKeyEntry, force_conflicting_author_key_entry_for_test, lookup_author_key_entries,
     record_author_key_material, verify_author_signature,
 };
-use crate::author_signing::{AuthorSigner, author_signature};
+use crate::author::author_signing::{AuthorSigner, author_signature};
 use crate::bundle::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
     decode_bundle, encode_bundle, encode_bundle_v1_for_test, encode_bundle_v2_for_test,
     export_bundle, import_bundle, verify_bundle,
 };
-use crate::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
-use crate::fsutil::len_to_u64;
-use crate::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer};
+use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
+use crate::foundation::fsutil::len_to_u64;
+use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer};
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::received::read_received_pointer;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     publish_text_create_then_edit_block_v1, rollback_patch_blob_envelope, signed_block,
     signed_patch_blob_envelope, signed_patch_envelope, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
@@ -961,10 +961,11 @@ fn a_pbndl001_bundle_imports_and_its_patch_reads_unverifiable() -> prikk_error::
 
 fn author_key_container_bytes(layout: &RepositoryLayout) -> prikk_error::Result<Vec<u8>> {
     let relative = layout.repository_relative(&layout.author_key_container_path())?;
-    Ok(
-        crate::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)?
-            .unwrap_or_default(),
-    )
+    Ok(crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    .unwrap_or_default())
 }
 
 /// Byte-for-byte snapshot of the received-ref index's full on-disk state: both container slots plus
@@ -977,10 +978,11 @@ fn received_index_bytes(
 ) -> prikk_error::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let read = |path: std::path::PathBuf| -> prikk_error::Result<Vec<u8>> {
         let relative = layout.repository_relative(&path)?;
-        Ok(
-            crate::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)?
-                .unwrap_or_default(),
-        )
+        Ok(crate::foundation::fsutil::read_file_if_exists(
+            layout.repository_mutation_root(),
+            &relative,
+        )?
+        .unwrap_or_default())
     };
     Ok((
         read(layout.received_index_slot_path(ContainerSlot::A))?,

@@ -1,6 +1,6 @@
 use prikk_object::NodeId;
 
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 
 use super::preimage::baseline_file_matches;
 use super::types::{Action, ConflictWitnessKind, OperationFacts, PairClass, RequiredOrder};

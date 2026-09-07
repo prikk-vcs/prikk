@@ -8,11 +8,11 @@ use super::{
     plan_compact_ref_pointer_index,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::fsutil::{TestFailPoint, fail_after_for_test};
-use crate::generation::resolve_live_slot;
-use crate::layout::{ContainerSlot, LockableContainer};
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
+use crate::foundation::generation::resolve_live_slot;
+use crate::foundation::layout::{ContainerSlot, LockableContainer};
 use crate::lock::acquire_container_locks;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, unique_temp_dir,
 };
 use crate::{
@@ -41,7 +41,7 @@ fn publish_update(
     store.publish(&RefPublication {
         ref_name: ref_name.to_string(),
         expected_previous_ref_state_id: expected_previous,
-        ref_update: crate::test_support::signed_ref_update_envelope(
+        ref_update: crate::test_gates::test_support::signed_ref_update_envelope(
             ref_name,
             expected_previous,
             ref_state_id,

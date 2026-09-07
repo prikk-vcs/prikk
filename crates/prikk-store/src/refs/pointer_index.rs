@@ -26,12 +26,12 @@ use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
 use prikk_object::ObjectId;
 
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{push_bytes_u64, push_u16};
-use crate::frame_resync::resync_to_next_magic;
-use crate::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
-use crate::generation::resolve_live_slot;
-use crate::layout::RepositoryLayout;
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{push_bytes_u64, push_u16};
+use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
+use crate::foundation::generation::resolve_live_slot;
+use crate::foundation::layout::RepositoryLayout;
 
 const POINTER_INDEX_MAGIC: &[u8; 8] = b"PREFPTI1";
 const POINTER_INDEX_VERSION: u16 = 1;
@@ -307,7 +307,7 @@ pub(crate) fn write_ref_pointer_candidate_for_test(
     append_ref_pointer_entry(
         layout,
         &PointerIndexEntry {
-            ref_name_key: crate::layout::ref_name_key_bytes(ref_name),
+            ref_name_key: crate::foundation::layout::ref_name_key_bytes(ref_name),
             ref_name: ref_name.to_string(),
             ref_state_id,
         },
@@ -432,7 +432,10 @@ pub fn remove_ref_pointer_entry_for_test_support(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<()> {
-    remove_pointer_entries_for_test(layout, crate::layout::ref_name_key_bytes(ref_name))
+    remove_pointer_entries_for_test(
+        layout,
+        crate::foundation::layout::ref_name_key_bytes(ref_name),
+    )
 }
 
 /// Force-append a pointer entry for `ref_state_id`, bypassing publish's CAS check and the ref log

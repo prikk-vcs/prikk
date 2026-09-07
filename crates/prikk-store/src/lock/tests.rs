@@ -1,7 +1,7 @@
 use std::fs;
 
-use crate::fsutil::{TestFailPoint, fail_once_for_test};
-use crate::test_support::unique_temp_dir;
+use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     ActiveLock, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout, acquire_container_locks,
 };

@@ -7,8 +7,8 @@ use super::{
     decode_pointer_index_records, encode_pointer_index_record, lookup_ref_pointer,
     replay_pointer_index,
 };
-use crate::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
-use crate::test_support::{sample_object_id, unique_temp_dir};
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
+use crate::test_gates::test_support::{sample_object_id, unique_temp_dir};
 
 #[test]
 fn write_then_lookup_round_trips() -> Result<()> {

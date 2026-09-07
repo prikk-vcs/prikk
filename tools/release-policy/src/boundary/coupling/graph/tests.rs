@@ -46,24 +46,32 @@ fn production_edge_text_tolerates_an_attribute_between_cfg_and_mod() {
 #[test]
 fn fsutil_none_module_is_counted_as_production() {
     let modules = walk_root_for_tests(&store_src_root()).expect("walk succeeds");
-    assert!(modules.contains("fsutil"));
-    let text = std::fs::read_to_string(store_src_root().join("fsutil/anchored/none.rs"))
-        .expect("none.rs exists");
-    // If this file were wrongly excluded, the crate::fsutil self-reference it contains would
-    // never reach the edge scan at all -- assert on the file being reachable instead of on the
-    // (self-loop, hence invisible) edge itself.
-    assert!(text.contains("crate::fsutil::contract::DurabilityContract"));
+    // RFC 131 §2.2a grouping: `fsutil` moved under `foundation/fsutil.rs` and is no longer a
+    // top-level module in its own right (its text is now collected into the `foundation` node).
+    assert!(modules.contains("foundation"));
+    let text =
+        std::fs::read_to_string(store_src_root().join("foundation/fsutil/anchored/none.rs"))
+            .expect("none.rs exists");
+    // If this file were wrongly excluded, the crate::foundation::fsutil self-reference it
+    // contains would never reach the edge scan at all -- assert on the file being reachable
+    // instead of on the (self-loop, hence invisible) edge itself.
+    assert!(text.contains("crate::foundation::fsutil::contract::DurabilityContract"));
 }
 
 #[test]
 fn walk_finds_the_confirmed_production_module_count() {
     let modules = walk_root_for_tests(&store_src_root()).expect("walk succeeds");
-    // 69 total top-level `mod` declarations in lib.rs, 8 `#[cfg(test)]` -- 61 production. Matches
-    // the coupling-gate-graph-contradiction round's own independent count exactly (report §1.1),
-    // itself the settlement of RFC 130 §4a's "61 vs 68" methodology question this gate depends on.
-    assert_eq!(modules.len(), 61, "modules: {modules:?}");
-    assert!(modules.contains("fsutil"));
-    assert!(modules.contains("layout"));
+    // RFC 131 §2.2a grouping (2026-09-08): 61 production modules at the coupling-gate-graph-
+    // contradiction round's own count shrank to 51 -- `foundation` (byte_cursor, container,
+    // file_codec, frame_resync, fsutil, generation, index, layout: 8 -> 1), `author`
+    // (author_key_index, author_signing: 2 -> 1), `node` (node_id_gen, node_lifecycle: 2 -> 1),
+    // and `received_index` folding into the already-top-level `received` (-1). None of §2's seven
+    // constrained modules moved; `patch`, `rollback`, `worktree`, `merge` name-family grouping was
+    // measured to create new coupling-graph cycles and was not done -- see the increment's report.
+    assert_eq!(modules.len(), 51, "modules: {modules:?}");
+    assert!(modules.contains("foundation"));
+    assert!(!modules.contains("fsutil"));
+    assert!(!modules.contains("layout"));
     assert!(!modules.contains("dc55_identity_evidence"));
     assert!(!modules.contains("test_support"));
 }
@@ -133,9 +141,16 @@ fn no_self_loops_in_the_graph() {
 
 #[test]
 fn fsutil_has_zero_production_out_edges() {
+    // RFC 131 §2.2a grouping folded `fsutil` into the `foundation` node alongside layout,
+    // byte_cursor, file_codec, frame_resync, container, index, generation -- `fsutil`'s own
+    // edges are no longer separately visible to this gate (a real cost, not free: RFC 130 §6's
+    // "fsutil is the crate's one genuinely clean seam" argument leaned on this exact number in
+    // isolation). The aggregate property this test can still check -- the whole foundation group
+    // has no *production* edge leaving it, matching every one of its eight members' own
+    // wide-fan-in-and-mostly-upward shape (RFC 130 §2.3) -- still holds and is checked here.
     let graph = build(&store_src_root()).expect("graph builds");
-    assert_eq!(graph.fan_out("fsutil"), 0);
-    assert!(graph.fan_in("fsutil") > 0);
+    assert_eq!(graph.fan_out("foundation"), 0);
+    assert!(graph.fan_in("foundation") > 0);
 }
 
 /// The full strongly-connected component's own edge set, pinned exactly -- **six** modules and

@@ -13,7 +13,7 @@ use super::{
     compute_patch_set_digest_for_ref, compute_patch_set_digest_from_block,
     patch_set_digest_preimage, resolve_patch_set_digest,
 };
-use crate::test_support::{maintainer_signature, signed_block, unique_temp_dir};
+use crate::test_gates::test_support::{maintainer_signature, signed_block, unique_temp_dir};
 use crate::{
     FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
 };
@@ -227,10 +227,16 @@ fn tag_ref_and_heads_ref_at_the_same_block_produce_the_same_digest() -> prikk_er
     let tip = write_block(&mut store, BlockKind::Normal, vec![genesis], vec![p1])?;
 
     let ref_store = RefStore::new(layout.clone());
-    let heads_state = crate::test_support::signed_ref_state_envelope("heads/main", None, tip, 1);
+    let heads_state =
+        crate::test_gates::test_support::signed_ref_state_envelope("heads/main", None, tip, 1);
     let heads_state_id = heads_state.object_id();
-    let heads_update =
-        crate::test_support::signed_ref_update_envelope("heads/main", None, heads_state_id, tip, 1);
+    let heads_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        heads_state_id,
+        tip,
+        1,
+    );
     ref_store.publish(&RefPublication {
         ref_name: "heads/main".to_string(),
         expected_previous_ref_state_id: None,
@@ -414,10 +420,14 @@ fn publish_branch(
     target_block_id: ObjectId,
     update_seq: u64,
 ) -> prikk_error::Result<()> {
-    let ref_state =
-        crate::test_support::signed_ref_state_envelope(ref_name, None, target_block_id, update_seq);
+    let ref_state = crate::test_gates::test_support::signed_ref_state_envelope(
+        ref_name,
+        None,
+        target_block_id,
+        update_seq,
+    );
     let ref_state_id = ref_state.object_id();
-    let ref_update = crate::test_support::signed_ref_update_envelope(
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
         ref_name,
         None,
         ref_state_id,
@@ -631,7 +641,8 @@ fn row5_a_block_reachable_only_from_remotes_is_not_a_candidate() -> prikk_error:
         Vec::new(),
         vec![ObjectId::from_bytes([0xe1; 32])],
     )?;
-    let received_state = crate::test_support::signed_ref_state_envelope("heads/x", None, tip, 1);
+    let received_state =
+        crate::test_gates::test_support::signed_ref_state_envelope("heads/x", None, tip, 1);
     let received_state_id = store.write_object(&received_state)?;
     crate::received::write_received_pointer(&layout, "remotes/heads/x", received_state_id)?;
 

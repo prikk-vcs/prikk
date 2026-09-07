@@ -9,9 +9,9 @@ use prikk_error::Result;
 use prikk_object::{BlockKind, ObjectId, ObjectType};
 
 use super::{AcceptOptions, ClaimSignatureVerification, accept_exchange_artifact};
-use crate::author_key_index::{lookup_author_key_entries, record_author_key_material};
-use crate::author_signing::AuthorSigner as _;
-use crate::layout::DEFAULT_ACTIVE_NAME;
+use crate::author::author_key_index::{lookup_author_key_entries, record_author_key_material};
+use crate::author::author_signing::AuthorSigner as _;
+use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::lock::ActiveLock;
 use crate::maintainer_signing::MaintainerSigner as _;
 use crate::patch_exchange::exchange_test_support::public_key_hex;
@@ -22,7 +22,7 @@ use crate::patch_exchange::exchange_test_support::{
 use crate::patch_exchange::export_exchange_artifact;
 use crate::patch_set_digest::compute_patch_set_digest_and_count_from_block;
 use crate::tag_travel::TagSignatureVerification;
-use crate::test_support::{signed_block, unique_temp_dir};
+use crate::test_gates::test_support::{signed_block, unique_temp_dir};
 use crate::verify::AuthorSignatureVerification;
 use crate::{FileObjectStore, ObjectWriter, RepositoryLayout};
 use crate::{ObjectReadSnapshot, add_trusted_maintainer, load_maintainer_trust_policy};
@@ -166,10 +166,11 @@ fn row1_a_refused_exchange_records_no_key_material_and_no_claim() -> Result<()> 
 
 fn author_key_container_bytes(layout: &RepositoryLayout) -> Result<Vec<u8>> {
     let relative = layout.repository_relative(&layout.author_key_container_path())?;
-    Ok(
-        crate::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)?
-            .unwrap_or_default(),
-    )
+    Ok(crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    .unwrap_or_default())
 }
 
 /// Review condition 1 (`RFC-115-stage-3-exchange-artifact-review-v1.md` §2): row 1's own test above
@@ -631,7 +632,9 @@ fn a_non_empty_parent_patch_ids_refuses() -> Result<()> {
     let canonical_payload = writer.finish();
     let mut patch = ObjectEnvelope::unsigned(ObjectType::Patch, 1, canonical_payload);
     let id = patch.object_id();
-    patch.add_signature(crate::author_signing::author_signature(&signer, id)?)?;
+    patch.add_signature(crate::author::author_signing::author_signature(
+        &signer, id,
+    )?)?;
     let patch_id = objects.write_object(&patch)?;
     let active_lock = ActiveLock::acquire(&sender, DEFAULT_ACTIVE_NAME)?;
     record_author_key_material(

@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use prikk_object::{BlobKind, CanonicalEncode, ObjectId};
 
 use crate::RepositoryLayout;
-use crate::fsutil::RootFileStat;
-use crate::test_support::unique_temp_dir;
+use crate::foundation::fsutil::RootFileStat;
+use crate::test_gates::test_support::unique_temp_dir;
 
 use super::{CommitIndex, CommitIndexEntry, content_hash};
 
@@ -69,7 +69,7 @@ fn a_corrupt_index_file_loads_as_empty_not_an_error() {
         let relative = layout.repository_relative(&layout.cache_dir().join("commit-index.v1"));
         assert!(relative.is_ok());
         if let Ok(relative) = relative {
-            let write = crate::fsutil::write_file_atomically(
+            let write = crate::foundation::fsutil::write_file_atomically(
                 layout.repository_mutation_root(),
                 &relative,
                 b"not a valid commit index at all",

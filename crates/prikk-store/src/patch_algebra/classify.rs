@@ -18,7 +18,7 @@ use super::witness::{
     common_node, conflict, conflict_with_span, derive_path, operand_path, ordered, unknown,
     unknown_from_facts,
 };
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::patch_replay::decode::DecodedPatchOperation;
 
 #[cfg(test)]

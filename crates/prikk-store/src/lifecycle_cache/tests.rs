@@ -10,7 +10,7 @@ use super::{
 
 use prikk_object::{CanonicalWriter, NodeId, NodeKind, ObjectId, WireType};
 
-use crate::node_lifecycle::{LiveNode, NodeContent, Tombstone};
+use crate::node::node_lifecycle::{LiveNode, NodeContent, Tombstone};
 use crate::path::RepoPath;
 
 const MAGIC: &[u8] = b"PRIKK-NODE-LIFECYCLE-CACHE-v1\0";
@@ -691,7 +691,7 @@ fn provenance_rejects_genesis_before_horizon() {
 // ---- 4.4-2b.2 step 3/4: replay-derived + compared rungs ----
 
 use super::{ComparedLifecycleCache, ReplayDerivedLifecycleState};
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 
 fn validated() -> ValidatedLifecycleCache {
     ValidatedLifecycleCache::from_decoded(decoded_valid(), &full_resolver(), &genesis_chain())

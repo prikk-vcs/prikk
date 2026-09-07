@@ -11,7 +11,7 @@ use super::types::{
     MergeEvidenceItem, MergeEvidenceOutcome, MergeEvidenceProofPhase, MergeEvidenceReasonCode,
     MergeEvidenceReport, MergeEvidenceSequence,
 };
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::patch_replay::decode::DecodedPatchOperation;
 
 use crate::patch_algebra::commutation::check_confluence;

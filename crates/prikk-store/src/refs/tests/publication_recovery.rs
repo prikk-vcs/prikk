@@ -9,9 +9,9 @@ mod state_matrix;
 use std::io::Write;
 
 use super::super::{append_log_record_for_signature_test, append_torn_ref_log_tail_for_test};
-use crate::fsutil::{TestFailPoint, fail_after_for_test};
-use crate::layout::ref_name_key_bytes;
-use crate::test_support::{
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
+use crate::foundation::layout::ref_name_key_bytes;
+use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_patch_envelope, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };
@@ -180,7 +180,7 @@ fn fully_framed_checksum_failure_is_never_truncated() -> prikk_error::Result<()>
     store.publish(&publication)?;
     // `heads/main` is the only ref in this fixture, so the whole container is exactly its own
     // subsequence.
-    let path = layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A);
+    let path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
     let mut bytes = std::fs::read(&path)?;
     let last = bytes.last_mut().ok_or_else(|| {
         prikk_error::PrikkError::Integrity("expected a complete ref-log record".to_string())
@@ -294,7 +294,8 @@ fn duplicate_and_greater_than_one_log_divergence_fail_closed() -> prikk_error::R
         if duplicate {
             // `heads/main` is the only ref in this fixture, so the whole container is exactly its
             // own subsequence -- duplicating the whole file duplicates only this ref's own record.
-            let path = layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A);
+            let path =
+                layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
             let record = std::fs::read(&path)?;
             std::fs::OpenOptions::new()
                 .append(true)

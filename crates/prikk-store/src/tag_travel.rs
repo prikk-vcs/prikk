@@ -25,9 +25,9 @@ use prikk_object::{
     RefUpdatePayload, Signature, SignatureAlgorithm, SignerRole, TagPayload,
 };
 
-use crate::container::decode_container_records;
-use crate::fsutil::read_file_if_exists;
-use crate::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
+use crate::foundation::container::decode_container_records;
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_set_digest::{PatchSetDigest, PatchSetResolution, resolve_patch_set_digest};

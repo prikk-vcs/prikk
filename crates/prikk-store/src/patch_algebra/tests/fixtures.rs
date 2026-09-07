@@ -1,6 +1,6 @@
 use prikk_object::{NodeId, ObjectId, text_span_hash};
 
-use crate::node_lifecycle::{LiveNode, NodeContent};
+use crate::node::node_lifecycle::{LiveNode, NodeContent};
 use crate::patch_replay::decode::{DecodedDeletePreimage, DecodedPatchOperation};
 use crate::path::RepoPath;
 use crate::text_span;

@@ -17,10 +17,10 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::{NodeId, ObjectId};
 
 use crate::blob_access::ensure_blob_matches_node_kind;
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::ignore::{IgnoreRules, should_skip_discovery};
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lifecycle_cache::replay::TextCache;
-use crate::node_lifecycle::{NodeContent, NodeLifecycleState};
+use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::object_store::ObjectReadSnapshot;
 use crate::patch_replay::decode::{
     DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,

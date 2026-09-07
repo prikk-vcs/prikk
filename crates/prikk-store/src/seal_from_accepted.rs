@@ -51,9 +51,11 @@ use prikk_object::{
 };
 
 use crate::block_state::{CandidateStateDerivationError, derive_next_state_root_for_candidate};
-use crate::container::decode_container_records;
-use crate::fsutil::read_file_if_exists;
-use crate::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryLayout, persisted_object_types};
+use crate::foundation::container::decode_container_records;
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::{
+    ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryLayout, persisted_object_types,
+};
 use crate::lifecycle_cache::replay::LifecycleReplayError;
 use crate::lock::ActiveLock;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};

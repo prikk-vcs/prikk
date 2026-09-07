@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use prikk_error::{PrikkError, Result};
 
-use crate::fsutil::{EntryKind, list_directory_tolerating_absence};
-use crate::layout::RepositoryLayout;
+use crate::foundation::fsutil::{EntryKind, list_directory_tolerating_absence};
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReadSnapshot;
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
@@ -153,7 +153,7 @@ pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> 
         // cross-reference by `ref_name_key_bytes(ref_name)`, not by a per-ref file path -- a shared
         // container has no such path, and `RefFileOutcome::path` is a display-only container
         // locator now (see its own doc), not a stable key a failed entry can be found by.
-        let ref_name_key = crate::layout::ref_name_key_bytes(&ref_name);
+        let ref_name_key = crate::foundation::layout::ref_name_key_bytes(&ref_name);
         let pointer_failure = pointer
             .is_none()
             .then(|| pointer_failures_by_key.get(&ref_name_key).cloned());

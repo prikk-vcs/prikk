@@ -33,7 +33,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
 use prikk_object::{BlockPayload, ObjectId, ObjectType, RefStatePayload};
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::merge_evidence::ancestors_inclusive;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::refs::{RefStore, resolve_ref_tip_block};
@@ -112,7 +112,7 @@ pub fn compute_patch_set_digest_and_count_from_block(
     tip_block_id: ObjectId,
 ) -> Result<(PatchSetDigest, u64)> {
     let patch_ids = patch_ids_reachable_from_block(object_store, tip_block_id)?;
-    let count = crate::fsutil::len_to_u64(patch_ids.len())?;
+    let count = crate::foundation::fsutil::len_to_u64(patch_ids.len())?;
     Ok((compute_patch_set_digest(&patch_ids)?, count))
 }
 
@@ -292,7 +292,7 @@ pub fn resolve_patch_set_digest(
         // paying for a hash. A mismatch here only ever means "not this candidate," never "not a
         // match despite matching," since a size match alone never enters `matches`: the digest
         // comparison below still has to agree too.
-        if crate::fsutil::len_to_u64(closure.len())? == patch_count {
+        if crate::foundation::fsutil::len_to_u64(closure.len())? == patch_count {
             let sorted: Vec<ObjectId> = closure.iter().copied().collect();
             if compute_patch_set_digest(&sorted)? == digest {
                 matches.push(block_id);

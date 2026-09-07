@@ -5,14 +5,14 @@ mod publication_recovery;
 
 use prikk_object::ObjectType;
 
-use crate::layout::{LockableContainer, ref_name_key_bytes};
+use crate::foundation::layout::{LockableContainer, ref_name_key_bytes};
 use crate::{
     FileObjectStore, ObjectWriter, RefLock, RefPublication, RefStore, RepositoryLayout,
     acquire_container_locks, verify_repository,
 };
 
-use crate::fsutil::{TestFailPoint, fail_after_for_test};
-use crate::test_support::{
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
+use crate::test_gates::test_support::{
     sample_object_id, signed_empty_block_envelope, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };
@@ -50,8 +50,9 @@ fn ref_lock_rejects_second_writer() {
 fn publish_writes_append_rather_than_replace() -> prikk_error::Result<()> {
     let root = unique_temp_dir("ref-publish-append-not-replace");
     let layout = RepositoryLayout::init(root.clone())?;
-    let pointer_index_path = layout.ref_pointer_index_slot_path(crate::layout::ContainerSlot::A);
-    let log_path = layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A);
+    let pointer_index_path =
+        layout.ref_pointer_index_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
     let mut objects = FileObjectStore::new(layout.clone());
     let store = RefStore::new(layout.clone());
 
@@ -515,7 +516,9 @@ fn ref_store_rejects_unborn_publication_when_log_has_trailing_partial() {
             if let Some(torn) = framed.get(..framed.len().saturating_sub(3)) {
                 assert!(
                     std::fs::write(
-                        layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+                        layout.ref_log_container_slot_path(
+                            crate::foundation::layout::ContainerSlot::A
+                        ),
                         torn
                     )
                     .is_ok()
@@ -596,7 +599,9 @@ fn verify_repository_detects_missing_ref_state_object() {
         assert!(store.publish(&publication).is_ok());
         // Containers are append-only, so there is no direct "delete one object" equivalent to the
         // pre-Stage-3 `std::fs::remove_file` this replaces.
-        assert!(crate::index::remove_index_entry_for_test(&layout, ref_state_id).is_ok());
+        assert!(
+            crate::foundation::index::remove_index_entry_for_test(&layout, ref_state_id).is_ok()
+        );
         let report = verify_repository(&layout);
         assert!(report.is_ok());
         if let Ok(report) = report {
@@ -646,7 +651,9 @@ fn ensure_no_incomplete_publication_refuses_when_a_ref_item_fails() {
         assert!(store.publish(&publication).is_ok());
         // Containers are append-only, so there is no direct "delete one object" equivalent to the
         // pre-Stage-3 `std::fs::remove_file` this replaces.
-        assert!(crate::index::remove_index_entry_for_test(&layout, ref_state_id).is_ok());
+        assert!(
+            crate::foundation::index::remove_index_entry_for_test(&layout, ref_state_id).is_ok()
+        );
 
         // Confirm the premise first: `verify_refs` itself no longer returns `Err` for this fixture
         // (item containment), so `ensure_no_incomplete_publication`'s own refusal cannot be coming
@@ -682,7 +689,7 @@ fn ensure_no_incomplete_publication_refuses_on_a_corrupted_log_container_record(
 
     // `heads/main` is the only ref in this fixture, so the whole container is exactly its own
     // subsequence; flip the last byte to corrupt the checksum of its one record.
-    let path = layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A);
+    let path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
     let mut bytes = std::fs::read(&path)?;
     let last = bytes
         .last_mut()

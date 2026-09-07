@@ -13,7 +13,9 @@ use prikk_object::{
 };
 
 use crate::maintainer_signing::MaintainerSigner;
-use crate::test_support::{signed_patch_blob_envelope, signed_patch_envelope, unique_temp_dir};
+use crate::test_gates::test_support::{
+    signed_patch_blob_envelope, signed_patch_envelope, unique_temp_dir,
+};
 use crate::{
     DEFAULT_ACTIVE_NAME, Ed25519MaintainerSigner, FileObjectStore, ObjectWriter, RefPublication,
     RefStore, RepositoryLayout, StageOutcome, StageStatus, VerificationStage, VerifyOptions, Wal,
@@ -157,8 +159,10 @@ fn verify_repository_reports_two_independent_bad_objects_in_the_same_stage() -> 
 
     let mut objects = FileObjectStore::new(layout.clone());
     let mut offsets = Vec::new();
-    let container_path =
-        layout.container_slot_path(ObjectType::Blob, crate::layout::ContainerSlot::A);
+    let container_path = layout.container_slot_path(
+        ObjectType::Blob,
+        crate::foundation::layout::ContainerSlot::A,
+    );
     for label in ["first", "second", "third"] {
         let before = std::fs::read(&container_path)
             .map(|bytes| bytes.len())
@@ -318,7 +322,7 @@ fn verify_repository_reports_two_independent_bad_refs_in_the_same_stage() -> Res
         // this replaces; a genuinely dangling reference under containers is an object whose index
         // entry is gone, not a container record that was ever removed (same technique as
         // `verify_repository_detects_dangling_ref_target`, `ref_cluster.rs`).
-        crate::index::remove_index_entry_for_test(&layout, block_id)?;
+        crate::foundation::index::remove_index_entry_for_test(&layout, block_id)?;
         Ok(())
     };
     publish_dangling_ref(&mut objects, "heads/first")?;

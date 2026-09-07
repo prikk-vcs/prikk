@@ -26,13 +26,13 @@ use prikk_object::{
 };
 
 use crate::active::{prepare_empty_active_ref_for_append, require_active_ref_for_non_empty_wal};
-use crate::author_signing::AuthorSigner;
+use crate::author::author_signing::AuthorSigner;
 use crate::commit_index::{self, CommitIndex, CommitIndexEntry};
-use crate::fsutil::{RootFileStat, read_file_if_exists};
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::foundation::fsutil::{RootFileStat, read_file_if_exists};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
-use crate::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
-use crate::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
+use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
+use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::object_store::{ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::RepoPath;
@@ -68,7 +68,7 @@ pub(crate) enum AuthorError {
     /// Symlink authoring is out of scope until FDD-04 §5.4a static target validation.
     UnsupportedSymlinkAuthoring(String),
     /// Fresh node-id minting failed (propagated without flattening).
-    Mint(crate::node_id_gen::NodeIdMintError),
+    Mint(crate::node::node_id_gen::NodeIdMintError),
     /// An underlying store/encoding error.
     Store(PrikkError),
 }
@@ -578,14 +578,14 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     );
     let patch_id = patch.object_id();
     // R1: real role-bound Ed25519 AUTHOR signature over the unsigned patch object id.
-    let signature =
-        crate::author_signing::author_signature(signer, patch_id).map_err(AuthorError::Store)?;
+    let signature = crate::author::author_signing::author_signature(signer, patch_id)
+        .map_err(AuthorError::Store)?;
     patch.add_signature(signature).map_err(AuthorError::Store)?;
     // DC-53 Stage 1: record this signer's key material now, while it is still available -- the
     // signer is the only party that ever holds it, and Ed25519 signatures are not
     // public-key-recoverable, so `verify` has nothing to check this Patch's signature against
     // later unless it is captured here.
-    crate::author_key_index::record_author_key_material(
+    crate::author::author_key_index::record_author_key_material(
         layout,
         signer.key_id(),
         signer.public_key_bytes(),

@@ -4,8 +4,10 @@
 use prikk_object::{CanonicalEncode, ObjectEnvelope, ObjectType, RefUpdatePayload};
 
 use super::root_publication;
-use crate::layout::{ContainerSlot, ref_name_key_bytes};
-use crate::test_support::{maintainer_signature, signed_patch_envelope, unique_temp_dir};
+use crate::foundation::layout::{ContainerSlot, ref_name_key_bytes};
+use crate::test_gates::test_support::{
+    maintainer_signature, signed_patch_envelope, unique_temp_dir,
+};
 use crate::{
     ActiveSession, DEFAULT_ACTIVE_PATCH_LIMIT, RefStore, RepositoryLayout, verify_repository,
 };

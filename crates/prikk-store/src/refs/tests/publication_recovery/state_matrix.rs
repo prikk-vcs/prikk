@@ -255,7 +255,7 @@ fn every_state_has_explicit_representative_command_mutation_outcome() -> prikk_e
         let fixture = Fixture::new(case.state)?;
         let before = fixture.state_bytes()?;
         let result = ActiveSession::new(fixture.layout.clone()).append_patch(
-            &crate::test_support::signed_patch_envelope(),
+            &crate::test_gates::test_support::signed_patch_envelope(),
             DEFAULT_ACTIVE_PATCH_LIMIT,
         );
         assert_eq!(result.is_ok(), case.mutation_succeeds);

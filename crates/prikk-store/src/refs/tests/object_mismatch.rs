@@ -1,6 +1,6 @@
 //! DC-36 publication refusal when immutable object bytes disagree.
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, signed_ref_update_envelope,
     unique_temp_dir,
 };

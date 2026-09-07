@@ -2,7 +2,7 @@ use prikk_object::{BlobPayload, CanonicalEncode, ObjectEnvelope, ObjectType, tex
 
 use crate::lifecycle_cache::ReplayDerivedLifecycleState;
 use crate::memory_store::MemoryObjectStore;
-use crate::node_lifecycle::{LiveNode, NodeContent};
+use crate::node::node_lifecycle::{LiveNode, NodeContent};
 use crate::object_store::ObjectWriter;
 
 use super::*;

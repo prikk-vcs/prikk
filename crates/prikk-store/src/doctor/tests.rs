@@ -16,7 +16,7 @@ use crate::{
     write_active_ref_metadata,
 };
 
-use crate::test_support::{
+use crate::test_gates::test_support::{
     maintainer_signature as legacy_maintainer_signature, rollback_author_signature,
     sample_object_id, signed_patch_envelope, unique_temp_dir,
 };
@@ -560,7 +560,7 @@ fn doctor_refuses_missing_main_ref_pointer_reconstruction() {
         assert!(
             crate::refs::remove_pointer_entries_for_test(
                 &layout,
-                crate::layout::ref_name_key_bytes("heads/main"),
+                crate::foundation::layout::ref_name_key_bytes("heads/main"),
             )
             .is_ok()
         );
@@ -776,7 +776,7 @@ fn repair_repository_still_refuses_when_the_refs_stage_fails() -> prikk_error::R
     // A dangling ref target: remove the just-published RefState's target Block's index entry.
     // Containers are append-only, so there is no direct "delete one object" equivalent to the
     // pre-Stage-3 `std::fs::remove_file` this replaces.
-    assert!(crate::index::remove_index_entry_for_test(&layout, target).is_ok());
+    assert!(crate::foundation::index::remove_index_entry_for_test(&layout, target).is_ok());
 
     let before = doctor_repository(&layout);
     assert!(!before.is_healthy());

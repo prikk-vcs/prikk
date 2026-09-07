@@ -57,8 +57,8 @@ use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
 
-use crate::fsutil::read_file_if_exists;
-use crate::layout::RepositoryLayout;
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::RepositoryLayout;
 use crate::path::RepoPath;
 
 /// Fixed name and location: the repository root, alongside the worktree it governs.

@@ -5,7 +5,7 @@
 use prikk_object::ObjectId;
 
 use crate::received::{list_received_pointers, read_received_pointer, validate_received_ref};
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{RepositoryLayout, received};
 
 fn fake_object_id(byte: u8) -> ObjectId {

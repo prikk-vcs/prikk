@@ -11,7 +11,7 @@ use prikk_object::{
 
 use super::assert_ref_failed;
 use crate::maintainer_signing::MaintainerSigner;
-use crate::test_support::unique_temp_dir;
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     Ed25519MaintainerSigner, FileObjectStore, ObjectWriter, RepositoryLayout,
     add_trusted_maintainer, derive_next_state_root, maintainer_signature, verify_repository,

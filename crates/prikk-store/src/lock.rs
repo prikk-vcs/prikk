@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
 
-use crate::fsutil::{MutationRoot, create_new_file_required, remove_file_cleanup_best_effort};
-use crate::layout::{LockableContainer, RepositoryLayout};
+use crate::foundation::fsutil::{
+    MutationRoot, create_new_file_required, remove_file_cleanup_best_effort,
+};
+use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 
 /// Active session lock acquired before mutating an active WAL tail.
 #[derive(Debug)]

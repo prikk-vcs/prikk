@@ -13,7 +13,7 @@ use prikk_object::{
     SignatureAlgorithm, SignerRole,
 };
 
-use crate::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::patch_inverse::prepare_patch_inverse_plan;
 use crate::patch_replay::decode::{
     decode_patch_message, decode_patch_operations, ensure_apply_supported,

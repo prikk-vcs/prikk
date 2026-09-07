@@ -1,8 +1,8 @@
 //! Unclean-shutdown worktree marker tests (RFC 102 Stage 1).
 
 use crate::RepositoryLayout;
-use crate::fsutil::{TestFailPoint, fail_once_for_test};
-use crate::test_support::unique_temp_dir;
+use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty, worktree_is_dirty};
 
 #[test]

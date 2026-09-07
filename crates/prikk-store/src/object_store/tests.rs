@@ -13,7 +13,7 @@ use crate::{
     ObjectWriter, RepositoryLayout,
 };
 
-use crate::test_support::{dummy_signature, unique_temp_dir};
+use crate::test_gates::test_support::{dummy_signature, unique_temp_dir};
 
 #[test]
 fn memory_store_roundtrips_object() {

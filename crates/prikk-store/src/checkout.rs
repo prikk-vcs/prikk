@@ -7,7 +7,7 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayload};
 
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::refs::RefStore;
 use crate::snapshot::SnapshotManifest;

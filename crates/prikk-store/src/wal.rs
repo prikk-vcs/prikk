@@ -7,14 +7,16 @@ use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{decode_envelope_file, encode_envelope_file, push_u16, push_u64};
-use crate::frame_resync::resync_to_next_magic;
-use crate::fsutil::{
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{
+    decode_envelope_file, encode_envelope_file, push_u16, push_u64,
+};
+use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::fsutil::{
     MutationRoot, append_file_required, len_to_u64, read_file_if_exists,
     truncate_existing_file_required, truncate_file_empty_required,
 };
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 
 const WAL_RECORD_MAGIC: &[u8; 8] = b"PWALR001";
 const WAL_RECORD_VERSION: u16 = 1;
@@ -357,7 +359,7 @@ fn encode_record(record: &WalRecord) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 pub(crate) fn encode_record_for_test(record: &WalRecord) -> Result<Vec<u8>> {
-    let body = crate::file_codec::encode_envelope_file_structural(&record.envelope)?;
+    let body = crate::foundation::file_codec::encode_envelope_file_structural(&record.envelope)?;
     frame_record(record.seq, &body)
 }
 

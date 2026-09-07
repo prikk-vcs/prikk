@@ -7,11 +7,11 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
-use crate::index::{
+use crate::foundation::index::{
     self, IndexEntry, WriteDecision, append_object_to_container, decide_write_outcome,
     lookup_object_location, read_object_envelope_at,
 };
-use crate::layout::RepositoryLayout;
+use crate::foundation::layout::RepositoryLayout;
 
 /// Read-only object access boundary.
 pub trait ObjectReader {
@@ -189,9 +189,11 @@ impl IndexSnapshot {
     /// bounded (RFC 111 Q3/Q4), so charging every read a stat here would buy nothing.
     fn ensure_current(&mut self, layout: &RepositoryLayout) -> Result<()> {
         let relative = layout.repository_relative(&layout.container_index_path())?;
-        let current_length =
-            crate::fsutil::stat_file_state_if_exists(layout.repository_mutation_root(), &relative)?
-                .map_or(0, |stat| stat.size);
+        let current_length = crate::foundation::fsutil::stat_file_state_if_exists(
+            layout.repository_mutation_root(),
+            &relative,
+        )?
+        .map_or(0, |stat| stat.size);
         if current_length == self.known_length {
             return Ok(());
         }

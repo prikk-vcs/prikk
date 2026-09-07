@@ -9,7 +9,7 @@ use super::{
     ContradictedField, RecognitionClaimConsistency, check_recognition_claim_consistency,
     order_claims_for_sealing,
 };
-use crate::test_support::{maintainer_signature, signed_block, unique_temp_dir};
+use crate::test_gates::test_support::{maintainer_signature, signed_block, unique_temp_dir};
 use crate::trust::load_maintainer_trust_policy;
 use crate::{FileObjectStore, ObjectWriter, RepositoryLayout};
 

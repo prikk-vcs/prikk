@@ -1,6 +1,6 @@
 use prikk_object::{BlobKind, NodeId, ObjectId, text_span_hash};
 
-use crate::node_lifecycle::NodeLifecycleState;
+use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::text_span;
 
 use super::evidence_types::{

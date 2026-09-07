@@ -65,7 +65,7 @@ use prikk_object::{
 
 use super::{assert_ref_failed, assert_stage_failed};
 use crate::maintainer_signing::MaintainerSigner;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, signed_ref_update_envelope,
     unique_temp_dir,
 };
@@ -220,7 +220,7 @@ fn verify_repository_detects_dangling_ref_target() -> Result<()> {
     // Containers are append-only, so there is no direct "delete one object" equivalent to the
     // pre-Stage-3 `std::fs::remove_file` this replaces -- a genuinely dangling reference under
     // containers is an object whose index entry is gone, not a container record that was removed.
-    crate::index::remove_index_entry_for_test(&layout, block_id)?;
+    crate::foundation::index::remove_index_entry_for_test(&layout, block_id)?;
 
     let report = verify_repository(&layout)?;
     assert_ref_failed(&report, "targets missing block");
@@ -265,7 +265,7 @@ fn verify_repository_detects_pointer_index_entry_key_mismatch() -> Result<()> {
     )?;
     crate::refs::write_ref_pointer_entry_with_explicit_key_for_test(
         &layout,
-        crate::layout::ref_name_key_bytes("heads/aux"),
+        crate::foundation::layout::ref_name_key_bytes("heads/aux"),
         "heads/not-aux",
         ref_state_id,
     )?;
@@ -316,11 +316,11 @@ fn verify_repository_detects_ref_container_record_key_mismatch() -> Result<()> {
         &signer,
     )?;
     let framed = crate::refs::encode_ref_container_record_for_test(
-        crate::layout::ref_name_key_bytes("heads/aux"),
+        crate::foundation::layout::ref_name_key_bytes("heads/aux"),
         &mismatched_update,
     )?;
     std::fs::write(
-        layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
         framed,
     )?;
 
@@ -425,7 +425,7 @@ fn verify_repository_fails_closed_on_a_damaged_pointer_index_entry() -> Result<(
     crate::refs::write_ref_pointer_candidate(&layout, "heads/main", ref_state_id)?;
     // Corrupt the just-written entry's own last byte (inside its checksum-covered region) --
     // shape otherwise valid, only the content is damaged.
-    let path = layout.ref_pointer_index_slot_path(crate::layout::ContainerSlot::A);
+    let path = layout.ref_pointer_index_slot_path(crate::foundation::layout::ContainerSlot::A);
     let mut bytes = std::fs::read(&path)?;
     let last = bytes.last_mut().ok_or_else(|| {
         prikk_error::PrikkError::Integrity("expected a pointer entry".to_string())
@@ -645,7 +645,7 @@ fn verify_repository_detects_incomplete_log_tail_without_pointer_lead() -> Resul
     // own reasoning (`refs/container.rs`).
     crate::refs::append_torn_ref_log_tail_for_test(
         &layout,
-        crate::layout::ref_name_key_bytes("heads/main"),
+        crate::foundation::layout::ref_name_key_bytes("heads/main"),
         &update,
     )?;
 
@@ -712,7 +712,7 @@ fn verify_repository_detects_nonzero_created_at_under_format2() -> Result<()> {
     // subsequence -- overwriting the whole file with just this one record leaves no other ref's
     // data to disturb.
     std::fs::write(
-        layout.ref_log_container_slot_path(crate::layout::ContainerSlot::A),
+        layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
         crate::refs::encode_log_record_for_test(&update_envelope)?,
     )?;
 

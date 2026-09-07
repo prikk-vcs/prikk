@@ -7,7 +7,7 @@ use prikk_object::{
 
 #[cfg(target_os = "windows")]
 use crate::ObjectReader;
-use crate::test_support::{
+use crate::test_gates::test_support::{
     rollback_patch_envelope, signed_patch_blob_envelope, signed_patch_envelope, unique_temp_dir,
 };
 use crate::{
@@ -88,7 +88,7 @@ fn full_verification_retains_wal_objects_trust_and_recovery_diagnosis_after_root
     Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME).append_patch(&patch)?;
     crate::refs::remove_pointer_entries_for_test(
         &layout,
-        crate::layout::ref_name_key_bytes("heads/main"),
+        crate::foundation::layout::ref_name_key_bytes("heads/main"),
     )?;
 
     assert_retained_missing_pointer(&layout, patch_id)?;

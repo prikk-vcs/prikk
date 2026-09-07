@@ -6,7 +6,7 @@ use prikk_object::{
     PATCH_TEXT_SPAN_V2_SCHEMA, REF_STATE_CLOSED_SCHEMA,
 };
 
-use crate::layout::RepositoryFormat;
+use crate::foundation::layout::RepositoryFormat;
 
 pub(crate) fn validate_object_envelope(
     format: RepositoryFormat,

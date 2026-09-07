@@ -36,11 +36,13 @@ use std::collections::BTreeSet;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, Signature, SignerRole};
 
-use crate::author_key_index::{AuthorKeyEntry, lookup_author_key_entries};
-use crate::byte_cursor::ByteCursor;
-use crate::file_codec::{decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64};
-use crate::fsutil::len_to_u64;
-use crate::layout::RepositoryLayout;
+use crate::author::author_key_index::{AuthorKeyEntry, lookup_author_key_entries};
+use crate::foundation::byte_cursor::ByteCursor;
+use crate::foundation::file_codec::{
+    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64,
+};
+use crate::foundation::fsutil::len_to_u64;
+use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,
