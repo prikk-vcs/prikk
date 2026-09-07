@@ -386,6 +386,37 @@ determinism test needs **no binary and no repository** — which is what makes �
 suite rather than joining the `#[ignore]`d instruments" achievable at all. **Separating planning from
 execution is therefore structural, not stylistic**, and the handoff says so.
 
+### Increment 2 — DELIVERED and ACCEPTED 2026-09-07 (`329715b`), and §6's floor is RULED unreachable
+
+**§6 deliberately refused to fix a depth target before the build cost was measured. That refusal
+paid.** Measured: per-seal cost is **linear in history depth**, so cumulative build cost is
+**quadratic** — power-law exponent **2.03**, re-derived independently by the architect. Depth 2,048
+extrapolates to **23 to 101 hours**. Full figures and the RFC 111 distinction: **RFC 133 §5b**.
+
+**RULED: the 2,048 floor stands as the design's requirement and is unreachable in practice today.
+Those are two different statements and both are recorded.**
+
+- **The floor is not revised away.** §6 chose 2,048 as the depth at which a depth-versus-storage curve
+  has *shape* — 32 `REANCHOR_BOUND` intervals. Nothing measured changes what the curve needs.
+- **The implementing round's practical target of 256 is accepted for increment 3**, exercising the
+  authority §6 gave it. **It is 4 intervals, not 32** — the round said so plainly rather than
+  softening it, and that honesty is why it is accepted.
+- **So increment 3 must state what 4 intervals can and cannot support.** RFC 136 §9 item 1 (checkout
+  cost at realistic depth) is answerable at 256. **Cadence tuning against `REANCHOR_BOUND` is not** —
+  four points show direction, not shape. **Increment 3 must not present a 256-deep result as
+  cadence-tuning evidence.**
+
+**The substantive consequence, and it is new:** **reducing `seal`'s per-block object reads is now a
+prerequisite for this RFC's own stated purpose**, not a separate performance nicety. The corpus did
+not fail to reach its floor — **it measured the thing that blocks it**, which is what an instrument is
+for. RFC 133 §5b.2 carries that dependency.
+
+**Two things this increment establishes beyond its own scope.** §5a's ruling held up exactly as
+designed — determinism compares action manifests, and the round's own control asserts sealed heads
+**differ**, putting §5a into the test suite rather than leaving a future reader to assume they should
+match. And the planner/executor split the handoff required made the determinism test runnable with **no
+binary and no repository**: verified, it runs in the ordinary suite with **0 ignored**.
+
 **Increment 3 — the two measurements the corpus was held for.**
 RFC 136 §9 item 1 (checkout cost at realistic depth — the quantity the reviewer confirmed has no
 honest git proxy) and item 2 (baseline reconstruction on the **merge** path, which DC-64 never

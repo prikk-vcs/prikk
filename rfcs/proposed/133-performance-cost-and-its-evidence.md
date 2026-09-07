@@ -195,6 +195,50 @@ re-derives that chain from genesis, for every block" — may itself no longer de
 updates the cost and leaves a stale mechanism sentence would replace one wrong claim with another.**
 Tracked here as its own piece of work rather than done in passing.
 
+## 5b. Sealing cost is quadratic in history depth — measured 2026-09-07 (RFC 139 increment 2)
+
+**The first result the measurement corpus produced, and it arrived before the corpus was finished.**
+Recorded here because RFC 139 §6 requires it and because `.git-exclude/` does not survive a clone.
+
+**Method.** One repository grown commit-by-commit and sealed from `profiles/prikk-self.toml` scaled to
+depth, every commit and seal timed, peak RSS sampled from `/proc` at checkpoints. Raw table and the
+binary's own SHA-256: `rfcs/handoffs/139-measurement-corpus/build-cost-curve-report-v1.md`. **One
+sample run, on one machine, to depth 128 — not to RFC 139 §6's 2,048 floor.** Reported by the
+implementing round; the arithmetic below was re-derived independently by the architect.
+
+| Depth | Seal (ms) | Cumulative (s) | seal ÷ depth |
+|---:|---:|---:|---:|
+| 32 | 1501 | 71.1 | 46.9 |
+| 64 | 3597 | 376.3 | 56.2 |
+| 96 | 4636 | 749.3 | 48.3 |
+| 128 | 5721 | 1166.2 | 44.7 |
+
+**`seal ÷ depth` is roughly constant, so per-seal cost is linear in history depth and cumulative
+build cost is quadratic.** An independent power-law fit of the cumulative column gives an exponent of
+**2.03**, matching the implementing round's own figure. Extrapolated to depth 2,048: **≈23 hours**
+(from the last two points) to **≈101 hours** (from all four).
+
+### 5b.1 This does not violate RFC 111's gate, and the distinction is the point
+
+`rfc111_seal_decode_cost_gate.rs` asserts *"that sealing one more commit performs a number of full
+object-index **decodes** that does not grow with how much history already exists."* Its own doc states
+the rest plainly: **`seal` "reads O(N) objects to seal one more block"** — the gate fixed how
+expensive each read is, never how many there are.
+
+**So linear per-seal cost is the architecture as gated, and this is the first time anyone measured
+what it costs.** §5's table above says time has two gates and memory none; this adds a third category —
+**a cost that is gated at the wrong granularity to notice it.** The gate is green and the property it
+guards is intact; the property nobody guarded is the one that makes a 2,048-block corpus take days.
+
+### 5b.2 What it now blocks
+
+**RFC 139's corpus cannot reach its own stated floor until sealing gets cheaper.** That dependency did
+not exist before this measurement and is the substantive consequence: reducing seal's per-block object
+reads is now a prerequisite for the corpus's own purpose, not merely a performance nicety.
+
+**It is not scheduled here.** RFC 133 §7 keeps this RFC descriptive, and §6's ruling still gates any
+increment from it. Recorded so the next scheduling conversation has the number.
+
 ## 6. The ruling this RFC carries — corrected 2026-09-03 after the owner questioned its shape
 
 **The first draft of this section asked "does peak RSS get standing protection?" That was the wrong
