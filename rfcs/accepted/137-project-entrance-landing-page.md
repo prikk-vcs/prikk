@@ -340,6 +340,47 @@ That last requirement is not stylistic: the original's baked feature strip is wh
 false claims live, and **an image cannot be checked by the gate that keeps this page honest.** Text in
 artwork is the route by which a removed claim returns without anything noticing.
 
+### 10.1c A third defect, and a gap in the architect's own asset spec
+
+**Found 2026-09-07 while answering "who can make the artwork": the story panels do not theme-adapt.**
+They are baked light-background rasters, and the page has a dark theme. In the external architect's own
+dark render they are **five bright cream rectangles glowing out of a dark page** — visibly worse than
+the ragged strip is in light mode. The header logo has the same problem.
+
+**Neither the external review nor the architect named this.** The review's dark-mode note was about
+`--beige` as a card fill; the panels' own non-adaptation went unremarked in both light-mode analyses.
+
+**It is also a gap in §10.1b's asset spec, which is the architect's.** That spec asks for artwork only,
+no text, landscape, `.webp`, tens of KB — **and says nothing about background or theme.** A re-render
+following it exactly would still glow white on the dark page. **Amended: the artwork must either carry
+a transparent background, or be supplied as two variants (light and dark), or be built in a form that
+adapts.**
+
+### 10.1d The three ways to unblock §2, and the third is available now
+
+**The architect cannot produce artwork in the original's rendered-3D style.** That is illustration work.
+Three options, and the choice is the owner's because the identity and the original art are theirs.
+
+| | Who | Style | Weight | Theme-adapts |
+|---|---|---|---|---|
+| **A. One re-rendered artwork, whole** | owner or an illustrator | matches draft-02's warmth | tens of KB (target) | only if transparent or two variants (§10.1c) |
+| **B. Five re-rendered panels** | owner or an illustrator | same | ≥ today's 60 KB | same caveat |
+| **C. Hand-authored SVG, in the hero's own language** | **the architect, now** | flat rounded tiles + connecting paths, sage/beige/clay | **~3-5 KB** | **yes, by construction** — CSS variables |
+
+**Option C is not a fallback invented to escape the block; the page already proves it works.** The
+rebuilt hero mark is exactly this — **1,362 bytes** of rounded `rect`s, `path`s and a clay node, filled
+from CSS variables, which is why it adapts to both themes while the panels beside it do not. A
+five-stage story in the same language would give the page **one visual language throughout**, which is
+the coherence the external review said it lacked — reached from the other direction.
+
+**The trade is real and it is the owner's to weigh.** The external review offered both directions:
+*"either warm the chrome up to meet the art, or calm the art down to meet the chrome."* §10.2 chose to
+warm the chrome, and that half has shipped. **Option C is the other half of the same sentence** — and
+it would lose draft-02's rendered warmth, which the owner liked and which A and B keep.
+
+**Nothing is decided here.** Option C is offered because it is buildable today and costs nothing to
+discard; A and B remain preferable if the owner wants the rendered look and can supply the asset.
+
 ### 10.2 RULED — the rest
 
 - **Finding B — the hero animation is a defect, not a preference.** Blocks that arrive and then fade to
