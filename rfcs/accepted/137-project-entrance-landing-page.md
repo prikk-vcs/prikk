@@ -383,6 +383,28 @@ unnatural fragments §10.1a refused: equal cells, shared baseline, ordered singl
 illustration**, and is demoted to what it always was — an alternative aesthetic direction, not an
 escape from a block that turned out not to exist.
 
+### 10.1b-ii DELIVERED 2026-09-07 (`6055149`), with one required follow-up
+
+**The five panels were re-cropped from the existing source, as §10.1b-i ruled** — one `420×420` canvas
+each, native-pixel scale, padded not stretched, bottom-anchored. **Verified by bounding-box measurement
+rather than from the render**: nothing is clipped, and `panel-2-patches.webp` — whose connector curves
+ran off the edge into nothing — now carries **140px of clean right margin**. Assets fell from 44,554 B
+to **32,564 B (−27%)**.
+
+**The implementing round contradicted this RFC's own instruction, correctly.** §10.1a carried the
+external reviewer's `align-items:end` verbatim. **It misaligns the artwork here**: `align-items`
+positions each grid item's whole box, and captions wrapping to one line for two panels and two for
+three make the boxes differ by 20.25px — so end-aligning pushes the shorter-captioned panels' *images*
+down by a caption line. The advice is right where the image is the last element in the item; it is
+wrong for this markup, and **neither the reviewer nor the architect checked which we had.**
+
+**REQUIRED follow-up** (`story-panel-height-handoff-v2.md`): `.panels img` sets no height, so the
+markup's `height="420"` presentational hint applies and **`aspect-ratio:1/1` is ignored — it only fills
+a dimension that is `auto`.** Each panel therefore reserves a **~425px box to show 148px of artwork**,
+about 300px of dead space per panel. **The evidence was in the implementing round's own report** — an
+`imgTop`→`capTop` gap of 434px where a square image in a 172.8px column gives ~187px. One line:
+`height:auto`.
+
 ### 10.1c A third defect, and a gap in the architect's own asset spec
 
 **Found 2026-09-07 while answering "who can make the artwork": the story panels do not theme-adapt.**
