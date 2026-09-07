@@ -12,11 +12,17 @@ repository.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1.1"
-
+prikk-hash = { workspace = true }
+prikk-store = { workspace = true }
 [[bin]]
 name = "extract-profile"
 path = "src/bin/extract_profile.rs"
+
+[[bin]]
+name = "plan-corpus"
+path = "src/bin/plan_corpus.rs"
 
 [lints]
 workspace = true

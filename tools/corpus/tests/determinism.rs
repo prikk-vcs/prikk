@@ -45,3 +45,38 @@ fn control1_two_separate_processes_produce_byte_identical_output() {
         "two separate process invocations of the same input must produce byte-identical output"
     );
 }
+
+/// RFC 139 increment 2, handoff §2.2/§6 control 1: the **planner's** own determinism, proven the
+/// same rigorous way -- two separate process invocations of the `plan-corpus` binary, byte-identical
+/// stdout. No `prikk` binary and no repository are involved on either side, which is exactly what
+/// §5a.2's "the determinism test compares the builder's action manifest, not sealed heads" buys: this
+/// test could not exist in this form (in the ordinary suite, no `#[ignore]`) if planning required
+/// executing anything.
+#[test]
+fn control1_planner_two_separate_processes_produce_byte_identical_manifests() {
+    let run = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_plan-corpus"))
+            .arg(fixture("tiny-profile.toml"))
+            .arg("6")
+            .output()
+            .expect("plan-corpus must run");
+        assert!(
+            output.status.success(),
+            "plan-corpus failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+
+    let first = run();
+    let second = run();
+    assert!(
+        !first.is_empty(),
+        "plan-corpus must produce a non-empty manifest"
+    );
+    assert_eq!(
+        first, second,
+        "two separate process invocations of the same profile and target depth must produce a \
+         byte-identical manifest"
+    );
+}

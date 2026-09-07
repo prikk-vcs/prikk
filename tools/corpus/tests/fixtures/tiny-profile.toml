@@ -1,0 +1,48 @@
+# A small, hand-authored profile for this crate's own tests -- not extracted from any real history
+# (unlike profiles/prikk-self.toml). Used by the planner's subprocess determinism test and by the
+# executor controls, which need something fast to build for real rather than a 600-commit history.
+
+schema_version = 1
+
+[provenance]
+source_repository = "test fixture (not extracted from a real history)"
+revision = "0000000000000000000000000000000000000000"
+extraction_commands = ["(hand-authored fixture; no extraction command applies)"]
+extraction_date = "2026-09-07"
+rename_detection = true
+
+[shape]
+commit_count = 6
+distinct_paths = 12
+
+[shape.files_changed_per_commit]
+1 = 4
+3 = 2
+
+[shape.operation_kind_mix]
+added = 8
+modified = 6
+deleted = 2
+renamed = 2
+copied = 0
+type_changed = 0
+
+[shape.path_touches]
+1 = 8
+2 = 3
+3 = 1
+
+[shape.file_sizes]
+16 = 3
+64 = 2
+256 = 1
+
+[builder_inputs]
+generator_seed = 424242
+author_key_id = "corpus-fixture-author"
+author_seed_hex = "5555555555555555555555555555555555555555555555555555555555555555"
+maintainer_key_id = "corpus-fixture-maintainer"
+maintainer_seed_hex = "6666666666666666666666666666666666666666666666666666666666666666"
+known_nondeterminism_risks = [
+    "NodeId is minted from the OS CSPRNG at authoring time (crates/prikk-store/src/node_id_gen.rs); see profiles/prikk-self.toml for the full explanation this fixture does not repeat.",
+]
