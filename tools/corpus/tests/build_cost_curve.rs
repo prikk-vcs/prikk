@@ -160,18 +160,20 @@ fn build_cost_curve() {
         #[cfg(target_os = "linux")]
         let (commit_elapsed, peak_kb) = if is_checkpoint {
             spawn_and_measure(
-                execute::commit_command(binary, &repo_root, &profile, &message),
+                execute::commit_command(binary, &repo_root, &profile, execute::REF_NAME, &message),
                 "commit",
             )
         } else {
             let start = Instant::now();
-            execute::run_commit(binary, &repo_root, &profile, &message).expect("commit");
+            execute::run_commit(binary, &repo_root, &profile, execute::REF_NAME, &message)
+                .expect("commit");
             (start.elapsed(), None)
         };
         #[cfg(not(target_os = "linux"))]
         let (commit_elapsed, peak_kb) = {
             let start = Instant::now();
-            execute::run_commit(binary, &repo_root, &profile, &message).expect("commit");
+            execute::run_commit(binary, &repo_root, &profile, execute::REF_NAME, &message)
+                .expect("commit");
             (start.elapsed(), None)
         };
 
@@ -181,7 +183,7 @@ fn build_cost_curve() {
         }
 
         let seal_start = Instant::now();
-        execute::run_seal(binary, &repo_root, &profile).expect("seal");
+        execute::run_seal(binary, &repo_root, &profile, execute::REF_NAME).expect("seal");
         let seal_elapsed = seal_start.elapsed();
 
         if is_checkpoint {

@@ -123,3 +123,45 @@ pub fn block_ids(binary: &Path, repo_root: &Path, ref_name: &str, limit: usize) 
         .filter_map(|line| line.strip_prefix("block ").map(str::to_owned))
         .collect()
 }
+
+/// Copy only `src`'s `.prikk` directory into a fresh `dst` (created if needed). Used to measure
+/// `checkout` cost against a repository's sealed history alone, the way a fresh clone would --
+/// never copies worktree files, since a real clone would not have any either.
+pub fn copy_prikk_only(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst.join(".prikk")).expect("creating dst/.prikk");
+    copy_dir_recursive(&src.join(".prikk"), &dst.join(".prikk"));
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("creating directory");
+    for entry in std::fs::read_dir(src).expect("reading directory") {
+        let entry = entry.expect("reading directory entry");
+        let file_type = entry.file_type().expect("reading file type");
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst_path);
+        } else {
+            std::fs::copy(entry.path(), &dst_path).expect("copying file");
+        }
+    }
+}
+
+/// Every real file under `root`, excluding `.prikk` -- a materialized worktree's file count.
+pub fn count_tree_files(root: &Path) -> u64 {
+    fn walk(dir: &Path, count: &mut u64) {
+        for entry in std::fs::read_dir(dir).expect("reading directory") {
+            let entry = entry.expect("reading directory entry");
+            if entry.file_name() == ".prikk" {
+                continue;
+            }
+            if entry.file_type().expect("reading file type").is_dir() {
+                walk(&entry.path(), count);
+            } else {
+                *count += 1;
+            }
+        }
+    }
+    let mut count = 0;
+    walk(root, &mut count);
+    count
+}

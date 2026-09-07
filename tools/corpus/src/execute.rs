@@ -191,7 +191,7 @@ fn verify_content(expected_hex: &str, bytes: &[u8], path: &str) -> Result<(), Ex
     }
 }
 
-/// Build (without running) the `prikk commit --ref heads/main -m <message>` command, authoring with
+/// Build (without running) a `prikk commit --ref <ref_name> -m <message>` command, authoring with
 /// the profile's fixed author key. Exposed so callers that need non-`.output()` execution (RFC 139
 /// §6's peak-memory pass, which must `.spawn()` and poll) can build the exact same command
 /// [`run_commit`] would run, rather than duplicating its env/arg construction.
@@ -199,6 +199,7 @@ pub fn commit_command(
     binary_path: &Path,
     repo_root: &Path,
     profile: &Profile,
+    ref_name: &str,
     message: &str,
 ) -> Command {
     let mut command = Command::new(binary_path);
@@ -206,18 +207,19 @@ pub fn commit_command(
         .current_dir(repo_root)
         .env("PRIKK_AUTHOR_KEY_ID", &profile.builder_inputs.author_key_id)
         .env("PRIKK_AUTHOR_SEED", &profile.builder_inputs.author_seed_hex)
-        .args(["commit", "--ref", REF_NAME, "-m", message]);
+        .args(["commit", "--ref", ref_name, "-m", message]);
     command
 }
 
-/// Run `prikk commit --ref heads/main -m <message>`, authoring with the profile's fixed author key.
+/// Run `prikk commit --ref <ref_name> -m <message>`, authoring with the profile's fixed author key.
 pub fn run_commit(
     binary_path: &Path,
     repo_root: &Path,
     profile: &Profile,
+    ref_name: &str,
     message: &str,
 ) -> Result<Output, ExecuteError> {
-    let output = commit_command(binary_path, repo_root, profile, message).output()?;
+    let output = commit_command(binary_path, repo_root, profile, ref_name, message).output()?;
     require_success(&output, "commit")?;
     Ok(output)
 }
@@ -255,11 +257,12 @@ pub fn trust_maintainer(
     Ok(())
 }
 
-/// Run `prikk seal --allow-no-audit --ref heads/main`, using the profile's fixed maintainer key.
+/// Run `prikk seal --allow-no-audit --ref <ref_name>`, using the profile's fixed maintainer key.
 pub fn run_seal(
     binary_path: &Path,
     repo_root: &Path,
     profile: &Profile,
+    ref_name: &str,
 ) -> Result<Output, ExecuteError> {
     let output = Command::new(binary_path)
         .current_dir(repo_root)
@@ -271,9 +274,72 @@ pub fn run_seal(
             "PRIKK_MAINTAINER_SEED",
             &profile.builder_inputs.maintainer_seed_hex,
         )
-        .args(["seal", "--allow-no-audit", "--ref", REF_NAME])
+        .args(["seal", "--allow-no-audit", "--ref", ref_name])
         .output()?;
     require_success(&output, "seal")?;
+    Ok(output)
+}
+
+/// Publish a new local branch ref `name` targeting `from_ref`'s **current** block (RFC 139
+/// increment 3, handoff §2.3: the corpus builder gains this so a measurement can produce a real
+/// divergence -- `branch create --from` points the new branch at a block that already exists,
+/// unlike an ordinary `commit`+`seal` on a fresh ref name, which would instead mint an unrelated
+/// genesis). Requires the profile's fixed maintainer key, like [`run_seal`]; trusts it first, same
+/// idempotent-enough precedent as [`trust_maintainer`].
+pub fn branch_create(
+    binary_path: &Path,
+    repo_root: &Path,
+    profile: &Profile,
+    name: &str,
+    from_ref: &str,
+) -> Result<(), ExecuteError> {
+    trust_maintainer(binary_path, repo_root, profile)?;
+    let output = Command::new(binary_path)
+        .current_dir(repo_root)
+        .env(
+            "PRIKK_MAINTAINER_KEY_ID",
+            &profile.builder_inputs.maintainer_key_id,
+        )
+        .env(
+            "PRIKK_MAINTAINER_SEED",
+            &profile.builder_inputs.maintainer_seed_hex,
+        )
+        .args(["branch", "create", name, "--from", from_ref])
+        .output()?;
+    require_success(&output, "branch create")
+}
+
+/// Run `prikk checkout --patch-plan --ref <ref_name>` against `repo_root` (a directory that
+/// already contains a `.prikk`, and nothing else -- planning does not need a worktree present).
+/// RFC 139 increment 3 §2.2: read-only, so safe to run repeatedly against the same directory.
+pub fn checkout_patch_plan(
+    binary_path: &Path,
+    repo_root: &Path,
+    ref_name: &str,
+) -> Result<Output, ExecuteError> {
+    let output = Command::new(binary_path)
+        .current_dir(repo_root)
+        .args(["checkout", "--patch-plan", "--ref", ref_name])
+        .output()?;
+    require_success(&output, "checkout --patch-plan")?;
+    Ok(output)
+}
+
+/// Run `prikk checkout --patch-materialize --ref <ref_name>` against `repo_root`. Writes the
+/// reconstructed worktree into `repo_root` itself, alongside its `.prikk` -- callers measuring
+/// repeatedly must supply a fresh `repo_root` each time (this is what RFC 136 §9 item 1 actually
+/// asks about: the cost of materializing a worktree from sealed history alone, the way a fresh
+/// clone would).
+pub fn checkout_patch_materialize(
+    binary_path: &Path,
+    repo_root: &Path,
+    ref_name: &str,
+) -> Result<Output, ExecuteError> {
+    let output = Command::new(binary_path)
+        .current_dir(repo_root)
+        .args(["checkout", "--patch-materialize", "--ref", ref_name])
+        .output()?;
+    require_success(&output, "checkout --patch-materialize")?;
     Ok(output)
 }
 
@@ -309,13 +375,14 @@ pub fn build(
             binary_path,
             repo_root,
             profile,
+            REF_NAME,
             &format!("corpus commit {index}"),
         )?;
         if !trusted {
             trust_maintainer(binary_path, repo_root, profile)?;
             trusted = true;
         }
-        run_seal(binary_path, repo_root, profile)?;
+        run_seal(binary_path, repo_root, profile, REF_NAME)?;
     }
     Ok(())
 }

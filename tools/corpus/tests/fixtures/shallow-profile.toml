@@ -1,0 +1,45 @@
+# RFC 139 increment 3: a small, hand-authored profile with a tiny, fixed tree but growable history
+# depth -- DC-92's own isolation technique (a small tree, grown deep via edits rather than creates)
+# applied to a profile instead of hand-rolled churn, so this crate's own fast controls can
+# demonstrate "cost moves with depth" without waiting on `profiles/prikk-self.toml`'s own realistic,
+# much larger per-commit content.
+
+schema_version = 1
+
+[provenance]
+source_repository = "test fixture (not extracted from a real history)"
+revision = "0000000000000000000000000000000000000000"
+extraction_commands = ["(hand-authored fixture; no extraction command applies)"]
+extraction_date = "2026-09-07"
+rename_detection = true
+
+[shape]
+commit_count = 50
+distinct_paths = 5
+
+[shape.files_changed_per_commit]
+1 = 50
+
+[shape.operation_kind_mix]
+added = 1
+modified = 9
+deleted = 0
+renamed = 0
+copied = 0
+type_changed = 0
+
+[shape.path_touches]
+1 = 5
+
+[shape.file_sizes]
+16 = 1
+
+[builder_inputs]
+generator_seed = 139003
+author_key_id = "corpus-shallow-author"
+author_seed_hex = "7777777777777777777777777777777777777777777777777777777777777777"
+maintainer_key_id = "corpus-shallow-maintainer"
+maintainer_seed_hex = "8888888888888888888888888888888888888888888888888888888888888888"
+known_nondeterminism_risks = [
+    "NodeId is minted from the OS CSPRNG at authoring time (crates/prikk-store/src/node_id_gen.rs); see profiles/prikk-self.toml for the full explanation this fixture does not repeat.",
+]
