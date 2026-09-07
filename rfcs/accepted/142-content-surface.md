@@ -1,6 +1,19 @@
 # RFC 142 — Showing what changed
 
-**Status.** **PROPOSED, 2026-09-08.** Opened at the project owner's instruction, as item 1 of the
+**Status.** **ACCEPTED by the project owner 2026-09-08**, the same day it was opened.
+
+**Moved to `rfcs/accepted/` on acceptance** — the trigger is design complete, not handoff issued.
+
+**What the acceptance covers.** The whole design as written: §3's finding that a patch is
+self-describing; §4's ruling that paths are resolved despite costing one replay, with **no flag to skip
+it**; §5's split — **`show` ships and `diff` does not**, with both prose and `--format json` in the same
+increment, scoped as RFC 138 §7.2 scoped its own; §6's refusal to synthesize a line-oriented diff over
+what are content-anchored spans; and §7's refusals, including **no schema change and no path added to
+node-addressed operations**.
+
+**Handoff issued 2026-09-08:** `rfcs/handoffs/142-content-surface/show-handoff-v1.md`.
+
+Originally opened as: **PROPOSED, 2026-09-08**, at the project owner's instruction, as item 1 of the
 current order.
 
 **Author-review independence.** The architect wrote this RFC and is also its only reviewer — the
