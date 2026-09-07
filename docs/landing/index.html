@@ -11,6 +11,9 @@
     --cream:#f8f3ec; --paper:#fffdfa; --sage:#7f9179; --sage-dim:#93a48d;
     --beige:#dcc9b6; --clay:#d4794f; --ink:#2c352f; --ink-soft:#5a6560;
     --rule:#e7ddd0; --focus:#d4794f; --btn-ink:#fffdfa;
+    /* Warmth pass: the one shadow this page uses, everywhere it uses one -- replacing the hard
+       1px rule around card-like blocks that lost their border below. */
+    --soft-shadow:0 1px 2px rgba(20,15,5,.05), 0 4px 10px rgba(20,15,5,.04);
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
@@ -33,10 +36,13 @@
   .wrap{max-width:1000px;margin:0 auto;padding:0 28px}
   a{color:inherit}
   h1,h2,h3,p{margin-top:0}
-  /* Universal, not scoped to a/button: `pre.term` and `.panels` are both `overflow-x:auto`, which
-     makes Chromium/Firefox put them in the tab order for keyboard scrolling even with no
-     `tabindex` -- without this rule they show the browser's own default outline instead of this
-     page's, discovered by tabbing through the real page rather than assumed from the CSS alone. */
+  /* Universal, not scoped to a/button: `.panels` is `overflow-x:auto`, which makes Chromium/
+     Firefox put it in the tab order for keyboard scrolling even with no `tabindex` -- without
+     this rule it shows the browser's own default outline instead of this page's, discovered by
+     tabbing through the real page rather than assumed from the CSS alone. (`pre.term` lost its
+     own `overflow-x:auto` in the visual finishing pass -- §5 wraps its content instead -- but the
+     rule stays universal since `.panels` alone still needs it, and a future scrollable region
+     would too.) */
   :focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:3px}
 
   /* ---- header ---- */
@@ -88,26 +94,37 @@
   .blk.clay{fill:var(--clay)}
   .path{fill:none;stroke:var(--beige);stroke-width:3.2;stroke-linecap:round}
   .node{fill:var(--beige)}
+  .node.clay{fill:var(--clay)}
   /* Reduced motion is the opt-IN default here: arriving blocks are fully visible and static
      unless the browser confirms motion is welcome (no-preference), never the reverse -- an
-     override that starts animated and turns itself off is the wrong direction of this test. */
+     override that starts animated and turns itself off is the wrong direction of this test.
+     Direction §17: "the page should still look beautiful when all animation is paused" -- a
+     single settle-on-load, not a loop, so every frame after it reads as a complete scene, never
+     as a patch that arrived and then vanished. Both arriving groups settle **together**, on
+     purpose: a staggered second group was tried and rejected -- control 3's own screenshot test
+     caught it live, mid-animation, with the new block not yet visible but the path already drawn
+     up to where it belongs, which reads as broken rather than settling. Simultaneous timing has
+     no such window: at every instant both groups are at the same opacity, so a path segment and
+     the block it leads to are never caught apart. */
   .arriving{opacity:1}
   @media (prefers-reduced-motion: no-preference){
-    .arriving{opacity:0;animation:settle 9s ease-in-out infinite}
-    .a2{animation-delay:3s}
-    .a3{animation-delay:6s}
+    .arriving{opacity:0;animation:settle .8s cubic-bezier(.16,1,.3,1) forwards}
   }
-  @keyframes settle{0%{opacity:0;transform:translateY(-6px)}14%,74%{opacity:1;transform:none}94%,100%{opacity:0;transform:none}}
+  @keyframes settle{0%{opacity:0;transform:translateY(-6px)}100%{opacity:1;transform:none}}
   .art-caption{margin:14px 0 0;text-align:center;font-size:12.5px;color:var(--ink-soft)}
 
   /* ---- sections ---- */
-  section{border-top:1px solid var(--rule);padding:68px 0}
+  /* Warmth pass: hard rules between sections are gone in favour of a soft tonal shift -- the
+     even sections (in document order) sit on --paper against the odd ones' --cream, so the
+     rhythm comes from a change in ground rather than a drawn line. */
+  section{padding:68px 0}
+  main section:nth-of-type(even){background:var(--paper)}
   section h2{font-size:clamp(1.7rem,3.2vw,2.5rem);line-height:1.08;letter-spacing:-.03em;margin-bottom:16px}
 
   /* ---- numbered principles (draft-01) ---- */
-  .principle-grid{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--rule);margin-top:38px}
+  .principle-grid{display:grid;grid-template-columns:repeat(3,1fr);margin-top:38px}
   .principle-grid article{padding:26px 22px 6px 0}
-  .principle-grid article + article{padding-left:22px;border-left:1px solid var(--rule)}
+  .principle-grid article + article{padding-left:22px}
   .number{display:block;margin-bottom:30px;font-size:.74rem;color:var(--ink-soft)}
   .principle-grid h3{font-size:1.2rem;margin-bottom:8px}
   .principle-grid p{margin:0;line-height:1.6;color:var(--ink-soft)}
@@ -122,9 +139,13 @@
 
   /* ---- terminal ---- */
   pre.term{
-    background:var(--paper); border:1px solid var(--rule); border-radius:10px;
-    padding:18px 20px; overflow-x:auto; font-size:13px; line-height:1.6; margin:0; color:var(--ink);
+    background:var(--paper); border-radius:10px; box-shadow:var(--soft-shadow);
+    padding:18px 20px; font-size:13px; line-height:1.6; margin:0; color:var(--ink);
     font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    /* §5: the two `note:` lines were the longest content on the page and the ones being clipped
+       by the old overflow-x:auto -- wrapping keeps every caveat readable without a horizontal
+       scrollbar; overflow-wrap covers the one long unbroken token (the patch id). */
+    white-space:pre-wrap; overflow-wrap:anywhere;
   }
   .term .p{color:var(--sage)}
   .term .c{color:var(--ink-soft)}
@@ -141,15 +162,14 @@
 
   /* ---- feature strip ---- */
   .feature-strip{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:0;
-    border:1px solid var(--rule);border-radius:12px;background:var(--paper)}
-  .feature-strip li{padding:22px 20px;border-left:1px solid var(--rule)}
-  .feature-strip li:first-child{border-left:0}
+    border-radius:12px;background:var(--paper);box-shadow:var(--soft-shadow)}
+  .feature-strip li{padding:22px 20px}
   .feature-strip h3{font-size:.95rem;margin-bottom:6px}
   .feature-strip p{margin:0;font-size:13px;color:var(--ink-soft)}
 
   /* ---- install ---- */
   .install-block{display:grid;gap:12px;max-width:660px;margin-top:30px}
-  .cmdrow{display:flex;align-items:center;gap:10px;background:var(--paper);border:1px solid var(--rule);
+  .cmdrow{display:flex;align-items:center;gap:10px;background:var(--paper);box-shadow:var(--soft-shadow);
     border-radius:9px;padding:11px 14px;max-width:100%}
   /* The command wraps rather than scrolling: a scrollable strip hides part of a command the
      reader is about to pipe into `sh`, and the scrollbar that would signal the hidden part is
@@ -179,11 +199,8 @@
     .hero-grid{grid-template-columns:1fr}
     .hero-art{justify-self:center;max-width:260px;order:-1}
     .principle-grid{grid-template-columns:1fr}
-    .principle-grid article,.principle-grid article + article{border-left:0;border-top:1px solid var(--rule);padding:20px 0}
-    .principle-grid article:first-child{border-top:0}
+    .principle-grid article,.principle-grid article + article{padding:20px 0}
     .feature-strip{grid-template-columns:1fr}
-    .feature-strip li{border-left:0;border-top:1px solid var(--rule)}
-    .feature-strip li:first-child{border-top:0}
     /* Direction §16: the sequence must read without a horizontal diagram on mobile, so the row
        becomes a stack rather than an overflow-x strip -- each panel keeps its own natural size
        instead of being squeezed to fit a fixed track width. */
@@ -231,21 +248,25 @@
       </div>
 
       <div class="hero-art">
-        <svg viewBox="0 0 320 210" role="img" aria-labelledby="artt">
+        <svg viewBox="0 0 296 200" role="img" aria-labelledby="artt">
           <title id="artt">Patches accumulate and are sealed into blocks, connected in a verifiable chain.</title>
-          <rect class="blk beige" x="12"  y="130" width="52" height="52" rx="13"/>
-          <rect class="blk"       x="76"  y="130" width="52" height="52" rx="13"/>
-          <rect class="blk"       x="76"  y="60"  width="52" height="52" rx="13"/>
-          <rect class="blk beige" x="140" y="130" width="52" height="52" rx="13"/>
-          <path class="path" d="M38 130 V104 H102 V86"/>
-          <circle class="node" cx="102" cy="104" r="5"/>
+          <!-- A small grid of tiles echoing the wordmark: a bottom row of accumulated blocks, one
+               risen tile marking an earlier seal, and a new column arriving on the right --
+               everything on the grid is reached by the one connecting path, nothing floats free. -->
+          <rect class="blk beige" x="20"  y="108" width="52" height="52" rx="13"/>
+          <rect class="blk"       x="88"  y="108" width="52" height="52" rx="13"/>
+          <rect class="blk"       x="88"  y="40"  width="52" height="52" rx="13"/>
+          <rect class="blk beige" x="156" y="108" width="52" height="52" rx="13"/>
+          <path class="path" d="M46 108 V82 H114 V66"/>
+          <circle class="node" cx="114" cy="82" r="5"/>
           <g class="arriving">
-            <rect class="blk clay" x="204" y="130" width="52" height="52" rx="13"/>
-            <path class="path" d="M166 130 H230"/>
-            <circle class="node" cx="166" cy="130" r="5"/>
+            <rect class="blk clay" x="224" y="108" width="52" height="52" rx="13"/>
+            <path class="path" d="M182 108 H250"/>
+            <circle class="node clay" cx="250" cy="108" r="5"/>
           </g>
-          <g class="arriving a2">
-            <rect class="blk" x="268" y="60" width="40" height="122" rx="13"/>
+          <g class="arriving">
+            <rect class="blk clay" x="224" y="40" width="52" height="52" rx="13"/>
+            <path class="path" d="M250 108 V66"/>
           </g>
         </svg>
         <p class="art-caption">A quiet chain: patches arrive, and the project grows.</p>
