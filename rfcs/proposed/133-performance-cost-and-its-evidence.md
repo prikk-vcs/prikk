@@ -126,6 +126,7 @@ whoever knows must say so; otherwise the named costs above are the whole list.
 | Create-path memory is O(added bytes) | **One measurement, in §2.** No gate |
 | `AUD-01`/`AUD-02` costs | **Nothing.** Source reading only |
 | `status --format json`'s queue enumeration is bounded by `worktree-status` | **One measurement, §5a below.** No gate |
+| Checkout and merge-evidence both cost O(depth^1.45), from two separate uncached chain walks | **One measurement, RFC 136 §9.3.** No gate |
 
 **Time has two gates; memory has none.** That asymmetry is the subject of §6.
 
@@ -238,6 +239,24 @@ reads is now a prerequisite for the corpus's own purpose, not merely a performan
 
 **It is not scheduled here.** RFC 133 §7 keeps this RFC descriptive, and §6's ruling still gates any
 increment from it. Recorded so the next scheduling conversation has the number.
+
+## 5c. Checkout and merge baseline reconstruction, measured 2026-09-07 (RFC 139 increment 3)
+
+**The measurements RFC 136 was held pending, and the corpus's reason to exist.** Full table, method
+and caveats: **RFC 136 §9.3**; raw data
+`rfcs/handoffs/139-measurement-corpus/two-measurements-report-v1.md`.
+
+**Both grow as depth^1.45** — checkout `1.446`, merge-evidence `1.445`, re-derived independently —
+while tree size over the same range grew only as `depth^0.859`. **Cost tracks replay depth, not tree
+size.**
+
+**Two separate implementations, not one shared function**, verified at source:
+`patch_replay/read.rs::single_parent_chain` (terminates at parent `None`) and
+`lifecycle_cache/replay.rs::walk_single_parent_chain` (terminates at a horizon). Neither is cached —
+DC-64's incremental cache is scoped to the commit path, and DC-92's memo lives in `verify.rs`.
+
+**Added to §5's table as a third measured-but-ungated property.** It joins §5b's quadratic sealing cost
+in the same category the table now makes visible: **costs that are real, measured, and held by nothing.**
 
 ## 6. The ruling this RFC carries — corrected 2026-09-03 after the owner questioned its shape
 

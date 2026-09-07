@@ -428,6 +428,74 @@ distribution. Their structural argument is *sound in shape, unquantified in magn
 this RFC and it retires the standing methodological weakness **every** performance decision here
 inherits, RFC 133 included. **That is a scheduling decision and it is the owner's.**
 
+## 9.3 MEASURED 2026-09-07 — §9 items 1 and 2 are answered, and they turned out to be one question
+
+**RFC 139's corpus was built for this. These are its numbers**, taken on a real
+`profiles/prikk-self.toml`-shaped history rather than a git proxy — the quantity §9.2.8 recorded as
+having *"no honest git-history proxy"* at all. Re-derived independently by the architect; every figure
+below reproduces.
+
+| Baseline depth | Tree files | `checkout --patch-plan` (ms) | `checkout --patch-materialize` (ms) | `merge-evidence` (ms) |
+|---:|---:|---:|---:|---:|
+| 32 | 29 | 1,041 | 1,045 | 1,056 |
+| 69 | 42 | 3,724 | 3,683 | 3,736 |
+| 138 | 91 | 9,762 | 9,798 | 10,058 |
+| 207 | 129 | 16,660 | 16,659 | 16,841 |
+| 276 | 175 | 23,671 | 23,650 | 23,773 |
+
+**Item 1 is answered: checkout cost grows as depth^1.446** — superlinear in history depth, and **not**
+bound by tree size, which grew only as depth^0.859 over the same range. **Cost tracks how many blocks
+are walked, not how much content exists at the end of the walk.**
+
+**Item 2 is answered, and it is the same number.** `merge-evidence` grows as **depth^1.445** — the same
+exponent to three figures — and the two track each other at every checkpoint (ratios 0.986, 0.997,
+0.971, 0.989, 0.996).
+
+### 9.3.1 This is evidence *for* §7's Option A ruling, not against it
+
+§7 ruled Option A on a premise §9 item 1 explicitly said was *"never measured"*. **It is now measured
+and it is the shape Option A assumes**: superlinear in depth, on real history. The ruling stands and is
+better supported than when it was made.
+
+### 9.3.2 The correction that matters for implementing it: two implementations, not one
+
+**The implementing round concluded that "one O(depth) replay path is walked from two call sites, and
+both inherit whatever fixes it." That inheritance claim is wrong, and the round's own §2 said the
+opposite correctly** — its two halves disagreed, and this is the half to keep.
+
+**Verified at source:** these are **two separate implementations** of the same pattern, not two callers
+of one function.
+
+| | `patch_replay/read.rs::single_parent_chain` | `lifecycle_cache/replay.rs::walk_single_parent_chain` |
+|---|---|---|
+| reached from | `prepare_patch_replay_plan` (checkout) | `replay_derived_state` (merge evidence) |
+| terminates at | parent `None` | an explicit **horizon** |
+| returns | `Vec<ObjectId>` | `Vec<(ObjectId, Block)>` |
+| visited set | `HashSet` | `BTreeSet` |
+
+**So the costs match because both perform a full, uncached chain walk — not because they share code.**
+
+**The consequence for Option A is concrete: a snapshot must be wired into both call sites
+independently. Doing one leaves the other at exactly today's cost**, and nothing about fixing the first
+propagates to the second. **Whoever implements Option A should treat "does this also cover
+`replay_derived_state`?" as an acceptance question, not a follow-up.**
+
+### 9.3.3 What the measurement does not cover
+
+- **Conflict-detection cost under content overlap.** The divergence built for item 2 was **disjoint new
+  files**, and its shape is *invented* — `profiles/prikk-self.toml` carries `--no-merges` in its own
+  extraction command, so **no merge shape can be derived from it**. The baseline *depth* is profiled;
+  the divergence is not. Same-file divergence is where conflict cost and conflicts both live, and it is
+  a different question needing its own generator.
+- **`RenamePath` and symlink operations**, which this codebase does not author, so the measured replay
+  chain never exercises them. If Option A's snapshot format or §7.2's content check must reason about
+  them, this says nothing about that cost.
+- **Cadence tuning.** Five points at a 256-block practical cap is **4 `REANCHOR_BOUND` intervals, not
+  32** (RFC 139 §6's floor is unreachable — RFC 133 §5b). **These numbers show direction, not curve
+  shape, and must not be cited as cadence evidence.**
+
+**Raw data and method:** `rfcs/handoffs/139-measurement-corpus/two-measurements-report-v1.md`.
+
 ## 10. Scope
 
 **Proposed here:** the problem record, the evidence, the option space, and the §7 question.
