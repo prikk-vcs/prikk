@@ -49,14 +49,17 @@ use super::{BoundaryError, push};
 
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
-/// `min(fan_in, fan_out)`, today's ranking is 13 (`refs`), 11 (`patch_replay`), 8
-/// (`lifecycle_cache`), then a two-way tie at 6 (`wal`, `active`), then a clean drop to 5
-/// (`trust`, `merge_evidence`, `author_key_index`). The break sits between 6 and 5.
-/// **`trust` was part of the tier-6 tie until carried-defect C's relocation** (see the module doc)
-/// removed the one outgoing edge (`trust -> recognition_claim`) that had put it at fan-out 6; it
-/// now sits at 5, alongside the tier it would have joined anyway if RFC 138 had never added that
-/// edge. See `graph::tests::the_scc_has_exactly_this_edge_set` for the exact numbers this constant
-/// is checked against.
+/// `min(fan_in, fan_out)`, today's ranking is 11 (`patch_replay`), 8 (`refs`), 8
+/// (`lifecycle_cache`), then a clean drop to 5 (`trust`, `merge_evidence`, `active`). The break
+/// sits between 8 and 5.
+///
+/// **`active` and `wal` dropped out of the declared set at RFC 131 §2.2a's `foundation` grouping
+/// (2026-09-08)**, a real consolidation effect rather than a code change to either module: several
+/// of each one's distinct fan-out edges into `layout`/`fsutil`/`byte_cursor`/etc. collapsed into
+/// one edge into the merged `foundation` node, the same way RFC 122's consolidation concentrated
+/// edges rather than adding unrelated reach. `wal` fell from a fan-out of 6 to 2 (min 6 -> 2);
+/// `active` from 6 to 5 (min 6 -> 5). See `graph::tests::the_scc_has_exactly_this_edge_set` for
+/// the exact numbers this constant is checked against.
 const HUB_THRESHOLD: usize = 6;
 
 /// One declared cycle-forming edge: the reason it exists, and — the property that makes a cycle
@@ -195,12 +198,17 @@ struct DeclaredHub {
     reason: &'static str,
 }
 
-/// Today's five hubs by `min(fan_in, fan_out)`. The RFC's original four (`refs`, `patch_replay`,
-/// `wal`, `lifecycle_cache`) plus one new entrant tied with `wal` at the threshold: `active` (a
-/// trend the coupling-gate-graph-contradiction round already flagged). `trust` briefly joined this
-/// list too, for exactly as long as RFC 138's own `trust -> recognition_claim` edge existed;
-/// carried-defects C removed that edge along with the cycle it caused, and `trust` dropped back
-/// below the threshold with it (see the module doc).
+/// Today's three hubs by `min(fan_in, fan_out)`. **`wal` and `active` were declared here and are
+/// removed as of RFC 131 §2.2a's `foundation` grouping (2026-09-08)**: consolidating
+/// `layout`/`fsutil`/`byte_cursor`/`file_codec`/`frame_resync`/`container`/`index`/`generation`
+/// into one node collapsed several of each module's distinct fan-out edges into that one shared
+/// target, dropping both below `HUB_THRESHOLD` (`wal` 6 -> 2, `active` 6 -> 5) -- the same
+/// consolidation-not-sprawl shape RFC 122 gave `lifecycle_cache`/`patch_replay`, just moving a
+/// module *out* of the declared set instead of in. `graph::tests::the_scc_has_exactly_this_edge_
+/// set` and `coupling::tests::the_real_repository_passes_with_no_undeclared_cycle_or_hub` pin the
+/// numbers this reflects. `trust` briefly joined this list too, for exactly as long as RFC 138's
+/// own `trust -> recognition_claim` edge existed; carried-defects C removed that edge along with
+/// the cycle it caused, and `trust` dropped back below the threshold with it (see the module doc).
 const DECLARED_HUBS: &[DeclaredHub] = &[
     DeclaredHub {
         module: "refs",
@@ -223,22 +231,6 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   invalidates -- a cache's whole purpose is sitting between a wide set of readers \
                   and a wide set of writers, so both-sides-high fan is the shape a cache is \
                   supposed to have",
-    },
-    DeclaredHub {
-        module: "wal",
-        reason: "the active write-ahead-log container every active-session operation (commit, \
-                  seal, doctor, unlock, compact) reads or appends through -- a single shared queue \
-                  necessarily has wide fan-in from everything that queues work and wide fan-out to \
-                  everything that shapes a queued record",
-    },
-    DeclaredHub {
-        module: "active",
-        reason: "the active-session/ref-metadata layer every commit-boundary operation touches on \
-                  both sides -- readers asking whether an active ref exists and is valid, writers \
-                  preparing or clearing it. Newly crossing the threshold as a trend already flagged \
-                  by the coupling-gate-graph-contradiction round, driven by the same cyclic \
-                  relationships (with refs, worktree_patch, patch_replay) declared above, not by \
-                  unrelated scope creep",
     },
 ];
 
