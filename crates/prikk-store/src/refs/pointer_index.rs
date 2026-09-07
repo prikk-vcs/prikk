@@ -46,23 +46,35 @@ pub(crate) struct PointerIndexEntry {
 }
 
 /// Outcome of attempting to decode one pointer-index record frame. Mirrors `index::IndexRecordStatus`.
+///
+/// RFC 131 §3/§5: `pub(in crate::refs)`, not `pub(crate)`, on this and the two structs below --
+/// `pointer_index` is already a private submodule of `refs`, so this changes no real reach; it
+/// makes that already-true fact explicit. `PointerIndexEntry` itself stays `pub(crate)`: `compact`
+/// constructs and reads it directly, a real crate-wide need these three do not have.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PointerIndexRecordStatus {
+pub(in crate::refs) enum PointerIndexRecordStatus {
     Evaluated,
     Failed { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PointerIndexRecordOutcome {
-    pub(crate) offset: usize,
-    pub(crate) status: PointerIndexRecordStatus,
+pub(in crate::refs) struct PointerIndexRecordOutcome {
+    pub(in crate::refs) offset: usize,
+    pub(in crate::refs) status: PointerIndexRecordStatus,
 }
 
+/// The type itself must stay `pub(crate)`: `replay_pointer_index` (a `pub(crate)` fn) returns it,
+/// and Rust requires a function's return type to be at least as visible as the function -- a type
+/// cannot be narrower than the least-restrictive signature that names it, regardless of whether
+/// every caller ever writes the type name explicitly (found by trying the narrower form first and
+/// letting the compiler reject it, not assumed). `trailing_partial_bytes`/`record_outcomes` still
+/// narrow safely: `compact::compact_ref_pointer_index`, the sole external caller, reads only
+/// `entries` and calls `has_item_failure`, never these two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PointerIndexReplay {
     pub(crate) entries: Vec<PointerIndexEntry>,
-    pub(crate) trailing_partial_bytes: usize,
-    pub(crate) record_outcomes: Vec<PointerIndexRecordOutcome>,
+    pub(in crate::refs) trailing_partial_bytes: usize,
+    pub(in crate::refs) record_outcomes: Vec<PointerIndexRecordOutcome>,
 }
 
 impl PointerIndexReplay {
@@ -274,7 +286,7 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
 /// Look up one ref's current published pointer: the last entry matching `ref_name_key`, matching
 /// `index::lookup_object_location`'s own "last entry wins" reverse search exactly. Refuses if the
 /// index itself has a damaged entry, rather than silently searching around it.
-pub(crate) fn lookup_ref_pointer(
+pub(in crate::refs) fn lookup_ref_pointer(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<Option<PointerIndexEntry>> {
@@ -341,7 +353,7 @@ pub(crate) fn write_ref_pointer_entry_with_explicit_key_for_test(
 /// "last entry wins" already makes a benign duplicate harmless -- so the caller's own CAS check
 /// (`expected_previous_ref_state_id` against the current lookup) is what refuses a genuine conflict,
 /// not this function.
-pub(crate) fn append_ref_pointer_entry(
+pub(in crate::refs) fn append_ref_pointer_entry(
     layout: &RepositoryLayout,
     entry: &PointerIndexEntry,
 ) -> Result<()> {

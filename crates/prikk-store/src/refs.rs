@@ -16,8 +16,10 @@ mod verify;
 // not the broader `#[cfg(test)]` the other two names here still need for their own cross-platform
 // consumers in `verify::tests::ref_cluster`. A cross-target clippy run caught this as unused on
 // Windows before it shipped; see `EXECUTION-ORDER.md` §6 rule 9's own cross-target amendment.
+// RFC 131 §3/§5: `pub(in crate::refs)`, not `pub(crate)` -- the sole consumer named above is
+// inside `refs` itself, and the function's own declaration is `pub(in crate::refs)` now too.
 #[cfg(all(test, target_os = "linux"))]
-pub(crate) use container::append_ref_container_record;
+pub(in crate::refs) use container::append_ref_container_record;
 #[cfg(test)]
 pub(crate) use container::{
     append_torn_ref_log_tail_for_test, encode_ref_container_record_for_test,

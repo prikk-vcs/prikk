@@ -49,9 +49,8 @@ fn fsutil_none_module_is_counted_as_production() {
     // RFC 131 §2.2a grouping: `fsutil` moved under `foundation/fsutil.rs` and is no longer a
     // top-level module in its own right (its text is now collected into the `foundation` node).
     assert!(modules.contains("foundation"));
-    let text =
-        std::fs::read_to_string(store_src_root().join("foundation/fsutil/anchored/none.rs"))
-            .expect("none.rs exists");
+    let text = std::fs::read_to_string(store_src_root().join("foundation/fsutil/anchored/none.rs"))
+        .expect("none.rs exists");
     // If this file were wrongly excluded, the crate::foundation::fsutil self-reference it
     // contains would never reach the edge scan at all -- assert on the file being reachable
     // instead of on the (self-loop, hence invisible) edge itself.

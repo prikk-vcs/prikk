@@ -119,18 +119,24 @@ const REF_CONTAINER_VERSION: u16 = 1;
 const REF_CONTAINER_HEADER_LEN: usize = 8 + 2 + 32 + 8 + 32;
 
 /// One durable ref-log container record.
+///
+/// RFC 131 §3/§5: `pub(in crate::refs)`, not `pub(crate)` -- `container` is already a private
+/// submodule of `refs` (no other top-level module can name `crate::refs::container::` at all), so
+/// this marking changes no real reach; it makes that already-true fact self-evident from the item
+/// itself rather than only from tracing `refs.rs`'s own `mod container;` privacy. Verified: no
+/// file outside `refs`'s own tree references this type (checked crate-wide, code sites only).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RefContainerRecord {
+pub(in crate::refs) struct RefContainerRecord {
     /// This record's own header-carried ref-name key -- trusted (the frame's checksum covers it),
     /// since this variant is only ever produced for a frame that passed checksum validation.
-    pub(crate) ref_name_key: [u8; 32],
+    pub(in crate::refs) ref_name_key: [u8; 32],
     /// Exact signed RefUpdate envelope stored at append time.
-    pub(crate) envelope: ObjectEnvelope,
+    pub(in crate::refs) envelope: ObjectEnvelope,
 }
 
 /// Outcome of attempting to decode one ref-log container record frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RefContainerRecordStatus {
+pub(in crate::refs) enum RefContainerRecordStatus {
     /// The frame at this offset was read and validated successfully.
     Evaluated,
     /// The frame at this offset failed to validate (bad magic/version, checksum mismatch, or a
@@ -150,29 +156,29 @@ pub(crate) enum RefContainerRecordStatus {
 
 /// One attempted ref-log container record frame's resolved outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RefContainerRecordOutcome {
+pub(in crate::refs) struct RefContainerRecordOutcome {
     /// The byte offset within the container this frame attempt started at.
-    pub(crate) offset: usize,
+    pub(in crate::refs) offset: usize,
     /// How this frame's own read/validation resolved.
-    pub(crate) status: RefContainerRecordStatus,
+    pub(in crate::refs) status: RefContainerRecordStatus,
 }
 
 /// Ref-log container replay result -- every ref's records, interleaved, in physical (write) order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RefContainerReplay {
+pub(in crate::refs) struct RefContainerReplay {
     /// Valid records read from the container, in file order -- includes records found after a
     /// damaged one, not merely a prefix up to the first failure.
-    pub(crate) records: Vec<RefContainerRecord>,
+    pub(in crate::refs) records: Vec<RefContainerRecord>,
     /// Number of trailing bytes ignored as an incomplete final record.
-    pub(crate) trailing_partial_bytes: usize,
+    pub(in crate::refs) trailing_partial_bytes: usize,
     /// One outcome per attempted frame, in scan order -- both `Evaluated` and `Failed`.
-    pub(crate) record_outcomes: Vec<RefContainerRecordOutcome>,
+    pub(in crate::refs) record_outcomes: Vec<RefContainerRecordOutcome>,
 }
 
 /// Encode one signed RefUpdate envelope as a durable ref-log container record. `ref_name_key` is
 /// supplied by the caller (already known from the decoded `RefUpdatePayload` at write time) rather
 /// than re-derived here, so this function never has to decode its own input to frame it.
-pub(crate) fn encode_ref_container_record(
+pub(in crate::refs) fn encode_ref_container_record(
     ref_name_key: [u8; 32],
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
@@ -290,7 +296,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
 /// 3 already followed): a frame that fails to validate no longer aborts replay -- its offset and
 /// error are recorded as a `Failed` outcome, and `frame_resync::resync_to_next_magic` finds the next
 /// candidate frame so every subsequent sound record, for every ref, is still read.
-pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerReplay> {
+pub(in crate::refs) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerReplay> {
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
@@ -369,7 +375,7 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
 /// would mean one ref's crash blocks every other ref's publishes under a shared container -- exactly
 /// the availability regression the ruling rejects. Mirrors `write_object_to_container`'s own
 /// unconditional container-append exactly.
-pub(crate) fn append_ref_container_record(
+pub(in crate::refs) fn append_ref_container_record(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
     envelope: &ObjectEnvelope,
@@ -419,7 +425,7 @@ pub(crate) fn append_ref_container_record(
 /// the retry append lands correctly regardless, per the ruling's own point 1; an unattributed tail
 /// only loses the specific "N incomplete trailing byte(s)" diagnostic wording and the truncate-before-
 /// retry hygiene step, never the underlying detection or recovery).
-pub(crate) fn replay_ref_subsequence(
+pub(in crate::refs) fn replay_ref_subsequence(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<RefLogReplay> {
@@ -506,7 +512,7 @@ fn trailing_tail_ref_name_key(bytes: &[u8], trailing_partial_bytes: usize) -> Op
 /// `expected` would produce if appended now under `ref_name_key`. Mirrors
 /// `refs::log::incomplete_tail_matches`, generalized from "the one file this ref owns" to "the
 /// container's own physical tail".
-pub(crate) fn incomplete_tail_matches(
+pub(in crate::refs) fn incomplete_tail_matches(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
     expected: &ObjectEnvelope,
@@ -538,7 +544,7 @@ pub(crate) fn incomplete_tail_matches(
 /// (design-v1.md §13.6 point 3): "trailing" already means "past the last fully-parseable frame", so
 /// nothing sound is ever removed. Mirrors `refs::log::truncate_incomplete_tail`, generalized from a
 /// per-ref file to the shared container.
-pub(crate) fn truncate_incomplete_tail(layout: &RepositoryLayout) -> Result<usize> {
+pub(in crate::refs) fn truncate_incomplete_tail(layout: &RepositoryLayout) -> Result<usize> {
     let relative = layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;

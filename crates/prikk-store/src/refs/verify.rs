@@ -62,6 +62,13 @@ pub struct RefItemOutcome {
 }
 
 /// Ref verification counters and publication-state issues.
+///
+/// RFC 131 §3/§5: the type itself must stay `pub(crate)` -- `verify_refs` (a `pub(crate)` fn)
+/// returns it, and Rust requires a function's return type to be at least as visible as the
+/// function itself, regardless of whether callers ever name the type explicitly (found by trying
+/// `pub(in crate::refs)` here first and letting the compiler reject it). `has_item_failure` below
+/// narrows safely: `verify.rs`, the sole external reader, destructures every field directly and
+/// never calls it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RefVerification {
     pub pointer_count: usize,
@@ -86,8 +93,10 @@ impl RefVerification {
     /// Return true when any pointer file, log file, or ref-name classification failed (DC-95
     /// Stage 2 Level 2). Item containment means `verify_refs` itself now returns `Ok` for these
     /// cases -- callers that need "is this repository's ref state fully sound," not just "did the
-    /// scan run at all," must check this alongside any hard `Err`.
-    pub(crate) fn has_item_failure(&self) -> bool {
+    /// scan run at all," must check this alongside any hard `Err`. Not called anywhere today
+    /// (`verify.rs` destructures the fields directly instead) -- narrowed rather than left
+    /// `pub(crate)` on the strength of an unused capability.
+    pub(in crate::refs) fn has_item_failure(&self) -> bool {
         self.pointer_outcomes
             .iter()
             .any(|outcome| matches!(outcome.status, RefFileStatus::Failed { .. }))
