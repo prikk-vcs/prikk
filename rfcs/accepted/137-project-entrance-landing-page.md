@@ -253,6 +253,76 @@ key.
 not built. Its install section ends at *installed*, not at *working*. If RFC 135 later produces a
 `prikk setup`-shaped entrance, the landing page gains one line and no more.
 
+## 10. AMENDED 2026-09-07 — the visual finishing pass, and why §9 no longer excludes it
+
+**§9 put visual design out of scope as "settled in the drafts review".** The project owner commissioned
+an external visual/UX review of the published page
+(`.git-exclude/external-communication/external-arch/receive/audit-20260907-landing-page/`) and
+instructed that its findings be acted on. **§9's exclusion is lifted for a finishing pass, and only for
+that** — content, the truth mechanism, and the three-surface division are untouched.
+
+**The review is accepted on its diagnosis.** Every checkable claim was re-derived by the architect
+against `docs/landing/index.html` and reproduces exactly:
+
+- `.panels li{width:170px}` with `gap:28px` over five sources of `270×170`, `150×310`, `240×300`,
+  `265×400`, `340×400` renders at heights **~107px to ~351px**, captions at five different `y`.
+- **The desktop overflow is arithmetic, not opinion**: `5×170 + 4×28 = 962px` against a content width of
+  `1000 − 2×28 = 944px`, inside `.panels{overflow-x:auto}`.
+- `@keyframes settle` ends `94%,100%{opacity:0}` on `infinite` — **arriving blocks vanish, forever.**
+- **`--clay` is used exactly once in 436 lines**, at `.blk.clay{fill:var(--clay)}` inside the hero SVG.
+  The accent appears nowhere in the page's own chrome.
+
+### 10.1 RULED — finding A's fix, which is neither the current state nor the review's recommendation
+
+**The diagnosis is right and the split was the architect's own recommendation.** §3's table records
+*"Story image | used, split into panels with its text as real HTML"*; that came from the drafts review,
+and the reviewer is correct that following it to the letter produced the bad result.
+
+**But their recommended fix — use `prikk-attraction-story.png` whole as one `<img>` — is REFUSED, and
+the reason is one their own scope prevented them from seeing.** They wrote *"I do not re-open its
+content decisions"* and judged the content sound. **That image bakes in all three false claims §4.1
+exists to have removed** — its bottom strip reads *"Isolated Workspaces — Safe & Parallel"*,
+*"Effortless Review — Clear Changes"*, *"Confident Merge"* — plus a headline duplicating the page's own
+`h1`, and text that is unselectable and inaccessible.
+
+**Using it whole would reintroduce, as pixels, exactly what this RFC removed as prose.** That is also
+the reason the split existed: it let the five story stages be used while the false-claim strip and the
+duplicate headline were dropped. **The reason was right; the execution broke the story.**
+
+**RULED — the artwork is re-rendered as one image containing artwork only:** the five stages on their
+shared ground line with the connecting light paths intact, **and no baked text of any kind** — no
+wordmark, no headline, no chips, no captions, no feature strip. Chips and captions are real HTML beneath
+it, as they are now. **This keeps the flow, the truth mechanism, and accessibility at once**, which
+neither the current page nor the review's recommendation does.
+
+**If no re-render is available, the fallback is the reviewer's own**: a CSS grid of five equal cells,
+`align-items:end` for a shared baseline, each image in a fixed-ratio frame (`aspect-ratio` +
+`object-fit:contain`), collapsing to an ordered single column. **It fixes the raggedness and the
+overflow with the assets already committed**, and it is strictly better than today.
+
+### 10.2 RULED — the rest
+
+- **Finding B — the hero animation is a defect, not a preference.** Blocks that arrive and then fade to
+  `opacity:0` contradict the page's own message and the direction's §17. **Arriving blocks must stay.**
+  A single settle on load, then static, satisfies "still look beautiful when paused".
+- **Finding D's terminal clipping is a defect**: the two `note:` lines are the honest caveats, and they
+  are the part being hidden. Shorten or wrap.
+- **Finding D's dark-mode contrast is objective**: `--ink-soft` on `--paper` must be **measured** against
+  WCAG AA in both themes, not judged.
+- **Finding C — warmth and texture — is accepted in its mechanical parts** (fewer hard rules, soft
+  tonal shifts, deliberate sparing use of `--clay`). **The aesthetic direction itself is the owner's**,
+  who owns the identity and approved both drafts. The reviewer's framing — *warm the chrome up to meet
+  the art* rather than calm the art down — is endorsed by the architect but is a redirectable choice,
+  and the owner's stated value is "clean over rich".
+- **Finding D's heading cadence is taste, not a defect.** Optional.
+
+### 10.3 What must not be lost
+
+The reviewer's §E, verbatim as a constraint on the pass: content truth, the maturity note up front, real
+terminal output, the copy button with its live region, reduced-motion as the opt-in default, the
+reflow-friendly command wrap, semantic sections and heading order. **A styling pass that breaks one of
+these has failed regardless of how it looks.**
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
