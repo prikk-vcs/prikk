@@ -67,8 +67,10 @@ fn walk_finds_the_confirmed_production_module_count() {
     // and `received_index` folding into the already-top-level `received` (-1). None of §2's seven
     // constrained modules moved; `patch`, `rollback`, `worktree`, `merge` name-family grouping was
     // measured to create new coupling-graph cycles and was not done -- see the increment's report.
-    assert_eq!(modules.len(), 51, "modules: {modules:?}");
+    // RFC 142 (2026-09-08) then added one new top-level module, `show`: 51 -> 52.
+    assert_eq!(modules.len(), 52, "modules: {modules:?}");
     assert!(modules.contains("foundation"));
+    assert!(modules.contains("show"));
     assert!(!modules.contains("fsutil"));
     assert!(!modules.contains("layout"));
     assert!(!modules.contains("dc55_identity_evidence"));

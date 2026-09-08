@@ -14,7 +14,7 @@ pub use display::{
 };
 pub use merge_plan::MergePlanDisplay;
 
-use crate::lifecycle_cache::replay_derived_state;
+use crate::lifecycle_cache::{ReplayDerivedLifecycleState, replay_derived_state};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_algebra::{EvidenceScope, StorePatchAlgebraEvidence, analyze_merge_evidence};
 use crate::patch_replay::decode::{DecodedPatchOperation, decode_patch_operations};
@@ -183,6 +183,23 @@ fn lineage_horizon(object_store: &impl ObjectReader, baseline: ObjectId) -> Resu
             }
         }
     }
+}
+
+/// RFC 142 §3's narrow boundary: `show` needs `lineage_horizon` + `replay_derived_state` to
+/// resolve a node-addressed operation's path at a sealed block, but `lineage_horizon` stays
+/// private to this file and `replay_derived_state`/`ReplayDerivedLifecycleState` stay at their
+/// existing `pub(crate)` visibility (RFC 131 narrowed internals two days before this one; widening
+/// them back out would work directly against that). This is the one new function instead — same
+/// shape as RFC 140's `enumerate_queued_patches`, which called `resolve_folded_worktree_baseline`
+/// directly rather than exporting it further. One replay per call: callers resolve as many node
+/// ids as they need against the single returned value ("resolve once per invocation, not once per
+/// operation").
+pub(crate) fn lifecycle_state_at(
+    object_store: &impl ObjectReader,
+    block_id: ObjectId,
+) -> Result<ReplayDerivedLifecycleState> {
+    let horizon = lineage_horizon(object_store, block_id)?;
+    replay_derived_state(object_store, block_id, horizon)
 }
 
 /// The parent state derivation continues through: mainline only for a `Merge` block (DC-75), the

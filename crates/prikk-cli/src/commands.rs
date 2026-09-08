@@ -206,6 +206,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "show",
+        run: crate::run_show,
+        help_lines: &[
+            "  prikk show <block-id|patch-id> [--format json]  Show what a block or patch changed",
+        ],
+    },
+    Command {
         name: "merge-evidence",
         run: crate::run_merge_evidence,
         help_lines: &[

@@ -50,8 +50,8 @@ use super::{BoundaryError, push};
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
 /// `min(fan_in, fan_out)`, today's ranking is 11 (`patch_replay`), 8 (`refs`), 8
-/// (`lifecycle_cache`), then a clean drop to 5 (`trust`, `merge_evidence`, `active`). The break
-/// sits between 8 and 5.
+/// (`lifecycle_cache`), 6 (`merge_evidence`, new as of RFC 142), then a clean drop to 5 (`trust`,
+/// `active`). The break sits between 6 and 5.
 ///
 /// **`active` and `wal` dropped out of the declared set at RFC 131 §2.2a's `foundation` grouping
 /// (2026-09-08)**, a real consolidation effect rather than a code change to either module: several
@@ -198,7 +198,7 @@ struct DeclaredHub {
     reason: &'static str,
 }
 
-/// Today's three hubs by `min(fan_in, fan_out)`. **`wal` and `active` were declared here and are
+/// Today's four hubs by `min(fan_in, fan_out)`. **`wal` and `active` were declared here and are
 /// removed as of RFC 131 §2.2a's `foundation` grouping (2026-09-08)**: consolidating
 /// `layout`/`fsutil`/`byte_cursor`/`file_codec`/`frame_resync`/`container`/`index`/`generation`
 /// into one node collapsed several of each module's distinct fan-out edges into that one shared
@@ -209,6 +209,10 @@ struct DeclaredHub {
 /// numbers this reflects. `trust` briefly joined this list too, for exactly as long as RFC 138's
 /// own `trust -> recognition_claim` edge existed; carried-defects C removed that edge along with
 /// the cycle it caused, and `trust` dropped back below the threshold with it (see the module doc).
+/// **`merge_evidence` newly crosses it (2026-09-08, RFC 142)**: `show` reuses `merge_evidence::
+/// lifecycle_state_at` rather than duplicating its private `lineage_horizon`/`replay_derived_
+/// state` call sequence, the same "add one narrow function instead of widening internals" shape
+/// RFC 131 §3 argued for -- fan-in 5 -> 6, fan-out unchanged at 8.
 const DECLARED_HUBS: &[DeclaredHub] = &[
     DeclaredHub {
         module: "refs",
@@ -231,6 +235,14 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   invalidates -- a cache's whole purpose is sitting between a wide set of readers \
                   and a wide set of writers, so both-sides-high fan is the shape a cache is \
                   supposed to have",
+    },
+    DeclaredHub {
+        module: "merge_evidence",
+        reason: "RFC 142's `show` reuses this module's own lineage-horizon-to-replay sequence \
+                  through one new narrow function (`lifecycle_state_at`) rather than duplicating \
+                  it or widening `lifecycle_cache`'s already-`pub(crate)` internals further -- a \
+                  second real consumer sharing one derivation, not two derivations existing \
+                  because reach crept outward",
     },
 ];
 

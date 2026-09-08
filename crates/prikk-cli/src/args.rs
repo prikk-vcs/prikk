@@ -472,6 +472,60 @@ pub(crate) fn parse_commit_args(args: Vec<String>) -> std::result::Result<Commit
     })
 }
 
+/// Parsed show command arguments (RFC 142). No `[path]` -- unlike most commands, `show` was never
+/// specified with one (its own help line names only `<block-id|patch-id> [--format json]`), so
+/// `run_show` opens the current directory directly, matching `run_status_adapter`.
+pub(crate) struct ShowArgs {
+    /// Target block or patch id.
+    pub(crate) id: prikk_object::ObjectId,
+    /// Whether `--format json` was given.
+    pub(crate) format_json: bool,
+}
+
+/// Parse `prikk show` arguments.
+pub(crate) fn parse_show_args(args: Vec<String>) -> std::result::Result<ShowArgs, CliError> {
+    let mut id = None;
+    let mut format_json = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--format" => {
+                let value = flag_value(&mut iter, "show --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "show --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
+            other if other.starts_with('-') => return Err(unknown_argument("show", other)),
+            _ => {
+                if id.is_some() {
+                    return Err(CliError::Usage(
+                        "show accepts exactly one id (usage: prikk show <block-id|patch-id> \
+                         [--format json])"
+                            .to_string(),
+                    ));
+                }
+                id = Some(arg);
+            }
+        }
+    }
+    let Some(id) = id else {
+        return Err(CliError::Usage(
+            "show requires <block-id|patch-id> (usage: prikk show <block-id|patch-id> [--format \
+             json])"
+                .to_string(),
+        ));
+    };
+    let id = id.parse::<prikk_object::ObjectId>().map_err(|err| {
+        CliError::Usage(format!(
+            "show id must be a lowercase 64-hex object id ({err})"
+        ))
+    })?;
+    Ok(ShowArgs { id, format_json })
+}
+
 /// Return an optional path or the current working directory.
 pub(crate) fn optional_path_or_current(
     path: Option<String>,

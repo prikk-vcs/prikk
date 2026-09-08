@@ -14,6 +14,7 @@
 - [Repository Status](guide/status.md)
 - [Worktree Status](guide/worktree-status.md)
 - [Ignoring Worktree Paths](guide/ignore.md)
+- [Show](guide/show.md)
 - [Checkout Planning](guide/checkout/checkout.md)
   - [Snapshot Checkout Planning](guide/checkout/snapshot-checkout.md)
   - [Snapshot Materialization](guide/checkout/snapshot-materialization.md)

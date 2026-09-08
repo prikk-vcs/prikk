@@ -68,6 +68,7 @@ const DECLARED_DOCUMENTS: &[&str] = &[
     "docs/src/guide/rollback/rollback-preview.md",
     "docs/src/guide/rollback/sealed-rollback-history.md",
     "docs/src/guide/security-setup.md",
+    "docs/src/guide/show.md",
     "docs/src/guide/status.md",
     "docs/src/guide/sync.md",
     "docs/src/guide/troubleshooting.md",

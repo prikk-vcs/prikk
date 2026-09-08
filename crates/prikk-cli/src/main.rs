@@ -8,9 +8,9 @@
 //! read-only inverse planning, rollback preview, rollback draft append/verification, sealed rollback classification,
 //! supported patch replay planning/materialization, explicit patch deletion planning, a local
 //! no-audit seal scaffold, read-only history inspection, checkout planning, conservative snapshot
-//! materialization, read-only worktree status, minimal publication trust setup, read-only merge
-//! evidence and merge plan review, confluent merge execution, repository verification, doctor
-//! diagnostics, and stale lock/index maintenance.
+//! materialization, read-only worktree status, minimal publication trust setup, read-only content
+//! display for a sealed block or patch, read-only merge evidence and merge plan review, confluent
+//! merge execution, repository verification, doctor diagnostics, and stale lock/index maintenance.
 //! Multi-operation text diff minimization, full patch algebra, and audit plugins remain later increments.
 
 use std::path::PathBuf;
@@ -43,8 +43,8 @@ use args::{
     CheckoutMode, MergeEvidenceTargetArg, VerifyOutputFormat, current_dir, parse_checkout_args,
     parse_commit_args, parse_doctor_args, parse_inverse_plan_args, parse_log_args,
     parse_merge_evidence_args, parse_merge_plan_args, parse_rollback_draft_args,
-    parse_rollback_draft_verify_args, parse_rollback_preview_args, parse_verify_args,
-    parse_worktree_status_args,
+    parse_rollback_draft_verify_args, parse_rollback_preview_args, parse_show_args,
+    parse_verify_args, parse_worktree_status_args,
 };
 use commands::CliError;
 use output::{
@@ -52,10 +52,10 @@ use output::{
     print_command_help, print_doctor_report, print_help, print_history, print_merge_evidence,
     print_merge_plan, print_patch_deletion_plan, print_patch_inverse_plan,
     print_patch_materialization_report, print_patch_replay_plan, print_rollback_draft_report,
-    print_rollback_draft_verification, print_rollback_preview_plan, print_snapshot_checkout_plan,
-    print_snapshot_materialization_report, print_status_json, print_trust_check,
-    print_trust_check_json, print_trust_list, print_trust_list_json, print_verify_report,
-    print_verify_report_json, print_worktree_status,
+    print_rollback_draft_verification, print_rollback_preview_plan, print_show, print_show_json,
+    print_snapshot_checkout_plan, print_snapshot_materialization_report, print_status_json,
+    print_trust_check, print_trust_check_json, print_trust_list, print_trust_list_json,
+    print_verify_report, print_verify_report_json, print_worktree_status,
 };
 use prikk_object::Signature;
 use prikk_store::{
@@ -69,7 +69,7 @@ use prikk_store::{
     materialize_snapshot_checkout, plan_patch_checkout_deletions, prepare_checkout_plan,
     prepare_merge_evidence, prepare_merge_plan, prepare_patch_inverse_plan,
     prepare_patch_replay_plan, prepare_rollback_preview, prepare_snapshot_checkout_plan,
-    read_active_ref_metadata, remove_trusted_maintainer, repair_repository,
+    read_active_ref_metadata, remove_trusted_maintainer, repair_repository, show,
     verify_active_rollback_draft, verify_repository_with_options, worktree_status,
 };
 
@@ -671,6 +671,20 @@ fn run_merge_evidence(args: Vec<String>) -> std::result::Result<(), CliError> {
     )
     .map_err(|err| err.to_string())?;
     print_merge_evidence(&report);
+    Ok(())
+}
+
+/// `prikk show` (RFC 142): what a block or patch changed. Exit `0` whichever way it resolves
+/// (RFC 121) -- a block that changed nothing (zero patches) is a valid answer, not a failure.
+fn run_show(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let show_args = parse_show_args(args)?;
+    let layout = open_repository(current_dir()?)?;
+    let patches = show(&layout, show_args.id).map_err(|err| err.to_string())?;
+    if show_args.format_json {
+        print_show_json(&patches);
+    } else {
+        print_show(&patches);
+    }
     Ok(())
 }
 

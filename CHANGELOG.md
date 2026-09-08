@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added — `prikk show`: what a block or patch changed
+
+`prikk show <block-id|patch-id> [--format json]` renders what a sealed block or patch changed:
+each operation, the path(s) it affects, and the content it changed. A text edit shows its exact
+before and after span, never a synthesized line-oriented diff — prikk's edits are content-anchored
+spans, not line ranges. There is no `prikk diff`: comparing two arbitrary points in history is a
+separate, materially more expensive question this command does not answer.
+
 ## 0.35.0 — 2026-09-06
 
 ### Added — `prikk status --format json`, and which patches a seal will freeze
