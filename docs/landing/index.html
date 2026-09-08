@@ -100,6 +100,19 @@
     position:absolute; inset:0; z-index:1;
     background:linear-gradient(100deg, var(--cream) 0%, var(--cream) 40%, transparent 75%);
   }
+  /* RFC 137 §13b: the owner's own reveal -- the photograph shows first, unobstructed (§13a
+     measured the scrim itself as one of the three things hiding it), and the *content* (the scrim
+     together with the copy it protects) fades in after a short delay, not the other way round.
+     `.hero-reveal` is shared by `.hero-scrim` and `.hero-grid` so both appear together as one
+     event, not the scrim first and the (unreadable, unprotected) copy trailing it.
+     `opacity:1` is the base rule -- exactly `.arriving`'s own pattern for the block diagram in
+     `.flow` below, reduced motion is the opt-in *default* here too, so a browser that never
+     confirms motion is welcome gets today's already-legible state, never an unrevealed one. */
+  .hero-reveal{opacity:1}
+  @media (prefers-reduced-motion: no-preference){
+    .hero-reveal{opacity:0;animation:hero-reveal .8s cubic-bezier(.16,1,.3,1) .5s forwards}
+  }
+  @keyframes hero-reveal{from{opacity:0}to{opacity:1}}
   /* Single column now that the hero has its own photograph: `.hero-art` no longer occupies the
      second column (see its own rule below), so the grid has one track to lay out, sized like
      `.hero-copy` used to be within the old two-column track. */
@@ -316,8 +329,8 @@
         <img class="hero-photo dark" src="assets/hero-9x16-dark.webp" width="941" height="1672" alt="">
       </div>
     </div>
-    <div class="hero-scrim" aria-hidden="true"></div>
-    <div class="wrap hero-grid">
+    <div class="hero-scrim hero-reveal" aria-hidden="true"></div>
+    <div class="wrap hero-grid hero-reveal">
       <div class="hero-copy">
         <p class="eyebrow">Version control, patch by patch</p>
         <h1>Patches build projects.</h1>
