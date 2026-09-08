@@ -3,6 +3,9 @@ use prikk_object::{
     NodeId, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind,
 };
 
+mod rename_convergence;
+mod root_stability;
+
 use super::{
     BlockStateStatus, LineageStateMemo, derive_next_state_root, validate_block_v2_shape,
     verify_block_v2_state, verify_blocks_topological,

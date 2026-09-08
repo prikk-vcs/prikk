@@ -64,17 +64,19 @@ pub(super) fn apply_state_effect<R: BlobKindResolver + BlobContentResolver>(
             text_cache.remove(node_id);
             Ok(())
         }
-        DecodedOperationKind::RenamePath {
-            node_id,
-            old_path,
-            new_path,
-        } => {
-            // Exact replay (P1-2): the persisted record's old_path must match the live path.
-            let expected_old = parse_repo_path(old_path)?;
-            let new = parse_repo_path(new_path)?;
-            state
-                .rename_node_checked(*node_id, &expected_old, new)
-                .map_err(inconsistent)
+        DecodedOperationKind::RenamePath { .. } => {
+            // RFC 144 §4j / increment 2: a lone `RenamePath` applied here, one operation at a time,
+            // is exactly the sequential fold that cannot represent a rename cycle (`rename_node`
+            // rejects a target still occupied by its own swap partner). The caller is responsible
+            // for collecting a run of consecutive `RenamePath` operations and resolving it through
+            // `apply_rename_run` instead -- see that function and `collect_rename_run`. This arm
+            // only says a lone rename is never handled *here*; it does not mean renames are
+            // unsupported.
+            Err(LifecycleReplayError::InconsistentLifecycleEffect {
+                detail: "apply_state_effect received a RenamePath -- the caller must route \
+                         consecutive RenamePath runs to apply_rename_run instead, never here"
+                    .to_string(),
+            })
         }
         DecodedOperationKind::ChangePerm {
             node_id,
@@ -217,6 +219,63 @@ fn apply_edit_text<R: BlobContentResolver>(
         .map_err(inconsistent)?;
     text_cache.insert(node_id, new_text);
     Ok(())
+}
+
+/// Extract one `RenamePath` operation's `(node_id, old_path, new_path)` triple, parsing both paths.
+/// Callers only ever invoke this after already matching `DecodedOperationKind::RenamePath`.
+fn rename_triple(
+    kind: &DecodedOperationKind,
+) -> Result<(NodeId, RepoPath, RepoPath), LifecycleReplayError> {
+    let DecodedOperationKind::RenamePath {
+        node_id,
+        old_path,
+        new_path,
+    } = kind
+    else {
+        return Err(LifecycleReplayError::InconsistentLifecycleEffect {
+            detail: "rename_triple called on a non-RenamePath operation".to_string(),
+        });
+    };
+    Ok((
+        *node_id,
+        parse_repo_path(old_path)?,
+        parse_repo_path(new_path)?,
+    ))
+}
+
+/// Collect one run of consecutive `RenamePath` operations starting at `first` (already consumed
+/// from `iter` by the caller), pulling further matching operations from `iter` via `next_if` so the
+/// run stops at the first non-`RenamePath` operation without consuming it (RFC 144 §4j.3: a run is
+/// scoped to consecutive same-kind operations within one patch, matching
+/// `patch_replay::apply::apply_rename_batch`'s own scoping exactly). Shared by every fold site that
+/// walks a patch's own operation list (§3 of the increment 2 handoff): `apply_patch_ids` and
+/// `apply_queued_patch_envelopes` both call this the same way, so `replay_chain_with_appended_patches`
+/// (which only ever reaches `apply_state_effect` through `apply_patch_ids`) inherits it too.
+pub(super) fn collect_rename_run<'a>(
+    iter: &mut std::iter::Peekable<
+        std::slice::Iter<'a, crate::patch_replay::decode::DecodedPatchOperation>,
+    >,
+    first: &'a crate::patch_replay::decode::DecodedPatchOperation,
+) -> Result<Vec<(NodeId, RepoPath, RepoPath)>, LifecycleReplayError> {
+    let mut run = vec![rename_triple(&first.kind)?];
+    while let Some(next) =
+        iter.next_if(|operation| matches!(operation.kind, DecodedOperationKind::RenamePath { .. }))
+    {
+        run.push(rename_triple(&next.kind)?);
+    }
+    Ok(run)
+}
+
+/// Apply one collected rename run to `state` (RFC 144 §4j / increment 2) -- the same node-before-path
+/// batch resolution [`crate::node::node_lifecycle::NodeLifecycleState::rename_nodes_checked_batch`]
+/// implements, mapped into this module's own `LifecycleReplayError` taxonomy.
+pub(super) fn apply_rename_run(
+    state: &mut NodeLifecycleState,
+    renames: &[(NodeId, RepoPath, RepoPath)],
+) -> Result<(), LifecycleReplayError> {
+    state
+        .rename_nodes_checked_batch(renames)
+        .map_err(inconsistent)
 }
 
 /// Require a blob to be present and `BlobKind::Binary` for a `ReplaceBinary` effect; a missing

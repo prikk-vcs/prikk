@@ -434,7 +434,15 @@ pub(crate) fn apply_queued_patch_envelopes(
     for record in records {
         let patch_id = record.envelope.object_id();
         let operations = read_patch_operations_from_envelope(&record.envelope, patch_id)?;
-        for operation in &operations {
+        let mut iter = operations.iter().peekable();
+        while let Some(operation) = iter.next() {
+            if matches!(operation.kind, DecodedOperationKind::RenamePath { .. }) {
+                // RFC 144 §4j / increment 2: resolve the whole run together, node before path --
+                // never one RenamePath at a time (see `effect::apply_rename_run`'s own doc comment).
+                let run = effect::collect_rename_run(&mut iter, operation)?;
+                effect::apply_rename_run(state, &run)?;
+                continue;
+            }
             match apply_state_effect(state, text_cache, &operation.kind, &blob_resolver) {
                 Ok(()) => {}
                 Err(LifecycleReplayError::MissingBlobForLifecycleEffect { blob_id }) => {
@@ -538,7 +546,15 @@ fn apply_patch_ids<R: BlobKindResolver + BlobContentResolver>(
 ) -> Result<(), LifecycleReplayError> {
     for patch_id in patch_ids {
         let operations = read_patch_operations(reader, *patch_id, require_schema_one)?;
-        for operation in &operations {
+        let mut iter = operations.iter().peekable();
+        while let Some(operation) = iter.next() {
+            if matches!(operation.kind, DecodedOperationKind::RenamePath { .. }) {
+                // RFC 144 §4j / increment 2: resolve the whole run together, node before path --
+                // never one RenamePath at a time (see `effect::apply_rename_run`'s own doc comment).
+                let run = effect::collect_rename_run(&mut iter, operation)?;
+                effect::apply_rename_run(state, &run)?;
+                continue;
+            }
             apply_state_effect(state, text_cache, &operation.kind, blob_resolver)?;
         }
     }

@@ -161,6 +161,96 @@ impl NodeLifecycleState {
         self.rename_node(node_id, new_path)
     }
 
+    /// Rename a batch of live nodes together, resolving node before path (RFC 144 §4j / increment
+    /// 2): a rename cycle (a swap) applied one operation at a time collides, since the second
+    /// half's target is still occupied by the first half's own not-yet-moved node. Resolved by
+    /// treating the whole batch as one unit: every `(node_id, old_path)` pair is validated against
+    /// the state as it stood *before* this batch (and a node or destination named twice within the
+    /// batch is rejected -- this is also what rejects a *chained* rename, `A→B` then `B→A`/`B→C`
+    /// for the same node, per §4j.2's ruling that the intermediate path existed in no sealed state),
+    /// then every source path is cleared from `path_to_id` before any destination is claimed, so two
+    /// nodes trading paths never observe an intermediate collision with each other. A destination
+    /// still occupied afterward belongs to a node outside this batch -- a genuine, structural
+    /// collision, reported (the exact same message `rename_node` already produces for a single
+    /// rename) rather than silently overwritten.
+    ///
+    /// Mirrors `prikk-store`'s `patch_replay::apply::apply_rename_batch` (RFC 144 increment 1) at
+    /// the node-primary state this crate owns: no bytes move here (this state carries no content,
+    /// only identity/path/metadata), so resolution is clearing and re-inserting `path_to_id`
+    /// entries rather than moving byte buffers between map slots.
+    pub fn rename_nodes_checked_batch(
+        &mut self,
+        renames: &[(NodeId, RepoPath, RepoPath)],
+    ) -> Result<()> {
+        if renames.is_empty() {
+            return Ok(());
+        }
+
+        // Phase 0: validate every pair's own assertion against the pre-batch state, and reject a
+        // batch that renames the same node twice or names the same destination twice.
+        let mut sources_seen = std::collections::BTreeSet::new();
+        let mut destinations_seen = std::collections::BTreeSet::new();
+        for (node_id, old_path, new_path) in renames {
+            let live = self.live_by_id.get(node_id).ok_or_else(|| {
+                PrikkError::Integrity("RenamePath target node_id is not live".to_string())
+            })?;
+            if live.path != *old_path {
+                return Err(PrikkError::Integrity(format!(
+                    "RenamePath old_path {} does not match the live path {}",
+                    old_path.as_str(),
+                    live.path.as_str()
+                )));
+            }
+            if !sources_seen.insert(*node_id) {
+                return Err(PrikkError::Integrity(
+                    "RenamePath renames the same node more than once in the same batch".to_string(),
+                ));
+            }
+            if !destinations_seen.insert(new_path.clone()) {
+                return Err(PrikkError::Integrity(
+                    "RenamePath names the same destination path more than once in the same batch"
+                        .to_string(),
+                ));
+            }
+        }
+
+        // Phase 1: clear every source's path_to_id entry across the whole batch before claiming any
+        // destination, so a destination about to be vacated by another rename in this same batch
+        // never reads as occupied.
+        for (node_id, old_path, _new_path) in renames {
+            match self.path_to_id.get(old_path) {
+                Some(id) if id == node_id => {
+                    self.path_to_id.remove(old_path);
+                }
+                _ => {
+                    return Err(PrikkError::Integrity(
+                        "path index does not point at the live node being renamed".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Phase 2: every source in this batch is now vacant. A destination still occupied belongs
+        // to a node this batch never touched -- report it rather than overwrite it.
+        for (_node_id, _old_path, new_path) in renames {
+            if self.path_to_id.contains_key(new_path) {
+                return Err(PrikkError::Integrity(format!(
+                    "rename target path {} is occupied by another live node",
+                    new_path.as_str()
+                )));
+            }
+        }
+
+        // Phase 3: commit. No further failure is possible past this point.
+        for (node_id, _old_path, new_path) in renames {
+            self.path_to_id.insert(new_path.clone(), *node_id);
+            if let Some(node) = self.live_by_id.get_mut(node_id) {
+                node.path = new_path.clone();
+            }
+        }
+        Ok(())
+    }
+
     /// Apply a `ChangePerm` to a live file node, preserving its `node_id` and path. The mode is
     /// recorded exactly (O1: the lifecycle index must carry post-mutation mode, since a later
     /// deletion's tombstone — and §10.2 `EntryHash` — bind it). Fails closed if the node is not
