@@ -258,6 +258,34 @@ DC-64's incremental cache is scoped to the commit path, and DC-92's memo lives i
 **Added to §5's table as a third measured-but-ungated property.** It joins §5b's quadratic sealing cost
 in the same category the table now makes visible: **costs that are real, measured, and held by nothing.**
 
+## 5d. `prikk show` at depth, measured 2026-09-08 (RFC 142)
+
+**Recorded because the number exists, not because it is comparable to §5c.** `show` resolves
+node-addressed paths through the same `lineage_horizon`/`replay_derived_state` mechanism §5c measured,
+so it inherits that cost; but the figures filed with the `show` round were taken on a **degenerate
+fixture — one file, held constant while depth grew** — where §5c's corpus grows the tree alongside
+depth.
+
+| depth | wall clock, mean of 5 |
+|---:|---:|
+| 1 (genesis) | 0.001 s |
+| 8 | 0.002 s |
+| 32 | 0.009 s |
+| 128 | 0.020 s |
+| 256 | 0.033 s |
+
+**Exponent ≈ 0.67 on this shape, against §5c's 1.45.** The two are not in tension and neither
+supersedes the other: **§5c varies depth and tree together, §5d varies depth alone.** Read together
+they say the cost §5c measured is carried substantially by tree growth, not by chain length by itself
+— which is consistent with §5c's own finding that neither replay implementation is cached, and worth
+re-testing directly rather than inferred from two differently-shaped runs.
+
+**`show` also performs exactly one replay per invocation for a block target even when no operation in
+the block is node-addressed.** Named here as a known, unclaimed inefficiency; no gate holds it.
+
+**Third measured-but-ungated cost after §5b and §5c** — the pattern in §5's table is now four rows
+deep and unchanged: real, measured, held by nothing.
+
 ## 6. The ruling this RFC carries — corrected 2026-09-03 after the owner questioned its shape
 
 **The first draft of this section asked "does peak RSS get standing protection?" That was the wrong

@@ -55,7 +55,7 @@ Measured against the command inventory: **there is no `show` and no `diff`.** `l
 |---|---|---|
 | **`EditText`** | **`old_span_text` and `replacement_text` — the actual bytes, verbatim** — plus optional line/column presentation hints | **none** |
 | `CreateFile` | `path`, `blob_id`, `mode` | one blob |
-| `DeleteNode` | `path`, and a preimage carrying `old_blob_id`/`old_mode` (or `old_target`) | one blob |
+| `DeleteNode` | `path`, and a preimage carrying `old_blob_id`/`old_mode` (or `old_target`) | one blob — **which may not exist; see §3a** |
 | `RenamePath` | `old_path`, `new_path` | none |
 | `ChangePerm` | `old_mode`, `new_mode` | none |
 | `CreateSymlink` | `path`, `target` | none |
@@ -67,6 +67,33 @@ bytes are *in the operation*, because the inverse-plan machinery needs them ther
 
 **This is the opposite of what the cost analysis would have predicted**, and it is why this RFC can be
 opened without waiting on RFC 136's snapshot work.
+
+## 3a. CORRECTION 2026-09-08 — "one blob" is a blob *id*, and an id is not a promise of an object
+
+**§3's table above was wrong, and it was mine.** It read a blob id in a payload as a blob that can be
+read. For `DeleteNode` that does not hold, and the gap is not a defect anywhere — it is the design
+working as ruled.
+
+**DC-65.** Once a text node has been edited, its current content identity has no stored object: the
+edit is carried as `old_span_text`/`replacement_text`, and the resulting content is reconstructed by
+replay rather than written as a blob. `plan_delete`
+(`crates/prikk-store/src/worktree_patch/node_authoring.rs:743`) therefore records `base.blob_id` — the
+node's **correct** current content identity — and that identity is deliberately unbacked.
+`current_text_for_node` (`:894`) says so in its own doc: falling through to replay-based
+materialization is *"expected, not exceptional, for any node whose most recent sealed operation was an
+`EditText`"*.
+
+**Nothing downstream was broken by this, because nothing downstream dereferenced it.** The inverse
+path (`crates/prikk-store/src/patch_inverse.rs:227-243`) *validates* `old_blob_id` against
+replay-derived bytes via `ensure_blob_matches_node_kind`; it never reads the blob. `show` is the first
+consumer to dereference a preimage blob id, and so the first to meet the case.
+
+**RULED: this is not an authoring defect and no `worktree_patch` change is warranted.** The blob id is
+right. What was wrong is the row above, which promised a read that the store never undertook to
+satisfy. **The obligation is on the reader, and §6a states it.**
+
+**The same correction applies to the `ReplaceBinary` row's "two blobs"** as a matter of form: those
+ids, too, are ids. They are backed today; the reader may not assume they always will be.
 
 ## 4. The one expensive dimension, and it is already measured
 
@@ -117,6 +144,28 @@ happened.
 hints are explicitly *"not part of algebraic identity"*. A rendering that presents spans as a
 line-oriented patch would be **asserting a structure the format deliberately does not have**, and the
 first user to apply it with `patch(1)` would find out. **The span is the truth; render the span.**
+
+## 6a. RULED 2026-09-08 — an unreadable blob degrades the operation, it does not fail the command
+
+**`prikk show` currently exits `1` on an ordinary sequence.** Create a file, edit it, delete it, seal
+each: `show` on the delete block reports `error: integrity error: missing Blob <id>` and exits `1`, in
+prose and in `--format json` alike. The repository is intact; the command is wrong about it.
+
+**This is RFC 140 §7b, and that ruling stands unchanged here:** *a read may degrade, but it must say
+that it degraded, in a field a machine can branch on.* A read surface that cannot render one operation
+must still render the other operations, and must still exit `0`. Turning an intact repository into an
+integrity error is the failure mode §7b exists to forbid.
+
+**The shape to follow is already in the same file.** `resolve_node_path`
+(`crates/prikk-store/src/show.rs:284-294`) meets an unresolvable node id and returns
+`ShowPathResolution::Unresolved { node_id }` — a named variant a consumer can branch on. **Content
+gets the same treatment**: an unreadable blob becomes a declared, machine-readable "unavailable"
+state carrying the blob id, not a `PrikkError`.
+
+**This binds every blob dereference in the command, not only the one that was demonstrated.** There
+are four: `CreateFile`'s `blob_id`, `DeleteNode`'s file preimage, and `ReplaceBinary`'s `old_blob_id`
+and `new_blob_id`. Whether each is reachable today is not the criterion — a read surface does not get
+to fail hard on the ones it believes cannot happen.
 
 ## 7. What this RFC does not decide, and what it refuses
 
