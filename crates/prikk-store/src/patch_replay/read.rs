@@ -158,20 +158,25 @@ pub(super) fn files_to_replay_manifest(
     files: BTreeMap<String, Vec<u8>>,
     live_nodes: &BTreeMap<NodeId, ReplayLiveNode>,
 ) -> Result<ReplayManifest> {
-    let modes_by_path: BTreeMap<&str, u32> = live_nodes
+    let live_by_path: BTreeMap<&str, &ReplayLiveNode> = live_nodes
         .values()
-        .map(|node| (node.path.as_str(), node.mode))
+        .map(|node| (node.path.as_str(), node))
         .collect();
     let mut entries = Vec::with_capacity(files.len());
     for (path, bytes) in files {
-        let mode = modes_by_path
-            .get(path.as_str())
-            .copied()
+        let live = live_by_path.get(path.as_str()).copied();
+        let mode = live
+            .map(|node| node.mode)
             .unwrap_or(SNAPSHOT_SEEDED_FALLBACK_MODE);
+        let kind = live.map(|node| node.kind);
+        let blob_id =
+            live.and_then(|node| (node.kind == NodeKind::BinaryFile).then_some(node.blob_id));
         entries.push(ReplayManifestEntry {
             path: RepoPath::parse(&path)?,
             bytes,
             mode,
+            kind,
+            blob_id,
         });
     }
     Ok(ReplayManifest { files: entries })

@@ -26,6 +26,15 @@ pub(super) struct ReplayLiveNode {
     /// checked-out file's permission bits match what was authored, not the anchored write
     /// primitive's create-time default.
     pub(super) mode: u32,
+    /// The blob id backing this node's *current* content, as recorded by the operation that most
+    /// recently set it (`CreateFile`, then any `ReplaceBinary`) — RFC 143 §5. Meaningful only when
+    /// `kind` is `BinaryFile`: a `TextFile` node's tracked id goes stale the moment an `EditText`
+    /// touches it (DC-65 — the pre-edit blob is deliberately never rewritten), so RFC 143's own
+    /// content report never reads this field for text. `BinaryFile` nodes never take that path
+    /// (`EditText` is text-only; binary content only ever changes via `ReplaceBinary`, which always
+    /// updates this to a real, current, apply-validated blob), so for them this id never goes
+    /// stale.
+    pub(super) blob_id: ObjectId,
 }
 
 pub(super) fn apply_decoded_operation(
@@ -59,7 +68,15 @@ pub(super) fn apply_decoded_operation(
             let (kind, bytes) = read_blob_bytes_with_kind(object_store, blob_id)?;
             deleted_files.remove(&path);
             files.insert(path.clone(), bytes);
-            live_nodes.insert(node_id, ReplayLiveNode { path, kind, mode });
+            live_nodes.insert(
+                node_id,
+                ReplayLiveNode {
+                    path,
+                    kind,
+                    mode,
+                    blob_id,
+                },
+            );
         }
         DecodedOperationKind::DeleteNode {
             path,
@@ -163,7 +180,7 @@ pub(super) fn apply_decoded_operation(
 fn apply_replace_binary(
     object_store: &impl ObjectReader,
     files: &mut BTreeMap<String, Vec<u8>>,
-    live_nodes: &BTreeMap<NodeId, ReplayLiveNode>,
+    live_nodes: &mut BTreeMap<NodeId, ReplayLiveNode>,
     node_id: NodeId,
     old_blob_id: ObjectId,
     new_blob_id: ObjectId,
@@ -195,7 +212,13 @@ fn apply_replace_binary(
             "ReplaceBinary new blob {new_blob_id} is not a binary-file blob"
         )));
     }
-    files.insert(live.path.clone(), new_bytes);
+    let path = live.path.clone();
+    files.insert(path, new_bytes);
+    // Safe to unwrap: the `live_nodes.get(&node_id)` lookup above already proved this key exists,
+    // and nothing between there and here removes it.
+    if let Some(live) = live_nodes.get_mut(&node_id) {
+        live.blob_id = new_blob_id;
+    }
     Ok(())
 }
 

@@ -51,11 +51,12 @@ use output::{
     QueueTarget, QueueThresholdStatus, print_active_session_repairs, print_checkout_plan,
     print_command_help, print_doctor_report, print_help, print_history, print_merge_evidence,
     print_merge_plan, print_patch_deletion_plan, print_patch_inverse_plan,
-    print_patch_materialization_report, print_patch_replay_plan, print_rollback_draft_report,
-    print_rollback_draft_verification, print_rollback_preview_plan, print_show, print_show_json,
-    print_snapshot_checkout_plan, print_snapshot_materialization_report, print_status_json,
-    print_trust_check, print_trust_check_json, print_trust_list, print_trust_list_json,
-    print_verify_report, print_verify_report_json, print_worktree_status,
+    print_patch_materialization_report, print_patch_plan_content_json, print_patch_replay_plan,
+    print_rollback_draft_report, print_rollback_draft_verification, print_rollback_preview_plan,
+    print_show, print_show_json, print_snapshot_checkout_plan,
+    print_snapshot_materialization_report, print_status_json, print_trust_check,
+    print_trust_check_json, print_trust_list, print_trust_list_json, print_verify_report,
+    print_verify_report_json, print_worktree_status,
 };
 use prikk_object::Signature;
 use prikk_store::{
@@ -68,9 +69,10 @@ use prikk_store::{
     materialize_patch_checkout, materialize_patch_checkout_with_deletions,
     materialize_snapshot_checkout, plan_patch_checkout_deletions, prepare_checkout_plan,
     prepare_merge_evidence, prepare_merge_plan, prepare_patch_inverse_plan,
-    prepare_patch_replay_plan, prepare_rollback_preview, prepare_snapshot_checkout_plan,
-    read_active_ref_metadata, remove_trusted_maintainer, repair_repository, show,
-    verify_active_rollback_draft, verify_repository_with_options, worktree_status,
+    prepare_patch_plan_content_report, prepare_patch_replay_plan, prepare_rollback_preview,
+    prepare_snapshot_checkout_plan, read_active_ref_metadata, remove_trusted_maintainer,
+    repair_repository, show, verify_active_rollback_draft, verify_repository_with_options,
+    worktree_status,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -632,9 +634,16 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
             print_snapshot_materialization_report(&layout, &report);
         }
         CheckoutMode::PatchPlan => {
-            let plan = prepare_patch_replay_plan(&layout, &args.ref_name)
-                .map_err(|err| err.to_string())?;
-            print_patch_replay_plan(&layout, &plan);
+            if args.format_json {
+                let report =
+                    prepare_patch_plan_content_report(&layout, &args.ref_name, &args.content_paths)
+                        .map_err(|err| err.to_string())?;
+                print_patch_plan_content_json(&report);
+            } else {
+                let plan = prepare_patch_replay_plan(&layout, &args.ref_name)
+                    .map_err(|err| err.to_string())?;
+                print_patch_replay_plan(&layout, &plan);
+            }
         }
         CheckoutMode::PatchMaterialize => {
             let report = materialize_patch_checkout(&layout, &args.ref_name)

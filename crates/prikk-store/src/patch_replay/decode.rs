@@ -151,6 +151,24 @@ pub(crate) fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Resul
     }
 }
 
+/// Stable label for one apply-supported operation kind (RFC 143 §6's coverage field). Mirrors
+/// `show.rs`'s own `ShowOperation::kind` vocabulary exactly (`"create-file"`, `"delete-node"`,
+/// `"edit-text"`, `"replace-binary"`, `"change-perm"`) rather than inventing a second one --
+/// callable only after [`ensure_apply_supported`] has already confirmed the kind is one of these
+/// five; the three refused kinds have no label here because they never reach a successful apply to
+/// be recorded as covered.
+pub(crate) fn applied_operation_kind_label(kind: &DecodedOperationKind) -> &'static str {
+    match kind {
+        DecodedOperationKind::CreateFile { .. } => "create-file",
+        DecodedOperationKind::DeleteNode { .. } => "delete-node",
+        DecodedOperationKind::EditText { .. } => "edit-text",
+        DecodedOperationKind::ReplaceBinary { .. } => "replace-binary",
+        DecodedOperationKind::ChangePerm { .. } => "change-perm",
+        DecodedOperationKind::RenamePath { .. } => "rename-path",
+        DecodedOperationKind::CreateSymlink { .. } => "create-symlink",
+    }
+}
+
 /// Decode every FDD-03 §9.3 operation kind from canonical patch payload bytes into
 /// typed [`DecodedPatchOperation`]s. Decoding validates structure/identity only;
 /// applicability is gated separately by [`ensure_apply_supported`] (erratum P1).

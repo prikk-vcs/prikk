@@ -3,8 +3,8 @@
 use prikk_object::{
     BlockKind, BlockPayload, CanonicalEncode, CreateFile, EditText, MerkleRoot, NodeId,
     ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PATCH_MESSAGE_SCHEMA,
-    PatchPayload, PatchPurpose, RefKind, RefStatePayload, RefUpdatePayload, RenamePath, Signature,
-    SignatureAlgorithm, SignerRole,
+    PatchPayload, PatchPurpose, RefKind, RefStatePayload, RefUpdatePayload, RenamePath,
+    ReplaceBinary, Signature, SignatureAlgorithm, SignerRole,
 };
 
 use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryLayout};
@@ -361,6 +361,125 @@ pub(crate) fn publish_text_create_then_edit_block(
         ref_update,
     })?;
     Ok(())
+}
+
+/// A binary blob, unlike [`write_blob`]'s always-`BlobKind::Text`.
+pub(crate) fn write_binary_blob(
+    store: &mut FileObjectStore,
+    bytes: &[u8],
+) -> prikk_error::Result<ObjectId> {
+    let payload = BlobPayload::new(BlobKind::Binary, bytes.to_vec());
+    let mut envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, payload.to_canonical_bytes()?);
+    envelope.add_signature(maintainer_signature())?;
+    store.write_object(&envelope)
+}
+
+/// One `CreateFile` (binary), sealed in its own root block, then a second block replacing its
+/// content with `ReplaceBinary`. Returns the final `new_blob_id`. RFC 143's own content-report
+/// tests need this; it lives here rather than in `patch_replay/tests/content_report.rs` because
+/// this module -- unlike that one -- is already `#[cfg(test)]`-excluded from RFC 130's coupling
+/// gate at `lib.rs`'s own top level, so a fixture calling `derive_next_state_root` (a `block_state`
+/// re-export) here never risks a spurious `patch_replay -> block_state` production edge.
+pub(crate) fn publish_binary_create_then_replace(
+    layout: &RepositoryLayout,
+    old: &[u8],
+    new: &[u8],
+) -> prikk_error::Result<ObjectId> {
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let node_id = NodeId::from_bytes([0x83; 32]);
+    let old_blob = write_binary_blob(&mut object_store, old)?;
+
+    let create_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "asset.bin".to_string(),
+                node_id,
+                blob_id: old_blob,
+                mode: 0o100644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut create_patch =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, create_payload.to_canonical_bytes()?);
+    create_patch.add_signature(dummy_signature())?;
+    let create_patch_id = object_store.write_object(&create_patch)?;
+    let root_state = crate::derive_next_state_root(&object_store, None, &[create_patch_id])?;
+    let root_block = signed_block_with_state_root(
+        BlockKind::Root,
+        Vec::new(),
+        vec![create_patch_id],
+        None,
+        root_state,
+    );
+    let root_block_id = object_store.write_object(&root_block)?;
+
+    let new_blob = write_binary_blob(&mut object_store, new)?;
+    let replace_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ReplaceBinary(ReplaceBinary {
+                node_id,
+                old_blob_id: old_blob,
+                new_blob_id: new_blob,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut replace_patch =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, replace_payload.to_canonical_bytes()?);
+    replace_patch.add_signature(dummy_signature())?;
+    let replace_patch_id = object_store.write_object(&replace_patch)?;
+    let next_state =
+        crate::derive_next_state_root(&object_store, Some(root_block_id), &[replace_patch_id])?;
+    let next_block = signed_block_with_state_root(
+        BlockKind::Normal,
+        vec![root_block_id],
+        vec![replace_patch_id],
+        None,
+        next_state,
+    );
+    let next_block_id = object_store.write_object(&next_block)?;
+
+    let ref_store = RefStore::new(layout.clone());
+    let root_ref_state = signed_ref_state_envelope("heads/main", None, root_block_id, 1);
+    let root_ref_state_id = root_ref_state.object_id();
+    let root_ref_update =
+        signed_ref_update_envelope("heads/main", None, root_ref_state_id, root_block_id, 1);
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state: root_ref_state,
+        ref_update: root_ref_update,
+    })?;
+    let next_ref_state =
+        signed_ref_state_envelope("heads/main", Some(root_ref_state_id), next_block_id, 2);
+    let next_ref_state_id = next_ref_state.object_id();
+    let next_ref_update = signed_ref_update_envelope(
+        "heads/main",
+        Some(root_ref_state_id),
+        next_ref_state_id,
+        next_block_id,
+        2,
+    );
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: Some(root_ref_state_id),
+        ref_state: next_ref_state,
+        ref_update: next_ref_update,
+    })?;
+    Ok(new_blob)
 }
 
 /// RFC 134 §8, §3.2 ("demonstrate, do not assume" a v1-`EditText`-history repository still

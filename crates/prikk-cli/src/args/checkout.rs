@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use prikk_store::DEFAULT_CHECKOUT_REF;
+use prikk_store::{DEFAULT_CHECKOUT_REF, RepoPath};
 
 use super::optional_path_or_current;
-use crate::arg_scan::{SetOnce, flag_value, unknown_argument};
+use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 
 /// Parsed checkout command arguments.
@@ -16,6 +16,15 @@ pub(crate) struct CheckoutArgs {
     pub(crate) ref_name: String,
     /// Checkout mode.
     pub(crate) mode: CheckoutMode,
+    /// Whether `--format json` was given. RFC 143: meaningful only for `--patch-plan`; rejected
+    /// at parse time for every other mode rather than silently ignored.
+    pub(crate) format_json: bool,
+    /// `--content-path <repo-relative path>`, repeatable. RFC 143 §5: content is emitted only for
+    /// these paths, never the whole tree by default -- validated with the same `RepoPath::parse`
+    /// the object layer itself uses, so a malformed path is a usage error (exit `2`, RFC 121)
+    /// caught before any repository work begins, not an `Integrity` failure surfacing later as
+    /// exit `1`.
+    pub(crate) content_paths: Vec<String>,
 }
 
 /// Checkout command mode.
@@ -44,6 +53,8 @@ pub(crate) fn parse_checkout_args(
     let mut mode = None;
     let mut path = None;
     let mut ref_name = None;
+    let mut format_json = false;
+    let mut content_paths = Vec::new();
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -67,6 +78,25 @@ pub(crate) fn parse_checkout_args(
                 }
                 ref_name.set_once("--ref", value)?;
             }
+            "--format" => {
+                let value = flag_value(&mut iter, "checkout --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "checkout --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
+            "--content-path" => {
+                let value = flag_value(&mut iter, "checkout --content-path")?;
+                RepoPath::parse(&value).map_err(|err| {
+                    CliError::Usage(format!(
+                        "checkout --content-path {value:?} is not a valid repository-relative \
+                         path ({err})"
+                    ))
+                })?;
+                content_paths.push(value);
+            }
             other if other.starts_with('-') => return Err(unknown_argument("checkout", other)),
             _ => {
                 if path.is_some() {
@@ -88,10 +118,23 @@ pub(crate) fn parse_checkout_args(
             .to_string(),
         ));
     };
+    if mode != CheckoutMode::PatchPlan && (format_json || !content_paths.is_empty()) {
+        return Err(CliError::Usage(
+            "checkout --format and --content-path are only meaningful with --patch-plan"
+                .to_string(),
+        ));
+    }
+    if !content_paths.is_empty() && !format_json {
+        return Err(CliError::Usage(
+            "checkout --content-path requires --format json".to_string(),
+        ));
+    }
     Ok(CheckoutArgs {
         root: optional_path_or_current(path)?,
         ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
         mode,
+        format_json,
+        content_paths,
     })
 }
 

@@ -153,7 +153,10 @@ pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,
     prepare_patch_inverse_plan,
 };
-pub use patch_replay::{PatchReplayPlan, prepare_patch_replay_plan};
+pub use patch_replay::{
+    PatchPlanContent, PatchPlanContentEntry, PatchPlanContentReport, PatchPlanCoverage,
+    PatchReplayPlan, prepare_patch_plan_content_report, prepare_patch_replay_plan,
+};
 pub use patch_set_digest::{
     PatchSetDigest, PatchSetResolution, compute_patch_set_digest,
     compute_patch_set_digest_and_count_from_block, compute_patch_set_digest_for_ref,

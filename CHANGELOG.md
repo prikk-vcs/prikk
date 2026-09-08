@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added — `prikk checkout --patch-plan --format json`: content at a replayed point
+
+`checkout --patch-plan` already reconstructs every file's bytes to prove a replay, then discarded
+them. `--format json --content-path <repo-relative path>` (repeatable) now reports that content for
+exactly the paths named — never the whole tree by default, and a bare `--format json` with no
+`--content-path` reports metadata only. A requested path the replay never resolved degrades to
+`not_found`, not an error; an unsupported operation anywhere in the walked chain still fails the
+whole call. Binary content is never emitted as bytes — a binary file reports its blob id and
+declared size only. The report's `coverage` field names which operation kinds this replay actually
+applied and that the walk is single-parent; it is not a completeness promise. This adds no
+comparison surface: prikk still has no `diff`, and comparing two arbitrary points remains a
+separate, not-yet-open question — the requesting side takes on that comparison itself.
+
 ## 0.36.0 — 2026-09-08
 
 ### Added — `prikk show`: what a block or patch changed
