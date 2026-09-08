@@ -1316,6 +1316,60 @@ prominent control. **The owner's call.**
 probably were not either — `.chip`, `.nav-cta`, `--ink-soft` body text, and the caption text under
 each story panel.
 
+## 13o. MEASURED 2026-09-08 — the full contrast sweep, and it is a light-theme sage problem
+
+**§13n's finding swept across the whole page**, every text-on-background pair, both themes, against
+WCAG AA (4.5:1 — nothing on this page qualifies as large text at `.92rem`/14.72px).
+
+**Dark theme passes everything.** Fifteen pairs, lowest 4.89. **Do not touch it.**
+
+**Light theme fails three, and all three are sage:**
+
+| | | ratio |
+|---|---|---:|
+| `.eyebrow` — `--sage-dim` on `--cream` | `#93a48d` on `#f8f3ec` | **2.40** |
+| primary button — `--btn-ink` on `--sage` | `#fffdfa` on `#7f9179` | **3.32** |
+| terminal prompt `.p` — `--sage` on `--paper` | `#7f9179` on `#fffdfa` | **3.32** |
+
+**`.eyebrow` at 2.40 is the worst on the page**, and it appears above every section heading.
+
+**RULED — one constraint, not one colour.** Light `--sage` must satisfy **both**: white text on it
+≥ 4.5, and it as text on cream ≥ 4.5. **That is relative luminance ≤ ≈0.145**, against today's 0.2614.
+**One token change fixes the button and the terminal prompt together.** The exact colour is a design
+choice inside that constraint and is not ruled here — `#5f6e5b` (5.35 / 4.92) is the boundary, offered
+as arithmetic rather than as a recommendation.
+
+**`.eyebrow` needs its own answer.** `--sage-dim` is 0.3468 — far outside the constraint — and it is a
+*dimmer* variant by intent. **Darkening it to pass would make it darker than `--sage`, inverting the
+relationship the name asserts.** Either it stops being a text colour, or the pair is re-derived.
+
+**Dark theme is not symmetrical and must not be "fixed" to match.** Its `--sage` is `#93a48d` and
+serves as a *foreground* there; light's `#7f9179` is a *background*. **The same token plays opposite
+roles and only the light side is broken.**
+
+## 13p. RULED 2026-09-08 — modest motion, and the two things that bound it
+
+**The owner asked for modest UI motion — button hover, card hover or fade-in.** Swept first: the page
+has **two `@keyframes` and not a single `transition:` declaration.** Every hover state — the primary
+button, nav links, the copy button, the 404's links — changes instantly. **The gap is real.**
+
+**RULED — two bounds, both non-negotiable:**
+
+1. **`prefers-reduced-motion: reduce` must fall back to the finished state**, never to a hidden or
+   half-rendered one. §13b established this and it is the reason the hero reveal was safe: with
+   content fading *in*, the fallback is *content visible*. **Any new reveal inherits that test.**
+2. **No JavaScript.** The page has none for content decisions and must not gain any. **This rules out
+   scroll-triggered reveals** — `IntersectionObserver` is JS, and CSS scroll-driven animation is not
+   broadly available. **A card fade-in must be on load, like the hero's, or not at all.**
+
+**Also bounded:** animate colour, background, border and opacity — **never layout**. CLS stays zero.
+And reuse the existing house timing (`.8s cubic-bezier(.16,1,.3,1)`) rather than introducing a second
+motion vocabulary.
+
+**Caution, not a rule:** the hero already delays its own copy by 500ms. **More on-load reveals
+compound into a page that assembles itself while the reader waits.** Hover feedback costs nothing and
+is felt immediately; on-load reveals are the ones to be sparing with.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
