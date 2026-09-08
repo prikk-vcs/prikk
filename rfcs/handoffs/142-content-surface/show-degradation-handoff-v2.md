@@ -1,6 +1,6 @@
 # RFC 142 follow-up — degrade absence, propagate error
 
-**RFC:** `rfcs/accepted/142-content-surface.md` — **§6b is new, added 2026-09-08.** It corrects §6a's
+**RFC:** `rfcs/done/142-content-surface.md` — **§6b is new, added 2026-09-08.** It corrects §6a's
 requirement 4, which was mine and was too broad. **Read §6b before anything else.**
 **Base:** `7f603fc`, accepted in shape and held unpushed. Commit on top.
 **Round 2 review:** `.git-exclude/reviewed/142-show-degradation-review-v1.md`.

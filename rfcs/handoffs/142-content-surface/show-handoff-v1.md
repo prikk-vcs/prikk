@@ -1,6 +1,6 @@
 # RFC 142 — `prikk show`: what a block or patch changed
 
-**RFC:** `rfcs/accepted/142-content-surface.md` — **accepted in full 2026-09-08.** §4's ruling (resolve
+**RFC:** `rfcs/done/142-content-surface.md` — **accepted in full 2026-09-08.** §4's ruling (resolve
 paths, no opt-out flag), §5's split (`show` ships, `diff` does not) and §6's span rendering are settled
 input.
 **Base:** `main` at `c27aad4`.

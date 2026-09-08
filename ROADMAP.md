@@ -405,9 +405,9 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**1**~~ | ~~RFC 139 increment 2 — the builder, determinism, and the build-cost curve~~ | Product | **DONE 2026-09-07** (`329715b`). Produced the corpus's first result before the corpus was finished: **per-seal cost is linear in depth, so cumulative build cost is quadratic** (exponent 2.03), which puts §6's 2,048 floor at 23-101 hours. Filed as RFC 133 §5b; the floor is ruled unreachable-in-practice, not revised away |
 | ~~**1**~~ | ~~RFC 139 increment 3 — checkout cost at depth, and merge-path baseline reconstruction~~ | Product | **DONE 2026-09-07** (`8a325f0`). Both answered, and they turned out to be **one** cost: checkout and merge-evidence both grow as depth^1.45 from two separate uncached chain walks. Filed as RFC 136 §9.3 / RFC 133 §5c |
 | ~~**2**~~ | ~~RFC 131 — module grouping and `pub(in ...)` scoping~~ | Product | **DONE 2026-09-08** (`544cc6c`, `4acd7e8`, `971e664`). **125 → 100 top-level entries, 69 → 52 modules**, first 27 `pub(in crate::…)`. Generalized §6a's constraint (merge-induced cycles are not limited to the constrained seven) and exposed that **§6a forecloses §3's own target** — see the new item 2 |
-| **1** | **RFC 142** — the content surface — **ACCEPTED 2026-09-08**, handed off | Product | **Scheduled 2026-09-06 on the owner's instruction to schedule hosting, because it is what actually gates it.** Also the stikk project's oldest carried dependency (`UD-09`, since their 0.1.0), which two of their designed views are blocked on. **Already ruled: if a content surface lands, its JSON form is designed at the same time, not a release later.** Architect work to open; implementation follows acceptance |
-| **2** | **Teach the coupling gate qualified module names** — RFC 130's gate | Product | **Proposed for this position, owner to authorize.** RFC 131 §6b.2 rules this **the prerequisite for §3's stated goal**, not the optional alternative it was called before: `pub(in crate::<path>)` needs an ancestor, §6a forbids giving the constrained seven a shared parent, so their edges cannot be narrowed at all until the gate can name `group::module`. Unblocks the rest of RFC 131 §3; **internal, so it fills no release** |
-| **3** | **Open the hosting-shape RFC** — `prikk instaweb` vs. a separate small server | Product | **Scheduled 2026-09-06, deliberately not first**, per the owner: *"No need to take it as the most prioritized."* Rules which of the owner's two named shapes to build. **Gated on item 1** — a browse view with no content surface hits exactly the wall stikk hit: it can name changed paths and show no line of what changed |
+| ~~**1**~~ | ~~RFC 142 — the content surface~~ | Product | **DONE 2026-09-08** (`0a52411`, `7f603fc`, `bbf4236`), **shipped in 0.36.0** and retired to `rfcs/done/`. `prikk show` ships; **`prikk diff` is refused, not deferred** — a patch is self-describing. Three rounds, and **both defects were the architect's own**, each the previous one's sign reversed: §3's table read a blob id as a readable blob, then §6a's requirement 4 licensed degrading every failure. §6b is the correction that outlives it — **degrade absence, propagate error** |
+| **1** | **Teach the coupling gate qualified module names** — RFC 130's gate | Product | **Now the head of the order; owner to authorize.** RFC 131 §6b.2 rules this **the prerequisite for §3's stated goal**, not the optional alternative it was called before: `pub(in crate::<path>)` needs an ancestor, §6a forbids giving the constrained seven a shared parent, so their edges cannot be narrowed at all until the gate can name `group::module`. Unblocks the rest of RFC 131 §3; **internal, so it fills no release** |
+| **2** | **Open the hosting-shape RFC** — `prikk instaweb` vs. a separate small server | Product | **Scheduled 2026-09-06, deliberately not first**, per the owner: *"No need to take it as the most prioritized."* Rules which of the owner's two named shapes to build. **Its gate is now open**: RFC 142 shipped the content surface in 0.36.0, so a browse view no longer hits the wall stikk hit — it can show what changed, not only which paths did |
 | — | RFC 120 §9.4, §9.4a; RFC 133 §6 | **owner rulings** | Consume no dev-team capacity and can be answered at any point. **§9.4a would stop an error now on its third occurrence** |
 | — | RFC 137 increment 5; RFC 136; DC-43; RFCs 109/110/113 | blocked | Each waits on a named external answer — `prikk.org` DNS, the corpus, the signer bootstrap, a direction. **RFC 137 is accepted-but-unshipped and still not rankable here**: its increment 5 is a DNS action, not dev capacity, and it re-enters the queue the day the domain resolves |
 
@@ -445,8 +445,9 @@ sync is artifact-based, any existing host — object storage, a web server, a sh
 serve prikk artifacts as dumb bytes with no prikk-specific code, which is exactly what RFC 116 §4
 anticipates (*"with no network code at all"*).
 
-**Owed outward, held: the stikk reply.** Drafted and answering both their letters, **held until
-0.36.0 ships** (owner's ruling 2026-09-07) even though both letters' subjects shipped in 0.35.0. **It
+**Owed outward, now unblocked: the stikk reply.** Drafted and answering both their letters, held
+until 0.36.0 ships (owner's ruling 2026-09-07) — **0.36.0 shipped 2026-09-08, so the hold is
+released and the checklist is now due** even though both letters' subjects shipped in 0.35.0. **It
 carries a re-verification checklist in its own header** — it went stale within a day of drafting
 (§5 said the content surface was unscheduled hours before it was scheduled), so the cut that releases
 it must run that checklist rather than send it as written.
@@ -510,6 +511,39 @@ now so it is a recognised threshold rather than a later surprise.
 **Band 3 is complete except RFC 126 §5.** RFC 123's interim, RFC 124, and RFC 126 §2 all landed;
 §6a and §6b followed on 2026-09-03. **`AUD-05` through `AUD-10` are all delivered** — the whole
 no-design-decision half of this program — leaving `AUD-01` through `AUD-04`, which are design work.
+
+### Release position — 0.36.0 shipped 2026-09-08
+
+**`0.36.0` was cut at `0b749d2`**, carrying one user-facing feature: **`prikk show`** (RFC 142). CI
+green on all 15 jobs before the tag, signed tag verified locally before pushing, `Release` green on
+four build targets with 16 assets, **all eight crates published to crates.io and confirmed live
+against the sparse index**, none yanked.
+
+**Verified past the workflows' own reports**, on both artifacts:
+
+- The published Linux asset's SHA-256 matched its declared checksum, and its `build-info.txt` names
+  commit `0b749d2` and tag `0.36.0`.
+- **The create/edit/delete sequence — the exact defect that took three review rounds — exits `0` on
+  the shipped binary**, rendering `content: <unavailable blob …>` in prose and
+  `"content": {"kind": "unavailable", …}` in JSON. The edit block renders its content-anchored span
+  (`old: world` / `new: there`) with the node-addressed path resolved to `a.txt`.
+- RFC 121's exit codes hold on the shipped binary: missing argument `2`, malformed id `2`,
+  well-formed nonexistent id `1`.
+- **Repeated against a clean `cargo install prikk --version 0.36.0`** — the registry artifact, not
+  the release asset — reading the same repository, same output.
+
+**The release's whole subject is one command, and its cost was three rounds of review.** `show`
+renders what a block or patch changed from the patch payload itself; RFC 142 §3's finding is that a
+patch is self-describing, so no diff engine is needed and **`prikk diff` deliberately does not
+ship**. The two defects along the way were both mine: §3's table read a blob *id* as a readable blob,
+and §6a's requirement 4 then licensed degrading every failure — which inverted the defect, from
+calling an intact repository damaged to calling a damaged one intact. **§6b settles it: absence is
+ambiguous, an error is not.**
+
+**Public API is purely additive** — the exported item *names* were diffed against `0.35.0`: nothing
+removed, seven added, all `Show*` types. RFC 131's grouping moved a great deal of code with zero
+`pub mod` in either version, so it never reached the external surface, and **no downstream consumer
+can break on this cut**. No wire schema change: `prikk-object` untouched.
 
 ### Release position — 0.35.0 shipped 2026-09-06
 

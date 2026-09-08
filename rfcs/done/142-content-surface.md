@@ -1,6 +1,33 @@
 # RFC 142 — Showing what changed
 
-**Status.** **ACCEPTED by the project owner 2026-09-08**, the same day it was opened.
+**Status.** **CLOSED 2026-09-08 and moved to `rfcs/done/` — shipped in 0.36.0** (`0b749d2`).
+`prikk show <block-id|patch-id> [--format json]` is released. **`prikk diff` is refused, not
+deferred** (§5, §7): a patch is self-describing, so the expensive comparison surface is not needed to
+answer what a block or patch changed.
+
+**What outlives this RFC is a correction to a rule, and it is §6b.** RFC 140 §7b said a read may
+degrade but must say so in a field a machine can branch on. This RFC learned the boundary that
+ruling was missing: **degrade absence, propagate error.** `Ok(None)` is ambiguous — DC-65's
+deliberately unbacked identity and a lost object are indistinguishable and always will be. An `Err`
+is the object store *affirmatively reporting damage*, including `read_object_at_entry`'s content-hash
+check, and degrading it turns a corrupt repository into an apparently ordinary one. **§6a's
+requirement 4, which said to degrade both when they cannot be separated, was true of absence and
+nothing else.**
+
+**Two defects, both the architect's**, recorded because the shape recurs: §3's table read a blob *id*
+as a blob that can be read (corrected in §3a — DC-65 makes that identity deliberately unbacked, and
+the store never undertook to satisfy the read), and §6a then licensed the over-wide catch that
+inverted the defect. Each round's bug was the previous round's bug with its sign reversed.
+
+**§6c outlives it as a warning to RFC 136.** `show`'s propagate path is shadowed for block targets by
+lifecycle replay's own blob dereference. **Option A's snapshots remove that shadow** — once replay
+starts after a `CreateFile`, the rendering layer is the only thing between a corrupt object and an
+exit `0`.
+
+**One measurement outlives it**, filed where measurements survive: RFC 133 §5d, `show` at depth on a
+depth-only fixture (exponent ≈0.67 against §5c's 1.45 — a different shape, not a contradiction).
+
+Everything below is the record as it stood. Previously: **ACCEPTED by the project owner 2026-09-08**, the same day it was opened.
 
 **Moved to `rfcs/accepted/` on acceptance** — the trigger is design complete, not handoff issued.
 

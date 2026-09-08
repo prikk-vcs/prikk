@@ -1,6 +1,6 @@
 # RFC 142 follow-up — `show` must degrade on an unreadable blob, not fail the command
 
-**RFC:** `rfcs/accepted/142-content-surface.md` — **§3a and §6a are new, added 2026-09-08**, and both
+**RFC:** `rfcs/done/142-content-surface.md` — **§3a and §6a are new, added 2026-09-08**, and both
 are corrections issued *with* your round's acceptance. **Read them first; §3a corrects my table, not
 your code.**
 **Base:** your own `0a52411`, which is **accepted and held unpushed** pending this. Commit on top.
