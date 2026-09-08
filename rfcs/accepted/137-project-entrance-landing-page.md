@@ -1176,6 +1176,31 @@ payoff frame.**
 §13j's were rejected. **The constraint in §13l.1 is the ruling; the values are tuned against the
 render and confirmed by the owner.**
 
+## 13m. DELIVERED 2026-09-08 — the three panels, and what the glow ruling actually bought
+
+**Delivered at `bf55412`: three `style` attributes.** dark `Integrate` 1.15 → **1.45** zoom, +4.5 →
+**+12px**; light `Grow` 1.36 → **1.48**, −0.7 → **+6px**; dark `Grow` 1.05 → **1.50**, +6.2 → **+16px**.
+
+**§13l.1 was the whole unlock.** The old values were pinned by a margin check protecting *glow*; once
+it protected only solid geometry, all three panels had real room for zoom and downward shift together
+— the combination the previous round correctly reported it could not achieve under the old rule.
+
+**Verified independently at one held threshold:** light `Grow` 85.1% ≥ `Integrate` 77.6%; dark `Grow`
+95.5% ≥ `Integrate` 95.0%. **§13l.2 holds in both themes.**
+
+**Edge check, by a second method:** solid geometry in the dark panels sits at brightness 1.00 and no
+border pixel exceeds 0.50. **Nothing solid is cut; only dim glow pooling reaches an edge.**
+
+**Recorded so a later round does not misread it: the headroom is smaller than 95% suggests.** Those
+figures include glow. The implementing round stopped when edge closeups stopped looking comfortably
+clear rather than when a formula ran out, and dark `Grow`'s solid geometry is now genuinely near its
+own margin. **A further increase would cut glow at several edges rather than one.**
+
+**And a caution for whoever measures these panels next**, which cost three rounds to learn: **an
+absolute brightness or contrast threshold will classify glow as subject.** The reviewer's own first
+pass flagged 119 border pixels as solid geometry on that basis; they were dim amber pooling.
+**Compare against the panel's own interior — the panel is its own reference.**
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
