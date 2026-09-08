@@ -1,4 +1,4 @@
-<h1><a href="https://prikk.org/" target="_blank"><img src="https://raw.githubusercontent.com/prikk-vcs/prikk/main/assets/logo/prikk-header-520.png" alt="Prikk" width="360"></a></h1>
+<h1><a href="https://prikk.org/"><img src="https://raw.githubusercontent.com/prikk-vcs/prikk/main/assets/logo/prikk-header-520.png" alt="Prikk" width="360"></a></h1>
 
 [![documentation](https://img.shields.io/badge/docs-prikk.org-brightgreen)](https://prikk.org/docs/)
 [![license](https://img.shields.io/crates/l/prikk.svg)](LICENSE)
