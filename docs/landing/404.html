@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not found · Prikk</title>
+<link rel="icon" href="/assets/logo.webp" type="image/webp">
+<style>
+  /*
+    RFC 137 §7.2e: this page is served at whatever URL was mistyped, not at its own path -- every
+    href/src here is root-relative or absolute by construction (never a bare relative path), and
+    that is what the deep-path control in the round's own report actually proves.
+
+    Its own minimal CSS, deliberately not shared with docs/landing/index.html (§7.2e's own ruling:
+    extracting a stylesheet would put a request on the landing page's critical path to save bytes
+    on a page almost nobody loads). These tokens are copied from index.html's :root block, not
+    imported -- if the palette changes there, it must be changed here too, by hand.
+  */
+  :root{
+    --cream:#f8f3ec; --paper:#fffdfa; --ink:#2c352f; --ink-soft:#5a6560;
+    --sage:#7f9179; --rule:#e7ddd0;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --cream:#1c201d; --paper:#232823; --ink:#e8e3da; --ink-soft:#a9b0a8;
+      --sage:#93a48d; --rule:#333a34;
+    }
+  }
+  :root[data-theme="dark"]{
+    --cream:#1c201d; --paper:#232823; --ink:#e8e3da; --ink-soft:#a9b0a8;
+    --sage:#93a48d; --rule:#333a34;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:var(--cream); color:var(--ink);
+    font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  main{max-width:480px;padding:48px 28px;text-align:center}
+  .code{font-size:.85rem;letter-spacing:.08em;color:var(--ink-soft);text-transform:uppercase}
+  h1{margin:10px 0 14px;font-size:1.6rem}
+  p{margin:0 0 26px;color:var(--ink-soft)}
+  .links{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  a{
+    display:inline-flex;align-items:center;min-height:44px;padding:0 20px;
+    border-radius:999px;text-decoration:none;font-weight:620;font-size:.92rem;
+    border:1px solid var(--rule);color:var(--ink);
+  }
+  a:hover{border-color:var(--sage)}
+  a.primary{background:var(--sage);color:var(--paper);border-color:var(--sage)}
+  :focus-visible{outline:2px solid var(--sage);outline-offset:3px;border-radius:3px}
+</style>
+</head>
+<body>
+<main>
+  <p class="code">404</p>
+  <h1>Page not found</h1>
+  <p>The link that brought you here doesn't match anything at Prikk. It may be old, or mistyped.</p>
+  <nav class="links" aria-label="Where to go instead">
+    <a class="primary" href="/">Home</a>
+    <a href="/docs/">Documentation</a>
+  </nav>
+</main>
+</body>
+</html>
