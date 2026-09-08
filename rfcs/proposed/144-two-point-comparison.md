@@ -125,6 +125,119 @@ open question is whether the deferral is still right — **and whether "the mode
 an overstatement of an ordinary unimplemented feature.** We reached that framing quickly, which is
 when we are least reliable, and the external review request says so explicitly.
 
+## 4b. CORRECTED 2026-09-08 — §4a was overstated, and the external review was right to say so
+
+**§4a claimed the model contradicts itself. It does not, and the inflation was costing us.**
+
+**The external architect's correction, which I accept:** the invariant in `node_id_gen.rs` is a property
+of the `NodeId` **under the operation set** — *when a `RenamePath` is applied, the id is preserved*.
+**That claim is true.** What is missing is not in the primitive and not in the operation. It is in
+**authoring policy**: `commit` chooses to represent a move as delete+create rather than emitting the
+`RenamePath` the model already defines.
+
+**Verified at source rather than accepted:** `rename_node_checked`
+(`prikk-replay/src/node_lifecycle/mutation.rs:145`) looks the node up by `node_id`, validates the
+stated old path against the live one, then moves the path and keeps the id. **The operation preserves
+identity by construction.**
+
+**The honest finding, restated:**
+
+> **prikk defines `RenamePath` and guarantees it preserves node identity, but `commit` never emits it,
+> so real-world moves are recorded as delete+create. This is an undecided authoring policy, not a
+> defect in the model or the id.**
+
+**Why the correction matters and is not pedantry:** "the model contradicts itself" puts the `NodeId`
+primitive and the `span_id` preimage on the table as suspect. **They are not. Nothing about the id draw
+or the span hash needs to change.** The decision is contained entirely to authoring — a far smaller and
+safer decision. **§4a distrusted its own framing because it was reached quickly; that instinct was
+right and the framing was wrong.**
+
+## 4c. The reframing, which is sharper than this RFC's own §4
+
+**From the external review, and adopted:**
+
+> **On what evidence may authoring ever assert that two nodes are one — and the answer is: only a
+> declaration, never an inference.**
+
+**Q2 and Q5 are one decision, not two.** Preserving identity across a move *is* the assertion "these
+two are the same node". If that assertion can be minted from a similarity score, **it is a
+provenance-laundering primitive**: file B inherits file A's identity and lineage. The mitigation is the
+rule above.
+
+- **A declared move** (`prikk mv`, or equivalent capture) is a truth a human asserted. **Author
+  `RenamePath`; preserve the id.**
+- **An inferred move** (content similarity) is *evidence, not identity*. **It must never silently mint
+  an identity-preserving operation** — at most it proposes, and a human confirms.
+
+**"Detect nothing, require declaration" is therefore defensible — on one condition**, which the review
+states and this RFC adopts: **it is honest only if the declaration path exists and is ergonomic.** It
+becomes abdication the moment there is no way to declare a move and the user is blamed for the
+delete+create. **So the work this implies is not a detector. It is a capture path plus the authoring
+that turns a declaration into a `RenamePath`.**
+
+## 4d. VERIFIED — prikk already has the primitive Pijul built a dual-vertex model to get
+
+**Both external notes hang their merge argument on a structural claim they could not check from
+outside. I checked it.**
+
+```
+NodeLifecycleState {
+    live_by_id:  BTreeMap<NodeId, LiveNode>,   // primary index
+    path_to_id:  BTreeMap<RepoPath, NodeId>,   // secondary
+}
+LiveNode { path, kind, content }               // path is an attribute of the node
+```
+
+Its own doc: *"Live-node uniqueness is structural: `live_by_id` is keyed by `node_id`."*
+
+**Replay keys on identity; path is a mutable attribute and a secondary lookup.** Per the external
+prior-art note, that is precisely Pijul's split — an identity vertex and a name vertex — which Pijul
+pays a whole model for **in order to make renames commute with edits.** **prikk already has it.**
+
+**Consequence: the merge property is structural, not hoped.** A declared rename would be an operation
+the merge simply carries, and an `EditText` — node-addressed — follows the moved node with no path
+heuristic.
+
+## 4e. The prior-art lesson, attributed
+
+**From the external architect's note** (their sources and their reading; recorded here as their
+finding, not as this project's independent verification):
+
+- **Both Darcs and Pijul model moves explicitly and never infer them**, and the reason is merge, not
+  display: **an inferred rename cannot participate in a sound merge** — it is invisible to commutation
+  and re-guessed, possibly differently, by every reader.
+- **Darcs' scar:** putting conflict *reasoning* inside the patch algebra made merges exponential in
+  conflict size; conflictors helped and recursive cases still blow up. **The lesson: keep rename an
+  ordinary explicit operation on a stable identity, and keep detection and resolution out of the
+  merge core.**
+- **Pijul's limit, which is not ours to inherit:** it keeps conflicts *in* the data structure and never
+  loses information — a conflict-tolerant model. **prikk's claim is authored, verifiable history where
+  a human resolves and the resolution is recorded.** Take Pijul's primitive; leave its conflict model.
+
+**Open, and worth its own check:** Pijul's "inode" vertex is an internal identity minted from a change
+hash — **not** the OS `st_ino` this RFC's Q2 rejected as non-portable. **The naming collides with the
+exact thing we ruled out and they are opposites.**
+
+## 4f. RULED-SHAPED — the `diff` question splits, and the split is the answer
+
+**Adopting the external review's Q3 answer, which is better than either of this RFC's own options.**
+
+**Decline a generic `prikk diff`.** Owning it means owning what "difference" means forever — across
+renames, permissions, binaries, symlinks and merges the replay does not walk. **That is an unbounded
+contract and "clean over rich" declines it.** A consumer holding RFC 143's content-at-a-point for two
+points can compose the generic comparison correctly.
+
+**Own exactly one case: what accepting this bundle would do to this repository.** §3's scenario 2.
+**It is not a convenience comparison; it is a safety surface consulted before an irreversible act**,
+and a consumer who composes a safety answer wrongly emits a confident wrong answer at the worst
+moment.
+
+**And it is probably not `diff`-shaped.** It is anchored at HEAD — *what does this do to me* — not
+*what differs between two arbitrary points*. **Naming it `diff` would be the tail wagging the dog.**
+
+**Publish a recipe for the rest**, so declining the general command is a documented position rather
+than a silence.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
