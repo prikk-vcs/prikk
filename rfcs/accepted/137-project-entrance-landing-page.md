@@ -256,10 +256,38 @@ does not exist yet**, and the undercount matters because the missed one ships in
 | `docs/book.toml` | `site-url` `/prikk/docs/` → `/docs/` |
 | `README.md` | **three** sites: the header badge, the crate-table badge, and the Documentation link |
 | `tools/release-policy/src/release_notes.rs:52` | a hardcoded link to the release-compatibility reference **inside the notes body of every future release**. Rust, not documentation — **this is the one increment 5's own wording would have missed** |
-| `CNAME` *(new)* | GitHub Pages needs it in the published artifact; none exists, and `docs.yml` publishes `$SITE_DIR`, so it must be staged there rather than committed at the repo root |
+| ~~`CNAME`~~ | **STRUCK 2026-09-08 — this was wrong.** Measured after the domain went live: **no `CNAME` file exists in the repo or the published artifact** (`https://prikk.org/CNAME` → 404) **and the site serves correctly at the apex regardless.** For an Actions-based Pages deploy the custom domain lives in repository settings, not in the artifact. **The requirement was asserted, not checked** — see §7.2c |
 
 **Must NOT change — records of what was true:** `CHANGELOG.md` (past releases genuinely carried that
 URL), `rfcs/done/129`, the RFC 137 handoffs, and ROADMAP's historical rows.
+
+### 7.2c MEASURED 2026-09-08 — the domain is live, and three things it revealed
+
+**`prikk.org` resolves to all four GitHub Pages addresses and serves both `/` and `/docs/`.** The old
+host `prikk-vcs.github.io/prikk/` **301-redirects to `https://prikk.org/`**, so existing links survive
+the move.
+
+**Three findings, measured against the live site:**
+
+1. **`www.prikk.org` has no TLS certificate.** `http://` returns a 301, but `https://www.prikk.org/`
+   fails with *"no alternative certificate subject name matches target hostname"*. DNS is correct —
+   `www` is a `CNAME` to the apex — so this is certificate provisioning, not configuration.
+   **Owner-side: it may resolve itself within a day, and if it does not, the Pages custom-domain
+   setting is where to look.** Nothing in this repository can fix it.
+
+2. **`/docs/404.html` still carries `<base href="/prikk/docs/">`** — the stale `site-url`, confirmed
+   live. **This is exactly what increment 5 fixes.**
+
+3. **There is no site-root `/404.html`.** `docs.yml` stages the landing page at the artifact root and
+   the book under `docs/`, and the landing page has no 404 of its own — so **any mistyped URL at
+   `prikk.org` renders GitHub's generic "Page not found · GitHub Pages"**, not anything of ours.
+   **Not in increment 5's scope as written, and worth its own decision** rather than being swept in.
+
+**§7's own rationale for `site-url` needs a caveat too:** it argued that a 404 served under `/docs/`
+would resolve its CSS against the host root and render unstyled. **GitHub Pages serves only the
+site-root `404.html`**, so `/docs/404.html` is not actually served to anyone today. **Fixing
+`site-url` remains correct** — the file should not carry a wrong base — **but the user-visible symptom
+the RFC described does not currently occur**, and finding 3 is the reason.
 
 ### 7.2a ADDED 2026-09-08 — the social-preview tags belong to this increment, not before it
 
