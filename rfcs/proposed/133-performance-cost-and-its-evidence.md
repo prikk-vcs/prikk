@@ -347,6 +347,83 @@ and DC-92 landed.** Whether it can now be claimed was always the owner's on evid
 and no such evidence has been gathered. **This RFC does not ask for that ruling — it records that the
 question is open and unmeasured**, since §2 measured memory and `NFR-PERF-01` bounds latency.
 
+## 6a. ANALYSIS 2026-09-09 — the owner asked whether the property is achievable at all, and the answer splits by axis
+
+**The owner's objection, recorded verbatim because it reframes §6:** *"Is it actually possible in real
+world? If not, it should not be stated, for it will harm project procedure and growth."*
+
+**The objection is correct, and §6 as written invites the unachievable reading.** "Commit cost does not
+scale with repository size" is not one property. It is two, on two different axes, and they have
+opposite answers.
+
+### 6a.1 Against content bytes — true today, achievable, and worth holding
+
+This is what §2 measured and what DC-56 won: an incremental commit costs **16.3 MiB against a 128 MiB
+repository**. Nothing about that is fragile or aspirational — the changed-path index skips reads for
+unchanged files, which is exactly its purpose. **A requirement on this axis is meetable, is currently
+met, and costs nothing to keep.**
+
+### 6a.2 Against node count — structurally impossible today, and stating it would be the harm the owner names
+
+`NodeLifecycleState` (`prikk-replay/src/node_lifecycle/types.rs:52-57`) is four in-memory collections,
+every one of them keyed per node or per path:
+
+```rust
+live_by_id: BTreeMap<NodeId, LiveNode>,
+path_to_id: BTreeMap<RepoPath, NodeId>,
+latest_tombstone_by_id: BTreeMap<NodeId, Tombstone>,
+seen_ids: BTreeSet<NodeId>,
+```
+
+Every commit must materialize this state. So commit memory is **O(nodes)**, unavoidably, for as long as
+lifecycle state is a materialized map rather than something streamed or paged.
+
+**And `seen_ids` is worse than O(live nodes): it is monotonic.** Verified at source — it has inserts
+(`mutation.rs:51`, `:386`, `:403`) and **no removes anywhere in the crate**. It is the replay-time guard
+against node-id reuse, so a deleted node's id must stay in it forever. **Commit memory therefore grows
+with every node the repository has *ever* contained, not with its current size**, and a long-lived
+repository that creates and deletes files never gives that memory back.
+
+`lifecycle_cache/incremental.rs`'s `try_incremental_step` additionally **clones the whole state**
+(`let mut state = cached.state.clone();`) before stepping, so the peak carries a factor of two.
+
+**A requirement of size-independent memory stated without an axis would therefore be unmeetable by
+construction.** Adopting it would mean either an immediately-failing requirement, or — likelier and
+worse — a requirement quietly reinterpreted until it meant only the bytes axis anyway. **That is
+precisely the "harm to procedure and growth" the owner names, and it is a good reason to refuse the
+unqualified form.**
+
+### 6a.3 But "memory is deliberately unbounded" is not the right answer either, and §2's own table shows why
+
+§2 reports genesis against file *count* (256-byte files) as: 100 → 14.5 MiB, 1,000 → 14.2, 4,000 → 14.0,
+**8,000 → 21.7**, and concludes **"Flat. Cost follows bytes, not paths."**
+
+**Its own fourth row does not support that reading.** Three points are flat and the fourth is not:
++7.7 MiB, a **55% increase**, for a 2x increase in path count — while content over the same step grew by
+only 1 MiB (4,000 x 256 B = 1.0 MiB, 8,000 x 256 B = 2.0 MiB). **The jump is not explained by bytes**,
+which is the very hypothesis the row is cited to support.
+
+**No cause is asserted here** — one sample per point cannot carry one, and this project has twice stated
+a one-sample reading as fact. What is asserted is narrower and sufficient: **the "flat" conclusion is
+drawn from a series whose last point departs from it, and the series stops exactly where it departs.**
+The node-count axis is therefore not measured to the point where it matters, and prikk's own profile
+(875 distinct paths) sits below the region where the anomaly appears. **A real repository is where it
+would bite.**
+
+### 6a.4 Recommendation to the owner — the ruling remains theirs
+
+1. **Refuse the unqualified form**, for the owner's own stated reason.
+2. **State it on the bytes axis**, where it is true, free, and meetable: *incremental commit memory is
+   independent of repository content size.* The evidence follows mechanically from §2's method.
+3. **Record the node-count axis in §5's table as a known structural cost, not as a requirement** —
+   O(nodes) with a monotonic `seen_ids` component and a 2x clone at peak — so it is visible rather than
+   promised.
+4. **Re-measure the count axis before anything is ruled on it**, past 8,000 and with more than one sample
+   per point. If the departure is real, it is a finding about long-lived repositories that no current gate
+   or measurement would catch.
+
+**Item 4 is a measurement task and does not need the owner.** Items 1-3 are the ruling, and it is theirs.
+
 ## 7. Scope
 
 **In:** the costs named in §2 and §3; the evidence tables in §5 and §5.1; §6's ruling; retiring §4's
