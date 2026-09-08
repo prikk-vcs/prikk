@@ -31,7 +31,7 @@ rust-version    = "1.85"
 license             = "Apache-2.0"
 authors             = ["nabbisen"]
 repository          = "https://github.com/prikk-vcs/prikk"
-homepage            = "https://prikk-vcs.github.io/prikk/"
+homepage            = "https://prikk.org/"
 # RFC 128 §4: "algorithms" is not a real fit for a VCS. `development-tools` and
 # `command-line-utilities` are the closest real crates.io category slugs -- verified against the
 # live category list (https://crates.io/api/v1/categories) and its `development-tools`

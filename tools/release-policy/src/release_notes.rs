@@ -49,7 +49,7 @@ committed release-signer set (`release-signers.toml`) is empty and fail-closed, 
 currently satisfies that gate. A checksum published beside a binary on this page proves integrity of\n\
 transport, not authority of origin. Verify what you obtain by content, not by release authority —\n\
 see `prikk verify` and this project's\n\
-[release-compatibility reference](https://prikk-vcs.github.io/prikk/reference/release-compatibility.html).";
+[release-compatibility reference](https://prikk.org/docs/reference/release-compatibility.html).";
 
 /// Assemble the full notes body for `tag`, reading `CHANGELOG.md` under `root` and scanning
 /// `dist_dir` for `*.build-info.txt` files. Fails if either source cannot support the claim being

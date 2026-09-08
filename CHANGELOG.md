@@ -15,6 +15,12 @@ applied and that the walk is single-parent; it is not a completeness promise. Th
 comparison surface: prikk still has no `diff`, and comparing two arbitrary points remains a
 separate, not-yet-open question — the requesting side takes on that comparison itself.
 
+### Changed — the project's documentation and homepage move to `prikk.org`
+
+`prikk.org` is now the project's permanent home: the landing page, the guide, and the crate's own
+`homepage` field. The old `prikk-vcs.github.io/prikk/` address still redirects, so existing links
+and bookmarks keep working.
+
 ## 0.36.0 — 2026-09-08
 
 ### Added — `prikk show`: what a block or patch changed

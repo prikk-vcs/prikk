@@ -11,12 +11,10 @@ additional-js = ["mermaid.min.js", "mermaid-init.js"]
 # (verified in docs/book/404.html, not assumed from the manual -- other pages use relative paths
 # and carry no <base> tag at all): without it, <base href="/">, so a 404 served at
 # /docs/guide/nope.html resolves its relative CSS refs against the site root and gets
-# a path that does not exist. site-url is a HOST-root path, not a site-root one -- today the book is
-# served under a repository path (prikk-vcs.github.io/prikk/docs/), not the domain apex, so this is
-# "/prikk/docs/", not "/docs/". CUTOVER: this must become "/docs/" the same increment that sets
-# `homepage = "https://prikk.org/"` (RFC 137 §7 increment 5) -- nothing enforces that pairing, so
-# whoever does increment 5 must also change this line.
-site-url = "/prikk/docs/"
+# a path that does not exist. site-url is a HOST-root path, not a site-root one -- RFC 137 §7
+# increment 5 moved the book to the domain apex (prikk.org/docs/), paired with `homepage` in
+# Cargo.toml -- both changed in the same commit, since neither is correct without the other.
+site-url = "/docs/"
 
 [preprocessor]
 
