@@ -42,6 +42,10 @@
        `.hero`'s own rule below. Not theme-dependent, defined once here for the same reason every
        other page-wide constant is. */
     --hero-cap:92vh;
+    /* RFC 137 §13p: the house motion curve, `.8s cubic-bezier(.16,1,.3,1)`, at a duration meant for
+       hover feedback rather than an on-load reveal -- same curve everywhere on the page, one motion
+       vocabulary, only the duration changes with what it is timing. */
+    --hover-timing:.15s cubic-bezier(.16,1,.3,1);
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
@@ -80,7 +84,7 @@
   .brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:650;letter-spacing:.01em}
   .brand img{width:28px;height:28px;border-radius:7px;display:block}
   nav[aria-label="Primary"]{display:flex;align-items:center;gap:22px;font-size:14.5px}
-  nav[aria-label="Primary"] a{text-decoration:none;color:var(--ink-soft)}
+  nav[aria-label="Primary"] a{text-decoration:none;color:var(--ink-soft);transition:color var(--hover-timing)}
   nav[aria-label="Primary"] a:hover{color:var(--ink)}
   .nav-cta{color:var(--ink) !important;font-weight:600}
 
@@ -100,15 +104,28 @@
   }
 
   /* ---- buttons ---- */
+  /* RFC 137 §13p: hover feedback, the "clear win" §2.3 named -- these states already existed and
+     changed instantly. `--hover-timing` reuses the house curve at a shorter duration than the
+     on-load reveals below (.8s): hover wants to read as immediate, not as a reveal. Only
+     background-color/border-color transition -- never a property that could shift layout, so this
+     costs nothing in CLS (`border` itself never changes width, only colour, on any element below). */
   .button{
     display:inline-flex; align-items:center; justify-content:center; min-height:44px;
     padding:0 22px; border-radius:999px; text-decoration:none; font-weight:620;
     font-size:.92rem; border:1px solid transparent;
+    transition:background-color var(--hover-timing), border-color var(--hover-timing);
   }
   .button-primary{background:var(--sage);color:var(--btn-ink);border-color:var(--sage)}
   .button-primary:hover{background:var(--sage-dim);border-color:var(--sage-dim)}
   .button-quiet{background:transparent;border-color:var(--rule);color:var(--ink)}
   .button-quiet:hover{border-color:var(--sage)}
+  /* Covers every hover transition on the page (buttons above, nav links and `.copy` below) in one
+     place rather than three: reduced motion makes the colour change instant, it never removes it --
+     the `:hover` rules above still apply in full, this only turns off the tween between states, so
+     a hover still communicates without needing to be seen moving. */
+  @media (prefers-reduced-motion: reduce){
+    .button, nav[aria-label="Primary"] a, .copy{transition:none}
+  }
 
   /* ---- hero (RFC 137 §11: a photographic hero, single column of copy over it) ---- */
   /* RFC 137 §13c, RULED: size the section from the *image's own* aspect ratio so `object-fit:cover`
@@ -317,7 +334,8 @@
   .cmdrow code{flex:1 1 auto;min-width:0;font-size:13.5px;line-height:1.55;white-space:pre-wrap;
     overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
   .copy{flex:0 0 auto;border:1px solid var(--rule);background:transparent;color:var(--ink-soft);
-    border-radius:6px;padding:5px 11px;font-size:12.5px;cursor:pointer;font:inherit}
+    border-radius:6px;padding:5px 11px;font-size:12.5px;cursor:pointer;font:inherit;
+    transition:color var(--hover-timing), border-color var(--hover-timing)}
   .copy:hover{color:var(--ink);border-color:var(--sage)}
   .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
