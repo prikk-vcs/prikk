@@ -165,14 +165,27 @@ impl NodeLifecycleState {
     /// 2): a rename cycle (a swap) applied one operation at a time collides, since the second
     /// half's target is still occupied by the first half's own not-yet-moved node. Resolved by
     /// treating the whole batch as one unit: every `(node_id, old_path)` pair is validated against
-    /// the state as it stood *before* this batch (and a node or destination named twice within the
-    /// batch is rejected -- this is also what rejects a *chained* rename, `A→B` then `B→A`/`B→C`
-    /// for the same node, per §4j.2's ruling that the intermediate path existed in no sealed state),
-    /// then every source path is cleared from `path_to_id` before any destination is claimed, so two
-    /// nodes trading paths never observe an intermediate collision with each other. A destination
-    /// still occupied afterward belongs to a node outside this batch -- a genuine, structural
+    /// the state as it stood *before* this batch. This is what rejects a *chained* rename (`A→B`
+    /// then `B→C` for the same node, per §4j.2's ruling that the intermediate path existed in no
+    /// sealed state): the second pair's asserted `old_path` (`"b"`) is checked against node A's
+    /// *pre-batch* live path (still `"a"`, since nothing has been applied yet), so it simply does
+    /// not match. A destination or source node named twice with an old_path that *does* match the
+    /// pre-batch state (e.g. `A: a→b` and `A: a→c` in the same batch) is a narrower malformed shape
+    /// the old_path check alone would not catch, and is rejected separately, by name, before either
+    /// check below ever runs. A destination currently occupied by a node *outside* this batch is a
+    /// genuine, structural
     /// collision, reported (the exact same message `rename_node` already produces for a single
-    /// rename) rather than silently overwritten.
+    /// rename) rather than silently overwritten; a destination occupied by a node *inside* the
+    /// batch is not a collision at all -- that node's own path is being vacated by this same batch
+    /// (§4k.3: checked against the batch's own source-node set, never by mutating `path_to_id` and
+    /// re-reading it, so the check itself never observes an intermediate state).
+    ///
+    /// **Fail-atomic** (§4k.3): every check runs to completion before any mutation begins, so an
+    /// `Err` leaves `self` byte-for-byte unchanged. This is `pub` on a published `prikk-replay`
+    /// type -- unlike `patch_replay::apply::apply_rename_batch` (RFC 144 increment 1), whose
+    /// `pub(super)` visibility and replay-local, discard-on-error state make its own non-atomicity
+    /// safe by construction -- so a caller reaching this method has no way to know its receiver was
+    /// left half-mutated on failure unless the method itself guarantees otherwise.
     ///
     /// Mirrors `prikk-store`'s `patch_replay::apply::apply_rename_batch` (RFC 144 increment 1) at
     /// the node-primary state this crate owns: no bytes move here (this state carries no content,
@@ -214,14 +227,29 @@ impl NodeLifecycleState {
             }
         }
 
-        // Phase 1: clear every source's path_to_id entry across the whole batch before claiming any
-        // destination, so a destination about to be vacated by another rename in this same batch
-        // never reads as occupied.
+        // Phase 1: check every destination for a genuine collision -- occupied by a live node this
+        // batch does not itself rename. Checked against `sources_seen` (node identity), never by
+        // mutating `path_to_id` first: a node inside the batch that currently occupies a
+        // destination is, by Phase 0's own validation, about to vacate that exact path as part of
+        // this same batch, so it is not a collision. No mutation has happened yet, so an error here
+        // leaves `self` completely unchanged.
+        for (_node_id, _old_path, new_path) in renames {
+            if let Some(occupant) = self.path_to_id.get(new_path) {
+                if !sources_seen.contains(occupant) {
+                    return Err(PrikkError::Integrity(format!(
+                        "rename target path {} is occupied by another live node",
+                        new_path.as_str()
+                    )));
+                }
+            }
+        }
+
+        // Phase 2: confirm the path index actually points back at each node being renamed
+        // (internal consistency, matching `rename_node`'s own erratum P2-1 check) -- still
+        // read-only, so this can still fail without leaving any partial state.
         for (node_id, old_path, _new_path) in renames {
             match self.path_to_id.get(old_path) {
-                Some(id) if id == node_id => {
-                    self.path_to_id.remove(old_path);
-                }
+                Some(id) if id == node_id => {}
                 _ => {
                     return Err(PrikkError::Integrity(
                         "path index does not point at the live node being renamed".to_string(),
@@ -230,18 +258,13 @@ impl NodeLifecycleState {
             }
         }
 
-        // Phase 2: every source in this batch is now vacant. A destination still occupied belongs
-        // to a node this batch never touched -- report it rather than overwrite it.
-        for (_node_id, _old_path, new_path) in renames {
-            if self.path_to_id.contains_key(new_path) {
-                return Err(PrikkError::Integrity(format!(
-                    "rename target path {} is occupied by another live node",
-                    new_path.as_str()
-                )));
-            }
+        // Phase 3: commit. No further failure is possible past this point. Every source is
+        // cleared before any destination is claimed, so two nodes trading paths never observe an
+        // intermediate collision with each other (about the map's own transient state during this
+        // loop, not about failure -- Phase 1 already proved there is none left to find).
+        for (_node_id, old_path, _new_path) in renames {
+            self.path_to_id.remove(old_path);
         }
-
-        // Phase 3: commit. No further failure is possible past this point.
         for (node_id, _old_path, new_path) in renames {
             self.path_to_id.insert(new_path.clone(), *node_id);
             if let Some(node) = self.live_by_id.get_mut(node_id) {

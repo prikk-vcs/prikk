@@ -10,11 +10,14 @@ use prikk_object::{
     ReplaceBinary, text_span_hash,
 };
 
-use super::{LifecycleReplayError, replay_lineage, walk_lineage};
-use crate::node::node_lifecycle::NodeContent;
+use super::{
+    LifecycleReplayError, TextCache, apply_queued_patch_envelopes, replay_lineage, walk_lineage,
+};
+use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::object_store::ObjectReader;
 use crate::path::RepoPath;
 use crate::text_span;
+use crate::wal::WalRecord;
 
 /// A reader whose id → object mapping is set by hand. Unlike a content-addressed store this can
 /// host forged topologies (cycles, merges, wrong horizons) needed to prove the walk fails closed,
@@ -1550,4 +1553,126 @@ fn replay_does_not_re_read_lineage_blocks() {
     let state = replay_lineage(&guard, child, genesis).expect("replay over read-once guard");
     assert!(state.live_node(&nid(0x11)).is_some());
     assert!(state.live_node(&nid(0x12)).is_some());
+}
+
+// ---- RFC 144 §4k.1: the queued-envelope fold site is a *separate* production entry point from
+// the sealed-lineage one every other test in this file exercises (`apply_patch_ids`, reached via
+// `replay_lineage`/`replay_single_patch`). Review found this site had zero coverage of its own
+// rename routing: deleting the routing block from `apply_queued_patch_envelopes` entirely, leaving
+// `apply_patch_ids` untouched, passed the full 1035-test suite. The control below closes that gap
+// by entering through `apply_queued_patch_envelopes` itself -- constructing `WalRecord`s, the exact
+// shape `patch_replay.rs:566`'s own production call passes -- never by calling
+// `collect_rename_run`/`apply_rename_run` directly, which would prove the primitive works without
+// proving this fold site actually reaches it. ----
+
+fn queued_record(seq: u64, operations: Vec<Operation>) -> WalRecord {
+    let payload = PatchPayload {
+        operations,
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: prikk_object::PatchPurpose::Normal,
+        message: None,
+    };
+    let envelope = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        payload.to_canonical_bytes().expect("patch encodes"),
+    );
+    WalRecord { seq, envelope }
+}
+
+/// Control (RFC 144 §4k.1, required before increment 3): a two-node swap, queued as two unsealed
+/// WAL records, resolves through `apply_queued_patch_envelopes` -- the production fold site for the
+/// unsealed multi-commit queue, reached from `patch_replay.rs:566`. This is exactly the shape a
+/// future `prikk mv` could queue across a multi-commit sequence once increment 3 lands; today
+/// nothing authors `RenamePath`, which is why this path had no test until now.
+///
+/// **This control can fail.** `apply_state_effect`'s `RenamePath` arm refuses loudly (RFC 144 §4j),
+/// so if the routing block that detects and batches a `RenamePath` run were removed from
+/// `apply_queued_patch_envelopes`, this test would fail with that refusal -- not a wrong swap
+/// result, a hard `InconsistentLifecycleEffect` naming the routing contract itself. Verified by
+/// literally deleting that block and re-running (see the round's own report for the captured
+/// failure); restored before this commit.
+#[test]
+fn apply_queued_patch_envelopes_resolves_a_two_node_swap() {
+    let mut reader = MockReader::new();
+    let blob_a = oid(30);
+    let blob_b = oid(31);
+    reader.insert_blob(blob_a, BlobKind::Text);
+    reader.insert_blob(blob_b, BlobKind::Text);
+
+    let create_record = queued_record(
+        1,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "a.txt".to_string(),
+                    node_id: nid(0x21),
+                    blob_id: blob_a,
+                    mode: 0o100_644,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "b.txt".to_string(),
+                    node_id: nid(0x22),
+                    blob_id: blob_b,
+                    mode: 0o100_644,
+                }),
+            },
+        ],
+    );
+    let swap_record = queued_record(
+        2,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::RenamePath(RenamePath {
+                    node_id: nid(0x21),
+                    old_path: "a.txt".to_string(),
+                    new_path: "b.txt".to_string(),
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::RenamePath(RenamePath {
+                    node_id: nid(0x22),
+                    old_path: "b.txt".to_string(),
+                    new_path: "a.txt".to_string(),
+                }),
+            },
+        ],
+    );
+
+    let mut state = NodeLifecycleState::new();
+    let mut text_cache = TextCache::new();
+    apply_queued_patch_envelopes(
+        &reader,
+        &[create_record, swap_record],
+        &mut state,
+        &mut text_cache,
+        None,
+    )
+    .expect("a genuine two-node swap must resolve through the queued fold site");
+
+    assert_eq!(
+        state.node_id_at(&RepoPath::parse("b.txt").unwrap()),
+        Some(nid(0x21)),
+        "node 0x21 must have moved to b.txt"
+    );
+    assert_eq!(
+        state.node_id_at(&RepoPath::parse("a.txt").unwrap()),
+        Some(nid(0x22)),
+        "node 0x22 must have moved to a.txt"
+    );
 }

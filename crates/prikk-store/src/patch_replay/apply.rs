@@ -268,15 +268,22 @@ fn apply_change_perm(
 /// non-participating live node: a genuine, structural collision, reported rather than silently
 /// overwritten (`patch_replay/tests/rename.rs` control 3).
 ///
-/// Diverges from `lifecycle_cache/replay/effect.rs`'s own `rename_node_checked`, which resolves
-/// by node identity (looks the node up by id, not by path) but still checks occupancy against
-/// the *current*, already-partially-mutated path index on every call, one operation at a time --
-/// which does not actually survive a literal swap either (verified directly against
-/// `NodeLifecycleState`, not assumed from reading it: a two-node swap applied through
-/// `rename_node_checked` in sequence fails on the first half with exactly the collision this
-/// function exists to avoid). "Resolve node before path" describes *this* function's own
-/// algorithm, not a description of `lifecycle_cache`'s already-shipped behaviour -- see the round's
-/// own report for the full finding.
+/// As of RFC 144 increment 2, `lifecycle_cache` resolves a rename run the same way: both paths now
+/// apply the identical algorithm -- validate against the pre-run state, vacate every source before
+/// claiming any target, then check occupancy -- each at its own state's own shape (this function
+/// over `files`/`live_nodes`; `NodeLifecycleState::rename_nodes_checked_batch` over
+/// `path_to_id`/`live_by_id`, in `prikk-replay/src/node_lifecycle/mutation.rs`). Neither is a port
+/// of the other; each was written against its own state's own indexing.
+///
+/// This did not always hold. When this function was written (increment 1), `lifecycle_cache`'s own
+/// `rename_node_checked` resolved by node identity (looked the node up by id, not by path) but
+/// still checked occupancy against the *current*, already-partially-mutated path index on every
+/// call, one operation at a time -- which did not survive a literal swap either (verified directly
+/// against `NodeLifecycleState`, not assumed from reading it: a two-node swap applied through
+/// `rename_node_checked` in sequence failed on the first half with exactly the collision this
+/// function exists to avoid). That divergence is why increment 2 exists;
+/// `rename_node_checked` has no production caller left. See that round's own report for the
+/// original finding, and RFC 144 §4j/§4k for the ruling that closed the gap.
 ///
 /// Scoped to one contiguous run within a single patch, not the whole patch and not across patch
 /// boundaries: a patch is this system's own atomic unit of one signed intent, and a genuinely
