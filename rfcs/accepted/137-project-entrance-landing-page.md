@@ -846,6 +846,53 @@ ratio rather than staying full-bleed. At 2560px this left 937px of bare backgrou
 **Fixed with `width:100%`.** The test was not asked for by name — §13c's phrase *"cannot grow absurd
 on a wide monitor"* was read as an instruction to try one.
 
+## 13f. CORRECTED 2026-09-08 — squaring the box bought centring by spending the artwork's margins
+
+**The owner reports the story images are too tight on all four sides, and that dark is worse.**
+Measured on the shipped renders, subject margin inside the 201×200 image box:
+
+| | top | bottom | left | right |
+|---|---:|---:|---:|---:|
+| light Start | 76 | 24 | 13 | 15 |
+| light Patches | 34 | 30 | 14 | **6** |
+| light Integrate | 15 | 12 | 17 | 12 |
+| light Grow | **9** | **8** | 13 | 17 |
+| dark Start | 45 | 27 | 16 | 15 |
+| dark Patches | 19 | 19 | 14 | **8** |
+| dark Integrate | **1** | **0** | 18 | 12 |
+| dark Grow | **0** | **0** | 8 | 16 |
+
+**Both reports confirmed. Dark Integrate and Grow touch the frame outright**, and dark tops (45/19/1/0)
+run consistently under light's (76/34/15/9).
+
+**The cause is §13d's own ruling and it is mine.** Squaring the box to create `object-position` slack
+spends **134px of the 512px source height on crop** — and that crop is exactly the margin the artwork
+carries around its subject. **In the source, bottom margins are only 26-63px**, so a 134px crop
+removes them entirely. **Centring and margin are drawn from one budget; §13d bought the first with the
+second without saying so.**
+
+**The margin is recoverable — it is in the files.** Source subject extents per 378×512 cell, top and
+bottom margin:
+
+| | light | dark |
+|---|---|---|
+| Start | 273 / 47 | 219 / 53 |
+| Patches | 195 / 62 | 144 / 63 |
+| Integrate | 156 / 31 | 111 / 26 |
+| Grow | 137 / 34 | **57 / 27** |
+
+**RULED: margin wins over exact centring.** A subject flush against a frame edge reads as a mistake;
+a subject a few pixels off centre does not. **Reduce the crop until every panel has visible margin on
+all four sides in both themes, and accept whatever centring the remaining slack allows.**
+
+**Not ruled: the box ratio.** It is a continuous trade — every pixel of crop returned is a pixel of
+centring slack lost — and it must be chosen against measurement, not argued in advance. **§13d's
+per-theme `object-position` structure stays; only its budget changes.**
+
+**Recorded limit:** `Grow` dark carries just **57/27** of margin in the source, so even at zero crop
+its rendered margin is small. **If it cannot reach the target, that is artwork, not CSS** — the same
+category as `Start`'s residual offset, and the owner's call.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,

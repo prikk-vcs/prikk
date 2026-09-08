@@ -1,5 +1,9 @@
 # RFC 137 — the narrow hero cap: the last thing before the domain
 
+> **SUPERSEDED 2026-09-08 by `pre-domain-framing-handoff-v2.md`**, which carries this round's item
+> unchanged and adds the story-panel margin fix (RFC 137 §13f). **Work from v2.** This file is kept
+> because it was issued and read; nothing in it is wrong, it is just incomplete.
+
 **RFC:** `rfcs/accepted/137-project-entrance-landing-page.md` — **§13e rules this**, added 2026-09-08
 with the acceptance of your third visual pass. **§7.2 is also new; read it, but do not act on it.**
 **Base:** `main` at the tip that carries §13e. **Check `git log`, do not trust this line.**
