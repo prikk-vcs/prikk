@@ -235,12 +235,15 @@
      page, from the same `--paper`/`--soft-shadow` tokens every other card on this page already
      uses -- not a colour picked to match this artwork specifically. */
   .panels .frame{position:relative;background:var(--paper);border-radius:16px;padding:10px;box-shadow:var(--soft-shadow)}
-  /* Cells are 384x512 in the source sheet, inset 3px each side to drop the seam at the column
-     boundary (RFC 137 §11e) -- 378 wide, 512 tall, so the panel's own frame is 3:4, not 1:1
-     (§10's own round found `aspect-ratio` silently not applying; re-measured this round, see the
-     report). `object-fit:cover` rather than `contain`: unlike the old five-panel crops, these are
-     not pre-padded to their target frame, so `cover` is what keeps the frame filled edge to edge. */
-  .panels img{display:block;width:100%;height:auto;aspect-ratio:3/4;object-fit:cover;border-radius:10px}
+  /* RFC 137 §13d, RULED: the 378x512 cells are 3/4 boxed here before, and `cover` at 3/4 crops only
+     ≈1.6% -- almost no slack to steer toward where each subject actually sits, and every subject
+     sits low (measured: light +51 to +112px off centre, dark +14 to +82px, of 512). A square box
+     gives real slack (≈67px of original-image travel each way) without touching the delivered
+     files -- reversible framing, no asset churn, exactly what §13d asked for. `object-position`
+     (below, per panel per theme) is what actually steers it; the box shape itself is identical in
+     both themes so the grid keeps one baseline regardless of which theme's `object-position`
+     is active. */
+  .panels img{display:block;width:100%;height:auto;aspect-ratio:1/1;object-fit:cover;border-radius:10px}
   /* Same light/dark toggle idiom `.hero-photo` uses above, reused rather than reinvented -- both
      images sit in the same `.frame`, and exactly one is `display:block` at a time. */
   .panels img.dark{display:none}
@@ -462,8 +465,10 @@
           <p class="chip">Start</p>
           <div class="frame">
             <img class="light" src="assets/panel-1-start-light.webp" width="378" height="512"
+              style="object-position:50% 100%"
               alt="A small platform holding a few scattered blocks, one glowing green among plain ones.">
             <img class="dark" src="assets/panel-1-start-dark.webp" width="378" height="512"
+              style="object-position:50% 100%"
               alt="A small platform holding a few scattered blocks, one glowing green among plain ones.">
           </div>
           <p class="caption">A new project begins.</p>
@@ -472,8 +477,10 @@
           <p class="chip">Patches</p>
           <div class="frame">
             <img class="light" src="assets/panel-2-patches-light.webp" width="378" height="512"
+              style="object-position:50% 99%"
               alt="Four cards, each a focused change, flowing along glowing lines toward an arrow.">
             <img class="dark" src="assets/panel-2-patches-dark.webp" width="378" height="512"
+              style="object-position:50% 80%"
               alt="Four cards, each a focused change, flowing along glowing lines toward an arrow.">
           </div>
           <p class="caption">Small, focused patches flow in.</p>
@@ -482,8 +489,10 @@
           <p class="chip">Integrate</p>
           <div class="frame">
             <img class="light" src="assets/panel-3-integrate-light.webp" width="378" height="512"
+              style="object-position:50% 96%"
               alt="The blocks assembled into one connected cube, glowing along its internal seams.">
             <img class="dark" src="assets/panel-3-integrate-dark.webp" width="378" height="512"
+              style="object-position:50% 81%"
               alt="The blocks assembled into one connected cube, glowing along its internal seams.">
           </div>
           <p class="caption">Prikk integrates and validates with confidence.</p>
@@ -492,8 +501,10 @@
           <p class="chip">Grow</p>
           <div class="frame">
             <img class="light" src="assets/panel-4-grow-light.webp" width="378" height="512"
+              style="object-position:50% 88%"
               alt="The cube alive with leaves growing from it, surrounded by sparkling light.">
             <img class="dark" src="assets/panel-4-grow-dark.webp" width="378" height="512"
+              style="object-position:50% 60%"
               alt="The cube alive with leaves growing from it, surrounded by sparkling light.">
           </div>
           <p class="caption">The project grows, alive and spreading.</p>
