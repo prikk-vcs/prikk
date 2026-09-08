@@ -336,6 +336,31 @@ straddles the change.**
 2026-09-08. **§7's ordering constraint stands — neither half may land early**, because
 `site-url = "/docs/"` breaks the 404 page's `<base>` while the book is still served under `/prikk/`.
 
+### 7.2d DELIVERED 2026-09-08 — increment 5 is done and verified live
+
+**Delivered at `17d2a51`.** `homepage` → `https://prikk.org/`, `site-url` → `/docs/`, `README.md`'s
+three sites, `release_notes.rs`'s compatibility link, and §7.2a's full meta-tag set.
+
+**Verified on the live site after deploy, not from the diff:**
+
+- **`/docs/404.html` now reads `<base href="/docs/">`** — it read `/prikk/docs/` before. This was the
+  one control that could not be checked from a local commit, and the implementing round said so
+  rather than reporting the value its commit would eventually produce.
+- `prikk.org/` and `prikk.org/docs/` both 200; the old host still 301s to the apex.
+- `canonical`, `og:url` and `og:image` are absolute and correct; **`og:image` returns 200.**
+
+**A pre-existing defect found by the round, not by this RFC.** `release_notes.rs`'s link was
+`…/prikk/reference/release-compatibility.html` — **missing `/docs/`**, so it 301s to a 404. **Broken
+in the notes of every release since it was added**, and broken before the move too: on the old host
+the book lived at `/prikk/docs/`. §7.2 flagged that file as the one that hides because it is Rust
+rather than documentation; **it was hiding worse than a stale hostname.**
+
+**Still open, neither owned by this RFC:**
+
+1. **`www.prikk.org` has no TLS certificate.** DNS is correct; this is provisioning. Owner-side.
+2. **No site-root `404.html`** (§7.2c finding 3) — a mistyped `prikk.org` URL renders GitHub's generic
+   page. **Wants its own decision.**
+
 ## 8. The seam with RFC 135
 
 The landing page's last instruction is an install command. **RFC 135 owns everything after it** — what
