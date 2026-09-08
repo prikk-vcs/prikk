@@ -25,7 +25,7 @@ default-members = [
 ]
 
 [workspace.package]
-version         = "0.35.0"
+version         = "0.36.0"
 edition         = "2024"
 rust-version    = "1.85"
 license             = "Apache-2.0"
@@ -40,13 +40,13 @@ categories          = ["development-tools", "command-line-utilities"]
 keywords            = ["vcs", "version-control", "dvcs", "patch", "merge"]
 
 [workspace.dependencies]
-prikk-crypto                = { version = "0.35.0", path = "crates/prikk-crypto" }
-prikk-error                 = { version = "0.35.0", path = "crates/prikk-error" }
-prikk-ffi                   = { version = "0.35.0", path = "crates/prikk-ffi" }
-prikk-hash                  = { version = "0.35.0", path = "crates/prikk-hash" }
-prikk-object                = { version = "0.35.0", path = "crates/prikk-object" }
-prikk-replay                = { version = "0.35.0", path = "crates/prikk-replay" }
-prikk-store                 = { version = "0.35.0", path = "crates/prikk-store" }
+prikk-crypto                = { version = "0.36.0", path = "crates/prikk-crypto" }
+prikk-error                 = { version = "0.36.0", path = "crates/prikk-error" }
+prikk-ffi                   = { version = "0.36.0", path = "crates/prikk-ffi" }
+prikk-hash                  = { version = "0.36.0", path = "crates/prikk-hash" }
+prikk-object                = { version = "0.36.0", path = "crates/prikk-object" }
+prikk-replay                = { version = "0.36.0", path = "crates/prikk-replay" }
+prikk-store                 = { version = "0.36.0", path = "crates/prikk-store" }
 
 ed25519-dalek               = "3"
 getrandom                   = "0.4"

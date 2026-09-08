@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.36.0 — 2026-09-08
 
 ### Added — `prikk show`: what a block or patch changed
 
