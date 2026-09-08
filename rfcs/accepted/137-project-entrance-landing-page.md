@@ -495,6 +495,120 @@ terminal output, the copy button with its live region, reduced-motion as the opt
 reflow-friendly command wrap, semantic sections and heading order. **A styling pass that breaks one of
 these has failed regardless of how it looks.**
 
+## 11. AMENDED 2026-09-08 — the owner's second visual pass: a hero photograph, a four-panel story, and a reordered page
+
+**The owner supplied new artwork and a proposed section order** (`.git-exclude/tasks/architect/landing-20260908/`).
+Everything in §11 is ruled from the assets and the live page as they stand today, not from the proposal
+text alone.
+
+### 11a. The section order is adopted as proposed, because the names were already ours
+
+**The owner's section names are the page's existing `eyebrow` strings**, which makes the mapping exact
+and leaves nothing to interpret:
+
+| owner's name | section | position now → proposed |
+|---|---|---:|
+| Hero — *"Version control, patch by patch"* | `.hero` | 1 → 1 |
+| *"Get started"* | `.install` (`id="start"`) | **7 → 2** |
+| *"A calmer way to work"* | `.flow` | 3 → 3 |
+| *"The idea"* | `.principles` | **2 → 4** |
+| *"Patch by patch"* | `.story` | 5 → 5 |
+| *"What you get"* | `.features` | 6 → 6 |
+| *"Try it"* | `.terminal-section` | **4 → 7** |
+| Closing | `.closing` | 8 → 8 |
+
+**RULED: move the sections whole. Invent no new section and split none.** The owner offered *"or at
+least a tiny digest with a few command lines"* as a fallback; taking it would mean authoring a second
+"Get started" and leaving the original with a duplicate eyebrow. **Moving `.install` intact is the
+smaller change and it is reversible.**
+
+**One risk, named rather than pre-empted:** the hero closes on *"Early implementation. Not yet a place
+to keep history you cannot lose."* Position 2 then asks the reader to install it. **If that reads
+badly in the staged page, trimming `.install` to a digest is the follow-up** — but it should be seen
+in place first, not designed around in advance.
+
+### 11b. RULED — the fourth panel is **"Grow"**, and the heading changes with it
+
+The new set has **four** panels; the page has five. The owner asked whether the fourth is *"Grow and
+Shine"* or *"Shine"*.
+
+**Neither: it is "Grow."** *Shine* names a lighting treatment that panel 3 already carries — the
+glowing connections are what "integrated and validated" looks like — so it does not distinguish the
+last panel. What is new in panel 4 is **foliage**: the cube is alive and spreading. **"Grow" names the
+thing that changed and completes the arc — Start → Patches → Integrate → Grow.**
+
+**Consequence the proposal does not mention:** `<h2>Projects grow. Then they shine.</h2>` is a
+*two-beat* heading built for a two-panel ending that no longer exists. **It must change with the
+panels.** The heading is brand voice and the owner's to settle; the RFC records only that leaving it
+is not an option.
+
+### 11c. FINDING — the two "light" heroes are different times of day
+
+**This is a defect in the asset set and only the owner can fix it.**
+
+- `prikk-hero-16_9-light-01.png` — **bright daylight**: blue sky, white cloud, sun high and right.
+- `prikk-hero-9_16-light-01.png` — **dusk**: violet-and-orange sky, sun on the horizon, lit water.
+
+The 9:16 "light" is the same scene as the 9:16 dark at a brighter exposure — **a good pair.** The 16:9
+light is the odd one out of all four. **So "light theme" means daylight on a desktop and sunset on a
+phone**, and one reader rotating a tablet crosses that boundary.
+
+**The composition change between form factors is right and should be kept** — cards flow left-to-right
+into the cube at 16:9, and descend onto it at 9:16. That is a genuine re-composition rather than a
+crop, which is what the earlier cropping round failed to do.
+
+### 11d. RULED — `.story`'s background must become theme-aware, and its dark value is **not** `--paper`
+
+**This is the failure mode of the last two rounds, and it is loaded again.**
+
+`.story{background:#fdf6ee}` is hardcoded — the residue of §10.1c, where the panels could not
+theme-adapt so the section was pinned to light. The new sheet carries both themes, so the pin comes
+off. **The values, sampled from the sheet rather than assumed:**
+
+| | sampled from the artwork | site token |
+|---|---|---|
+| light row background | **`#fdf6ef`** | `.story` is `#fdf6ee` — a 1/255 difference, already correct |
+| dark row background | **`#1d2a28`** | `--paper` dark is `#232823` — **visibly different** |
+
+**RULED: the dark `.story` background is `#1d2a28`, taken from the artwork, not `--paper`.** Using the
+site token would put every panel on the page as a visible rectangle of slightly-wrong dark green —
+exactly the class of defect §10.1a and §10.1d were about. **The light value is already right and must
+not be "tidied" into a token either.**
+
+### 11e. The sheet's geometry, measured
+
+`prikk-story-image-set-01-light-dark-compat.png` is 1536×1024: **four columns × two rows, cells
+exactly 384×512.** Light row `y=0`, dark row `y=512` — a hard transition, no seam. Columns begin at
+`x = 0, 384, 768, 1152`, with a **≈2px near-white seam on each column boundary**, so crops must inset
+horizontally rather than cut on the nominal edge.
+
+**Panels change from 1:1 to 3:4.** `.panels img{aspect-ratio:1/1}` and
+`.panels{grid-template-columns:repeat(5,1fr)}` are both wrong for this set. **§10's own round found
+`aspect-ratio` silently not applying**; that is the thing to re-verify by measurement here, not by
+reading the rule.
+
+### 11f. The `.hero-art` SVG — the right-side defect, located
+
+The owner ruled it re-drawn and moved rather than removed, and named the right-side connection as
+unnatural. **It is, and the reason is specific.**
+
+The left connector is `M46 108 V82 H114 V66` — it **rises clear of the blocks to `y=82`**, travels in
+open space, then enters the upper block, with a node at the bend `(114,82)`.
+
+The right connector is `M182 108 H250` — **`y=108` is the top edge of both blocks**, so it runs *along
+their tops* for 26px on each side rather than through open space, and it carries **no node at its
+bend**. Two connectors, two different idioms.
+
+**The fix is to mirror the left**: rise to `y=82`, travel, descend — `M182 108 V82 H250 V66` — with a
+node at `(250,82)`. It does not collide, because the left path occupies `y=82` only between `x=46` and
+`x=114`.
+
+### 11g. RULED — every asset ships as WebP, and this is not negotiable
+
+The four hero PNGs are **1.6–2.0 MB each, ≈7 MB for the set**. The panels already on the page are WebP
+at 2–12 KB. **A landing page whose entrance image is heavier than the entire rest of the site fails the
+purpose §1 gives it.** Convert; keep the PNGs as sources under `.git-exclude/`, which does not ship.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
