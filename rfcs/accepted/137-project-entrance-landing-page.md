@@ -893,6 +893,52 @@ per-theme `object-position` structure stays; only its budget changes.**
 its rendered margin is small. **If it cannot reach the target, that is artwork, not CSS** — the same
 category as `Start`'s residual offset, and the owner's call.
 
+## 13g. CORRECTED 2026-09-08 — §13f was a set-wide ruling for a two-panel problem, and it is reverted
+
+**§13f ruled "margin wins over exact centring" and told the implementing round to reduce the crop
+set-wide. That was wrong, and the error is the shape of the ruling, not the round that carried it
+out.**
+
+**Measured, and it is the number §13f should have established first — subject height against the
+square box's 378px window:**
+
+| | Start | Patches | Integrate | Grow |
+|---|---:|---:|---:|---:|
+| light | 191 | 254 | 324 | 340 |
+| dark | 239 | 304 | 374 | **427** |
+
+**Only two of eight subjects exceed the window: dark `Integrate` (374) and dark `Grow` (427).** The
+other six fit with room. **§13f treated a two-panel problem as a set-wide one and spent six good
+panels to fix two.**
+
+**What the set-wide change actually produced**, measured on the shipped render at `4/5`
+(box 201×251):
+
+| | top | bottom | off-centre |
+|---|---:|---:|---:|
+| light Start | 126 | **0** | +63.0 |
+| light Patches | 83 | **0** | +41.5 |
+| light Integrate | 62 | **0** | +31.0 |
+| light Grow | 51 | **0** | +25.5 |
+
+**Every light panel runs to the bottom edge with a large gap above** — which is the owner's *original*
+complaint from before §13d, restored. The round reported the centring loss honestly in its own table;
+the ruling is what made it inevitable.
+
+**RULED: revert to the square box.** Round 4's framing stands — light margins 76/34/15/9 top and
+24/30/12/8 bottom, dark 45/27 and 19/19 for `Start` and `Patches`, and every panel within ±3 of centre
+except `Start`. **Reverted directly rather than handed back**, being a correction to the architect's
+own ruling restoring a state already reviewed and accepted.
+
+**RULED: dark `Integrate` and dark `Grow` are artwork, not CSS.** Their subjects are physically larger
+than any window that keeps the other six centred — 427px of a 512px cell for `Grow`. **No framing
+choice reaches them.** They join `Start`'s residual offset as the second owner-facing artwork item:
+**the subjects want to be smaller within their own cells.**
+
+**The lesson, recorded because it is general:** *"fix the tight ones"* and *"change the box"* are not
+the same instruction. **§13f should have asked which panels failed and why before ruling how the set
+should change** — the answer was two, and it was in the source geometry the RFC already had.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
