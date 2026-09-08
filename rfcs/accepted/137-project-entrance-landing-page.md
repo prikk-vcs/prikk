@@ -1129,6 +1129,53 @@ eye. **If light still reads wrong, no mechanism has been found for it.**
 round's before and after heights were read at different thresholds, which understated its own
 improvement and made the comparison not like-for-like.
 
+## 13l. RULED 2026-09-08 — the "no touching" constraint protects solid geometry, not glow
+
+**The owner narrowed the remaining defect to three panels: light `Grow`, dark `Integrate`, dark
+`Grow`. All three must be bigger and sit lower, and light `Grow` must be at least as large as light
+`Integrate`.**
+
+**The cause is visible in the shipped values:**
+
+| | light zoom | dark zoom |
+|---|---:|---:|
+| Start | 1.46 | 1.49 |
+| Patches | 1.38 | 1.26 |
+| **Integrate** | **1.44** | **1.15** |
+| **Grow** | **1.36** | **1.05** |
+
+**Dark `Grow` carries the lowest zoom of all eight, and dark `Integrate` the second lowest** — while
+their light counterparts sit at 1.36 and 1.44. **That is exactly why dark 03/04 read smaller than
+light**, and light `Grow` at 1.36 reads smaller than light `Integrate` at 1.44 for the same reason.
+
+### 13l.1 What over-constrained them, and it was my rule
+
+§13j.4 rule 4 said *"no subject may touch a frame edge"*, and the implementing round applied it to a
+**glow-inclusive** bounding box. **On these two dark panels the halo already spans nearly the whole
+frame**, so the rule capped zoom at 1.05-1.15 and left `slack ≈ 0` for any downward shift. The round
+reported that trade honestly and it was real **given the rule as written.**
+
+**The rule was wrong. §13g's defect was solid geometry flush against the frame** — a cube whose face
+is cut by the edge. **A halo, sparkle, or ground-reflection reaching or crossing the edge is ambient
+light, not a cropped object**, and reading it as one is what produced two undersized panels.
+
+**RULED: the constraint protects the solid object. Glow, halo, sparkles and reflection may reach the
+frame edge and may be clipped by it.** This is what unlocks zoom *and* downward shift simultaneously
+on the two panels where the previous round could get neither.
+
+### 13l.2 Cross-panel consistency is a requirement, not an outcome
+
+**Light `Grow` must be at least as large as light `Integrate`.** The story runs
+Start → Patches → Integrate → Grow, and the final panel reading smaller than the one before it works
+against the narrative the section exists to tell. **Whatever the measurement says, `Grow` is the
+payoff frame.**
+
+### 13l.3 No target numbers, deliberately, for the third time
+
+**I am again not specifying zoom or shift values.** §13h.1's numbers looked right and were rejected;
+§13j's were rejected. **The constraint in §13l.1 is the ruling; the values are tuned against the
+render and confirmed by the owner.**
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
