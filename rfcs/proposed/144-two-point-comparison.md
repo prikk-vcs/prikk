@@ -238,6 +238,54 @@ moment.
 **Publish a recipe for the rest**, so declining the general command is a documented position rather
 than a silence.
 
+## 4g. FOUND 2026-09-08 — three things that change the size of the decision
+
+**Verified at source while preparing this RFC for acceptance.**
+
+### 4g.1 Two replay paths disagree about `RenamePath`, so authoring one today would break checkout
+
+- **`lifecycle_cache/replay/effect.rs:67` handles it** — calls `rename_node_checked`, preserving the
+  id. This is what `show` and lifecycle state use.
+- **`patch_replay/decode.rs:145` refuses it** — `unsupported_operation("RenamePath (node-addressed
+  apply pending a rename authoring path)")`. **This is the path `checkout --patch-plan`,
+  `--patch-materialize`, and therefore RFC 143's content-at-a-point all use.**
+
+**So the moment `commit` authors a rename, every checkout and every content-at-a-point read over that
+history fails.** The work is not "teach `commit` to emit it" — **it is that plus teaching the
+materialization path to apply it.** §5's list understated the scope and this corrects it.
+
+**The refusal is loud, not silent**, so nothing would be quietly wrong — but the feature is
+strictly larger than the authoring change it looks like.
+
+### 4g.2 `RenamePath` carries no provenance field — and it may not need one
+
+Its fields are `node_id`, `old_path`, `new_path`. **Nothing records whether the assertion was declared
+or inferred**, which §4c's rule says must be distinguishable.
+
+**But the rule can be satisfied without a schema change.** If authoring never mints an inferred
+rename, **every `RenamePath` in history is declared by construction** — the guarantee comes from the
+authoring rule, not from a per-operation field. Recording "declared" on every operation when no other
+kind exists is noise.
+
+**The cost is deferred, not avoided:** if a later version ever mints inferred renames, it must add the
+field then, and absence would have to mean *"authored in an era that only declared"*. **That is sound
+provided the rule is never quietly relaxed** — which is exactly the kind of thing this RFC should say
+out loud so a future round cannot drift past it.
+
+**Recommendation: no schema change now.** A `Patch` schema bump is a release-compatibility event
+(0.31.0 is the precedent — the first release older builds could not read) and this does not earn one.
+
+### 4g.3 The bundle-impact preview is separable, and cheaper than §4f implies
+
+**It does not depend on the rename decision at all.** It is *bundle against HEAD* — one replay of the
+current state plus applying the bundle's own patches — **not two arbitrary points.** A bundle
+containing delete+create for a move previews delete+create: honest, and limited in exactly the way
+today's history is.
+
+**So the two halves of this RFC can be accepted separately.** The preview could be authorized and
+built while the rename question stays open, and it would not need revisiting when the rename question
+is settled.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
@@ -250,10 +298,26 @@ than a silence.
 4. **What it must never claim.** RFC 142 §6's discipline applies in spirit even where §2b's specific
    argument does not: **the output must not imply structure the repository does not record.**
 
-## 6. What this RFC does NOT do
+## 6. What this RFC does NOT do — CORRECTED 2026-09-08
 
-**It does not accept `prikk diff`.** RFC 142 §5's split stands until this RFC is ruled. **It does not
-authorize rename authoring**, which is §4's question and is larger than this document.
+**This section predated §4b-§4g and contradicted them. Restated.**
+
+**It still does not authorize any implementation.** Nothing may be built from this document.
+
+**What acceptance would settle** — the positions §4c-§4f adopt after external review:
+
+- **`prikk diff` as a general command is declined**, not deferred (§4f).
+- **The pre-acceptance bundle-impact preview is the one case worth owning** (§4f), and §4g.3 shows it
+  is separable from everything else here.
+- **Identity-preserving rename authoring follows only from a declaration, never from inference**
+  (§4c), and that rule is what makes the operation safe rather than a lineage-forgery primitive.
+
+**What acceptance would NOT settle, and what still needs its own decision:**
+
+- **Whether to build the declared-move capture path at all**, and what it looks like when the user
+  has already moved the file outside the tool (§7's open risk).
+- **Teaching `patch_replay` to apply `RenamePath`** (§4g.1) — a prerequisite nobody had costed.
+- **The recipe** that documents composing a generic comparison from RFC 143's surfaces.
 
 **And it does not treat the requesting consumer as a reason.** stikk asked, narrowed, and said plainly
 it was not a blocker. **This is reopened because the architect's own stated reason expired**, which is
@@ -266,5 +330,15 @@ the only good reason to reverse a refusal.
 - **§4 could swallow this RFC.** If the answer is "author renames", that is a patch-model change with
   its own schema, authoring, replay and conflict consequences. **This RFC must be allowed to conclude
   "the real work is elsewhere" rather than forcing a `diff` shape onto a rename problem.**
+- **The load-bearing assumption is untested, and it is not ours.** §4c's "declare, never infer" is
+  honest *only if declaring is ergonomic* — the external architect said plainly they would abandon
+  their own advice if it cannot be, and cited Mercurial as evidence that people do record moves when
+  the tool makes it cheap. **We have no evidence either way for prikk.** And the realistic flow is
+  against us: a user runs `mv` in a shell and *then* commits, by which point the declaration was
+  never made. **The options at that moment are all unattractive** — record delete+create (today, and
+  honest), ask interactively (breaks scripted and CI use), require a post-hoc
+  `prikk mv --record` (awkward, and easy to forget), or infer-and-mark-derived (the thing the rule
+  refuses). **This is the risk most likely to invalidate the whole approach, and nothing in this RFC
+  resolves it.**
 - **A comparison surface is a permanent contract** in a way `show` is not: `show` reports what a patch
   says, `diff` asserts what two states mean relative to each other.
