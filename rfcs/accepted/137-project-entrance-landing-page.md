@@ -1028,6 +1028,26 @@ does not read as a mistake the way a subject flush against the frame did.
 question, and dark `Integrate`/`Grow` — which physically exceeded the frame at 374px and 427px of a
 512px cell — now sit at 14.2% and 12.6% margin.
 
+## 13i. DELIVERED 2026-09-08 — the landing page is complete
+
+**Delivered at `07a0aec`.** Eight replacement panels, eight re-derived `object-position` values, CSS
+box unchanged. **§13h.1's arithmetic held against a real render:** six of eight panels within ±3 of
+centre, `Start` the only exception in either theme, worst margin 11.4-13.4% against the predicted
+12.6%. **81,852 bytes total, smaller than the old set's 87,526 despite the richer margins.**
+
+**Both artwork items §13g raised are closed.**
+
+**The control skipped in two prior rounds was run by the implementing round itself**, with the
+detector calibrated against §13h's own published numbers before being trusted — and it caught a 7px
+scrollbar discrepancy that computed geometry would have missed. **Independently reproduced.**
+
+**Recorded for whoever measures this artwork next: the detector is glow-sensitive.** Two independent
+renders disagreed by ~13 units on light `Integrate` at threshold 40 while agreeing it is centred at
+threshold 50. **Sweep the threshold; do not trust one reading on artwork with bloom.**
+
+**What remains is not landing-page work:** increment 5 (blocked on `prikk.org` DNS, scope in
+§7.2/§7.2a/§7.2b) and the `.hero-art` drawing's appearance.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
