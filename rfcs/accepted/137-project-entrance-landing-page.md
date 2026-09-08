@@ -361,6 +361,39 @@ rather than documentation; **it was hiding worse than a stale hostname.**
 2. **No site-root `404.html`** (§7.2c finding 3) — a mistyped `prikk.org` URL renders GitHub's generic
    page. **Wants its own decision.**
 
+### 7.2e RULED 2026-09-08 — the site gets a 404 page, and it lives at the landing root
+
+**§7.2c finding 3 is now scheduled.** Any mistyped `prikk.org` URL renders GitHub's generic
+*"Page not found · GitHub Pages"*. **This is the project's own front door failing**, and it is
+reachable from every wrong link anyone ever writes.
+
+**GitHub Pages serves only the site-root `404.html`.** `docs.yml` stages `docs/landing/` at the
+artifact root, so **`docs/landing/404.html` is the file** — no workflow change is needed.
+
+**This also explains why increment 5's `site-url` fix had no visible effect.** mdBook generates
+`book/404.html`, which stages to `/docs/404.html` — **a path GitHub never serves.** Correcting its
+`<base>` was right (the file should not carry a wrong value) but §7's stated symptom, an unstyled 404
+under `/docs/`, does not occur and never did.
+
+**RULED — the constraint that decides the design: a 404 is served at an arbitrary path.** A visitor
+who mistypes `/docs/guide/instal.html` gets this page **at that URL**, so **every link and asset
+reference in it must be root-relative or absolute.** A relative `href` resolves against wherever the
+miss happened and breaks. **This is the same class of error as the `<base>` problem the RFC has
+already been wrong about once.**
+
+**RULED — it carries its own minimal CSS, and does not import the landing page's.** §7.2's CSS answer
+(inline, 10.6 KiB gzipped) was reasoned for a single page, and a 404 is the second. **Extracting a
+shared stylesheet would put a request on the landing page's critical path to save bytes on a page
+almost nobody loads** — the wrong trade. **The 404 duplicates the colour tokens and a little layout,
+nothing more.**
+
+**Accepted cost, stated rather than discovered later:** the duplicated tokens can drift from
+`index.html`'s. **That is cheaper than the alternative and it is a visual-only risk**, but a palette
+change must remember this file.
+
+**Not ruled:** the wording, and whether it offers anything beyond the two routes a lost visitor
+wants — the landing page and the docs index.
+
 ## 8. The seam with RFC 135
 
 The landing page's last instruction is an install command. **RFC 135 owns everything after it** — what
