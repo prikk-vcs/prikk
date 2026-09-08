@@ -127,6 +127,7 @@ whoever knows must say so; otherwise the named costs above are the whole list.
 | `AUD-01`/`AUD-02` costs | **Nothing.** Source reading only |
 | `status --format json`'s queue enumeration is bounded by `worktree-status` | **One measurement, §5a below.** No gate |
 | Checkout and merge-evidence both cost O(depth^1.45), from two separate uncached chain walks | **One measurement, RFC 136 §9.3.** No gate |
+| Commit memory is O(nodes ever created), with a monotonic component that never shrinks | **Nothing.** Source reading, §6b — and it is a *cost*, not a property being kept |
 
 **Time has two gates; memory has none.** That asymmetry is the subject of §6.
 
@@ -423,6 +424,76 @@ would bite.**
    or measurement would catch.
 
 **Item 4 is a measurement task and does not need the owner.** Items 1-3 are the ruling, and it is theirs.
+
+## 6b. RECORDED 2026-09-09 — the node-count cost is now tracked, at the owner's instruction
+
+**The owner's instruction, verbatim:** *"It should be fixed and improved whichever now or later. At
+least, it should be recorded and started to be in control now."*
+
+This section is that record. **No AUD id is minted** — `AUD-01`..`AUD-10` belong to the external audit's
+own numbering and six of them are retired, so a new one would collide with a retired id. This cost lives
+in §5's table and in this section.
+
+### 6b.1 What the cost actually is, decomposed
+
+`NodeLifecycleState` carries **two monotonic components**, and they are not the same size:
+
+| Component | Grows with | Per entry | Redundant? |
+|---|---|---|---|
+| `seen_ids: BTreeSet<NodeId>` | every node ever created | 32 bytes | **Yes — provably** (§6b.2) |
+| `latest_tombstone_by_id: BTreeMap<NodeId, Tombstone>` | every node ever *deleted* | `NodeId` + kind + content (blob id / symlink target) + path | **No** — carries restoration-equivalence data |
+| `live_by_id`, `path_to_id` | current tree | node + path | No — this is the working set |
+
+**The dominant monotonic term is the tombstone map, not `seen_ids`** — a `Tombstone` is several times a
+bare id. Stating this plainly because the cheap fix below is a *partial* one, and reporting it as the
+answer would misrepresent what remains.
+
+### 6b.2 `seen_ids` is redundant, and the codebase already asserts the invariant that makes it so
+
+Verified at source, both directions:
+
+- **Every insert lands in one of the other two maps.** `mutation.rs:51` (into `live_by_id`, having first
+  removed any tombstone at `:50`), `:386` (`seed_live_node` → live), `:403` (`seed_tombstone` → tombstones).
+  There is no fourth insert.
+- **There is exactly one `live_by_id.remove`** (`mutation.rs:60`, in `delete_node`) and it inserts the
+  tombstone at `:81`. The two early returns between them are `Err` paths on an already-desynchronised
+  path index, which abort replay.
+- **Live and tombstoned are disjoint by design** — `mutation.rs:48-50`'s own comment: *"no node_id may
+  be both live and tombstoned."*
+
+So on every non-error path `seen_ids == keys(live_by_id) ∪ keys(latest_tombstone_by_id)`.
+
+**This is not merely inferred — the codebase already enforces it.** `cache_ladder.rs:268` validates
+`seen_ids` strictly ascending **and** equal to the union, rejecting a decoded cache otherwise:
+`"seen_ids must equal exactly live ∪ tombstoned"`. **The project already treats the equality as an
+invariant while still storing both sides of it**, in memory, in the clone
+(`try_incremental_step`'s `cached.state.clone()`, which doubles peak), and on disk in the cache ladder.
+
+Its three read sites (`query.rs:17`, `validation.rs:27`, `:39`) are membership tests, each replaceable
+by `live_by_id.contains_key(id) || latest_tombstone_by_id.contains_key(id)` at the same complexity.
+
+### 6b.3 The steps, in the order their evidence supports
+
+1. **Re-measure the node-count axis** past 8,000 files, with more than one sample per point (§6a.3).
+   **This comes first**: nothing should be optimised against a series whose shape is not established, and
+   the departure at 8,000 may not be the structure named here at all. Needs no owner ruling.
+2. **Remove `seen_ids`.** Correctness-neutral against an invariant already validated on decode; saves
+   32 bytes per node ever created, doubled at peak by the clone, and again on disk. **It changes the
+   cache-ladder persisted format**, so it needs version handling — the cache is rebuildable by design
+   (`incremental.rs`: a save failure is a performance regression, not a correctness one), which makes
+   invalidation an acceptable answer, but the format change must be deliberate, not incidental.
+3. **Then the real question: can tombstones be bounded?** They exist for restoration-equivalence on
+   reintroduction. Whether they can be pruned past a horizon, or reconstructed from sealed history on
+   demand rather than held, is a design question this RFC does not answer and must not pre-empt — it is
+   the difference between a repository whose commit memory settles and one whose commit memory only ever
+   grows.
+4. **Independently: `try_incremental_step`'s clone.** It exists so a failed step cannot corrupt the
+   cached state. Now that rename resolution is fail-atomic (RFC 144 §4k.3), whether the clone is still
+   required for *every* operation kind is worth asking — but it is a separate thread, and "some
+   operations are fail-atomic" is not "the step is."
+
+**Step 3 is the one that decides whether the cost is bounded at all.** Steps 1 and 2 are cheap and make
+it smaller and measured; neither makes it stop growing.
 
 ## 7. Scope
 
