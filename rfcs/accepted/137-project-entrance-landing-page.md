@@ -243,6 +243,35 @@ only with the host-appropriate value** (`/prikk/docs/`, not `/docs/`). Increment
 and **the `site-url` cutover rides with it** — the two are one change, recorded here so the second is
 not forgotten.
 
+## 7.2 CORRECTED 2026-09-08 — increment 5 is not "two files", and one of them is Rust
+
+**§7's increment 5 says "one change, two files".** Swept at `a3333dd`: it is **four files plus one that
+does not exist yet**, and the undercount matters because the missed one ships in every future release.
+
+**Must change, together:**
+
+| file | what |
+|---|---|
+| `Cargo.toml` | `homepage` — **baked permanently into each published version**, so it must land before a release, never during one |
+| `docs/book.toml` | `site-url` `/prikk/docs/` → `/docs/` |
+| `README.md` | **three** sites: the header badge, the crate-table badge, and the Documentation link |
+| `tools/release-policy/src/release_notes.rs:52` | a hardcoded link to the release-compatibility reference **inside the notes body of every future release**. Rust, not documentation — **this is the one increment 5's own wording would have missed** |
+| `CNAME` *(new)* | GitHub Pages needs it in the published artifact; none exists, and `docs.yml` publishes `$SITE_DIR`, so it must be staged there rather than committed at the repo root |
+
+**Must NOT change — records of what was true:** `CHANGELOG.md` (past releases genuinely carried that
+URL), `rfcs/done/129`, the RFC 137 handoffs, and ROADMAP's historical rows.
+
+**The landing page itself needs nothing.** Swept: its only absolute links are to `github.com`, which
+the move does not touch, and its `docs/…` links are relative and travel with it.
+
+**Timing, and it is now favourable:** `homepage` is frozen per published version and 0.36.0 already
+shipped carrying `prikk-vcs.github.io`. **Landing the move before 0.37.0 means no released version
+straddles the change.**
+
+**The block is unchanged and is not ours:** `prikk.org` has no DNS record of any kind, re-checked
+2026-09-08. **§7's ordering constraint stands — neither half may land early**, because
+`site-url = "/docs/"` breaks the 404 page's `<base>` while the book is still served under `/prikk/`.
+
 ## 8. The seam with RFC 135
 
 The landing page's last instruction is an install command. **RFC 135 owns everything after it** — what
