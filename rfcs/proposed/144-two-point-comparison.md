@@ -92,6 +92,39 @@ completing the replay, renames especially — and its implementing round reporte
 risk was predicted is not an argument that yielding to it is wrong.** It does mean the rename decision
 should be made on its own merits and not smuggled in as a `diff` implementation detail.
 
+## 4a. STRENGTHENED 2026-09-08 — the model states an invariant the authoring path does not keep
+
+**Found while preparing the external review request, and it reframes this RFC.** Each link verified at
+source:
+
+1. **The model requires node identity to survive rename.**
+   `crates/prikk-store/src/node/node_id_gen.rs`, module doc, verbatim: *"A `NodeId` is an opaque
+   32-byte **stable** node identity, minted once at node creation and thereafter immutable: it **must
+   survive rename**, edit, chmod, and binary replacement, and it is part of the text `span_id`
+   preimage."*
+2. **Span identity is derived from node identity.** `text_span.rs::compute_span_id_v2` folds
+   `node_id.as_bytes()` into the hash preimage directly after the `PRIKK-TEXT-SPAN-v2` tag.
+3. **Authoring resolves the baseline by path** — `node_authoring.rs` keys it
+   `BTreeMap<String, BaselineFile>`.
+4. **`commit` never authors a rename** — `node_authoring.rs:12`: *"rename inference (moves author as
+   delete+create)"*.
+5. **A fresh node draws a new 256-bit id** from the OS CSPRNG.
+
+**Therefore a move mints a new node id and severs the old one, and because node id is in the span
+preimage, every span identity on that file changes. Edits before and after a move share no lineage
+the model can relate.**
+
+**This changes what this RFC is.** `prikk diff` reporting delete+create is not a rendering choice we
+could make differently — **it is the faithful report of a history in which the rename did not
+happen.** The output is a symptom; §4's question is the disease.
+
+**Stated against ourselves:** this is not a defect someone introduced. `RenamePath` is in the
+operation model, `show` carries a `rename-path` label, and `ensure_apply_supported` errors on it as
+*"node-addressed apply pending a rename authoring path"*. **The gap is deliberate and deferred.** The
+open question is whether the deferral is still right — **and whether "the model contradicts itself" is
+an overstatement of an ordinary unimplemented feature.** We reached that framing quickly, which is
+when we are least reliable, and the external review request says so explicitly.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
