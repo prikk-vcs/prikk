@@ -1323,6 +1323,19 @@ WCAG AA (4.5:1 — nothing on this page qualifies as large text at `.92rem`/14.7
 
 **Dark theme passes everything.** Fifteen pairs, lowest 4.89. **Do not touch it.**
 
+> **CORRECTED 2026-09-09 — this sweep was incomplete and the sentence above was false.** It measured
+> **selectors**, not **selector × every background it renders on × every interaction state**, and
+> missed two failures:
+>
+> - **light `.button-primary:hover`** — white on `--sage-dim` `#93a48d` = **2.61**, *worse than the
+>   resting 3.32 this section did find.* Only resting states were checked.
+> - **dark `.eyebrow` on `--paper` sections** = **4.45 — a dark-theme failure.**
+>   `main section:nth-of-type(even){background:var(--paper)}` alternates the section background, so
+>   **four of the eight eyebrows render on a background this sweep never tested them against.**
+>
+> **Found by the implementing round enumerating use sites instead of selectors**, which is the correct
+> enumeration. **§13n's own lesson, repeated one section later by its author.**
+
 **Light theme fails three, and all three are sage:**
 
 | | | ratio |
