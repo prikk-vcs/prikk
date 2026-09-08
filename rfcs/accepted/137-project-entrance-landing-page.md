@@ -678,12 +678,26 @@ that they are typed and visible, not absent.
 
 ### 12d. RULED — the `.story` heading
 
-**`No surprise merges. The history stays yours.`** — replacing *"Projects grow. Then they shine."*,
-which promised a fifth panel that §11b retired.
+**`Bring changes together. Keep the story yours.`** — the owner's wording, replacing both
+*"Projects grow. Then they shine."* (which promised a fifth panel §11b retired) and the architect's own
+*"No surprise merges. The history stays yours."*
 
-**It is bound to both properties and to neither overclaim**: the first clause is §12a's *named, not
-clean*; the second is §12b's *unmediated, not durable*. **Set by the architect directly** rather than
-handed off, being one line of the architect's own ruling that was blocking an otherwise-complete round.
+**The owner's correction was a viewpoint one and it was right:** the architect's line named a
+*developer's* annoyance — merges that surprise me — where this section addresses a **project owner**.
+An owner's two acts are bringing contributions together and holding the account of how the project got
+here. **Both clauses are imperative, matching `Commit. Seal. Verify.`**, where the architect's was a
+noun phrase plus a statement.
+
+**It also removes an echo the architect missed**: *history* already appears in
+*"Small changes. Clear history."* two sections earlier. *Story* does not appear in visible copy
+anywhere else on the page, checked.
+
+**Bound to both properties, and to neither overclaim.** *"Bring changes together"* is §12a's act
+without claiming merges are clean or automatic; *"Keep the story yours"* is §12b's *unmediated*.
+**Recorded caution:** *keep* could be misread as durability, which §12c.4 forbids — judged acceptable
+because the object of *keep* is the ownership, not the story's survival, and the parallel imperative
+reads as a pair of actions rather than a guarantee. **`The story stays yours` is the zero-risk
+alternative if that reading ever proves wrong**, at the cost of the parallel.
 
 ## 9. Scope
 
