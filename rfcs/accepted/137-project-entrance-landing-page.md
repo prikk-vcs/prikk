@@ -534,8 +534,11 @@ Shine"* or *"Shine"*.
 
 **Neither: it is "Grow."** *Shine* names a lighting treatment that panel 3 already carries — the
 glowing connections are what "integrated and validated" looks like — so it does not distinguish the
-last panel. What is new in panel 4 is **foliage**: the cube is alive and spreading. **"Grow" names the
-thing that changed and completes the arc — Start → Patches → Integrate → Grow.**
+last panel. What is new in panel 4 is the leaves — the cube is alive and spreading. **"Grow" names
+that, and completes the arc: Start → Patches → Integrate → Grow.**
+
+**The four chip labels are exactly `Start`, `Patches`, `Integrate`, `Grow`.** Nothing else in this
+section is a label; the surrounding sentences are the reasoning for the choice.
 
 **Consequence the proposal does not mention:** `<h2>Projects grow. Then they shine.</h2>` is a
 *two-beat* heading built for a two-panel ending that no longer exists. **It must change with the
