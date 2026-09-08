@@ -327,7 +327,42 @@ declaration is **a trusted author's signature over the patch, not a boolean on t
 of a hopeful one. **This also corrects the first external round's own advice**, which said *"the
 operation must record which it was"*; the reviewer withdrew the placement, not the principle.
 
-### 4h.3 Demote, do not reject
+### 4h.3 Demote, do not reject — CORRECTED: the demotion cannot touch history
+
+**The external answer was "degrade the `RenamePath` to delete+create on receipt". The intent is right
+and the mechanism is impossible here.** Three checks, verified at source:
+
+1. **The patch is signed** — rewriting an operation inside it breaks the author signature.
+2. **The patch is content-addressed** — rewriting changes its object id, so the block's patch list no
+   longer refers to it.
+3. **Replay is bound into the block.** `derive_next_state_root(reader, parent, patch_ids)` derives a
+   Merkle root from parent state plus patches, and `BlockPayload.state_merkle_root` carries it
+   **inside the signed block**; `verify` re-derives and compares.
+
+**So a repository that replayed a `RenamePath` as delete+create would derive a state root disagreeing
+with the block's own, and its `verify` would fail.** Two repositories with different trust policies
+would compute different histories from identical bytes.
+
+**RULED: trust policy must never be an input to replay.** Replay is a pure function of the patch set,
+and that determinism is what makes history verifiable at all.
+
+**What survives — and it is the whole intent: provenance is a read-time annotation, not a history
+mutation.**
+
+- The patch records `RenamePath`. **Signature, patch id, state root and replay all hold, identically
+  everywhere.**
+- **Whether a reader believes the identity claim is a function of (signer, that reader's trust
+  policy)** — computed on read, never stored, never fed to replay.
+- **Facts are shared; judgements are local.**
+
+**And the placement question answers itself from this project's own precedent.** RFC 140 §7b and RFC
+142 §6b already rule that *a read may degrade, but must say so in a field a machine can branch on*.
+**So the annotation belongs on the read surface in a branchable field, not in a side record** — a
+consumer asking *what changed here* is told, in the same document, that this rename's identity
+assertion comes from a signer outside their trust policy. **They cannot miss it, because it is in the
+answer rather than beside it.**
+
+### 4h.3a The original external framing, kept for the record
 
 **A receiving repository that does not trust a signer to assert identity should neither refuse the
 patch nor accept the claim.** It should **degrade the `RenamePath` to its honest floor — delete +
