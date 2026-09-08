@@ -297,6 +297,103 @@ today's history is.
 built while the rename question stays open, and it would not need revisiting when the rename question
 is settled.
 
+## 4h. RESOLVED 2026-09-08 — provenance rides in the signature, not the operation
+
+**Second external review round. The exchange-boundary hole §4g.2 raised is answered, and the answer is
+cheaper than either candidate this RFC proposed.**
+
+### 4h.1 It is not the same problem as the reviewer's own system, and the difference is our advantage
+
+Their system stamps a per-operation `Stated`/`Derived` marker because it **decodes a bag of facts from
+an unaccountable source** — one import mixes a recorded rename and an inferred one under the same
+"author", and **there is no one to hold accountable.**
+
+**prikk infers nothing and receives signed artifacts.** The question is not *"did I infer this"* — we
+did not — but *"did the author who signed this patch have standing to assert this rename, and can we
+hold them to it?"* **That is a trust question about an assertion crossing a boundary, not an epistemic
+question about a derivation.**
+
+### 4h.2 RULED-SHAPED — a per-operation provenance field would be forgeable, and is therefore wrong
+
+**Within one signed patch, provenance is uniform**: every `RenamePath` was minted by one author under
+one regime, so a per-operation marker is redundant. **Worse, it is forgeable** — a marker the asserter
+fills in themselves proves nothing across a trust boundary, because a hostile writer simply stamps
+`declared` on an inferred rename.
+
+**The only unforgeable provenance is who signed the patch.** So the record that a rename is a real
+declaration is **a trusted author's signature over the patch, not a boolean on the operation.**
+
+**Therefore: no `Patch` schema change** — §4g.2's conclusion survives, but for a sound reason instead
+of a hopeful one. **This also corrects the first external round's own advice**, which said *"the
+operation must record which it was"*; the reviewer withdrew the placement, not the principle.
+
+### 4h.3 Demote, do not reject
+
+**A receiving repository that does not trust a signer to assert identity should neither refuse the
+patch nor accept the claim.** It should **degrade the `RenamePath` to its honest floor — delete +
+create** — keeping the content change (always true), dropping the identity assertion (unverifiable
+across the boundary), and **recording that the demotion happened.**
+
+**Refusing loses the content; accepting forges lineage; demoting keeps the content and refuses only
+the forgeable claim.** Renames stay exchangeable and forged lineage stays impossible. **It is
+fail-closed applied to the claim rather than to the patch.**
+
+### 4h.4 VERIFIED — this probably needs no new machinery
+
+`patch_exchange::accept_exchange_artifact` **already** verifies the AUTHOR signature against recorded
+material and **already** loads the maintainer trust policy, verifying claim and tag signatures against
+it. **The trust decision exists at the boundary today.**
+
+**So the provenance question may collapse entirely into the acceptance decision already being made:**
+accept the patch → its renames are declarations by a trusted author; do not trust the signer for
+identity → demote. **Open, and ours to rule: whether "trusted to contribute" and "trusted to assert
+identity" should ever be separate grants.** Start from the assumption they are the same; split only if
+a real threat forces it.
+
+### 4h.5 The residual cost, and the fix that is not coercion
+
+**Declaration-only cannot punish (§4g's resolution), but one cost survives:** a user who *would* have
+declared, and did not know the path existed or forgot, gets delete+create **sealed permanently**. That
+is not a regression — it is an **irreversible, commit-time-invisible opportunity cost.**
+
+**RULED-SHAPED: the fix is discoverability, not a mandate.** When `commit` sees a delete+create that is
+a strong move candidate, it may **hint** — *"looks like you moved X to Y; `prikk mv` would preserve its
+identity"* — **without authoring anything.** The machine suggests; the human asserts. **This stays
+inside "declare, never infer", and it closes the one blind spot §4g's measurement honestly admitted:**
+the solo developer moving files in an IDE without thinking now gets a prompt at commit time.
+
+### 4h.6 Q10 answered, and it splits into two cases with different homes
+
+**Verified at source, and the answer is sharper than "add a witness".**
+
+`facts.rs:105` shows `RenamePath` **already inserts its destination into `newly_occupied`** — the set
+`SamePathCreate` fires on (`classify.rs:96`).
+
+- **Rename onto an occupied path: already covered.** Two operations whose `newly_occupied` intersect
+  raise `SamePathCreate` today. **The machinery is wired for renames already; only the label
+  misdescribes it**, since nothing was created.
+- **Both sides rename one node to different paths: nothing fires.** The destinations are disjoint, so
+  `SamePathCreate` does not trigger. **One node, two paths, no witness.**
+
+**And the taxonomy shows why the thirteenth is principled rather than additive.** It already carries
+per-attribute mismatch witnesses — `KindMismatch`, `ModeMismatch`, `BlobMismatch` — for disagreements
+about one node's attributes. **`path` is the one mutable attribute with no mismatch witness, precisely
+because the operation that mutates it was never authored.** The thirteenth completes a family rather
+than extending one.
+
+### 4h.7 Q11 is a prerequisite, and the fix dissolves both hazards
+
+**Materialization has the merge-ordering hazard's analogue**: a rename cycle (`a→b`, `b→a`) applied
+sequentially by path clobbers; a rename onto an occupied path silently overwrites.
+
+**Applied by node, both vanish.** Resolve the final `node → path` projection and materialize that: a
+swap is two nodes exchanging a path attribute, with no sequence to get wrong, and a collision becomes a
+structural event the `path_to_id` index detects.
+
+**So the fix is not "apply renames in the right order" — it is "teach `patch_replay` what
+`lifecycle_cache` already knows: resolve node before path."** And it **gates** rename authoring rather
+than following it: authoring first would seal history `checkout` cannot materialize.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
