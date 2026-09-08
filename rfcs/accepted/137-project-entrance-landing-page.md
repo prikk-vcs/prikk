@@ -788,6 +788,35 @@ Its subject sits so low that centring inside a 512px frame would need the frame 
 Framing improves it from +112 to roughly +45 — better than dark is today — and **the remainder needs
 new artwork for that panel, which is the owner's call and is not this round's work.**
 
+## 13e. DELIVERED 2026-09-08, with two corrections to §13c's own expectations
+
+**Delivered at `8b9ca94`, `d5d8e73`, `9c6faa2`.** The reveal is safe-by-default as §13b required —
+`.hero-reveal{opacity:1}` is the base rule and only `prefers-reduced-motion: no-preference` animates
+it. Panel framing verified from the shipped pixels by re-running §13d's own detection: Start **+48**
+light / **+16** dark, every other panel within ±3 of centre in both themes.
+
+**Correction 1 — the accepted cost did not occur.** §13c accepted the hero's `Get started` falling
+below the fold. Measured, it stays above at both 800px and 900px viewport heights (top 519, bottom
+563). **Recorded so nobody later fixes a problem that is not there.**
+
+**Correction 2 — one cap cannot serve both ends, and that premise was mine.** Residual crop measured
+**4.04% at 1400px, 0.00% at 1024px, 19.18% at narrow**. The implementing round declined to tune
+`--hero-cap` to zero one row at the other's expense, and said so rather than choosing silently.
+**They were right, and §13c's "single tunable value" is what forced the conflict** — it meant
+*tunable*, not *forbidden a breakpoint override*.
+
+**RULED: the narrow breakpoint takes its own cap.** The hero's aspect ratio is already
+breakpoint-specific (`.hero{aspect-ratio:941/1672}`), so a narrow-specific ceiling is consistent with
+the structure already present. At 390px the 9:16 ratio implies a 693px hero, which most phone
+viewports exceed — **raising or dropping the cap there takes narrow crop to approximately zero without
+touching the wide-monitor bound.**
+
+**A defect the round found unprompted, worth keeping in the record:** once `max-height` clamps an
+aspect-ratio-derived height, a block box with no explicit `width` recomputes *width* to preserve the
+ratio rather than staying full-bleed. At 2560px this left 937px of bare background beside the photo.
+**Fixed with `width:100%`.** The test was not asked for by name — §13c's phrase *"cannot grow absurd
+on a wide monitor"* was read as an instruction to try one.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
