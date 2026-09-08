@@ -429,6 +429,65 @@ structural event the `path_to_id` index detects.
 `lifecycle_cache` already knows: resolve node before path."** And it **gates** rename authoring rather
 than following it: authoring first would seal history `checkout` cannot materialize.
 
+## 4i. CLOSED 2026-09-09 — external review concluded, and one invariant survives it
+
+**Third and final external round. Q7, Q8, Q9, Q10, Q12 and Q13 are all settled**, and the reviewer
+declined to manufacture further doubt — recorded because a review that ends by saying *"I think this
+is solved"* is worth more than one that finds something to keep itself busy.
+
+### 4i.1 RULED — the honesty invariant, and it binds every future surface
+
+**The one obligation that outlives this RFC:**
+
+> **Any surface that presents a `RenamePath` must keep the asserting signer recoverable *in the same
+> answer*. The shared object carries the evidence (the signature); the belief is local; the two must
+> never be separated at the point of display.**
+
+**Why the object is honest without it, and what it guards.** A signed `RenamePath(a→b)` asserts *"signer
+S asserts a→b"* — which is **true**, whether or not anyone believes S. **Belief was never the object's
+to carry**, so the patch does not lie; it would lie only if it claimed *"a→b is so"*, and it never did.
+
+**The one way this system could produce a lying object is a read surface that renders a rename as a
+bare fact while suppressing who asserted it** — laundering a claim into a truth. **The invariant
+forbids exactly that and nothing else.** It passes the naive-reader test *because the signer is in the
+object*: even a reader computing no trust annotation still renders *"S asserts a→b"*.
+
+**RULED — make it a property, not a rule.** A written obligation decays; this project's own precedent
+is to make correctness structural (RFC 130's coupling gate, RFC 127's changelog gate, RFC 108 §3c's
+shared classifier that made parity *a property rather than a decision*). **So the rename and its
+asserting signer should be one value in the read types, not two fields a surface may render
+separately** — if a rename-bearing report cannot be *constructed* without its signer, no future surface
+can drop it, and the invariant is enforced by the compiler rather than by a reviewer's memory.
+
+### 4i.2 Q10 refined — only one of the two cases needs the thirteenth
+
+**The external verdict ratifies the thirteenth and narrows the work**, applying this RFC's own
+resolution test rather than taxonomy:
+
+- **Both sides rename one node to two disjoint destinations — needs the thirteenth.** Nothing fires
+  today, so there is no resolution path at all. Its resolution is *"choose which destination wins **for
+  this node**."*
+- **Rename onto an occupied path — `SamePathCreate` passes and should not change.** Its resolution,
+  *"two claimants for one path, choose one"*, is already correct. **Only the label is imprecise**, since
+  nothing was created. **Relabelling is optional cosmetics and may be deferred** — it is an
+  external-interface change with no resolution benefit.
+
+**And the pair is a genuine dual**, which is the strongest evidence the thirteenth is not
+`SamePathCreate` in a rename hat: **both-sides is "one node, two paths — pick the path"; occupied-path
+is "two nodes, one path — pick the node."** Different resolution shapes, so different witnesses.
+
+### 4i.3 Q12 and Q13 answered
+
+**Q12 — the read-time annotation satisfies the honesty rule**, and more cleanly than demotion would
+have, because it never had to mutate anything to stay honest.
+
+**Q13 — the separable-grant concern dissolves rather than hides.** The mechanism concern is gone with
+the mutation. The underlying question — *is trusting S's content the same as trusting S's identity
+assertions?* — relocates to the reader's own local policy, **and cannot bite shared state, because
+replay is policy-independent.** A concern load-bearing only on local display and never on shared
+history is dissolved. **Better than the reviewer's own mind-changer imagined:** a separable grant is
+never *needed*, yet the distinction is always *available* to any reader who wants it.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
