@@ -1,6 +1,6 @@
-<h1><img src="https://raw.githubusercontent.com/prikk-vcs/prikk/main/assets/logo/prikk-header-520.png" alt="Prikk" width="360"></h1>
+<h1><a href="https://prikk.org/" target="_blank"><img src="https://raw.githubusercontent.com/prikk-vcs/prikk/main/assets/logo/prikk-header-520.png" alt="Prikk" width="360"></a></h1>
 
-[![documentation](https://img.shields.io/badge/docs-github_pages-brightgreen)](https://prikk.org/docs/)
+[![documentation](https://img.shields.io/badge/docs-prikk.org-brightgreen)](https://prikk.org/docs/)
 [![license](https://img.shields.io/crates/l/prikk.svg)](LICENSE)
 [![CI](https://github.com/prikk-vcs/prikk/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/prikk-vcs/prikk/actions/workflows/ci.yml)    
 [Report a vulnerability](SECURITY.md)
@@ -132,7 +132,7 @@ CLI can be built from crates.io — **their APIs may change without notice befor
 
 | Crate | Purpose | Version | Docs | Dependencies |
 |---|---|---|---|---|
-| [`prikk`](https://crates.io/crates/prikk) | the command-line tool | [![crates.io](https://img.shields.io/crates/v/prikk.svg?label=%20)](https://crates.io/crates/prikk) | [![documentation](https://img.shields.io/badge/docs-github_pages-brightgreen)](https://prikk.org/docs/) | [![Dependency Status](https://deps.rs/crate/prikk/latest/status.svg)](https://deps.rs/crate/prikk) |
+| [`prikk`](https://crates.io/crates/prikk) | the command-line tool | [![crates.io](https://img.shields.io/crates/v/prikk.svg?label=%20)](https://crates.io/crates/prikk) | [![documentation](https://img.shields.io/badge/docs-prikk.org-brightgreen)](https://prikk.org/docs/) | [![Dependency Status](https://deps.rs/crate/prikk/latest/status.svg)](https://deps.rs/crate/prikk) |
 | [`prikk-store`](https://crates.io/crates/prikk-store) | repository storage engine — layout, object storage, WAL durability, verification, patch replay | [![crates.io](https://img.shields.io/crates/v/prikk-store.svg?label=%20)](https://crates.io/crates/prikk-store) | [![docs.rs](https://img.shields.io/docsrs/prikk-store?version=latest&label=%20)](https://docs.rs/prikk-store) | [![Dependency Status](https://deps.rs/crate/prikk-store/latest/status.svg)](https://deps.rs/crate/prikk-store) |
 | [`prikk-object`](https://crates.io/crates/prikk-object) | object identity, canonical encoding, and payload types | [![crates.io](https://img.shields.io/crates/v/prikk-object.svg?label=%20)](https://crates.io/crates/prikk-object) | [![docs.rs](https://img.shields.io/docsrs/prikk-object?version=latest&label=%20)](https://docs.rs/prikk-object) | [![Dependency Status](https://deps.rs/crate/prikk-object/latest/status.svg)](https://deps.rs/crate/prikk-object) |
 | [`prikk-replay`](https://crates.io/crates/prikk-replay) | replay and lifecycle semantics | [![crates.io](https://img.shields.io/crates/v/prikk-replay.svg?label=%20)](https://crates.io/crates/prikk-replay) | [![docs.rs](https://img.shields.io/docsrs/prikk-replay?version=latest&label=%20)](https://docs.rs/prikk-replay) | [![Dependency Status](https://deps.rs/crate/prikk-replay/latest/status.svg)](https://deps.rs/crate/prikk-replay) |
