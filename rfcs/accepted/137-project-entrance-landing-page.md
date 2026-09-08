@@ -261,6 +261,42 @@ does not exist yet**, and the undercount matters because the missed one ships in
 **Must NOT change — records of what was true:** `CHANGELOG.md` (past releases genuinely carried that
 URL), `rfcs/done/129`, the RFC 137 handoffs, and ROADMAP's historical rows.
 
+### 7.2a ADDED 2026-09-08 — the social-preview tags belong to this increment, not before it
+
+**Swept on the owner's question: the landing page has `charset`, `viewport`, `title`, `description`,
+`icon` and a correct `<html lang="en">`, and no Open Graph or Twitter Card tags at all.** A link to it
+shared in a chat client or on social renders as a bare URL — no card, no description, no image. **The
+hero and the four story panels are invisible at exactly the moment the page is being passed around.**
+
+**They land here rather than earlier because `og:url` and `og:image` must be absolute**, and both
+change with the domain. **Adding them before the move means writing them twice.** This increment
+already rewrites every absolute-URL surface; these join that list:
+
+- `og:title`, `og:description`, `og:type`, **`og:url`** (absolute), **`og:image`** (absolute — the
+  16:9 hero is the obvious candidate, and it is already a shipped asset)
+- `twitter:card` (`summary_large_image`), and whichever of title/description/image that needs
+- `<link rel="canonical">` — absolute
+- `theme-color`, which the light/dark work now makes meaningful
+
+**`og:image` must be a real absolute URL to a real asset**, checked by fetching it after the move —
+a card that 404s is worse than no card.
+
+### 7.2b RULED 2026-09-08 — no translation, and the criterion for revisiting
+
+**The owner asked whether i18n should wait. It should, and the reason is not resource limits.**
+
+**A translated landing page onto 465 untranslated documentation files is worse than a consistent
+English site** — it invites a reader in, then strands them. And this is a tool where a stale
+translation is dangerous rather than merely unhelpful: a mistranslated *"not yet a place to keep
+history you cannot lose"* could cost someone their work.
+
+**`lang="en"` is already correct**, so browsers offer machine translation. That is the honest fallback
+— visibly machine-made, never mistaken for the project's own claim.
+
+**RULED: the criterion for revisiting is not available resource but a named maintainer for a specific
+locale, willing to own it continuously.** Translation without an owner decays into exactly the state
+above.
+
 **The landing page itself needs nothing.** Swept: its only absolute links are to `github.com`, which
 the move does not touch, and its `docs/…` links are relative and travel with it.
 
