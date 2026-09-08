@@ -8,11 +8,13 @@
 each operation, the path(s) it affects, and the content it changed. A text edit shows its exact
 before and after span, never a synthesized line-oriented diff — prikk's edits are content-anchored
 spans, not line ranges. There is no `prikk diff`: comparing two arbitrary points in history is a
-separate, materially more expensive question this command does not answer. If a referenced blob
-cannot be read — the ordinary case being a deleted file whose most recent edit left its old
-identity unbacked by design, not repository damage — that one piece of content reports as a named
-"unavailable" state rather than failing the command; every other operation still renders and the
-command still exits `0`.
+separate, materially more expensive question this command does not answer. If a referenced blob is
+simply absent from the object store — the ordinary case being a deleted file whose most recent edit
+left its old identity unbacked by design, not repository damage — that one piece of content reports
+as a named "unavailable" state rather than failing the command; every other operation still renders
+and the command still exits `0`. A referenced blob the object store reports as damaged (a
+content-hash mismatch, a stored type disagreement, a malformed payload, or a `SNAPSHOT`-kind blob
+named where file content belongs) is different: `show` propagates it and the command fails.
 
 ## 0.35.0 — 2026-09-06
 

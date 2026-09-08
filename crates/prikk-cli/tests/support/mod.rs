@@ -200,6 +200,76 @@ pub fn append_torn_ref_log_tail(container_path: &Path) {
     file.write_all(&torn).unwrap();
 }
 
+/// RFC 142 show-degradation handoff v2, control 1's fixture: corrupt a real repository's blob
+/// container so that a specific, already-referenced blob decodes to *different, still internally
+/// valid* content -- reaching `object_store.rs`'s own id-recomputation check (`read_object_at_entry`,
+/// the content-hash verification a content-addressed store's read path performs) rather than the
+/// container's own earlier frame-checksum check one layer up. A bare bit-flip inside a frame's body
+/// would fail that earlier checksum instead (a different, less specific error) and never reach the
+/// check this fixture exists to exercise.
+///
+/// Requires the blob container to hold at least two frames of identical total length (magic(8) +
+/// version(2) + body_len(8) + checksum(32) header, then body -- `container.rs`'s own frame shape).
+/// Swapping two equal-length, individually well-formed frames in place leaves every other frame's
+/// offset unchanged and each swapped frame internally self-consistent (its own checksum still
+/// matches its own bytes, since the swap moves intact frames rather than editing them) -- but now
+/// the object id the repository's index claims for one offset decodes to *the other* frame's
+/// content, exactly the disagreement `object_store.rs:130-135` exists to catch. Callers arrange two
+/// equal-length, distinct-content blobs (e.g. two files of the same byte length) before sealing.
+pub fn swap_two_equal_length_blob_frames(repo: &Path) {
+    const MAGIC: &[u8; 8] = b"PCONBLB1";
+    const HEADER_LEN: usize = 8 + 2 + 8 + 32;
+    let container_path = repo.join(".prikk/containers/blob/a.container");
+    let mut bytes = std::fs::read(&container_path).unwrap();
+
+    let mut frames = Vec::new();
+    let mut offset = 0usize;
+    while offset + HEADER_LEN <= bytes.len() {
+        assert_eq!(
+            &bytes[offset..offset + 8],
+            MAGIC,
+            "unexpected frame magic at byte offset {offset} in {container_path:?}"
+        );
+        let body_len =
+            u64::from_be_bytes(bytes[offset + 10..offset + 18].try_into().unwrap()) as usize;
+        let frame_len = HEADER_LEN + body_len;
+        frames.push((offset, frame_len));
+        offset += frame_len;
+    }
+    assert_eq!(
+        offset,
+        bytes.len(),
+        "blob container has a trailing partial frame -- fixture must seal cleanly first"
+    );
+
+    let mut offsets_by_len: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+    for &(frame_offset, frame_len) in &frames {
+        offsets_by_len
+            .entry(frame_len)
+            .or_default()
+            .push(frame_offset);
+    }
+    let (frame_a, frame_b) = offsets_by_len
+        .into_values()
+        .find_map(|offsets| match offsets.as_slice() {
+            [a, b, ..] => Some((*a, *b)),
+            _ => None,
+        })
+        .expect(
+            "two blob frames of identical total length to swap -- caller must write two blobs of \
+             equal byte length before sealing",
+        );
+    let frame_len = frames.iter().find(|&&(o, _)| o == frame_a).unwrap().1;
+
+    let a_bytes = bytes[frame_a..frame_a + frame_len].to_vec();
+    let b_bytes = bytes[frame_b..frame_b + frame_len].to_vec();
+    bytes[frame_a..frame_a + frame_len].copy_from_slice(&b_bytes);
+    bytes[frame_b..frame_b + frame_len].copy_from_slice(&a_bytes);
+
+    std::fs::write(&container_path, &bytes).unwrap();
+}
+
 pub fn copy_dir_recursive(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {

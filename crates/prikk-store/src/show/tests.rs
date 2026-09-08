@@ -310,7 +310,7 @@ fn show_reports_unresolved_and_degrades_when_a_block_edits_and_deletes_the_same_
 /// (`show_operation`/`show_blob_content`) without needing to simulate post-seal object-store
 /// corruption to reach the other three.
 #[test]
-fn show_degrades_all_four_blob_dereference_sites() {
+fn show_degrades_all_four_blob_dereference_sites_on_absence() {
     use crate::memory_store::MemoryObjectStore;
     use crate::patch_replay::decode::{
         DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation,
@@ -329,7 +329,7 @@ fn show_degrades_all_four_blob_dereference_sites() {
             mode: 0o100_644,
         },
     };
-    let shown = super::show_operation(&store, &create_file, None);
+    let shown = super::show_operation(&store, &create_file, None).unwrap();
     match shown.content {
         ShowOperationContent::CreateFile {
             content: ShowBlobContent::Unavailable { blob_id },
@@ -350,7 +350,7 @@ fn show_degrades_all_four_blob_dereference_sites() {
             },
         },
     };
-    let shown = super::show_operation(&store, &delete_node, None);
+    let shown = super::show_operation(&store, &delete_node, None).unwrap();
     match shown.content {
         ShowOperationContent::DeleteNode {
             preimage: ShowDeletePreimage::File(ShowBlobContent::Unavailable { blob_id }),
@@ -366,7 +366,7 @@ fn show_degrades_all_four_blob_dereference_sites() {
             new_blob_id: never_written_b,
         },
     };
-    let shown = super::show_operation(&store, &replace_binary, None);
+    let shown = super::show_operation(&store, &replace_binary, None).unwrap();
     match shown.content {
         ShowOperationContent::ReplaceBinary {
             old: ShowBlobContent::Unavailable { blob_id: old_id },
@@ -377,6 +377,82 @@ fn show_degrades_all_four_blob_dereference_sites() {
         }
         other => panic!("expected both ReplaceBinary sides Unavailable, got {other:?}"),
     }
+}
+
+/// RFC 142 §6b, control 3's error-case sibling: an object the store affirmatively reports as
+/// damaged -- a type mismatch, a malformed payload, or a `SNAPSHOT`-kind blob named by a
+/// file-content operation -- propagates a real error rather than degrading. Three distinct error
+/// classes, each asserted to actually fail (not merely "not panic"), so this cannot pass by
+/// accident the way an unconstrained `Result` check could.
+#[test]
+fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
+    use crate::memory_store::MemoryObjectStore;
+    use crate::patch_replay::decode::{DecodedOperationKind, DecodedPatchOperation};
+
+    // Type mismatch: the id genuinely resolves, but to a Patch, not a Blob.
+    let mut store = MemoryObjectStore::new();
+    let wrong_type_envelope =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, b"not a blob".to_vec());
+    let wrong_type_id = store.write_object(&wrong_type_envelope).unwrap();
+    let create_file = DecodedPatchOperation {
+        op_seq: 1,
+        kind: DecodedOperationKind::CreateFile {
+            path: "a.txt".to_string(),
+            node_id: NodeId::from_bytes([0xC1; 32]),
+            blob_id: wrong_type_id,
+            mode: 0o100_644,
+        },
+    };
+    assert!(
+        super::show_operation(&store, &create_file, None).is_err(),
+        "a type-mismatched object must propagate an error, not degrade"
+    );
+
+    // Malformed payload: a real Blob-typed object whose bytes are not a valid BlobPayload.
+    let mut store = MemoryObjectStore::new();
+    let malformed_envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, b"garbage".to_vec());
+    let malformed_id = store.write_object(&malformed_envelope).unwrap();
+    let create_file = DecodedPatchOperation {
+        op_seq: 1,
+        kind: DecodedOperationKind::CreateFile {
+            path: "a.txt".to_string(),
+            node_id: NodeId::from_bytes([0xC2; 32]),
+            blob_id: malformed_id,
+            mode: 0o100_644,
+        },
+    };
+    assert!(
+        super::show_operation(&store, &create_file, None).is_err(),
+        "a malformed Blob payload must propagate an error, not degrade"
+    );
+
+    // A real, well-formed Blob -- but SNAPSHOT-kind, which no file-content operation may
+    // legitimately name (RFC 142 §6b: "goes back to being loud").
+    let mut store = MemoryObjectStore::new();
+    let snapshot_payload = BlobPayload {
+        blob_kind: BlobKind::Snapshot,
+        content: b"snapshot bytes".to_vec(),
+        declared_size: b"snapshot bytes".len() as u64,
+    };
+    let snapshot_envelope = ObjectEnvelope::unsigned(
+        ObjectType::Blob,
+        1,
+        snapshot_payload.to_canonical_bytes().unwrap(),
+    );
+    let snapshot_id = store.write_object(&snapshot_envelope).unwrap();
+    let create_file = DecodedPatchOperation {
+        op_seq: 1,
+        kind: DecodedOperationKind::CreateFile {
+            path: "a.txt".to_string(),
+            node_id: NodeId::from_bytes([0xC3; 32]),
+            blob_id: snapshot_id,
+            mode: 0o100_644,
+        },
+    };
+    assert!(
+        super::show_operation(&store, &create_file, None).is_err(),
+        "a SNAPSHOT-kind blob named by CreateFile must propagate an error, not degrade"
+    );
 }
 
 /// Control 4: a mixed block -- create, edit, delete, rename -- each renders with its own content

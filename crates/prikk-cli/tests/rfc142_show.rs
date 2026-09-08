@@ -449,3 +449,215 @@ fn degradation_control4_ordinary_output_is_unperturbed() {
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// Show-degradation handoff v2, control 1: build a real repository, corrupt a `CreateFile`-named
+/// blob's *stored* bytes (via `support::swap_two_equal_length_blob_frames`, which reaches
+/// `object_store.rs`'s own id-recomputation check rather than the container's earlier checksum
+/// check -- see that helper's own doc comment) and show it. Exit `1`, with a message that names an
+/// integrity problem, not exit `0` and render `<unavailable>`.
+///
+/// Shows the **patch** id, not the block id: `show` on a block first computes that block's
+/// lifecycle state (`merge_evidence::lifecycle_state_at`), which performs its own, pre-existing
+/// blob-resolvability replay check independent of anything this round touched (`show.rs`'s own
+/// module doc: "content comes straight from the patch payloads -- no replay needed" for a bare
+/// patch, `lifecycle: None`). A corrupted blob named by a *block*'s `CreateFile` fails there first,
+/// regardless of what `show_blob_content` does -- confirmed empirically: perturbing
+/// `show_blob_content` back to round 2's defect (degrade every `Err`) left a block-id version of
+/// this fixture still exiting `1` unchanged, which means it would not have caught round 2's defect
+/// and is not the control this round needs. Showing the *patch* id skips lifecycle replay entirely
+/// and reaches `show_operation` -> `show_blob_content` directly, the code this round actually
+/// changed; the same perturbation flips this version of the fixture to exit `0`.
+#[test]
+fn degradation_control1_a_corrupted_object_fails_loudly() {
+    let repo = support::unique_repo("rfc142-degradation-control1-corrupt");
+    support::init(&repo);
+    // Two files, same byte length, distinct content -- two blobs whose container frames are
+    // therefore identical total length (RFC 142 §6b handoff v2's own fixture requirement), so
+    // `swap_two_equal_length_blob_frames` has a matching pair to swap.
+    std::fs::write(repo.join("a.txt"), "AAAAAAAAAAAA").unwrap();
+    std::fs::write(repo.join("b.txt"), "BBBBBBBBBBBB").unwrap();
+    let commit_out = support::commit(&repo, "heads/main", "genesis");
+    support::ok(&commit_out, "genesis");
+    let patch_id = extract_patch_id(&commit_out);
+    let genesis_seal = support::seal(&repo, "heads/main");
+    support::ok(&genesis_seal, "seal genesis");
+
+    support::swap_two_equal_length_blob_frames(&repo);
+
+    let out = support::prikk(&repo)
+        .args(["show", &patch_id])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+    assert!(
+        stderr.contains("integrity"),
+        "exit-1 message must name an integrity problem, got stderr: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Show-degradation handoff v2, control 4: `ReplaceBinary`'s JSON shape is asserted directly,
+/// against a block that actually contains one -- not via a block that lacks it, the way round 2's
+/// `degradation_control4_ordinary_output_is_unperturbed` (an `EditText`-only block, which
+/// dereferences no blob at all) let the shape change from flat `old_blob_id`/`old_size`/
+/// `new_blob_id`/`new_size` to nested `old`/`new` objects ship unasserted and unmentioned.
+///
+/// `ReplaceBinary` is not reachable through ordinary `commit` (`show/tests.rs`'s own module doc:
+/// `WorktreeChangeKind` never detects a binary content replacement), so this builds the block
+/// directly against the library -- the same raw-patch-then-seal technique `prikk-store`'s own
+/// `show/tests.rs` uses, exposed cross-crate via `prikk-store`'s `test-support` feature -- then
+/// exercises the real binary's own JSON renderer, the only place this shape actually lives.
+#[test]
+fn degradation_control4_replace_binary_json_shape_is_asserted_directly() {
+    use prikk_object::{
+        BlobKind, BlobPayload, CanonicalEncode, CreateFile, NodeId, ObjectEnvelope, ObjectId,
+        ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose, RefStatePayload,
+        ReplaceBinary,
+    };
+    use prikk_store::{
+        Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, ObjectReader,
+        ObjectWriteSession, ObjectWriter, RepositoryLayout, Wal, add_trusted_maintainer,
+        author_signature, simulate_one_seal_for_test_support, write_active_ref_metadata,
+    };
+
+    // `simulate_one_seal_for_test_support` returns the published RefState's own id (see
+    // `rfc111_seal_drift_guard.rs`'s identical use), not the block id -- read the RefState back to
+    // get the block id `show` actually wants.
+    fn block_id_after_seal(layout: &RepositoryLayout, ref_state_id: ObjectId) -> ObjectId {
+        let object_store = FileObjectStore::new(layout.clone());
+        let envelope = object_store
+            .read_typed(ref_state_id, ObjectType::RefState)
+            .unwrap()
+            .unwrap();
+        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)
+            .unwrap()
+            .target_object_id
+    }
+
+    let repo = support::unique_repo("rfc142-degradation-control4-replace-binary");
+    let layout = RepositoryLayout::init(repo.clone()).unwrap();
+    add_trusted_maintainer(
+        &layout,
+        support::MAINTAINER_KEY_ID,
+        &support::maintainer_public_key_hex(),
+    )
+    .unwrap();
+    let author = Ed25519AuthorSigner::from_seed("rfc142-control4-author", &[0x51; 32]).unwrap();
+    let maintainer =
+        Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
+            .unwrap();
+
+    let write_blob = |kind: BlobKind, content: &[u8]| -> prikk_object::ObjectId {
+        let payload = BlobPayload::new(kind, content.to_vec());
+        let bytes = payload.to_canonical_bytes().unwrap();
+        let envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, bytes);
+        let mut session = ObjectWriteSession::open(&layout).unwrap();
+        session.write_object(&envelope).unwrap()
+    };
+
+    // node's live `CreateFile`, sealed on its own -- `ReplaceBinary`'s target must already be a
+    // live node at seal-time replay validation (found empirically, `show/tests.rs`'s own module
+    // doc: an invented node id is rejected at `seal`, not at `show`).
+    let node_id = NodeId::from_bytes([0x51; 32]);
+    let old_content: &[u8] = b"\x00binary-old";
+    std::fs::write(repo.join("bin.dat"), old_content).unwrap();
+    let create_blob_id = write_blob(BlobKind::Binary, old_content);
+    write_active_ref_metadata(&layout, "heads/main").unwrap();
+    let create_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "bin.dat".to_string(),
+                node_id,
+                blob_id: create_blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let create_bytes = create_payload.to_canonical_bytes().unwrap();
+    let mut create_envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, create_bytes);
+    let create_id = create_envelope.object_id();
+    create_envelope
+        .add_signature(author_signature(&author, create_id).unwrap())
+        .unwrap();
+    Wal::for_layout(&layout, prikk_store::DEFAULT_ACTIVE_NAME)
+        .append_patch(&create_envelope)
+        .unwrap();
+    simulate_one_seal_for_test_support(&layout, "heads/main", &maintainer).unwrap();
+
+    // A real `ReplaceBinary`: both sides must be sealed, binary-kind blobs (seal-time
+    // `require_binary_blob` validation), so write the new-content blob first.
+    let new_content: &[u8] = b"\x00binary-new";
+    let replace_blob_id = write_blob(BlobKind::Binary, new_content);
+    std::fs::write(repo.join("bin.dat"), new_content).unwrap();
+    write_active_ref_metadata(&layout, "heads/main").unwrap();
+    let replace_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ReplaceBinary(ReplaceBinary {
+                node_id,
+                old_blob_id: create_blob_id,
+                new_blob_id: replace_blob_id,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let replace_bytes = replace_payload.to_canonical_bytes().unwrap();
+    let mut replace_envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, replace_bytes);
+    let replace_id = replace_envelope.object_id();
+    replace_envelope
+        .add_signature(author_signature(&author, replace_id).unwrap())
+        .unwrap();
+    Wal::for_layout(&layout, prikk_store::DEFAULT_ACTIVE_NAME)
+        .append_patch(&replace_envelope)
+        .unwrap();
+    let replace_ref_state_id =
+        simulate_one_seal_for_test_support(&layout, "heads/main", &maintainer).unwrap();
+    let replace_block_id = block_id_after_seal(&layout, replace_ref_state_id);
+
+    let out = support::prikk(&repo)
+        .args(["show", &replace_block_id.to_string(), "--format", "json"])
+        .output()
+        .unwrap();
+    support::ok(&out, "show replace-binary block (json)");
+    let value = assert_valid_json(&stdout_of(&out));
+    let patches = value.get("patches").as_array();
+    let operations = patches[0].get("operations").as_array();
+    assert_eq!(operations[0].get("kind").as_str(), "replace-binary");
+    let content = operations[0].get("content");
+    let old = content.get("old");
+    let new = content.get("new");
+    assert_eq!(old.get("kind").as_str(), "binary");
+    assert_eq!(new.get("kind").as_str(), "binary");
+    assert_eq!(old.get("blob_id").as_str(), create_blob_id.to_string());
+    assert_eq!(new.get("blob_id").as_str(), replace_blob_id.to_string());
+    // `size` is a JSON number (`push_blob_content`'s `format!(", \"size\": {size}}}")`, no
+    // quotes), so this asserts against the parser's `Number` variant directly rather than
+    // `as_str()` (which would panic on a non-string value -- the point of asserting the shape
+    // directly rather than trusting it).
+    assert!(
+        matches!(old.get("size"), serde_json_like::Value::Number(n) if n == &old_content.len().to_string()),
+        "old.size: {:?}",
+        old.get("size")
+    );
+    assert!(
+        matches!(new.get("size"), serde_json_like::Value::Number(n) if n == &new_content.len().to_string()),
+        "new.size: {:?}",
+        new.get("size")
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
