@@ -376,3 +376,32 @@ named there may not be today's four.**
 
 No file moves. No visibility changes. No crate split. No change to any product behaviour, object
 format, or gate other than adding this one.
+
+## AMENDED 2026-09-08 — the scanner dropped `#[cfg(test)]` before a visibility-qualified `mod`
+
+**A correctness defect in this gate's own scanner, found by an implementing round and fixed at
+source.** `find_mod_declarations` reset its pending `cfg` on "any other real code token" — and
+`pub(crate)` between an attribute and its item is such a token. So **`#[cfg(test)]` followed by
+`pub(crate) mod tests;` lost the attribute, and that module's entire `tests/` subtree was aggregated
+as production text.**
+
+`crates/prikk-store/src/patch_replay.rs:570-571` is exactly that shape, and `patch_replay` is the
+graph's **top hub** (`min(fan_in, fan_out)` = 11) — so the most connected node in the coupling graph
+was being scanned with its test code included.
+
+**The damage was nil, and that is measured rather than hoped.** With the scanner fixed,
+`boundary-check` stays `valid` and no `DECLARED_CYCLES` or `DECLARED_HUBS` entry goes stale. **No
+declared edge was resting on test-only code; the recorded structural debt is real.** The bug was
+latent — nothing under `patch_replay/tests/` had referenced a not-yet-declared cross-module target
+until RFC 143's round did, which manufactured a spurious `patch_replay -> block_state` edge and
+failed the gate.
+
+**Fixed:** a visibility qualifier is stepped over rather than treated as a resetting token, with
+`find_matching_paren` added for the parenthesised forms. **Two regression tests**, one asserting all
+four visibility shapes are excised under `cfg(test)`, one asserting a `pub(crate) mod` with *no*
+pending cfg is still counted — guarding the fix against over-reaching into "skip anything after
+`pub`". **Perturbation-checked: disabling the fix fails exactly the first test.**
+
+**The implementing round was right not to patch this itself** — it is architect tooling, and it
+reported the diagnosis precisely enough that the fix was ten minutes' work. **It routed around the
+bug instead**, moving a fixture into `test_gates/` where the scanner already behaved, and said so.

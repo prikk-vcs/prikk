@@ -210,6 +210,27 @@ fn find_mod_declarations(comment_blanked: &str) -> Vec<ModDecl> {
             i = attr_end + 1;
             continue;
         }
+        // A visibility qualifier between an attribute and its item does NOT end the attribute's
+        // reach: `#[cfg(test)]\npub(crate) mod tests;` is one item, not an attribute stranded
+        // before an unrelated one. Skipping it here rather than falling through to the reset below
+        // is the whole fix -- without it the `cfg` was dropped and the module's `tests/` subtree
+        // was aggregated as production text. Found 2026-09-08 by an implementing round whose new
+        // test-only import manufactured a spurious production edge (`patch_replay -> block_state`)
+        // and failed `boundary-check`. `pub` alone, `pub(crate)`, `pub(super)` and `pub(in ...)`
+        // all take this path; the parenthesised form is skipped to its matching `)`.
+        if bytes.get(i..).is_some_and(|rest| rest.starts_with(b"pub")) {
+            let mut j = i + 3;
+            if byte_at(bytes, j) == b'(' {
+                match find_matching_paren(bytes, j + 1) {
+                    Some(close) => j = close + 1,
+                    None => break,
+                }
+            }
+            if byte_at(bytes, j).is_ascii_whitespace() {
+                i = j;
+                continue;
+            }
+        }
         // Byte-slice comparison, never a `str` slice: a byte slice is always memory-safe to read
         // regardless of whether `i` sits on a UTF-8 character boundary (only slicing the
         // underlying `&str` at a non-boundary panics, e.g. when scanning has walked byte-by-byte
@@ -266,6 +287,28 @@ fn find_matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
         match byte_at(bytes, i) {
             b'[' => depth += 1,
             b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Matching `)` for a visibility qualifier's own parenthesis (`pub(crate)`, `pub(in crate::foo)`).
+/// Mirrors [`find_matching_bracket`]; separate because a visibility qualifier is the one place this
+/// scanner must step over a parenthesised group rather than treat it as a code token.
+fn find_matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 1_u32;
+    let mut i = open;
+    while i < bytes.len() {
+        match byte_at(bytes, i) {
+            b'(' => depth += 1,
+            b')' => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);

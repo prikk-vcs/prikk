@@ -85,10 +85,20 @@ implicit.
 comment records that every production caller only reads and asks a future writing caller to re-check
 that assumption.
 
-**Content is emitted per requested path, never for the whole tree by default.** `checkout --patch-plan`
-already accepts `[path]`. **A document carrying every file's content at a point is unbounded in size
-and is not what the requesting view needs** — `FR-033` needs content for the paths that differ, which
-it already knows. **The path argument is the cost bound, and it is already there.**
+**Content is emitted per requested path, never for the whole tree by default.** **A document carrying
+every file's content at a point is unbounded in size and is not what the requesting view needs** —
+`FR-033` needs content for the paths that differ, which it already knows.
+
+**CORRECTED 2026-09-08 — this section originally said `checkout --patch-plan` "already accepts
+`[path]`" and that the cost bound therefore already existed. That was false.** `checkout`'s positional
+resolves to `CheckoutArgs.root: PathBuf` — **the repository root**, the same convention every other
+command uses (`init`, `log`, `merge-evidence`, `rollback-preview`). **There is no content-path scoping
+anywhere in this CLI**, so the mechanism this RFC leaned on did not exist. Found by the implementing
+round, verified at `crates/prikk-cli/src/args/checkout.rs:13-14`.
+
+**The intent survives; the mechanism is new.** A `--content-path <repo-relative-path>` flag, repeatable,
+validated at parse time so a malformed path is a usage error (exit `2`) rather than a later integrity
+failure. **The bound is real, it just had to be built rather than borrowed.**
 
 **Binary content is never rendered.** `ReplaceBinary`-derived and binary-kind content report id and
 declared size only, exactly as RFC 142 §7 rules for `show`. **One project, one answer to that

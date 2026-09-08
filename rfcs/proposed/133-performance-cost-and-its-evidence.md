@@ -274,7 +274,18 @@ depth.
 | 128 | 0.020 s |
 | 256 | 0.033 s |
 
-**Exponent ≈ 0.67 on this shape, against §5c's 1.45.** The two are not in tension and neither
+**CORRECTED 2026-09-08 (RFC 143): the 0.67 below is not trustworthy, and neither is a re-measurement
+that disagrees with it.** RFC 143's round re-measured **the same command on the same degenerate
+fixture** and got ≈1.07 by the same two-point method. **Neither number is wrong about the code; both
+are fitting process-spawn overhead.** Absolute times across this whole range are 1-4ms, so a two-point
+fit at this scale is dominated by exec cost rather than replay cost — confirmed by their min-based
+figures tracking their mean-based ones (no outlier skew) while still landing nowhere near 0.67.
+**Treat the table below as real times and the exponent as an artifact.** What RFC 143 established
+instead is structural and does hold: **`checkout --patch-plan --format json` and `show` are
+indistinguishable at every depth measured**, which is what sharing `replay_supported_patch_chain`
+predicts.
+
+**Exponent ≈ 0.67 on this shape, against §5c's 1.45** — superseded by the correction above.** The two are not in tension and neither
 supersedes the other: **§5c varies depth and tree together, §5d varies depth alone.** Read together
 they say the cost §5c measured is carried substantially by tree growth, not by chain length by itself
 — which is consistent with §5c's own finding that neither replay implementation is cached, and worth

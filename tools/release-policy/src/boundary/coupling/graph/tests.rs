@@ -42,6 +42,36 @@ fn production_edge_text_tolerates_an_attribute_between_cfg_and_mod() {
     assert!(!text.contains("should_not_count"));
 }
 
+/// A visibility qualifier between `#[cfg(test)]` and its `mod` must not strand the attribute.
+/// Regression for a bug found 2026-09-08: the scanner reset `pending_cfg` on any "other code
+/// token", and `pub(crate)` is one -- so `#[cfg(test)]\npub(crate) mod tests;` lost its cfg and the
+/// module's whole `tests/` subtree was aggregated as production text. `crates/prikk-store/src/
+/// patch_replay.rs:570-571` is exactly this shape, so the top hub of the coupling graph was
+/// affected. Latent until an implementing round's new test-only import manufactured a spurious
+/// `patch_replay -> block_state` production edge.
+#[test]
+fn production_edge_text_excises_visibility_qualified_test_modules() {
+    for vis in ["pub", "pub(crate)", "pub(super)", "pub(in crate::foo)"] {
+        let raw = format!(
+            "#[cfg(test)]\n{vis} mod inline_tests {{\n    fn g() {{ crate::should_not_count::X; }}\n}}\n"
+        );
+        let text = production_edge_text_for_tests(&raw);
+        assert!(
+            !text.contains("should_not_count"),
+            "`{vis} mod` under #[cfg(test)] leaked into production text"
+        );
+    }
+}
+
+/// The mirror of the above: a visibility qualifier with **no** pending cfg must still be production.
+/// Guards against the fix over-reaching into "skip anything after `pub`".
+#[test]
+fn production_edge_text_keeps_visibility_qualified_non_test_modules() {
+    let raw = "pub(crate) mod ordinary {\n    fn g() { crate::should_count::X; }\n}\n";
+    let text = production_edge_text_for_tests(raw);
+    assert!(text.contains("crate::should_count"));
+}
+
 /// The exact worked example RFC 130 uses to prove a substring check on the word "test" is wrong.
 #[test]
 fn fsutil_none_module_is_counted_as_production() {
