@@ -208,6 +208,29 @@ function throws it away.
 covers "possibly damage" — after this ruling it means the object is absent, whose overwhelmingly
 common cause is DC-65.
 
+## 6c. Recorded 2026-09-08 — which layer catches damage depends on the target, and RFC 136 could move it
+
+**Delivered at `bbf4236`.** §6b is implemented as ruled and verified: `read_blob` keeps the
+`Option`, absence degrades, every error propagates, `SNAPSHOT`-kind is loud again.
+
+**A fact about the surface, found while verifying and worth recording because it is not stable.**
+`show`'s own propagate path is reachable today only through a **patch** target. For a **block**
+target, `lifecycle_state_at` replays the lineage first, and `apply_state_effect`
+(`crates/prikk-store/src/lifecycle_cache/replay/effect.rs`) dereferences blobs of its own:
+`CreateFile` calls `blob_kind`, `ReplaceBinary` calls `require_binary_blob` on both sides.
+**`DeleteNode` is the only effect that resolves no blob** — which is why DC-65's absence case reaches
+the rendering layer at all — but its preimage blob's own `CreateFile` sits earlier in the same
+lineage. So a corrupt blob fails replay before rendering is reached.
+
+**Both paths exit `1`, so the user-facing property in §6b holds either way** — by two mechanisms, with
+two different messages.
+
+**This is why the fix is load-bearing beyond what it currently catches.** RFC 136's Option A writes
+snapshots so that replay need not walk the whole lineage. **The moment replay starts after a
+`CreateFile`, that operation's blob stops being dereferenced by replay and the rendering layer becomes
+the only thing standing between a corrupt object and an exit `0`.** Whoever implements Option A
+should read this section: the check that shadows `show`'s own is the one Option A exists to remove.
+
 ## 7. What this RFC does not decide, and what it refuses
 
 - **`diff`** (§5). Its own RFC when the replay cost is addressed.
