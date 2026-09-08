@@ -939,6 +939,59 @@ choice reaches them.** They join `Start`'s residual offset as the second owner-f
 the same instruction. **§13f should have asked which panels failed and why before ruling how the set
 should change** — the answer was two, and it was in the source geometry the RFC already had.
 
+## 13h. RULED 2026-09-08 — the replacement artwork, and the box stays square
+
+**The owner supplied eight replacement panels** (`prikk-story-image-set-{light,dark}-0{1..4}.png`),
+one per panel per theme, closing §13g's artwork item. **Measured rather than accepted:** subject
+margin, normalised to a 256-unit frame.
+
+| | top | bottom | left | right | off-centre |
+|---|---:|---:|---:|---:|---:|
+| light Start | 124 | 60 | 57 | 59 | +32.0 |
+| light Patches | 93 | 65 | 58 | 53 | +14.0 |
+| light Integrate | 78 | 53 | 62 | 57 | +12.5 |
+| light Grow | 71 | 55 | 58 | 59 | +8.0 |
+| dark Start | 115 | 54 | 63 | 59 | +30.5 |
+| dark Patches | 74 | 60 | 54 | 45 | +7.0 |
+| dark Integrate | 71 | 35 | 58 | 49 | +18.0 |
+| dark Grow | 57 | 42 | 51 | 57 | +7.5 |
+
+**Bottom margins are 35-65 of 256 (14-25%) against the old set's 26-63 of 512 (5-12%)** — roughly
+tripled proportionally. **The owner's "rich margin" is confirmed.**
+
+### 13h.1 The trade, computed this time rather than ruled blind
+
+**§13f's mistake was ruling a box ratio without computing what it cost.** Done properly, across
+candidate ratios, taking the worst panel of the eight on each axis:
+
+| box ratio | worst margin | worst off-centre (of 256) |
+|---|---:|---:|
+| 0.90 | 15.0% | 31.3 |
+| 0.95 | 14.4% | 24.6 |
+| **1.00 (square)** | **12.6%** | **18.6** |
+| 1.05 | 10.7% | 13.1 |
+| 1.10 | 8.8% | 8.2 |
+| 1.20 | 5.1% | 0.0 |
+
+**RULED: the box stays square.** At 1.00 **six of the eight panels centre exactly** and the worst
+margin across all eight is 12.6% — against the old artwork's 0/0px on dark `Grow` at the same ratio.
+**Going wider buys the last two panels' centring by spending everyone's margin**, which is the trade
+§13f got wrong; going narrower buys margin nobody needs at a centring cost that shows.
+
+**The CSS box does not change.** `aspect-ratio: 1/1` is what ships today after §13g's revert.
+**This round replaces assets and re-derives `object-position`, nothing else.**
+
+### 13h.2 `Start` stays slightly low, and that is now acceptable
+
+**`Start` clamps at +18.6 (light) and +7.3 (dark) of a 256 frame** — its subject sits low in the source
+and is small, so no square-box framing fully centres it. **It is also the panel with the largest
+margins of the eight (26%).** A small subject, generously surrounded, sitting a little below centre
+does not read as a mistake the way a subject flush against the frame did.
+
+**Both artwork items from §13g are closed by this.** `Start`'s residual is no longer an owner-facing
+question, and dark `Integrate`/`Grow` — which physically exceeded the frame at 374px and 427px of a
+512px cell — now sit at 14.2% and 12.6% margin.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
