@@ -295,7 +295,17 @@
     .hero-photo-set.tall{display:block}
     /* §13c's ratio switches with the form factor: `.tall` is 941x1672 (9:16), the mirror of
        `.wide`'s 1672:941 above. */
-    .hero{aspect-ratio:941/1672}
+    /* §13e, RULED: `--hero-cap` was tuned against the wide/landscape case, and forcing one value to
+       also bound the tall/portrait one is what produced 19.18% residual crop at narrow -- a real
+       tension between "bound a wide monitor" and "never crop a tall image on a short phone", not a
+       tuning miss. The wide cap is unchanged (out of scope here); narrow drops its own entirely:
+       width is already bounded by this media query's own 820px ceiling, so the tallest a 9:16 hero
+       can ever get here is 820 * (1672/941) =~ 1457px -- tall, but not the "absurd on a wide
+       monitor" case §13c's cap exists for, and nowhere near it at the widths this breakpoint
+       actually serves. With no `max-height` competing against `aspect-ratio`, the box always matches
+       the image's own shape exactly, so `object-fit:cover` has nothing left to crop -- not "crop
+       reduced to near zero" but structurally zero, regardless of viewport height. */
+    .hero{aspect-ratio:941/1672;max-height:none}
     /* A percentage-based fade (the wide layout's own `.hero-scrim`) does not survive to a narrow
        viewport: the stacked copy (eyebrow through the `$ prikk --help` note) reaches all the way
        to the section's own bottom edge here, measured directly against a real narrow screenshot --
