@@ -1048,6 +1048,63 @@ threshold 50. **Sweep the threshold; do not trust one reading on artwork with bl
 **What remains is not landing-page work:** increment 5 (blocked on `prikk.org` DNS, scope in
 §7.2/§7.2a/§7.2b) and the `.hero-art` drawing's appearance.
 
+## 13j. CORRECTED 2026-09-08 — I optimised a bounding box; the eye reads mass and scale
+
+**The owner reports the shipped panels are too small, and the content sits too high — a little on
+light, seriously on dark.** §13h.1 said six of eight were centred with 12.6% worst margin, and that
+was measured correctly. **It measured the wrong things.**
+
+### 13j.1 The axis never measured: subject scale
+
+**Subject height as a fraction of the 201px frame, from the shipped render:**
+
+| | Start | Patches | Integrate | Grow |
+|---|---:|---:|---:|---:|
+| light | **30.8%** | 42.3% | 53.7% | 57.2% |
+| dark | 41.3% | 57.7% | 70.6% | **75.6%** |
+
+**A 30.8%-to-75.6% spread across one set, and `Start` at 30.8% sits beside `Grow` at 57.2% in the same
+row.** §13h.1 optimised *margin* and *centring* and never asked how much of the frame the subject
+actually occupies — **the quantity that carries visual impact.** More margin and a bigger subject are
+in direct opposition, and I tuned only one of them.
+
+### 13j.2 Why "centred" reads as "too high" on dark
+
+**A bounding box is not perceived mass.** Comparing the bbox centre against a centroid weighted by
+each row's deviation from the background:
+
+| | bbox centre | mass centroid | centroid sits |
+|---|---:|---:|---|
+| dark Start | +6.5px | −7.1px | **13.6px above** |
+| dark Integrate | −1.0px | −9.7px | 8.7px above |
+| dark Grow | −1.0px | −12.2px | 11.2px above |
+
+**The detector counted the glow and ground-reflection below the subject; the eye does not.** The box is
+centred while the visual weight sits up to **13.6px high on a 201px frame — 6.8%**, which is plainly
+visible. **The dark artwork has more spill below, which is why dark is the worse half.**
+
+### 13j.3 What I cannot explain, stated rather than papered over
+
+**On light, the same measurement puts the mass centroid *below* the bbox centre by 6.5-9.3px** — which
+should read low, not high. **The owner's report of "a little too high" on light does not reproduce in
+any measurement I have.** I am not going to assert a mechanism I have not found.
+
+**Consequence: vertical position stops being settled by my detector.** It is tuned against the render
+and confirmed by the owner's eye. **A detector that has now disagreed with the owner twice does not get
+the deciding vote on a question of appearance.**
+
+### 13j.4 RULED
+
+1. **Subject scale is a first-class target.** The set must be visually consistent and the subject must
+   dominate its frame. **Both are yours to hit against the render, not mine to specify as a number** —
+   §13h.1's failure was exactly a number that looked right and was not.
+2. **Zoom in CSS, not by re-cropping the assets.** The sources are good; the framing is wrong.
+   Keeping the files intact keeps this reversible and keeps re-tuning cheap.
+3. **Vertical position is tuned by mass, not by bounding box**, and the owner confirms it. §13j.2's
+   centroid measurement is the better instrument; it is not the authority.
+4. **Margin stays sufficient that no subject touches a frame edge.** §13g's defect must not return —
+   **this correction must not become the next overcorrection**, which is what §13f was.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
