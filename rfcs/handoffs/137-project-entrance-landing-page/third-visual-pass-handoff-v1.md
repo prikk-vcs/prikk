@@ -38,25 +38,26 @@ registers, short enough that a repeat visitor is not made to wait and that **Lar
 is not materially delayed** — an `opacity:0` heading generally does not count as painted. **Report the
 value you chose, the reason, and the measured LCP with and without it.**
 
-## 3. The crop — §13c, and the trade is the owner's
+## 3. The crop — §13c, RULED
 
-Size the hero so `cover` has little or nothing left to cut.
+Size the hero so `cover` has little or nothing left to cut. **Size it from the image's aspect ratio,
+capped viewport-relatively so it cannot grow absurd on a wide monitor.**
 
-**Do not silently pick the comfortable option.** Matching the image aspect exactly gives a 788px-tall
-hero at 1400px and **pushes `Get started` below the fold on most laptops.** That is a real cost and the
-owner rules it.
+**The hero's own `Get started` may fall below the fold, and that is accepted.** `.nav-cta`
+(`index.html:302`) already puts a `Get started` link in the top nav, above the hero, so the first
+screen carries the action at every viewport. **The nav is not sticky** — that is fine here, but do not
+restate it as though it were. **Do not crop the artwork to protect a duplicate CTA**; that would defeat
+the round.
 
-**What you must deliver so the owner can rule:**
+**Mechanism is yours. The property is that the image is substantially whole.** Deliver:
 
 1. The residual crop percentage at **1400px, 1024px and 390px** — measured from renders, not computed
    from the CSS.
 2. **Where the `Get started` button falls** relative to a 800px-tall and a 900px-tall viewport, for
    whatever sizing you implement.
-3. **At least one alternative you did not ship**, with its numbers — e.g. accepting a smaller crop in
-   exchange for a shorter hero. The owner cannot choose between a thing and nothing.
+3. **The cap you chose and why**, with the height it produces at each of those widths.
 
-**Implement your recommendation, and make the alternative a one-value change** so reversing it is
-cheap.
+**Make the cap a single value** so it can be tuned without restructuring anything.
 
 ## 4. The story panels — §13d
 
@@ -130,8 +131,7 @@ Landing page, not a shipped crate surface. **Ruled here rather than left unsaid.
 
 - **a mid-reveal capture** (§5.2) — the control that cannot be faked by a finished screenshot;
 - **the delay/duration you chose, with LCP measured either way** (§2);
-- **the three residual-crop numbers and the CTA fold positions** (§3), plus **the alternative you did
-  not ship**;
+- **the three residual-crop numbers, the CTA fold positions, and the cap you chose** (§3);
 - **which `object-position` scheme you used** and why (§4);
 - **`Start`'s residual offset**, stated plainly;
 - **anything the reveal made worse.** A hero that changes after load is a real risk and you will be the

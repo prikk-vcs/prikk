@@ -746,10 +746,22 @@ it its own row is withdrawn; the reveal makes it unnecessary.
 bottom of the composition are never rendered. **The hero must be sized so `cover` has little or
 nothing left to cut.**
 
-**Not ruled: the mechanism, and what it costs.** Matching the image's aspect exactly makes a 788px-tall
-hero at 1400px, which pushes `Get started` below the fold on most laptops. **That trade is the owner's
-and must be shown, not decided quietly** — the implementing round reports the residual crop and the
-CTA's fold position at named viewports, and the owner rules.
+**RULED: the image wins, and the fold is not the constraint it looks like.** Matching the image's
+aspect makes a 788px-tall hero at 1400px, which pushes the hero's own `Get started` below the fold on
+most laptops. **That is acceptable, because the first screen already carries the action:** `.nav-cta`
+(`index.html:302`) is a `Get started` link in the top nav (`href="#start"`), above the hero and
+therefore above the fold on load at every viewport. **The nav is not sticky — checked, not assumed —
+so this covers the first screen, not the whole scroll.** That is enough: a visitor who scrolls past it
+is scrolling through the argument the CTA is the end of. **Cropping a third of the artwork to protect a duplicate CTA
+would defeat the pass.**
+
+**The bound:** size the hero from the image's aspect, capped viewport-relatively so it can never grow
+absurd on a wide monitor. **Mechanism is the implementing round's; the property is that the image is
+substantially whole and the residual crop is reported at named viewports.**
+
+**This was briefly deferred to the owner and should not have been.** Hero geometry is a design call,
+not a question of goals, priorities, scope, risk acceptance or release approval. **Recorded because the
+error was mis-assigning authority, which is worth catching in itself.**
 
 ### 13d. Measured — the story panels sit low, and light is worse
 
