@@ -268,11 +268,22 @@ authoring rule, not from a per-operation field. Recording "declared" on every op
 kind exists is noise.
 
 **The cost is deferred, not avoided:** if a later version ever mints inferred renames, it must add the
-field then, and absence would have to mean *"authored in an era that only declared"*. **That is sound
-provided the rule is never quietly relaxed** — which is exactly the kind of thing this RFC should say
-out loud so a future round cannot drift past it.
+field then, and absence would have to mean *"authored in an era that only declared"*.
 
-**Recommendation: no schema change now.** A `Patch` schema bump is a release-compatibility event
+**QUESTIONED 2026-09-08 — this reasoning has a hole and it may be wrong.** *Absence means declared*
+holds only if **every writer follows the rule**, and **prikk accepts patches authored elsewhere**:
+`patch_exchange::accept_exchange_artifact` takes an artifact from another repository. Today that is
+moot because nothing anywhere authors a rename — **but the moment prikk authors them, the format
+permits any writer to**, and a `RenamePath` crossing that boundary carries no evidence of how it was
+minted. **The guarantee is not enforceable across implementations; it is a hope with a good shape.**
+
+**Three candidate answers, none ruled**, put to the external architect whose own system carries a
+`Stated`/`Derived` distinction for exactly this reason: a per-operation field (a schema change); lean
+on the **signer already recorded** and make it a question of which authors you trust rather than a new
+field; or **refuse on receipt** any `RenamePath` whose provenance cannot be established — fail-closed,
+at the cost of making renames unexchangeable.
+
+**Recommendation, pending that answer: no schema change now.** A `Patch` schema bump is a release-compatibility event
 (0.31.0 is the precedent — the first release older builds could not read) and this does not earn one.
 
 ### 4g.3 The bundle-impact preview is separable, and cheaper than §4f implies
