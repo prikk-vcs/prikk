@@ -632,6 +632,59 @@ The four hero PNGs are **1.6–2.0 MB each, ≈7 MB for the set**. The panels al
 at 2–12 KB. **A landing page whose entrance image is heavier than the entire rest of the site fails the
 purpose §1 gives it.** Convert; keep the PNGs as sources under `.git-exclude/`, which does not ship.
 
+## 12. RULED 2026-09-08 — what the landing page may claim, verified against the code
+
+**The owner asked whether prikk can offer safe merge *and* ownership of the history record.** Both, with
+one boundary. **This section exists so a later copy pass cannot write a stronger version than the code
+supports** — every line below was checked at source, not recalled.
+
+### 12a. Safe merge — yes, and the honest verb is "named", not "clean"
+
+`ConflictWitnessKind` (`crates/prikk-store/src/patch_algebra/types.rs`) generates **twelve typed
+witnesses** from one macro so a thirteenth cannot be added without a label: `same-path-create`,
+`node-id-reuse`, `live-state-mismatch`, `kind-mismatch`, `mode-mismatch`, `blob-mismatch`,
+`text-span-overlap`, `text-anchor-stale`, `delete-mutation-conflict`, `unsupported-operation`,
+`malformed-operation`, `unknown-relation`. **`prikk merge-evidence` is read-only and reports them
+before anything merges.**
+
+**Claimable:** a conflict is *named up front* rather than discovered later inside a plausible-but-wrong
+result, and a content-anchored edit survives a rename because spans are not line ranges.
+**Not claimable: that merges are clean or always succeed.** Conflicts still happen; prikk's property is
+that they are typed and visible, not absent.
+
+### 12b. Ownership of the record — yes, and it means *unmediated*, not *durable*
+
+**Claimable, each backed:**
+
+- **No forge owns the history.** Repositories are anonymous and sync is artifact-based — bytes you
+  hold, not an account on someone's server.
+- **Anyone can verify offline.** The host's word is never required.
+- **Undo is recorded, not erased.** A rollback becomes sealed history rather than a force-push that
+  removes the evidence.
+- **Authorship is attributable.** Ed25519 over the patch's own content id
+  (`author/author_signing.rs`), and D8 binds one `key_id` to exactly one public key — a signature
+  failing against *recorded* material is a hard verification failure, not a warning.
+
+### 12c. The four things that must NOT be claimed
+
+1. **No trusted timestamp.** `Signature::created_at` is fixed at `0`, documented *"Advisory only
+   (never used as authoritative audit time)"*. **Prikk proves who, never when.**
+2. **An unsigned patch is not a failure.** `verify_author_signature` returns `Ok(None)` — the check
+   does not apply rather than failing.
+3. **An unrecorded `key_id` yields `sound: false`, explicitly not a failure.** The claim is recorded,
+   not proven; attribution is only as strong as the key material actually recorded.
+4. **Nothing about durability.** The hero's own maturity note says this is *"not yet a place to keep
+   history you cannot lose."* **Ownership is about who mediates the record, not whether it survives.**
+
+### 12d. RULED — the `.story` heading
+
+**`No surprise merges. The history stays yours.`** — replacing *"Projects grow. Then they shine."*,
+which promised a fifth panel that §11b retired.
+
+**It is bound to both properties and to neither overclaim**: the first clause is §12a's *named, not
+clean*; the second is §12b's *unmediated, not durable*. **Set by the architect directly** rather than
+handed off, being one line of the architect's own ruling that was blocking an otherwise-complete round.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
