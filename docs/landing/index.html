@@ -296,6 +296,43 @@
     </div>
   </section>
 
+  <section class="install" id="start">
+    <div class="wrap">
+      <p class="eyebrow">Get started</p>
+      <h2>Try Prikk</h2>
+      <div class="install-block">
+        <div class="cmdrow">
+          <code id="c1">curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/install.sh | sh</code>
+          <button class="copy" type="button" data-for="c1">Copy</button>
+        </div>
+        <div class="cmdrow">
+          <code id="c2">cargo install prikk</code>
+          <button class="copy" type="button" data-for="c2">Copy</button>
+        </div>
+      </div>
+      <p class="note">Linux, macOS, and Windows. The
+        <a href="docs/guide/install.html">install guide</a> covers pinning a version, verifying
+        checksums, and building from source.</p>
+      <p aria-live="polite" class="visually-hidden" id="copied"></p>
+    </div>
+  </section>
+
+  <section class="flow">
+    <div class="wrap">
+      <p class="eyebrow">A calmer way to work</p>
+      <h2>Commit. Seal. Verify.</h2>
+      <div class="flow-steps">
+        <span class="step"><b>commit</b> <span>— queue a signed patch</span></span>
+        <span class="arrow" aria-hidden="true">→</span>
+        <span class="step"><b>seal</b> <span>— fix it into a block</span></span>
+        <span class="arrow" aria-hidden="true">→</span>
+        <span class="step"><b>verify</b> <span>— anyone, offline</span></span>
+      </div>
+      <p class="note">Committing does not publish. A patch is queued and signed first, and only
+        sealing makes it history.</p>
+    </div>
+  </section>
+
   <section class="principles">
     <div class="wrap">
       <p class="eyebrow">The idea</p>
@@ -317,41 +354,6 @@
           <p>Integrate useful changes without making the project harder to reason about.</p>
         </article>
       </div>
-    </div>
-  </section>
-
-  <section class="flow">
-    <div class="wrap">
-      <p class="eyebrow">A calmer way to work</p>
-      <h2>Commit. Seal. Verify.</h2>
-      <div class="flow-steps">
-        <span class="step"><b>commit</b> <span>— queue a signed patch</span></span>
-        <span class="arrow" aria-hidden="true">→</span>
-        <span class="step"><b>seal</b> <span>— fix it into a block</span></span>
-        <span class="arrow" aria-hidden="true">→</span>
-        <span class="step"><b>verify</b> <span>— anyone, offline</span></span>
-      </div>
-      <p class="note">Committing does not publish. A patch is queued and signed first, and only
-        sealing makes it history.</p>
-    </div>
-  </section>
-
-  <section class="terminal-section">
-    <div class="wrap">
-      <p class="eyebrow">Try it</p>
-      <h2>What it looks like</h2>
-      <pre class="term"><code><span class="p">$</span> prikk commit --from-worktree -m "genesis"
-recorded worktree patch in active WAL
-baseline ref: heads/main
-patch id: c29910f552275f805d9b8efd513a4c47995249393ccc...
-WAL sequence: 1
-operations: 1
-referenced blobs: 1
-text edits: 0
-  create-file hello.txt
-<span class="c">note: multi-operation text diff minimization, patch algebra, rename detection, and audit plugins remain later increments
-note: the message is validated but not stored -- it will not appear in `prikk log`; persisting it is a later increment</span></code></pre>
-      <p class="note">Real output, not a mockup.</p>
     </div>
   </section>
 
@@ -415,24 +417,22 @@ note: the message is validated but not stored -- it will not appear in `prikk lo
     </div>
   </section>
 
-  <section class="install" id="start">
+  <section class="terminal-section">
     <div class="wrap">
-      <p class="eyebrow">Get started</p>
-      <h2>Try Prikk</h2>
-      <div class="install-block">
-        <div class="cmdrow">
-          <code id="c1">curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/install.sh | sh</code>
-          <button class="copy" type="button" data-for="c1">Copy</button>
-        </div>
-        <div class="cmdrow">
-          <code id="c2">cargo install prikk</code>
-          <button class="copy" type="button" data-for="c2">Copy</button>
-        </div>
-      </div>
-      <p class="note">Linux, macOS, and Windows. The
-        <a href="docs/guide/install.html">install guide</a> covers pinning a version, verifying
-        checksums, and building from source.</p>
-      <p aria-live="polite" class="visually-hidden" id="copied"></p>
+      <p class="eyebrow">Try it</p>
+      <h2>What it looks like</h2>
+      <pre class="term"><code><span class="p">$</span> prikk commit --from-worktree -m "genesis"
+recorded worktree patch in active WAL
+baseline ref: heads/main
+patch id: c29910f552275f805d9b8efd513a4c47995249393ccc...
+WAL sequence: 1
+operations: 1
+referenced blobs: 1
+text edits: 0
+  create-file hello.txt
+<span class="c">note: multi-operation text diff minimization, patch algebra, rename detection, and audit plugins remain later increments
+note: the message is validated but not stored -- it will not appear in `prikk log`; persisting it is a later increment</span></code></pre>
+      <p class="note">Real output, not a mockup.</p>
     </div>
   </section>
 
