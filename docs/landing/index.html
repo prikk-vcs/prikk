@@ -116,13 +116,37 @@
   .hero-note{margin:0;color:var(--ink-soft);font-size:.85rem}
   .hero-note code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 
-  /* RFC 137 §6, interim: the owner ruled `.hero-art` moved out of the hero rather than removed,
-     but only after a re-draw -- both land together in the next commit. Until then, the photo
-     behind this section already gives the hero its own visual interest, and the small diagram
-     would sit over a busy part of the photograph rather than open sky, illegible along with its
-     own caption. Hidden here, not deleted, not moved: its markup is untouched below, waiting for
-     the commit that redraws and relocates it. */
-  .hero-art{display:none;justify-self:end;width:100%;max-width:340px}
+  /* ---- sections ---- */
+  /* Warmth pass: hard rules between sections are gone in favour of a soft tonal shift -- the
+     even sections (in document order) sit on --paper against the odd ones' --cream, so the
+     rhythm comes from a change in ground rather than a drawn line. */
+  section{padding:68px 0}
+  main section:nth-of-type(even){background:var(--paper)}
+  section h2{font-size:clamp(1.7rem,3.2vw,2.5rem);line-height:1.08;letter-spacing:-.03em;margin-bottom:16px}
+
+  /* ---- numbered principles (draft-01) ---- */
+  .principle-grid{display:grid;grid-template-columns:repeat(3,1fr);margin-top:38px}
+  .principle-grid article{padding:26px 22px 6px 0}
+  .principle-grid article + article{padding-left:22px}
+  .number{display:block;margin-bottom:30px;font-size:.74rem;color:var(--ink-soft)}
+  .principle-grid h3{font-size:1.2rem;margin-bottom:8px}
+  .principle-grid p{margin:0;line-height:1.6;color:var(--ink-soft)}
+
+  /* ---- the shape of it ---- */
+  .flow-steps{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:.95rem;margin-top:8px}
+  .step{border:1px solid var(--rule);background:var(--paper);border-radius:8px;padding:9px 15px}
+  .step b{font-weight:650}
+  .step span{color:var(--ink-soft)}
+  .arrow{color:var(--ink-soft)}
+  .note{font-size:13.5px;color:var(--ink-soft);max-width:60ch;margin-top:20px}
+  /* RFC 137 §6/§11f: `.hero-art` moved here from the hero, which now has its own photograph and no
+     longer needs a diagram standing in for one. `.flow`'s own "commit, seal, verify" pipeline is
+     what this diagram has always depicted -- patches accumulating and being sealed into a
+     connected chain of blocks -- so it illustrates the steps just above it rather than sitting
+     apart from any text, the way it floated beside the hero copy without truly explaining either
+     side of it. Centred under the copy at a modest width, not a second grid column: `.flow` reads
+     as one column at every width, and a diagram this size does not need one of its own. */
+  .hero-art{margin:34px auto 0;width:100%;max-width:300px}
   .hero-art svg{width:100%;height:auto;display:block}
   .blk{fill:var(--sage)}
   .blk.beige{fill:var(--beige)}
@@ -147,30 +171,6 @@
   }
   @keyframes settle{0%{opacity:0;transform:translateY(-6px)}100%{opacity:1;transform:none}}
   .art-caption{margin:14px 0 0;text-align:center;font-size:12.5px;color:var(--ink-soft)}
-
-  /* ---- sections ---- */
-  /* Warmth pass: hard rules between sections are gone in favour of a soft tonal shift -- the
-     even sections (in document order) sit on --paper against the odd ones' --cream, so the
-     rhythm comes from a change in ground rather than a drawn line. */
-  section{padding:68px 0}
-  main section:nth-of-type(even){background:var(--paper)}
-  section h2{font-size:clamp(1.7rem,3.2vw,2.5rem);line-height:1.08;letter-spacing:-.03em;margin-bottom:16px}
-
-  /* ---- numbered principles (draft-01) ---- */
-  .principle-grid{display:grid;grid-template-columns:repeat(3,1fr);margin-top:38px}
-  .principle-grid article{padding:26px 22px 6px 0}
-  .principle-grid article + article{padding-left:22px}
-  .number{display:block;margin-bottom:30px;font-size:.74rem;color:var(--ink-soft)}
-  .principle-grid h3{font-size:1.2rem;margin-bottom:8px}
-  .principle-grid p{margin:0;line-height:1.6;color:var(--ink-soft)}
-
-  /* ---- the shape of it ---- */
-  .flow-steps{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:.95rem;margin-top:8px}
-  .step{border:1px solid var(--rule);background:var(--paper);border-radius:8px;padding:9px 15px}
-  .step b{font-weight:650}
-  .step span{color:var(--ink-soft)}
-  .arrow{color:var(--ink-soft)}
-  .note{font-size:13.5px;color:var(--ink-soft);max-width:60ch;margin-top:20px}
 
   /* ---- terminal ---- */
   pre.term{
@@ -267,12 +267,10 @@
        content actually is. `.hero-scrim` is switched off here; the card is the only thing between
        the copy and the photo. */
     .hero-scrim{display:none}
-    .hero-grid{grid-template-columns:1fr}
     .hero-copy{
       background:var(--paper); border-radius:16px; box-shadow:var(--soft-shadow);
       padding:22px 20px; max-width:none;
     }
-    .hero-art{justify-self:center;max-width:260px;order:-1}
     .principle-grid{grid-template-columns:1fr}
     .principle-grid article,.principle-grid article + article{padding:20px 0}
     .feature-strip{grid-template-columns:1fr}
@@ -332,31 +330,6 @@
         </div>
         <p class="hero-note"><code>$ prikk --help</code></p>
       </div>
-
-      <div class="hero-art">
-        <svg viewBox="0 0 296 200" role="img" aria-labelledby="artt">
-          <title id="artt">Patches accumulate and are sealed into blocks, connected in a verifiable chain.</title>
-          <!-- A small grid of tiles echoing the wordmark: a bottom row of accumulated blocks, one
-               risen tile marking an earlier seal, and a new column arriving on the right --
-               everything on the grid is reached by the one connecting path, nothing floats free. -->
-          <rect class="blk beige" x="20"  y="108" width="52" height="52" rx="13"/>
-          <rect class="blk"       x="88"  y="108" width="52" height="52" rx="13"/>
-          <rect class="blk"       x="88"  y="40"  width="52" height="52" rx="13"/>
-          <rect class="blk beige" x="156" y="108" width="52" height="52" rx="13"/>
-          <path class="path" d="M46 108 V82 H114 V66"/>
-          <circle class="node" cx="114" cy="82" r="5"/>
-          <g class="arriving">
-            <rect class="blk clay" x="224" y="108" width="52" height="52" rx="13"/>
-            <path class="path" d="M182 108 H250"/>
-            <circle class="node clay" cx="250" cy="108" r="5"/>
-          </g>
-          <g class="arriving">
-            <rect class="blk clay" x="224" y="40" width="52" height="52" rx="13"/>
-            <path class="path" d="M250 108 V66"/>
-          </g>
-        </svg>
-        <p class="art-caption">A quiet chain: patches arrive, and the project grows.</p>
-      </div>
     </div>
   </section>
 
@@ -394,6 +367,29 @@
       </div>
       <p class="note">Committing does not publish. A patch is queued and signed first, and only
         sealing makes it history.</p>
+      <div class="hero-art">
+        <svg viewBox="0 0 296 200" role="img" aria-labelledby="artt">
+          <title id="artt">Patches accumulate and are sealed into blocks, connected in a verifiable chain.</title>
+          <!-- A small grid of tiles echoing the wordmark: a bottom row of accumulated blocks, one
+               risen tile marking an earlier seal, and a new column arriving on the right --
+               everything on the grid is reached by the one connecting path, nothing floats free. -->
+          <rect class="blk beige" x="20"  y="108" width="52" height="52" rx="13"/>
+          <rect class="blk"       x="88"  y="108" width="52" height="52" rx="13"/>
+          <rect class="blk"       x="88"  y="40"  width="52" height="52" rx="13"/>
+          <rect class="blk beige" x="156" y="108" width="52" height="52" rx="13"/>
+          <path class="path" d="M46 108 V82 H114 V66"/>
+          <circle class="node" cx="114" cy="82" r="5"/>
+          <g class="arriving">
+            <rect class="blk clay" x="224" y="108" width="52" height="52" rx="13"/>
+            <path class="path" d="M182 108 V82 H250 V66"/>
+            <circle class="node clay" cx="250" cy="82" r="5"/>
+          </g>
+          <g class="arriving">
+            <rect class="blk clay" x="224" y="40" width="52" height="52" rx="13"/>
+          </g>
+        </svg>
+        <p class="art-caption">A quiet chain: patches arrive, and the project grows.</p>
+      </div>
     </div>
   </section>
 
