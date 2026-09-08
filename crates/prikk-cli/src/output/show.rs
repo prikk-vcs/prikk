@@ -30,6 +30,9 @@ fn print_blob_content(label: &str, content: &ShowBlobContent) {
         ShowBlobContent::Binary { blob_id, size } => {
             println!("    {label}: <binary blob {blob_id}, {size} bytes>");
         }
+        ShowBlobContent::Unavailable { blob_id } => {
+            println!("    {label}: <unavailable blob {blob_id}>");
+        }
     }
 }
 
@@ -70,19 +73,14 @@ fn print_operation(index: usize, operation: &ShowOperation) {
             print_text("old", old_span_text);
             print_text("new", replacement_text);
         }
-        ShowOperationContent::ReplaceBinary {
-            old_blob_id,
-            old_size,
-            new_blob_id,
-            new_size,
-        } => {
+        ShowOperationContent::ReplaceBinary { old, new } => {
             let [path] = operation.paths.as_slice() else {
                 println!("    (expected exactly one path)");
                 return;
             };
             print_path("path", path);
-            println!("    old: <binary blob {old_blob_id}, {old_size} bytes>");
-            println!("    new: <binary blob {new_blob_id}, {new_size} bytes>");
+            print_blob_content("old", old);
+            print_blob_content("new", new);
         }
         ShowOperationContent::RenamePath => {
             let [old_path, new_path] = operation.paths.as_slice() else {
@@ -154,6 +152,11 @@ fn push_blob_content(json: &mut String, content: &ShowBlobContent) {
             json.push_str(&escape_json_string(&blob_id.to_string()));
             json.push_str(&format!(", \"size\": {size}}}"));
         }
+        ShowBlobContent::Unavailable { blob_id } => {
+            json.push_str("{\"kind\": \"unavailable\", \"blob_id\": ");
+            json.push_str(&escape_json_string(&blob_id.to_string()));
+            json.push('}');
+        }
     }
 }
 
@@ -202,17 +205,12 @@ fn push_operation(json: &mut String, operation: &ShowOperation) {
             )));
             json.push('}');
         }
-        ShowOperationContent::ReplaceBinary {
-            old_blob_id,
-            old_size,
-            new_blob_id,
-            new_size,
-        } => {
-            json.push_str("{\"kind\": \"replace-binary\", \"old_blob_id\": ");
-            json.push_str(&escape_json_string(&old_blob_id.to_string()));
-            json.push_str(&format!(", \"old_size\": {old_size}, \"new_blob_id\": "));
-            json.push_str(&escape_json_string(&new_blob_id.to_string()));
-            json.push_str(&format!(", \"new_size\": {new_size}}}"));
+        ShowOperationContent::ReplaceBinary { old, new } => {
+            json.push_str("{\"kind\": \"replace-binary\", \"old\": ");
+            push_blob_content(json, old);
+            json.push_str(", \"new\": ");
+            push_blob_content(json, new);
+            json.push('}');
         }
         ShowOperationContent::RenamePath => {
             json.push_str("{\"kind\": \"rename-path\"}");

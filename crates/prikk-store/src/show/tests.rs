@@ -239,85 +239,144 @@ fn show_resolves_a_node_addressed_operation_to_a_path() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Control 3: an unresolved node id does not fail the command. A node-addressed operation
-/// (`ChangePerm`) and a deletion target the same node in one block; every operation reports, the
-/// mode change's own node id is unresolved (deleted by the same block's own later patch).
-///
-/// Not `EditText` (the handoff's own example): editing a text node before deleting it hits a
-/// real, separate gap this round found rather than caused -- `worktree_patch::node_authoring
-/// ::plan_delete` carries the *pre-edit* baseline `blob_id` into `DeleteNode`'s preimage
-/// unconditionally, and DC-65's own doc says a text node's baseline `blob_id` becomes a content
-/// identity (never a stored object) once its most recent operation was an `EditText`; `plan_delete`
-/// never calls the materialization fallback `plan_edit_text` already uses for exactly this case.
-/// Reading that preimage's blob -- exactly what showing a deleted file's old content requires --
-/// then fails with "missing Blob". Filed in the round's own report rather than routed around
-/// silently; `ChangePerm` reaches the same "node-addressed op, deleted later" shape without
-/// touching a blob at all, so it exercises this control cleanly.
+/// Control 3, rebuilt as originally specified (RFC 142 follow-up handoff §5 item 1): round 1
+/// substituted `ChangePerm` for the handoff's own `EditText` example to avoid a code path it
+/// mischaracterized as a `worktree_patch` defect (RFC 142 §3a: it is not one -- a text node's
+/// pre-edit `blob_id` is *deliberately* unbacked once the node has been edited, DC-65). **A
+/// control rebuilt to avoid the thing it tests has stopped being a control**, so this is the exact
+/// sequence: create `a.txt`, seal; edit it, seal; delete it, seal. Every operation still renders,
+/// the edit's own node id is unresolved (deleted later in the same block), and the delete's own
+/// preimage content degrades to [`ShowBlobContent::Unavailable`] (§6a) rather than failing the
+/// command -- exit `0`, not `1`.
 #[test]
-fn show_reports_unresolved_when_a_block_changes_and_deletes_the_same_node() {
+fn show_reports_unresolved_and_degrades_when_a_block_edits_and_deletes_the_same_node() {
     let root = unique_temp_dir("show-unresolved");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     trust_maintainer(&layout, &maintainer_signer());
-    let node_id = NodeId::from_bytes([0x9A; 32]);
-    let blob_id = create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+    generation(&layout, "a.txt", b"before\n", "genesis");
 
-    append_raw_patch(
-        &layout,
-        vec![
-            Operation {
-                op_seq: 1,
-                op_id: None,
-                preconditions: Vec::new(),
-                kind: OperationKind::ChangePerm(ChangePerm {
-                    node_id,
-                    old_mode: 0o100_644,
-                    new_mode: 0o100_755,
-                }),
-            },
-            Operation {
-                op_seq: 2,
-                op_id: None,
-                preconditions: Vec::new(),
-                kind: OperationKind::DeleteNode(DeleteNode {
-                    path: "a.txt".to_string(),
-                    node_id,
-                    old_node_kind: NodeKind::TextFile,
-                    preimage: DeleteNodePreimage::File {
-                        old_blob_id: blob_id,
-                        old_mode: 0o100_755,
-                    },
-                }),
-            },
-        ],
-    );
+    std::fs::write(root.join("a.txt"), b"after\n").unwrap();
+    commit(&layout, "edit a.txt");
+    std::fs::remove_file(root.join("a.txt")).unwrap();
+    commit(&layout, "delete a.txt");
     seal(&layout);
 
     let block_id = current_block_id(&layout);
     let patches = show(&layout, block_id).unwrap();
-    let [patch] = patches.as_slice() else {
-        panic!("expected exactly one patch, got {patches:?}");
+    let [edit_patch, delete_patch] = patches.as_slice() else {
+        panic!("expected exactly two patches (edit, delete), got {patches:?}");
     };
-    let [change_perm_op, delete_op] = patch.operations.as_slice() else {
-        panic!(
-            "expected exactly two operations, got {:?}",
-            patch.operations
-        );
+    let [edit_op] = edit_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", edit_patch.operations);
     };
-    assert_eq!(change_perm_op.kind, "change-perm");
-    let [change_perm_path] = change_perm_op.paths.as_slice() else {
-        panic!("expected one path, got {:?}", change_perm_op.paths);
+    assert_eq!(edit_op.kind, "edit-text");
+    let [edit_path] = edit_op.paths.as_slice() else {
+        panic!("expected one path, got {:?}", edit_op.paths);
     };
-    match change_perm_path {
+    match edit_path {
         ShowPathResolution::Unresolved { .. } => {}
-        other => panic!("expected Unresolved for the changed-then-deleted node, got {other:?}"),
+        other => panic!("expected Unresolved for the edited-then-deleted node, got {other:?}"),
     }
+
+    let [delete_op] = delete_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", delete_patch.operations);
+    };
     assert_eq!(delete_op.kind, "delete-node");
     assert_eq!(
         delete_op.paths,
         vec![ShowPathResolution::Path("a.txt".to_string())]
     );
+    match &delete_op.content {
+        ShowOperationContent::DeleteNode {
+            preimage: ShowDeletePreimage::File(ShowBlobContent::Unavailable { .. }),
+        } => {}
+        other => panic!(
+            "expected a File preimage degraded to Unavailable (the pre-edit blob id is never \
+             backed by a stored object, DC-65), got {other:?}"
+        ),
+    }
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// Handoff control 3: each of the four blob dereference sites degrades. Driven directly at this
+/// level (not through a real `commit`/`seal`), because seal-time replay *validates* three of the
+/// four against a real object already: `CreateFile`'s own blob (`lifecycle_cache/replay/
+/// effect.rs`'s `blob_resolver.blob_kind`) and both of `ReplaceBinary`'s (`require_binary_blob`)
+/// are checked to exist and resolve at the moment they are sealed, so an ordinarily-sealed
+/// repository can never carry an invented, never-written reference at those three sites -- only
+/// `DeleteNode`'s preimage can (DC-65, demonstrated above). Constructing the operations directly
+/// against a store that never wrote the referenced blobs exercises the same code
+/// (`show_operation`/`show_blob_content`) without needing to simulate post-seal object-store
+/// corruption to reach the other three.
+#[test]
+fn show_degrades_all_four_blob_dereference_sites() {
+    use crate::memory_store::MemoryObjectStore;
+    use crate::patch_replay::decode::{
+        DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation,
+    };
+
+    let store = MemoryObjectStore::new();
+    let never_written_a = ObjectId::from_bytes([0xA1; 32]);
+    let never_written_b = ObjectId::from_bytes([0xA2; 32]);
+
+    let create_file = DecodedPatchOperation {
+        op_seq: 1,
+        kind: DecodedOperationKind::CreateFile {
+            path: "a.txt".to_string(),
+            node_id: NodeId::from_bytes([0xB1; 32]),
+            blob_id: never_written_a,
+            mode: 0o100_644,
+        },
+    };
+    let shown = super::show_operation(&store, &create_file, None);
+    match shown.content {
+        ShowOperationContent::CreateFile {
+            content: ShowBlobContent::Unavailable { blob_id },
+            ..
+        } => assert_eq!(blob_id, never_written_a),
+        other => panic!("expected CreateFile content Unavailable, got {other:?}"),
+    }
+
+    let delete_node = DecodedPatchOperation {
+        op_seq: 1,
+        kind: DecodedOperationKind::DeleteNode {
+            path: "b.txt".to_string(),
+            node_id: NodeId::from_bytes([0xB2; 32]),
+            preimage: DecodedDeletePreimage::File {
+                old_node_kind: NodeKind::TextFile,
+                old_blob_id: never_written_a,
+                old_mode: 0o100_644,
+            },
+        },
+    };
+    let shown = super::show_operation(&store, &delete_node, None);
+    match shown.content {
+        ShowOperationContent::DeleteNode {
+            preimage: ShowDeletePreimage::File(ShowBlobContent::Unavailable { blob_id }),
+        } => assert_eq!(blob_id, never_written_a),
+        other => panic!("expected DeleteNode preimage Unavailable, got {other:?}"),
+    }
+
+    let replace_binary = DecodedPatchOperation {
+        op_seq: 1,
+        kind: DecodedOperationKind::ReplaceBinary {
+            node_id: NodeId::from_bytes([0xB3; 32]),
+            old_blob_id: never_written_a,
+            new_blob_id: never_written_b,
+        },
+    };
+    let shown = super::show_operation(&store, &replace_binary, None);
+    match shown.content {
+        ShowOperationContent::ReplaceBinary {
+            old: ShowBlobContent::Unavailable { blob_id: old_id },
+            new: ShowBlobContent::Unavailable { blob_id: new_id },
+        } => {
+            assert_eq!(old_id, never_written_a);
+            assert_eq!(new_id, never_written_b);
+        }
+        other => panic!("expected both ReplaceBinary sides Unavailable, got {other:?}"),
+    }
 }
 
 /// Control 4: a mixed block -- create, edit, delete, rename -- each renders with its own content
@@ -490,6 +549,57 @@ fn show_on_a_bare_sealed_patch_reports_node_addressed_operations_unresolved() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// `ChangePerm` decodes and renders, appended raw (see this file's own module doc).
+#[test]
+fn show_renders_change_perm() {
+    let root = unique_temp_dir("show-change-perm");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0x9B; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    seal(&layout);
+
+    let block_id = current_block_id(&layout);
+    let patches = show(&layout, block_id).unwrap();
+    let Some(last_patch) = patches.last() else {
+        panic!("expected at least one patch");
+    };
+    let [operation] = last_patch.operations.as_slice() else {
+        panic!(
+            "expected exactly one operation, got {:?}",
+            last_patch.operations
+        );
+    };
+    assert_eq!(operation.kind, "change-perm");
+    assert_eq!(
+        operation.content,
+        ShowOperationContent::ChangePerm {
+            old_mode: 0o100_644,
+            new_mode: 0o100_755,
+        }
+    );
+    assert_eq!(
+        operation.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())]
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// `CreateSymlink` decodes and renders, appended raw (see this file's own module doc).
 #[test]
 fn show_renders_create_symlink() {
@@ -577,10 +687,14 @@ fn show_replace_binary_reports_ids_and_sizes_not_content() {
     assert_eq!(
         operation.content,
         ShowOperationContent::ReplaceBinary {
-            old_blob_id,
-            old_size: 10,
-            new_blob_id,
-            new_size: 20,
+            old: ShowBlobContent::Binary {
+                blob_id: old_blob_id,
+                size: 10,
+            },
+            new: ShowBlobContent::Binary {
+                blob_id: new_blob_id,
+                size: 20,
+            },
         }
     );
 

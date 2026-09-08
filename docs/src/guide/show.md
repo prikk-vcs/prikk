@@ -31,9 +31,22 @@ structure the format does not have.
 `ReplaceBinary` and any binary-kind blob report their object id and declared size, never content —
 nobody has asked to see binary bytes in a terminal.
 
+**A content reference is an id, not a guarantee.** `CreateFile`, `DeleteNode`'s file preimage, and
+both sides of `ReplaceBinary` name a blob by content-addressed id — and once a text file has been
+edited, its *pre-edit* identity is deliberately never written back to the object store (the content
+is reconstructed by replay instead). If `show` cannot read a referenced blob, that one piece of
+content reports as **unavailable** — a named state carrying the blob id, distinct from real empty
+content — rather than failing the command. Every other operation in the block still renders, and
+the command still exits `0`. **This is not, by itself, evidence of a damaged repository**: the
+ordinary case is a deleted file whose most recent edit made its old identity unbacked by design.
+`show` cannot tell that case apart from genuine object-store damage; a `doctor`-level surface
+wanting to would need to check independently whether the node's own history includes an edit since
+that blob was last live.
+
 `show` never fails because there was nothing notable to report: exit `0` covers every case the
-target resolves to, whether or not anything is unresolved. A malformed or missing id is a usage
-error (exit `2`), caught before any repository work begins.
+target resolves to, whether or not anything is unresolved or unavailable. A malformed or missing id
+is a usage error (exit `2`), and a well-formed id naming no real block or patch is a failure (exit
+`1`) — an unavailable *content reference* never softens either of those, which stay what they were.
 
 `--format json` carries the same content as the prose form, as `show-report-v1`. It settles the
 format for `show` and nothing else.
@@ -49,7 +62,8 @@ There is no command for that today; it is a deliberately separate, not-yet-open 
 | Content comes from the patch payload directly; only node-addressed operations need a replay, and it runs once per invocation against the target block's own lifecycle state. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
 | An unresolved node-addressed operation is reported, not fatal; every other operation in the block still renders. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
 | `EditText` renders its own before/after span; `ReplaceBinary` and binary blobs report id and size only, never content. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`output/show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/output/show.rs) |
-| Exit `0` whichever way the target resolves; a malformed or missing id is a usage error, exit `2`. | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`args.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/args.rs) |
+| An unreadable blob reference degrades that one piece of content to a named "unavailable" state rather than failing the command; every other operation still renders and the command still exits `0`. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
+| Exit `0` whichever way the target resolves; a malformed or missing id is a usage error, exit `2`; a well-formed but nonexistent target id is a failure, exit `1`. | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`args.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/args.rs) |
 
 ## Provenance
 

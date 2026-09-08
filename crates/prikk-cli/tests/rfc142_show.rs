@@ -313,6 +313,23 @@ fn control8_exit_2_for_malformed_or_missing_id() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
+/// Show-degradation handoff, control 5: degrading a missing *blob* must not soften the
+/// missing-*target* path, which is a different failure and stays a failure. A well-formed but
+/// nonexistent object id still exits `1`.
+#[test]
+fn control8_exit_1_for_a_well_formed_nonexistent_target_id() {
+    let repo = support::unique_repo("rfc142-control8-nonexistent");
+    support::init(&repo);
+
+    let out = support::prikk(&repo)
+        .args(["show", &"0".repeat(64)])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// Control 8 (half): exit `0` whichever way `show` resolves -- a genesis block (a `CreateFile`,
 /// not a change against anything) is still a valid, complete answer, not a failure.
 #[test]
@@ -342,6 +359,93 @@ fn control5_show_on_a_patch_id_works_too() {
     support::ok(&out, "show edit patch");
     let stdout = stdout_of(&out);
     assert!(stdout.contains("edit-text"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Create `a.txt`, seal; edit it, seal; delete it, seal (the show-degradation handoff's own §2
+/// sequence). Returns the delete block id.
+fn edit_then_delete_fixture(repo: &std::path::Path) -> String {
+    let (_genesis, _edit_block, _edit_patch) = edit_fixture(repo);
+    std::fs::remove_file(repo.join("a.txt")).unwrap();
+    support::ok(
+        &support::commit(repo, "heads/main", "delete a.txt"),
+        "delete a.txt",
+    );
+    let delete_seal = support::seal(repo, "heads/main");
+    support::ok(&delete_seal, "seal delete");
+    extract_block_id(&delete_seal)
+}
+
+/// Show-degradation handoff control 1 (round 1's control 3, rebuilt as originally specified):
+/// create/edit/delete `a.txt`, seal each. `show` on the delete block exits `0` and renders every
+/// operation -- this is the exact sequence round 1 exited `1` on.
+#[test]
+fn degradation_control1_exits_0_and_renders_every_operation() {
+    let repo = support::unique_repo("rfc142-degradation-control1");
+    let delete_block_id = edit_then_delete_fixture(&repo);
+
+    let out = support::prikk(&repo)
+        .args(["show", &delete_block_id])
+        .output()
+        .unwrap();
+    support::ok(&out, "show delete block");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains("delete-node"), "{stdout}");
+    assert!(
+        stdout.contains("unavailable"),
+        "delete-node's preimage content must degrade, not vanish: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Show-degradation handoff control 2: JSON exposes the degraded state as a field a consumer can
+/// branch on (a distinct `"kind": "unavailable"`), never confusable with real empty text content
+/// (`"kind": "text", "text": ""`).
+#[test]
+fn degradation_control2_json_exposes_a_branchable_unavailable_state() {
+    let repo = support::unique_repo("rfc142-degradation-control2");
+    let delete_block_id = edit_then_delete_fixture(&repo);
+
+    let out = support::prikk(&repo)
+        .args(["show", &delete_block_id, "--format", "json"])
+        .output()
+        .unwrap();
+    support::ok(&out, "show delete block (json)");
+    let value = assert_valid_json(&stdout_of(&out));
+    let patches = value.get("patches").as_array();
+    let delete_patch = patches
+        .iter()
+        .find(|patch| patch.get("operations").as_array()[0].get("kind").as_str() == "delete-node")
+        .expect("a delete-node patch");
+    let operation = &delete_patch.get("operations").as_array()[0];
+    let preimage = operation.get("content").get("preimage");
+    assert_eq!(preimage.get("kind").as_str(), "file");
+    let content = preimage.get("content");
+    assert_eq!(content.get("kind").as_str(), "unavailable");
+    // Distinct key from the successful-text shape -- a consumer checking for `"text"` never sees
+    // it here, and checking for `"kind": "text"` never matches an unavailable blob either.
+    assert!(matches!(content, serde_json_like::Value::Object(map) if map.contains_key("blob_id")));
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Show-degradation handoff control 4: a block whose blobs are all readable renders no
+/// `"unavailable"` anywhere -- the fix adds a state, it does not perturb the ordinary path.
+#[test]
+fn degradation_control4_ordinary_output_is_unperturbed() {
+    let repo = support::unique_repo("rfc142-degradation-control4");
+    let (_genesis, edit_block_id, _patch) = edit_fixture(&repo);
+
+    let out = support::prikk(&repo)
+        .args(["show", &edit_block_id, "--format", "json"])
+        .output()
+        .unwrap();
+    support::ok(&out, "show edit block (json)");
+    let stdout = stdout_of(&out);
+    assert!(!stdout.contains("unavailable"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(&repo);
 }

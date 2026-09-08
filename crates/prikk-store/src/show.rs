@@ -35,6 +35,18 @@ pub enum ShowPathResolution {
 }
 
 /// A blob's content, rendered only when it is text — RFC 142 §7 refuses binary rendering.
+///
+/// RFC 142 §6a: a blob a patch payload names is a content-addressed *id*, not a promise the
+/// object store holds it (§3a's correction — DC-65 leaves a text node's pre-edit blob id
+/// deliberately unbacked once the node has been edited without a fresh blob write). `show` is a
+/// read surface, not `verify`: it cannot tell "unbacked by design" apart from "object store
+/// damaged" at this layer (neither the id nor the store gives it independent evidence either way,
+/// and deriving that would mean replaying the algebra to decide what *should* be stored — a
+/// verification path this RFC's own §7 refuses to add), so every unreadable blob degrades to this
+/// variant rather than failing the command, and both causes render identically. A `doctor`-level
+/// surface wanting to separate them would need to independently check whether this exact node's
+/// lifecycle includes an `EditText` since the blob was last live -- evidence `show` does not
+/// gather because nothing here needs it otherwise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShowBlobContent {
     /// `BlobKind::Text` — the blob's own bytes, verbatim.
@@ -45,6 +57,13 @@ pub enum ShowBlobContent {
         blob_id: ObjectId,
         /// Declared content size in bytes.
         size: u64,
+    },
+    /// The blob id could not be read (missing object, type mismatch, or malformed payload) —
+    /// named and machine-branchable, carrying the id that failed, never an omitted field or an
+    /// empty value a consumer could mistake for real empty content.
+    Unavailable {
+        /// The blob id that could not be read.
+        blob_id: ObjectId,
     },
 }
 
@@ -84,16 +103,15 @@ pub enum ShowOperationContent {
         /// The span's bytes after this edit.
         replacement_text: Vec<u8>,
     },
-    /// A binary blob replacement — ids and sizes only (RFC 142 §7: no binary rendering).
+    /// A binary blob replacement. Each side is [`ShowBlobContent`] the same way `CreateFile`'s
+    /// content is: id and declared size only, since binary content is never rendered (RFC 142
+    /// §7) — reusing the one degradation idiom rather than a second, `Option`-shaped one for this
+    /// operation alone (RFC 142 §6a's follow-up: "follow the local precedent").
     ReplaceBinary {
-        /// The replaced blob's own id.
-        old_blob_id: ObjectId,
-        /// The replaced blob's declared size.
-        old_size: u64,
-        /// The new blob's own id.
-        new_blob_id: ObjectId,
-        /// The new blob's declared size.
-        new_size: u64,
+        /// The replaced blob.
+        old: ShowBlobContent,
+        /// The new blob.
+        new: ShowBlobContent,
     },
     /// A path rename; both endpoints are already in [`ShowOperation::paths`].
     RenamePath,
@@ -175,7 +193,7 @@ fn show_patch(
     let operations = operations
         .iter()
         .map(|operation| show_operation(object_store, operation, lifecycle))
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
     Ok(ShowPatch {
         patch_id,
         operations,
@@ -186,7 +204,7 @@ fn show_operation(
     object_store: &impl ObjectReader,
     operation: &DecodedPatchOperation,
     lifecycle: Option<&NodeLifecycleState>,
-) -> Result<ShowOperation> {
+) -> ShowOperation {
     match &operation.kind {
         DecodedOperationKind::CreateFile {
             path,
@@ -194,91 +212,85 @@ fn show_operation(
             mode,
             ..
         } => {
-            let content = show_blob_content(object_store, *blob_id)?;
-            Ok(ShowOperation {
+            let content = show_blob_content(object_store, *blob_id);
+            ShowOperation {
                 kind: "create-file",
                 paths: vec![ShowPathResolution::Path(path.clone())],
                 content: ShowOperationContent::CreateFile {
                     content,
                     mode: *mode,
                 },
-            })
+            }
         }
         DecodedOperationKind::DeleteNode { path, preimage, .. } => {
             let preimage = match preimage {
                 DecodedDeletePreimage::File { old_blob_id, .. } => {
-                    ShowDeletePreimage::File(show_blob_content(object_store, *old_blob_id)?)
+                    ShowDeletePreimage::File(show_blob_content(object_store, *old_blob_id))
                 }
                 DecodedDeletePreimage::Symlink { old_target } => ShowDeletePreimage::Symlink {
                     old_target: old_target.clone(),
                 },
             };
-            Ok(ShowOperation {
+            ShowOperation {
                 kind: "delete-node",
                 paths: vec![ShowPathResolution::Path(path.clone())],
                 content: ShowOperationContent::DeleteNode { preimage },
-            })
+            }
         }
         DecodedOperationKind::EditText {
             node_id,
             old_span_text,
             replacement_text,
             ..
-        } => Ok(ShowOperation {
+        } => ShowOperation {
             kind: "edit-text",
             paths: vec![resolve_node_path(*node_id, lifecycle)],
             content: ShowOperationContent::EditText {
                 old_span_text: old_span_text.clone(),
                 replacement_text: replacement_text.clone(),
             },
-        }),
+        },
         DecodedOperationKind::ReplaceBinary {
             node_id,
             old_blob_id,
             new_blob_id,
-        } => {
-            let old_size = read_blob(object_store, *old_blob_id)?.declared_size;
-            let new_size = read_blob(object_store, *new_blob_id)?.declared_size;
-            Ok(ShowOperation {
-                kind: "replace-binary",
-                paths: vec![resolve_node_path(*node_id, lifecycle)],
-                content: ShowOperationContent::ReplaceBinary {
-                    old_blob_id: *old_blob_id,
-                    old_size,
-                    new_blob_id: *new_blob_id,
-                    new_size,
-                },
-            })
-        }
+        } => ShowOperation {
+            kind: "replace-binary",
+            paths: vec![resolve_node_path(*node_id, lifecycle)],
+            content: ShowOperationContent::ReplaceBinary {
+                old: show_blob_content(object_store, *old_blob_id),
+                new: show_blob_content(object_store, *new_blob_id),
+            },
+        },
         DecodedOperationKind::RenamePath {
             old_path, new_path, ..
-        } => Ok(ShowOperation {
+        } => ShowOperation {
             kind: "rename-path",
             paths: vec![
                 ShowPathResolution::Path(old_path.clone()),
                 ShowPathResolution::Path(new_path.clone()),
             ],
             content: ShowOperationContent::RenamePath,
-        }),
+        },
         DecodedOperationKind::ChangePerm {
             node_id,
             old_mode,
             new_mode,
-        } => Ok(ShowOperation {
+        } => ShowOperation {
             kind: "change-perm",
             paths: vec![resolve_node_path(*node_id, lifecycle)],
             content: ShowOperationContent::ChangePerm {
                 old_mode: *old_mode,
                 new_mode: *new_mode,
             },
-        }),
-        DecodedOperationKind::CreateSymlink { path, target, .. } => Ok(ShowOperation {
+        },
+        DecodedOperationKind::CreateSymlink { path, target, .. } => ShowOperation {
             kind: "create-symlink",
             paths: vec![ShowPathResolution::Path(path.clone())],
             content: ShowOperationContent::CreateSymlink {
                 target: target.clone(),
             },
-        }),
+        },
     }
 }
 
@@ -301,20 +313,25 @@ fn read_blob(object_store: &impl ObjectReader, blob_id: ObjectId) -> Result<Blob
     BlobPayload::decode_canonical(&envelope.canonical_payload)
 }
 
-fn show_blob_content(
-    object_store: &impl ObjectReader,
-    blob_id: ObjectId,
-) -> Result<ShowBlobContent> {
-    let blob = read_blob(object_store, blob_id)?;
-    match blob.blob_kind {
-        BlobKind::Text => Ok(ShowBlobContent::Text(blob.content)),
-        BlobKind::Binary => Ok(ShowBlobContent::Binary {
-            blob_id,
-            size: blob.declared_size,
-        }),
-        BlobKind::Snapshot => Err(PrikkError::Integrity(format!(
-            "content blob {blob_id} is a SNAPSHOT blob, not file content"
-        ))),
+/// RFC 142 §6a: never fails. A blob id a patch payload names is a reference, not a guarantee the
+/// object store holds it (§3a) -- missing, wrong-typed, or malformed all degrade to
+/// [`ShowBlobContent::Unavailable`] rather than propagating a `PrikkError`, the same "report, do
+/// not fail" treatment [`resolve_node_path`] already gives an unresolvable node id. `show` cannot
+/// distinguish "deliberately unbacked" from "object store damaged" here (see that variant's own
+/// doc), so both degrade identically -- a `SNAPSHOT`-kind blob (never legitimately referenced by a
+/// file-content operation) degrades the same way rather than getting a distinct error, for the
+/// same reason.
+fn show_blob_content(object_store: &impl ObjectReader, blob_id: ObjectId) -> ShowBlobContent {
+    match read_blob(object_store, blob_id) {
+        Ok(blob) => match blob.blob_kind {
+            BlobKind::Text => ShowBlobContent::Text(blob.content),
+            BlobKind::Binary => ShowBlobContent::Binary {
+                blob_id,
+                size: blob.declared_size,
+            },
+            BlobKind::Snapshot => ShowBlobContent::Unavailable { blob_id },
+        },
+        Err(_) => ShowBlobContent::Unavailable { blob_id },
     }
 }
 
