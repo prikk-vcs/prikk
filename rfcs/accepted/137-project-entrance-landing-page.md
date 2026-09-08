@@ -699,6 +699,83 @@ because the object of *keep* is the ownership, not the story's survival, and the
 reads as a pair of actions rather than a guarantee. **`The story stays yours` is the zero-risk
 alternative if that reading ever proves wrong**, at the cost of the parallel.
 
+## 13. AMENDED 2026-09-08 — the third visual pass: the artwork is barely visible, and the owner's reveal fixes it
+
+**Three findings, all framing rather than assets.** The images are right; the page is hiding them.
+
+### 13a. Measured — how little of the hero actually renders
+
+At a 1400px viewport, measured from the round's own render rather than estimated:
+
+```
+hero photo box   1400 × 542  = 2.58:1
+image            1672 × 941  = 1.78:1
+cover scales the image to 788px tall against a 542px box
+  -> 31.2% of the image height is discarded before any scrim applies
+scrim  linear-gradient(100deg, cream 0%, cream 40%, transparent 75%)
+  -> opaque to 560px, fading to 1050px, only the right 350px of 1400 unobstructed
+```
+
+**Two compounding losses.** The 16:9 composition runs cards left-to-right into the cube; the cards are
+under the opaque band and a third of the frame is never drawn. **The owner's report that the artwork is
+"almost hidden" is correct on desktop as well as mobile**, and the architect's earlier assessment of
+the desktop hero as "strong" was wrong.
+
+### 13b. RULED — the owner's content fade-in is adopted, and it is the accessible direction
+
+**The owner proposed fading in the *content* over an already-visible photograph** — the image shows
+first, the copy arrives after. The architect first evaluated the opposite (fading the scrim *out*) and
+argued against it. **That objection does not apply to what was actually proposed, and the owner's
+direction is the safe one by construction:**
+
+- With content fading **in**, the `prefers-reduced-motion` fallback is *copy visible immediately* —
+  today's legible state. **Fading the scrim out would have made the fallback the unreadable state.**
+  Yours degrades to safe; the version argued against degraded to broken.
+- **It needs no JavaScript.** A CSS animation with a delay is not a content decision, so the page's
+  standing no-JS-for-content convention is untouched.
+
+**RULED: adopt it, for both form factors.** It answers the desktop occlusion and the narrow-width case
+— where the copy card covers roughly four-fifths of the 9:16 image — with one mechanism.
+
+**Consequence: the hero photo stays a full-bleed background.** The architect's earlier proposal to give
+it its own row is withdrawn; the reveal makes it unnecessary.
+
+### 13c. RULED — the reveal does not fix the crop, and the crop must be fixed separately
+
+**§13a's 31.2% loss is independent of the scrim.** However long the photo is uncovered, the top and
+bottom of the composition are never rendered. **The hero must be sized so `cover` has little or
+nothing left to cut.**
+
+**Not ruled: the mechanism, and what it costs.** Matching the image's aspect exactly makes a 788px-tall
+hero at 1400px, which pushes `Get started` below the fold on most laptops. **That trade is the owner's
+and must be shown, not decided quietly** — the implementing round reports the residual crop and the
+CTA's fold position at named viewports, and the owner rules.
+
+### 13d. Measured — the story panels sit low, and light is worse
+
+Subject centre versus frame centre (256), per 378×512 cell, stable across detection thresholds 25-60:
+
+| | Start | Patches | Integrate | Grow |
+|---|---:|---:|---:|---:|
+| **light** | **+112** | **+66** | **+62** | **+51** |
+| dark | +82 | +40 | +42 | +14 |
+
+**Both rows are bottom-heavy; light sits 20-37px lower still.** The owner saw it only in light because
+pale empty space reads as a gap where dark space reads as depth — **the same placement, differently
+legible.**
+
+**RULED: fix it by framing, not by new artwork or re-cropped files.** The panels are 378×512 in a 3/4
+box, so `cover` crops ≈1.6% and there is no slack to steer. A squarer box restores the slack and
+`object-position` aims it, **using the delivered images untouched** — reversible, and no asset churn.
+
+**Two constraints:** the box shape must be identical in both themes or the grid stops aligning, and
+**dark needs its own `object-position`**, since a value centring light overshoots dark on `Grow`.
+
+**One honest limit, recorded so it is not chased:** **`Start` cannot be centred at full frame height.**
+Its subject sits so low that centring inside a 512px frame would need the frame cut to ≈286px.
+Framing improves it from +112 to roughly +45 — better than dark is today — and **the remainder needs
+new artwork for that panel, which is the owner's call and is not this round's work.**
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
