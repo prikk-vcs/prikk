@@ -1287,6 +1287,35 @@ absolute brightness or contrast threshold will classify glow as subject.** The r
 pass flagged 119 border pixels as solid geometry on that basis; they were dim amber pooling.
 **Compare against the panel's own interior — the panel is its own reference.**
 
+## 13n. FINDING 2026-09-08 — the primary button fails WCAG AA contrast in light theme
+
+**Found while reviewing the 404 page, caused by nothing in it, and more important than it.**
+
+`.button` and the 404's own links are `font-size:.92rem` — **14.72px**, far below WCAG's 18.66px
+threshold for "large text". **The requirement is 4.5:1.**
+
+| | text on `--sage` `#7f9179` | ratio |
+|---|---|---:|
+| **landing, light** — `--btn-ink` `#fffdfa` | | **3.32 — fails AA** |
+| landing, dark — `--btn-ink` `#1c201d` | | 4.89 — passes |
+| 404, light — `--paper` `#fffdfa` | | 3.32 — inherits it |
+| 404, dark — `--paper` `#232823` | | 4.45 — marginally under |
+
+**The first row is `Get started`** — the primary call to action on the project's front page, at a
+permanent public URL, in the default theme. **It has been below AA since the button was styled.**
+
+**Five visual rounds and five reviews missed it, mine included**, because every one measured framing,
+scale and position and **none measured contrast.** A page can be measured exhaustively along the axes
+someone thought to name and still fail an axis nobody did.
+
+**Not ruled here.** The remedy is a palette change — darken `--sage` behind buttons, or use the dark
+theme's own dark-on-sage treatment in light theme too (4.89:1) — and it alters the site's most
+prominent control. **The owner's call.**
+
+**Worth a sweep rather than a spot fix:** if this control was never contrast-checked, the others
+probably were not either — `.chip`, `.nav-cta`, `--ink-soft` body text, and the caption text under
+each story panel.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
