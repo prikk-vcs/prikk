@@ -1,7 +1,25 @@
 # RFC 144 — Two-point comparison: reopening `prikk diff`
 
-**Status.** **PROPOSED 2026-09-08**, opened on the owner's instruction after they questioned the
-refusal. **Not accepted; nothing may be implemented from it.**
+**Status.** **ACCEPTED by the project owner 2026-09-09**, after three rounds of external review.
+
+**What the acceptance covers, stated because a bare acceptance is scope-ambiguous:**
+
+- **`prikk diff` as a general command is declined, not deferred** (§4f). A recipe over RFC 143's
+  surfaces is published instead.
+- **The pre-acceptance bundle-impact preview is owned** (§4f), and is **separable from everything else
+  here** (§4g.3).
+- **Identity-preserving rename authoring follows only from a declaration, never from an inference**
+  (§4c) — the rule that makes the operation safe rather than a lineage-forgery primitive.
+- **Provenance rides in the signature, not the operation** (§4h.2). **No `Patch` schema change.**
+- **Trust policy is never an input to replay** (§4h.3). Provenance is a read-time annotation; facts are
+  shared, judgements are local.
+- **The honesty invariant** (§4i.1) binds every read surface built after renames are authored, and is
+  to be enforced structurally rather than by review.
+- **`patch_replay` must learn to apply `RenamePath` before any rename is authored** (§4h.7) — a gate,
+  not a follow-up.
+
+**What acceptance does not settle:** the wording and shape of the capture path itself, and the
+thirteenth conflict witness's own field set. **Both belong to their implementing increments.**
 
 **Author's note.** This RFC reopens a decision I made twice — RFC 142 §5/§7, restated in RFC 143 §7.
 **It is opened because the ground under that decision moved, not because the owner pressed.** §2 says
