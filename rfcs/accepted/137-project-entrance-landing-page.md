@@ -557,23 +557,43 @@ phone**, and one reader rotating a tablet crosses that boundary.
 into the cube at 16:9, and descend onto it at 9:16. That is a genuine re-composition rather than a
 crop, which is what the earlier cropping round failed to do.
 
-### 11d. RULED — `.story`'s background must become theme-aware, and its dark value is **not** `--paper`
+### 11d. CORRECTED 2026-09-08 — there is no single background to match, so stop matching
 
-**This is the failure mode of the last two rounds, and it is loaded again.**
+**My first ruling here was wrong, and wrong twice.** It said the dark panels' ground is `#1d2a28` and
+that `.story`'s dark background should be set to it. **The value came from one sampled point, and the
+premise that one value exists does not hold.** The owner questioned it; measurement settled it.
 
-`.story{background:#fdf6ee}` is hardcoded — the residue of §10.1c, where the panels could not
-theme-adapt so the section was pinned to light. The new sheet carries both themes, so the pin comes
-off. **The values, sampled from the sheet rather than assumed:**
+**Mean ground of a 60x60 patch, top and bottom of every cell:**
 
-| | sampled from the artwork | site token |
-|---|---|---|
-| light row background | **`#fdf6ef`** | `.story` is `#fdf6ee` — a 1/255 difference, already correct |
-| dark row background | **`#1d2a28`** | `--paper` dark is `#232823` — **visibly different** |
+| | panel 1 | panel 2 | panel 3 | panel 4 |
+|---|---|---|---|---|
+| light, top | 253,246,238 | 253,245,236 | 253,245,237 | 253,246,237 |
+| light, bottom | 249,239,229 | 246,235,225 | **245,232,220** | 250,237,224 |
+| dark, top | 25,37,38 | 26,37,36 | 26,37,36 | **38,47,42** |
+| dark, bottom | 23,35,35 | **34,40,36** | 25,35,35 | 32,42,39 |
 
-**RULED: the dark `.story` background is `#1d2a28`, taken from the artwork, not `--paper`.** Using the
-site token would put every panel on the page as a visible rectangle of slightly-wrong dark green —
-exactly the class of defect §10.1a and §10.1d were about. **The light value is already right and must
-not be "tidied" into a token either.**
+**Two things the single sample hid.** Every panel has an internal **top-to-bottom gradient** — a warm
+floor shading under the subject — so no panel has *one* ground of its own either. And the panels differ
+from each other: **dark panel 4's top is 13/255 lighter than its neighbours**, because its halo lifts
+the entire frame, and dark panel 2's *bottom* is the same kind of outlier.
+
+**In the light row the tops agree within 2/255 and the difference is invisible. In the dark row it is
+not** — small absolute deltas are perceptually large against a dark ground.
+
+**RULED: `.story` stops trying to match the artwork, and the panels become panels.** Give each image a
+defined bound — rounded corners and the grid gap already present — and let the section background be
+the ordinary theme token. **A warm cream card on the light page and a darker inset on the dark page
+both read as deliberate; a near-match that is wrong by 13/255 on one panel out of eight reads as a
+mistake.**
+
+**This retires the whole defect class rather than re-solving it.** §10.1a (unnatural crops), §10.1d
+(the height that never applied) and this are three rounds of the same underlying attempt — making
+raster artwork behave as though it were page background. **It cannot be made robust: any future
+regeneration of the artwork moves the target again.** A bounded panel is immune to that, and it is the
+cheaper thing to keep true.
+
+**§10.1c's pin comes off regardless** — it existed because the old panels could not theme-adapt, and
+these can.
 
 ### 11e. The sheet's geometry, measured
 

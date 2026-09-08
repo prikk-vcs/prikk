@@ -1,8 +1,8 @@
 # RFC 137 — the second visual pass: four-panel story, photographic hero, reordered page
 
 **RFC:** `rfcs/accepted/137-project-entrance-landing-page.md` — **§11 is new, added 2026-09-08** and
-rules this round. **Read §11d before you touch the story CSS**; it is the defect the last two rounds
-both hit.
+rules this round. **Read §11d before you touch the story CSS — it was corrected after first
+publication and now says the opposite of what it said.**
 **Base:** `main` at `e589923`.
 **Source assets:** `.git-exclude/tasks/architect/landing-20260908/` — **sources, not shippable.**
 `.git-exclude/` does not survive a clone; converted assets go in `docs/landing/assets/`.
@@ -75,16 +75,32 @@ The panels must follow **both**, the same way the rest of the page does. `<pictu
 `prefers-color-scheme` source alone will not answer a `[data-theme]` override — **whatever you choose,
 demonstrate it switching by explicit override, not only by OS setting.**
 
-## 4. `.story`'s background — RULED, and it is the round's real hazard
+## 4. `.story`'s background — CORRECTED, and the correction is the opposite of the first instruction
 
-`.story{background:#fdf6ee}` is hardcoded, pinned to light in §10.1c because the old panels could not
-theme-adapt. **That pin comes off, and the dark value is `#1d2a28` — sampled from the artwork, NOT
-`--paper` (`#232823`).**
+**An earlier version of this handoff told you to set `.story`'s dark background to `#1d2a28` to match
+the artwork. Ignore that. It was mine and it was wrong** — the value came from a single sampled point,
+and the premise that the panels share one ground does not hold. See RFC 137 §11d for the measurement.
 
-**Using the site token would leave every dark panel sitting on the page as a visible rectangle**, a
-slightly-wrong dark green against the artwork's own. That is precisely the defect class of §10.1a and
-§10.1d. **The light value `#fdf6ee` is already correct against the artwork's `#fdf6ef`; leave it, and
-do not "tidy" either value into a token.**
+**Every panel carries its own ground and an internal top-to-bottom gradient**, and dark panel 4 sits
+13/255 lighter than its neighbours because its halo lifts the whole frame. **No single background
+colour can match eight panels that do not match each other.**
+
+**RULED: stop matching. Make the panels panels.**
+
+- `.story`'s background becomes the ordinary theme token, light and dark. **Do not hand-pick a hex to
+  chase the artwork.**
+- **Each panel image gets a defined bound** — rounded corners, plus the grid gap already there. A warm
+  cream card on the light page and a darker inset on the dark page are both fine; **a near-match that
+  is wrong on one panel out of eight is not.**
+- `.story{background:#fdf6ee}`'s hardcoded pin comes off — §10.1c set it only because the old panels
+  could not theme-adapt.
+
+**Why this and not a better-chosen colour:** §10.1a, §10.1d and this round are three attempts at the
+same thing — making raster artwork behave as page background. **It cannot be made robust; regenerating
+the artwork moves the target again.** A bounded panel is immune, and it is less to keep true.
+
+**If a bounded panel looks worse than you expect at either theme, say so with a screenshot rather than
+reaching back for a matched colour.** That decision is the owner's, not a thing to reverse quietly.
 
 ## 5. The hero
 
@@ -133,10 +149,11 @@ landing page whose entrance image outweighs the rest of the site defeats §1.
 
 Each seen to fail before it passes.
 
-1. **Both themes, both form factors — four screenshots**, and the story panels' background is
-   indistinguishable from the section's at both themes. **Deliberately set the dark story background
-   to `--paper` once and confirm the seam becomes visible** — that is the control for §4, and if you
-   cannot see the difference, say so and show the measurement.
+1. **Both themes, both form factors — four screenshots**, with the panel bound visible and
+   deliberate at both themes. **The control is that all four panels look like they belong to one set:**
+   put the four dark panels side by side and confirm panel 4 does not read as a mistake next to its
+   neighbours despite its lighter ground. If it does, that is a finding, not something to correct with
+   a background colour.
 2. **Theme switches by `[data-theme]` override, not only by OS preference.**
 3. **The rendered panel height is measured, not assumed** (§3.3), at desktop and at the narrow
    breakpoint.
