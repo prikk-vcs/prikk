@@ -15,10 +15,15 @@
     extracting a stylesheet would put a request on the landing page's critical path to save bytes
     on a page almost nobody loads). These tokens are copied from index.html's :root block, not
     imported -- if the palette changes there, it must be changed here too, by hand.
+
+    RFC 137 §13o: light --sage darkened from #7f9179 to #5a6855 (mirrored from index.html's own
+    change) -- the original failed WCAG AA as this page's own `a.primary` text-on-background pair
+    (--paper #fffdfa on --sage #7f9179, 3.32:1, the same failure §13n found on the landing page's
+    button). Dark theme's --sage is unchanged.
   */
   :root{
     --cream:#f8f3ec; --paper:#fffdfa; --ink:#2c352f; --ink-soft:#5a6560;
-    --sage:#7f9179; --rule:#e7ddd0;
+    --sage:#5a6855; --rule:#e7ddd0;
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){

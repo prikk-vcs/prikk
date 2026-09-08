@@ -22,7 +22,17 @@
 <meta name="twitter:image" content="https://prikk.org/assets/hero-16x9-light.webp">
 <style>
   :root{
-    --cream:#f8f3ec; --paper:#fffdfa; --sage:#7f9179; --sage-dim:#93a48d;
+    /* RFC 137 §13o: light `--sage`/`--sage-dim` are darkened from their original #7f9179/#93a48d --
+       the originals failed WCAG AA (4.5:1) as both a button background under white text (3.32) and
+       as the terminal-prompt's own text colour on --paper (3.32, the same pair read the other way
+       round). The constraint (§13o): white text on --sage >= 4.5, and --sage as text on --cream
+       >= 4.5 -- relative luminance <= ~0.145. #5a6855 (luminance 0.127) clears both with margin
+       (5.83 / 5.37). #444e40 (--sage-dim, the button's hover background) is darker again
+       (luminance 0.076, white-on-it 8.58) -- hover now darkens rather than lightens, reversed from
+       the original design and from dark theme's own direction, a real and disclosed visual change,
+       not an oversight. Dark theme's own --sage/--sage-dim values are UNCHANGED (§13o §1.4: the
+       token plays a foreground role there and already passes; do not touch it). */
+    --cream:#f8f3ec; --paper:#fffdfa; --sage:#5a6855; --sage-dim:#444e40;
     --beige:#dcc9b6; --clay:#d4794f; --ink:#2c352f; --ink-soft:#5a6560;
     --rule:#e7ddd0; --focus:#d4794f; --btn-ink:#fffdfa;
     /* Warmth pass: the one shadow this page uses, everywhere it uses one -- replacing the hard
@@ -75,9 +85,18 @@
   .nav-cta{color:var(--ink) !important;font-weight:600}
 
   /* ---- eyebrow / heading rhythm (draft-01) ---- */
+  /* RFC 137 §13o: was `--sage-dim` (2.40:1 on --cream in light theme, the worst pair on the page --
+     darkening --sage-dim enough to pass would invert its own name, since it would end up darker
+     than --sage). `--ink-soft` already passes everywhere it is used and reads as the page's
+     existing "quiet text" colour, so the eyebrow now uses that instead of a sage variant --
+     decoupled from --sage-dim entirely, not a re-derivation of it. This also closes a second,
+     unnamed failure the RFC's own sweep did not check: dark theme's eyebrow sits on --paper in the
+     install/principles/features/closing sections, and dark `--sage-dim` there was 4.45:1 --
+     under 4.5, narrowly, and never flagged because only the --cream context (4.89) was measured.
+     `--ink-soft` fixes both without changing any dark-theme token value. */
   .eyebrow{
     margin:0 0 14px; font-size:.72rem; line-height:1; letter-spacing:.14em;
-    text-transform:uppercase; color:var(--sage-dim); font-weight:700;
+    text-transform:uppercase; color:var(--ink-soft); font-weight:700;
   }
 
   /* ---- buttons ---- */
