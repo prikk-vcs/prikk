@@ -73,9 +73,37 @@
   .button-quiet{background:transparent;border-color:var(--rule);color:var(--ink)}
   .button-quiet:hover{border-color:var(--sage)}
 
-  /* ---- hero, two columns (draft-01) ---- */
-  .hero{padding:64px 0 12px}
-  .hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(240px,.85fr);align-items:center;gap:48px}
+  /* ---- hero (RFC 137 §11: a photographic hero, single column of copy over it) ---- */
+  .hero{position:relative;padding:64px 0 12px;overflow:hidden}
+  /* RFC 137 §5/§11c: a photographic hero, two axes (form factor, theme). Both `.wide` (16:9) and
+     `.tall` (9:16) sets are always in the DOM; the narrow breakpoint below picks which set shows,
+     and within whichever set is showing, the same three-way `prefers-color-scheme`/`[data-theme]`
+     idiom `:root`'s own variables already use (`index.html`'s `:root` block, above) picks light or
+     dark -- reused, not reinvented, so a `[data-theme]` override reaches the photo exactly the way
+     it already reaches every colour token on the page. None of the four images carries baked-in
+     text (§5): the live `.hero-copy` sits over this layer, protected by `.hero-scrim` below. */
+  .hero-photo-layer{position:absolute;inset:0;z-index:0}
+  .hero-photo-set{position:absolute;inset:0}
+  .hero-photo-set.tall{display:none}
+  .hero-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  .hero-photo.dark{display:none}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .hero-photo.light{display:none}
+    :root:not([data-theme="light"]) .hero-photo.dark{display:block}
+  }
+  :root[data-theme="dark"] .hero-photo.light{display:none}
+  :root[data-theme="dark"] .hero-photo.dark{display:block}
+  /* A gradient in the page's own background tokens, not a fixed colour -- it re-solves itself for
+     dark mode the same way the rest of the page does, and keeps the live copy at the left legible
+     without hiding the photograph, which stays visible toward the right of the section. */
+  .hero-scrim{
+    position:absolute; inset:0; z-index:1;
+    background:linear-gradient(100deg, var(--cream) 0%, var(--cream) 40%, transparent 75%);
+  }
+  /* Single column now that the hero has its own photograph: `.hero-art` no longer occupies the
+     second column (see its own rule below), so the grid has one track to lay out, sized like
+     `.hero-copy` used to be within the old two-column track. */
+  .hero-grid{position:relative;z-index:2;display:grid;grid-template-columns:minmax(0,1fr);gap:48px}
   .hero-copy{max-width:560px}
   h1{font-size:clamp(2.5rem,6vw,4.1rem);line-height:1.03;letter-spacing:-.03em;font-weight:680;margin-bottom:20px}
   .lead{max-width:480px;margin-bottom:22px;font-size:clamp(1.05rem,1.6vw,1.2rem);line-height:1.6;color:var(--ink-soft)}
@@ -88,7 +116,13 @@
   .hero-note{margin:0;color:var(--ink-soft);font-size:.85rem}
   .hero-note code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 
-  .hero-art{justify-self:end;width:100%;max-width:340px}
+  /* RFC 137 §6, interim: the owner ruled `.hero-art` moved out of the hero rather than removed,
+     but only after a re-draw -- both land together in the next commit. Until then, the photo
+     behind this section already gives the hero its own visual interest, and the small diagram
+     would sit over a busy part of the photograph rather than open sky, illegible along with its
+     own caption. Hidden here, not deleted, not moved: its markup is untouched below, waiting for
+     the commit that redraws and relocates it. */
+  .hero-art{display:none;justify-self:end;width:100%;max-width:340px}
   .hero-art svg{width:100%;height:auto;display:block}
   .blk{fill:var(--sage)}
   .blk.beige{fill:var(--beige)}
@@ -151,35 +185,38 @@
   .term .p{color:var(--sage)}
   .term .c{color:var(--ink-soft)}
 
-  /* ---- story (five re-cropped panels, one shared ground and scale, RFC 137 §2.2a) ---- */
-  /* The panels are photographs of one artwork's own cream ground -- making it transparent would
-     also remove the glow that IS the "shining" stage (§2.2a's own ruling). Fixed, not swapped by
-     theme, so the artwork sits on deliberately matching paper in both themes instead of punching
-     five bright holes in a dark page -- the one CSS rule that ruling asked for. */
-  .story{background:#fdf6ee}
-  /* A CSS grid of five equal cells not a scrolling flex row, and there is no `overflow-x` left to
-     hide anything behind. The shared baseline comes from the crops themselves (each was cropped
-     and padded against the source's own ground line, not centered blindly) plus every chip and
-     image being the same fixed size regardless of column -- **not** from `align-items:end` on the
-     grid, which was tried and measured to make things worse: two captions wrap to one line and
-     three wrap to two, so end-aligning each `<li>` as a whole pushes the *shorter*-captioned tiles'
-     images down to match, misaligning the artwork by exactly one caption line to "fix" the
-     captions. Left at the default (`stretch`/`start`), the fixed-size chip+image stack lands at
-     the same position in every column regardless of what its own caption does below it. */
-  .panels{list-style:none;margin:38px 0 0;padding:0;display:grid;grid-template-columns:repeat(5,1fr);gap:20px}
+  /* ---- story (four panels, RFC 137 §11) ---- */
+  /* §11d, CORRECTED: three rounds (§10.1a, §10.1d, this one) tried making raster artwork behave as
+     page background, and it cannot be made robust -- any future regeneration of the artwork moves
+     the target again. `.story` no longer hand-picks a colour to chase the artwork; it uses the
+     ordinary theme token like every other section, and each panel image gets its own defined bound
+     instead (`.panels .frame`, below) -- a bounded panel is immune to the artwork's own ground
+     shifting under it. */
+  .panels{list-style:none;margin:38px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
   .panels li{text-align:center}
   .panels .chip{
     display:inline-block; margin:0 0 12px; font-size:.72rem; letter-spacing:.06em;
     color:var(--ink-soft); border:1px solid var(--rule); border-radius:999px; padding:4px 12px; background:var(--paper);
   }
-  /* Every crop is exported at the same 1:1 canvas (padded, never stretched, to reach it) --
-     `aspect-ratio` here is a frame the image already fills exactly, not a corrective one. `height`
-     must be `auto`: the markup's `height="420"` attribute is a presentational hint that CSS never
-     overrides otherwise, and `aspect-ratio` only fills a dimension that is `auto` -- with height
-     pinned at 420 by the attribute, a 172.8px-wide column left the box 172.8x420 and
-     `object-fit:contain` letterboxed 148px of artwork into ~300px of dead vertical space per panel
-     (found from the previous round's own render measurements not matching the 1:1 model). */
-  .panels img{display:block;width:100%;height:auto;aspect-ratio:1/1;object-fit:contain}
+  /* The card the RFC asks for (§11d): a warm card on the light page, a darker inset on the dark
+     page, from the same `--paper`/`--soft-shadow` tokens every other card on this page already
+     uses -- not a colour picked to match this artwork specifically. */
+  .panels .frame{position:relative;background:var(--paper);border-radius:16px;padding:10px;box-shadow:var(--soft-shadow)}
+  /* Cells are 384x512 in the source sheet, inset 3px each side to drop the seam at the column
+     boundary (RFC 137 §11e) -- 378 wide, 512 tall, so the panel's own frame is 3:4, not 1:1
+     (§10's own round found `aspect-ratio` silently not applying; re-measured this round, see the
+     report). `object-fit:cover` rather than `contain`: unlike the old five-panel crops, these are
+     not pre-padded to their target frame, so `cover` is what keeps the frame filled edge to edge. */
+  .panels img{display:block;width:100%;height:auto;aspect-ratio:3/4;object-fit:cover;border-radius:10px}
+  /* Same light/dark toggle idiom `.hero-photo` uses above, reused rather than reinvented -- both
+     images sit in the same `.frame`, and exactly one is `display:block` at a time. */
+  .panels img.dark{display:none}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .panels img.light{display:none}
+    :root:not([data-theme="light"]) .panels img.dark{display:block}
+  }
+  :root[data-theme="dark"] .panels img.light{display:none}
+  :root[data-theme="dark"] .panels img.dark{display:block}
   .panels .caption{margin:14px 0 0;font-size:13.5px;color:var(--ink-soft);line-height:1.5}
 
   /* ---- feature strip ---- */
@@ -218,7 +255,23 @@
   footer p{margin:14px 0 0}
 
   @media (max-width:820px){
+    .hero-photo-set.wide{display:none}
+    .hero-photo-set.tall{display:block}
+    /* A percentage-based fade (the wide layout's own `.hero-scrim`) does not survive to a narrow
+       viewport: the stacked copy (eyebrow through the `$ prikk --help` note) reaches all the way
+       to the section's own bottom edge here, measured directly against a real narrow screenshot --
+       `$ prikk --help` rendered against bare photo and nearly vanished, a genuine finding, not a
+       hypothetical one. Rather than chase a taller and taller fade percentage against content whose
+       height is not fixed (translation, font size), the copy gets its own solid card instead --
+       the same `--paper`/`--soft-shadow` idiom `.maturity` already uses, sized to whatever the
+       content actually is. `.hero-scrim` is switched off here; the card is the only thing between
+       the copy and the photo. */
+    .hero-scrim{display:none}
     .hero-grid{grid-template-columns:1fr}
+    .hero-copy{
+      background:var(--paper); border-radius:16px; box-shadow:var(--soft-shadow);
+      padding:22px 20px; max-width:none;
+    }
     .hero-art{justify-self:center;max-width:260px;order:-1}
     .principle-grid{grid-template-columns:1fr}
     .principle-grid article,.principle-grid article + article{padding:20px 0}
@@ -255,6 +308,17 @@
 
 <main id="top">
   <section class="hero">
+    <div class="hero-photo-layer" aria-hidden="true">
+      <div class="hero-photo-set wide">
+        <img class="hero-photo light" src="assets/hero-16x9-light.webp" width="1672" height="941" alt="">
+        <img class="hero-photo dark" src="assets/hero-16x9-dark.webp" width="1672" height="941" alt="">
+      </div>
+      <div class="hero-photo-set tall">
+        <img class="hero-photo light" src="assets/hero-9x16-light.webp" width="941" height="1672" alt="">
+        <img class="hero-photo dark" src="assets/hero-9x16-dark.webp" width="941" height="1672" alt="">
+      </div>
+    </div>
+    <div class="hero-scrim" aria-hidden="true"></div>
     <div class="wrap hero-grid">
       <div class="hero-copy">
         <p class="eyebrow">Version control, patch by patch</p>
@@ -364,33 +428,43 @@
       <ol class="panels">
         <li>
           <p class="chip">Start</p>
-          <img src="assets/panel-1-start.webp" width="420" height="420"
-            alt="A small flat platform holding a few scattered blocks.">
+          <div class="frame">
+            <img class="light" src="assets/panel-1-start-light.webp" width="378" height="512"
+              alt="A small platform holding a few scattered blocks, one glowing green among plain ones.">
+            <img class="dark" src="assets/panel-1-start-dark.webp" width="378" height="512"
+              alt="A small platform holding a few scattered blocks, one glowing green among plain ones.">
+          </div>
           <p class="caption">A new project begins.</p>
         </li>
         <li>
           <p class="chip">Patches</p>
-          <img src="assets/panel-2-patches.webp" width="420" height="420"
-            alt="Four small cards, each one a focused change, feeding toward the project.">
+          <div class="frame">
+            <img class="light" src="assets/panel-2-patches-light.webp" width="378" height="512"
+              alt="Four cards, each a focused change, flowing along glowing lines toward an arrow.">
+            <img class="dark" src="assets/panel-2-patches-dark.webp" width="378" height="512"
+              alt="Four cards, each a focused change, flowing along glowing lines toward an arrow.">
+          </div>
           <p class="caption">Small, focused patches flow in.</p>
         </li>
         <li>
-          <p class="chip">Integrated</p>
-          <img src="assets/panel-3-integrated.webp" width="420" height="420"
-            alt="The blocks assembled into one connected, glowing stack.">
+          <p class="chip">Integrate</p>
+          <div class="frame">
+            <img class="light" src="assets/panel-3-integrate-light.webp" width="378" height="512"
+              alt="The blocks assembled into one connected cube, glowing along its internal seams.">
+            <img class="dark" src="assets/panel-3-integrate-dark.webp" width="378" height="512"
+              alt="The blocks assembled into one connected cube, glowing along its internal seams.">
+          </div>
           <p class="caption">Prikk integrates and validates with confidence.</p>
         </li>
         <li>
-          <p class="chip">Growing</p>
-          <img src="assets/panel-4-growing.webp" width="420" height="420"
-            alt="The stack taller, with new shoots growing from it.">
-          <p class="caption">The project grows steadily.</p>
-        </li>
-        <li>
-          <p class="chip">Shining</p>
-          <img src="assets/panel-5-shining.webp" width="420" height="420"
-            alt="The full stack, lit from within, surrounded by growth.">
-          <p class="caption">A robust project shines its value.</p>
+          <p class="chip">Grow</p>
+          <div class="frame">
+            <img class="light" src="assets/panel-4-grow-light.webp" width="378" height="512"
+              alt="The cube alive with leaves growing from it, surrounded by sparkling light.">
+            <img class="dark" src="assets/panel-4-grow-dark.webp" width="378" height="512"
+              alt="The cube alive with leaves growing from it, surrounded by sparkling light.">
+          </div>
+          <p class="caption">The project grows, alive and spreading.</p>
         </li>
       </ol>
     </div>
