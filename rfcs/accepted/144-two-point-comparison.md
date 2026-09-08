@@ -571,6 +571,66 @@ against `op_seq`.
 is not resolved. **No control requires it and no authoring path can produce it**, but it is a real
 edge and is recorded rather than discovered later.
 
+## 4k. DELIVERED 2026-09-09 — increment 2 converged both paths, and the fold topology was two sites not three
+
+Increment 2 is **accepted** at `e72e6fc`. `NodeLifecycleState::rename_nodes_checked_batch` now carries the
+node-before-path resolution at the node-primary state, and both fold sites route consecutive `RenamePath`
+runs through `effect::collect_rename_run` / `apply_rename_run` instead of applying them one at a time.
+`apply_state_effect`'s `RenamePath` arm refuses, as a routing-bug defence rather than a statement that
+renames are unsupported. The seal path and the read path now agree on all five shapes — plain rename,
+two-node swap, chained rename, genuine collision, rename-free — with zero disagreements.
+
+**The handoff's §3 was wrong about the topology, and the correction is recorded here rather than left in a
+report.** It named *three* fold sites, listing `replay_chain_with_appended_patches (~:467)` as one. There
+are **two**: `apply_patch_ids` and `apply_queued_patch_envelopes`. Line 467 is inside the latter's own
+missing-blob retry branch, guarded by a let-else to `EditText`, so it is the same fold reached twice, not a
+second rule. `replay_chain_with_appended_patches` contains no operation loop at all — it calls
+`apply_patch_ids` twice and inherits the resolution. Verified at source during review.
+
+**A third *entry point* exists and needs no routing of its own.** The incremental lifecycle cache
+(`try_incremental_step` → `apply_one_block`) derives state without passing through either fold site
+directly; both `apply_one_block` and `apply_one_block_with_text_cache` funnel into `apply_patch_ids`, so
+they inherit the run resolution transitively. Recorded because "how many places implement this rule" is the
+question §3 existed to answer, and the answer is now one implementation, two fold sites, three entry points.
+
+**No sealed state root moved.** The constraint on this increment was that every patch set deriving a root
+today must still derive the same root. Confirmed independently at review by transplanting the round's own
+`root_stability.rs` onto the *parent* commit and running it there: all three roots pass pre-change, so the
+recorded values genuinely predate the work rather than having been captured from its output.
+
+### 4k.1 REQUIRED before increment 3 — the queued-envelope fold site is asserted, not demonstrated
+
+Removing the rename routing from `apply_queued_patch_envelopes` entirely, leaving `apply_patch_ids` intact,
+**passes the full 1035-test suite with zero failures**. The routing is present and correct; nothing proves
+it stays that way. Because `apply_state_effect` refuses a lone `RenamePath` loudly, any test driving a
+rename through the queued path would have failed instantly — none does.
+
+That site is the unsealed-WAL path, production-reachable from `patch_replay.rs:566`, and it is where
+multi-commit queuing lives. It is harmless today only because no authoring surface emits `RenamePath`.
+**Increment 3 is the increment that ends that**, so the coverage must exist before it lands: a control that
+drives a two-node swap through `apply_queued_patch_envelopes` and fails if the routing is removed.
+
+### 4k.2 REQUIRED — increment 1's doc comment now denies the convergence increment 2 established
+
+`patch_replay/apply.rs:271-279` states in the present tense that `apply_rename_batch` *diverges* from
+`lifecycle_cache`, which "applies renames one operation at a time" and "does not survive a literal swap."
+That was true when increment 1 shipped and is false now. `rename_node_checked`, which the paragraph names,
+has **no production caller left** — only `prikk-replay`'s own unit tests. `patch_replay` was correctly
+untouched by increment 2, so this is a consequence of the change rather than a fault within it, but a
+convergence asserted in code and denied in the comment beside it will not survive the next contributor.
+
+### 4k.3 RECORDED — `rename_nodes_checked_batch` is not fail-atomic, and neither is its twin
+
+Phase 1 clears every source from `path_to_id` before Phase 2 can still fail on occupancy, so an `Err` leaves
+the receiver half-mutated. **Not a regression**: increment 1's `apply_rename_batch` has the identical shape,
+and increment 2 was asked to mirror it. Not a live defect either — the single production caller sits under a
+replay discarded on error, and `try_incremental_step` clones the cached state before stepping.
+
+The asymmetry is exposure: increment 1's version is `pub(super)`, this one is `pub` on a published
+`prikk-replay` type. A method named `_checked` that half-applies on failure will mislead a future caller.
+Ruled: **make it atomic** — check occupancy against "occupied by a node outside this batch" using the
+batch's own source set, without vacating first — rather than documenting the hazard and keeping it.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
