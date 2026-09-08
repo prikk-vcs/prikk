@@ -631,6 +631,47 @@ The asymmetry is exposure: increment 1's version is `pub(super)`, this one is `p
 Ruled: **make it atomic** — check occupancy against "occupied by a node outside this batch" using the
 batch's own source set, without vacating first — rather than documenting the hazard and keeping it.
 
+## 4l. CLOSED 2026-09-09 — the three follow-ups are delivered, and §4j.2's mechanism was misdescribed twice
+
+All three items ruled in §4k.1–§4k.3 are delivered at `bb2e932` and reviewed. **Increment 3 is unblocked.**
+
+**§4k.1 — the queued fold site is now held.** A control enters through `apply_queued_patch_envelopes`
+itself, building `WalRecord`s in the shape `patch_replay.rs:566` supplies, and resolves a two-node swap.
+Re-verified at review by repeating the deletion experiment that found the gap: deleting the routing block
+now fails exactly one test, where against `e72e6fc` it failed none. Increment 2's routing is byte-identical
+to `e72e6fc` — nothing was disturbed to add the coverage.
+
+**§4k.2 — increment 1's doc comment is corrected**, and `patch_replay/apply.rs` is doc-comment-only in the
+diff, so the cleared algorithm is untouched. The sweep beyond the two named locations found no further
+staleness and said so explicitly.
+
+**§4k.3 — `rename_nodes_checked_batch` is fail-atomic.** Phases 0–2 are read-only, Phase 3 cannot fail, and
+occupancy is checked against the batch's own source set rather than by vacating first. A control asserts
+whole-state equality against a clone after a collision; review perturbed Phase 1 back to mutate-first and
+confirmed the control fails on exactly that property. One recorded consequence: occupancy is now checked
+before index consistency, so a state triggering both reports the other error. Both are `Integrity`, both
+reject rather than accept, and both require an already-corrupt index — accept/reject convergence with
+`patch_replay` is untouched.
+
+### 4l.1 CORRECTED — the chained rename is rejected by the `old_path` check, not the dedup
+
+Increment 2's report and the increment 2 review both stated that a chained rename is rejected by
+`sources_seen.insert(node_id)` in Phase 0. **It is not.** The `old_path`-against-pre-batch-state check sits
+*before* the dedup in the same loop: for a real chain (`A: a→b`, then `A: b→c`), the second pair asserts
+`old_path = "b"` while node A's pre-batch live path is still `"a"`, so the mismatch fires and the dedup is
+never reached. The dedup catches a narrower shape — the same node named twice with the same true `old_path`
+and two destinations (`A: a→b`, `A: a→c`) — where both pairs pass the `old_path` check.
+
+Found by the implementing team while writing the test for it: their first version asserted the stated
+mechanism and failed. The finding is theirs, not the reviewer's, and it corrects the reviewer.
+
+**The ruling does not move.** The outcome was and is correct — a chained rename is rejected, both paths
+agree, and `rename_convergence`'s `chained-rename` shape remains `false/false`. **§4j.2's own text was never
+wrong**: it describes the rule as validating `old_path` against the pre-run state, which is exactly the
+check that fires. The imprecision lived in two reports and one review, not in anything ruled — recorded
+here so the RFC carries the mechanism as well as the rule, since the two tests that now pin it are split
+along precisely this line.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
