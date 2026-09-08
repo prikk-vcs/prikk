@@ -167,6 +167,47 @@ are four: `CreateFile`'s `blob_id`, `DeleteNode`'s file preimage, and `ReplaceBi
 and `new_blob_id`. Whether each is reachable today is not the criterion — a read surface does not get
 to fail hard on the ones it believes cannot happen.
 
+## 6b. CORRECTION 2026-09-08 — §6a's requirement 4 was too broad, and the fix inverted the defect
+
+**§6a said: if you cannot separate "unbacked by design" from "object store damaged", degrade both.
+That is true of *absence* and of nothing else, and I did not say so.** The first implementation read
+it as written and degraded every failure, which is a defensible reading of my words and the wrong
+behaviour.
+
+**Absence is ambiguous. An error is not.** When the object store returns `Ok(None)` there is nothing
+to tell the two causes apart — DC-65's deliberately unbacked identity and a lost object look
+identical, and always will. But when it returns `Err`, it is *affirmatively reporting damage*:
+
+- `read_object_at_entry` (`crates/prikk-store/src/object_store.rs:130-135`) recomputes the envelope's
+  id and returns `Integrity` when it does not match the index's claim. **That is content-hash
+  verification — silent-corruption detection, the strongest integrity signal a content-addressed
+  store has.**
+- The same function returns `Integrity` when index and envelope disagree about object type (`:136-141`).
+- `read_typed` returns `ObjectTypeMismatch`; `validate_read_schema` rejects an unreadable format;
+  `BlobPayload::decode_canonical` rejects a malformed payload; and any of these may instead be an
+  `Io` error from a failing disk.
+
+**None of those is "unbacked by design." Every one of them is a repository or machine problem, and a
+read surface that renders them as ordinary content-not-stored is lying about the repository** — the
+exact defect §6a was written to remove, with its sign reversed.
+
+**RULED: degrade absence, propagate error.**
+
+- **`Ok(None)` → the declared unavailable state, exit `0`.** This is DC-65's case and §6a stands
+  unchanged for it.
+- **`Err(_)` → propagate. Exit `1` (RFC 121: operational failure).** A corrupt object store is an
+  operational failure and `show` says so.
+
+**The structural cause is one line and the fix is there.** `read_blob`
+(`crates/prikk-store/src/show.rs`) collapses `Result<Option<ObjectEnvelope>>` into `Result<_>` with
+`.ok_or_else(...)`, destroying the distinction before its caller can branch on it. **Keep the
+`Option`.** The information the reader needs is already coming out of the object store; only this
+function throws it away.
+
+**This narrows what the unavailable state means, and the guide page must follow.** It no longer
+covers "possibly damage" — after this ruling it means the object is absent, whose overwhelmingly
+common cause is DC-65.
+
 ## 7. What this RFC does not decide, and what it refuses
 
 - **`diff`** (§5). Its own RFC when the replay cost is addressed.
