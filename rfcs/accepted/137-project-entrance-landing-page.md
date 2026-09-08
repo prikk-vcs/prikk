@@ -1105,6 +1105,30 @@ the deciding vote on a question of appearance.**
 4. **Margin stays sufficient that no subject touches a frame edge.** §13g's defect must not return —
    **this correction must not become the next overcorrection**, which is what §13f was.
 
+## 13k. DELIVERED 2026-09-08 — scale and position corrected in CSS, assets untouched
+
+**Delivered at `f2dcc83`.** A `.photo` wrapper clips
+`transform: translateY(--panel-shift) scale(--panel-zoom)`; the eight `.webp` files are
+byte-identical. **Written in that order the shift is in unscaled screen pixels, so zoom and position
+are genuinely independent** — the failure §13f and §13h both had was one control buying two
+properties with the trade invisible until it shipped.
+
+**Verified on an independent render:** light subject-height floor 31.3% → 44.3%, dark 41.3% → 64.2%,
+dark spread 34.3pt → 19.9pt. **Dark `Start` and `Patches` moved from −6.9 and −3.0 to ≈0 by mass
+centroid** — they were the two the before render showed most clearly stranded high.
+
+**Open, and the owner's to judge:** dark `Integrate` and `Grow` remain at −8.9 and −9.4. **The trade is
+verified and real** — both subjects already span nearly the full safe frame, so correcting them fully
+means reducing zoom below where it started, against §13j.4 rule 1. The implementing round chose
+partial correction and disclosed it.
+
+**Still unexplained: §13j.3's light "too high".** The light centroids barely moved; it was tuned by
+eye. **If light still reads wrong, no mechanism has been found for it.**
+
+**Recorded for the next report comparing two states: hold one detection threshold across both.** This
+round's before and after heights were read at different thresholds, which understated its own
+improvement and made the comparison not like-for-like.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
