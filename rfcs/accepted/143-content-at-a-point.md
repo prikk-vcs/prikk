@@ -1,8 +1,16 @@
 # RFC 143 — Content at a point: exposing the replay result we already compute
 
-**Status.** **PROPOSED 2026-09-08**, opened at the stikk project's request
-(`005-content-at-a-point.md`) and on the owner's instruction. **Not accepted; nothing may be
-implemented from it yet.**
+**Status.** **ACCEPTED by the project owner 2026-09-08**, the same day it was opened, at the stikk
+project's request (`005-content-at-a-point.md`).
+
+**What the acceptance covers, stated because a bare acceptance is scope-ambiguous:** §5's shipped
+surface (a read-only `--format json` on `checkout --patch-plan`, **path-scoped**, binary as id and size
+only), §6's requirement that the replay's partial coverage be machine-readable, and §7's refusals —
+`prikk diff` stays refused, nothing writes, no whole-tree default.
+
+**What it does not settle, and the implementing increment decides:** the schema name, the exact field
+shape, and whether `--patch-materialize`'s report gains the same format. §7 lists these as open and
+they remain so.
 
 **Author's note on independence:** this RFC is written by the architect who refused `prikk diff` in
 RFC 142 §5/§7. The refusal is not being softened here and §7 restates it. Reviewed against that risk
