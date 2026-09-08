@@ -330,7 +330,26 @@ the only good reason to reverse a refusal.
 - **§4 could swallow this RFC.** If the answer is "author renames", that is a patch-model change with
   its own schema, authoring, replay and conflict consequences. **This RFC must be allowed to conclude
   "the real work is elsewhere" rather than forcing a `diff` shape onto a rename problem.**
-- **The load-bearing assumption is untested, and it is not ours.** §4c's "declare, never infer" is
+- **RESOLVED 2026-09-08 — the ergonomics risk below was overstated, and the reason is structural.**
+  **Declaration-only cannot punish anyone, because the undeclared path *is* today's behaviour.** A
+  user who declares a move gets identity preserved; a user who does not gets delete+create — **exactly
+  what they get now.** There is no regression to fall back to, only an unclaimed benefit. The external
+  architect's own stated escape hatch — *"require declaration really does collapse into punishing the
+  user"* — **does not apply to prikk**, because the status quo is the fallback rather than a penalty.
+  **This removes the load-bearing assumption they said would make them abandon their advice.**
+
+  **Measured, rather than reasoned:** in this repository's own 1519 commits, 99 (6.5%) contain a
+  rename, 345 file-renames in total. **The population is bimodal and neither half is accidental** —
+  83% of rename-commits move exactly one file (RFC lifecycle moves, deliberate and one at a time), and
+  71% of all renames sit in commits of five or more (planned restructures; the largest are 57, 30, 24
+  and 21 files). **Both shapes are deliberate acts that a declaration path would naturally capture.**
+
+  **Honest limit on that evidence:** this is one repository, worked by an architect and a dev team
+  following a documented process. **It is not evidence about a solo developer refactoring in an IDE**,
+  who moves files without thinking. It bounds the question for this project's own work and no further.
+
+- **SUPERSEDED — the original statement of the risk, kept because the reasoning above answers it:**
+  **The load-bearing assumption is untested, and it is not ours.** §4c's "declare, never infer" is
   honest *only if declaring is ergonomic* — the external architect said plainly they would abandon
   their own advice if it cannot be, and cited Mercurial as evidence that people do record moves when
   the tool makes it cheap. **We have no evidence either way for prikk.** And the realistic flow is
