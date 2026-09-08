@@ -5,8 +5,8 @@
 
 use crate::test_gates::test_support::{
     publish_binary_create_then_replace, publish_snapshot_then_patch_block,
-    publish_text_create_then_edit_block, publish_text_edit_then_unsupported_rename_path_block,
-    unique_temp_dir,
+    publish_text_create_then_edit_block, publish_text_edit_then_rename_path_block,
+    publish_text_edit_then_unsupported_create_symlink_block, unique_temp_dir,
 };
 use crate::{PatchPlanContent, RepositoryLayout, prepare_patch_plan_content_report};
 
@@ -114,18 +114,56 @@ fn snapshot_seeded_untouched_path_is_opaque() {
 }
 
 /// RFC 143 §6b: an unsupported operation anywhere in the walked chain still fails the whole call
-/// -- never folded into a degraded field alongside otherwise-successful content.
+/// -- never folded into a degraded field alongside otherwise-successful content. `CreateSymlink`
+/// remains apply-unsupported after RFC 144 increment 1 (unlike `RenamePath`, which this fixture
+/// used to cover before that increment made it apply-supported -- see
+/// `publish_text_edit_then_unsupported_create_symlink_block`'s own doc comment).
 #[test]
 fn unsupported_operation_still_propagates_as_an_error() {
     let root = unique_temp_dir("content-report-unsupported");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
-    publish_text_edit_then_unsupported_rename_path_block(&layout).unwrap();
+    publish_text_edit_then_unsupported_create_symlink_block(&layout).unwrap();
 
     let result =
         prepare_patch_plan_content_report(&layout, "heads/main", &["README.md".to_string()]);
     assert!(
         result.is_err(),
-        "an unsupported RenamePath in the chain must error, not degrade: {result:?}"
+        "an unsupported CreateSymlink in the chain must error, not degrade: {result:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 144 increment 1, control 4: content at a point over rename-containing history reports the
+/// node's content at its *new* path, and the old path is no longer live.
+#[test]
+fn content_report_reflects_renamed_path() {
+    let root = unique_temp_dir("content-report-rename");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    publish_text_edit_then_rename_path_block(&layout).unwrap();
+
+    let report = prepare_patch_plan_content_report(
+        &layout,
+        "heads/main",
+        &["README2.md".to_string(), "README.md".to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        report.not_found,
+        vec!["README.md".to_string()],
+        "the old path must no longer be live after the rename"
+    );
+    let [entry] = report.entries.as_slice() else {
+        panic!("expected exactly one entry, got {:?}", report.entries);
+    };
+    assert_eq!(entry.path, "README2.md");
+    match &entry.content {
+        PatchPlanContent::Text(bytes) => assert_eq!(bytes, b"alpha BETA\n"),
+        other => panic!("expected Text, got {other:?}"),
+    }
+    assert_eq!(
+        report.coverage.applied_operation_kinds,
+        vec!["create-file", "edit-text", "rename-path"]
     );
 
     let _ = std::fs::remove_dir_all(root);

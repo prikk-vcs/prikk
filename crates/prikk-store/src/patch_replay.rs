@@ -2,11 +2,14 @@
 //!
 //! PR-024 keeps a deliberately narrow replay boundary. It can reconstruct an in-memory snapshot
 //! manifest by walking a single-parent block chain and applying `CreateFile`, `DeleteNode`,
-//! `EditText`, `ReplaceBinary`, and `ChangePerm` operations (DC-73 wired the last two — see
-//! `apply.rs` and `decode.rs::ensure_apply_supported`). Renames and symlinks remain unauthored
-//! (`node_authoring.rs` never produces `RenamePath`; symlink authoring is refused outright), so
-//! their apply paths stay deferred pending an authoring path, not the node model; merge algebra and
-//! conflict handling remain later increments.
+//! `EditText`, `ReplaceBinary`, `ChangePerm`, and — RFC 144 increment 1 — `RenamePath` operations
+//! (DC-73 wired the middle three; see `apply.rs` and `decode.rs::ensure_apply_supported`).
+//! Consecutive `RenamePath` operations within one patch are resolved together, node before path,
+//! by `apply::apply_rename_batch` rather than one at a time (RFC 144 §4h.7) — see that function's
+//! own doc comment for why. Renames still have no authoring path (`node_authoring.rs` never
+//! produces `RenamePath`; that is increment 3, gated on this one landing correctly) and symlink
+//! authoring is refused outright, so symlink apply stays deferred pending an authoring path, not
+//! the node model; merge algebra and conflict handling remain later increments.
 //!
 //! Split across three files (DC-58): this file keeps the public API and baseline resolution;
 //! `read.rs` holds object-store reading helpers (block-chain walking, blob/patch/snapshot
@@ -31,8 +34,8 @@ use crate::snapshot::SnapshotManifest;
 use crate::validate_local_branch_ref;
 use crate::wal::WalReplay;
 
-use apply::apply_decoded_operation;
-use decode::decode_patch_operations;
+use apply::{apply_decoded_operation, apply_rename_batch};
+use decode::{DecodedOperationKind, decode_patch_operations};
 use read::{
     current_target_block, files_to_manifest, files_to_replay_manifest, load_snapshot_files,
     read_block, read_patch, single_parent_chain,
@@ -331,21 +334,45 @@ pub(crate) fn replay_supported_patch_chain(
             let patch = read_patch(&object_store, patch_id)?;
             let operations =
                 decode_patch_operations(&patch.canonical_payload, patch.schema_version)?;
-            for operation in operations {
-                // Captured before the operation is consumed below, and only kept if the apply
-                // that follows actually succeeds -- a kind `ensure_apply_supported` admits can
-                // still fail apply's own further validation (a real Integrity error), and that
-                // must propagate rather than being recorded as "covered".
-                let kind_label = decode::applied_operation_kind_label(&operation.kind);
-                apply_decoded_operation(
-                    &object_store,
-                    &mut files,
-                    &mut live_nodes,
-                    &mut deleted_files,
-                    operation,
-                )?;
-                applied_operation_kinds.insert(kind_label);
-                applied_operation_count += 1;
+            // RFC 144 §4h.7 / increment 1: a run of consecutive `RenamePath` operations is
+            // resolved together (node before path -- see `apply::apply_rename_batch`), not one
+            // at a time, so a rename cycle within one patch never sees its own other half as an
+            // occupied path. Scoped to *consecutive* renames within *this* patch only: a
+            // non-rename operation between two renames breaks the run, each half is then checked
+            // individually against the immediate state exactly as before -- deliberate, see
+            // `apply_rename_batch`'s own doc comment.
+            let mut operations = operations.into_iter().peekable();
+            while let Some(first) = operations.next() {
+                if matches!(first.kind, DecodedOperationKind::RenamePath { .. }) {
+                    let mut run = vec![first];
+                    while let Some(next) = operations.next_if(|next| {
+                        matches!(next.kind, DecodedOperationKind::RenamePath { .. })
+                    }) {
+                        run.push(next);
+                    }
+                    // Captured before the run is consumed below, and only kept if the batch
+                    // apply that follows actually succeeds -- same rule as the single-operation
+                    // path below.
+                    let run_len = run.len();
+                    apply_rename_batch(&mut files, &mut live_nodes, run)?;
+                    applied_operation_kinds.insert("rename-path");
+                    applied_operation_count += run_len;
+                } else {
+                    // Captured before the operation is consumed below, and only kept if the apply
+                    // that follows actually succeeds -- a kind `ensure_apply_supported` admits can
+                    // still fail apply's own further validation (a real Integrity error), and that
+                    // must propagate rather than being recorded as "covered".
+                    let kind_label = decode::applied_operation_kind_label(&first.kind);
+                    apply_decoded_operation(
+                        &object_store,
+                        &mut files,
+                        &mut live_nodes,
+                        &mut deleted_files,
+                        first,
+                    )?;
+                    applied_operation_kinds.insert(kind_label);
+                    applied_operation_count += 1;
+                }
             }
             patch_count += 1;
         }

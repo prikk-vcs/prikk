@@ -12,7 +12,7 @@ use crate::{
 
 use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block,
-    publish_text_edit_then_unsupported_rename_path_block,
+    publish_text_edit_then_rename_path_block,
 };
 use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_patch_envelope, signed_ref_state_envelope,
@@ -277,7 +277,7 @@ fn rollback_draft_fails_closed_on_supported_text_plus_unsupported_operation() {
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
     if let Ok(layout) = layout {
-        let result = publish_text_edit_then_unsupported_rename_path_block(&layout);
+        let result = publish_text_edit_then_rename_path_block(&layout);
         assert!(result.is_ok());
         let signer = test_signer();
         let report = append_rollback_draft(&layout, "heads/main", "rollback unsupported", &signer);

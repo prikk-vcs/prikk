@@ -121,10 +121,17 @@ pub(crate) enum DecodedDeletePreimage {
 /// Apply-time support gate (review erratum P1). Decoding a kind says nothing about
 /// whether replay/apply can execute it; this is the *single* source of truth for the
 /// apply-supported subset. Returns `Ok(())` only for the kinds whose application is
-/// wired today (`CreateFile`, file-`DeleteNode`, `EditText`, `ReplaceBinary`, and `ChangePerm` —
-/// DC-73); node-addressed kinds whose application is still deferred return
+/// wired today (`CreateFile`, file-`DeleteNode`, `EditText`, `ReplaceBinary`, `ChangePerm`, and —
+/// RFC 144 increment 1 — `RenamePath`); the remaining node-addressed kinds return
 /// `UnsupportedObjectType`. Per review erratum P4, Phase 4 cannot be marked
 /// implementation-reconciled while any kind still returns unsupported here.
+///
+/// `RenamePath` admission here is the gate only — a decoded `RenamePath` is never applied by
+/// [`super::apply::apply_decoded_operation`] (which still refuses it, defensively: routing is the
+/// caller's job). The caller (`patch_replay.rs`'s own replay loop) is responsible for collecting
+/// consecutive `RenamePath` runs and resolving each through
+/// [`super::apply::apply_rename_batch`] instead, per RFC 144 §4h.7 — this function only says the
+/// kind is *admitted*, not which code path admits it.
 pub(crate) fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Result<()> {
     match &operation.kind {
         DecodedOperationKind::CreateFile { .. }
@@ -134,17 +141,16 @@ pub(crate) fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Resul
         }
         | DecodedOperationKind::EditText { .. }
         | DecodedOperationKind::ReplaceBinary { .. }
-        | DecodedOperationKind::ChangePerm { .. } => Ok(()),
+        | DecodedOperationKind::ChangePerm { .. }
+        | DecodedOperationKind::RenamePath { .. } => Ok(()),
         DecodedOperationKind::DeleteNode {
             preimage: DecodedDeletePreimage::Symlink { .. },
             ..
         } => Err(unsupported_operation("DeleteNode(symlink)")),
-        // DC-73: unreachable in practice — `commit` never authors either kind (renames become
-        // delete+create; symlink authoring is refused outright), so these apply paths stay
-        // deferred pending an authoring path, not the node model.
-        DecodedOperationKind::RenamePath { .. } => Err(unsupported_operation(
-            "RenamePath (node-addressed apply pending a rename authoring path)",
-        )),
+        // Still refused: no authoring path exists for either kind (`commit` never authors
+        // `CreateSymlink`, and symlink deletion above is the same story) — out of RFC 144
+        // increment 1's scope (handoff §3), unrelated to the rename-authoring gate this
+        // increment removes.
         DecodedOperationKind::CreateSymlink { .. } => Err(unsupported_operation(
             "CreateSymlink (apply pending a symlink authoring path)",
         )),
@@ -153,10 +159,10 @@ pub(crate) fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Resul
 
 /// Stable label for one apply-supported operation kind (RFC 143 §6's coverage field). Mirrors
 /// `show.rs`'s own `ShowOperation::kind` vocabulary exactly (`"create-file"`, `"delete-node"`,
-/// `"edit-text"`, `"replace-binary"`, `"change-perm"`) rather than inventing a second one --
-/// callable only after [`ensure_apply_supported`] has already confirmed the kind is one of these
-/// five; the three refused kinds have no label here because they never reach a successful apply to
-/// be recorded as covered.
+/// `"edit-text"`, `"replace-binary"`, `"change-perm"`, and — RFC 144 increment 1 — `"rename-path"`)
+/// rather than inventing a second one -- callable only after [`ensure_apply_supported`] has already
+/// confirmed the kind is one of these six; `CreateSymlink` has no label here because it never
+/// reaches a successful apply to be recorded as covered.
 pub(crate) fn applied_operation_kind_label(kind: &DecodedOperationKind) -> &'static str {
     match kind {
         DecodedOperationKind::CreateFile { .. } => "create-file",

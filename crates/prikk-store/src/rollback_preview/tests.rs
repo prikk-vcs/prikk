@@ -5,7 +5,7 @@ use crate::{RepositoryLayout, RollbackPreviewChangeKind, prepare_rollback_previe
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block,
-    publish_text_edit_then_unsupported_rename_path_block,
+    publish_text_edit_then_rename_path_block,
 };
 
 #[test]
@@ -76,7 +76,7 @@ fn rollback_preview_fails_closed_on_supported_text_plus_unsupported_operation() 
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
     if let Ok(layout) = layout {
-        let result = publish_text_edit_then_unsupported_rename_path_block(&layout);
+        let result = publish_text_edit_then_rename_path_block(&layout);
         assert!(result.is_ok());
         let preview = prepare_rollback_preview(&layout, "heads/main");
         assert!(preview.is_err());

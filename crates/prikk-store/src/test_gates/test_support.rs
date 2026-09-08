@@ -1,8 +1,8 @@
 //! Shared test fixtures and cross-module test harnesses.
 
 use prikk_object::{
-    BlockKind, BlockPayload, CanonicalEncode, CreateFile, EditText, MerkleRoot, NodeId,
-    ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PATCH_MESSAGE_SCHEMA,
+    BlockKind, BlockPayload, CanonicalEncode, CreateFile, CreateSymlink, EditText, MerkleRoot,
+    NodeId, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PATCH_MESSAGE_SCHEMA,
     PatchPayload, PatchPurpose, RefKind, RefStatePayload, RefUpdatePayload, RenamePath,
     ReplaceBinary, Signature, SignatureAlgorithm, SignerRole,
 };
@@ -280,6 +280,12 @@ fn unique_suffix() -> String {
     let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{}-{nanos}-{sequence}", std::process::id())
 }
+
+mod rename_history;
+pub(crate) use rename_history::{
+    publish_two_nodes_then_rename_cycle_block,
+    publish_two_nodes_then_rename_onto_occupied_path_block,
+};
 
 mod snapshot_history;
 pub(crate) use snapshot_history::publish_snapshot_then_patch_block;
@@ -569,7 +575,14 @@ pub(crate) fn publish_text_create_then_edit_block_v1(
     Ok(())
 }
 
-pub(crate) fn publish_text_edit_then_unsupported_rename_path_block(
+/// `CreateFile`, then `EditText`, then `RenamePath` — one node, one path change, sealed via the
+/// raw-patch-then-seal technique since `commit` never authors a `RenamePath` (that stays true
+/// through RFC 144 increment 3). RFC 144 increment 1 made `patch_replay`'s own apply path accept
+/// this; `patch_inverse` still refuses it independently (its own `RenamePath` arm, unrelated to
+/// `patch_replay::decode::ensure_apply_supported`) pending a later increment's inverse-planning
+/// support, which is why `patch_inverse`/`rollback_preview`/`rollback_draft`'s own
+/// fails-closed-on-unsupported-operation tests still use this fixture and still pass.
+pub(crate) fn publish_text_edit_then_rename_path_block(
     layout: &RepositoryLayout,
 ) -> prikk_error::Result<()> {
     let mut object_store = FileObjectStore::new(layout.clone());
@@ -620,6 +633,100 @@ pub(crate) fn publish_text_edit_then_unsupported_rename_path_block(
                     node_id,
                     old_path: "README.md".to_string(),
                     new_path: "README2.md".to_string(),
+                }),
+            },
+        ],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        prikk_object::PATCH_TEXT_SPAN_V2_SCHEMA,
+        patch_payload.to_canonical_bytes()?,
+    );
+    patch.add_signature(dummy_signature())?;
+    let patch_id = object_store.write_object(&patch)?;
+    let state_root = crate::derive_next_state_root(&object_store, None, &[patch_id])?;
+    let block = signed_block_with_state_root(
+        BlockKind::Root,
+        Vec::new(),
+        vec![patch_id],
+        None,
+        state_root,
+    );
+    let block_id = object_store.write_object(&block)?;
+
+    let ref_store = RefStore::new(layout.clone());
+    let ref_state = signed_ref_state_envelope("heads/main", None, block_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = signed_ref_update_envelope("heads/main", None, ref_state_id, block_id, 1);
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    })?;
+    Ok(())
+}
+
+/// `CreateFile`, then `EditText`, then `CreateSymlink` — unlike `RenamePath`, `CreateSymlink`
+/// remains apply-unsupported after RFC 144 increment 1 (handoff §3: refused for a different
+/// reason, no authoring path, out of this increment's scope). Kept as the "still genuinely
+/// unsupported" fixture so `patch_replay`'s own fails-closed-on-unsupported-operation test keeps
+/// probing a real refusal rather than one this increment removed.
+pub(crate) fn publish_text_edit_then_unsupported_create_symlink_block(
+    layout: &RepositoryLayout,
+) -> prikk_error::Result<()> {
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let node_id = NodeId::from_bytes([0x82; 32]);
+    let old = b"alpha beta\n";
+    let new = b"alpha BETA\n";
+    let old_blob = write_blob(&mut object_store, old)?;
+    let span = crate::text_span::plan_authored_text_span(old, new, node_id)
+        .map_err(|err| prikk_error::PrikkError::Integrity(err.to_string()))?
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("test edit is unchanged".to_string()))?;
+
+    let patch_payload = PatchPayload {
+        operations: vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "README.md".to_string(),
+                    node_id,
+                    blob_id: old_blob,
+                    mode: 0o100644,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::EditText(EditText {
+                    node_id,
+                    span_id: span.span_id,
+                    old_span_hash: span.old_span_hash,
+                    left_anchor_hash: span.left_anchor_hash,
+                    right_anchor_hash: span.right_anchor_hash,
+                    replacement_text: span.replacement_text,
+                    presentation_hint_line: None,
+                    presentation_hint_column: None,
+                    old_span_text: span.old_span_text,
+                    left_anchor_len: Some(span.left_anchor_len),
+                    right_anchor_len: Some(span.right_anchor_len),
+                }),
+            },
+            Operation {
+                op_seq: 3,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateSymlink(CreateSymlink {
+                    path: "link".to_string(),
+                    node_id: NodeId::from_bytes([0x84; 32]),
+                    target: "README.md".to_string(),
                 }),
             },
         ],

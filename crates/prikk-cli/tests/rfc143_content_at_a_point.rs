@@ -354,15 +354,21 @@ fn control2_writes_nothing_with_format_json() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Control 3: an unsupported operation (`RenamePath`) still errors and does not appear as a
-/// degraded field. `RenamePath` is unauthored today (`commit` turns renames into delete+create),
-/// so this needs the raw-patch-then-seal technique the `show` rounds established, exposed
-/// cross-crate through `prikk-store`'s `test-support` feature.
+/// Control 3: an unsupported operation (`CreateSymlink`) still errors and does not appear as a
+/// degraded field. `CreateSymlink` is unauthored today (no symlink authoring path exists), so this
+/// needs the raw-patch-then-seal technique the `show` rounds established, exposed cross-crate
+/// through `prikk-store`'s `test-support` feature.
+///
+/// This control used to exercise `RenamePath` for the same purpose; RFC 144 increment 1 made
+/// `patch_replay`'s own apply path accept `RenamePath` (it stays unauthored -- `commit` still never
+/// emits one -- but it is no longer *unsupported*, so it stopped being a valid fixture for "still
+/// errors"). `CreateSymlink` remains refused for a different, unrelated reason (no authoring path)
+/// and was out of that increment's scope, so it is still a genuine unsupported-operation fixture.
 #[test]
 fn control3_unsupported_operation_still_errors() {
     use prikk_object::{
-        CreateFile, NodeId, ObjectEnvelope, ObjectType, Operation, OperationKind, PatchPayload,
-        PatchPurpose, RenamePath,
+        CreateFile, CreateSymlink, NodeId, ObjectEnvelope, ObjectType, Operation, OperationKind,
+        PatchPayload, PatchPurpose,
     };
     use prikk_store::{
         Ed25519AuthorSigner, Ed25519MaintainerSigner, ObjectWriteSession, ObjectWriter,
@@ -411,10 +417,10 @@ fn control3_unsupported_operation_still_errors() {
                 op_seq: 2,
                 op_id: None,
                 preconditions: Vec::new(),
-                kind: OperationKind::RenamePath(RenamePath {
-                    node_id,
-                    old_path: "a.txt".to_string(),
-                    new_path: "b.txt".to_string(),
+                kind: OperationKind::CreateSymlink(CreateSymlink {
+                    path: "link".to_string(),
+                    node_id: NodeId::from_bytes([0x72; 32]),
+                    target: "a.txt".to_string(),
                 }),
             },
         ],
@@ -442,14 +448,14 @@ fn control3_unsupported_operation_still_errors() {
             "--format",
             "json",
             "--content-path",
-            "b.txt",
+            "a.txt",
         ])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let stderr = stderr_of(&out).to_lowercase();
     assert!(
-        stderr.contains("rename") || stderr.contains("unsupported"),
+        stderr.contains("symlink") || stderr.contains("unsupported"),
         "error must name the unsupported operation, got: {stderr}"
     );
     assert!(

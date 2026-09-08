@@ -164,6 +164,13 @@ pub(super) fn apply_decoded_operation(
         } => {
             apply_change_perm(live_nodes, node_id, old_mode, new_mode)?;
         }
+        DecodedOperationKind::RenamePath { .. } => {
+            return Err(PrikkError::MalformedData(
+                "apply_decoded_operation received a RenamePath -- the caller must route \
+                 consecutive RenamePath runs to apply_rename_batch instead, never here"
+                    .to_string(),
+            ));
+        }
         _ => {
             return Err(PrikkError::MalformedData(
                 "apply_decoded_operation received an operation kind ensure_apply_supported \
@@ -244,6 +251,124 @@ fn apply_change_perm(
         )));
     }
     live.mode = new_mode;
+    Ok(())
+}
+
+/// Apply one consecutive run of `RenamePath` operations (from the same patch, nothing else
+/// interleaved) together, resolving node before path (RFC 144 §4h.7 / increment 1 handoff §2).
+///
+/// A rename cycle -- a swap, `a->b` alongside `b->a` -- applied one operation at a time collides:
+/// the first half's target path is still occupied by the second half's own not-yet-moved node,
+/// which is exactly the merge-ordering hazard's materialization analogue. Resolved here by
+/// treating the whole run as one unit instead of a sequence: every assertion (`node_id` live,
+/// its current path matches the operation's own `old_path`) is checked against the state as it
+/// stood *before* this run, every source path is vacated before any target path is claimed, and
+/// only *then* is occupancy checked -- so two nodes trading paths never observe an intermediate
+/// collision with each other, and a path still occupied afterward belongs to a third,
+/// non-participating live node: a genuine, structural collision, reported rather than silently
+/// overwritten (`patch_replay/tests/rename.rs` control 3).
+///
+/// Diverges from `lifecycle_cache/replay/effect.rs`'s own `rename_node_checked`, which resolves
+/// by node identity (looks the node up by id, not by path) but still checks occupancy against
+/// the *current*, already-partially-mutated path index on every call, one operation at a time --
+/// which does not actually survive a literal swap either (verified directly against
+/// `NodeLifecycleState`, not assumed from reading it: a two-node swap applied through
+/// `rename_node_checked` in sequence fails on the first half with exactly the collision this
+/// function exists to avoid). "Resolve node before path" describes *this* function's own
+/// algorithm, not a description of `lifecycle_cache`'s already-shipped behaviour -- see the round's
+/// own report for the full finding.
+///
+/// Scoped to one contiguous run within a single patch, not the whole patch and not across patch
+/// boundaries: a patch is this system's own atomic unit of one signed intent, and a genuinely
+/// simultaneous swap can only be meaningfully authored within one (splitting it across separately
+/// sealed patches would require a real intermediate state where both nodes are momentarily at the
+/// same path, which is not a swap, it is two sequential renames needing a third, temporary path).
+/// A non-rename operation between two halves of an intended swap breaks the run and each half is
+/// checked individually against the immediate state, exactly as today -- deliberate: nothing in
+/// RFC 144 increment 1 asks for lookahead across an unrelated operation, and failing closed on
+/// that unstated case is the safer default.
+pub(super) fn apply_rename_batch(
+    files: &mut BTreeMap<String, Vec<u8>>,
+    live_nodes: &mut BTreeMap<NodeId, ReplayLiveNode>,
+    renames: Vec<DecodedPatchOperation>,
+) -> Result<()> {
+    if renames.is_empty() {
+        return Ok(());
+    }
+
+    // Phase 0: validate every operation's own assertion against the pre-run state, and reject a
+    // run that renames the same node twice or names the same destination twice -- neither is a
+    // cycle this algorithm resolves, both are malformed regardless of approach.
+    let mut resolved = Vec::with_capacity(renames.len());
+    let mut sources_seen = std::collections::BTreeSet::new();
+    let mut destinations_seen = std::collections::BTreeSet::new();
+    for operation in renames {
+        let DecodedOperationKind::RenamePath {
+            node_id,
+            old_path,
+            new_path,
+        } = operation.kind
+        else {
+            return Err(PrikkError::MalformedData(
+                "apply_rename_batch received a non-RenamePath operation".to_string(),
+            ));
+        };
+        let live = live_nodes.get(&node_id).ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "RenamePath target node {} is not live",
+                hex32(node_id.as_bytes())
+            ))
+        })?;
+        if live.path != old_path {
+            return Err(PrikkError::Integrity(format!(
+                "RenamePath old_path {old_path} does not match live node {}'s current path {}",
+                hex32(node_id.as_bytes()),
+                live.path
+            )));
+        }
+        if !sources_seen.insert(node_id) {
+            return Err(PrikkError::Integrity(format!(
+                "RenamePath renames node {} more than once in the same run",
+                hex32(node_id.as_bytes())
+            )));
+        }
+        if !destinations_seen.insert(new_path.clone()) {
+            return Err(PrikkError::Integrity(format!(
+                "RenamePath names destination path {new_path} more than once in the same run"
+            )));
+        }
+        resolved.push((node_id, old_path, new_path));
+    }
+
+    // Phase 1: vacate every source path across the whole run before claiming any target path, so
+    // a target about to be vacated by another rename in this same run never reads as occupied.
+    let mut staged = Vec::with_capacity(resolved.len());
+    for (node_id, old_path, new_path) in resolved {
+        let bytes = files.remove(&old_path).ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "RenamePath source path {old_path} has no file content"
+            ))
+        })?;
+        staged.push((node_id, new_path, bytes));
+    }
+
+    // Phase 2: every source in this run is now vacant. A target still occupied belongs to a node
+    // this run never touched -- report it rather than overwrite it.
+    for (_, new_path, _) in &staged {
+        if files.contains_key(new_path) {
+            return Err(PrikkError::Integrity(format!(
+                "RenamePath target path {new_path} is occupied by another live node"
+            )));
+        }
+    }
+
+    // Phase 3: commit. No further failure is possible past this point.
+    for (node_id, new_path, bytes) in staged {
+        files.insert(new_path.clone(), bytes);
+        if let Some(live) = live_nodes.get_mut(&node_id) {
+            live.path = new_path;
+        }
+    }
     Ok(())
 }
 

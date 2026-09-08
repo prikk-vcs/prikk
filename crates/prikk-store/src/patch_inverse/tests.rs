@@ -13,7 +13,7 @@ use crate::{
 
 use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, publish_text_create_then_edit_block,
-    publish_text_edit_then_unsupported_rename_path_block, signed_ref_state_envelope,
+    publish_text_edit_then_rename_path_block, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };
 
@@ -238,7 +238,7 @@ fn inverse_plan_fails_closed_on_supported_text_plus_unsupported_operation() {
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
     if let Ok(layout) = layout {
-        let published = publish_text_edit_then_unsupported_rename_path_block(&layout);
+        let published = publish_text_edit_then_rename_path_block(&layout);
         assert!(published.is_ok());
         let plan = prepare_patch_inverse_plan(&layout, "heads/main");
         assert!(plan.is_err());

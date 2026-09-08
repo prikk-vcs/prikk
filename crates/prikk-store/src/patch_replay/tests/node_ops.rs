@@ -501,18 +501,17 @@ fn patch_with_raw_op(op_tag: u16, record: &[u8]) -> Vec<u8> {
 // ---- RenamePath (tag 13) §9.3 read-side ----
 
 #[test]
-fn decode_valid_rename_path_is_validated_then_unsupported() {
+fn decode_valid_rename_path_is_validated_then_apply_supported() {
+    // RFC 144 increment 1: a well-formed §9.3 RenamePath is reconciled, validated, and now
+    // admitted by the apply-supported gate -- routing to `apply::apply_rename_batch` is the
+    // caller's job (`patch_replay.rs`'s own replay loop), not this gate's.
     let mut record = Vec::new();
     tlv(&mut record, 1, 0x11, &[0x22; 32]); // node_id
     tlv(&mut record, 2, 0x13, b"a.txt"); // old_path repo_path
     tlv(&mut record, 3, 0x13, b"b.txt"); // new_path repo_path
     let bytes = patch_with_raw_op(13, &record);
     let ops = decode_patch_operations(&bytes, 1).expect("decodes");
-    let err = ensure_apply_supported(ops.first().expect("one operation")).expect_err("deferred");
-    assert!(
-        matches!(err, PrikkError::UnsupportedObjectType(_)),
-        "{err:?}"
-    );
+    ensure_apply_supported(ops.first().expect("one operation")).expect("supported");
 }
 
 #[test]
@@ -527,7 +526,9 @@ fn decode_rejects_rename_path_all_zero_node_id() {
 }
 
 #[test]
-fn decode_rename_path_via_object_encoder_is_unsupported() {
+fn decode_rename_path_via_object_encoder_is_apply_supported() {
+    // End-to-end through the real §9.3 object writer (encoder/decoder agree on wire). RFC 144
+    // increment 1: RenamePath is now admitted by the apply-supported gate.
     let bytes = patch_bytes(OperationKind::RenamePath(RenamePath {
         node_id: NodeId::from_bytes([0x22; 32]),
         old_path: "a.txt".to_string(),
@@ -546,11 +547,7 @@ fn decode_rename_path_via_object_encoder_is_unsupported() {
         }
         other => panic!("expected RenamePath, got {other:?}"),
     }
-    let err = ensure_apply_supported(ops.first().expect("one operation")).expect_err("deferred");
-    assert!(
-        matches!(err, PrikkError::UnsupportedObjectType(_)),
-        "{err:?}"
-    );
+    ensure_apply_supported(ops.first().expect("one operation")).expect("supported");
 }
 
 // ---- ChangePerm (tag 14) §9.3 read-side ----
