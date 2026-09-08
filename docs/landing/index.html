@@ -235,22 +235,15 @@
      page, from the same `--paper`/`--soft-shadow` tokens every other card on this page already
      uses -- not a colour picked to match this artwork specifically. */
   .panels .frame{position:relative;background:var(--paper);border-radius:16px;padding:10px;box-shadow:var(--soft-shadow)}
-  /* RFC 137 §13f, CORRECTED: §13d's square box spent 134px of the 512px source on crop to buy
-     `object-position` slack -- and that 134px *was* the artwork's own margin around its subject
-     (source bottom margins are only 26-63px), so two panels (dark `Integrate`, dark `Grow`) shipped
-     with the subject flush against the frame. RULED there: margin wins over exact centring. `4/5`
-     spends only ≈39.5px of the 512px source instead -- measured against three candidates (`4/5`
-     ≈39.5px, `5/6` ≈58.4px, `7/8` ≈80px) against every panel's own source margin table (§13f); `7/8`
-     already left dark `Grow` at 2px on both sides (worse than square), `5/6` held it at a thin
-     ≈12px, and `4/5` is the first of the three where dark `Grow` -- the tightest source margin in
-     the set at 57/27 -- clears a comfortable ≈22px on both sides while every other panel's own
-     source margin is generous enough that none of these candidates moved its own result at all (see
-     the report: seven of eight panels are budget-limited long before centring, not ratio-limited).
-     `object-position` (below, per panel per theme) spends whatever of that smaller budget each
-     panel's own geometry can use; the box shape itself stays identical in both themes so the grid
-     keeps one baseline regardless of which theme's `object-position` is active -- §13d's own
-     structure, only its budget changed. */
-  .panels img{display:block;width:100%;height:auto;aspect-ratio:4/5;object-fit:cover;border-radius:10px}
+  /* RFC 137 §13d, RULED: the 378x512 cells are 3/4 boxed here before, and `cover` at 3/4 crops only
+     ≈1.6% -- almost no slack to steer toward where each subject actually sits, and every subject
+     sits low (measured: light +51 to +112px off centre, dark +14 to +82px, of 512). A square box
+     gives real slack (≈67px of original-image travel each way) without touching the delivered
+     files -- reversible framing, no asset churn, exactly what §13d asked for. `object-position`
+     (below, per panel per theme) is what actually steers it; the box shape itself is identical in
+     both themes so the grid keeps one baseline regardless of which theme's `object-position`
+     is active. */
+  .panels img{display:block;width:100%;height:auto;aspect-ratio:1/1;object-fit:cover;border-radius:10px}
   /* Same light/dark toggle idiom `.hero-photo` uses above, reused rather than reinvented -- both
      images sit in the same `.frame`, and exactly one is `display:block` at a time. */
   .panels img.dark{display:none}
@@ -494,10 +487,10 @@
           <p class="chip">Patches</p>
           <div class="frame">
             <img class="light" src="assets/panel-2-patches-light.webp" width="378" height="512"
-              style="object-position:50% 100%"
+              style="object-position:50% 99%"
               alt="Four cards, each a focused change, flowing along glowing lines toward an arrow.">
             <img class="dark" src="assets/panel-2-patches-dark.webp" width="378" height="512"
-              style="object-position:50% 100%"
+              style="object-position:50% 80%"
               alt="Four cards, each a focused change, flowing along glowing lines toward an arrow.">
           </div>
           <p class="caption">Small, focused patches flow in.</p>
@@ -506,10 +499,10 @@
           <p class="chip">Integrate</p>
           <div class="frame">
             <img class="light" src="assets/panel-3-integrate-light.webp" width="378" height="512"
-              style="object-position:50% 100%"
+              style="object-position:50% 96%"
               alt="The blocks assembled into one connected cube, glowing along its internal seams.">
             <img class="dark" src="assets/panel-3-integrate-dark.webp" width="378" height="512"
-              style="object-position:50% 100%"
+              style="object-position:50% 81%"
               alt="The blocks assembled into one connected cube, glowing along its internal seams.">
           </div>
           <p class="caption">Prikk integrates and validates with confidence.</p>
@@ -518,10 +511,10 @@
           <p class="chip">Grow</p>
           <div class="frame">
             <img class="light" src="assets/panel-4-grow-light.webp" width="378" height="512"
-              style="object-position:50% 100%"
+              style="object-position:50% 88%"
               alt="The cube alive with leaves growing from it, surrounded by sparkling light.">
             <img class="dark" src="assets/panel-4-grow-dark.webp" width="378" height="512"
-              style="object-position:50% 88%"
+              style="object-position:50% 60%"
               alt="The cube alive with leaves growing from it, surrounded by sparkling light.">
           </div>
           <p class="caption">The project grows, alive and spreading.</p>
