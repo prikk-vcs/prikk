@@ -14,6 +14,10 @@
     /* Warmth pass: the one shadow this page uses, everywhere it uses one -- replacing the hard
        1px rule around card-like blocks that lost their border below. */
     --soft-shadow:0 1px 2px rgba(20,15,5,.05), 0 4px 10px rgba(20,15,5,.04);
+    /* RFC 137 §13c: the single tunable cap on the hero's own aspect-ratio-derived height -- see
+       `.hero`'s own rule below. Not theme-dependent, defined once here for the same reason every
+       other page-wide constant is. */
+    --hero-cap:92vh;
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
@@ -74,7 +78,23 @@
   .button-quiet:hover{border-color:var(--sage)}
 
   /* ---- hero (RFC 137 §11: a photographic hero, single column of copy over it) ---- */
-  .hero{position:relative;padding:64px 0 12px;overflow:hidden}
+  /* RFC 137 §13c, RULED: size the section from the *image's own* aspect ratio so `object-fit:cover`
+     has little or nothing left to cut -- §13a measured 31.2% of the image height discarded under
+     the old fixed-height hero. `aspect-ratio` here matches `.wide`'s own 1672x941 (16:9); the
+     narrow breakpoint below overrides it to `.tall`'s own 941x1672 (9:16) once that set takes over.
+     `--hero-cap` is the single tunable value §13c asked for: a viewport-relative ceiling so the
+     section cannot grow absurd on a wide, short monitor, without hardcoding a pixel height that
+     would need hunting for on every future edit. The `Get started` button may fall below the fold
+     at this height -- accepted in §13c, because `.nav-cta` already puts one above the hero on every
+     load, and the nav is not sticky but does not need to be for that alone.
+     `width:100%` is load-bearing, not decorative: found by rendering at an ultra-wide viewport,
+     not assumed. Once `max-height` actually clamps the aspect-ratio-derived height, a block-level
+     box with no explicit width recomputes *width* to keep the ratio too, rather than staying full
+     bleed and letting `object-fit:cover` crop the sides -- a wide monitor was left with the hero's
+     own box stopping partway across the screen and bare page background filling the rest. An
+     explicit `width:100%` makes width the browser's fixed input instead of a second free variable,
+     so only height is ever clamped. */
+  .hero{position:relative;padding:64px 0 12px;overflow:hidden;width:100%;aspect-ratio:1672/941;max-height:var(--hero-cap)}
   /* RFC 137 §5/§11c: a photographic hero, two axes (form factor, theme). Both `.wide` (16:9) and
      `.tall` (9:16) sets are always in the DOM; the narrow breakpoint below picks which set shows,
      and within whichever set is showing, the same three-way `prefers-color-scheme`/`[data-theme]`
@@ -270,6 +290,9 @@
   @media (max-width:820px){
     .hero-photo-set.wide{display:none}
     .hero-photo-set.tall{display:block}
+    /* §13c's ratio switches with the form factor: `.tall` is 941x1672 (9:16), the mirror of
+       `.wide`'s 1672:941 above. */
+    .hero{aspect-ratio:941/1672}
     /* A percentage-based fade (the wide layout's own `.hero-scrim`) does not survive to a narrow
        viewport: the stacked copy (eyebrow through the `$ prikk --help` note) reaches all the way
        to the section's own bottom edge here, measured directly against a real narrow screenshot --
