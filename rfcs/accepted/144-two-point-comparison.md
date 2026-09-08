@@ -506,6 +506,71 @@ replay is policy-independent.** A concern load-bearing only on local display and
 history is dissolved. **Better than the reviewer's own mind-changer imagined:** a separable grant is
 never *needed*, yet the distinction is always *available* to any reader who wants it.
 
+## 4j. CORRECTED 2026-09-09 — the handoff's "reference implementation" was false, and the gap reaches sealing
+
+**Increment 1's handoff said: *"teach `patch_replay` what `lifecycle_cache` already knows"* and *"there
+is a reference implementation in this repository."* **That was wrong for the one case the increment
+exists to handle.**
+
+**Verified at source.** `rename_node` (`prikk-replay/src/node_lifecycle/mutation.rs:93-101`) rejects a
+target path occupied by another live node. Applied **sequentially** — which is what
+`apply_state_effect` does, one operation at a time — **a two-node swap fails**: node A moving to
+`b.txt` while node B is still live there raises
+`Integrity("rename target path b.txt is occupied by another live node")`.
+
+**And the gap is not confined to a read path.** `apply_candidate_patches` is, in its own words, *"the
+same `apply_state_effect` fold every other replay path uses"*, and
+`derive_next_state_root_for_candidate` is the **seal-time** derivation
+(`seal_from_accepted.rs:208`; also `rfc111_seal_simulation.rs:82`, `merge_execute.rs:166`).
+
+> **A rename cycle cannot be sealed into history today, and increment 1 does not change that.** It
+> teaches the *read* path to materialize one; the *write* path still cannot produce a block whose
+> state root represents it.
+
+**Found by the implementing round empirically — their first fixture called `derive_next_state_root` the
+way existing fixtures do, and it failed with the identical error from a different call site.**
+
+### 4j.1 RULED — the seal path gets the same resolution, in its own increment, before authoring
+
+**Increment 3 must not land first.** Authoring `RenamePath` while the seal path cannot represent a
+cycle would produce exactly the failure increment 1 was built to prevent, one layer up: history that
+cannot be sealed rather than history that cannot be read.
+
+**Constraint on that increment, and it is the part that needs care:** for every patch set that derives
+a state root successfully today, **it must still derive the same root.** Turning an error into a value
+is safe — nothing depends on a derivation that currently fails. **Turning a success into an error is
+not**, and a naive port of increment 1's validation would do exactly that. See §4j.2.
+
+### 4j.2 RULED — a chained rename within one patch is malformed, and both paths must say so
+
+**Increment 1 removes one divergence and introduces another, in the opposite direction.** Its Phase 0
+validates every operation's `old_path` against the **pre-run** state, so a *chained* rename — `A→B`
+then `B→C` for one node in one patch — is rejected. **The sequential seal path accepts it**, because
+each operation sees the previous one's result.
+
+**So today a chained rename would seal successfully and then fail to check out.**
+
+**RULED: the chained rename is the malformed one, and `patch_replay` is right to reject it.** A patch
+describes one set of changes; renaming a node twice within it means the intermediate path existed in no
+sealed state. **Its only honest meaning is the net move `A→C`.**
+
+**Therefore the follow-on increment aligns `derive_next_state_root` to `patch_replay`'s validation, not
+the reverse.** That is a success→error flip, and it is admissible **only because it is unreachable in
+authored history** — nothing emits `RenamePath` — and because the case represents a state no sealed
+block ever had. **Increment 3 must never author one.**
+
+### 4j.3 The batch scope, accepted as ruled
+
+Resolution is over **maximal runs of consecutive `RenamePath` operations within one patch** — not
+across patch boundaries, not across interleaved non-rename operations. **The reasoning is sound and
+recorded:** a patch is the atomic signed unit, so a genuine simultaneous swap can only be authored
+within one; deferring all of a patch's renames regardless of interleaving would reorder execution
+against `op_seq`.
+
+**Accepted limitation:** a *non-adjacent* interleaved cycle (`rename A`, unrelated edit, `rename B`)
+is not resolved. **No control requires it and no authoring path can produce it**, but it is a real
+edge and is recorded rather than discovered later.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
