@@ -826,6 +826,36 @@ Recorded because RFC 131 §3's remaining target is already foreclosed by its own
 coupling-gate item, and a visibility budget that only ever moves outward between narrowing rounds is the
 thing that would make that target unreachable for good.
 
+### 4n.3 CLOSED 2026-09-09 — the unsealed repository answers, and the release blocker is lifted
+
+Delivered at `a6d70665`. `preview_bundle` branches on `Option<ObjectId>` instead of erroring: an
+unpublished local ref routes to `preview::preview_new_repository_impact`, which replays the bundle's own
+chain against an empty starting state and reports every path as `Created` with `AppliesCleanly` — "all of
+it arrives." Exit `0`, JSON `connectivity: "no-local-history"`, distinct from all four existing labels
+(`bundle.rs:297-301`).
+
+**§4n.1's ruling was followed, not reinterpreted**: `FastForward` was not overloaded, and `preview_impact`
+is untouched — the branch is taken at the call site, before any `ObjectId`-shaped value is required.
+
+**Verified at review by perturbing the new branch alone** to write a cache file: only
+`no_local_history_reports_the_whole_bundle_as_created` failed. The guarantee holds on the new path, which
+is where a guarantee most often silently stops applying.
+
+**The neighbour question is settled, at the type rather than the call site.**
+`RefStore::read_current_ref_state_id` (`refs.rs:336-348`) returns `Ok(None)` whenever no pointer entry
+exists. A ref that never existed and a ref not yet published are **not two states this store can
+distinguish** — they are one, and both now route to `NoLocalHistory`.
+
+**Recorded for whoever adds a sixth branch:** the round's report claims the pre-existing
+`bundle_preview_writes_nothing` test "covers every path through `preview_bundle`." **It does not** — it
+builds a sealed fixture and takes the `Some(...)` branch; under the perturbation above it passed while
+the new test failed. The new path is covered only because the new test carries its own before/after
+digest. **A claim that an existing control covers a new path must be established by a perturbation that
+travels that path**, or a future branch will ship with the guarantee quietly not applying to it and every
+test still green.
+
+**`prikk bundle preview` is complete.** Nothing in §4m or §4n remains open.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
