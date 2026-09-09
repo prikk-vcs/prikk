@@ -856,6 +856,120 @@ test still green.
 
 **`prikk bundle preview` is complete.** Nothing in §4m or §4n remains open.
 
+## 4o. DESIGNED 2026-09-09 — increment 3, in four pieces, of which one is handed off
+
+§3 says "`prikk mv`, **or equivalent capture**" and §4h.5 mentions `prikk mv --record` only to set it
+aside. **The policy is ruled thoroughly and the surface is not designed at all** — the same state
+`bundle preview` was in at §4f before §4m. This section designs it.
+
+**Increment 3 as scoped bundles four separable pieces**, and only the first is on the critical path.
+All four are designed here; **piece 1 is handed off alone**, because it is the round that makes several
+latent things live at once and should be small enough to review closely.
+
+### 4o.1 RULED — `prikk mv <old> <new>`, and it both moves and declares
+
+**The command performs the rename on disk *and* records the declaration.** Not one or the other.
+
+A declaration that does not move the file leaves the worktree and the declaration disagreeing, and the
+user finding out at `commit`. A move that does not declare is the shell `mv` we already have. **`git mv`
+does both and the shape is right for the same reason.**
+
+**But the realistic flow is against us, and §7's own note says so:** *"a user runs `mv` in a shell and
+**then** commits, by which point the declaration was never made."* So `prikk mv` must accept the
+already-moved case:
+
+| Worktree state | Behaviour |
+|---|---|
+| `<old>` exists, `<new>` does not | Perform the rename, record the declaration |
+| `<old>` gone, `<new>` exists | **Record the declaration only**, touch no bytes — the user already moved it in a shell |
+| Both exist | **Refuse.** Two files, and which one is the node is not ours to guess |
+| Neither exists | **Refuse.** Nothing to move |
+
+**The second row is the one that makes this usable at all**, and it is why the command is not merely a
+wrapper around `rename(2)`. **It must not compare content to decide** — that would be inference, and
+§4g's declaration-only ruling forbids the machine deciding what moved.
+
+### 4o.2 RULED — the declaration is durable, cleared on consumption, and collapses to the net move
+
+`prikk mv` and `prikk commit` are separate invocations, so the declaration must survive between them.
+It lives in the repository's own state alongside the queue, is written durably, and is **cleared when
+the commit that consumes it is queued** — not when it is sealed. A declaration is an intent about the
+*next* patch, and a queued patch has already captured it.
+
+**Chained declarations collapse to the net move, and §4j.2 already ruled why.** `prikk mv a b` then
+`prikk mv b c` before a single commit must author **`a→c`**, one operation, not two.
+
+> §4j.2, verbatim: *"renaming a node twice within it means the intermediate path existed in no sealed
+> state. **Its only honest meaning is the net move `A→C`.**"*
+
+That is not a new decision; it is the same rule the seal path and `patch_replay` already enforce,
+applied one layer earlier so a malformed patch is never authored in the first place. **Authoring must
+not emit what replay would reject.**
+
+**Two corollaries fall out of the same rule and must be handled, not discovered:**
+
+- **`prikk mv a b` then `prikk mv b a`** nets to no move. **Drop the declaration entirely** — do not
+  author `a→a`, which asserts a move that did not happen.
+- **A declared move whose destination is then deleted** nets to a deletion. **Drop the declaration and
+  author the plain `DeleteNode`** — the intermediate path existed in no sealed state, exactly as above.
+
+**If the worktree contradicts a live declaration at commit time — the declared destination is gone and
+the source is back — refuse the commit with a message naming the declaration.** Do not silently drop it:
+the user asserted something, and the machine discarding an assertion quietly is the failure mode §4g's
+whole resolution exists to prevent.
+
+### 4o.3 RULED — `worktree-status` shows live declarations, because an invisible assertion is a trap
+
+A declaration made and forgotten is authored into permanent history at the next commit. **It must be
+visible before then**, in the command whose job is *what will this commit do*, and in its `--format
+json` as a machine-branchable field.
+
+### 4o.4 Piece 2 — the commit-time hint (§4h.5), non-authoring
+
+When `commit` sees a delete+create pair that is a strong move candidate, it **may** print
+*"looks like you moved X to Y; `prikk mv` would preserve its identity"* — and **authors nothing**.
+
+**The heuristic is allowed to be wrong** because it costs a line of output, not a fact in history. Its
+one hard constraint: **it must never author, never prompt, and never block.** The machine suggests; the
+human asserts. A hint that becomes a default is the coercion §4h.5 refused.
+
+**Scope note:** exact-content match is the obvious candidate signal and is sufficient. Similarity
+scoring is explicitly out — it buys a better hint at the cost of a threshold nobody can defend.
+
+### 4o.5 Piece 3 — the thirteenth conflict witness (§4i.2)
+
+**One node, two disjoint destinations, both sides.** Resolution: *choose which destination wins for this
+node*. Distinct from `SamePathCreate`, which stays as it is — §4i.2 established the pair is a genuine
+dual: *"both-sides is one node, two paths — pick the path; occupied-path is two nodes, one path — pick
+the node."*
+
+**Relabelling `SamePathCreate` remains optional cosmetics and stays deferred**, per §4i.2.
+
+### 4o.6 Piece 4 — §4i.1's honesty invariant, enforced structurally
+
+**Rename and asserting signer become one value in the read types**, so a rename-bearing report cannot be
+*constructed* without its signer and no future surface can drop it.
+
+**This is the piece with reach beyond rename**, since it changes read types other surfaces already use —
+`show`, `bundle preview`, `checkout --patch-plan --format json` all render operations. It is designed
+here and **must not ride with piece 1**: bundling a type change across four render surfaces into the
+round that first authors renames would make both harder to review.
+
+### 4o.7 Sequencing, and what piece 1 makes live
+
+**Piece 1 first and alone.** Pieces 2-4 follow in any order; piece 4 wants its own round.
+
+**Piece 1 is the first thing in prikk that ever emits a `RenamePath`**, and that flips several latent
+things to live in one commit:
+
+- **`checkout --patch-plan --format json` fails outright on a `RenamePath`** — documented, and we told
+  stikk so in `send/004`. Their Compare view will start meeting it.
+- **The queued-envelope fold site's rename routing becomes load-bearing** rather than precautionary —
+  which is exactly why §4k.1 gated increment 3 on proving it.
+- **`rename_nodes_checked_batch`'s fail-atomicity starts mattering** on real input.
+
+None of these is a reason to delay. They are the reason to keep piece 1 small.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
