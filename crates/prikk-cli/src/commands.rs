@@ -182,6 +182,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk bundle export --ref REF --output <file> [--force]  Write a self-contained history bundle; refuses an existing file unless --force",
             "  prikk bundle import --input <file>        Import a bundle as an untrusted received pointer",
+            "  prikk bundle preview --input <file> [--ref REF] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
             "  prikk bundle verify --input <file>        Check a bundle offline; writes nothing, needs no repository",
         ],
     },

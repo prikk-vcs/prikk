@@ -71,6 +71,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod preview;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
     BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload, Signature, SignerRole,
@@ -262,6 +264,259 @@ pub struct BundleImportReport {
     /// grants no admission judgement, only lets `verify` distinguish Sound from Unverifiable for the
     /// Patches it covers.
     pub recorded_author_key_count: usize,
+}
+
+/// How a bundle's own history relates to the local ref it was previewed against (RFC 144 §4m.3
+/// answer #1 -- "does it apply at all?"). Never an error: a bundle whose history shares no ancestry
+/// with the local ref is a legitimate, reportable outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundlePreviewConnectivity {
+    /// No shared ancestry with the local ref at all.
+    DoesNotConnect,
+    /// The bundle's own target block is already an ancestor of the local ref's current target --
+    /// this bundle brings nothing this repository does not already have.
+    AlreadyIncluded,
+    /// The local ref's current target is an ancestor of the bundle's own target: a fast-forward.
+    /// No conflict is possible by construction.
+    FastForward,
+    /// Both sides carry commits since their common ancestor. See [`BundlePreviewConflict`] for
+    /// whether this would conflict.
+    Diverged,
+}
+
+impl BundlePreviewConnectivity {
+    /// Stable CLI/JSON label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DoesNotConnect => "does-not-connect",
+            Self::AlreadyIncluded => "already-included",
+            Self::FastForward => "fast-forward",
+            Self::Diverged => "diverged",
+        }
+    }
+}
+
+/// The answer to RFC 144 §4m.3's answer #2 -- "would it conflict?" -- present only when
+/// [`BundlePreviewConnectivity::FastForward`] or [`BundlePreviewConnectivity::Diverged`] (a
+/// disconnected or already-included bundle has no such question to answer). **A conflict is the
+/// result of a successful preview, not a failure of one**: this is a field, never an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BundlePreviewConflict {
+    /// The bundle's own new operations replayed cleanly onto the local ref's current state.
+    AppliesCleanly,
+    /// Replaying the bundle's own new operations onto the local ref's current state failed --
+    /// `detail` names the underlying replay error.
+    Conflict {
+        /// The replay failure that constitutes the conflict.
+        detail: String,
+    },
+    /// More than one common ancestor has equal claim to being the merge base (a genuinely
+    /// ambiguous history). Not guessed at -- an honest "not answerable today," per RFC 144 §4m's
+    /// own instruction that this beats a field that is always populated and sometimes wrong.
+    Undetermined {
+        /// Why this could not be determined.
+        reason: String,
+    },
+}
+
+impl BundlePreviewConflict {
+    /// Stable CLI/JSON label.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AppliesCleanly => "applies-cleanly",
+            Self::Conflict { .. } => "conflict",
+            Self::Undetermined { .. } => "undetermined",
+        }
+    }
+}
+
+/// One node-granularity effect the bundle's own new operations would have on the local ref's
+/// current state (RFC 144 §4m.3). **Never a rename** -- see [`BundlePreviewReport`]'s own doc for
+/// the honesty limit this reflects (§4g.3/§4m.4): until rename authoring lands, a moved path
+/// previews as a delete plus a create, and the report says so rather than let a reader infer
+/// intent the repository does not record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundlePreviewEffect {
+    /// Repository-relative path.
+    pub path: String,
+    /// What would happen to this path.
+    pub kind: BundlePreviewEffectKind,
+    /// Byte length in the local ref's current state, when the path currently exists.
+    pub current_bytes: Option<u64>,
+    /// Byte length after the bundle's own new operations, when the path would exist.
+    pub after_bytes: Option<u64>,
+}
+
+/// See [`BundlePreviewEffect`]'s own doc for why this has no `Renamed` variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundlePreviewEffectKind {
+    /// The path does not currently exist and would be created.
+    Created,
+    /// The path currently exists and would be removed.
+    Deleted,
+    /// The path's content would change.
+    Edited,
+    /// The path's content is unchanged but its mode bits would change.
+    PermissionChanged,
+}
+
+impl BundlePreviewEffectKind {
+    /// Stable CLI/JSON label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Deleted => "deleted",
+            Self::Edited => "edited",
+            Self::PermissionChanged => "permission-changed",
+        }
+    }
+}
+
+/// Full report of previewing a bundle's impact on a local ref (RFC 144 §4m), never mutating
+/// anything -- see [`preview_bundle`]'s own doc comment for the write-nothing guarantee and its
+/// control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundlePreviewReport {
+    /// The bundle's own exported ref name (not the local ref it was previewed against).
+    pub bundle_ref_name: String,
+    /// The local ref this preview compared against.
+    pub local_ref_name: String,
+    /// How the bundle's history relates to the local ref (§4m.3 answer #1).
+    pub connectivity: BundlePreviewConnectivity,
+    /// Would applying the bundle conflict (§4m.3 answer #2)? `None` only for
+    /// [`BundlePreviewConnectivity::DoesNotConnect`] or `AlreadyIncluded`, where the question does
+    /// not apply.
+    pub conflict: Option<BundlePreviewConflict>,
+    /// The MAINTAINER key id(s) that sealed the bundle's own exported RefState (§4m.3 answer #3).
+    /// **Reported, not trusted** -- this is recorded signer identity, the same "continuity only,
+    /// not a trust decision" disclaimer `bundle import`/`bundle verify` already print, matching
+    /// their own care per the handoff's own instruction. Never independently verified against a
+    /// trust policy here; `verify` after import is what decides trust.
+    pub sealed_by: Vec<String>,
+    /// Node-granularity effects, sorted by path. Empty when connectivity is `DoesNotConnect`,
+    /// `AlreadyIncluded`, or the conflict answer is `Conflict`/`Undetermined` (a replay that failed
+    /// or was never attempted has no well-defined "after" state to diff).
+    pub effects: Vec<BundlePreviewEffect>,
+    /// This bundle's own self-describing manifest, if it carries one -- same semantics as
+    /// [`BundleVerifyReport::manifest`].
+    pub manifest: Option<BundleManifest>,
+}
+
+/// Preview what a bundle would do to `ref_name` in this repository, **writing nothing** (RFC 144
+/// §4m.2's own hard requirement -- no objects, no refs, no received pointer, no trust state, no
+/// cache write; proven by a control, `bundle_preview_writes_nothing`, not by this doc comment).
+///
+/// **The reader, and why it is safe not to write the bundle's objects first** (§4m.3's
+/// implementation crux): the bundle is self-contained, so its own objects are readable without
+/// being written, via `BundleAndLocalReader` (crate-private) -- the repository's real object store overlaid with
+/// the bundle's own object set held in memory. Every read this function performs, and every read
+/// the replay machinery it calls performs, goes through that composed reader or a bundle-only view
+/// of it; nothing here ever opens an [`ObjectWriteSession`] or any other write path. **This is
+/// deliberately not "import to a temporary directory, then delete"**: that would write, could
+/// leave residue on a crash, and would make the write-nothing control a statement about cleanup
+/// rather than about behaviour (the handoff's own instruction).
+///
+/// **No incremental lifecycle cache is touched.** That cache is a best-effort, persisted
+/// optimization real replay paths use and write to disk; this function never calls into it
+/// (`patch_replay::preview`'s own `walk_and_replay` is a plain in-memory fold, the same primitive
+/// `patch_replay`'s own read paths use before any cache lookup) -- see this function's own control
+/// for the perturbation that proves it.
+pub fn preview_bundle(
+    layout: &RepositoryLayout,
+    bytes: &[u8],
+    options: &BundleImportOptions,
+    ref_name: &str,
+) -> Result<BundlePreviewReport> {
+    let read_snapshot = ObjectReadSnapshot::open(layout)?;
+    let contents = validate_bundle_contents(bytes, options, Some(&read_snapshot))?;
+
+    let sealed_by: Vec<String> = contents
+        .objects
+        .first()
+        .into_iter()
+        .flat_map(|envelope| envelope.signatures.iter())
+        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
+        .map(|signature| signature.key_id.clone())
+        .collect();
+
+    let local_ref_state_id = RefStore::new(layout.clone())
+        .read_current_ref_state_id(ref_name)?
+        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
+    let local_ref_state_envelope = read_snapshot
+        .read_typed(local_ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "ref {ref_name} points to missing RefState {local_ref_state_id}"
+            ))
+        })?;
+    let local_ref_state_payload = RefStatePayload::decode_canonical(
+        &local_ref_state_envelope.canonical_payload,
+        local_ref_state_envelope.schema_version,
+    )?;
+    let (local_target, _) =
+        crate::refs::resolve_ref_tip_block(&read_snapshot, &local_ref_state_payload)?;
+
+    let combined_reader = BundleAndLocalReader {
+        bundle_objects: &contents.bundle_objects_by_id,
+        local: Some(&read_snapshot),
+    };
+    let bundle_only_reader = BundleAndLocalReader {
+        bundle_objects: &contents.bundle_objects_by_id,
+        local: None,
+    };
+    let (bundle_target, _) =
+        crate::refs::resolve_ref_tip_block(&bundle_only_reader, &contents.ref_state_payload)?;
+
+    let preview = preview::preview_impact(
+        &combined_reader,
+        &bundle_only_reader,
+        local_target,
+        bundle_target,
+    )?;
+
+    let connectivity = match preview.connectivity {
+        preview::BundleConnectivity::DoesNotConnect => BundlePreviewConnectivity::DoesNotConnect,
+        preview::BundleConnectivity::AlreadyIncluded => BundlePreviewConnectivity::AlreadyIncluded,
+        preview::BundleConnectivity::FastForward => BundlePreviewConnectivity::FastForward,
+        preview::BundleConnectivity::Diverged => BundlePreviewConnectivity::Diverged,
+    };
+    let conflict = preview.conflict.map(|answer| match answer {
+        preview::ConflictAnswer::AppliesCleanly => BundlePreviewConflict::AppliesCleanly,
+        preview::ConflictAnswer::Conflict { detail } => BundlePreviewConflict::Conflict { detail },
+        preview::ConflictAnswer::Undetermined { reason } => {
+            BundlePreviewConflict::Undetermined { reason }
+        }
+    });
+    let effects = preview
+        .effects
+        .into_iter()
+        .map(|effect| BundlePreviewEffect {
+            path: effect.path,
+            kind: match effect.kind {
+                preview::BundleImpactEffectKind::Created => BundlePreviewEffectKind::Created,
+                preview::BundleImpactEffectKind::Deleted => BundlePreviewEffectKind::Deleted,
+                preview::BundleImpactEffectKind::Edited => BundlePreviewEffectKind::Edited,
+                preview::BundleImpactEffectKind::PermissionChanged => {
+                    BundlePreviewEffectKind::PermissionChanged
+                }
+            },
+            current_bytes: effect.current_bytes,
+            after_bytes: effect.after_bytes,
+        })
+        .collect();
+
+    Ok(BundlePreviewReport {
+        bundle_ref_name: contents.origin_ref_name,
+        local_ref_name: ref_name.to_string(),
+        connectivity,
+        conflict,
+        sealed_by,
+        effects,
+        manifest: contents.manifest,
+    })
 }
 
 /// Export a genesis-complete, verifiable subset of objects for `ref_name` (DC-78 §D4/§D6). Walks the
@@ -852,9 +1107,13 @@ fn read_required(
 /// so a bundle-carried object is not yet reachable through `local` even once import succeeds --
 /// `bundle_objects` is what makes it visible during validation. `local` is `None` for offline
 /// verification (`verify_bundle`), which has no repository to fall back to.
-struct BundleAndLocalReader<'a> {
-    bundle_objects: &'a BTreeMap<ObjectId, ObjectEnvelope>,
-    local: Option<&'a ObjectReadSnapshot>,
+///
+/// `pub(crate)` (RFC 144 §4m.3): this is the "composed, read-only reader -- the repository's
+/// object store overlaid with the bundle's own object set held in memory" the bundle-impact
+/// preview needs, reused rather than reimplemented -- see `preview_bundle`'s own doc comment.
+pub(crate) struct BundleAndLocalReader<'a> {
+    pub(crate) bundle_objects: &'a BTreeMap<ObjectId, ObjectEnvelope>,
+    pub(crate) local: Option<&'a ObjectReadSnapshot>,
 }
 
 impl ObjectReader for BundleAndLocalReader<'_> {

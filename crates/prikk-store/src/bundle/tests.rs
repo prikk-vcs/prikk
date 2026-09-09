@@ -1,5 +1,6 @@
 //! Bundle export/import tests.
 
+mod preview;
 mod proptest_decode_bundle;
 
 use prikk_object::{

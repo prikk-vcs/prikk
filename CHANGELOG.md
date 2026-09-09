@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — `prikk bundle preview --input <file>`: what a bundle would do to your repository
+
+Until now, learning what a bundle would do to your repository required `bundle import` first —
+admitting its objects into your object store before you could ask. `bundle preview` answers the
+same question without writing anything: no objects, no refs, no received pointer, no trust state,
+no cache. It reports, at the node level, which paths the bundle would create, delete, edit, or
+change the permissions of; whether the bundle's history connects to yours at all (a bundle with no
+shared ancestry is a legitimate, reported answer, not an error); whether applying it would conflict
+(also a result, not a failure — a conflicting or disconnected bundle still exits `0`); and who
+sealed it, with the same "continuity only, not a trust decision" disclaimer `bundle import` already
+prints for recorded signer material. `--format json` makes all of this machine-branchable. Until
+rename authoring lands, a moved path previews as a delete plus a create, and the output says so
+rather than let a reader infer intent the repository does not yet record.
+
 ### Added — `prikk checkout --patch-plan --format json`: content at a replayed point
 
 `checkout --patch-plan` already reconstructs every file's bytes to prove a replay, then discarded

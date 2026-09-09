@@ -9,6 +9,7 @@ use prikk_store::{
     SnapshotMaterializationReport,
 };
 
+mod bundle_preview;
 mod help;
 mod merge_evidence;
 mod patch_plan;
@@ -18,6 +19,7 @@ mod trust;
 mod verification;
 mod worktree;
 
+pub(crate) use bundle_preview::{print_bundle_preview_json, print_bundle_preview_plain};
 pub(crate) use help::{print_command_help, print_help};
 pub(crate) use merge_evidence::{print_merge_evidence, print_merge_plan};
 pub(crate) use patch_plan::print_patch_plan_content_json;

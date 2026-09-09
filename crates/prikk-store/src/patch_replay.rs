@@ -9,21 +9,25 @@
 //! own doc comment for why. Renames still have no authoring path (`node_authoring.rs` never
 //! produces `RenamePath`; that is increment 3, gated on this one landing correctly) and symlink
 //! authoring is refused outright, so symlink apply stays deferred pending an authoring path, not
-//! the node model; merge algebra and conflict handling remain later increments.
+//! the node model.
 //!
-//! Split across three files (DC-58): this file keeps the public API and baseline resolution;
-//! `read.rs` holds object-store reading helpers (block-chain walking, blob/patch/snapshot
-//! loading); `apply.rs` holds the per-operation state-fold logic. `decode.rs` (pre-existing) is
-//! unchanged. No behaviour or public path changed by the split.
+//! **Split across four modules** (DC-58, RFC 144 §4m): this file keeps the public API and baseline
+//! resolution; `read.rs` holds object-store reading helpers (block-chain walking, blob/patch/
+//! snapshot loading); `apply.rs` holds the per-operation state-fold logic; `preview.rs` (RFC 144
+//! §4m) reuses both to answer *would applying a bundle's own new operations onto a ref's current
+//! state conflict* -- a narrower question than `patch_algebra`'s own confluence/witness machinery
+//! answers (see `preview.rs`'s own doc comment for why that narrower question is the right one for
+//! a bundle preview), not full merge algebra, which remains `patch_algebra`'s and later
+//! increments' own scope. `decode.rs` (pre-existing) is unchanged.
 
 use std::collections::BTreeMap;
 
-mod apply;
+pub(crate) mod apply;
 pub(crate) mod decode;
-mod read;
+pub(crate) mod read;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{NodeKind, ObjectId};
+use prikk_object::{NodeId, NodeKind, ObjectId};
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::node::node_lifecycle::NodeLifecycleState;
@@ -302,6 +306,56 @@ pub(crate) struct PatchReplayDeletedFile {
     pub(crate) old_bytes: Vec<u8>,
 }
 
+/// Apply a decoded operation sequence -- already concatenated across whatever patch(es) produced
+/// it -- onto existing `files`/`live_nodes`/`deleted_files` state, using the exact per-operation
+/// dispatch [`replay_supported_patch_chain`]'s own loop uses: consecutive `RenamePath` operations
+/// batched into one run (RFC 144 §4h.7/§4j; see `apply::apply_rename_batch`'s own doc comment),
+/// everything else applied one at a time via `apply_decoded_operation`. Returns the count and the
+/// distinct applied-kind labels, matching the bookkeeping the chain-walking loop keeps.
+///
+/// Extracted as its own reusable primitive (not merely inlined in the loop below) because the
+/// bundle-impact preview needs the identical dispatch applied to a *different* operation source: a
+/// bundle's own candidate operations, applied onto a copy of the local ref's current replayed
+/// state rather than operations read patch-by-patch while walking a block chain -- "one replay of
+/// current state, plus the bundle's own patches applied in memory," in the design's own words.
+pub(crate) fn apply_operation_sequence(
+    object_store: &impl ObjectReader,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    live_nodes: &mut BTreeMap<NodeId, apply::ReplayLiveNode>,
+    deleted_files: &mut BTreeMap<String, PatchReplayDeletedFile>,
+    operations: Vec<decode::DecodedPatchOperation>,
+) -> Result<(usize, std::collections::BTreeSet<&'static str>)> {
+    let mut applied_operation_count = 0_usize;
+    let mut applied_operation_kinds = std::collections::BTreeSet::new();
+    let mut operations = operations.into_iter().peekable();
+    while let Some(first) = operations.next() {
+        if matches!(first.kind, DecodedOperationKind::RenamePath { .. }) {
+            let mut run = vec![first];
+            while let Some(next) = operations
+                .next_if(|next| matches!(next.kind, DecodedOperationKind::RenamePath { .. }))
+            {
+                run.push(next);
+            }
+            // Captured before the run is consumed below, and only kept if the batch apply that
+            // follows actually succeeds -- same rule as the single-operation path below.
+            let run_len = run.len();
+            apply_rename_batch(files, live_nodes, run)?;
+            applied_operation_kinds.insert("rename-path");
+            applied_operation_count += run_len;
+        } else {
+            // Captured before the operation is consumed below, and only kept if the apply that
+            // follows actually succeeds -- a kind `ensure_apply_supported` admits can still fail
+            // apply's own further validation (a real Integrity error), and that must propagate
+            // rather than being recorded as "covered".
+            let kind_label = decode::applied_operation_kind_label(&first.kind);
+            apply_decoded_operation(object_store, files, live_nodes, deleted_files, first)?;
+            applied_operation_kinds.insert(kind_label);
+            applied_operation_count += 1;
+        }
+    }
+    Ok((applied_operation_count, applied_operation_kinds))
+}
+
 /// Replay the supported operation subset into a validated in-memory manifest.
 pub(crate) fn replay_supported_patch_chain(
     layout: &RepositoryLayout,
@@ -334,46 +388,15 @@ pub(crate) fn replay_supported_patch_chain(
             let patch = read_patch(&object_store, patch_id)?;
             let operations =
                 decode_patch_operations(&patch.canonical_payload, patch.schema_version)?;
-            // RFC 144 §4h.7 / increment 1: a run of consecutive `RenamePath` operations is
-            // resolved together (node before path -- see `apply::apply_rename_batch`), not one
-            // at a time, so a rename cycle within one patch never sees its own other half as an
-            // occupied path. Scoped to *consecutive* renames within *this* patch only: a
-            // non-rename operation between two renames breaks the run, each half is then checked
-            // individually against the immediate state exactly as before -- deliberate, see
-            // `apply_rename_batch`'s own doc comment.
-            let mut operations = operations.into_iter().peekable();
-            while let Some(first) = operations.next() {
-                if matches!(first.kind, DecodedOperationKind::RenamePath { .. }) {
-                    let mut run = vec![first];
-                    while let Some(next) = operations.next_if(|next| {
-                        matches!(next.kind, DecodedOperationKind::RenamePath { .. })
-                    }) {
-                        run.push(next);
-                    }
-                    // Captured before the run is consumed below, and only kept if the batch
-                    // apply that follows actually succeeds -- same rule as the single-operation
-                    // path below.
-                    let run_len = run.len();
-                    apply_rename_batch(&mut files, &mut live_nodes, run)?;
-                    applied_operation_kinds.insert("rename-path");
-                    applied_operation_count += run_len;
-                } else {
-                    // Captured before the operation is consumed below, and only kept if the apply
-                    // that follows actually succeeds -- a kind `ensure_apply_supported` admits can
-                    // still fail apply's own further validation (a real Integrity error), and that
-                    // must propagate rather than being recorded as "covered".
-                    let kind_label = decode::applied_operation_kind_label(&first.kind);
-                    apply_decoded_operation(
-                        &object_store,
-                        &mut files,
-                        &mut live_nodes,
-                        &mut deleted_files,
-                        first,
-                    )?;
-                    applied_operation_kinds.insert(kind_label);
-                    applied_operation_count += 1;
-                }
-            }
+            let (count, kinds) = apply_operation_sequence(
+                &object_store,
+                &mut files,
+                &mut live_nodes,
+                &mut deleted_files,
+                operations,
+            )?;
+            applied_operation_count += count;
+            applied_operation_kinds.extend(kinds);
             patch_count += 1;
         }
     }

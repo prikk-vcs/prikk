@@ -35,24 +35,27 @@ use std::path::PathBuf;
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
+use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
 use crate::stdout::println;
 use prikk_store::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, verify_bundle,
+    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, DEFAULT_CHECKOUT_REF, export_bundle, import_bundle,
+    preview_bundle, verify_bundle,
 };
 
-/// Dispatch `prikk bundle [export|import|verify]`.
+/// Dispatch `prikk bundle [export|import|preview|verify]`.
 pub fn run_bundle(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut iter = args.into_iter();
     match iter.next().as_deref() {
         Some("export") => run_export(root, iter.collect()),
         Some("import") => run_import(root, iter.collect()),
+        Some("preview") => run_preview(root, iter.collect()),
         Some("verify") => run_verify(iter.collect()),
         Some(other) => Err(CliError::Usage(format!(
-            "unknown bundle subcommand: {other} (expected export, import, or verify)"
+            "unknown bundle subcommand: {other} (expected export, import, preview, or verify)"
         ))),
         None => Err(CliError::Usage(
-            "bundle requires a subcommand: export, import, or verify".to_string(),
+            "bundle requires a subcommand: export, import, preview, or verify".to_string(),
         )),
     }
 }
@@ -114,6 +117,73 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
          `trust maintainer add` to trust the sealing key, then `merge` to incorporate this history"
     );
     Ok(())
+}
+
+fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
+    let parsed = parse_preview_args(args)?;
+    let layout = crate::open_repository(root)?;
+    let bytes = std::fs::read(&parsed.input).map_err(|err| {
+        format!(
+            "failed to read bundle from {}: {err}",
+            parsed.input.display()
+        )
+    })?;
+    let options = bundle_import_options_from_env()?;
+    let report = preview_bundle(&layout, &bytes, &options, &parsed.ref_name)
+        .map_err(|err| err.to_string())?;
+    if parsed.format_json {
+        print_bundle_preview_json(&report);
+    } else {
+        print_bundle_preview_plain(&report);
+    }
+    Ok(())
+}
+
+struct PreviewArgs {
+    input: PathBuf,
+    ref_name: String,
+    format_json: bool,
+}
+
+fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, CliError> {
+    let mut input = None;
+    let mut ref_name = None;
+    let mut format_json = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--input" => {
+                let value = flag_value(&mut iter, "bundle preview --input")?;
+                input.set_once("--input", PathBuf::from(value))?;
+            }
+            "--ref" => {
+                let value = flag_value(&mut iter, "bundle preview --ref")?;
+                if value.trim().is_empty() {
+                    return Err(CliError::Usage(
+                        "bundle preview --ref must not be empty".to_string(),
+                    ));
+                }
+                ref_name.set_once("--ref", value)?;
+            }
+            "--format" => {
+                let value = flag_value(&mut iter, "bundle preview --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "bundle preview --format only accepts \"json\", got {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
+            other => return Err(unknown_argument("bundle preview", other)),
+        }
+    }
+    let input =
+        input.ok_or_else(|| CliError::Usage("bundle preview requires --input".to_string()))?;
+    Ok(PreviewArgs {
+        input,
+        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        format_json,
+    })
 }
 
 fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {

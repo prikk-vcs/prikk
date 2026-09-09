@@ -18,14 +18,14 @@ use super::decode::{
 use super::read::read_blob_bytes_with_kind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ReplayLiveNode {
-    pub(super) path: String,
-    pub(super) kind: NodeKind,
+pub(crate) struct ReplayLiveNode {
+    pub(crate) path: String,
+    pub(crate) kind: NodeKind,
     /// Current mode bits, as recorded by the operation that most recently set them
     /// (`CreateFile`, then any `ChangePerm`) — DC-73. Threaded into materialization so a
     /// checked-out file's permission bits match what was authored, not the anchored write
     /// primitive's create-time default.
-    pub(super) mode: u32,
+    pub(crate) mode: u32,
     /// The blob id backing this node's *current* content, as recorded by the operation that most
     /// recently set it (`CreateFile`, then any `ReplaceBinary`) — RFC 143 §5. Meaningful only when
     /// `kind` is `BinaryFile`: a `TextFile` node's tracked id goes stale the moment an `EditText`
@@ -34,7 +34,7 @@ pub(super) struct ReplayLiveNode {
     /// (`EditText` is text-only; binary content only ever changes via `ReplaceBinary`, which always
     /// updates this to a real, current, apply-validated blob), so for them this id never goes
     /// stale.
-    pub(super) blob_id: ObjectId,
+    pub(crate) blob_id: ObjectId,
 }
 
 pub(super) fn apply_decoded_operation(
