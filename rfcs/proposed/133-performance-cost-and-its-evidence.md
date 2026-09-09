@@ -695,6 +695,40 @@ by explicit path, before the next release that publishes `prikk`.** Not a defect
 not a reason to hold it — but a feature name in a published crate is durable, and removing one later is a
 breaking change.
 
+### 6d.6 CLOSED 2026-09-09 — the probe left the published crate, and the ratio band is a large-N property only
+
+**§6d.5 delivered at `8e715eda`.** The `[[bin]]` and the `rusage-probe` feature are gone from
+`crates/prikk-cli`; the binary moved by `git mv` into `tools/benchmarks`, which was already
+`publish = false`, already depends on `prikk-store` alone, and was already in `boundary.rs`'s member
+allowlist — so **no new workspace member and no allowlist edit**, and `boundary.rs` is untouched.
+
+**Verified at the packaging level, not the manifest level:** `cargo package -p prikk --list` shows **no
+`src/bin` entry**. (`tests/support/rusage_child.py`/`.zsh` still appear, as every crate's `tests/` does;
+test fixtures are not API surface and are not what §6d.5 was about.) The test locates the binary through
+`PRIKK_RUSAGE_PROBE_BIN`, failing loudly with the build command when unset, and **records the binary's
+SHA-256** per RFC 139 increment 2's convention. All 12 feature-gates removed; the driver now appears in
+the default test listing as `ignored` rather than vanishing.
+
+### 6d.6a CORRECTED — the 2.7-3.0x ratio band was never ladder-wide, and the handoff misused it
+
+The relocation handoff asked for a two-point spot check against a **2.7-3.0x** band. N=64,000 confirmed
+at **2.88x against 2.90x recorded, 0.7% apart**. N=1,000 came back at **3.34x**, outside the band — and
+the round **reported it rather than resolving it**, which was correct.
+
+**The band was wrong, not the measurement.** §6d.4's own three samples at N=1,000 were growths of
+**236, 236, 356 KiB** — ratios of **2.74x, 2.74x, 4.13x**. This round's 288 KiB and 3.34x both sit
+**inside that run's own observed range**, and **the stated band does not even contain that run's own
+maximum sample at this N**.
+
+The band was computed from medians and stated as if uniformly meaningful. At N=1,000 the physical minimum
+is **86.2 KiB** against a floor jitter of ~120 KiB — **the noise exceeds the quantity being measured**, so
+the ratio cannot discriminate there at all.
+
+**RULED: the resident-vs-minimum ratio is a large-N sanity read, not a ladder-wide test.** Do not use it
+below roughly N=8,000. **The standing control (resident >= physical minimum) is the check that
+discriminates at every N**, and it held at both points in both runs. §6d.4's recorded figures are
+unchanged and were correctly left alone.
+
 ## 7. Scope
 
 **In:** the costs named in §2 and §3; the evidence tables in §5 and §5.1; §6's ruling; retiring §4's
