@@ -618,6 +618,40 @@ the RFC 111 time gate.** Not a reason to hold AUD-01 — a reason not to execute
 
 **AUD-01 is also no longer "unmeasured"**: this round gives its structure a first measured growth series.
 
+### 6d.3 MEASURED and PARTLY OVERTURNED 2026-09-09 — the resident index is ~8.6% of the residual, on one credible point
+
+§6d.1's probe delivered at `6aa67c32`, through the public `ObjectReadSnapshot`/`ObjectWriteSession` API as
+the corrected ruling specified, with **zero production diff**.
+
+**The reported range does not survive review.** Six of its seven points measure allocator slack, not the
+index. **A structure decoded wholesale into a `Vec` cannot occupy less RAM than its own serialized form**,
+and against the attribution round's own file sizes the probe reports **0.42x / 0.35x / 0.12x** at
+N=8,000 / 16,000 / 32,000. Nor is that the on-disk record being fatter than the struct: `IndexEntry` is
+`ObjectId`(32) + `container_checksum`(32) + `offset`(8) + `length`(8) + type/slot — **>=88 bytes in a
+contiguous `Vec`**, so 32,003 entries need **>=2,750 KiB** resident against **500 KiB** measured, **0.18x
+of a hard floor**.
+
+At N=64,000 the same floor is >=5,500 KiB against 7,544 measured — **1.37x, physically credible.** The
+worker's 11,380 KiB baseline carries enough already-resident heap to absorb a multi-megabyte allocation
+without raising peak RSS; only at 64,000 does the allocation clear it. **The "flat run then jump" the
+round flagged is the signature of that masking, not of the index.**
+
+**What stands:** at the one credible point the resident index is **8.6% of the residual** — not the
+dominant explanation. **So §6d's answer holds: no named candidate owns the departure.** But the
+elimination rests on **one point, not seven**, and this RFC records it that way rather than carrying a
+range that is mostly artifact.
+
+**The round flagged the anomaly itself and refused to smooth it**, which is why this was catchable at all.
+A clean-looking table here would have produced a confident wrong elimination that nobody would reopen.
+
+**REQUIRED before the elimination is treated as settled:** re-measure with the masking defeated — a
+minimal worker whose floor a 4 MiB structure can clear, and/or a ladder extended past 64,000.
+
+**RULED as a standing control for every future memory probe in this project:** assert that measured
+resident cost **>= the serialized size of the structure being measured**. A reading below that is a
+measurement failure, not a finding. It is free, and applied here it would have failed four points
+automatically and pointed at the cause.
+
 ## 7. Scope
 
 **In:** the costs named in §2 and §3; the evidence tables in §5 and §5.1; §6's ruling; retiring §4's
