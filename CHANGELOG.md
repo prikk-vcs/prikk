@@ -36,18 +36,18 @@ never reaches it (it already authored a `RenamePath`); an ambiguous set (more th
 created path sharing the same content) prints no hint rather than guess a pairing; more than five
 unambiguous candidates in one commit print a single summary line instead of one per pair.
 
-### Added — `rename-destination-conflict`: the thirteenth merge-evidence conflict witness
+### Added — `rename-destination-conflict`: a thirteenth conflict witness, not yet reachable end to end
 
-`prikk merge-evidence` can now classify the case only declared renames make reachable: two sides
-each renaming the *same* node to two *disjoint* destinations. Distinct from the existing
+**`prikk merge-evidence` cannot produce this witness yet** — whole-sequence confluence checking, the
+path that command uses, still defers on any operation sequence containing a rename before the new
+classification runs (see the patch-algebra reference page). What changed is the algebra beneath it:
+it now classifies the case only declared renames make reachable — two sides each renaming the
+*same* node to two *disjoint* destinations. Distinct from the existing
 `same-path-create` witness by design — one node with two competing paths, versus two nodes
 competing for one path — and its resolution is the mirror image: *choose which destination wins*,
 not *choose which node wins*. A rename onto a path a different node's own operation also claims
 still classifies as `same-path-create`, unchanged. Classification only; prikk still refuses to
-author a conflict resolution automatically. **Known gap**: whole-sequence confluence checking (the
-path `prikk merge-evidence` itself uses) still defers on any operation sequence containing a
-rename before this new pairwise classification runs, so this witness is not yet reachable through
-that command end to end — see the patch-algebra reference page.
+author a conflict resolution automatically.
 
 ## 0.37.0 — 2026-09-09
 

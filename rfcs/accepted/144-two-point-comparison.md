@@ -1106,6 +1106,56 @@ Declared moves are kept out of the heuristic by a `debug_assert!` plus a CLI-lev
 assertion. Adequate — the behaviour is covered either way — but the assertion is not a release-time check
 and should not be read as one.
 
+## 4r. DELIVERED 2026-09-09 — the thirteenth witness exists, and a gate one layer up hides it
+
+**Piece 3 accepted at `0e04164a`.** Label **`rename-destination-conflict`**, chosen once and now an
+external interface. Two renames of one node to disjoint destinations classify, with both destinations
+recoverable through the real report path.
+
+**`Action::RenamePath` gained its destination**, which the handoff established up front as the enabling
+change: it carried only `node_id`, so the node→destination pairing was unrecoverable and the witness
+could not be computed.
+
+**`SamePathCreate` untouched** — extracted into `classify_same_path_create`, byte-identical logic.
+
+### 4r.1 REQUIRED — the witness cannot be produced by `prikk merge-evidence`, and that is shared machinery
+
+`check_confluence` (`commutation.rs:44-58`) calls `ensure_flat_sequence` on both sides and **returns
+early** before the pairwise loop where classification lives; `ensure_flat_sequence` reports `Unknown` for
+any operation whose `deferred_reason` is `Some`, which for `Action::RenamePath` is **unconditional**.
+**So any real call touching a rename reports `Unknown { RenameDeferred }` and never classifies.**
+
+Found by the round while building its own control 4, verified independently at review, and documented in
+the patch-algebra reference and the changelog rather than left in a report.
+
+**Correctly out of scope there**: the fix restructures ordering in shared machinery **every** witness kind
+flows through, which is the class of change piece 3 was scoped to exclude. **Handed off separately, with
+the constraint that it must not become rename-specific** — a special case for `RenameDeferred` that leaves
+symlink deferral pre-empting classification closes the reported gap and leaves the real one.
+
+### 4r.2 CORRECTED — reachability, twice, and both corrections were the round's
+
+**The handoff called control 2 a regression guard. It is new reachability.** Before this round a rename
+onto an occupied path classified as `Unknown { RenameDeferred }`, not `SamePathCreate`, because
+`deferred_reason` fires unconditionally and was checked first. **§4i.2's "`SamePathCreate` passes and
+should not change" describes the *resolution*, not *reachability***, and this round is what establishes
+reachability at all.
+
+**And the completeness sweep is weaker than its name.**
+`every_conflict_witness_kind_reaches_the_report_item` passed immediately, with no report-item work: it
+constructs a synthetic witness for every kind and checks the mapping passes it through — **kind-agnostic
+by construction**, so it proves the mapping is total and **can never catch a kind real classification does
+not produce**. The round read it rather than reporting a pass. **That distinction is worth more than the
+feature it was asked about.**
+
+### 4r.3 RULED — the same-destination case stays `SamePathCreate`
+
+Two sides renaming one node to the **identical** destination intersect on `newly_occupied`, so
+`SamePathCreate` fires and its resolution *pick one* is exactly as correct as for a create-vs-create
+collision. Nothing was created, so the label is imprecise **in the same way §4i.2 already ruled optional
+cosmetics for the dual — deferred on the same grounds**: an external-interface change with no resolution
+benefit.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
