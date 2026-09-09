@@ -590,10 +590,18 @@ It is **the only named candidate known to be held wholesale in RAM per session**
 N=64,000, more as a `Vec` of structs. The shape objection still applies and it is not asserted as the
 cause; the point is that it belongs in the RSS-commensurate category its own source reading puts it in.
 
-**The obstacle to probing it is tooling, not evidence.** `IndexEntry` is `pub(crate)`, so `prikk-cli`'s
-test cannot reach it — and refusing to widen production visibility to get at it was right. **The probe
-belongs inside `prikk-store`**, where a `test-support`/`#[cfg(test)]` probe has the access already and
-needs no visibility change. That is the next measurement.
+**The obstacle to probing it is tooling, not evidence** — and on checking, there is no obstacle at all.
+
+**CORRECTED 2026-09-09, same day: this section first said the probe "belongs inside `prikk-store`" behind
+`test-support`. That was wrong, and checking the crate's own exports before writing the handoff found it.**
+`ObjectReadSnapshot` is `pub` and exported from the crate root (`lib.rs:140`), and its `pub fn open`
+holds `snapshot: IndexSnapshot` (`object_store.rs:228-240`) — as does `ObjectWriteSession::open`
+(`:275-281`), which is the commit path. Both decode the index exactly once, by their own doc comments.
+
+**So the probe needs no visibility change, no `test-support` addition, and no new crate-side code**: it
+runs from the existing `prikk-cli` instrument against the **public** API, measuring the real path rather
+than a synthetic reconstruction of it. `IndexEntry`'s `pub(crate)` visibility was never in the way — it
+only blocked building a *synthetic* `Vec<IndexEntry>`, which is the weaker measurement anyway.
 
 ### 6d.2 RULED — AUD-01's completion condition must gain a memory measurement before it is executed
 
