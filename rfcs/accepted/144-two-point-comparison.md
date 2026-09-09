@@ -1192,6 +1192,33 @@ scenarios asserts the literal value that kind's own pre-existing dedicated test 
 
 **Increment 3 now has one piece left: §4o.6, the structural honesty invariant.**
 
+### 4o.6a CORRECTED 2026-09-09 — the surface list was wrong in both directions
+
+§4o.6 said piece 4 *"changes read types across `show`, `bundle preview` and `checkout --patch-plan`."*
+**Checked at source before handing off, and that is wrong twice.**
+
+**In scope, because they present a `RenamePath`:** `show` (`show.rs:281`), `merge-evidence` (rename
+operands reach classification since `0e04164a`/`88e61bdd`), and **`status`/`worktree-status`**
+(`worktree_status.rs:420`, `QueuedOperationEntry { kind: "rename-path" }`) — **which §4o.6 never named.**
+
+**Out by construction:** `bundle preview` has no `Renamed` variant deliberately (§4m), so a rename
+surfaces as delete+create effects — **under-claiming rather than laundering**, and §4i.1's failure is
+claiming a rename without its signer, not declining to claim one. `checkout --patch-plan --format json`
+fails the whole call on a `RenamePath` and never presents one.
+
+**The asserting signer is the patch's AUTHOR key id, and it is not optional.** `verify.rs:352-354`'s own
+doc settles it: a missing AUTHOR signature is *"propagated as an `Err` ... not a value this type
+carries."* An `Option` would model a state the pipeline refuses to produce, and **every `Option` here is
+an invitation to render the `None` case as a bare rename** — the precise failure §4i.1 exists to prevent.
+
+**Carry the key id and nothing else** — no trust, no verification status. §4i.1: *"the belief is local"*;
+§4h.3: trust policy must never be an input. `Sound` vs `Unverifiable` is a separate local question with
+its own type, and folding it in would put a trust judgement inside a shared read value.
+
+**The key id goes inside the rename variant**, not beside it — a sibling field is exactly the *"two
+fields a surface may render separately"* §4i.1 rejects. The deliverable is the compiler refusing a
+construction that omits it.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
