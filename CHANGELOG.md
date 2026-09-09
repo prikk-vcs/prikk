@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.37.0 — 2026-09-09
 
 ### Added — `prikk bundle preview --input <file>`: what a bundle would do to your repository
 
@@ -31,6 +31,17 @@ declared size only. The report's `coverage` field names which operation kinds th
 applied and that the walk is single-parent; it is not a completeness promise. This adds no
 comparison surface: prikk still has no `diff`, and comparing two arbitrary points remains a
 separate, not-yet-open question — the requesting side takes on that comparison itself.
+
+### Added — measured scale limits, on the Current State page
+
+The documentation's Current State page previously listed only missing *features* under "not a good
+fit yet"; it now also says what happens as a repository grows. Sealing cost rises quadratically with
+history depth, checkout and merge-evidence both cost roughly `depth^1.45`, and incremental commit
+memory is flat to a few thousand tracked files before growing at roughly 1.7 KiB per file — so cost
+tracks history depth rather than repository size: a wide, shallow repository is cheap to work with
+and a deep one is not. Each figure is published with the evidence behind it, including which of them
+rests on the thinnest run, and the deep-history projection is labelled a projection rather than a
+measurement.
 
 ### Changed — the project's documentation and homepage move to `prikk.org`
 
