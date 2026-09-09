@@ -147,9 +147,12 @@ pub(super) fn operand_path(
         | Action::DeleteFile { path, .. }
         | Action::DeleteSymlink { path, .. }
         | Action::CreateSymlink { path, .. } => Some(path.clone()),
-        // `RenamePath` always reaches `unknown()` via `facts::deferred_reason` before any
-        // witness is built -- no reachable witness is ever constructed from this operand.
-        Action::RenamePath { .. } => None,
+        // RFC 144 §4o.5: the destination, mirroring `CreateFile`'s own "where it is being
+        // created" -- the analogous "where it is heading" for a rename. Reachable now: a
+        // `RenamePath` no longer always reaches `unknown()` before a witness is built (see
+        // `classify.rs`'s own rename-only-deferred branch), so this operand's own path is a real
+        // input to `derive_path`, not dead code.
+        Action::RenamePath { new_path, .. } => Some(new_path.clone()),
         Action::EditText { node_id, .. }
         | Action::ReplaceBinary { node_id, .. }
         | Action::ChangePerm { node_id, .. } => {

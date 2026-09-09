@@ -45,9 +45,41 @@ pub(crate) fn classify_pair_with_text_resolver<R: PatchAlgebraEvidence>(
         Err(reason) => return Ok(unknown(reason, left, right, None, None)),
     };
 
-    if let Some(reason) =
-        deferred_reason(&left_facts.action).or(deferred_reason(&right_facts.action))
-    {
+    let left_deferred = deferred_reason(&left_facts.action);
+    let right_deferred = deferred_reason(&right_facts.action);
+    let symlink_deferred = matches!(left_deferred, Some(UnknownReason::SymlinkDeferred))
+        || matches!(right_deferred, Some(UnknownReason::SymlinkDeferred));
+
+    if left_deferred.is_none() && right_deferred.is_none() {
+        // Neither operand is deferred -- unchanged from before this round.
+        if let Some(class) = classify_path_relation(baseline, &left_facts, &right_facts) {
+            return Ok(class);
+        }
+    } else if !symlink_deferred {
+        // RFC 144 §4o.5: a `RenamePath`'s own destination is now recoverable (`Action::RenamePath`
+        // carries it), so a pair deferred only for `RenameDeferred` -- never `SymlinkDeferred`,
+        // which keeps deferring immediately below exactly as before this round -- gets a chance at
+        // two path-relation-based resolutions before giving up: the thirteenth conflict witness
+        // (same node, disjoint destinations), and `SamePathCreate`'s own existing dual (a rename
+        // destination colliding with a path someone else already claims). Deliberately **not**
+        // the other two `classify_path_relation` checks (the `freed`/`required_free`
+        // intersections gating `LiveStateMismatch`/ordering): those assume `DeleteFile`/
+        // `CreateFile` preimage semantics (`is_delete_preimage_valid`/`is_create_after_delete_valid`
+        // are typed to exactly those two actions) that do not describe what a `RenamePath`'s own
+        // preimage even means, and reaching them here risks a confidently wrong conflict for a
+        // cross-node rename interaction this round is not scoped to resolve (§6: "do not add a
+        // resolution mechanism").
+        if let Some(class) =
+            classify_rename_destination_conflict(baseline, &left_facts, &right_facts)
+        {
+            return Ok(class);
+        }
+        if let Some(class) = classify_same_path_create(baseline, &left_facts, &right_facts) {
+            return Ok(class);
+        }
+    }
+
+    if let Some(reason) = left_deferred.or(right_deferred) {
         // Prefer the pairwise-shared path (correct when both operands act on the same node --
         // e.g. `RenamePath` paired with a `ChangePerm` on the same node id, where the rename
         // itself carries no path but the shared node's live path does). Only when that is
@@ -55,7 +87,7 @@ pub(crate) fn classify_pair_with_text_resolver<R: PatchAlgebraEvidence>(
         // node's `CreateFile` -- fall back to the deferred operand's own path, so an unrelated
         // peer's disagreement never discards a path the deferred operand genuinely has.
         let path = derive_path(baseline, &left_facts, &right_facts).or_else(|| {
-            if deferred_reason(&left_facts.action).is_some() {
+            if left_deferred.is_some() {
                 operand_path(baseline, &left_facts)
             } else {
                 operand_path(baseline, &right_facts)
@@ -70,10 +102,6 @@ pub(crate) fn classify_pair_with_text_resolver<R: PatchAlgebraEvidence>(
         ));
     }
 
-    if let Some(class) = classify_path_relation(baseline, &left_facts, &right_facts) {
-        return Ok(class);
-    }
-
     match (left_facts.node_id, right_facts.node_id) {
         (Some(left_node), Some(right_node)) if left_node == right_node => classify_same_node(
             baseline,
@@ -86,7 +114,13 @@ pub(crate) fn classify_pair_with_text_resolver<R: PatchAlgebraEvidence>(
     }
 }
 
-fn classify_path_relation(
+/// RFC 144 §4o.5, §4i.2's dual: "two nodes, one path -- pick the node." Fires whenever the two
+/// operands' own destinations collide, regardless of which operation kinds produced them --
+/// `CreateFile`/`CreateSymlink` land here the same as it always has, and a `RenamePath` reaches it
+/// for the first time now that its destination is recoverable (`classify_pair_with_text_resolver`'s
+/// own rename-only-deferred branch is what makes that reachable; this function's own logic and
+/// label are unchanged from before this round).
+fn classify_same_path_create(
     baseline: &NodeLifecycleState,
     left: &OperationFacts,
     right: &OperationFacts,
@@ -103,6 +137,52 @@ fn classify_path_relation(
             common_node(left, right),
             derive_path(baseline, left, right),
         ));
+    }
+    None
+}
+
+/// RFC 144 §4o.5 (the thirteenth), §4i.2's dual: "one node, two paths -- pick the path." Fires
+/// only when both operands are a `RenamePath` for the *same* node with *different* destinations.
+/// The same-destination case (§4o.5 §4, a third shape §4i.2 does not rule on) is deliberately left
+/// unresolved here -- returning `None` lets it fall through to `classify_same_path_create` above,
+/// whose `newly_occupied` intersection already fires `SamePathCreate` for it, unchanged.
+fn classify_rename_destination_conflict(
+    baseline: &NodeLifecycleState,
+    left: &OperationFacts,
+    right: &OperationFacts,
+) -> Option<PairClass> {
+    let (
+        Action::RenamePath {
+            node_id: left_node,
+            new_path: left_new,
+        },
+        Action::RenamePath {
+            node_id: right_node,
+            new_path: right_new,
+        },
+    ) = (&left.action, &right.action)
+    else {
+        return None;
+    };
+    if left_node != right_node || left_new == right_new {
+        return None;
+    }
+    Some(conflict(
+        ConflictWitnessKind::RenameDestinationConflict,
+        left,
+        right,
+        Some(*left_node),
+        derive_path(baseline, left, right),
+    ))
+}
+
+fn classify_path_relation(
+    baseline: &NodeLifecycleState,
+    left: &OperationFacts,
+    right: &OperationFacts,
+) -> Option<PairClass> {
+    if let Some(class) = classify_same_path_create(baseline, left, right) {
+        return Some(class);
     }
 
     if !left

@@ -102,8 +102,11 @@ pub(super) fn operation_facts(
             effects.freed.insert(old_path);
             effects.required_free.insert(new_path.clone());
             effects.occupied_after.insert(new_path.clone());
-            effects.newly_occupied.insert(new_path);
-            Action::RenamePath { node_id: *node_id }
+            effects.newly_occupied.insert(new_path.clone());
+            Action::RenamePath {
+                node_id: *node_id,
+                new_path,
+            }
         }
         DecodedOperationKind::ChangePerm {
             node_id,
@@ -160,7 +163,7 @@ impl Action {
             | Self::DeleteSymlink { node_id, .. }
             | Self::EditText { node_id, .. }
             | Self::ReplaceBinary { node_id, .. }
-            | Self::RenamePath { node_id }
+            | Self::RenamePath { node_id, .. }
             | Self::ChangePerm { node_id, .. }
             | Self::CreateSymlink { node_id, .. } => Some(*node_id),
         }

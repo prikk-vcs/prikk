@@ -131,6 +131,10 @@ macro_rules! conflict_witness_kinds {
 
 conflict_witness_kinds! {
     SamePathCreate => "same-path-create",
+    /// RFC 144 §4o.5 (the thirteenth): both sides rename the *same* node to two *disjoint*
+    /// destinations. Distinct from `SamePathCreate` by design (§4i.2's own dual): "one node, two
+    /// paths -- pick the path" versus `SamePathCreate`'s "two nodes, one path -- pick the node".
+    RenameDestinationConflict => "rename-destination-conflict",
     NodeIdReuse => "node-id-reuse",
     LiveStateMismatch => "live-state-mismatch",
     KindMismatch => "kind-mismatch",
@@ -211,6 +215,12 @@ pub(super) enum Action {
     },
     RenamePath {
         node_id: NodeId,
+        /// RFC 144 §4o.5: the destination is load-bearing for classification, not just an
+        /// authoring detail -- the thirteenth conflict witness (two renames of one node to
+        /// disjoint destinations) cannot be computed without it, since `PathEffects` alone
+        /// (`newly_occupied`/`occupied_after`/`required_free`) does not recover which node a
+        /// destination belongs to.
+        new_path: RepoPath,
     },
     ChangePerm {
         node_id: NodeId,

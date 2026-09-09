@@ -147,6 +147,7 @@ Current `witness_kind` labels:
 | Label | Meaning |
 |---|---|
 | `same-path-create` | Both sides create a node at the identical path. |
+| `rename-destination-conflict` | Both sides rename the *same* node to two *disjoint* destinations. Distinct from `same-path-create`: one node, two paths, versus `same-path-create`'s two nodes, one path. |
 | `node-id-reuse` | A node identity is reused across unrelated creations. |
 | `live-state-mismatch` | A side's precondition does not match the state the other side's operation requires. |
 | `kind-mismatch` | The two sides disagree about the node's kind (file, symlink, etc.). |
@@ -225,6 +226,14 @@ proof/witness/merge-evidence/merge-plan objects, same-node text operational tran
 analysis, display-path filtering, JSON output, patch-algebra crate extraction, and public stable Rust
 APIs for replay, patch algebra, merge evidence, or merge planning internals.
 
+**A rename pairing that conflicts is classified, but a sequence containing any rename cannot yet
+prove full confluence.** RFC 144 §4o.5's `rename-destination-conflict` and a rename now reaching
+`same-path-create` both classify correctly at the pairwise level. Whole-sequence flatness checking
+(`prikk merge-evidence`'s own real entry point) still defers on any individually-unreplayable
+operation — a category `RenamePath` is in — before that pairwise classification ever runs, so a
+merge evidence request touching a rename currently reports `Unsupported`, not the specific
+conflict, unless the pairwise classifier is reached directly. A known gap, not fixed here.
+
 **Conflict resolution itself is not on this list** — see Conflict Resolution Is Refused By Design,
 above. "Deferred" means eventually built; automatic conflict resolution is refused by the
 architecture and will not be built at all. A conflict-resolution *UI* remains deferred in the sense
@@ -245,7 +254,7 @@ automatic resolver.
 | `merge-plan` maps evidence outcomes to `ConfluentSubset` and `Blocked*` statuses without adding merge execution. | [`merge_plan.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/merge_evidence/merge_plan.rs), [DC-25](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-25-MERGE-PLANNING-SURFACE.md), [merge plan guide](../guide/merge-plan.md) |
 | Evidence and plan output avoid raw text spans, replacement text, blob bytes, absolute host paths, and arbitrary object debug dumps. | [`display.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/merge_evidence/display.rs), [DC-21](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-21-MERGE-CONFLICT-EVIDENCE-CONTRACT.md), [DC-23](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-23-MERGE-EVIDENCE-UX-STABILIZATION.md) |
 | Patch algebra, merge evidence, and merge plan internals are not public stable Rust APIs. | [DC-20](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-20-REPLAY-BOUNDARY-STABILIZATION.md), [DC-25](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-25-MERGE-PLANNING-SURFACE.md), [implementation status](https://github.com/prikk-vcs/prikk/blob/main/rfcs/IMPLEMENTATION-STATUS.md) |
-| Conflict-witness kinds (twelve) are generated with their labels from one macro invocation, the same discipline `VerificationStage` uses. | [`types.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_algebra/types.rs), [conflict-witness-presentation handoff v1](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-21-merge-conflict-evidence-contract/conflict-witness-presentation-handoff-v1.md) |
+| Conflict-witness kinds (thirteen) are generated with their labels from one macro invocation, the same discipline `VerificationStage` uses. | [`types.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_algebra/types.rs), [conflict-witness-presentation handoff v1](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-21-merge-conflict-evidence-contract/conflict-witness-presentation-handoff-v1.md) |
 | `MergeEvidenceDisplayItem` publishes `witness_kind`/`witness_path`/`witness_node_id`, but never the underlying `left_op_seq`/`right_op_seq` pair or raw `text_span` bytes. | [`display.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/merge_evidence/display.rs), [`mapping.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_algebra/report/mapping.rs) |
 | Automatic conflict resolution is refused by design (DC-35 applied at the patch layer, per DC-74). | [DC-35](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-35-RELEASE-COMPATIBILITY-STATUS-CORRECTION.md), [DC-74](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-74-MERGE-EXECUTION.md), [`merge_execute.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/merge_execute.rs), [conflict-witness-presentation handoff v1](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-21-merge-conflict-evidence-contract/conflict-witness-presentation-handoff-v1.md) |
 

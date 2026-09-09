@@ -111,7 +111,17 @@ fn operation_path(operation: &DecodedPatchOperation) -> Option<RepoPath> {
         DecodedOperationKind::CreateFile { path, .. }
         | DecodedOperationKind::DeleteNode { path, .. }
         | DecodedOperationKind::CreateSymlink { path, .. } => RepoPath::parse(path).ok(),
-        DecodedOperationKind::RenamePath { old_path, .. } => RepoPath::parse(old_path).ok(),
+        // RFC 144 §4o.5: the destination, not the source -- mirroring `CreateFile`'s own "where it
+        // is being created", the analogous "where it is heading" for a rename. This is what the
+        // thirteenth conflict witness's own "both destinations recoverable" requirement rests on:
+        // `MergeEvidenceDisplayItem.operation.path`/`.peer_operation.path` are each side's own
+        // recorded path, read independently from this per-side sequence summary -- the same
+        // mechanism `witness.rs`'s own `derive_path` doc comment already precedents for
+        // `NodeIdReuse` (two operands whose own paths genuinely differ, so a single shared
+        // `witness_path` cannot carry both). Never previously reachable in practice (a `RenamePath`
+        // reached only `Unsupported`/deferred report items before this round), so this is not a
+        // behavior change any existing consumer could observe.
+        DecodedOperationKind::RenamePath { new_path, .. } => RepoPath::parse(new_path).ok(),
         DecodedOperationKind::EditText { .. }
         | DecodedOperationKind::ReplaceBinary { .. }
         | DecodedOperationKind::ChangePerm { .. } => None,
