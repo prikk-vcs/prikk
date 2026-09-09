@@ -258,6 +258,48 @@ the gate no longer hides a cycle inside a group, **not as a side effect of the g
 
 **This round enables the lift. It does not perform it**, and must not move any module.
 
+### 6c.4 CORRECTED 2026-09-10 — §6c.1 made the gate blind, and the SCC did not dissolve
+
+**Qualified naming delivered at `42bcab15`: 53 → 127 nodes, longest-prefix resolution, grouped imports
+per element, edge vocabulary untouched.** The mechanism is accepted and is not reopened.
+
+**Its measurement reported zero cycles and concluded the declared debt "was never real coupling, only
+imprecise attribution." That conclusion does not stand.** Two pairs traced by hand at review:
+
+- `refs/evidence.rs:7` → `crate::active::{…}`; `active.rs:22` → `crate::refs::{…}`
+- `lifecycle_cache/replay.rs`, `replay/effect.rs` → `crate::patch_replay`; `patch_replay.rs` →
+  `crate::lifecycle_cache`
+
+**In both, the two subtrees mutually depend.** That is a cycle in the only sense RFC 130 cares about,
+and nothing about it has changed. **The new graph misses it because nothing connects `refs` to
+`refs::evidence`** — containment is unmodelled, so a dependency that leaves a subtree through a child
+and returns to the subtree's root is invisible.
+
+**This is §6a's own failure mode in a new form** — *"the gate would report no cycle, not because the
+coupling was resolved but because the grouping hid it"* — arrived at by implementing §6c.1 faithfully.
+
+**Naive containment edges are also wrong, measured before proposing them:** 35 files across 9 parents
+reference their own parent by absolute `crate::` path (`foundation` 14, `test_gates` 7, `patch_algebra`
+5, `refs` 4, …). Parent→child containment plus those child→ancestor text edges makes a 2-cycle out of
+ordinary intra-subtree access written absolutely instead of with `super::`.
+
+**RULED, superseding §6c.1's silence on this:**
+
+1. **Keep qualified nodes** — they are what makes `pub(in crate::…)` targetable and stop grouping from
+   hiding anything.
+2. **Compute cycles over subtrees, not raw nodes**: a cycle exists between A and B when *any* descendant
+   of A depends on *any* descendant of B and vice versa. This restores the question the old gate
+   answered correctly, without its fixed top-level granularity.
+3. **Report at the smallest pair of subtrees exhibiting it** — `refs ↔ active` here, but *derived*
+   rather than an artifact, so a future narrowing changes the reported pair instead of silently keeping
+   it.
+4. **An edge between a node and its own ancestor or descendant is not coupling** and must not
+   contribute. That removes the 35-file noise without losing the real cycles.
+
+**The allowlist decision §6c.2 reserved is not made**: zero is the count of *raw node* cycles, and the
+subtree count is unmeasured. **Hold all 8 `DECLARED_CYCLES` entries, both stale hubs, and the 3 new
+undeclared hubs** until it is known.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
