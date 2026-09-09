@@ -10,8 +10,10 @@
 //! Out of scope here (later phases): trust stores, key persistence, rotation, and signature policy.
 
 use prikk_crypto::Ed25519KeyPair;
-use prikk_error::Result;
-use prikk_object::{ObjectId, ObjectType, Signature, SignatureAlgorithm, SignerRole};
+use prikk_error::{PrikkError, Result};
+use prikk_object::{
+    ObjectEnvelope, ObjectId, ObjectType, Signature, SignatureAlgorithm, SignerRole,
+};
 
 /// A provider that produces the detached signature bytes for an authored patch.
 ///
@@ -55,6 +57,31 @@ pub fn author_signature(signer: &impl AuthorSigner, object_id: ObjectId) -> Resu
     signature.validate()?;
     signature.validate_shape()?;
     Ok(signature)
+}
+
+/// The AUTHOR key id that asserted `envelope` (RFC 144 §4o.6a's honesty invariant): the asserting
+/// signer any read surface presenting a `RenamePath` must keep recoverable in the same answer.
+///
+/// A missing AUTHOR signature is a genuine authorship-integrity defect, not a state a
+/// rename-presenting read value may carry -- `verify.rs`'s own `author_verification` doc settles
+/// this ("propagated as an `Err`... not a value this type carries"). Deliberately does not check
+/// the signature against recorded key material or verify it cryptographically: trust and
+/// verification status are a separate, local question (`AuthorSignatureVerification` in
+/// `verify.rs`), and this helper exists only to recover *who asserted* the rename, not whether
+/// they should be believed.
+pub(crate) fn require_author_key_id(envelope: &ObjectEnvelope) -> Result<String> {
+    envelope
+        .signatures
+        .iter()
+        .find(|signature| signature.signer_role == SignerRole::Author)
+        .map(|signature| signature.key_id.clone())
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "{} {} has no AUTHOR signature",
+                envelope.object_type,
+                envelope.object_id()
+            ))
+        })
 }
 
 /// Production AUTHOR signer: a real Ed25519 keypair plus a caller-provided key id.

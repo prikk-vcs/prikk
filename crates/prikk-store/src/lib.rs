@@ -133,8 +133,8 @@ pub use maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner, maintain
 pub use memory_store::MemoryObjectStore;
 pub use merge_evidence::{
     MergeEvidenceDisplay, MergeEvidenceDisplayItem, MergeEvidenceDisplayOperation,
-    MergeEvidenceDisplaySelector, MergeEvidenceTarget, MergePlanDisplay, prepare_merge_evidence,
-    prepare_merge_plan,
+    MergeEvidenceDisplayOperationContent, MergeEvidenceDisplaySelector, MergeEvidenceTarget,
+    MergePlanDisplay, prepare_merge_evidence, prepare_merge_plan,
 };
 pub use merge_execute::{MergeExecutionReport, execute_merge};
 pub use object_store::{
@@ -235,6 +235,7 @@ pub use worktree_patch::{
     commit_worktree_changes_signed,
 };
 pub use worktree_status::{
-    QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution, WorktreeChange,
-    WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches, worktree_status,
+    QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,
+    WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,
+    worktree_status,
 };

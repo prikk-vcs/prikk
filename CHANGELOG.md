@@ -54,6 +54,16 @@ only falls back to its own answer when no pair resolves anything, which by const
 happen when one side has no operations to pair against at all. Every other conflict-witness kind
 classifies exactly as it did before this change.
 
+### Changed — a rendered rename always names who asserted it
+
+`show`, `status --format json`, and `prikk merge-evidence` now report the AUTHOR signature key id
+alongside every `RenamePath` they render — the signer is recoverable in the same answer as the
+rename itself, never a separate lookup. This is structural: each surface's own read type has no
+construction for a rename that omits its asserting key id, so a patch whose AUTHOR signature is
+missing fails the command rather than rendering a rename with a blank signer. `bundle preview`
+(still delete-plus-create, never a `Renamed` effect — RFC 144 §4m) and `checkout --patch-plan
+--format json` (still refuses a `RenamePath` outright) are unaffected; neither presents a rename.
+
 ## 0.37.0 — 2026-09-09
 
 ### Added — `prikk bundle preview --input <file>`: what a bundle would do to your repository

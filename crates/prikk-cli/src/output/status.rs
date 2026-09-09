@@ -11,7 +11,10 @@
 
 use crate::stdout::println;
 use prikk_object::ObjectId;
-use prikk_store::{QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution, RepositoryLayout};
+use prikk_store::{
+    QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,
+    RepositoryLayout,
+};
 
 use super::verification::escape_json_string;
 
@@ -167,5 +170,10 @@ fn push_operation(json: &mut String, operation: &QueuedOperationEntry) {
             }
         }
     }
-    json.push_str("]}");
+    json.push(']');
+    if let QueuedOperationContent::RenamePath { author_key_id } = &operation.content {
+        json.push_str(", \"author_key_id\": ");
+        json.push_str(&escape_json_string(author_key_id));
+    }
+    json.push('}');
 }

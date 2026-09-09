@@ -215,6 +215,155 @@ fn cross_display_preserves_distinct_left_and_right_operations() -> Result<()> {
     Ok(())
 }
 
+/// RFC 144 §4o.6a control 1: a `RenamePath` operand reaching `merge-evidence` through the real
+/// `prepare_merge_evidence` path (not a hand-constructed display value) carries its asserting
+/// AUTHOR key id -- on both sides of a `RenameDestinationConflict` cross item, mirroring
+/// `flat_sequence_gate.rs`'s own `control1_the_thirteenth_reaches_analyze_merge_evidence` fixture
+/// (same node, disjoint destinations) but through this crate's public boundary rather than
+/// `analyze_merge_evidence` directly. `write_operation_block`'s own `write_patch_block` signs
+/// every patch with `dummy_signature()` (`key_id: "author-key"`, a real AUTHOR-role signature,
+/// just not a cryptographically valid one -- irrelevant here, since this helper reads the key id
+/// without verifying it, per §3).
+#[test]
+fn merge_evidence_reports_a_rename_conflicts_asserting_author_key_id() -> Result<()> {
+    let root = unique_temp_dir("merge-evidence-rename-author-key-id");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let node_id = NodeId::from_bytes([0x51; 32]);
+    let blob_id = write_blob(&layout, b"shared-source.bin\n")?;
+    let baseline = write_operation_block(
+        &layout,
+        BlockKind::Root,
+        Vec::new(),
+        OperationKind::CreateFile(CreateFile {
+            path: "shared-source.bin".to_string(),
+            node_id,
+            blob_id,
+            mode: 0o100_644,
+        }),
+    )?;
+    let left = write_operation_block(
+        &layout,
+        BlockKind::Normal,
+        vec![baseline],
+        OperationKind::RenamePath(prikk_object::RenamePath {
+            node_id,
+            old_path: "shared-source.bin".to_string(),
+            new_path: "left-dest.bin".to_string(),
+        }),
+    )?;
+    let right = write_operation_block(
+        &layout,
+        BlockKind::Normal,
+        vec![baseline],
+        OperationKind::RenamePath(prikk_object::RenamePath {
+            node_id,
+            old_path: "shared-source.bin".to_string(),
+            new_path: "right-dest.bin".to_string(),
+        }),
+    )?;
+
+    let report = prepare_merge_evidence(
+        &layout,
+        baseline,
+        MergeEvidenceTarget::Block(left),
+        MergeEvidenceTarget::Block(right),
+    )?;
+
+    assert_eq!(report.outcome, "Conflict");
+    let Some(cross_item) = report.items.iter().find(|item| item.side == "cross") else {
+        panic!("missing cross display item");
+    };
+    assert_eq!(cross_item.witness_kind, Some("rename-destination-conflict"));
+    let Some(left_operation) = cross_item.operation.as_ref() else {
+        panic!("missing left operation summary");
+    };
+    let Some(right_operation) = cross_item.peer_operation.as_ref() else {
+        panic!("missing right operation summary");
+    };
+    assert_eq!(
+        left_operation.content,
+        super::MergeEvidenceDisplayOperationContent::RenamePath {
+            author_key_id: "author-key".to_string()
+        }
+    );
+    assert_eq!(
+        right_operation.content,
+        super::MergeEvidenceDisplayOperationContent::RenamePath {
+            author_key_id: "author-key".to_string()
+        }
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 144 §4o.6a control 3: a `RenamePath` operand whose patch carries no AUTHOR signature at
+/// all fails `prepare_merge_evidence` outright -- never a rendered rename with a blank or absent
+/// signer. `write_operation_block`/`write_patch_block` always sign with a real AUTHOR-role
+/// `dummy_signature()`, so this fixture bypasses that helper for the rename side and signs with a
+/// MAINTAINER-role signature only -- enough to satisfy the object store's own signed-envelope
+/// requirement, but not an AUTHOR signature.
+#[test]
+fn merge_evidence_fails_a_rename_whose_patch_has_no_author_signature() -> Result<()> {
+    let root = unique_temp_dir("merge-evidence-rename-no-author-signature");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let node_id = NodeId::from_bytes([0x52; 32]);
+    let blob_id = write_blob(&layout, b"shared-source.bin\n")?;
+    let baseline = write_operation_block(
+        &layout,
+        BlockKind::Root,
+        Vec::new(),
+        OperationKind::CreateFile(CreateFile {
+            path: "shared-source.bin".to_string(),
+            node_id,
+            blob_id,
+            mode: 0o100_644,
+        }),
+    )?;
+
+    let mut store = FileObjectStore::new(layout.clone());
+    let patch = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::RenamePath(prikk_object::RenamePath {
+                node_id,
+                old_path: "shared-source.bin".to_string(),
+                new_path: "renamed.bin".to_string(),
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch_env = ObjectEnvelope::unsigned(ObjectType::Patch, 1, patch.to_canonical_bytes()?);
+    patch_env.add_signature(maintainer_signature())?;
+    let patch_id = store.write_object(&patch_env)?;
+    let left = write_block(&layout, BlockKind::Normal, vec![baseline], vec![patch_id])?;
+
+    let err = match prepare_merge_evidence(
+        &layout,
+        baseline,
+        MergeEvidenceTarget::Block(left),
+        MergeEvidenceTarget::Block(baseline),
+    ) {
+        Ok(_) => panic!(
+            "a RenamePath whose patch carries no AUTHOR signature must fail, not render a blank signer"
+        ),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+    assert!(
+        message.contains("AUTHOR signature"),
+        "expected an AUTHOR-signature error, got: {message}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 #[test]
 fn missing_ancestry_fails_before_report() -> Result<()> {
     let root = unique_temp_dir("merge-evidence-missing-ancestry");

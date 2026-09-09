@@ -77,7 +77,11 @@ Reading the output:
 - cross-side items render as a `cross:` block with separate `left[...]` and `right[...]` operation
   lines, rather than an ambiguous one-line form;
 - report-level items render as `report:` without a fake operation label;
-- DC-21 outcome and reason-code names are preserved exactly.
+- DC-21 outcome and reason-code names are preserved exactly;
+- a `RenamePath` operand's line also carries `asserted-by=<key-id>` — the patch's AUTHOR signature
+  key id. This is structural, not a rendering choice: the underlying read type cannot represent a
+  rename without its asserting signer, so a patch whose AUTHOR signature is missing fails the
+  command rather than showing a rename with no signer.
 
 Privacy: the output never includes raw text spans, replacement text, blob bytes, absolute host paths,
 `.prikk` private paths, signer secrets, key material, or arbitrary object debug dumps. Displayed paths

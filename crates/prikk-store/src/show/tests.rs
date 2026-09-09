@@ -98,6 +98,13 @@ fn current_block_id(layout: &RepositoryLayout) -> ObjectId {
     payload.target_object_id
 }
 
+/// An envelope for tests that call `show_operation` directly on a non-`RenamePath` operation --
+/// its own content is never inspected by any of those kinds, only `RenamePath` reads the
+/// envelope's AUTHOR signature.
+fn dummy_envelope() -> ObjectEnvelope {
+    ObjectEnvelope::unsigned(ObjectType::Patch, 1, Vec::new())
+}
+
 /// Append a raw, directly-constructed Patch envelope to the active WAL, bypassing ordinary
 /// authoring (see this file's own module doc). Also writes the active-ref metadata
 /// `commit_worktree_changes_signed` would normally set up and `seal` requires
@@ -329,7 +336,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
             mode: 0o100_644,
         },
     };
-    let shown = super::show_operation(&store, &create_file, None).unwrap();
+    let shown = super::show_operation(&store, &dummy_envelope(), &create_file, None).unwrap();
     match shown.content {
         ShowOperationContent::CreateFile {
             content: ShowBlobContent::Unavailable { blob_id },
@@ -350,7 +357,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
             },
         },
     };
-    let shown = super::show_operation(&store, &delete_node, None).unwrap();
+    let shown = super::show_operation(&store, &dummy_envelope(), &delete_node, None).unwrap();
     match shown.content {
         ShowOperationContent::DeleteNode {
             preimage: ShowDeletePreimage::File(ShowBlobContent::Unavailable { blob_id }),
@@ -366,7 +373,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
             new_blob_id: never_written_b,
         },
     };
-    let shown = super::show_operation(&store, &replace_binary, None).unwrap();
+    let shown = super::show_operation(&store, &dummy_envelope(), &replace_binary, None).unwrap();
     match shown.content {
         ShowOperationContent::ReplaceBinary {
             old: ShowBlobContent::Unavailable { blob_id: old_id },
@@ -404,7 +411,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
         },
     };
     assert!(
-        super::show_operation(&store, &create_file, None).is_err(),
+        super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
         "a type-mismatched object must propagate an error, not degrade"
     );
 
@@ -422,7 +429,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
         },
     };
     assert!(
-        super::show_operation(&store, &create_file, None).is_err(),
+        super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
         "a malformed Blob payload must propagate an error, not degrade"
     );
 
@@ -450,7 +457,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
         },
     };
     assert!(
-        super::show_operation(&store, &create_file, None).is_err(),
+        super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
         "a SNAPSHOT-kind blob named by CreateFile must propagate an error, not degrade"
     );
 }
@@ -549,6 +556,78 @@ fn show_renders_a_mixed_block_with_its_own_content_and_paths() {
             ShowPathResolution::Path("to-rename.txt".to_string()),
             ShowPathResolution::Path("renamed.txt".to_string()),
         ]
+    );
+    // RFC 144 §4o.6a control 1: the rename's asserting AUTHOR key id is recoverable in the same
+    // answer, through the real `show` path (`append_raw_patch` signs with `author_signer()`,
+    // key id "show-author") -- not a hand-constructed `ShowOperationContent` value.
+    assert_eq!(
+        rename_op.content,
+        ShowOperationContent::RenamePath {
+            author_key_id: "show-author".to_string()
+        }
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 144 §4o.6a control 3: a `RenamePath` operand whose patch carries no AUTHOR signature at
+/// all fails `show` outright -- never a rendered rename with a blank or absent signer. A
+/// missing-signature patch is constructed directly (bypassing `append_raw_patch`, which always
+/// signs), the same way `show_propagates_an_error_for_a_damaged_object_distinct_from_absence`
+/// above constructs its own error cases directly rather than simulating post-seal corruption.
+#[test]
+fn show_fails_a_rename_whose_patch_has_no_author_signature() {
+    let root = unique_temp_dir("show-rename-no-author-signature");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let rename_node_id = NodeId::from_bytes([0x9E; 32]);
+    create_raw_file(
+        &layout,
+        rename_node_id,
+        "to-rename.txt",
+        BlobKind::Text,
+        b"rename me\n",
+    );
+
+    crate::write_active_ref_metadata(&layout, "heads/main").unwrap();
+    let payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::RenamePath(RenamePath {
+                node_id: rename_node_id,
+                old_path: "to-rename.txt".to_string(),
+                new_path: "renamed.txt".to_string(),
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    // A signed envelope (the WAL itself refuses an entirely unsigned one), but deliberately no
+    // AUTHOR-role signature -- unlike `append_raw_patch`, which always signs with one. A
+    // MAINTAINER-role signature is not a stand-in AUTHOR signature (§3: a specific role, not "any
+    // signature"); it exists only to get the envelope past the WAL's own signed-envelope check.
+    let mut envelope =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, payload.to_canonical_bytes().unwrap());
+    envelope
+        .add_signature(crate::test_gates::test_support::maintainer_signature())
+        .unwrap();
+    Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+        .append_patch(&envelope)
+        .unwrap();
+    seal(&layout);
+
+    let block_id = current_block_id(&layout);
+    let err = show(&layout, block_id).expect_err(
+        "a RenamePath whose patch carries no AUTHOR signature must fail, not render a blank signer",
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("AUTHOR signature"),
+        "expected an AUTHOR-signature error, got: {message}"
     );
 
     let _ = std::fs::remove_dir_all(root);

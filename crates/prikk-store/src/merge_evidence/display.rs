@@ -104,13 +104,40 @@ pub struct MergeEvidenceDisplayOperation {
     pub kind: Option<&'static str>,
     /// Repository-relative path, when safe and available.
     pub path: Option<String>,
+    /// What this operation carries beyond `kind`/`path` -- RFC 144 §4o.6a's honesty invariant,
+    /// the same mechanism `ShowOperationContent` already uses: a rename presented here cannot be
+    /// constructed without its asserting AUTHOR key id, so this is the one value a surface must
+    /// consult to know a rename is being shown, and it cannot omit the signer.
+    pub content: MergeEvidenceDisplayOperationContent,
+}
+
+/// What a [`MergeEvidenceDisplayOperation`] carries beyond kind, op_seq, and path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeEvidenceDisplayOperationContent {
+    /// A path rename. RFC 144 §4o.6a: a signed `RenamePath` asserts *this signer* rewrote `old`
+    /// to `new`, so the asserting signer must be recoverable in the same answer.
+    RenamePath {
+        /// The patch's AUTHOR signature key id -- the signer who asserted this rename.
+        author_key_id: String,
+    },
+    /// Every other operation kind carries nothing beyond `kind`/`path` today.
+    Other,
 }
 
 impl MergeEvidenceDisplay {
+    /// `left_author_key_ids`/`right_author_key_ids` are the AUTHOR key id resolved for each
+    /// operation in `report.left_sequence`/`report.right_sequence`, in lockstep by index (RFC 144
+    /// §4o.6a) -- `Some` only for a `RenamePath` operation, `None` for every other kind. Callers
+    /// build these from the exact same operation slice `analyze_merge_evidence` itself consumed
+    /// (`candidate_sequence`, in `merge_evidence.rs`), so an index that names a `RenamePath` here
+    /// is guaranteed to have a resolved key id -- a missing one is an internal invariant failure,
+    /// not a value this constructor can degrade gracefully.
     pub(crate) fn from_report(
         report: MergeEvidenceReport,
         left_selector: MergeEvidenceDisplaySelector,
         right_selector: MergeEvidenceDisplaySelector,
+        left_author_key_ids: &[Option<String>],
+        right_author_key_ids: &[Option<String>],
     ) -> Self {
         let reason = report
             .items
@@ -119,7 +146,7 @@ impl MergeEvidenceDisplay {
         let items = report
             .items
             .iter()
-            .map(|item| item_from_report(&report, item))
+            .map(|item| item_from_report(&report, item, left_author_key_ids, right_author_key_ids))
             .collect();
         Self {
             baseline_block_id: report.baseline_block_id,
@@ -147,6 +174,8 @@ impl MergeEvidenceDisplay {
 fn item_from_report(
     report: &MergeEvidenceReport,
     item: &MergeEvidenceItem,
+    left_author_key_ids: &[Option<String>],
+    right_author_key_ids: &[Option<String>],
 ) -> MergeEvidenceDisplayItem {
     MergeEvidenceDisplayItem {
         side: side_name(item.side),
@@ -155,12 +184,16 @@ fn item_from_report(
             operation_side(item.side),
             item.operation_index,
             item.op_seq,
+            left_author_key_ids,
+            right_author_key_ids,
         ),
         peer_operation: operation_for_item(
             report,
             peer_side(item.side),
             item.peer_operation_index,
             item.peer_op_seq,
+            left_author_key_ids,
+            right_author_key_ids,
         ),
         outcome: outcome_name(item.outcome),
         evidence_scope: item.evidence_scope.map(scope_name),
@@ -184,19 +217,37 @@ fn operation_for_item(
     side: MergeEvidenceSide,
     index: Option<usize>,
     fallback_op_seq: Option<u32>,
+    left_author_key_ids: &[Option<String>],
+    right_author_key_ids: &[Option<String>],
 ) -> Option<MergeEvidenceDisplayOperation> {
     let index = index?;
-    let sequence = match side {
-        MergeEvidenceSide::Left => &report.left_sequence,
-        MergeEvidenceSide::Right => &report.right_sequence,
+    let (sequence, author_key_ids) = match side {
+        MergeEvidenceSide::Left => (&report.left_sequence, left_author_key_ids),
+        MergeEvidenceSide::Right => (&report.right_sequence, right_author_key_ids),
         MergeEvidenceSide::Cross | MergeEvidenceSide::Report => return None,
     };
     let operation = sequence.operations.get(index);
+    let content = match operation.map(|op| op.operation_kind) {
+        Some(MergeEvidenceOperationKind::RenamePath) => match author_key_ids.get(index) {
+            Some(Some(author_key_id)) => MergeEvidenceDisplayOperationContent::RenamePath {
+                author_key_id: author_key_id.clone(),
+            },
+            // `candidate_sequence` resolves an AUTHOR key id for every `RenamePath` operation it
+            // pushes, in the same order -- a `RenamePath` operation here with no resolved key id
+            // means the two vecs desynchronized, an internal invariant this display layer cannot
+            // repair. Fails loudly rather than rendering a rename with a silently blank signer.
+            _ => {
+                unreachable!("RenamePath operation at index {index} has no resolved AUTHOR key id")
+            }
+        },
+        _ => MergeEvidenceDisplayOperationContent::Other,
+    };
     Some(MergeEvidenceDisplayOperation {
         index,
         op_seq: operation.map_or(fallback_op_seq, |op| Some(op.op_seq)),
         kind: operation.map(|op| operation_kind_name(op.operation_kind)),
         path: operation.and_then(|op| op.path.as_ref().map(|path| path.as_str().to_string())),
+        content,
     })
 }
 

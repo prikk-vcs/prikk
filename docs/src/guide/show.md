@@ -12,6 +12,12 @@ replaced and their replacement; `CreateFile`/`DeleteNode` carry (or point to) th
 `RenamePath`/`ChangePerm`/`CreateSymlink` carry everything they need inline. Nothing is replayed to
 find *what* changed.
 
+A `RenamePath` also reports the AUTHOR key id that signed the patch asserting it — the signer is
+recoverable in the same answer as the rename itself, never a fact a caller has to look up
+separately. This is structural, not a rendering choice: `show`'s own read type cannot represent a
+rename without it, so a patch whose AUTHOR signature is missing fails the command rather than
+rendering a rename with no signer.
+
 Three operation kinds — `EditText`, `ChangePerm`, `ReplaceBinary` — are node-addressed rather than
 path-addressed, so finding *where* they apply needs one replay of the target block's own lifecycle
 state. `show` pays that cost once per invocation, not once per operation, and there is no flag to
@@ -74,6 +80,7 @@ There is no command for that today; it is a deliberately separate, not-yet-open 
 | `EditText` renders its own before/after span; `ReplaceBinary` and binary blobs report id and size only, never content. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`output/show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/output/show.rs) |
 | An absent blob reference degrades that one piece of content to a named "unavailable" state rather than failing the command; every other operation still renders and the command still exits `0`. A blob the object store reports as damaged (hash mismatch, type mismatch, malformed payload, or `SNAPSHOT`-kind) propagates instead — the command fails rather than rendering it unavailable. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs) |
 | Exit `0` whichever way the target resolves; a malformed or missing id is a usage error, exit `2`; a well-formed but nonexistent target id, or a referenced object the store reports as damaged, is a failure, exit `1`. | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`args.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/args.rs) |
+| `RenamePath` cannot be rendered without its asserting AUTHOR key id -- the read type has no construction that omits it, and a patch with no AUTHOR signature fails the command. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`author_signing.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/author/author_signing.rs) |
 
 ## Provenance
 

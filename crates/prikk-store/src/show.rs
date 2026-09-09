@@ -8,9 +8,12 @@
 //! per invocation, not one per operation.
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlobKind, BlobPayload, BlockPayload, NodeId, ObjectId, ObjectType};
+use prikk_object::{
+    BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType,
+};
 
 use crate::RepositoryLayout;
+use crate::author::author_signing::require_author_key_id;
 use crate::merge_evidence::lifecycle_state_at;
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
@@ -117,8 +120,16 @@ pub enum ShowOperationContent {
         /// The new blob.
         new: ShowBlobContent,
     },
-    /// A path rename; both endpoints are already in [`ShowOperation::paths`].
-    RenamePath,
+    /// A path rename; both endpoints are already in [`ShowOperation::paths`]. RFC 144 §4o.6a's
+    /// honesty invariant: a signed `RenamePath` asserts *this signer* rewrote `old` to `new`, so
+    /// the asserting signer must be recoverable in the same answer, not a fact a surface can
+    /// choose to drop -- this variant cannot be constructed without it.
+    RenamePath {
+        /// The patch's AUTHOR signature key id -- the signer who asserted this rename. Not a
+        /// trust or verification judgement (that is a separate, local question); carries identity
+        /// only.
+        author_key_id: String,
+    },
     /// A mode change.
     ChangePerm {
         /// Mode before the change.
@@ -196,7 +207,7 @@ fn show_patch(
     let operations = decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?;
     let operations = operations
         .iter()
-        .map(|operation| show_operation(object_store, operation, lifecycle))
+        .map(|operation| show_operation(object_store, &envelope, operation, lifecycle))
         .collect::<Result<Vec<_>>>()?;
     Ok(ShowPatch {
         patch_id,
@@ -210,6 +221,7 @@ fn show_patch(
 /// inventing a second signalling path alongside [`ShowBlobContent::Unavailable`].
 fn show_operation(
     object_store: &impl ObjectReader,
+    envelope: &ObjectEnvelope,
     operation: &DecodedPatchOperation,
     lifecycle: Option<&NodeLifecycleState>,
 ) -> Result<ShowOperation> {
@@ -278,7 +290,9 @@ fn show_operation(
                 ShowPathResolution::Path(old_path.clone()),
                 ShowPathResolution::Path(new_path.clone()),
             ],
-            content: ShowOperationContent::RenamePath,
+            content: ShowOperationContent::RenamePath {
+                author_key_id: require_author_key_id(envelope)?,
+            },
         },
         DecodedOperationKind::ChangePerm {
             node_id,

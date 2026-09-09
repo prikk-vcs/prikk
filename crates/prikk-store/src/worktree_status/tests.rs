@@ -277,6 +277,72 @@ fn enumerate_queued_patches_reports_rename_path_with_both_endpoints_verbatim() {
             QueuedPathResolution::Path("new-name.txt".to_string()),
         ]
     );
+    // RFC 144 §4o.6a control 1: the rename's asserting AUTHOR key id is recoverable in the same
+    // answer, through the real `enumerate_queued_patches` path (`append_raw_patch` signs with
+    // `author_signer()`, key id "worktree-status-author") -- not a hand-constructed
+    // `QueuedOperationContent` value.
+    assert_eq!(
+        operation.content,
+        super::QueuedOperationContent::RenamePath {
+            author_key_id: "worktree-status-author".to_string()
+        }
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 144 §4o.6a control 3: a `RenamePath` operand whose patch carries no AUTHOR signature at
+/// all fails `enumerate_queued_patches` outright -- never a rendered rename with a blank or
+/// absent signer. Constructed directly (bypassing `append_raw_patch`, which always signs), the
+/// same way `enumerate_queued_patches_degrades_gracefully_when_active_ref_metadata_is_missing`
+/// above constructs its own queue state directly.
+#[test]
+fn enumerate_queued_patches_fails_a_rename_whose_patch_has_no_author_signature() {
+    let root = unique_temp_dir("enumerate-queued-patches-rename-no-author-signature");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+
+    // Deliberately no active-ref metadata write (as
+    // `enumerate_queued_patches_degrades_gracefully_when_active_ref_metadata_is_missing` above
+    // also does not) -- `queued_operation_entry`'s `RenamePath` arm reads the AUTHOR key id
+    // straight from the payload's own signed envelope, the same way it reads `old_path`/
+    // `new_path`, regardless of whether the queue's owning ref (hence any lifecycle replay) can
+    // be resolved. Keeping metadata absent here means only the missing-signature check is under
+    // test, not the (unrelated) replay-validity of an invented node id.
+    let payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::RenamePath(RenamePath {
+                node_id: NodeId::from_bytes([0x9C; 32]),
+                old_path: "old-name.txt".to_string(),
+                new_path: "new-name.txt".to_string(),
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    // A signed envelope (the WAL itself refuses an entirely unsigned one), but deliberately no
+    // AUTHOR-role signature -- unlike `append_raw_patch`, which always signs with one.
+    let mut envelope =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, payload.to_canonical_bytes().unwrap());
+    envelope
+        .add_signature(crate::test_gates::test_support::maintainer_signature())
+        .unwrap();
+    Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+        .append_patch(&envelope)
+        .unwrap();
+
+    let err = enumerate_queued_patches(&layout).expect_err(
+        "a RenamePath whose patch carries no AUTHOR signature must fail, not render a blank signer",
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("AUTHOR signature"),
+        "expected an AUTHOR-signature error, got: {message}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

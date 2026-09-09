@@ -2,7 +2,10 @@
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::stdout::{print, println};
-use prikk_store::{MergeEvidenceDisplay, MergeEvidenceDisplayOperation, MergePlanDisplay};
+use prikk_store::{
+    MergeEvidenceDisplay, MergeEvidenceDisplayOperation, MergeEvidenceDisplayOperationContent,
+    MergePlanDisplay,
+};
 
 /// Print a read-only merge evidence report.
 pub(crate) fn print_merge_evidence(report: &MergeEvidenceDisplay) {
@@ -109,6 +112,9 @@ fn print_labeled_operation(label: &str, operation: Option<&MergeEvidenceDisplayO
     }
     if let Some(path) = &operation.path {
         print!(" {path}");
+    }
+    if let MergeEvidenceDisplayOperationContent::RenamePath { author_key_id } = &operation.content {
+        print!(" asserted-by={author_key_id}");
     }
     println!();
 }

@@ -14,8 +14,9 @@ use std::fs;
 use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{NodeId, ObjectId};
+use prikk_object::{NodeId, ObjectEnvelope, ObjectId};
 
+use crate::author::author_signing::require_author_key_id;
 use crate::blob_access::ensure_blob_matches_node_kind;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::ignore::{IgnoreRules, should_skip_discovery};
@@ -339,6 +340,25 @@ pub struct QueuedOperationEntry {
     pub kind: &'static str,
     /// The path(s) this operation affects, in payload order.
     pub paths: Vec<QueuedPathResolution>,
+    /// What this operation carries beyond kind and paths -- RFC 144 §4o.6a's honesty invariant,
+    /// the same mechanism `ShowOperationContent` already uses: `RenamePath` cannot be constructed
+    /// without its asserting AUTHOR key id, so no future surface can render this entry's `kind`
+    /// without it.
+    pub content: QueuedOperationContent,
+}
+
+/// What a [`QueuedOperationEntry`] carries beyond its kind label and paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueuedOperationContent {
+    /// A path rename; both endpoints are already in [`QueuedOperationEntry::paths`]. RFC 144
+    /// §4o.6a: a signed `RenamePath` asserts *this signer* rewrote `old` to `new`, so the
+    /// asserting signer must be recoverable in the same answer.
+    RenamePath {
+        /// The patch's AUTHOR signature key id -- the signer who asserted this rename.
+        author_key_id: String,
+    },
+    /// Every other queued operation kind carries nothing beyond its label and paths today.
+    Other,
 }
 
 /// One queued patch, in queue order (RFC 140).
@@ -397,18 +417,21 @@ pub fn enumerate_queued_patches(layout: &RepositoryLayout) -> Result<Vec<QueuedP
             patch_id: record.envelope.object_id(),
             operations: operations
                 .iter()
-                .map(|operation| queued_operation_entry(operation, resolved_state.as_ref()))
-                .collect(),
+                .map(|operation| {
+                    queued_operation_entry(&record.envelope, operation, resolved_state.as_ref())
+                })
+                .collect::<Result<Vec<_>>>()?,
         });
     }
     Ok(entries)
 }
 
 fn queued_operation_entry(
+    envelope: &ObjectEnvelope,
     operation: &DecodedPatchOperation,
     resolved_state: Option<&NodeLifecycleState>,
-) -> QueuedOperationEntry {
-    match &operation.kind {
+) -> Result<QueuedOperationEntry> {
+    Ok(match &operation.kind {
         DecodedOperationKind::CreateFile { path, .. } => single_path("create-file", path.clone()),
         DecodedOperationKind::DeleteNode { path, .. } => single_path("delete-node", path.clone()),
         DecodedOperationKind::CreateSymlink { path, .. } => {
@@ -422,6 +445,9 @@ fn queued_operation_entry(
                 QueuedPathResolution::Path(old_path.clone()),
                 QueuedPathResolution::Path(new_path.clone()),
             ],
+            content: QueuedOperationContent::RenamePath {
+                author_key_id: require_author_key_id(envelope)?,
+            },
         },
         DecodedOperationKind::EditText { node_id, .. } => {
             resolved_node_path("edit-text", *node_id, resolved_state)
@@ -432,13 +458,14 @@ fn queued_operation_entry(
         DecodedOperationKind::ReplaceBinary { node_id, .. } => {
             resolved_node_path("replace-binary", *node_id, resolved_state)
         }
-    }
+    })
 }
 
 fn single_path(kind: &'static str, path: String) -> QueuedOperationEntry {
     QueuedOperationEntry {
         kind,
         paths: vec![QueuedPathResolution::Path(path)],
+        content: QueuedOperationContent::Other,
     }
 }
 
@@ -456,6 +483,7 @@ fn resolved_node_path(
     QueuedOperationEntry {
         kind,
         paths: vec![resolution],
+        content: QueuedOperationContent::Other,
     }
 }
 

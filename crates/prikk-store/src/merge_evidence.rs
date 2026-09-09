@@ -10,14 +10,17 @@ use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayloa
 
 pub use display::{
     MergeEvidenceDisplay, MergeEvidenceDisplayItem, MergeEvidenceDisplayOperation,
-    MergeEvidenceDisplaySelector,
+    MergeEvidenceDisplayOperationContent, MergeEvidenceDisplaySelector,
 };
 pub use merge_plan::MergePlanDisplay;
 
+use crate::author::author_signing::require_author_key_id;
 use crate::lifecycle_cache::{ReplayDerivedLifecycleState, replay_derived_state};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_algebra::{EvidenceScope, StorePatchAlgebraEvidence, analyze_merge_evidence};
-use crate::patch_replay::decode::{DecodedPatchOperation, decode_patch_operations};
+use crate::patch_replay::decode::{
+    DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
+};
 use crate::received::read_received_pointer;
 use crate::refs::RefStore;
 use crate::trust::{MaintainerTrustPolicy, verify_trusted_publication_envelope};
@@ -54,12 +57,12 @@ pub fn prepare_merge_evidence(
             .map_err(|err| PrikkError::Integrity(format!("merge evidence baseline: {err:?}")))?;
     let left_selector = resolve_target(layout, &object_store, left_target)?;
     let right_selector = resolve_target(layout, &object_store, right_target)?;
-    let left_operations = candidate_sequence(
+    let (left_operations, left_author_key_ids) = candidate_sequence(
         &object_store,
         baseline_block_id,
         left_selector.target_block_id,
     )?;
-    let right_operations = candidate_sequence(
+    let (right_operations, right_author_key_ids) = candidate_sequence(
         &object_store,
         baseline_block_id,
         right_selector.target_block_id,
@@ -77,6 +80,8 @@ pub fn prepare_merge_evidence(
         report,
         left_selector,
         right_selector,
+        &left_author_key_ids,
+        &right_author_key_ids,
     ))
 }
 
@@ -359,13 +364,20 @@ fn baseline_reachable_patch_ids(
         .collect())
 }
 
+/// The candidate operation sequence plus, in lockstep (one entry per operation, same order,
+/// never separately indexed), the AUTHOR key id that asserted each `RenamePath` operation --
+/// RFC 144 §4o.6a's honesty invariant. Built for every other kind too, always `None`: only a
+/// `RenamePath` operand ever needs its asserting signer resolved, so only that arm pays
+/// `require_author_key_id`'s cost (and only that arm can fail the whole call on a missing AUTHOR
+/// signature -- a patch with no rename in it is never affected).
 fn candidate_sequence(
     object_store: &impl ObjectReader,
     baseline: ObjectId,
     target: ObjectId,
-) -> Result<Vec<DecodedPatchOperation>> {
+) -> Result<(Vec<DecodedPatchOperation>, Vec<Option<String>>)> {
     let excluded = baseline_reachable_patch_ids(object_store, baseline)?;
     let mut operations = Vec::new();
+    let mut author_key_ids = Vec::new();
     for (_, block) in candidate_blocks(object_store, baseline, target)? {
         for patch_id in block.patch_ids {
             if excluded.contains(&patch_id) {
@@ -374,13 +386,21 @@ fn candidate_sequence(
             let envelope = object_store
                 .read_typed(patch_id, ObjectType::Patch)?
                 .ok_or_else(|| PrikkError::Integrity(format!("missing Patch {patch_id}")))?;
-            operations.extend(decode_patch_operations(
-                &envelope.canonical_payload,
-                envelope.schema_version,
-            )?);
+            for operation in
+                decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?
+            {
+                let author_key_id = match &operation.kind {
+                    DecodedOperationKind::RenamePath { .. } => {
+                        Some(require_author_key_id(&envelope)?)
+                    }
+                    _ => None,
+                };
+                operations.push(operation);
+                author_key_ids.push(author_key_id);
+            }
         }
     }
-    Ok(operations)
+    Ok((operations, author_key_ids))
 }
 
 /// Patch identities strictly between `baseline` (exclusive) and `target` (inclusive), in the order
