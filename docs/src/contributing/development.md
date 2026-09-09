@@ -19,8 +19,27 @@ Run the standard checks before submitting a source drop:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
+git diff --check
+cargo audit --no-fetch
+RUSTDOCFLAGS="-D rustdoc::private_intra_doc_links" cargo doc --workspace --no-deps
 cargo run --locked -p prikk-release-policy -- check
+cargo run --locked -p prikk-release-policy -- boundary-check
+cargo run --locked -p prikk-release-policy -- reference-check
 ```
+
+### The cross-target addendum
+
+If your change touches `#[cfg(target_os)]`-gated code, also run:
+
+```sh
+cargo clippy --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked --target x86_64-apple-darwin -- -D warnings
+```
+
+"Touching cfg-gated code" is broader than adding a `#[cfg(target_os)]` line yourself: it also covers
+adding un-gated code to a file that already contains that gating. That shape adds no `cfg` line to
+your diff, so it is easy to miss — and missing it once left the project's own main branch red on the
+macOS and Windows Clippy jobs for three consecutive changes.
 
 ## Building the documentation
 

@@ -41,3 +41,34 @@ Prikk is not yet the right tool if you need:
   path prefixes, one per line, with no globbing, no negation, and no per-directory files, so
   patterns like `*.log` do not work; and a file swept into history by mistake still cannot be
   removed later.
+
+## What scale to expect
+
+The list above is about missing features. Scale is a separate question, and worth stating on its
+own: what happens as a repository's history gets deep, or its tracked file count gets large. Three
+measured shapes:
+
+- **Sealing cost grows quadratically with history depth.** Per-seal cost is roughly linear in depth,
+  so cumulative cost to build a history of a given depth is roughly quadratic — a measured power-law
+  exponent of 2.03.
+- **Checkout and merge-evidence both cost roughly `depth^1.45`**, from two separate, uncached history
+  walks — measured exponents 1.446 and 1.445. Over the same range, tree size itself grew only as
+  `depth^0.859`. **Cost tracks history depth, not repository size**: a wide, shallow repository is
+  cheap to work with; a deep one is not, regardless of how large its tree is.
+- **Incremental commit memory is flat up to a few thousand tracked files, then grows linearly** at
+  roughly 1.7 KiB per file beyond that — measured peak around 11.6 MiB at 100 files and 113 MiB at
+  64,000.
+
+A few things worth knowing about these numbers before relying on them:
+
+- They describe *shape and order of magnitude*, not a guarantee for any particular repository.
+  They were measured against synthetic history ladders and a small corpus of profiles — two
+  profiles, chosen deliberately at opposite ends of one axis but also differing 46x in breadth from
+  each other, so results are bracketed by two shapes rather than interpolated across every shape a
+  real repository might have.
+- Extrapolating the sealing curve to very deep history (a few thousand sealed blocks) lands
+  somewhere between roughly 23 and 101 hours, depending on which points the extrapolation is fit
+  from — that range is a **projection**, not a measurement; that depth has never actually been
+  built. If you quote a number like that, say "projected" alongside it, or better, quote the shape
+  (quadratic) and apply it to your own depth.
+- All of the above was measured on Linux, with release builds.
