@@ -1156,6 +1156,42 @@ collision. Nothing was created, so the label is imprecise **in the same way §4i
 cosmetics for the dual — deferred on the same grounds**: an external-interface change with no resolution
 benefit.
 
+### 4r.4 CLOSED 2026-09-09 — the witness is reachable, and the obvious fix was the wrong one
+
+Delivered at `88e61bdd`. **`prikk merge-evidence` now produces `rename-destination-conflict`**, and
+`same-path-create` for a rename operand, through `analyze_merge_evidence` itself.
+
+**`ensure_flat_sequence` was conflating two questions** — *does this sequence have a genuine
+replay/evidence/prefix-dependency problem* and *can the oracle attempt this operation alone*. Split into
+`FlatSequenceCheck { hard, deferred }`: **`hard` still pre-empts everything at the same point in the same
+order**; only `deferred` moved past the pairwise loop, consulted as a fallback.
+
+**The naive fix — run the pairwise loop first — is wrong, and the round found out by checking rather than
+by shipping.** It breaks
+`confluence::sequence_internal_dependency_is_deferred_before_cross_pair_checks`, a case with **no rename
+in it at all**: a genuine same-node ordering dependency coexisting with a cross-pair that resolves to a
+different `Unknown` reason, which would have been reported instead. **Verified independently at review**
+by running the naive version: exactly that test fails, and only that test.
+
+**That is the risk §4r.1's handoff was written around** — *"the risk is not the feature but the twelve
+other kinds this shared ordering moves underneath"* — met and avoided.
+
+**Not rename-specific**: nothing in `commutation.rs` branches on which deferred reason it is, and the
+symlink case is covered by its own control. A fix special-casing `RenameDeferred` would have closed the
+reported gap and left the real one.
+
+**A prediction in the handoff was wrong and the round said so.** It predicted that disabling the deferred
+fallback would report `Confluent`; it reports `EvidenceFailure`, because the code then falls through to
+the full replay proof and hits the oracle's own refusal to replay a deferred operation. Wrong either way,
+caught either way — and **stating that the observed mode differed from the predicted one** is what
+distinguishes a perturbation that was run from one that was described.
+
+**Regression evidence is tied to existing commitments, not hand-captured**: each of the six sweep
+scenarios asserts the literal value that kind's own pre-existing dedicated test already asserts. 1061 →
+1066 tests, none of the pre-existing 1061 modified.
+
+**Increment 3 now has one piece left: §4o.6, the structural honesty invariant.**
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
