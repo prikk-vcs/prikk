@@ -672,6 +672,98 @@ check that fires. The imprecision lived in two reports and one review, not in an
 here so the RFC carries the mechanism as well as the rule, since the two tests that now pin it are split
 along precisely this line.
 
+## 4m. DESIGNED 2026-09-09 — the bundle-impact preview, and the gap it actually fills
+
+§4f ruled the *shape* — own exactly one comparison, anchored at HEAD, and do not call it `diff`. §4g.3
+ruled it separable. Neither designed it. This section does, and **the design changed once the existing
+surface was read rather than assumed.**
+
+### 4m.1 The gap, stated precisely
+
+The exchange path today is four steps, and the safety question falls in a hole between the first two:
+
+| Step | What it does | Writes? |
+|---|---|---|
+| `bundle verify --input <f>` | Checks a bundle offline. **Needs no repository** | Nothing |
+| `bundle import --input <f>` | Records it as an untrusted received pointer | **Writes objects into the store** |
+| `trust maintainer add` | The trust decision | Trust state |
+| `merge --into REF --from REF` | Seals the merge | **The irreversible act** |
+
+**`merge-plan` already exists and is already read-only** — but it takes block ids or refs, so it can only
+answer *after* the bundle's objects are in the store. **So today, to learn what a bundle would do to you,
+you must first let its objects into your object store.**
+
+That is the gap. `bundle verify` answers *is this bundle internally sound*; nothing answers *what would
+this do to **my** repository* without first admitting it. **The preview is the missing middle step**: it
+needs the repository (there is nothing to compare against otherwise) and it **writes nothing**.
+
+**This is a narrower and better-founded claim than §4f's own framing.** §4f called the preview a surface
+consulted "before an irreversible act", implying `merge`. The act it must precede is earlier: **admitting
+foreign objects into the store.**
+
+### 4m.2 RULED — the command
+
+**`prikk bundle preview --input <file>`.**
+
+A `bundle` subcommand, not a top-level command: it sits beside `export` / `import` / `verify`, takes the
+same `--input <file>` those already take, and reads in the same vocabulary. §4f's instruction not to call
+it `diff` is satisfied without inventing a noun — and `rollback-preview` already establishes `preview` as
+this project's word for a non-mutating look at what an operation would do.
+
+**Hard requirement: it writes nothing.** No objects, no refs, no received pointer, no trust state, no
+cache. A safety surface that mutates the thing it is protecting is not one. This must be asserted by a
+control, not by inspection — the round must prove the object store and every ref are byte-identical
+before and after.
+
+**It requires a repository** (unlike `bundle verify`), because the whole question is *against my HEAD*.
+
+### 4m.3 RULED — what it computes, and the reader it needs
+
+**One replay of current state, plus the bundle's own patches applied in memory** (§4g.3). The
+implementation crux: the bundle is self-contained, so its objects must be readable **without being
+written**. That means a composed, read-only reader — the repository's object store **overlaid with the
+bundle's own object set held in memory** — and replay run against that.
+
+**Reported effects, at node granularity**, being exactly what the model can honestly say today:
+paths created, deleted, edited, renamed, and permission-changed, with counts and the affected paths.
+
+**Three answers that are not effects, and are the point of the surface:**
+
+1. **Does it apply at all?** A bundle whose history does not connect to this repository's is a
+   legitimate, common answer — **report it, do not error.**
+2. **Would it conflict?** Conflicts are a *result* of a successful preview, not a failure of it.
+3. **Who sealed it?** Report the sealing identity, and **state in the same breath that this is not a
+   trust decision** — `import` already says exactly that about recorded author key material, and a
+   preview that implies trust it has not established would be worse than one that says nothing.
+
+### 4m.4 RULED — exit codes, output, and the honesty limit
+
+**Exit codes follow RFC 121 unchanged: `0` the preview was produced · `1` operational failure · `2` usage
+error.** **A bundle that would conflict, or that does not connect, exits `0`** — the command was asked
+what would happen and it answered. Conflict is not the command failing.
+
+**Therefore the answer must be machine-branchable in the output**, per RFC 140 §7b / RFC 142 §6b's
+lineage: a caller must be able to distinguish *applies cleanly*, *applies with conflicts*, and *does not
+connect* from a field, never by parsing prose or inferring from an exit code. `--format json` is
+required, not optional, for the same reason.
+
+**Degradation follows RFC 142 §6b: degrade absence, propagate error.** A blob the preview cannot read is
+reported as unavailable in a named field; a malformed bundle is an error.
+
+**The honesty limit is stated in the output, not only in the docs.** §4g.3: *"A bundle containing
+delete+create for a move previews delete+create."* Until rename authoring lands (§4k, order item 4), the
+preview cannot show a move as a move, and **it must say so** rather than let a reader infer that a
+delete-plus-create was what the author meant.
+
+### 4m.5 Scope — one increment, and what it must not become
+
+**In:** the subcommand, the composed read-only reader, the node-granularity effect report, the three
+answers of §4m.3, `--format json`, and the write-nothing control.
+
+**Out, explicitly:** content-level diffing of any kind — that is RFC 143's job composed by the caller,
+and §4f declined it deliberately; any trust evaluation; any change to `import`, `merge`, or `merge-plan`;
+and any prompt-to-import convenience. **The preview tells you; it does not offer to act.**
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
