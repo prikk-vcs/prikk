@@ -385,6 +385,19 @@ These apply to all work above and are not restated in each handoff.
    and the same with `--target x86_64-apple-darwin`. CI's `non-linux build` job runs this natively on both
    platforms, so an increment that skips it can pass every canonical gate and still turn CI red. The nine
    above cannot see platform-conditional dead code, which is the exact failure DC-71 exists to prevent.
+
+   **AMENDED 2026-09-09 — every report must state this rule's outcome, not silently omit it.** The rule
+   was skipped by three consecutive RFC 133 rounds and the architect accepted all three, leaving `main`
+   red on the macOS and Windows clippy jobs from `11871bfd` to `61da6987`. The first round declared its
+   two `#[cfg(target_os)]` uses under its own "checked per this round's own diff" heading and did not run
+   the two commands that declaration triggers; the next two **did not mention `cfg` at all** while each
+   added ~250 lines to the same gated file. Nothing in any report was false — the skip was simply
+   invisible.
+
+   **So: state the two cross-target results explicitly, or state that the rule does not apply and why.**
+   "Touching cfg-gated code" includes **adding un-gated code to a file that already contains cfg gating** —
+   that is precisely how platform-conditional dead code appears, and it adds no `cfg` line to the diff for
+   anyone to notice. A round that says nothing has not established that the rule did not apply.
 10. **Report counts before and after.** Test counts per touched crate, and locked package count where
     dependencies change, so no silent loss or growth can hide.
 

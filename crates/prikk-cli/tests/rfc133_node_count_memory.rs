@@ -139,7 +139,15 @@
 //! `#[ignore]`d: these are measurement instruments, not correctness tests, and their dominant cost
 //! (repositories up to tens of thousands of files, three samples per point) does not belong in the
 //! default suite.
+//!
+//! **Linux-only, in full.** Every measurement here reads `getrusage(RUSAGE_CHILDREN).ru_maxrss`
+//! through `support/rusage_child.py`, matching `dc59_commit_benchmark.rs`'s own memory pass
+//! (DC-62) — verified on Linux and not assumed portable elsewhere. The whole file is gated rather
+//! than each helper: on other platforms there is nothing here to be unused, so nothing needs
+//! `#[allow(dead_code)]` to stay quiet. `dc59`/`dc92` gate per item because most of *their* code is
+//! genuinely cross-platform; none of this file's is.
 
+#![cfg(target_os = "linux")]
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
 use std::collections::BTreeMap;
@@ -762,20 +770,6 @@ fn render_attribution_report(
 #[test]
 #[ignore = "long-running measurement instrument; run deliberately, see module docs"]
 fn rfc133_node_count_memory() {
-    #[cfg(not(target_os = "linux"))]
-    {
-        eprintln!(
-            "skipping node-count memory measurement: verified on Linux only, matching dc59's own \
-             memory pass (DC-62); see module docs"
-        );
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    rfc133_node_count_memory_linux();
-}
-
-#[cfg(target_os = "linux")]
-fn rfc133_node_count_memory_linux() {
     if !Path::new(RUSAGE_CHILD_SCRIPT).exists() {
         panic!("rusage_child.py not found at {RUSAGE_CHILD_SCRIPT}");
     }
@@ -874,20 +868,6 @@ fn rfc133_node_count_memory_linux() {
 #[test]
 #[ignore = "long-running measurement instrument; run deliberately, see module docs"]
 fn rfc133_node_count_memory_attribution() {
-    #[cfg(not(target_os = "linux"))]
-    {
-        eprintln!(
-            "skipping node-count memory attribution: verified on Linux only, matching step 1's own \
-             instrument; see module docs"
-        );
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    rfc133_node_count_memory_attribution_linux();
-}
-
-#[cfg(target_os = "linux")]
-fn rfc133_node_count_memory_attribution_linux() {
     if !Path::new(RUSAGE_CHILD_SCRIPT).exists() {
         panic!("rusage_child.py not found at {RUSAGE_CHILD_SCRIPT}");
     }
@@ -1072,20 +1052,6 @@ fn render_object_index_report(floor_kib: i64, points: &[ObjectIndexPoint]) -> St
 #[test]
 #[ignore = "long-running measurement instrument; run deliberately, see module docs"]
 fn rfc133_node_count_memory_object_index() {
-    #[cfg(not(target_os = "linux"))]
-    {
-        eprintln!(
-            "skipping object-index resident-cost measurement: verified on Linux only, matching \
-             this file's other instruments; see module docs"
-        );
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    rfc133_node_count_memory_object_index_linux();
-}
-
-#[cfg(target_os = "linux")]
-fn rfc133_node_count_memory_object_index_linux() {
     if !Path::new(RUSAGE_CHILD_SCRIPT).exists() {
         panic!("rusage_child.py not found at {RUSAGE_CHILD_SCRIPT}");
     }
