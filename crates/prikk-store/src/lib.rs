@@ -230,8 +230,9 @@ pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};
 pub use worktree_patch::{
     DEFAULT_ACTIVE_PATCH_LIMIT, DeclarationDisclosure, DeclarationDisclosureReason,
-    WorktreePatchCommitOptions, WorktreePatchCommitReport, WorktreePatchOperationKind,
-    WorktreePatchOperationSummary, commit_worktree_changes_signed,
+    MOVE_HINT_SUMMARY_THRESHOLD, MoveHintCandidate, MoveHints, WorktreePatchCommitOptions,
+    WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
+    commit_worktree_changes_signed,
 };
 pub use worktree_status::{
     QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution, WorktreeChange,

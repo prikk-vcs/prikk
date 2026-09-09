@@ -46,9 +46,9 @@ use crate::text_span;
 use crate::wal::Wal;
 use crate::worktree_marker::worktree_is_dirty;
 use crate::worktree_patch::{
-    DeclarationDisclosure, DeclarationDisclosureReason, WorktreePatchCommitOptions,
-    WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
-    next_op_seq,
+    DeclarationDisclosure, DeclarationDisclosureReason, MOVE_HINT_SUMMARY_THRESHOLD,
+    MoveHintCandidate, MoveHints, WorktreePatchCommitOptions, WorktreePatchCommitReport,
+    WorktreePatchOperationKind, WorktreePatchOperationSummary, next_op_seq,
 };
 use crate::{
     ActiveRefMetadata, read_active_ref_metadata, remove_active_ref_metadata,
@@ -751,6 +751,10 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         )));
     }
 
+    // RFC 144 §4o.4: read-only, over `planned` exactly as it stands right now -- authors nothing,
+    // and must run before anything below could be mistaken for a reason to change it.
+    let move_hints = plan_move_hints(&planned, &renamed_away, &rename_targets)?;
+
     // Canonical operation ordering (review v2 §4): kind rank, then path bytes, then node_id bytes.
     planned.sort_by(|a, b| {
         kind_rank(&a.kind)
@@ -845,6 +849,94 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         text_edit_count,
         changes: summaries,
         declaration_disclosures,
+        move_hints,
+    })
+}
+
+/// RFC 144 §4o.4: compute this commit's own move-hint candidates from `planned` as already
+/// assembled -- read-only, authors nothing, and does not consult `planned` again after this point.
+/// Exact content equality is the whole signal (§4o.4's own scope note rules similarity scoring
+/// out): two operations are a candidate pair only when a `DeleteNode`'s preimage blob and a
+/// `CreateFile`'s new blob are byte-identical, `blob_id` equality standing in for content equality
+/// since `BlobPayload`'s canonical encoding (`commit_index::content_hash`'s own doc) is a pure
+/// function of `(kind, bytes)`.
+fn plan_move_hints(
+    planned: &[PlannedOp],
+    renamed_away: &BTreeSet<String>,
+    rename_targets: &BTreeSet<String>,
+) -> std::result::Result<MoveHints, AuthorError> {
+    let mut deleted_by_blob: BTreeMap<ObjectId, Vec<&str>> = BTreeMap::new();
+    let mut created_by_blob: BTreeMap<ObjectId, Vec<&str>> = BTreeMap::new();
+    for op in planned {
+        match &op.kind {
+            OperationKind::DeleteNode(delete) => {
+                if let DeleteNodePreimage::File { old_blob_id, .. } = &delete.preimage {
+                    deleted_by_blob
+                        .entry(*old_blob_id)
+                        .or_default()
+                        .push(delete.path.as_str());
+                }
+            }
+            OperationKind::CreateFile(create) => {
+                created_by_blob
+                    .entry(create.blob_id)
+                    .or_default()
+                    .push(create.path.as_str());
+            }
+            _ => {}
+        }
+    }
+
+    // Zero-byte content is excluded explicitly (§4o.4 case 2): every empty file shares one of these
+    // two blob ids, a real repository holds several unrelated ones, and a lone 1:1 pair of them is
+    // not caught by the ambiguity check below (that check only fires on more than one candidate per
+    // side) -- confirmed by working through exactly that case rather than assumed.
+    let empty_text_blob_id =
+        commit_index::content_hash(BlobKind::Text, &[]).map_err(AuthorError::Store)?;
+    let empty_binary_blob_id =
+        commit_index::content_hash(BlobKind::Binary, &[]).map_err(AuthorError::Store)?;
+
+    let mut candidates = Vec::new();
+    for (blob_id, deleted_paths) in &deleted_by_blob {
+        if *blob_id == empty_text_blob_id || *blob_id == empty_binary_blob_id {
+            continue;
+        }
+        let Some(created_paths) = created_by_blob.get(blob_id) else {
+            continue;
+        };
+        // Ambiguous pairing (§4o.4 case 1): more than one candidate on either side means which
+        // moved to which is unknowable -- no hint for this content at all, rather than a guess.
+        if deleted_paths.len() != 1 || created_paths.len() != 1 {
+            continue;
+        }
+        let (Some(&old_path), Some(&new_path)) = (deleted_paths.first(), created_paths.first())
+        else {
+            continue;
+        };
+        // §4o.4 case 3: a declared move authors a RenamePath, never a DeleteNode/CreateFile pair --
+        // asserted here, not assumed, since `renamed_away`/`rename_targets` are exactly the sets
+        // the loops above used to keep a confirmed rename's own paths out of the generic
+        // deletion/create loops in the first place.
+        debug_assert!(
+            !renamed_away.contains(old_path) && !rename_targets.contains(new_path),
+            "a declared move must never reach the move-hint candidate scan: {old_path} -> {new_path}"
+        );
+        candidates.push(MoveHintCandidate {
+            old_path: old_path.to_string(),
+            new_path: new_path.to_string(),
+        });
+    }
+    candidates.sort_by(|a, b| a.old_path.cmp(&b.old_path));
+
+    Ok(if candidates.is_empty() {
+        MoveHints::None
+    } else if candidates.len() > MOVE_HINT_SUMMARY_THRESHOLD {
+        // §4o.4 case 4: a genuine mass reorganisation prints one summary line, not a wall of them.
+        MoveHints::Summary {
+            count: candidates.len(),
+        }
+    } else {
+        MoveHints::Pairs(candidates)
     })
 }
 

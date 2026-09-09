@@ -63,7 +63,7 @@ use prikk_object::Signature;
 use prikk_store::{
     ActiveRefMetadata, ActiveSessionRepairStatus, DEFAULT_ACTIVE_NAME, DEFAULT_ACTIVE_PATCH_LIMIT,
     DoctorRepairOptions, Ed25519AuthorSigner, Ed25519MaintainerSigner, MergeEvidenceTarget,
-    RefStore, RepositoryLayout, VerifyOptions, Wal, WorktreePatchCommitOptions,
+    MoveHints, RefStore, RepositoryLayout, VerifyOptions, Wal, WorktreePatchCommitOptions,
     add_trusted_maintainer, append_rollback_draft, commit_worktree_changes_signed,
     doctor_repository, enumerate_queued_patches, list_received_pointers,
     load_maintainer_trust_policy_or_empty, load_received_ref_history, load_ref_history,
@@ -177,9 +177,6 @@ fn run_commit(args: Vec<String>) -> std::result::Result<(), CliError> {
     // RFC 144 §4p.2: every live declaration that resolved to something other than the rename it
     // asserted is named here, with what it became -- the outcome was already correct before this
     // line existed; only the silence about it was the defect.
-    // RFC 144 §4p.2: every live declaration that resolved to something other than the rename it
-    // asserted is named here, with what it became -- the outcome was already correct before this
-    // line existed; only the silence about it was the defect.
     for disclosure in &report.declaration_disclosures {
         println!(
             "  declaration {} -> {}: {}",
@@ -187,6 +184,28 @@ fn run_commit(args: Vec<String>) -> std::result::Result<(), CliError> {
             disclosure.new_path,
             disclosure.resolution.describe()
         );
+    }
+    // RFC 144 §4o.4: a suggestion about a pair the user did *not* assert -- unindented and prefixed
+    // like the "note:" lines below (never the two-space `declaration …` prefix disclosures use
+    // above), conditional tense throughout, and printed only after every operation and disclosure,
+    // never interleaved with them. A hint names nothing that was authored; it authors nothing.
+    match &report.move_hints {
+        MoveHints::None => {}
+        MoveHints::Pairs(pairs) => {
+            for pair in pairs {
+                println!(
+                    "hint: looks like {} moved to {}; `prikk mv` would have preserved its \
+                     identity",
+                    pair.old_path, pair.new_path
+                );
+            }
+        }
+        MoveHints::Summary { count } => {
+            println!(
+                "hint: {count} deleted/created pairs in this commit look like moves; `prikk mv` \
+                 would have preserved their identity"
+            );
+        }
     }
     println!(
         "note: multi-operation text diff minimization, patch algebra, rename detection, and audit \

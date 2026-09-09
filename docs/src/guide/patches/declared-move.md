@@ -86,6 +86,48 @@ moved b.txt -> a.txt
 declaration a.txt -> b.txt -> a.txt: nets to no move, dropped
 ```
 
+## The commit-time hint — a suggestion about what you *didn't* declare
+
+If you move a file with a plain shell `mv` and never tell prikk, `commit` sees an ordinary delete
+and an ordinary create — nothing tells you identity could have been preserved. `commit` may print a
+hint for that:
+
+```text
+$ mv old-name.txt new-name.txt      # a shell mv, not prikk mv -- never declared
+$ prikk commit -m moved
+  delete-file old-name.txt
+  create-file new-name.txt
+hint: looks like old-name.txt moved to new-name.txt; `prikk mv` would have preserved its identity
+```
+
+**The hint and a disclosure line look deliberately different, on purpose**, because they mean
+opposite things — one is a fact about something you asserted, the other is a guess about something
+you didn't:
+
+```text
+  declaration a.txt -> build/a.txt: destination is ignored; recorded as a deletion, not a rename
+hint: looks like old-name.txt moved to new-name.txt; `prikk mv` would have preserved its identity
+```
+
+A disclosure line is indented like the operations above it, past tense, and says what *did* happen
+to something you declared. A hint is unindented, conditional ("would have"), and says what *might*
+have been true of something you never declared at all — the same shape as this guide's own "note:"
+lines, not the operation list.
+
+**The hint authors nothing.** It costs a line of output, never a fact in history, which is exactly
+why it is allowed to be wrong. It never prompts and never blocks, and there is no flag to make it a
+default — the machine suggests, you assert, always with `prikk mv` itself.
+
+The signal is exact content equality only — never similarity scoring, and never anything cleverer.
+A few cases the signal alone would get wrong are handled directly:
+
+- **A declared move never triggers it.** `prikk mv` already authored a `RenamePath`; there is
+  nothing left to suggest.
+- **An ambiguous set prints no hint.** Two deleted files and two created files sharing identical
+  content — which moved to which is unknowable, and a wrong guess is worse than silence.
+- **A mass reorganisation prints one summary line**, not a wall of hints, once a commit's own
+  unambiguous candidates pass a small threshold.
+
 Two nodes can be swapped in one commit by chaining declarations through a temporary name:
 
 ```sh
@@ -97,7 +139,7 @@ prikk commit --from-worktree -m "swap a.txt and b.txt"
 
 ## What this does not do (yet)
 
-- No content-similarity detection. `prikk mv` never suggests a rename by comparing an untracked file
-  against a missing one.
+- No similarity scoring in the commit-time hint above — exact content equality only, and nothing
+  cleverer.
 - No conflict witness for two declarations naming the same destination.
 - Symlink renaming is out of scope, the same as symlink authoring generally.

@@ -25,6 +25,17 @@ was never a tracked node has nothing to rename), and `prikk mv` itself discloses
 nets to no move, since that one is resolved immediately, not at the next commit. Every outcome was
 already correct; only the silence about it was fixed.
 
+`prikk commit` may now also print a hint for a plain shell move it was never told about: when a
+commit's own delete and create exactly match one deleted path's content to one created path's
+content, and the pairing is unambiguous, it prints `hint: looks like <old> moved to <new>; \`prikk
+mv\` would have preserved its identity` — visually and grammatically distinct from a disclosure
+line (unindented, conditional tense, no `declaration` prefix), printed after every operation and
+disclosure, never interleaved with them. The hint authors nothing and never changes what a commit
+authors; it may also be wrong, which costs a line of output, not a fact in history. A declared move
+never reaches it (it already authored a `RenamePath`); an ambiguous set (more than one deleted or
+created path sharing the same content) prints no hint rather than guess a pairing; more than five
+unambiguous candidates in one commit print a single summary line instead of one per pair.
+
 ## 0.37.0 — 2026-09-09
 
 ### Added — `prikk bundle preview --input <file>`: what a bundle would do to your repository

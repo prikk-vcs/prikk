@@ -40,6 +40,10 @@ pub struct WorktreePatchCommitReport {
     /// (worktree disagrees with a live declaration) refuses the whole commit instead of reaching
     /// this report at all, so it never appears here.
     pub declaration_disclosures: Vec<DeclarationDisclosure>,
+    /// Unambiguous exact-content-match delete+create pairs this commit authored, that `prikk mv`
+    /// could have preserved identity for (RFC 144 §4o.4). Purely a suggestion computed from what
+    /// was already planned -- authors nothing, and never changes `changes` above.
+    pub move_hints: MoveHints,
 }
 
 /// Summary of one generated patch operation.
@@ -90,6 +94,39 @@ impl DeclarationDisclosureReason {
             }
         }
     }
+}
+
+/// RFC 144 §4o.4: above this many unambiguous move-hint candidates in one commit, `commit` reports
+/// [`MoveHints::Summary`] (one line naming the count) instead of [`MoveHints::Pairs`] (one line per
+/// pair) -- a wall of hints is noise. A small number, chosen to comfortably cover an ordinary
+/// handful of renamed files while still catching a genuine mass reorganisation; not derived from
+/// any measurement, and free to move without any compatibility concern -- this is presentation
+/// only, never part of authored history.
+pub const MOVE_HINT_SUMMARY_THRESHOLD: usize = 5;
+
+/// One unambiguous move candidate `commit` may hint at (RFC 144 §4o.4): a deleted path's baseline
+/// content and a created path's new content are byte-identical, and each side has exactly one such
+/// path in this commit. Authors nothing -- purely a suggestion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveHintCandidate {
+    /// The deleted path whose baseline content matched.
+    pub old_path: String,
+    /// The created path whose new content matched.
+    pub new_path: String,
+}
+
+/// What `commit` should report about this commit's own move-hint candidates (RFC 144 §4o.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveHints {
+    /// No unambiguous move candidate in this commit.
+    None,
+    /// One line per candidate, at or below [`MOVE_HINT_SUMMARY_THRESHOLD`].
+    Pairs(Vec<MoveHintCandidate>),
+    /// More than [`MOVE_HINT_SUMMARY_THRESHOLD`] candidates -- the count, not the pairs.
+    Summary {
+        /// How many unambiguous candidates were found.
+        count: usize,
+    },
 }
 
 /// Generated operation kind for CLI/reporting.
