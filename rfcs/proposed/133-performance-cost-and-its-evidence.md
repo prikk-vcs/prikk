@@ -495,6 +495,61 @@ by `live_by_id.contains_key(id) || latest_tombstone_by_id.contains_key(id)` at t
 **Step 3 is the one that decides whether the cost is bounded at all.** Steps 1 and 2 are cheap and make
 it smaller and measured; neither makes it stop growing.
 
+## 6c. MEASURED 2026-09-09 — incremental commit memory is O(N) past ~4,000-8,000 nodes, and the cache does not explain it
+
+**§6b.3 step 1 delivered at `11871bfd`.** Release build, Linux, tmpfs, `getrusage(RUSAGE_CHILDREN)`,
+fresh process per measured commit, **3 samples per point**, N from 100 to 64,000. Both series re-derived
+independently at review.
+
+**Incremental commit — the in-scope property** (median peak RSS, KiB): 100 → 11,888 · 1,000 → 11,788 ·
+4,000 → 11,840 · **8,000 → 18,476** · 16,000 → 31,856 · 32,000 → 60,028 · 64,000 → 115,688.
+
+**The shape is flat-then-linear.** Flat through N=4,000 across a 40x increase in node count, departing
+between 4,000 and 8,000 (1.56x for that step, every prior step <=1.09x), then linear — doubling ratios
+1.56x → 1.72x → 1.88x → 1.93x, converging on 2.0x as O(N) does. Large-N fit: **1,781 bytes per node**,
+intercept **4.22 MiB**. **A single line does not fit**: extended back it predicts 18,908 KiB at N=4,000
+against 11,840 observed, so the kink is real. The genesis series shows the same break independently.
+
+**§2's "flat" reading is now corrected with evidence.** It covered 100-8,000, read three points as flat
+with a fourth that disagreed, and stopped at the departure. The fourth point was the start of a real O(N)
+region that continues for three more doublings.
+
+### 6c.1 The control returned the *other* answer, and it is decisive
+
+§6b.3 step 1's required control compared peak RSS against the persisted `lifecycle-state.v1` size.
+
+**The cache file is linear in N from the very first point** — ~154 bytes/node, constant across two orders
+of magnitude, **no flat region and no departure at all**. RSS is flat then linear. **Different shape, and
+~11x larger per node** (slope ratio 11.49x; the 4,000→8,000 step 11.03x — both re-derived at review).
+
+**So the persisted lifecycle state explains neither the shape nor the magnitude.** Two explanations stay
+open and this round deliberately does not choose: (a) the *in-memory* `NodeLifecycleState` costing ~11x
+its packed serialization, or (b) something else growing with N. A `commit-index.v1` file was observed at
+a comparable order (~3.76 MiB at N=32,000) and is flagged as a lead, not a cause.
+
+**Scale of what is unattributed:** at N=32,000, RSS growth over baseline is **~47 MiB**, while
+`lifecycle-state.v1` (4.95 MiB) and `commit-index.v1` (~3.76 MiB) together are **~8.7 MiB — under a
+fifth.** Whatever explains the rest is not a file on disk.
+
+### 6c.2 RE-RULED — §6b.3 step 2 is a simplification, and attribution replaces it as the next memory step
+
+**Step 2 ("remove `seen_ids`") held its position on a premise this measurement removed** — that the
+lifecycle state is where the growth lives. The serialized lifecycle state is ~1/9 of the per-node growth,
+and `seen_ids` is ~1/5 of that file.
+
+1. **Removing `seen_ids` remains justified as a simplification, not as the memory remedy.** It is provably
+   redundant against an invariant `cache_ladder.rs:285` already validates (§6b.2); removing proven
+   redundancy stands on its own under "clean over rich". **It must no longer be described as the fix for
+   commit memory.**
+2. **The next memory step is attribution.** Measure `NodeLifecycleState`'s in-memory cost in isolation and
+   `commit-index.v1`'s own growth, and distinguish (a) from (b) **before changing anything**. Optimising
+   the understood ninth while four fifths is unattributed would repeat, in a smaller font, the error §6a.3
+   was written about.
+
+**§6b.3's ordering paid for itself.** Measurement was sequenced before optimisation deliberately; had both
+been handed off together, `seen_ids` would now be removed, the curve would be essentially unchanged, and
+the round would have looked like a fix.
+
 ## 7. Scope
 
 **In:** the costs named in §2 and §3; the evidence tables in §5 and §5.1; §6's ruling; retiring §4's
