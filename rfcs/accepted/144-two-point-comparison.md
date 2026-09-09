@@ -1028,6 +1028,38 @@ line each. **Refusal stays reserved for the contradiction case §4o.2 already na
 - **Raising these rather than interpolating them silently is why they could be ruled on.** Two were
   right as built; two (§4p.2) were right in outcome and wrong in disclosure.
 
+### 4p.4 CLOSED 2026-09-09 — disclosure delivered, and it belongs at the point of resolution
+
+Delivered at `cabe2487`, output only — every outcome unchanged, the `continue` sites intact with a
+disclosure push added before them.
+
+```
+  delete-file a.txt
+  declaration a.txt -> build/a.txt: destination is ignored; recorded as a deletion, not a rename
+  declaration a.txt -> b.txt: destination is gone; recorded as a deletion, not a rename
+  declaration x.txt -> y.txt: source was never a tracked node; there was no node to rename
+  declaration a.txt -> b.txt -> a.txt: nets to no move, dropped
+```
+
+**Every line says what happened and stops** — no advice, no "did you mean", no warning tone. That was
+the easiest thing to drift from and it did not drift; §4o.4's hint stayed out, though "destination is
+ignored" sits one sentence away from it.
+
+**CORRECTED — the disclosure belongs at the point of resolution, not uniformly at commit.** §4p.2's
+handoff said "on the commit that consumes it." **For the round trip there is nothing to consume**: the
+chain-collapse drops it when the second `mv` runs, so no commit ever sees it. That one disclosure lives
+on `prikk mv`'s own output, and the round **flagged the deviation rather than silently reinterpreting the
+ruling.** My wording was wrong; a disclosure can only live where the resolution happens.
+
+**Deleted and ignored are distinguished by a filesystem check, not by the ignore-filtered map.** A path
+absent from that map means either *gone* or *present but excluded* — the map is the wrong witness for
+this question by construction, and reusing it would have produced a confidently wrong message.
+`symlink_metadata` against the real disk path decides.
+
+**The perturbation's scope proved a property beyond its failure.** Suppressing commit-side emission fails
+exactly the three commit-side disclosure tests while the round-trip control keeps passing — demonstrating
+the two disclosure sites are **independently held**, so breaking one cannot be masked by the other.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
