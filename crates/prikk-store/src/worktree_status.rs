@@ -341,9 +341,17 @@ pub struct QueuedOperationEntry {
     /// The path(s) this operation affects, in payload order.
     pub paths: Vec<QueuedPathResolution>,
     /// What this operation carries beyond kind and paths -- RFC 144 §4o.6a's honesty invariant,
-    /// the same mechanism `ShowOperationContent` already uses: `RenamePath` cannot be constructed
-    /// without its asserting AUTHOR key id, so no future surface can render this entry's `kind`
-    /// without it.
+    /// the same mechanism `ShowOperationContent` already uses: `RenamePath` cannot be
+    /// **constructed** without its asserting AUTHOR key id, so the signer is guaranteed present in
+    /// every value that reaches a renderer.
+    ///
+    /// **The guarantee is construction-enforced, not render-enforced, and the difference matters.**
+    /// `kind` remains a stable public string, so a renderer *can* read `kind == "rename-path"` and
+    /// present a rename without ever destructuring `content` -- verified by compiling exactly that.
+    /// Removing `kind` would enforce it fully and is not on the table: it is an external interface
+    /// (RFC 140's vocabulary, shared with `ShowOperation::kind`). So this type makes the signer
+    /// impossible to *lose*, not impossible to *ignore*, and a reviewer must still check that a new
+    /// rename-presenting surface reads it.
     pub content: QueuedOperationContent,
 }
 

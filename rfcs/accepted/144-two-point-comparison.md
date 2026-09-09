@@ -1219,6 +1219,52 @@ its own type, and folding it in would put a trust judgement inside a shared read
 fields a surface may render separately"* §4i.1 rejects. The deliverable is the compiler refusing a
 construction that omits it.
 
+## 4s. CLOSED 2026-09-09 — the honesty invariant is enforced, and increment 3 is complete
+
+**Piece 4 accepted at `b1de935c`.** All three presenting surfaces carry a struct variant that cannot be
+constructed without the asserting signer: `ShowOperationContent::RenamePath { author_key_id }`,
+`QueuedOperationContent::RenamePath { … }`, `MergeEvidenceDisplayOperationContent::RenamePath { … }`.
+`require_author_key_id` returns `Err` on absence, matching `verify.rs`'s own rule that a missing AUTHOR
+signature is an error rather than a value. **Key id only** — no trust, no verification status (§4i.1's
+*"the belief is local"*, §4h.3's *"trust policy must never be an input"*).
+
+**The surface list needed a third correction, and the round made it.** §4o.6 named two surfaces that are
+out by construction; §4o.6a added `status`/`worktree-status`. **`worktree-status` never renders
+`QueuedOperationEntry` at all** — only `prikk status --format json` does. Verified at review. The CLI
+surfaces actually changed are `show`, `status --format json`, and `merge-evidence`.
+
+### 4s.1 CORRECTED — construction-enforced is not render-enforced, and the difference must be stated
+
+§4i.1 reasoned that *"if a rename-bearing report cannot be constructed without its signer, no future
+surface can drop it."* **The first clause is delivered exactly. The second does not follow.**
+
+`kind` remains a stable public string (RFC 140's vocabulary), so a renderer reading
+`kind == "rename-path"` and never destructuring `content` **compiles cleanly** — verified at review by
+compiling exactly that. Removing `kind` would close it and is not available: it is an external interface.
+
+**So the type makes the signer impossible to _lose_, not impossible to _ignore_.** That is the achievable
+ceiling and the mechanism is right; the claim about it was one step too strong, in a doc comment on a
+public type, and has been corrected there. **Overstating a security-adjacent invariant is how it later
+fails quietly** — a reviewer who believes the compiler forbids a `kind`-only renderer will wave one
+through. **A reviewer must still check that each new rename-presenting surface reads `content`.**
+
+### 4s.2 One seam left where the pairing is convention, not type
+
+`candidate_sequence` returns operations and signers as **parallel arrays joined by index**. Acceptable —
+private, one caller, keeps `analyze_merge_evidence`'s signature untouched, and the invariant is enforced
+at the display type, which is the boundary §4i.1 is about. **But it is the one place an operation and its
+signer travel as two values that could drift**, which is the shape the invariant outlaws at the
+presentation layer. A future refactor should collapse it rather than extend it.
+
+### 4s.3 Increment 3 is complete
+
+`prikk mv` and rename authoring · declaration disclosure · the commit-time hint · the thirteenth witness
+and its reachability fix · the honesty invariant.
+
+**prikk can now author a rename, explain what a declaration became when it was not one, suggest the
+command to the person who did not know it existed, name the conflict when two people move one node
+apart, and never present a rename without saying who asserted it.**
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
