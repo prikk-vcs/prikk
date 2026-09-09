@@ -14,7 +14,10 @@ shared ancestry is a legitimate, reported answer, not an error); whether applyin
 sealed it, with the same "continuity only, not a trust decision" disclaimer `bundle import` already
 prints for recorded signer material. `--format json` makes all of this machine-branchable. Until
 rename authoring lands, a moved path previews as a delete plus a create, and the output says so
-rather than let a reader infer intent the repository does not yet record.
+rather than let a reader infer intent the repository does not yet record. A local ref that has
+never been published — the state before your first `seal`, and the moment you most need to ask
+what a bundle would do — now reports `no-local-history` with the bundle's whole content as
+`created`, rather than the integrity error it returned before this line landed.
 
 ### Added — `prikk checkout --patch-plan --format json`: content at a replayed point
 

@@ -59,6 +59,13 @@ type ReplayedLiveNodes = BTreeMap<prikk_object::NodeId, ReplayLiveNode>;
 /// How the bundle's own history relates to the local ref it is being previewed against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BundleConnectivity {
+    /// The local ref has never been published (§4n.1) -- there is no local target to compare
+    /// against at all, not merely an empty one. Named for what is true of the **local** side,
+    /// deliberately distinct from `FastForward`: fast-forward asserts *local history is a prefix
+    /// of the bundle's*, which is not a true statement when local has no history to be a prefix
+    /// of. The whole of the bundle's own content previews as `Created`, the same way
+    /// `FastForward` reports new nodes, and there is nothing to conflict with.
+    NoLocalHistory,
     /// No shared ancestry at all -- a legitimate, common answer (§4m.3 #1), reported rather than
     /// treated as an error.
     DoesNotConnect,
@@ -217,6 +224,39 @@ fn find_lowest_common_ancestors(
         }
     }
     shared.difference(&dominated).copied().collect()
+}
+
+/// The preview computation for §4n.1's fifth state: the local ref named has never been
+/// published, so there is no `local_target` to compare against at all. `bundle_only_reader` must
+/// resolve only the bundle's own object set -- there is no local ref state to combine it with,
+/// and reusing the bundle-only reader here (rather than a composed one) keeps this path
+/// consistent with `preview_impact`'s own "never credit local objects the bundle did not itself
+/// carry" discipline, even though local has nothing to contribute in this state by construction.
+///
+/// Walks the bundle's own full chain from genesis to `bundle_target` and reports every path in
+/// it as `Created` against an empty starting state -- "all of it arrives," per §4n.1's own
+/// instruction -- with no conflict question to answer (there is no local state to conflict
+/// with).
+pub(crate) fn preview_new_repository_impact(
+    bundle_only_reader: &impl ObjectReader,
+    bundle_target: ObjectId,
+) -> Result<BundlePreviewResult> {
+    let (after_files, after_live) = walk_and_replay(
+        bundle_only_reader,
+        &single_parent_chain(bundle_only_reader, bundle_target)?,
+    )?;
+    let after_modes = modes_by_path(&after_live);
+    let effects = diff_effects(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &after_files,
+        &after_modes,
+    );
+    Ok(BundlePreviewResult {
+        connectivity: BundleConnectivity::NoLocalHistory,
+        conflict: Some(ConflictAnswer::AppliesCleanly),
+        effects,
+    })
 }
 
 /// The full preview computation: connectivity, conflict answer, and node-level effects, for a

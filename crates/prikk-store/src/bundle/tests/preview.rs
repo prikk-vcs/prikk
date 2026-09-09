@@ -427,6 +427,74 @@ fn already_included_reports_no_effects() {
     let _ = std::fs::remove_dir_all(&local_root);
 }
 
+// ---- §4n.1: the local ref has never been published. ----
+
+#[test]
+fn no_local_history_reports_the_whole_bundle_as_created() {
+    let (source_layout, source_root, _, _) = genesis_repo("rfc144-preview-no-history-source");
+    let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
+
+    // A bare, freshly-initialized repository: `init`, nothing sealed -- exactly the tutorial's
+    // own `init` -> `commit` -> `seal` sequence before the first seal. `heads/main` has never
+    // been published, not merely published-and-empty.
+    let local_root = unique_temp_dir("rfc144-preview-no-history-local");
+    let local_layout = RepositoryLayout::init(local_root.clone()).unwrap();
+
+    let before = directory_digest(&local_root);
+    let options = BundleImportOptions::default_limits();
+    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    assert_eq!(
+        report.connectivity,
+        BundlePreviewConnectivity::NoLocalHistory
+    );
+    assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
+    assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
+    assert_eq!(report.effects[0].path, "a.txt");
+    assert_eq!(report.effects[0].kind, BundlePreviewEffectKind::Created);
+    assert_eq!(report.effects[0].current_bytes, None);
+    assert_eq!(report.effects[0].after_bytes, Some("shared\n".len() as u64));
+    let after = directory_digest(&local_root);
+    assert_eq!(
+        before, after,
+        "bundle preview must write nothing even on a repository that has never sealed"
+    );
+
+    let _ = std::fs::remove_dir_all(&source_root);
+    let _ = std::fs::remove_dir_all(&local_root);
+}
+
+/// §3's own "check the neighbours" question: a ref name that has never existed at all previews
+/// identically to a ref name that exists conceptually (a checked-out worktree target, say) but
+/// has never been published. `read_current_ref_state_id` makes no such distinction in this
+/// codebase's model -- a ref *is* its published pointer, so "exists but unpublished" is not a
+/// state this store can represent separately from "never referenced." Both reach the same `None`
+/// branch and so, correctly, produce the same answer -- confirmed here rather than only argued.
+#[test]
+fn a_ref_name_that_never_existed_behaves_the_same_as_an_unpublished_one() {
+    let (source_layout, source_root, _, _) =
+        genesis_repo("rfc144-preview-no-history-neighbour-source");
+    let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
+
+    // This local repository has sealed and published `heads/main`, so it is not the "nothing
+    // published yet" case at all -- but the ref name being previewed against
+    // (`heads/does-not-exist`) has never appeared anywhere in it.
+    let (local_layout, local_root, _, _) =
+        genesis_repo("rfc144-preview-no-history-neighbour-local");
+
+    let options = BundleImportOptions::default_limits();
+    let report = preview_bundle(&local_layout, &bytes, &options, "heads/does-not-exist").unwrap();
+    assert_eq!(
+        report.connectivity,
+        BundlePreviewConnectivity::NoLocalHistory
+    );
+    assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
+    assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
+    assert_eq!(report.effects[0].path, "a.txt");
+
+    let _ = std::fs::remove_dir_all(&source_root);
+    let _ = std::fs::remove_dir_all(&local_root);
+}
+
 #[test]
 fn sealed_by_reports_the_maintainer_key_id() {
     let (source_layout, source_root, _, _) = genesis_repo("rfc144-preview-sealed-by-source");

@@ -327,6 +327,65 @@ fn bundle_preview_exits_zero_even_when_disconnected() {
     let _ = std::fs::remove_dir_all(bundle_path.parent().unwrap());
 }
 
+/// RFC 144 §4n.1: a repository that has `init`ed but never `seal`ed yet -- the tutorial's own
+/// state before the first seal, and the one moment a user most needs to ask what a bundle would
+/// do. Must be an answer (`no-local-history`, exit 0), never the integrity error it used to be.
+#[test]
+fn bundle_preview_on_an_unsealed_repository_reports_no_local_history() {
+    let source = support::unique_repo("rfc144-preview-cli-unsealed-source");
+    support::init(&source);
+    std::fs::write(source.join("a.txt"), "shared\n").unwrap();
+    support::ok(
+        &support::commit(&source, "heads/main", "genesis"),
+        "genesis",
+    );
+    support::ok(&support::seal(&source, "heads/main"), "seal genesis");
+    let bundle_path =
+        support::unique_repo("rfc144-preview-cli-unsealed-bundle").join("bundle.pbndl");
+    support::ok(
+        &support::prikk(&source)
+            .args([
+                "bundle",
+                "export",
+                "--ref",
+                "heads/main",
+                "--output",
+                bundle_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "bundle export",
+    );
+
+    // `init` only -- no commit, no seal. `heads/main` has never been published.
+    let local = support::unique_repo("rfc144-preview-cli-unsealed-local");
+    support::init(&local);
+
+    let out = support::prikk(&local)
+        .args([
+            "bundle",
+            "preview",
+            "--input",
+            bundle_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let value = assert_valid_json(&stdout_of(&out));
+    assert_eq!(value.get("connectivity").as_str(), "no-local-history");
+    assert_eq!(value.get("conflict").as_str(), "applies-cleanly");
+    let effects = value.get("effects").as_array();
+    assert_eq!(effects.len(), 1, "{effects:?}");
+    assert_eq!(effects[0].get("path").as_str(), "a.txt");
+    assert_eq!(effects[0].get("kind").as_str(), "created");
+
+    let _ = std::fs::remove_dir_all(&source);
+    let _ = std::fs::remove_dir_all(&local);
+    let _ = std::fs::remove_dir_all(bundle_path.parent().unwrap());
+}
+
 #[test]
 fn bundle_preview_requires_input() {
     let repo = support::unique_repo("rfc144-preview-cli-missing-input");

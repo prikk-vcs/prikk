@@ -271,6 +271,11 @@ pub struct BundleImportReport {
 /// with the local ref is a legitimate, reportable outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundlePreviewConnectivity {
+    /// The local ref named has never been published (RFC 144 §4n.1) -- there is no local target
+    /// to compare against, not merely an empty one. Distinct from `FastForward`, which asserts
+    /// *local history is a prefix of the bundle's*: a ref with no history has no prefix to be
+    /// one. The bundle's entire content previews as `Created`; there is nothing to conflict with.
+    NoLocalHistory,
     /// No shared ancestry with the local ref at all.
     DoesNotConnect,
     /// The bundle's own target block is already an ancestor of the local ref's current target --
@@ -289,6 +294,7 @@ impl BundlePreviewConnectivity {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::NoLocalHistory => "no-local-history",
             Self::DoesNotConnect => "does-not-connect",
             Self::AlreadyIncluded => "already-included",
             Self::FastForward => "fast-forward",
@@ -442,27 +448,8 @@ pub fn preview_bundle(
         .map(|signature| signature.key_id.clone())
         .collect();
 
-    let local_ref_state_id = RefStore::new(layout.clone())
-        .read_current_ref_state_id(ref_name)?
-        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
-    let local_ref_state_envelope = read_snapshot
-        .read_typed(local_ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {ref_name} points to missing RefState {local_ref_state_id}"
-            ))
-        })?;
-    let local_ref_state_payload = RefStatePayload::decode_canonical(
-        &local_ref_state_envelope.canonical_payload,
-        local_ref_state_envelope.schema_version,
-    )?;
-    let (local_target, _) =
-        crate::refs::resolve_ref_tip_block(&read_snapshot, &local_ref_state_payload)?;
+    let local_ref_state_id = RefStore::new(layout.clone()).read_current_ref_state_id(ref_name)?;
 
-    let combined_reader = BundleAndLocalReader {
-        bundle_objects: &contents.bundle_objects_by_id,
-        local: Some(&read_snapshot),
-    };
     let bundle_only_reader = BundleAndLocalReader {
         bundle_objects: &contents.bundle_objects_by_id,
         local: None,
@@ -470,14 +457,42 @@ pub fn preview_bundle(
     let (bundle_target, _) =
         crate::refs::resolve_ref_tip_block(&bundle_only_reader, &contents.ref_state_payload)?;
 
-    let preview = preview::preview_impact(
-        &combined_reader,
-        &bundle_only_reader,
-        local_target,
-        bundle_target,
-    )?;
+    // §4n.1: a local ref with no published RefState at all -- not merely an empty one -- has no
+    // target to compare against, so this is answered without ever attempting
+    // `preview_impact`'s own ancestor walk. Reachable and common (the tutorial's own sequence is
+    // `init` -> `commit` -> `seal`, so nothing is published until the first seal); it is a
+    // legitimate connectivity state (§4m.3 rule 1's own family), not an error.
+    let preview = match local_ref_state_id {
+        None => preview::preview_new_repository_impact(&bundle_only_reader, bundle_target)?,
+        Some(local_ref_state_id) => {
+            let local_ref_state_envelope = read_snapshot
+                .read_typed(local_ref_state_id, ObjectType::RefState)?
+                .ok_or_else(|| {
+                    PrikkError::Integrity(format!(
+                        "ref {ref_name} points to missing RefState {local_ref_state_id}"
+                    ))
+                })?;
+            let local_ref_state_payload = RefStatePayload::decode_canonical(
+                &local_ref_state_envelope.canonical_payload,
+                local_ref_state_envelope.schema_version,
+            )?;
+            let (local_target, _) =
+                crate::refs::resolve_ref_tip_block(&read_snapshot, &local_ref_state_payload)?;
+            let combined_reader = BundleAndLocalReader {
+                bundle_objects: &contents.bundle_objects_by_id,
+                local: Some(&read_snapshot),
+            };
+            preview::preview_impact(
+                &combined_reader,
+                &bundle_only_reader,
+                local_target,
+                bundle_target,
+            )?
+        }
+    };
 
     let connectivity = match preview.connectivity {
+        preview::BundleConnectivity::NoLocalHistory => BundlePreviewConnectivity::NoLocalHistory,
         preview::BundleConnectivity::DoesNotConnect => BundlePreviewConnectivity::DoesNotConnect,
         preview::BundleConnectivity::AlreadyIncluded => BundlePreviewConnectivity::AlreadyIncluded,
         preview::BundleConnectivity::FastForward => BundlePreviewConnectivity::FastForward,
