@@ -463,6 +463,63 @@ are independent of each other and either may go first.
    2's design work, not a gap in the format — RFC 139 §3's "a profile plus a builder, not a
    recording".
 
+## 9a. DELIVERED 2026-09-09 — increment 4, and the contrast is confounded on breadth
+
+**Increment 4 is delivered at `373626d8`. All four increments of §9 are complete.**
+
+`profiles/sindresorhus-awesome.toml` — `sindresorhus/awesome` at `bc98e517`, CC0-1.0, 600 non-merge
+commits, the same extraction commands and unmodified extractor. **Concentration metric** (*mean touches
+per distinct path*, computable from fields the profile already carries): **prikk 2.58, awesome 33.05, a
+12.8x contrast** — recomputed independently at review from the committed TOML and matching to every
+reported digit. No source paths are stored; only prikk's own file is named, in the nondeterminism note.
+
+**The metric earned its place by rejecting a candidate.** `ohmyzsh/ohmyzsh` was selected first on
+reputation — a config framework whose activity is mostly small third-party plugin PRs — and measured
+**2.67** against prikk's 2.58, indistinguishable. §1's named failure mode is "a second profile that
+resembles the first"; selection on reputation alone would have shipped it and retired limit 2 on paper.
+**The rejected extraction was kept**, which is what makes "this metric discriminates" checkable.
+
+Equal `n` is now **enforced by a test**, not merely stated — verified at review by perturbing
+`commit_count` to 599 and watching it fail.
+
+### 9a.1 FINDING — concentration and breadth moved together, so the pair brackets rather than isolates
+
+The two profiles differ on **two** axes at once:
+
+| Axis | prikk-self | sindresorhus-awesome | ratio |
+|---|---|---|---|
+| Concentration (touches/path) | 2.58 | 33.05 | 12.8x |
+| **Breadth (`distinct_paths`)** | **875** | **19** | **46x** |
+
+The metric isolates concentration. **The profiles do not.** Breadth moved further than concentration did
+in the same step, so **a future measurement differing between these corpora cannot be attributed to
+concentration.** §2's founding complaint was that no two measurements shared a repository; this is its
+successor — the profiles are comparable in `n` and uncontrolled on breadth.
+
+**And `sindresorhus/awesome` is not a software project** — a curated markdown list, 86.8% of touches on
+one file. RFC 136 §9.1 limit 2 speaks of *a project that accumulates many small fixups against the same
+file*, which in a corpus built to measure VCS operations on software histories reads as a software
+project. This is an **extreme endpoint**, not a representative concentrated software project.
+
+**This is not a defect in increment 4**, which satisfied §3 and §4 as written and did so with measured
+evidence. The pair genuinely **brackets the range**, and a conclusion holding at both 2.58 and 33.05 is
+well-supported. The limit is that conclusions are *bracketed*, not *interpolated*: the shape most real
+projects have — many files **and** concentrated churn — lies between these two points and is represented
+by neither.
+
+**RULED, conditionally: a third profile is not required now**, since nothing has been measured against the
+second yet. **It becomes required before any conclusion is attributed to concentration** rather than
+merely checked at both ends. Until then, results taken across these two profiles must be reported as
+*holds at both ends of a range that also varies 46x in breadth* — never as *concentration does not
+matter*.
+
+### 9a.2 Limit 2 is narrowed at the instrument level, not retired
+
+The corpus can now build from two empirically opposite profiles and any measurement can be taken against
+both. **But no conclusion has been re-checked against the second profile**, so whether RFC 136's figures
+or any other result drawn from `prikk-self.toml` alone still hold against a concentrated rhythm is open.
+Retiring the limit *as applied to a specific claim* needs its own increment and its own handoff.
+
 ## 10. Scope
 
 **In:** the profile format and its provenance requirements; the builder and its determinism
