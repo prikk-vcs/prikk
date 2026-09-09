@@ -970,6 +970,64 @@ things to live in one commit:
 
 None of these is a reason to delay. They are the reason to keep piece 1 small.
 
+## 4p. DELIVERED 2026-09-09 — prikk authors renames, and §4o.2's refusal rule was narrower than its own reason
+
+**Piece 1 accepted at `9a1b7dc2`. This is the first sealed prikk history that can contain a
+`RenamePath`** — increments 1 and 2 built the replay and seal paths for an operation nothing could yet
+produce; this round produces it. `prikk mv <old> <new>`, the four worktree states of §4o.1, the durable
+declaration store of §4o.2 with net-move collapse, and `worktree-status` disclosure per §4o.3.
+
+**Six controls, end to end through the compiled binary**, including the two-node swap that increments 1
+and 2 existed for and that nothing could reach until now. The round's perturbation — removing the
+round-trip drop guard — was re-run at review and fails exactly one control, the right one.
+
+### 4p.1 The finding this round produced: a path-keyed cache is invalid for a rename destination
+
+Comparing a rename's destination against baseline through `resolve_existing_file` consults
+`commit_index`, **a cache keyed by path and valid on the premise "this path's content is unchanged since
+the entry was recorded."** A rename breaks that premise in a way no other caller does: `new_path` just
+changed **which node occupies it**, so a prior entry at that key describes the path's *former* occupant.
+Observed as a false content mismatch that sent a provably-unchanged rename into `plan_edit_text`.
+
+**Only a swap can reach it** — a lone rename's destination is never a path the index already holds a
+stale entry for. Fixed by never consulting the cache for a rename destination, while still refreshing
+the entry afterward. **Found by the control that only became runnable in this round.**
+
+### 4p.2 CORRECTED — §4o.2 required refusal for one case; three others discard the assertion just as quietly
+
+§4o.2 required refusing the contradiction case (destination gone, source back), justified as:
+*"a machine discarding a human's assertion quietly is the exact failure §4g exists to prevent."*
+**The rule was narrower than the reason.** Three further resolutions discard the assertion silently, and
+the round implemented them exactly as specified. Verified at review against the built binary:
+
+```
+$ prikk mv a.txt build/a.txt        # build/ is ignore-matched
+moved a.txt -> build/a.txt
+$ prikk commit -m moved
+  delete-file a.txt                 # no mention of the declaration at all
+```
+
+**The outcome is correct and must not change.** Moving a tracked file into an ignored path removes it
+from the tracked set; a deletion is the honest record and refusing it would be wrong. **The silence is
+the defect.**
+
+**RULED: disclosure, not refusal.** Every declaration resolving to anything other than the asserted
+rename — vacuous round trip, nets-to-deletion, `old_path` never a tracked baseline node,
+ignore-matched destination — **must be named on the commit that consumes it, with what it became**, one
+line each. **Refusal stays reserved for the contradiction case §4o.2 already names.**
+
+### 4p.3 The three judgment calls accepted as implemented
+
+- **"Last stated intent wins"** when a second `mv` names an `old_path` with a distinct live declaration.
+  **Correct**: it matches the declaration model exactly — the user's latest assertion is the one they
+  mean, and both a merge and a refusal would be the machine second-guessing an assertion.
+- **A declared destination occupied by another untouched tracked node is refused at authoring time**,
+  best-effort, with replay authoritative. **Correct layering**: a fail-closed authoring check that
+  neither duplicates `rename_nodes_checked_batch` nor pretends to replace it, and is framed as
+  best-effort rather than complete.
+- **Raising these rather than interpolating them silently is why they could be ruled on.** Two were
+  right as built; two (§4p.2) were right in outcome and wrong in disclosure.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
