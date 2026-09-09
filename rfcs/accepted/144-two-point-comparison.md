@@ -764,6 +764,68 @@ answers of §4m.3, `--format json`, and the write-nothing control.
 and §4f declined it deliberately; any trust evaluation; any change to `import`, `merge`, or `merge-plan`;
 and any prompt-to-import convenience. **The preview tells you; it does not offer to act.**
 
+## 4n. DELIVERED 2026-09-09 — `prikk bundle preview` is built, and one state it cannot answer
+
+**Accepted at `b814716a`.** `prikk bundle preview --input <file> [--ref REF] [--format json]` answers
+§4m.3's three questions — connectivity, conflict, and sealer — against a bundle whose objects are never
+admitted to the store.
+
+**The write-nothing guarantee is proven at the subject level.** The round's own perturbation demonstrated
+that its digest is sensitive to a write; review additionally made `preview_bundle` *itself* write a cache
+file and confirmed `bundle_preview_writes_nothing` fails on it. The digest is a full recursive walk over
+path **and** bytes, so cache writes and stray refs are in scope, not just objects.
+
+**The reader already existed.** §4m.3 specified "the object store overlaid with the bundle's own object
+set held in memory"; `BundleAndLocalReader` was already exactly that, used by `verify_bundle` with
+`local: None`. Reused rather than rebuilt.
+
+**Two limits, both disclaimed in the output rather than only in the docs:** conflict detection is a naive
+apply and cannot see two individually-successful changes that fail to compose under real 3-way
+resolution; and an ambiguous lowest common ancestor degrades to `Undetermined` rather than guessing. A
+`rename_note` field carries §4g.3's delete+create honesty limit, and there is deliberately **no `Renamed`
+effect variant** — a variant that can never be produced would be worse than its absence.
+
+### 4n.1 REQUIRED before any release ships this command — the unsealed repository
+
+**`preview_bundle` returns `Err("ref heads/main is not published")` on a freshly-initialized repository**,
+verified empirically. `bundle.rs:445-447` has no branch for an absent local ref, and no fixture covers the
+case — every test starts from a repo that has already sealed.
+
+**That state is reachable and it is the important one.** The tutorial's sequence is `prikk init` →
+`commit` → `seal`; nothing is published until the first seal. **So the one moment a user most needs to ask
+what a bundle would do — they have just initialized, someone handed them a bundle, and they have nothing
+of their own yet — is the one moment the command returns exit 1 instead of an answer.**
+
+This is a gap against §4m.3 rule 1 (*does not connect is a legitimate answer; report it, do not error*),
+of which an empty repository is the limiting case, rather than a defect in what was built.
+
+**RULED: add a fifth `BundlePreviewConnectivity` state; do not overload `FastForward`.** With no local
+history the bundle's whole history is new, which makes `FastForward` tempting — but that variant asserts
+*your history is a prefix of the bundle's*, and a repository with no history has no prefix. In a field
+whose entire purpose is to be machine-branchable, that would be a false value. A distinct state costs one
+variant and says the true thing.
+
+### 4n.2 RECORDED — the cycle fix cost 39 `pub(crate)` widenings
+
+Building the module as `patch_replay::preview` created `patch_replay -> merge_evidence` while
+`merge_evidence` already depended on `patch_replay` — a real cycle, caught by RFC 130's own SCC gate and
+confirmed with `boundary-check`. **Relocating to `bundle/preview.rs` was the right fix** (`bundle` already
+depended on `patch_replay` one-way), and it was chosen over widening the gate or suppressing the check.
+
+It required widening **39** items to `pub(crate)` — `mod apply;`, `mod read;`, `apply_operation_sequence`,
+`single_parent_chain`, `read_block`, `read_patch`, `load_snapshot_files`, `ReplayLiveNode` and its fields
+among them.
+
+**RFC 131 is already delivered** (`544cc6c`, `4acd7e8`, `971e664`): 125 → 100 top-level entries, 69 → 52
+modules, and the **first 27 `pub(in crate::…)` narrowings**. So this is not a tension with future work —
+**this round widened 39 items while the completed round narrowed 27.** They are different items and do
+not cancel, but the direction is opposite and the magnitude larger, and **nothing measures the net**: the
+coupling gate binds cycles, not visibility, so no gate would have said this happened.
+
+Recorded because RFC 131 §3's remaining target is already foreclosed by its own §6a pending the
+coupling-gate item, and a visibility budget that only ever moves outward between narrowing rounds is the
+thing that would make that target unreachable for good.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
