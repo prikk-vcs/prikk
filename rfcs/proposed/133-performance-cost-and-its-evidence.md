@@ -652,6 +652,49 @@ resident cost **>= the serialized size of the structure being measured**. A read
 measurement failure, not a finding. It is free, and applied here it would have failed four points
 automatically and pointed at the cause.
 
+### 6d.4 RESOLVED 2026-09-09 — the masking is gone, the share is ~18-29%, and the answer still stands
+
+Delivered at `e36fd8b8`. Floor cut from **11,380 KiB to 2,312 KiB**; **every write-session point now
+passes the standing control**, with the resident-vs-physical-minimum ratio stable at **2.90-2.98x** from
+N=1,000 through N=64,000 (2.74x at 1,000).
+
+**The new series is explainable where the old one was not.** `replay_index_with_extent` holds the whole
+file **and** the decoded `Vec` during decode — 133 + 88 bytes/entry — giving a floor of **2.51x** with no
+slack and **3.51x** with full capacity overshoot. **Observed 2.90-2.98x sits inside that band.** The
+previous 0.12x-1.37x spread had no mechanism that could produce it.
+
+**Share of the residual revised upward: 28.5 / 19.9 / 18.1 / 18.3%** at N=8,000 / 16,000 / 32,000 /
+64,000, replacing §6d.3's masked "1.1%-8.6%, negligible". **The conclusion does not change**: the
+resident object index is a real, precisely-measured **roughly one-fifth** contributor — not the dominant
+explanation. **Four-fifths to five-sixths of the departure still has no named owner.**
+
+**The masking mechanism was not what review hypothesised, and the round proved it.** Review guessed the
+self-reexec worker's own ~11 MiB. Tested and found incomplete: a minimal companion binary, `/usr/bin/true`
+and a bare `fn main(){}` all measured ~11-12 MiB through the same spawner, while **Python's own RSS
+immediately before `fork()` measured ~10-12 MiB — matching the "child's" floor.** The floor tracked **the
+spawning parent, not the measured child**. The minimal binary was necessary but not sufficient; replacing
+the spawner with zsh (~1.6-2 MiB idle) is what moved the floor.
+
+**Neither ladder extension was needed** — fix (a) rescued every existing point, so 128,000/256,000 would
+have added build cost for no evidentiary gain. Correctly not attempted.
+
+### 6d.5 REQUIRED before the next release that publishes `prikk` — move the probe out of the published crate
+
+`crates/prikk-cli` gained `[[bin]] rusage-object-index-probe` and `[features] rusage-probe = []`. **`prikk`
+is published** (no `publish = false`; last in the publish order), so this adds a source file that ships in
+the `.crate` tarball and a **public feature name** that becomes durable surface.
+
+**This project already has the home for instruments**: `tools/corpus` and `tools/benchmarks` both carry
+`publish = false`, and RFC 139 §7 placed the corpus there deliberately. The reason the probe landed in
+`prikk-cli` is real — `env!("CARGO_BIN_EXE_...")` resolves only for test targets of the declaring crate —
+**but RFC 139 increment 2 already solved exactly this**, ruling that the executor takes the binary path
+explicitly and records its identity.
+
+**RULED: relocate the probe binary to a `publish = false` crate under `tools/`, with the test locating it
+by explicit path, before the next release that publishes `prikk`.** Not a defect in the measurement, and
+not a reason to hold it — but a feature name in a published crate is durable, and removing one later is a
+breaking change.
+
 ## 7. Scope
 
 **In:** the costs named in §2 and §3; the evidence tables in §5 and §5.1; §6's ruling; retiring §4's
