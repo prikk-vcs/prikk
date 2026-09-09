@@ -1,21 +1,40 @@
-//! RFC 130's production module graph: which top-level modules exist, which files belong to each
-//! (test-only files and test-only inline `mod` blocks excluded via [`super::cfg_expr`]), and every
-//! `crate::` edge between them (v2 handoff §3.5 items 3/4).
+//! RFC 130's production module graph, RFC 131 §6c's qualified-name amendment: a node is every
+//! production module at every depth, keyed by its qualified path from the crate root
+//! (`foundation::layout` is a node distinct from `foundation::fsutil`), and every `crate::` edge
+//! between them (v2 handoff §3.5 items 3/4, amended).
 //!
-//! **Edge extraction (item 3).** Every `crate::<ident>` occurrence in a production file's text, in
-//! *any* position -- `use` statements and expression-position paths alike -- after comments and
-//! string/char literals are blanked out so neither can produce a spurious match. `<ident>` resolves
-//! either to a top-level module of that exact name, or (if it is not one) to the single top-level
-//! module that re-exports an item of that name from `lib.rs`'s own `pub use` block -- the path this
-//! crate's own `patch_replay -> active` edge only exists through (`active`'s `read_active_ref_
-//! metadata`/`ActiveRefMetadata` are `pub use` re-exports; `patch_replay.rs` never writes
-//! `crate::active::` anywhere).
+//! **A module's text is its own file's, not its descendants'.** Before this amendment every
+//! descendant file's text was concatenated into its top-level ancestor's single node -- a node
+//! could only be a top-level module, and a cycle wholly inside one could never be seen (RFC 131
+//! §6a/§6c). Splitting nodes by depth is the whole point.
+//!
+//! **Edge extraction (item 3).** Every `crate::<ident>(::<ident>)*` occurrence in a production
+//! file's text, in *any* position -- `use` statements and expression-position paths alike -- after
+//! comments and string/char literals are blanked out so neither can produce a spurious match.
+//! **RFC 131 §6c.1: the edge *vocabulary* does not change, only its resolution.** The captured
+//! path resolves to the **deepest existing module** that is a prefix of it --
+//! `crate::a::b::C` reaches node `a::b` when `a::b` is a module and node `a` when it is not; an
+//! item name is never itself a node. If no prefix at all names a module, the path's own first
+//! segment falls back to the pre-existing re-export table -- the single top-level module that
+//! re-exports an item of that name from `lib.rs`'s own `pub use` block, unchanged from before this
+//! amendment: the path this crate's own `patch_replay -> active` edge only exists through
+//! (`active`'s `read_active_ref_metadata`/`ActiveRefMetadata` are `pub use` re-exports;
+//! `patch_replay.rs` never writes `crate::active::` anywhere). Deliberately does **not** add
+//! `super::`, `self::`, or bare-path scanning -- those are invisible to the gate today, and adding
+//! them would change what an edge *means*, not how precisely it is named (RFC 131 §6c.1).
 //!
 //! **Grouped imports** (`use crate::{a, b, module::c};`) are expanded before the bare-`crate::`
 //! scan runs, so each is resolved once rather than the group being treated as a single opaque
-//! match. No nested grouping (`crate::{a::{b, c}, d}`) exists anywhere in this crate today (checked
-//! directly against every `use crate::{` site) -- the flat splitter below would mis-parse one if a
-//! future change ever added it, which is worth stating rather than leaving implicit.
+//! match, and each element now keeps its own full path (`module::c`, not just `module`) so the same
+//! resolution applies to it. No nested grouping (`crate::{a::{b, c}, d}`) exists anywhere in this
+//! crate today (re-checked directly against every `use crate::{` site as of this amendment) -- the
+//! flat splitter below would mis-parse one if a future change ever added it, which is worth stating
+//! rather than leaving implicit. A *prefixed* group (`crate::module::{a, b}`, e.g. this crate's own
+//! `crate::text_span::{self, TextSpanResolutionFailure}`) is a different, simpler shape: it is not
+//! expanded specially either before or after this amendment, since the plain scan already stops
+//! right before the `{` and captures exactly the qualified prefix (`text_span`) as one occurrence --
+//! correct today and unchanged by this round; extending capture *into* such a group's own elements
+//! was not asked for and does not ride along.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -370,10 +389,12 @@ fn production_edge_text(raw: &str) -> String {
     blank(&with_inline_blanked, &kinds, true, true)
 }
 
-/// The production top-level module tree, walked from `lib.rs`. `mod.rs`-style files and
-/// `#[path = "..."]` overrides are not resolved (neither is used anywhere in `prikk-store` today,
-/// confirmed directly) -- every child of a file `x.rs` resolves to `x/<name>.rs`, and every
-/// top-level child of the crate root resolves directly under `src/`.
+/// The production module tree, walked from `lib.rs`, keyed by qualified path from the crate root
+/// (RFC 131 §6c) -- `foundation::layout` is a distinct key from `foundation`, each holding only its
+/// own file's edge-scan text. `mod.rs`-style files and `#[path = "..."]` overrides are not resolved
+/// (neither is used anywhere in `prikk-store` today, confirmed directly) -- every child of a file
+/// `x.rs` resolves to `x/<name>.rs`, and every top-level child of the crate root resolves directly
+/// under `src/`.
 fn walk(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
     let lib_rs = src_root.join("lib.rs");
     let raw = fs::read_to_string(&lib_rs)
@@ -393,21 +414,24 @@ fn walk(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
             continue;
         }
         let file = src_root.join(format!("{}.rs", decl.name));
-        let mut text = String::new();
-        collect_production_text(&file, &mut text)?;
-        modules.insert(decl.name, text);
+        collect_production_modules(&file, decl.name.clone(), &mut modules)?;
     }
     Ok(modules)
 }
 
-/// Recursively append every production file's own edge-scan text under `file`, walking further
-/// `mod` declarations (file-based only -- see [`walk`]'s doc) relative to `file`'s own
-/// stem-named sibling directory.
-fn collect_production_text(file: &Path, out: &mut String) -> Result<(), String> {
+/// Recursively insert one node per production file reachable from `file`, each keyed by its own
+/// qualified path (`qualified_name`) and holding only its own edge-scan text -- never a
+/// descendant's (RFC 131 §6c: "a module's text is its own file's, not its descendants'"). Walks
+/// further `mod` declarations (file-based only -- see [`walk`]'s doc) relative to `file`'s own
+/// stem-named sibling directory, extending `qualified_name` with `::<child>` at each step.
+fn collect_production_modules(
+    file: &Path,
+    qualified_name: String,
+    modules: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
     let raw =
         fs::read_to_string(file).map_err(|error| format!("read {}: {error}", file.display()))?;
-    out.push_str(&production_edge_text(&raw));
-    out.push('\n');
+    modules.insert(qualified_name.clone(), production_edge_text(&raw));
     let kinds = classify(&raw);
     let comment_blanked = blank(&raw, &kinds, true, false);
     let children_dir = file
@@ -419,13 +443,19 @@ fn collect_production_text(file: &Path, out: &mut String) -> Result<(), String> 
         );
     for decl in find_mod_declarations(&comment_blanked) {
         if decl.inline_block.is_some() {
-            continue; // handled in place by `production_edge_text`, not a separate file
+            // A production inline `mod name { ... }` block's own text stays part of its parent
+            // file's text (via `production_edge_text`, which only excises a *test-only* inline
+            // block) rather than becoming its own node -- unchanged from before this amendment.
+            // No such block exists in `prikk-store` today (checked directly), so this is a
+            // documented, deliberate non-goal rather than an untested path.
+            continue;
         }
         if !cfg_expr::is_possibly_production(decl.cfg.as_ref()) {
             continue;
         }
         let child_file = children_dir.join(format!("{}.rs", decl.name));
-        collect_production_text(&child_file, out)?;
+        let child_qualified = format!("{qualified_name}::{}", decl.name);
+        collect_production_modules(&child_file, child_qualified, modules)?;
     }
     Ok(())
 }
@@ -488,9 +518,43 @@ fn reexports(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
         .collect())
 }
 
-/// Expand grouped `crate::{a, b, module::c}` imports into their individual first-segment idents,
-/// then mask the original group text out of `text` so the plain `crate::<ident>` scan below never
-/// double-counts it.
+/// The end offset (exclusive) of the `ident(::ident)*` qualified path starting at byte `0` of
+/// `bytes` -- shared by the plain `crate::<path>` scan and the grouped-import expander below so a
+/// path never resolves differently depending on which one found it (RFC 131 §6c). Stops before a
+/// `::` that is not immediately followed by another identifier -- `crate::foo::{...}` and
+/// `crate::foo::*` both stop at `foo`, leaving the `::` and everything after it for the caller to
+/// treat as it already did (a group boundary, a glob, or simply the end of a bare reference).
+fn scan_qualified_path(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    while i < bytes.len()
+        && (byte_at(bytes, i).is_ascii_alphanumeric() || byte_at(bytes, i) == b'_')
+    {
+        i += 1;
+    }
+    if i == 0 {
+        return 0;
+    }
+    loop {
+        if byte_at(bytes, i) != b':' || byte_at(bytes, i + 1) != b':' {
+            return i;
+        }
+        let segment_start = i + 2;
+        let mut j = segment_start;
+        while j < bytes.len()
+            && (byte_at(bytes, j).is_ascii_alphanumeric() || byte_at(bytes, j) == b'_')
+        {
+            j += 1;
+        }
+        if j == segment_start {
+            return i; // `::` not followed by an identifier -- stop before it, not after
+        }
+        i = j;
+    }
+}
+
+/// Expand grouped `crate::{a, b, module::c}` imports into their individual elements' own full
+/// qualified paths (`a`, `b`, `module::c` -- not first-segment-only), then mask the original group
+/// text out of `text` so the plain `crate::<path>` scan below never double-counts it.
 fn extract_grouped_idents(text: &mut String) -> Vec<String> {
     let mut idents = Vec::new();
     while let Some(rel) = text.find("crate::{") {
@@ -502,12 +566,10 @@ fn extract_grouped_idents(text: &mut String) -> Vec<String> {
         let group_text = text[group_start + 1..close].to_owned();
         for item in group_text.split(',') {
             let item = item.trim();
-            let first_segment_len = item
-                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .unwrap_or(item.len());
-            let first_segment = item[..first_segment_len].trim();
-            if !first_segment.is_empty() {
-                idents.push(first_segment.to_owned());
+            let path_len = scan_qualified_path(item.as_bytes());
+            let path = &item[..path_len];
+            if !path.is_empty() {
+                idents.push(path.to_owned());
             }
         }
         let span_len = close + 1 - rel;
@@ -516,21 +578,21 @@ fn extract_grouped_idents(text: &mut String) -> Vec<String> {
     idents
 }
 
-/// Every `crate::<ident>` occurrence's `<ident>`, from grouped imports and plain paths alike.
+/// Every `crate::<path>` occurrence's full `::`-separated path (e.g. `crate::a::b::C` yields
+/// `"a::b::C"`), from grouped imports and plain paths alike -- left for the caller to resolve
+/// against known module nodes (RFC 131 §6c: "an item name is not a node").
 fn crate_idents(edge_text: &str) -> Vec<String> {
     let mut text = edge_text.to_owned();
     let mut idents = extract_grouped_idents(&mut text);
     let mut rest = text.as_str();
     while let Some(rel) = rest.find("crate::") {
         rest = &rest[rel + "crate::".len()..];
-        let ident_len = rest
-            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .unwrap_or(rest.len());
-        let ident = rest[..ident_len].trim();
-        if !ident.is_empty() {
-            idents.push(ident.to_owned());
+        let path_len = scan_qualified_path(rest.as_bytes());
+        let path = &rest[..path_len];
+        if !path.is_empty() {
+            idents.push(path.to_owned());
         }
-        rest = &rest[ident_len..];
+        rest = &rest[path_len..];
     }
     idents
 }
@@ -731,6 +793,36 @@ pub(crate) fn strongly_connected_components(graph: &ModuleGraph) -> Vec<Vec<Stri
         .collect()
 }
 
+/// Resolve one captured `crate::` path (`path`, e.g. `"a::b::C"`) to the node it denotes: the
+/// longest prefix of its own `::`-separated segments that names a real module wins (RFC 131 §6c --
+/// `crate::a::b::C` reaches `a::b` when `a::b` is a module, `a` when it is not; an item name is
+/// never itself a node). Every qualified module key's own ancestor chain is always present in
+/// `modules` too (`collect_production_modules` inserts a parent before ever recursing into a
+/// child), so if no prefix at all matches, not even the first segment does either -- exactly the
+/// pre-existing "not a module" case, which falls back to the re-export table keyed by that first
+/// segment (the reexported item's own name), regardless of how many further segments follow it (an
+/// associated item, variant, or method access -- never itself a module). Unchanged from before this
+/// amendment.
+fn resolve_target(
+    path: &str,
+    modules: &BTreeSet<String>,
+    owners: &BTreeMap<String, String>,
+) -> Option<String> {
+    let segments: Vec<&str> = path.split("::").collect();
+    for end in (1..=segments.len()).rev() {
+        let Some(prefix) = segments.get(..end) else {
+            continue;
+        };
+        let candidate = prefix.join("::");
+        if modules.contains(&candidate) {
+            return Some(candidate);
+        }
+    }
+    segments
+        .first()
+        .and_then(|first| owners.get(*first).cloned())
+}
+
 /// Build the production module coupling graph for `prikk-store`. `src_root` is that crate's
 /// `src/` directory.
 pub(crate) fn build(src_root: &Path) -> Result<ModuleGraph, String> {
@@ -739,13 +831,8 @@ pub(crate) fn build(src_root: &Path) -> Result<ModuleGraph, String> {
     let modules: BTreeSet<String> = module_texts.keys().cloned().collect();
     let mut edges = BTreeSet::new();
     for (module, text) in &module_texts {
-        for ident in crate_idents(text) {
-            let target = if modules.contains(&ident) {
-                Some(ident)
-            } else {
-                owners.get(&ident).cloned()
-            };
-            if let Some(target) = target {
+        for path in crate_idents(text) {
+            if let Some(target) = resolve_target(&path, &modules, &owners) {
                 if &target != module {
                     edges.insert((module.clone(), target));
                 }
@@ -774,6 +861,20 @@ pub(crate) fn reexports_for_tests(src_root: &Path) -> Result<BTreeMap<String, St
 #[cfg(test)]
 pub(crate) fn walk_root_for_tests(src_root: &Path) -> Result<BTreeSet<String>, String> {
     Ok(walk(src_root)?.into_keys().collect())
+}
+
+#[cfg(test)]
+pub(crate) fn crate_idents_for_tests(edge_text: &str) -> Vec<String> {
+    crate_idents(edge_text)
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_target_for_tests(
+    path: &str,
+    modules: &BTreeSet<String>,
+    owners: &BTreeMap<String, String>,
+) -> Option<String> {
+    resolve_target(path, modules, owners)
 }
 
 #[cfg(test)]
