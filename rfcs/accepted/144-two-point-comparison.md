@@ -1060,6 +1060,52 @@ this question by construction, and reusing it would have produced a confidently 
 exactly the three commit-side disclosure tests while the round-trip control keeps passing — demonstrating
 the two disclosure sites are **independently held**, so breaking one cannot be masked by the other.
 
+## 4q. DELIVERED 2026-09-09 — the commit-time hint, and "authors nothing" made a compiler guarantee
+
+**Piece 2 accepted at `25c45734`.** A shell `mv` followed by `commit` now names the command that would
+have preserved identity — closing §4h.5's *"irreversible, commit-time-invisible opportunity cost"*
+without prompting, defaulting or blocking.
+
+```
+  declaration a.txt -> build/a.txt: destination is ignored; recorded as a deletion, not a rename
+hint: looks like a.txt moved to b.txt; `prikk mv` would have preserved its identity
+```
+
+**Separated on three axes, not one:** indentation (the disclosure sits with the operation lines; the hint
+does not), prefix (`declaration …` versus `hint:`, matching the existing `note:` convention), and grammar
+(past-tense fact versus conditional suggestion). **A reader can tell what prikk recorded from what prikk
+wondered**, which was the requirement.
+
+**`plan_move_hints` takes `planned: &[PlannedOp]` — a shared slice.** "Authors nothing" is therefore
+enforced by the borrow checker, not by the test suite: the function *cannot* mutate the operation list.
+**That is §4i.1's own principle applied elsewhere** — make it a property, not a rule. Review's
+perturbation had to be installed at the call site, because the signature makes it unreachable from
+inside, and it fails exactly the two controls that inspect authored operations.
+
+**No prompt, no flag, no default, no `--assume-moves`.** §4h.5's prohibition held, and this was the round
+that could most easily have drifted into it once a working heuristic existed.
+
+### 4q.1 CORRECTED — the ambiguity rule does not cover empty files, and the handoff assumed it did
+
+The piece-2 handoff said zero-byte content was *"probably covered by the ambiguity rule, but check that
+the rule actually covers it rather than assuming."* **It is not.** The ambiguity check fires only on
+*more than one* candidate per side, so **two unrelated empty files — one deleted, one created — are 1:1**
+and would have produced a confident, false hint inviting the user to assert a move that never happened.
+
+Both empty blob ids are excluded explicitly. Verified at review by removing the exclusion: exactly the
+dedicated test fails while the ambiguity control still passes, proving the two rules are independent and
+the exclusion load-bearing. The finding is recorded in the code, not only in a report.
+
+**The signal remains exact content equality alone** — `blob_id` equality, sound because the canonical
+encoding is a pure function of `(kind, bytes)`. Similarity scoring stays refused.
+
+### 4q.2 A note for whoever reads the declared-move assertion next
+
+Declared moves are kept out of the heuristic by a `debug_assert!` plus a CLI-level control.
+**`debug_assert!` compiles out in release**, so the release-build guarantee is the control, not the
+assertion. Adequate — the behaviour is covered either way — but the assertion is not a release-time check
+and should not be read as one.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
