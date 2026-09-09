@@ -201,6 +201,63 @@ alternative" (§6a) — it is the prerequisite for §3's stated goal.** Until th
 `group::module`, the SCC and hub edges §3 exists to narrow cannot be narrowed at all. **That is the
 next decision this RFC needs, and it belongs to RFC 130's gate.**
 
+### 6c. DESIGNED 2026-09-10 — qualified module names, and the two rulings that bound the change
+
+§6b.2 posed this as *"the next decision this RFC needs"* and said it *"belongs to RFC 130's gate."*
+**RFC 130 is closed, so the design is recorded here** — in the RFC the gap actually blocks — and
+cross-referenced from RFC 130 §8. It amends that gate's behaviour and nothing else about RFC 130.
+
+**The mechanism, verified at source before ruling.** `walk` (`coupling/graph.rs:377-401`) builds a
+`BTreeMap<String, String>` keyed by the **top-level `mod` in `lib.rs`**, and
+`collect_production_text` recursively concatenates **every descendant file's text into that same
+value**. Edges come from *"every `crate::<ident>` occurrence"* — **the first segment only**, which is
+precisely why a node is a top-level module and can be nothing else.
+
+**RULED: a node becomes every production module at every depth, keyed by its qualified path from the
+crate root.** `foundation::layout` is a node distinct from `foundation::fsutil`, and a module's text
+is its own file's, not its descendants'.
+
+#### 6c.1 RULED — the edge *vocabulary* does not change, only its resolution
+
+**An edge stays "a `crate::` path reference", exactly as today.** The change is that the path resolves
+to the **deepest existing module node** rather than its first segment: `crate::a::b::C` reaches node
+`a::b` when `a::b` is a module, and node `a` when it is not.
+
+**Do not add `super::`, `self::`, or bare-path scanning.** Those are invisible to the gate today, and
+making them visible changes **what an edge means**, not how precisely it is named. It would also make
+every `foo/bar.rs` that reaches back through `super::` an edge to `foo` — turning ordinary parent/child
+structure into reported coupling, which is not what §3 is trying to narrow.
+
+**That is a separate decision and does not ride along.** If it is ever wanted, it is its own round with
+its own measurement.
+
+The grouped-import expander (`crate::{a, b::c}`) must be extended in step: it currently reduces each
+element to a first segment, and must preserve full paths for the same resolution to apply.
+
+#### 6c.2 RULED — measure what qualified naming reveals before deciding what to do about it
+
+**Splitting concatenated nodes will expose cycles that exist today and are invisible** — two modules
+under one top-level parent that reference each other by `crate::` path are one node now, and two nodes
+after. **The gate will start failing on debt it previously could not see.**
+
+**RULED: the implementing round reports the count and shape and populates no allowlist and fixes no
+cycle.** RFC 130 §4b already made acyclicity *"an allowlist ... a ledger of structural debt rather than
+a list of permanent excuses"*, with **per-cycle entries**, so recording newly-visible debt is the
+established idiom — **but how much there is changes what the right response is**, and that number is not
+knowable from reading.
+
+A handful is a ledger entry each. Dozens is a finding that reshapes the work, because **an allowlist
+long enough to skim is a gate nobody reads.** The ruling comes after the number, not before it — the
+same sequencing that paid for itself in RFC 133 §6c.2.
+
+#### 6c.3 §6a's prohibition is NOT lifted by this round
+
+§6a forbids any two of the constrained seven sharing a group **because grouping merges nodes and hides
+cycles**. This round removes that mechanism — but the prohibition is lifted by RFC 131, on evidence that
+the gate no longer hides a cycle inside a group, **not as a side effect of the gate changing**.
+
+**This round enables the lift. It does not perform it**, and must not move any module.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.

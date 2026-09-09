@@ -372,6 +372,12 @@ named there may not be today's four.**
 
 **STOPPED 2026-09-06 at the re-derivation, correctly and by the handoff's own instruction. See §4a: §2.1's cycle count was false when written, and §4.1's absolute-acyclicity rule would have rejected RFC 122 — the same commit §4 uses to prove the degree bound wrong. No gate is implemented; §4.1's invariant is re-opened.** **RULED 2026-09-06 in §4b: acyclicity becomes an allowlist-with-reasons, the same idiom §4.1 already chose for hubs — the gate forces a recorded decision rather than adjudicating one, which §4 applied to one of its two rules and not the other. A cycle's entry must also state what would remove it. **Handoff v1 is superseded and must be reissued.**
 
+**AMENDED 2026-09-10 — qualified module names.** RFC 131 §6b.2 established that this gate's top-level
+node granularity forecloses RFC 131 §3's own target. **The design amending this gate is recorded in
+RFC 131 §6c**, in the RFC the gap blocks, rather than reopening this closed one: a node becomes every
+production module at every depth, the edge vocabulary (`crate::` paths) is unchanged, and newly-visible
+cycles are measured before any allowlist decision.
+
 ## 9. Non-goals
 
 No file moves. No visibility changes. No crate split. No change to any product behaviour, object
