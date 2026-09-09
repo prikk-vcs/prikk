@@ -226,14 +226,6 @@ proof/witness/merge-evidence/merge-plan objects, same-node text operational tran
 analysis, display-path filtering, JSON output, patch-algebra crate extraction, and public stable Rust
 APIs for replay, patch algebra, merge evidence, or merge planning internals.
 
-**A rename pairing that conflicts is classified, but a sequence containing any rename cannot yet
-prove full confluence.** RFC 144 §4o.5's `rename-destination-conflict` and a rename now reaching
-`same-path-create` both classify correctly at the pairwise level. Whole-sequence flatness checking
-(`prikk merge-evidence`'s own real entry point) still defers on any individually-unreplayable
-operation — a category `RenamePath` is in — before that pairwise classification ever runs, so a
-merge evidence request touching a rename currently reports `Unsupported`, not the specific
-conflict, unless the pairwise classifier is reached directly. A known gap, not fixed here.
-
 **Conflict resolution itself is not on this list** — see Conflict Resolution Is Refused By Design,
 above. "Deferred" means eventually built; automatic conflict resolution is refused by the
 architecture and will not be built at all. A conflict-resolution *UI* remains deferred in the sense

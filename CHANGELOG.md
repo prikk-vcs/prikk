@@ -36,18 +36,23 @@ never reaches it (it already authored a `RenamePath`); an ambiguous set (more th
 created path sharing the same content) prints no hint rather than guess a pairing; more than five
 unambiguous candidates in one commit print a single summary line instead of one per pair.
 
-### Added — `rename-destination-conflict`: a thirteenth conflict witness, not yet reachable end to end
+### Added — `rename-destination-conflict`: a thirteenth conflict witness, reachable through `prikk merge-evidence`
 
-**`prikk merge-evidence` cannot produce this witness yet** — whole-sequence confluence checking, the
-path that command uses, still defers on any operation sequence containing a rename before the new
-classification runs (see the patch-algebra reference page). What changed is the algebra beneath it:
-it now classifies the case only declared renames make reachable — two sides each renaming the
-*same* node to two *disjoint* destinations. Distinct from the existing
+`prikk merge-evidence` can now classify the case only declared renames make reachable: two sides
+each renaming the *same* node to two *disjoint* destinations. Distinct from the existing
 `same-path-create` witness by design — one node with two competing paths, versus two nodes
 competing for one path — and its resolution is the mirror image: *choose which destination wins*,
 not *choose which node wins*. A rename onto a path a different node's own operation also claims
 still classifies as `same-path-create`, unchanged. Classification only; prikk still refuses to
 author a conflict resolution automatically.
+
+Reaching `prikk merge-evidence` itself needed a second fix: whole-sequence confluence checking used
+to give up on any operation sequence containing a rename (or a symlink operation) before pairwise
+classification ever ran, regardless of whether that pairwise check could actually resolve it. That
+now happens the other way around — pairwise classification runs first, and the sequence-level check
+only falls back to its own answer when no pair resolves anything, which by construction can only
+happen when one side has no operations to pair against at all. Every other conflict-witness kind
+classifies exactly as it did before this change.
 
 ## 0.37.0 — 2026-09-09
 

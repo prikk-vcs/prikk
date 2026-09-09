@@ -48,12 +48,15 @@ pub(crate) fn check_confluence<R: PatchAlgebraEvidence>(
     left: &[DecodedPatchOperation],
     right: &[DecodedPatchOperation],
 ) -> ConfluenceAnalysisResult {
-    let left_sequence_result = ensure_flat_sequence(baseline, evidence, candidate_scope, left)?;
-    let right_sequence_result = ensure_flat_sequence(baseline, evidence, candidate_scope, right)?;
-    if let Some(result) = left_sequence_result {
+    let left_check = ensure_flat_sequence(baseline, evidence, candidate_scope, left)?;
+    let right_check = ensure_flat_sequence(baseline, evidence, candidate_scope, right)?;
+    // RFC 144 §4r.1: a genuine replay/evidence/prefix-dependency problem (`FlatSequenceCheck::hard`)
+    // still pre-empts everything below, at the same point in the same order as before this round --
+    // this is not about rename/symlink reachability, and nothing here changes it.
+    if let Some(result) = left_check.hard {
         return Ok(result);
     }
-    if let Some(result) = right_sequence_result {
+    if let Some(result) = right_check.hard {
         return Ok(result);
     }
     for (left_index, left_operation) in left.iter().enumerate() {
@@ -76,6 +79,22 @@ pub(crate) fn check_confluence<R: PatchAlgebraEvidence>(
                 }
             }
         }
+    }
+    // RFC 144 §4r.1: an individually-deferred operation (`FlatSequenceCheck::deferred` --
+    // `RenameDeferred`/`SymlinkDeferred`) no longer pre-empts the pairwise loop above -- every pair
+    // it takes part in was just classified for real, and any pair that stayed genuinely
+    // unresolvable already returned `Unknown` from inside that loop (`classify_pair_with_text_
+    // resolver`'s own deferred fallback still applies; this round did not change it). Reaching this
+    // point means the pairwise loop found nothing wrong with any pair the deferred operation is in,
+    // which happens only when its only partner sequence is empty (the loop never runs). Full
+    // confluence still cannot be proven by replay for an operation the oracle cannot replay at all,
+    // so fall back to its own original reason here, not silently proceed to the replay-based proof
+    // below as if the operation were fine.
+    if let Some(result) = left_check.deferred {
+        return Ok(result);
+    }
+    if let Some(result) = right_check.deferred {
+        return Ok(result);
     }
     let left_then_right = replay_sequence_order(baseline, evidence, candidate_scope, left, right)?;
     let right_then_left = replay_sequence_order(baseline, evidence, candidate_scope, right, left)?;
@@ -134,19 +153,36 @@ fn prove_pair_replay<R: PatchAlgebraEvidence>(
     }
 }
 
+/// Result of checking one side's own sequence for individual replayability, split in two (RFC 144
+/// §4r.1) so a caller can act on them at different points:
+struct FlatSequenceCheck {
+    /// A genuine replay/evidence/prefix-dependency problem -- a real reason full confluence cannot
+    /// be proven that has nothing to do with pairwise relation. Pre-empts pairwise classification,
+    /// exactly as this whole check did before this round.
+    hard: Option<ConfluenceResult>,
+    /// An individually-deferred operation's own reason (`RenameDeferred`/`SymlinkDeferred` --
+    /// whether the replay oracle can even attempt this operation *alone*, not a relation to any
+    /// peer). No longer pre-empts pairwise classification; a caller consults this only as a
+    /// fallback, after the pairwise loop finds no conflict for any pair the operation takes part
+    /// in -- see `check_confluence`'s own doc comment at its two call sites for why.
+    deferred: Option<ConfluenceResult>,
+}
+
 fn ensure_flat_sequence<R: PatchAlgebraEvidence>(
     baseline: &NodeLifecycleState,
     evidence: &R,
     candidate_scope: EvidenceScope,
     sequence: &[DecodedPatchOperation],
-) -> Result<Option<ConfluenceResult>, EvidenceError> {
-    let mut first_algebraic_result = None;
+) -> Result<FlatSequenceCheck, EvidenceError> {
+    let mut hard = None;
+    let mut deferred = None;
     for (index, operation) in sequence.iter().enumerate() {
         validate_operation_provenance(operation, candidate_scope)?;
-        // Scan the full sequence so sealed evidence errors are not hidden by earlier algebraic Unknown.
+        // Scan the full sequence so sealed evidence errors are not hidden by an earlier algebraic
+        // result of either kind below.
         if let Ok(facts) = operation_facts(operation) {
             if let Some(reason) = deferred_reason(&facts.action) {
-                first_algebraic_result.get_or_insert(ConfluenceResult::Unknown { reason });
+                deferred.get_or_insert(ConfluenceResult::Unknown { reason });
                 continue;
             }
         }
@@ -154,7 +190,7 @@ fn ensure_flat_sequence<R: PatchAlgebraEvidence>(
             Ok(_) => {}
             Err(OracleFailure::Evidence(error)) => return Err(error),
             Err(OracleFailure::Unknown(reason)) => {
-                first_algebraic_result.get_or_insert(ConfluenceResult::Unknown { reason });
+                hard.get_or_insert(ConfluenceResult::Unknown { reason });
             }
             Err(OracleFailure::Replay) => {
                 let result =
@@ -173,11 +209,11 @@ fn ensure_flat_sequence<R: PatchAlgebraEvidence>(
                             },
                         }
                     };
-                first_algebraic_result.get_or_insert(result);
+                hard.get_or_insert(result);
             }
         }
     }
-    Ok(first_algebraic_result)
+    Ok(FlatSequenceCheck { hard, deferred })
 }
 
 fn has_prefix_dependency<R: PatchAlgebraEvidence>(

@@ -8,6 +8,7 @@ mod create;
 mod deferred;
 mod evidence;
 mod fixtures;
+mod flat_sequence_gate;
 mod independence;
 mod merge_evidence_precedence;
 mod merge_evidence_report;
