@@ -21,5 +21,10 @@ tempfile = "3"
 name = "commit"
 harness = false
 
+# RFC 133 §6d.5: relocated from `crates/prikk-cli` -- see the binary's own doc comment for why.
+[[bin]]
+name = "rusage-object-index-probe"
+path = "src/bin/rusage_object_index_probe.rs"
+
 [lints]
 workspace = true

@@ -123,11 +123,18 @@
 //! cost (every linked crate, the full `libtest` harness) masking a multi-megabyte allocation inside
 //! already-touched heap slack — the handoff's own fix asked for a minimal companion binary.
 //!
-//! **Built one (`rusage-object-index-probe`, `src/bin/rusage_object_index_probe.rs`, gated behind
-//! the `rusage-probe` feature so it never ships in an ordinary `cargo install prikk` — `[[bin]]`
-//! targets never see `[dev-dependencies]`, so it depends on `prikk-store` alone, already a plain
-//! `[dependencies]` entry). Confirmed at source: `[[bin]]` targets are excluded from
-//! `[dev-dependencies]` regardless of how `cargo` is invoked.**
+//! **Built one (`rusage-object-index-probe`).** First landed as a `[[bin]]` on this crate,
+//! `required-features`-gated so an ordinary `cargo install prikk` would not build it — but `prikk`
+//! is a **published** crate, so that still shipped the binary's source in the `.crate` tarball and
+//! put a public feature name on published surface (§6d.5). **Relocated to `tools/benchmarks`**
+//! (`prikk-benchmarks`, `publish = false`, already depends on `prikk-store` alone and nothing
+//! else — exactly what this probe needs, and already exists for precisely this purpose, so the move
+//! needed no new workspace member). `env!("CARGO_BIN_EXE_*")` only resolves for test targets of the
+//! crate declaring the `[[bin]]`, so it cannot name a binary in a different crate — the same wall
+//! RFC 139 increment 2's own executor hit, resolved the same way here:
+//! `rusage_object_index_probe_binary` takes the path from `PRIKK_RUSAGE_PROBE_BIN` explicitly and
+//! `rusage_object_index_probe_identity` records the binary's own hash, rather than relying on a
+//! macro that cannot reach it.
 //!
 //! **That alone did not fix it — confirmed empirically before committing to the rest of the fix,
 //! not assumed.** Spawning the new minimal binary through `rusage_child.py` still read ~11-12 MiB.
@@ -162,15 +169,21 @@
 //! method, and this is a real behaviour difference: a debug build's allocator/bounds-checking
 //! overhead would not be comparable to §2's figures at all. `rfc133_node_count_memory` and
 //! `rfc133_node_count_memory_attribution` need `python3` on `PATH`;
-//! `rfc133_node_count_memory_object_index` needs `zsh` on `PATH` and **`--features rusage-probe`**
-//! (the minimal companion binary only exists under that feature). All three are Linux-only
-//! (`resource.getrusage`/zsh's `TIMEFMT` are POSIX and likely work elsewhere, but this harness is
-//! not verified anywhere else and skips cleanly elsewhere).
+//! `rfc133_node_count_memory_object_index` needs `zsh` on `PATH` **and the companion binary built
+//! and named**, since §6d.5 moved it out of this crate:
+//!
+//! ```text
+//! cargo build --release -p prikk-benchmarks --locked --bin rusage-object-index-probe
+//! PRIKK_RUSAGE_PROBE_BIN=target/release/rusage-object-index-probe \
+//!   cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_object_index
+//! ```
+//!
+//! All three are Linux-only (`resource.getrusage`/zsh's `TIMEFMT` are POSIX and likely work
+//! elsewhere, but this harness is not verified anywhere else and skips cleanly elsewhere).
 //!
 //! ```text
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_attribution
-//! cargo test -p prikk --release --locked --test rfc133_node_count_memory --features rusage-probe -- --ignored --nocapture rfc133_node_count_memory_object_index
 //! ```
 //!
 //! `#[ignore]`d: these are measurement instruments, not correctness tests, and their dominant cost
@@ -182,9 +195,11 @@
 //! assumed portable elsewhere. The whole file is gated rather than each helper: on other platforms
 //! there is nothing here to be unused, so nothing needs `#[allow(dead_code)]` to stay quiet.
 //! `dc59`/`dc92` gate per item because most of *their* code is genuinely cross-platform; none of
-//! this file's is. `rfc133_node_count_memory_object_index` and everything it alone needs are
-//! additionally gated behind the `rusage-probe` feature (see that section above) so this file still
-//! compiles cleanly under the workspace's own default-feature gates without it.
+//! this file's is. `rfc133_node_count_memory_object_index` is no longer feature-gated (§6d.5): it
+//! is already `#[ignore]`d, so a missing `PRIKK_RUSAGE_PROBE_BIN` panics loudly with build
+//! instructions at run time instead of being refused at compile time — simpler, and it means the
+//! driver shows up in an ordinary `cargo test --workspace` listing as `ignored` rather than
+//! vanishing under default features.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
@@ -509,13 +524,11 @@ fn measure_lifecycle_state_probe_rss_kib(node_count: usize) -> i64 {
 /// `INDEX_BODY_LEN` (32+2+1+8+8+32=83) = 133, fixed-width, no length-prefixing inside the body.
 /// Confirmed at source and cross-checked against the attribution round's own measured 133-137
 /// bytes/node for this same file.
-#[cfg(feature = "rusage-probe")]
 const INDEX_RECORD_BYTES: u64 = 133;
 
 /// The exact count of objects `containers/index.container` currently indexes, derived from its
 /// fixed-width record size rather than assumed equal to node count (§6d.1's own instruction: N nodes
 /// produce blobs, patches, blocks, and ref states, so the index holds more entries than N).
-#[cfg(feature = "rusage-probe")]
 fn indexed_object_count(root: &Path) -> u64 {
     let bytes = object_index_file_size(root)
         .unwrap_or_else(|| panic!("no containers/index.container under {}", root.display()));
@@ -532,34 +545,67 @@ fn indexed_object_count(root: &Path) -> u64 {
 /// the review found readings implausibly low below N=64,000, and it traced back to the whole
 /// compiled test binary's own ~11 MiB startup cost (every linked crate, the full `libtest` harness)
 /// masking a multi-megabyte allocation inside already-touched heap slack. Building a genuinely
-/// minimal companion binary (`rusage-object-index-probe`, gated behind the `rusage-probe` feature,
-/// `src/bin/rusage_object_index_probe.rs`) turned out **not** to be sufficient on its own --
-/// confirmed empirically before committing to the fix, not assumed: spawning that minimal binary
-/// through `rusage_child.py` still read ~11-12 MiB, and so did spawning `/usr/bin/true` and a bare
-/// `fn main(){}` Rust binary with no dependencies. The floor tracks **Python's own** resident size
-/// at fork time, not the child's -- a real Linux fork()+exec() characteristic (see
+/// minimal companion binary (`rusage-object-index-probe`) turned out **not** to be sufficient on its
+/// own -- confirmed empirically before committing to the fix, not assumed: spawning that minimal
+/// binary through `rusage_child.py` still read ~11-12 MiB, and so did spawning `/usr/bin/true` and a
+/// bare `fn main(){}` Rust binary with no dependencies. The floor tracks **Python's own** resident
+/// size at fork time, not the child's -- a real Linux fork()+exec() characteristic (see
 /// `tests/support/rusage_child.zsh`'s own doc comment for the mechanism). So this probe alone uses
 /// `rusage_child.zsh` (zsh's `TIMEFMT`, same underlying syscall, an order of magnitude smaller
 /// spawning process) instead of `rusage_child.py`; every other measurement in this file keeps using
 /// `rusage_child.py` unchanged, per the handoff's own "do not re-run the other two rounds' series"
 /// instruction -- their signal sizes are not distorted by an 11 MiB floor the way this one was.
-#[cfg(feature = "rusage-probe")]
 const RUSAGE_CHILD_ZSH_SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/support/rusage_child.zsh"
 );
 
-/// Path to the minimal companion binary, gated behind the `rusage-probe` feature (see
-/// `crates/prikk-cli/Cargo.toml`'s own comment on the `[[bin]]` entry for why `[[bin]]` targets
-/// cannot see `[dev-dependencies]`, and this file's own module docs for why a genuinely separate
-/// binary was needed rather than another self-reexec worker).
-#[cfg(feature = "rusage-probe")]
-const RUSAGE_OBJECT_INDEX_PROBE_BINARY: &str = env!("CARGO_BIN_EXE_rusage-object-index-probe");
+/// §6d.5 -- the minimal companion binary moved to `tools/benchmarks` (`prikk-benchmarks`, `publish =
+/// false`) because `prikk` itself is a published crate and a `[[bin]]` there, even
+/// `required-features`-gated, still shipped the binary's source in the `.crate` tarball and put a
+/// public feature name on published surface. `env!("CARGO_BIN_EXE_*")` only resolves for test
+/// targets of the crate declaring the `[[bin]]`, so it cannot name a binary in a different crate --
+/// the same wall RFC 139 increment 2's own executor hit, resolved the same way here: take the path
+/// explicitly (`PRIKK_RUSAGE_PROBE_BIN`) and record its identity (see
+/// `rusage_object_index_probe_identity` below), rather than relying on a macro that cannot reach it.
+/// Fails loudly, naming the variable and the build command, rather than silently skipping -- an
+/// unset variable here means the binary was never built, not that the environment lacks a tool (the
+/// `zsh`/`python3` checks elsewhere in this file skip for the latter reason; this one panics because
+/// it is the former).
+fn rusage_object_index_probe_binary() -> PathBuf {
+    let Ok(path) = std::env::var("PRIKK_RUSAGE_PROBE_BIN") else {
+        panic!(
+            "PRIKK_RUSAGE_PROBE_BIN is not set. Build the probe binary first:\n\n  \
+             cargo build --release -p prikk-benchmarks --locked --bin rusage-object-index-probe\n\n\
+             then set PRIKK_RUSAGE_PROBE_BIN to its path (e.g. \
+             target/release/rusage-object-index-probe) and re-run."
+        );
+    };
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        panic!(
+            "PRIKK_RUSAGE_PROBE_BIN={} does not exist. Build it first:\n\n  \
+             cargo build --release -p prikk-benchmarks --locked --bin rusage-object-index-probe",
+            path.display()
+        );
+    }
+    path
+}
+
+/// The probed binary's own identity (RFC 139 increment 2's own convention for exactly this
+/// situation: a measurement taken with one binary is not comparable to one taken with another) --
+/// its path as given, plus the hex SHA-256 of its own bytes. No `--version` flag to also record:
+/// unlike `prikk` itself, this is a small purpose-built tool with no version output.
+fn rusage_object_index_probe_identity(binary: &Path) -> String {
+    let bytes = std::fs::read(binary)
+        .unwrap_or_else(|err| panic!("reading {} to record its identity: {err}", binary.display()));
+    let sha256 = prikk_hash::to_hex(&prikk_hash::sha256(&bytes));
+    format!("{} (sha256 {sha256})", binary.display())
+}
 
 /// Like `run_rusage_child`, but via `rusage_child.zsh` instead of `rusage_child.py` -- see that
 /// script's own doc comment for why. No `envs` parameter: this probe's only caller passes
 /// everything as argv, not environment.
-#[cfg(feature = "rusage-probe")]
 fn run_rusage_child_zsh(cwd: &Path, binary: &Path, args: &[&str]) -> i64 {
     let output = Command::new("zsh")
         .arg(RUSAGE_CHILD_ZSH_SCRIPT)
@@ -588,24 +634,18 @@ fn run_rusage_child_zsh(cwd: &Path, binary: &Path, args: &[&str]) -> i64 {
 
 /// Run the minimal companion binary against `repo_root` in `mode` (`"read"` or `"write"`) and
 /// return its peak RSS in KiB.
-#[cfg(feature = "rusage-probe")]
-fn measure_object_index_probe_rss_kib(repo_root: &Path, mode: &str) -> i64 {
+fn measure_object_index_probe_rss_kib(binary: &Path, repo_root: &Path, mode: &str) -> i64 {
     run_rusage_child_zsh(
         Path::new(env!("CARGO_MANIFEST_DIR")),
-        Path::new(RUSAGE_OBJECT_INDEX_PROBE_BINARY),
+        binary,
         &[mode, &repo_root.to_string_lossy()],
     )
 }
 
 /// The floor: the same minimal binary, `mode = "floor"` (returns immediately, no repository) --
 /// process-startup cost only.
-#[cfg(feature = "rusage-probe")]
-fn measure_object_index_probe_floor_rss_kib() -> i64 {
-    run_rusage_child_zsh(
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        Path::new(RUSAGE_OBJECT_INDEX_PROBE_BINARY),
-        &["floor"],
-    )
+fn measure_object_index_probe_floor_rss_kib(binary: &Path) -> i64 {
+    run_rusage_child_zsh(Path::new(env!("CARGO_MANIFEST_DIR")), binary, &["floor"])
 }
 
 /// §3's own worked lower bound, stated here rather than re-derived silently: `IndexEntry`'s fields
@@ -613,13 +653,11 @@ fn measure_object_index_probe_floor_rss_kib() -> i64 {
 /// `container_checksum: [u8; 32]` 32 -- `foundation/index.rs`'s own `encode_entry_body`) sum to
 /// 82-83 bytes before Rust's struct alignment rounds up to a multiple of 8: 88. `IndexEntry` itself
 /// is `pub(crate)`, so this cannot be computed via `size_of` from outside the crate that owns it.
-#[cfg(feature = "rusage-probe")]
 const INDEX_ENTRY_MIN_RESIDENT_BYTES: i64 = 88;
 
 /// §6d.3's own REQUIRED standing control: measured resident cost can never read below the
 /// structure's own physical minimum. `growth_kib` is resident cost *over the floor*, since the
 /// floor itself is not part of what the structure costs.
-#[cfg(feature = "rusage-probe")]
 fn object_index_resident_floor_holds(indexed_objects: u64, growth_kib: i64) -> bool {
     let resident_bytes = growth_kib * 1024;
     let minimum_bytes = indexed_objects as i64 * INDEX_ENTRY_MIN_RESIDENT_BYTES;
@@ -1090,7 +1128,6 @@ fn rfc133_node_count_memory_attribution() {
 /// One node-count point's resident-index measurement: both probe modes' RSS series, the exact
 /// indexed-object count the repository held when they were taken, and whether §6d.3's standing
 /// control (resident cost >= the structure's own physical minimum) holds for each mode.
-#[cfg(feature = "rusage-probe")]
 struct ObjectIndexPoint {
     node_count: usize,
     indexed_objects: u64,
@@ -1100,15 +1137,18 @@ struct ObjectIndexPoint {
     write_holds: bool,
 }
 
-#[cfg(feature = "rusage-probe")]
-fn render_object_index_report(floor_kib: i64, points: &[ObjectIndexPoint]) -> String {
+fn render_object_index_report(
+    binary_identity: &str,
+    floor_kib: i64,
+    points: &[ObjectIndexPoint],
+) -> String {
     let mut out = String::new();
     out.push_str(
         "# RFC 133 §6d.3 — the object index's resident cost, re-measured unmasked, report v1\n\n",
     );
-    out.push_str("Generated by `cargo test -p prikk --release --locked --test rfc133_node_count_memory --features rusage-probe -- --ignored --nocapture rfc133_node_count_memory_object_index`.\n");
-    out.push_str("Re-running that exact command regenerates this file. Comparing this series against the attribution round's own residual is done by hand in the narrative report, not baked into this file, so this file does not go stale if the attribution report is ever regenerated on different hardware.\n\n");
-    out.push_str(&format!("Revision measured at: `{}`. Release build, Linux, worktrees under a `tmpfs` temp directory, peak RSS from `getrusage(RUSAGE_CHILDREN).ru_maxrss` via `tests/support/rusage_child.zsh` (not `rusage_child.py` -- see module docs for why this one probe needs the smaller spawning process). {SAMPLES_PER_POINT} samples per point. Process-startup floor (minimal companion binary, no repository opened), median = {floor_kib} KiB.\n\n", git_revision()));
+    out.push_str("Generated by (build, then run):\n\n```sh\ncargo build --release -p prikk-benchmarks --locked --bin rusage-object-index-probe\nPRIKK_RUSAGE_PROBE_BIN=target/release/rusage-object-index-probe \\\n  cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_object_index\n```\n");
+    out.push_str("Re-running those exact commands regenerates this file. Comparing this series against the attribution round's own residual is done by hand in the narrative report, not baked into this file, so this file does not go stale if the attribution report is ever regenerated on different hardware.\n\n");
+    out.push_str(&format!("Revision measured at: `{}`. Probe binary identity: `{binary_identity}`. Release build, Linux, worktrees under a `tmpfs` temp directory, peak RSS from `getrusage(RUSAGE_CHILDREN).ru_maxrss` via `tests/support/rusage_child.zsh` (not `rusage_child.py` -- see module docs for why this one probe needs the smaller spawning process). {SAMPLES_PER_POINT} samples per point. Process-startup floor (minimal companion binary, no repository opened), median = {floor_kib} KiB.\n\n", git_revision()));
 
     out.push_str("## §6d.3's REQUIRED standing control: resident cost >= structure's own physical minimum (88 bytes/entry)\n\n");
     out.push_str("| N | indexed objects | minimum resident (bytes) | read growth (bytes) | read holds? | write growth (bytes) | write holds? |\n");
@@ -1158,10 +1198,11 @@ fn render_object_index_report(floor_kib: i64, points: &[ObjectIndexPoint]) -> St
 /// `ObjectReadSnapshot`/`ObjectWriteSession` held live in the minimal companion binary, via
 /// `rusage_child.zsh`. See module docs for the floor-masking finding this exists to fix.
 ///
-/// Gated behind the `rusage-probe` feature end to end (the minimal companion binary only exists
-/// under it) -- run with `--features rusage-probe`, not the plain invocation the other two drivers
-/// in this file use.
-#[cfg(feature = "rusage-probe")]
+/// §6d.5 -- the companion binary now lives in `tools/benchmarks` (`prikk-benchmarks`), not this
+/// crate, so it must be built first and its path passed via `PRIKK_RUSAGE_PROBE_BIN` (see
+/// `rusage_object_index_probe_binary`'s own doc comment for why, and its panic message for the
+/// exact build command). No longer feature-gated: run it the same plain way as the other two
+/// drivers in this file, with that one variable set.
 #[test]
 #[ignore = "long-running measurement instrument; run deliberately, see module docs"]
 fn rfc133_node_count_memory_object_index() {
@@ -1173,10 +1214,13 @@ fn rfc133_node_count_memory_object_index() {
         );
         return;
     }
+    let binary = rusage_object_index_probe_binary();
+    let binary_identity = rusage_object_index_probe_identity(&binary);
+    eprintln!("probe binary identity: {binary_identity}");
 
     let mut floor_samples = Vec::with_capacity(SAMPLES_PER_POINT);
     for _ in 0..SAMPLES_PER_POINT {
-        floor_samples.push(measure_object_index_probe_floor_rss_kib());
+        floor_samples.push(measure_object_index_probe_floor_rss_kib(&binary));
     }
     let floor_series = RssSeries {
         node_count: 0,
@@ -1211,11 +1255,11 @@ fn rfc133_node_count_memory_object_index() {
 
         let mut read_kib = Vec::with_capacity(SAMPLES_PER_POINT);
         for _ in 0..SAMPLES_PER_POINT {
-            read_kib.push(measure_object_index_probe_rss_kib(&root, "read"));
+            read_kib.push(measure_object_index_probe_rss_kib(&binary, &root, "read"));
         }
         let mut write_kib = Vec::with_capacity(SAMPLES_PER_POINT);
         for _ in 0..SAMPLES_PER_POINT {
-            write_kib.push(measure_object_index_probe_rss_kib(&root, "write"));
+            write_kib.push(measure_object_index_probe_rss_kib(&binary, &root, "write"));
         }
         let read_series = RssSeries {
             node_count,
@@ -1247,7 +1291,7 @@ fn rfc133_node_count_memory_object_index() {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    let report = render_object_index_report(floor_kib, &points);
+    let report = render_object_index_report(&binary_identity, floor_kib, &points);
     let report_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../rfcs/handoffs/133-performance-cost-and-its-evidence/object-index-resident-cost-report-v1.md"

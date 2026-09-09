@@ -1,6 +1,18 @@
 //! Minimal companion binary for RFC 133 §6d.3's resident-object-index probe
-//! (`tests/rfc133_node_count_memory.rs`). Gated behind the `rusage-probe` feature so it never ships
-//! with an ordinary `cargo install prikk`.
+//! (`crates/prikk-cli/tests/rfc133_node_count_memory.rs`).
+//!
+//! **Lives here, not in `prikk-cli`, deliberately (RFC 133 §6d.5).** It was first built as a
+//! `[[bin]]` on `prikk-cli` itself, gated behind a `rusage-probe` feature so an ordinary `cargo
+//! install prikk` would not build it -- but `prikk` is a **published** crate, so that still shipped
+//! the binary's source in the `.crate` tarball and put a public feature name on published surface,
+//! however unreachable by default. `prikk-benchmarks` (this crate) is `publish = false`, already
+//! depends on `prikk-store` and nothing else -- exactly what this probe needs -- and already exists
+//! for precisely this "instrument, not shipped product" purpose, so relocating here needed no new
+//! workspace member and no `boundary.rs` allowlist edit. The test file locates this binary by an
+//! explicit environment variable rather than `env!("CARGO_BIN_EXE_*")`, which only resolves for
+//! test targets of the crate that declares the `[[bin]]` -- the same wall RFC 139 increment 2's own
+//! executor hit, resolved the same way it was there: take the path explicitly and record its
+//! identity.
 //!
 //! **Why a genuinely separate binary, not another self-reexec worker.** The file's other probes
 //! (`lifecycle_state_probe_worker`, the original object-index worker this one replaces) re-invoke
