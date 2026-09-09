@@ -1,0 +1,73 @@
+schema_version = 1
+
+[provenance]
+source_repository = "https://github.com/sindresorhus/awesome"
+revision = "bc98e517ddca672f55f9857d714fc3ea3c3540b2"
+extraction_commands = [
+    "git log --pretty=format:'@@%H' --name-status --no-merges -n 600",
+    "git ls-tree -r -l bc98e517ddca672f55f9857d714fc3ea3c3540b2",
+]
+extraction_date = "2026-09-09"
+rename_detection = true
+
+[shape]
+commit_count = 600
+distinct_paths = 19
+
+[shape.files_changed_per_commit]
+1 = 581
+2 = 13
+3 = 3
+4 = 3
+
+[shape.operation_kind_mix]
+added = 12
+modified = 614
+deleted = 2
+renamed = 0
+copied = 0
+type_changed = 0
+
+[shape.path_touches]
+1 = 6
+11 = 1
+2 = 6
+3 = 1
+33 = 1
+4 = 1
+545 = 1
+6 = 1
+8 = 1
+
+[shape.file_sizes]
+107 = 1
+129 = 1
+21222 = 1
+218 = 1
+2190 = 1
+2569 = 1
+272 = 1
+2894 = 1
+3230 = 1
+4298 = 1
+4491 = 1
+4920 = 1
+573 = 1
+5829 = 1
+603 = 1
+6478 = 1
+6668 = 1
+67949 = 1
+741 = 1
+78330 = 1
+8165 = 1
+82308 = 1
+9040 = 1
+
+[builder_inputs]
+generator_seed = 1394
+author_key_id = "prikk-corpus-author-concentrated"
+author_seed_hex = "5555555555555555555555555555555555555555555555555555555555555555"
+maintainer_key_id = "prikk-corpus-maintainer-concentrated"
+maintainer_seed_hex = "6666666666666666666666666666666666666666666666666666666666666666"
+known_nondeterminism_risks = ["NodeId is minted from the OS CSPRNG at authoring time (crates/prikk-store/src/node_id_gen.rs), not derived from the generator seed or any other builder input, and has no CLI-level override. A corpus built through the ordinary `prikk commit` surface (RFC 139 §7) will mint different node ids -- and therefore different object ids, state roots, and sealed heads -- on every build from this same profile. Determinism at the level RFC 139 §5 requires cannot be reached without either a CLI-level deterministic-entropy override (a crates/ change, out of scope for this increment) or a re-reading of the determinism requirement."]
