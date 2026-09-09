@@ -550,6 +550,66 @@ and `seen_ids` is ~1/5 of that file.
 been handed off together, `seen_ids` would now be removed, the curve would be essentially unchanged, and
 the round would have looked like a fix.
 
+## 6d. ATTRIBUTED 2026-09-09 — none of the named candidates explains the departure, and the residual is the result
+
+**§6c.2 delivered at `2492e6c`.** Same method and ladder as step 1, so the two rounds sit side by side.
+Attribution table re-derived exactly at review.
+
+**RSS growth vs the isolated `NodeLifecycleState` probe** (KiB): N=8,000 growth 6,732, probe **−480** ·
+16,000 growth 20,368, probe **−216** · 32,000 growth 49,036, probe 4,024 (8.2%) · 64,000 growth 104,700,
+probe 17,412 (**16.6%**).
+
+**(a) is ruled out for the departure, not merely shown partial.** At the two points where step 1 located
+the kink, the isolated structure shows **no measurable cost at all**. It does grow eventually (11.60 MiB
+at N=100 → 28.58 MiB at 64,000) but its onset is an order of magnitude further along the ladder. **A cause
+cannot begin after its effect.**
+
+**The kink survives the test that would dissolve it.** Had the large-N rate (1.749 KiB/node) held from the
+start, growth at N=4,000 would be **6,998 KiB against 300 observed** — 23x, far outside the sample band.
+This is a real regime change, not a linear cost emerging from under baseline noise.
+
+**Shape argues against the persisted files too.** `commit-index.v1` (115-118 bytes/node) and the object
+index (133-137 bytes/node) are both **linear from N=100 with no kink**, as `lifecycle-state.v1` already
+was. **No named candidate's shape matches the departure's shape.**
+
+**The sweep found five paths scaling with N** and confirmed every other path under `.prikk/` flat by
+measurement. Two of the five are the blob and patch containers — the repository's own content, 1:1 with N
+by construction, correctly not counted as derived structures.
+
+**So the honest statement stands: the great majority of the departure is unattributed**, and this round
+narrows what it is not.
+
+### 6d.1 FINDING — the object index is an in-memory materialization, not a disk-bytes candidate
+
+The round classified `containers/index.container` as *"the wrong unit — disk bytes, not RSS."* **It is
+not.** `object_store.rs:160-168` stores `entries: replay.entries` — **the whole index decoded into a
+`Vec<IndexEntry>` in memory on every write session** (verified at review; the round confirmed the same
+call at source and then filed it under the weaker heading anyway).
+
+It is **the only named candidate known to be held wholesale in RAM per session** — 8.5 MB on disk at
+N=64,000, more as a `Vec` of structs. The shape objection still applies and it is not asserted as the
+cause; the point is that it belongs in the RSS-commensurate category its own source reading puts it in.
+
+**The obstacle to probing it is tooling, not evidence.** `IndexEntry` is `pub(crate)`, so `prikk-cli`'s
+test cannot reach it — and refusing to widen production visibility to get at it was right. **The probe
+belongs inside `prikk-store`**, where a `test-support`/`#[cfg(test)]` probe has the access already and
+needs no visibility change. That is the next measurement.
+
+### 6d.2 RULED — AUD-01's completion condition must gain a memory measurement before it is executed
+
+ROADMAP's `AUD-01` completion condition is **"a map built inside `IndexSnapshot::open`, last-entry-wins
+preserved, with the existing RFC 111 cost gate extended to cover it."**
+
+**That fix addresses time and pays in memory.** Swapping the `Vec<IndexEntry>` for a map keeps every entry
+resident and adds per-entry overhead for the same population — against a structure now measured growing at
+~133 bytes/node. And the named gate is **RFC 111's, which is a time gate**: AUD-01 could be executed,
+pass its own stated condition, and enlarge the very structure §6d.1 flags.
+
+**RULED: before AUD-01 is executed, its completion condition must require a memory measurement alongside
+the RFC 111 time gate.** Not a reason to hold AUD-01 — a reason not to execute it blind.
+
+**AUD-01 is also no longer "unmeasured"**: this round gives its structure a first measured growth series.
+
 ## 7. Scope
 
 **In:** the costs named in §2 and §3; the evidence tables in §5 and §5.1; §6's ruling; retiring §4's
