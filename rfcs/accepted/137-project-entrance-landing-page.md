@@ -1383,6 +1383,37 @@ motion vocabulary.
 compound into a page that assembles itself while the reader waits.** Hover feedback costs nothing and
 is felt immediately; on-load reveals are the ones to be sparing with.
 
+## 13q. RULED and DELIVERED 2026-09-09 — one install command, and the Cargo path moves to the guide
+
+**Owner finding:** *"The 'Get started' section: Installation of both `sh` and `cargo` can confuse
+unskilled user. Only a single command line should be shown. The primary one is `sh`'s."* Two resolutions
+were offered for the Cargo path: **(a)** a tab, or **(b)** hide it and rely on the install guide.
+
+**RULED: (b).** The `cargo install prikk` row is removed; the note now names the Cargo path and points at
+the install guide, which already documents it.
+
+**Why (b) rather than (a), stated because (a) was the richer option and this project's aesthetic is
+"clean over rich":**
+
+1. **A tab does not actually solve the stated problem.** The complaint is that a choice confuses an
+   unskilled reader. A tab hides one option's *text* while keeping the choice itself on the page — the
+   reader still has to decide which tab is theirs. Removing the row removes the decision.
+2. **A tab is real accessibility surface for a two-item choice.** Done correctly it needs `role="tablist"`,
+   `aria-selected`, roving `tabindex` and arrow-key handling. Accessibility is a standing project value
+   here (§7.2e), and the honest cost of a correct tab is not small — for the benefit of showing one extra
+   command to readers who are, by definition, already skilled enough to have Cargo installed.
+3. **The path is not lost, only relocated.** `docs/src/guide/install.md` documents `cargo install prikk`
+   (line 113), and the note is amended from *"covers pinning a version, verifying checksums, and building
+   from source"* to lead with **"covers installing with Cargo"** — so the landing page still tells a Cargo
+   user where to go. **Verified before removing**, rather than assuming the guide covered it.
+
+**No CSS changed.** `.install-block` is `display:grid` with a `gap`, which renders a single child
+correctly; the copy-button script binds by `querySelectorAll(".copy")`, so it needed no edit either. The
+`c2` id is gone with no dangling reference. Page is 38,547 bytes / 12,709 gzipped.
+
+**(a) remains available** if the owner later wants Cargo visible on the page — the ruling is about which
+resolution serves an unskilled first-time reader, not a judgement that tabs are wrong.
+
 ## 9. Scope
 
 **In:** the entrance problem, the truth mechanism, the three-surface division, the measured URL cost,
