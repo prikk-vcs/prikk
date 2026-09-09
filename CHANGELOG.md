@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added — `prikk mv <old> <new>`: declared move and rename authoring
+
+The first prikk command that authors a `RenamePath`. Renames are never inferred from content — the
+machine never compares bytes to guess that an untracked file is really a missing one, moved; a
+rename only ever comes from this explicit declaration. `prikk mv` keys its behavior on existence
+only: if `<old>` exists and `<new>` does not, it performs the move and records the declaration; if
+`<old>` is already gone and `<new>` exists (the ordinary flow of running a shell `mv` and only
+afterward remembering to tell prikk), it records the declaration alone, touching no bytes; if both
+or neither exist, it refuses. The declaration is durable and authored into the next `prikk commit`,
+not immediately — `prikk worktree-status` shows every live declaration, in prose and in
+`--format json` (also new). Renaming a node more than once before a commit collapses to its net
+move (`mv a b` then `mv b c` authors one `RenamePath`, `a -> c`, never two hops); a declaration that
+returns to its starting point is dropped, authoring nothing. A worktree that contradicts a live
+declaration at commit time refuses the whole commit, naming the declaration, rather than silently
+dropping it. This is the first sealed prikk history to ever contain a rename.
+
 ## 0.37.0 — 2026-09-09
 
 ### Added — `prikk bundle preview --input <file>`: what a bundle would do to your repository

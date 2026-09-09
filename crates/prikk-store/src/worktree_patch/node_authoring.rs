@@ -9,8 +9,13 @@
 //! File modes are normalized through the single [`normalize_file_mode`] rule and drive both
 //! `CreateFile.mode` (4.4a-2aR) and existing-node `ChangePerm` detection (4.4a-2b).
 //!
-//! Out of scope (unchanged): rename inference (moves author as delete+create) and symlink authoring
-//! (fails closed until FDD-04 §5.4a).
+//! Rename authoring (RFC 144 §4o) is declaration-based, never inferred from content: a live
+//! declaration recorded by `prikk mv` is consumed here against this same worktree/baseline snapshot,
+//! authoring a `RenamePath` (plus any simultaneous content/mode change on the same node) for a
+//! confirmed move, a plain `DeleteNode` for one whose destination was itself deleted, or nothing at
+//! all for a round trip -- see the consumption block inside `author_inner`.
+//!
+//! Out of scope (unchanged): symlink authoring (fails closed until FDD-04 §5.4a).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -22,7 +27,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::{
     BlobKind, BlobPayload, CanonicalEncode, ChangePerm, CreateFile, DeleteNode, DeleteNodePreimage,
     EditText, NodeId, NodeKind, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind,
-    PATCH_MESSAGE_SCHEMA, PatchPayload, PatchPurpose, ReplaceBinary,
+    PATCH_MESSAGE_SCHEMA, PatchPayload, PatchPurpose, RenamePath, ReplaceBinary,
 };
 
 use crate::active::{prepare_empty_active_ref_for_append, require_active_ref_for_non_empty_wal};
@@ -36,6 +41,7 @@ use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::object_store::{ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::RepoPath;
+use crate::rename_declaration::{clear_rename_declarations, read_rename_declarations};
 use crate::text_span;
 use crate::wal::Wal;
 use crate::worktree_marker::worktree_is_dirty;
@@ -67,6 +73,12 @@ pub(crate) enum AuthorError {
     UnsupportedKindTransition(String),
     /// Symlink authoring is out of scope until FDD-04 §5.4a static target validation.
     UnsupportedSymlinkAuthoring(String),
+    /// A live rename declaration (RFC 144 §4o.2) does not match this worktree snapshot: either the
+    /// declared source is back on disk (a contradiction §3 requires refusing outright, naming the
+    /// declaration), or the declared destination is already occupied by a different tracked node
+    /// this commit does not also move or delete (a collision `patch_replay`'s own batch-rename
+    /// check would refuse at seal time -- authoring must not emit what replay would reject).
+    DeclarationContradicted(String),
     /// Fresh node-id minting failed (propagated without flattening).
     Mint(crate::node::node_id_gen::NodeIdMintError),
     /// An underlying store/encoding error.
@@ -91,6 +103,12 @@ impl fmt::Display for AuthorError {
                     "worktree authoring: unsupported symlink authoring: {detail}"
                 )
             }
+            Self::DeclarationContradicted(detail) => {
+                write!(
+                    f,
+                    "worktree authoring: rename declaration refused: {detail}"
+                )
+            }
             Self::Mint(e) => write!(f, "worktree authoring: {e}"),
             Self::Store(e) => write!(f, "worktree authoring: {e}"),
         }
@@ -102,6 +120,11 @@ impl From<AuthorError> for PrikkError {
         match e {
             AuthorError::Store(inner) => inner,
             AuthorError::Mint(inner) => inner.into(),
+            // RFC 132's Precondition variant: a worktree that disagrees with a live declaration, or
+            // a declared destination already occupied by an untouched tracked node, is a caller
+            // precondition -- nothing is held and no other writer is racing this one; waiting does
+            // not help, only changing the worktree or the declaration does.
+            AuthorError::DeclarationContradicted(detail) => PrikkError::Precondition(detail),
             other => PrikkError::Integrity(other.to_string()),
         }
     }
@@ -344,6 +367,79 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // is read on demand (below) so an unchanged file is never opened — DC-56.
     let worktree = enumerate_worktree_files(layout, &tracked_paths)?;
 
+    // RFC 144 §4o.2/§3: consume every live rename declaration against this same worktree/baseline
+    // snapshot, before either per-path loop below ever sees a rename's old or new path -- both need
+    // the exclusion sets built here first (`renamed_away`, `rename_targets`), and the dedicated
+    // rename-authoring loop further down needs `confirmed_renames`.
+    //
+    // Control 6's two-node swap is why every check below is evaluated against the *whole batch* of
+    // live declarations, not one declaration in isolation: after `a -> tmp -> ... -> c` and
+    // `c -> a` both land on disk, `old_path` for the first declaration (`a`) is genuinely present in
+    // the worktree again -- but as the *second* declaration's own landing spot, not because the
+    // original node never moved. Checking a single declaration's `old_path`/`new_path` against the
+    // worktree without also asking "is this path claimed elsewhere in this same batch" would refuse
+    // a real swap as a false contradiction (source-checked) or a false collision (destination-
+    // checked) -- exactly the two-node case increments 1 and 2 built `rename_nodes_checked_batch`'s
+    // own same-batch tolerance for.
+    let live_declarations = read_rename_declarations(layout).map_err(AuthorError::Store)?;
+    let declared_old_paths: BTreeSet<&str> = live_declarations
+        .iter()
+        .map(|declaration| declaration.old_path.as_str())
+        .collect();
+    let declared_new_paths: BTreeSet<&str> = live_declarations
+        .iter()
+        .map(|declaration| declaration.new_path.as_str())
+        .collect();
+    let mut renamed_away: BTreeSet<String> = BTreeSet::new();
+    let mut confirmed_renames: Vec<(String, String)> = Vec::new();
+    for declaration in &live_declarations {
+        let old_path = &declaration.old_path;
+        let new_path = &declaration.new_path;
+        // A declaration whose old_path was never a tracked baseline node (e.g. declared against a
+        // path that was itself never committed) is vacuous. Judgment call, not RFC-specified -- the
+        // six required controls do not exercise this: drop silently, letting the ordinary loops
+        // below handle whatever the worktree actually holds at old_path/new_path.
+        let Some(base) = baseline_files.get(old_path) else {
+            continue;
+        };
+        if worktree.contains_key(old_path.as_str())
+            && !declared_new_paths.contains(old_path.as_str())
+        {
+            // The worktree contradicts a live declaration -- source is back, and no other live
+            // declaration claims to have landed here (the swap's own tolerance above does not apply).
+            // §3: refuse the whole commit, naming the declaration, rather than silently dropping a
+            // human assertion.
+            return Err(AuthorError::DeclarationContradicted(format!(
+                "{old_path} -> {new_path}: the source is present in the worktree again; the \
+                 declared move was not completed on disk. Run `prikk mv` again, or move {new_path} \
+                 back to {old_path} to clear the declaration before committing"
+            )));
+        }
+        if !worktree.contains_key(new_path.as_str()) {
+            // Nets to deletion (§3 corollary 2): neither path is present. The ordinary deletion loop
+            // below already authors a plain DeleteNode for old_path unassisted; nothing to claim.
+            continue;
+        }
+        // Confirmed: old_path is a baseline node, and its declared destination is present. Refuse a
+        // destination already occupied by a different, untouched tracked node that this same batch
+        // does not also vacate -- authoring must not emit what `rename_nodes_checked_batch` would
+        // refuse at seal time (§3's own principle, applied to a collision as much as to a chain).
+        if let Some(occupant) = baseline_files.get(new_path) {
+            if occupant.node_id != base.node_id && !declared_old_paths.contains(new_path.as_str()) {
+                return Err(AuthorError::DeclarationContradicted(format!(
+                    "{old_path} -> {new_path}: the destination is already occupied by a different \
+                     tracked node that this commit does not also move or delete"
+                )));
+            }
+        }
+        renamed_away.insert(old_path.clone());
+        confirmed_renames.push((old_path.clone(), new_path.clone()));
+    }
+    let rename_targets: BTreeSet<String> = confirmed_renames
+        .iter()
+        .map(|(_, new_path)| new_path.clone())
+        .collect();
+
     // DC-56 changed-path index: per-path (size, mtime, mode) -> last-known content hash, so an
     // unchanged file's content read can be skipped. Rebuildable and never authoritative (NFR-PERF-04)
     // — a missing or corrupt index loads as empty and simply costs one full read per path, exactly as
@@ -362,6 +458,12 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     let mut create_candidates: Vec<(String, Vec<u8>, u32)> = Vec::new();
 
     for (path, meta) in &worktree {
+        if rename_targets.contains(path) {
+            // Claimed by the dedicated rename-authoring block below -- never a plain create, and
+            // never re-inspected here even if it also happens to be a baseline path (the occupied-
+            // destination check above already refused that case).
+            continue;
+        }
         if let Some(base) = baseline_files.get(path) {
             // Existing node: kind is authoritative (E4); compare in that kind, never reclassify.
             match base.kind {
@@ -452,9 +554,113 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         }
     }
 
+    // RFC 144 §4o: author each confirmed rename's RenamePath, plus any simultaneous content or mode
+    // change on the same node -- safe to combine, because ChangePerm/EditText/ReplaceBinary are all
+    // node-addressed (no path field), so their relative order against RenamePath never depends on
+    // which path is "current" when a patch is applied. Run before the deletions loop below (and
+    // before commit_index is persisted, further down) so the fresh `commit_index.record` calls made
+    // here land in the same save.
+    //
+    // Deliberately does not call `resolve_existing_file` (this file's other two content-comparison
+    // sites both do): its cache is keyed by *path*, on the trust condition "this path's own content
+    // is unchanged since the entry was recorded" -- true for every other caller, which only ever
+    // reads a path that has held the same node across commits. `new_path` here just changed which
+    // node occupies it; any prior entry at that key describes new_path's *former* occupant, not the
+    // node being evaluated now, so a stat-coincidence hit (found directly: two files this round's
+    // own control 6 wrote nanoseconds apart landed in the same commit_index mtime bucket in this
+    // environment) reads as a false content mismatch against `base.blob_id`, which then sends a
+    // provably-unchanged rename through `plan_edit_text` and trips its own "unchanged text" guard.
+    // Always reading for real avoids the whole class, and the explicit `commit_index.record` below
+    // still refreshes -- rather than leaves stale -- whatever entry `new_path` carried in before.
+    for (old_path, new_path) in &confirmed_renames {
+        let base = baseline_files.get(old_path).ok_or_else(|| {
+            AuthorError::Store(PrikkError::Integrity(format!(
+                "{old_path}: confirmed rename lost its baseline node between resolution and \
+                 authoring"
+            )))
+        })?;
+        planned.push(PlannedOp {
+            kind: OperationKind::RenamePath(RenamePath {
+                node_id: base.node_id,
+                old_path: old_path.clone(),
+                new_path: new_path.clone(),
+            }),
+            // Deliberately not just `old_path`: `RenamePath` is the only kind at this rank
+            // (`CreateSymlink` authoring always fails closed before reaching this point), so the
+            // sort-key role this field otherwise plays never actually discriminates between two
+            // rename ops here -- carrying both sides instead makes the CLI's per-change report
+            // (which reuses this same field) show the move, not just its source.
+            path: format!("{old_path} -> {new_path}"),
+            node_id: base.node_id,
+            summary_kind: WorktreePatchOperationKind::RenamePath,
+            blob_refs: 0,
+        });
+        let meta = worktree.get(new_path).ok_or_else(|| {
+            AuthorError::Store(PrikkError::Integrity(format!(
+                "{new_path}: confirmed rename lost its destination between resolution and \
+                 authoring"
+            )))
+        })?;
+        let blob_kind = match base.kind {
+            NodeKind::TextFile => BlobKind::Text,
+            NodeKind::BinaryFile => BlobKind::Binary,
+            NodeKind::Symlink => {
+                return Err(AuthorError::UnsupportedSymlinkAuthoring(format!(
+                    "{old_path} -> {new_path}: symlink node modification is out of scope"
+                )));
+            }
+        };
+        let bytes = read_existing_file_bytes(layout, new_path, blob_kind)?;
+        let content_hash =
+            commit_index::content_hash(blob_kind, &bytes).map_err(AuthorError::Store)?;
+        let resolved_mode = meta.mode.unwrap_or(base.mode);
+        commit_index.record(
+            new_path.clone(),
+            CommitIndexEntry {
+                size: meta.size,
+                mtime_secs: meta.mtime_secs,
+                mtime_nanos: meta.mtime_nanos,
+                mode: resolved_mode,
+                kind: blob_kind,
+                content_hash,
+            },
+        );
+        if content_hash != base.blob_id {
+            match base.kind {
+                NodeKind::TextFile => {
+                    planned.push(plan_edit_text(
+                        &object_store,
+                        base,
+                        &bytes,
+                        new_path,
+                        lineage_baseline_block_id,
+                        lineage_horizon_id,
+                        &queue_text_cache,
+                    )?);
+                }
+                NodeKind::BinaryFile => {
+                    planned.push(plan_replace_binary(
+                        &mut object_store,
+                        base,
+                        &bytes,
+                        new_path,
+                    )?);
+                }
+                NodeKind::Symlink => unreachable!("symlinks already refused above"),
+            }
+        }
+        if let Some(op) = plan_mode_change_if_observed(base, meta.mode, new_path) {
+            planned.push(op);
+        }
+    }
+
     // Deletions: baseline files absent from the worktree.
     for (path, base) in &baseline_files {
         if !worktree.contains_key(path) {
+            if renamed_away.contains(path) {
+                // Claimed above by a confirmed rename's own RenamePath -- not a plain deletion.
+                continue;
+            }
             planned.push(plan_delete(base, path));
         }
     }
@@ -595,6 +801,15 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
 
     prepare_empty_active_ref_for_append(layout, &canonical_ref).map_err(AuthorError::Store)?;
     let wal_sequence = wal.append_patch(&patch).map_err(AuthorError::Store)?;
+
+    // RFC 144 §4o.2: "cleared when the commit that consumes it is queued -- not when sealed." The
+    // loop above resolves every live declaration into exactly one of confirmed-rename,
+    // nets-to-deletion, or vacuous -- a contradiction returns early, before this point, and nothing
+    // else leaves a declaration unresolved -- so a successful append here means the whole live set
+    // was just consumed and the store is cleared unconditionally, not entry by entry.
+    if !live_declarations.is_empty() {
+        clear_rename_declarations(layout).map_err(AuthorError::Store)?;
+    }
 
     Ok(WorktreePatchCommitReport {
         ref_name: canonical_ref,

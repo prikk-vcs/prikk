@@ -20,6 +20,7 @@
   - [Snapshot Materialization](guide/checkout/snapshot-materialization.md)
 - [Worktree Patch Authoring](guide/patches/worktree-patch.md)
   - [Content-Anchored Text Edits](guide/patches/text-edits.md)
+  - [Declared Move and Rename Authoring](guide/patches/declared-move.md)
   - [Supported Patch Replay](guide/patches/patch-replay.md)
   - [Supported Patch Materialization](guide/patches/patch-materialization.md)
   - [Supported Patch Deletions](guide/patches/patch-deletions.md)

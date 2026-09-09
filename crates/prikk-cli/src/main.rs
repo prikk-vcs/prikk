@@ -29,6 +29,7 @@ mod compact;
 mod durable_output;
 mod key;
 mod merge;
+mod mv;
 mod output;
 mod seal;
 mod setup;
@@ -56,7 +57,7 @@ use output::{
     print_show, print_show_json, print_snapshot_checkout_plan,
     print_snapshot_materialization_report, print_status_json, print_trust_check,
     print_trust_check_json, print_trust_list, print_trust_list_json, print_verify_report,
-    print_verify_report_json, print_worktree_status,
+    print_verify_report_json, print_worktree_status, print_worktree_status_json,
 };
 use prikk_object::Signature;
 use prikk_store::{
@@ -768,7 +769,15 @@ fn run_worktree_status(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_worktree_status_args(args)?;
     let layout = open_repository(args.root)?;
     let report = worktree_status(&layout, &args.ref_name).map_err(|err| err.to_string())?;
-    print_worktree_status(&layout, &report);
+    // RFC 144 §4o.3: `--format json` is an alternate rendering of the same report, not a different
+    // command -- the exit-code contract below (refuse when the worktree has changes) is unchanged
+    // by format, matching `verify --format json`'s own precedent of leaving exit-code semantics
+    // format-independent.
+    if args.format_json {
+        print_worktree_status_json(&layout, &report);
+    } else {
+        print_worktree_status(&layout, &report);
+    }
     if report.is_clean() {
         Ok(())
     } else {

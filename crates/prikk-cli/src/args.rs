@@ -77,6 +77,9 @@ pub(crate) struct WorktreeStatusArgs {
     pub(crate) root: PathBuf,
     /// Ref to use as baseline.
     pub(crate) ref_name: String,
+    /// RFC 144 §4o.3: `true` for `--format json`, the machine-branchable form that carries live
+    /// rename declarations as a real field rather than a prose line.
+    pub(crate) format_json: bool,
 }
 
 /// Parsed doctor command arguments.
@@ -366,6 +369,7 @@ pub(crate) fn parse_worktree_status_args(
 ) -> std::result::Result<WorktreeStatusArgs, CliError> {
     let mut path = None;
     let mut ref_name = None;
+    let mut format_json = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -377,6 +381,17 @@ pub(crate) fn parse_worktree_status_args(
                     ));
                 }
                 ref_name.set_once("--ref", value)?;
+            }
+            // RFC 144 §4o.3, the same restricted-value pattern `status --format json` already uses
+            // (`commands.rs::run_status_adapter`'s own doc): the only supported value is `json`.
+            "--format" => {
+                let value = flag_value(&mut iter, "worktree-status --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "worktree-status --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
             }
             other if other.starts_with('-') => {
                 return Err(unknown_argument("worktree-status", other));
@@ -394,6 +409,7 @@ pub(crate) fn parse_worktree_status_args(
     Ok(WorktreeStatusArgs {
         root: optional_path_or_current(path)?,
         ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        format_json,
     })
 }
 

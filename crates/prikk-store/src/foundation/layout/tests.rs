@@ -242,12 +242,13 @@ fn init_allocates_every_trust_container_name_once() -> Result<()> {
 }
 
 /// RFC 102 Stage 5 acceptance criterion 1, folded in per round 4's review §3: `active/default/`'s
-/// `init`-allocated names (`queue.wal`, `ref-name`) enumerated the same way, with the one real
-/// complication the review named directly -- `active.lock` is created at runtime by `ActiveLock::
-/// acquire`, not `init`, and correctly so (a lock file lost to a crash is harmless; its holder is
-/// gone too). Not a criterion-1 violation, but it does mean this directory's membership isn't a
-/// plain fixed set the way `refs_containers_dir()`'s or `trust_dir()`'s is -- asserted here as "the
-/// non-lock members are exactly these two names," both before and after the lock exists.
+/// `init`-allocated names (`queue.wal`, `ref-name`, and -- RFC 144 §4o.2 -- `declarations`)
+/// enumerated the same way, with the one real complication the review named directly --
+/// `active.lock` is created at runtime by `ActiveLock::acquire`, not `init`, and correctly so (a
+/// lock file lost to a crash is harmless; its holder is gone too). Not a criterion-1 violation, but
+/// it does mean this directory's membership isn't a plain fixed set the way `refs_containers_dir()`'s
+/// or `trust_dir()`'s is -- asserted here as "the non-lock members are exactly these three names,"
+/// both before and after the lock exists.
 #[test]
 fn init_allocates_every_active_default_container_name_once_excluding_the_runtime_lock() -> Result<()>
 {
@@ -257,6 +258,7 @@ fn init_allocates_every_active_default_container_name_once_excluding_the_runtime
     let active_container_paths = vec![
         layout.default_queue_wal_path(),
         layout.default_active_ref_name_path(),
+        layout.default_declarations_path(),
     ];
     for path in &active_container_paths {
         assert!(path.is_file(), "expected {path:?} to exist after init");
@@ -271,7 +273,7 @@ fn init_allocates_every_active_default_container_name_once_excluding_the_runtime
     assert_eq!(
         files_under(&layout.default_active_dir())?,
         expected,
-        "before any lock is ever acquired, active/default/ must contain exactly the two init-\
+        "before any lock is ever acquired, active/default/ must contain exactly the three init-\
          allocated names"
     );
 
@@ -285,7 +287,7 @@ fn init_allocates_every_active_default_container_name_once_excluding_the_runtime
     );
     assert_eq!(
         with_lock, expected,
-        "excluding the runtime lock, the set is still exactly the two init-allocated names"
+        "excluding the runtime lock, the set is still exactly the three init-allocated names"
     );
     drop(lock);
 

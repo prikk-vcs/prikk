@@ -32,7 +32,7 @@ pub(crate) use verification::{
     print_active_session_repairs, print_doctor_report, print_verify_report,
     print_verify_report_json,
 };
-pub(crate) use worktree::{print_history, print_worktree_status};
+pub(crate) use worktree::{print_history, print_worktree_status, print_worktree_status_json};
 
 /// Print a checkout plan.
 pub(crate) fn print_checkout_plan(layout: &RepositoryLayout, plan: &CheckoutPlan) {

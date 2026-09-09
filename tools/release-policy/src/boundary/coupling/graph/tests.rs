@@ -98,7 +98,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // constrained modules moved; `patch`, `rollback`, `worktree`, `merge` name-family grouping was
     // measured to create new coupling-graph cycles and was not done -- see the increment's report.
     // RFC 142 (2026-09-08) then added one new top-level module, `show`: 51 -> 52.
-    assert_eq!(modules.len(), 52, "modules: {modules:?}");
+    // RFC 144 §4o.2 (2026-09-09) added one new top-level module, `rename_declaration`: 52 -> 53.
+    assert_eq!(modules.len(), 53, "modules: {modules:?}");
     assert!(modules.contains("foundation"));
     assert!(modules.contains("show"));
     assert!(!modules.contains("fsutil"));

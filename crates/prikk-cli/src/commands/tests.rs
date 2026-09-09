@@ -57,6 +57,7 @@ const DECLARED_DOCUMENTS: &[&str] = &[
     "docs/src/guide/merge-evidence.md",
     "docs/src/guide/merge.md",
     "docs/src/guide/merge-plan.md",
+    "docs/src/guide/patches/declared-move.md",
     "docs/src/guide/patches/patch-deletions.md",
     "docs/src/guide/patches/patch-inverse.md",
     "docs/src/guide/patches/patch-materialization.md",

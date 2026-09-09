@@ -216,6 +216,11 @@ impl RepositoryLayout {
         // -append, cleared by truncate-to-empty, never removed. Previously created lazily on the
         // empty-to-non-empty WAL transition (`active.rs::prepare_empty_active_ref_for_append`).
         create_empty_file_once(&layout, &layout.default_active_ref_name_path())?;
+        // RFC 144 §4o.2: the live rename-declaration store, on the same marker pattern as the two
+        // files just above. `write_declarations_map` (`rename_declaration.rs`) also self-heals a
+        // missing file for a repository initialized before this line existed -- this is only the
+        // fast path for every repository `init` creates from here on.
+        create_empty_file_once(&layout, &layout.default_declarations_path())?;
         // RFC 102 Stage 3, design-v1.md §2: every container name, both slots, plus the index and the
         // (currently unused) compaction generation log -- all allocated here, at `init`, and nowhere
         // else, for the life of the repository. This is the acceptance test itself (handoff §5
@@ -537,6 +542,21 @@ impl RepositoryLayout {
     #[must_use]
     pub fn default_active_ref_name_path(&self) -> PathBuf {
         self.active_ref_name_path(DEFAULT_ACTIVE_NAME)
+    }
+
+    /// Return the active-session live rename-declaration store path for `name` (RFC 144 §4o.2) --
+    /// a sibling of `queue.wal`/`ref-name`, on the same `active/<name>/` shape, pre-allocated at
+    /// `init` the same way. See `active_session_dir`'s doc for why this takes `impl AsRef<Path>`
+    /// rather than `&str`.
+    #[must_use]
+    pub(crate) fn active_declarations_path(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.active_session_dir(name).join("declarations")
+    }
+
+    /// Return the default active-session live rename-declaration store path.
+    #[must_use]
+    pub fn default_declarations_path(&self) -> PathBuf {
+        self.active_declarations_path(DEFAULT_ACTIVE_NAME)
     }
 
     /// Return the ref root directory.

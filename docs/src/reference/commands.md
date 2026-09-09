@@ -20,6 +20,7 @@ prikk trust maintainer remove --key-id ID
 prikk trust maintainer list [--format json]
 prikk trust maintainer check --key-id ID [--format json]
 prikk commit [--from-worktree] [--text-edits] [--ref heads/<branch>] -m <message>
+prikk mv <old> <new>
 prikk seal --allow-no-audit [--ref heads/<branch>]
 prikk status [--format json]
 prikk log [path] [--limit N] [--ref REF]
@@ -57,7 +58,7 @@ prikk sync seal <ref> --claim <id>
 prikk sync seal <ref> --claims <file>
 prikk sync tags
 prikk sync adopt-tag <name>
-prikk worktree-status [path] [--ref REF]
+prikk worktree-status [path] [--ref REF] [--format json]
 prikk verify [path] [--stop-on-first-error] [--format json]
 prikk doctor [path]
 prikk doctor [path] --repair-wal-tail

@@ -27,8 +27,9 @@ use crate::patch_replay::decode::{
 };
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::{RepoPath, join_repo_path_to_root};
+use crate::rename_declaration::read_rename_declarations;
 use crate::wal::Wal;
-use crate::{ActiveRefMetadata, read_active_ref_metadata};
+use crate::{ActiveRefMetadata, RenameDeclaration, read_active_ref_metadata};
 
 /// Read-only worktree status report against the replay baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,10 @@ pub struct WorktreeStatusReport {
     /// reclassify them: a queued file for a *different* ref is not part of that other ref's
     /// baseline either, so it correctly still shows as untracked here.
     pub queued_elsewhere: Option<String>,
+    /// Live rename declarations (RFC 144 §4o.3): `prikk mv`'s durable intent, not yet consumed by a
+    /// commit. A declaration made and forgotten becomes permanent history at the next commit, so it
+    /// must be visible in the command whose job is *what will this commit do*.
+    pub declarations: Vec<RenameDeclaration>,
 }
 
 impl WorktreeStatusReport {
@@ -204,12 +209,15 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
             .then(left.kind.as_str().cmp(right.kind.as_str()))
     });
 
+    let declarations = read_rename_declarations(layout)?;
+
     Ok(WorktreeStatusReport {
         ref_name: ref_name.to_string(),
         tracked_files,
         unchanged_files,
         changes,
         queued_elsewhere: resolved.queued_on_other_ref,
+        declarations,
     })
 }
 

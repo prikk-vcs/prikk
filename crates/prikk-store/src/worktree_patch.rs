@@ -5,8 +5,9 @@
 //! operation-mapping, minting, mode-normalization, and canonical-ordering logic lives in
 //! [`node_authoring`]; signing goes through the injected [`crate::AuthorSigner`] boundary (no
 //! placeholder signer). Existing paths resolve to their persisted `node_id`; fresh nodes are minted
-//! in canonical create order; text edits go through the shared `text_span` module. Rename inference
-//! and symlink authoring remain out of scope.
+//! in canonical create order; text edits go through the shared `text_span` module. Rename authoring
+//! (RFC 144 §4o) is declaration-based, never inferred from content -- see `node_authoring`'s own
+//! consumption of `rename_declaration`'s live store. Symlink authoring remains out of scope.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
@@ -58,6 +59,10 @@ pub enum WorktreePatchOperationKind {
     EditText,
     /// A regular file whose normalized mode changed is represented as `ChangePerm`.
     ChangePerm,
+    /// A declared move (RFC 144 §4o) is represented as `RenamePath`. `path` on the report carries
+    /// both sides as `"old_path -> new_path"`, since a rename is the one kind this report's
+    /// single-path summary shape must describe two paths for.
+    RenamePath,
 }
 
 impl WorktreePatchOperationKind {
@@ -70,6 +75,7 @@ impl WorktreePatchOperationKind {
             Self::ReplaceBinary => "replace-binary",
             Self::EditText => "edit-text",
             Self::ChangePerm => "change-perm",
+            Self::RenamePath => "rename-path",
         }
     }
 }

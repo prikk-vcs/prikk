@@ -145,6 +145,14 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "mv",
+        run: crate::mv::run_mv,
+        help_lines: &[
+            "  prikk mv <old> <new>                      Move and declare a rename, authored into the next commit",
+            "  note: if <old> is already moved on disk (a shell `mv`), this records the declaration alone, touching no bytes",
+        ],
+    },
+    Command {
         name: "status",
         run: run_status_adapter,
         help_lines: &[
@@ -263,8 +271,9 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "worktree-status",
         run: crate::run_worktree_status,
         help_lines: &[
-            "  prikk worktree-status [path] [--ref REF]  Report changes against the replay baseline",
+            "  prikk worktree-status [path] [--ref REF] [--format json]  Report changes against the replay baseline",
             "  note: .prikkignore at the repository root excludes matching paths from the untracked list",
+            "  note: live rename declarations from `prikk mv` are reported here too, both in prose and as a `--format json` field",
         ],
     },
     Command {

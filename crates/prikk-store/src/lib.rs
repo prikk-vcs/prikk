@@ -57,6 +57,7 @@ mod path;
 mod received;
 mod recognition_claim;
 mod refs;
+mod rename_declaration;
 mod rfc111_seal_simulation;
 // RFC 131 §2.2a: the `rollback` name family is NOT grouped -- measured to introduce a new
 // verify<->rollback coupling-graph cycle via a shared `patch` dependency; see the report.
@@ -180,6 +181,10 @@ pub use refs::{
 pub use refs::{
     force_ref_pointer_to_arbitrary_state_for_test_support,
     remove_ref_pointer_entry_for_test_support,
+};
+pub use rename_declaration::{
+    RenameDeclaration, clear_rename_declarations, read_rename_declarations,
+    record_rename_declaration,
 };
 #[cfg(feature = "test-support")]
 pub use rfc111_seal_simulation::simulate_one_seal_for_test_support;
