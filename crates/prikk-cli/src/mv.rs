@@ -5,7 +5,9 @@
 
 use std::path::PathBuf;
 
-use prikk_store::{RepoPath, RepositoryLayout, record_rename_declaration};
+use prikk_store::{
+    DeclarationRecordOutcome, RepoPath, RepositoryLayout, record_rename_declaration,
+};
 
 use crate::args::current_dir;
 use crate::commands::CliError;
@@ -50,20 +52,24 @@ pub(crate) fn run_mv(args: Vec<String>) -> std::result::Result<(), CliError> {
 
     // §4o.1's four worktree states, keyed on existence only -- content is never inspected to decide
     // among them (§4g).
-    match (old_exists, new_exists) {
+    let outcome = match (old_exists, new_exists) {
         (true, false) => {
             std::fs::rename(&old_disk_path, &new_disk_path)
                 .map_err(|err| format!("failed to rename {old_arg} to {new_arg}: {err}"))?;
-            record_rename_declaration(&layout, old_repo_path.as_str(), new_repo_path.as_str())
-                .map_err(|err| err.to_string())?;
+            let outcome =
+                record_rename_declaration(&layout, old_repo_path.as_str(), new_repo_path.as_str())
+                    .map_err(|err| err.to_string())?;
             println!("moved {old_arg} -> {new_arg}");
+            outcome
         }
         (false, true) => {
             // The realistic flow this row exists for: a shell `mv` already happened, and the user
             // is only now telling prikk about it. Touch no bytes -- record the declaration alone.
-            record_rename_declaration(&layout, old_repo_path.as_str(), new_repo_path.as_str())
-                .map_err(|err| err.to_string())?;
+            let outcome =
+                record_rename_declaration(&layout, old_repo_path.as_str(), new_repo_path.as_str())
+                    .map_err(|err| err.to_string())?;
             println!("declared {old_arg} -> {new_arg} (already moved on disk; no bytes touched)");
+            outcome
         }
         (true, true) => {
             return Err(format!(
@@ -78,11 +84,22 @@ pub(crate) fn run_mv(args: Vec<String>) -> std::result::Result<(), CliError> {
             )
             .into());
         }
+    };
+    // RFC 144 §4p.2: this call's own chain-collapse may have resolved to something other than the
+    // rename just asserted -- say so here, since the declaration store never carries a round trip
+    // forward for `commit` to disclose later (it is dropped the moment it nets to no move, right
+    // here, not at the next commit).
+    match outcome {
+        DeclarationRecordOutcome::Recorded { .. } => {
+            println!(
+                "note: this declaration is authored into the next `prikk commit`; see `prikk \
+                 worktree-status` to review it first"
+            );
+        }
+        DeclarationRecordOutcome::NetsToNoMove { origin, via } => {
+            println!("declaration {origin} -> {via} -> {origin}: nets to no move, dropped");
+        }
     }
-    println!(
-        "note: this declaration is authored into the next `prikk commit`; see `prikk \
-         worktree-status` to review it first"
-    );
     Ok(())
 }
 

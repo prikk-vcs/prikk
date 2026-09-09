@@ -18,6 +18,13 @@ returns to its starting point is dropped, authoring nothing. A worktree that con
 declaration at commit time refuses the whole commit, naming the declaration, rather than silently
 dropping it. This is the first sealed prikk history to ever contain a rename.
 
+Every declaration that resolves to something other than the rename it asserted is now named, with
+what it became: `prikk commit` prints one line per such declaration alongside the operations it
+authors (a destination deleted or excluded by `.prikkignore` nets to a plain deletion; a source that
+was never a tracked node has nothing to rename), and `prikk mv` itself discloses a round trip that
+nets to no move, since that one is resolved immediately, not at the next commit. Every outcome was
+already correct; only the silence about it was fixed.
+
 ## 0.37.0 — 2026-09-09
 
 ### Added — `prikk bundle preview --input <file>`: what a bundle would do to your repository

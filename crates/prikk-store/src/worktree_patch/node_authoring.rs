@@ -40,14 +40,15 @@ use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
 use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::object_store::{ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_replay::resolve_folded_worktree_baseline;
-use crate::path::RepoPath;
+use crate::path::{RepoPath, join_repo_path_to_root};
 use crate::rename_declaration::{clear_rename_declarations, read_rename_declarations};
 use crate::text_span;
 use crate::wal::Wal;
 use crate::worktree_marker::worktree_is_dirty;
 use crate::worktree_patch::{
-    WorktreePatchCommitOptions, WorktreePatchCommitReport, WorktreePatchOperationKind,
-    WorktreePatchOperationSummary, next_op_seq,
+    DeclarationDisclosure, DeclarationDisclosureReason, WorktreePatchCommitOptions,
+    WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
+    next_op_seq,
 };
 use crate::{
     ActiveRefMetadata, read_active_ref_metadata, remove_active_ref_metadata,
@@ -392,6 +393,10 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         .collect();
     let mut renamed_away: BTreeSet<String> = BTreeSet::new();
     let mut confirmed_renames: Vec<(String, String)> = Vec::new();
+    // RFC 144 §4p.2: every declaration below that resolves to something other than the rename it
+    // asserted gets one disclosure entry here -- the outcome is unchanged by this (still correct;
+    // was correct before this round too), only the silence about it is what this round closes.
+    let mut declaration_disclosures: Vec<DeclarationDisclosure> = Vec::new();
     for declaration in &live_declarations {
         let old_path = &declaration.old_path;
         let new_path = &declaration.new_path;
@@ -400,6 +405,11 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // six required controls do not exercise this: drop silently, letting the ordinary loops
         // below handle whatever the worktree actually holds at old_path/new_path.
         let Some(base) = baseline_files.get(old_path) else {
+            declaration_disclosures.push(DeclarationDisclosure {
+                old_path: old_path.clone(),
+                new_path: new_path.clone(),
+                resolution: DeclarationDisclosureReason::NeverTracked,
+            });
             continue;
         };
         if worktree.contains_key(old_path.as_str())
@@ -416,8 +426,23 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             )));
         }
         if !worktree.contains_key(new_path.as_str()) {
-            // Nets to deletion (§3 corollary 2): neither path is present. The ordinary deletion loop
-            // below already authors a plain DeleteNode for old_path unassisted; nothing to claim.
+            // Nets to deletion (§3 corollary 2): the ordinary deletion loop below already authors a
+            // plain DeleteNode for old_path unassisted; nothing to claim here. Two distinct real
+            // causes share this branch -- the destination was deleted, or it exists on disk but
+            // `.prikkignore` excluded it from `worktree` -- and §4p.2 requires saying which, so a
+            // direct filesystem check (independent of the ignore-filtered `worktree` map) decides.
+            let new_repo_path = RepoPath::parse(new_path).map_err(AuthorError::Store)?;
+            let new_disk_path = join_repo_path_to_root(&new_repo_path, layout.root());
+            let destination_ignored = std::fs::symlink_metadata(&new_disk_path).is_ok();
+            declaration_disclosures.push(DeclarationDisclosure {
+                old_path: old_path.clone(),
+                new_path: new_path.clone(),
+                resolution: if destination_ignored {
+                    DeclarationDisclosureReason::DestinationIgnored
+                } else {
+                    DeclarationDisclosureReason::DestinationDeleted
+                },
+            });
             continue;
         }
         // Confirmed: old_path is a baseline node, and its declared destination is present. Refuse a
@@ -819,6 +844,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         referenced_blob_count,
         text_edit_count,
         changes: summaries,
+        declaration_disclosures,
     })
 }
 

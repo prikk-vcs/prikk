@@ -50,14 +50,41 @@ live rename declarations: 1
 
 - **Confirmed** (old path absent, new path present): authors a `RenamePath`. Any simultaneous content
   or mode change on the same node is authored alongside it in the same patch.
-- **Nets to deletion**: if the declared destination is itself deleted before the commit, the
-  declaration is dropped and a plain deletion is authored instead — never a rename to nowhere.
+- **Nets to deletion**: if the declared destination is itself gone before the commit — deleted, or
+  excluded by `.prikkignore` — the declaration is dropped and a plain deletion is authored instead,
+  never a rename to nowhere.
+- **Never tracked**: if the declared source was never a sealed node (an untracked file, moved with
+  `prikk mv` before its first commit), there is no node to rename.
 - **Contradicted**: if the worktree disagrees with the declaration (the source path is back on disk),
   the whole commit is refused, naming the declaration. Nothing is silently dropped.
 
+Every one of these outcomes is correct on its own — a deletion really is the honest record for a file
+moved into an ignored directory, for instance. What would be wrong is doing this silently: a user who
+asserted a move deserves to see what actually happened to it. So `prikk commit` names every declaration
+that did not become the rename it asserted, one line each, alongside the operations it authors:
+
+```text
+$ prikk mv a.txt build/a.txt        # build/ is excluded by .prikkignore
+moved a.txt -> build/a.txt
+$ prikk commit -m moved
+  delete-file a.txt
+  declaration a.txt -> build/a.txt: destination is ignored; recorded as a deletion, not a rename
+```
+
 Renaming a node more than once before a commit collapses to the net move: `prikk mv a b` followed by
 `prikk mv b c` authors exactly one `RenamePath`, `a -> c` — never two hops. A declaration that returns
-to its starting point (`prikk mv a b` then `prikk mv b a`) is dropped entirely; nothing is authored.
+to its starting point (`prikk mv a b` then `prikk mv b a`) is dropped entirely; nothing is authored —
+and `prikk mv` says so immediately, since the round trip is resolved right there, not at the next
+commit:
+
+```text
+$ prikk mv a.txt b.txt
+moved a.txt -> b.txt
+note: this declaration is authored into the next `prikk commit`; see `prikk worktree-status` to review it first
+$ prikk mv b.txt a.txt
+moved b.txt -> a.txt
+declaration a.txt -> b.txt -> a.txt: nets to no move, dropped
+```
 
 Two nodes can be swapped in one commit by chaining declarations through a temporary name:
 

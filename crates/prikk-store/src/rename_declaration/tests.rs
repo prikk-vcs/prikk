@@ -4,7 +4,8 @@
 
 use crate::RepositoryLayout;
 use crate::rename_declaration::{
-    clear_rename_declarations, read_rename_declarations, record_rename_declaration,
+    DeclarationRecordOutcome, clear_rename_declarations, read_rename_declarations,
+    record_rename_declaration,
 };
 use crate::test_gates::test_support::unique_temp_dir;
 
@@ -42,11 +43,18 @@ fn a_chained_declaration_collapses_to_the_net_move() {
 }
 
 #[test]
-fn a_round_trip_declaration_drops_entirely() {
+fn a_round_trip_declaration_drops_entirely_and_discloses_it() {
     let root = unique_temp_dir("rename-declaration-round-trip");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     record_rename_declaration(&layout, "a.txt", "b.txt").unwrap();
-    record_rename_declaration(&layout, "b.txt", "a.txt").unwrap();
+    let outcome = record_rename_declaration(&layout, "b.txt", "a.txt").unwrap();
+    assert_eq!(
+        outcome,
+        DeclarationRecordOutcome::NetsToNoMove {
+            origin: "a.txt".to_string(),
+            via: "b.txt".to_string(),
+        }
+    );
     assert!(read_rename_declarations(&layout).unwrap().is_empty());
     let _ = std::fs::remove_dir_all(root);
 }

@@ -183,8 +183,8 @@ pub use refs::{
     remove_ref_pointer_entry_for_test_support,
 };
 pub use rename_declaration::{
-    RenameDeclaration, clear_rename_declarations, read_rename_declarations,
-    record_rename_declaration,
+    DeclarationRecordOutcome, RenameDeclaration, clear_rename_declarations,
+    read_rename_declarations, record_rename_declaration,
 };
 #[cfg(feature = "test-support")]
 pub use rfc111_seal_simulation::simulate_one_seal_for_test_support;
@@ -229,8 +229,9 @@ pub use verify::{
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};
 pub use worktree_patch::{
-    DEFAULT_ACTIVE_PATCH_LIMIT, WorktreePatchCommitOptions, WorktreePatchCommitReport,
-    WorktreePatchOperationKind, WorktreePatchOperationSummary, commit_worktree_changes_signed,
+    DEFAULT_ACTIVE_PATCH_LIMIT, DeclarationDisclosure, DeclarationDisclosureReason,
+    WorktreePatchCommitOptions, WorktreePatchCommitReport, WorktreePatchOperationKind,
+    WorktreePatchOperationSummary, commit_worktree_changes_signed,
 };
 pub use worktree_status::{
     QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution, WorktreeChange,

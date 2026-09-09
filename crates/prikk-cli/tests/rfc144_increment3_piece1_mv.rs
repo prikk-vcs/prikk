@@ -126,12 +126,22 @@ fn control3_round_trip_declaration_authors_nothing() {
     ok(&seal(&repo, "heads/main"), "seal a.txt");
 
     ok(&mv(&repo, "a.txt", "b.txt"), "mv a.txt b.txt");
-    ok(&mv(&repo, "b.txt", "a.txt"), "mv b.txt a.txt");
+    let second_mv = mv(&repo, "b.txt", "a.txt");
+    ok(&second_mv, "mv b.txt a.txt");
     assert!(
         repo.join("a.txt").exists(),
         "worktree must be back to a.txt"
     );
     assert!(!repo.join("b.txt").exists());
+
+    // RFC 144 §4p.2: the round trip is resolved (and the declaration dropped) at the second `mv`
+    // itself, not at the next commit -- by commit time the declaration store already has nothing
+    // left to disclose about it, so the disclosure belongs on `mv`'s own output.
+    let second_mv_stdout = stdout_of(&second_mv);
+    assert!(
+        second_mv_stdout.contains("declaration a.txt -> b.txt -> a.txt: nets to no move"),
+        "expected mv's own output to disclose the dropped round trip: {second_mv_stdout}"
+    );
 
     let status_out = prikk(&repo).arg("worktree-status").output().unwrap();
     let status_stdout = stdout_of(&status_out);
@@ -189,6 +199,10 @@ fn control4_declared_move_whose_destination_is_deleted_authors_plain_delete() {
     assert!(
         stdout.contains("delete-file a.txt"),
         "expected a plain delete-file for a.txt: {stdout}"
+    );
+    assert!(
+        stdout.contains("declaration a.txt -> b.txt: destination is gone"),
+        "expected commit to disclose what the declaration became: {stdout}"
     );
 
     ok(&seal(&repo, "heads/main"), "seal the deletion");
@@ -294,6 +308,77 @@ fn control6_two_node_swap_end_to_end() {
 
     let _ = std::fs::remove_dir_all(&repo);
     let _ = std::fs::remove_dir_all(&materialized);
+}
+
+/// RFC 144 §4p.2: a declared move whose destination is excluded by `.prikkignore` also nets to
+/// deletion -- the same outcome as an outright deletion (control 4), but for a different reason,
+/// and §4p.2 requires the disclosure to say which. Reproduces the review's own repro exactly.
+#[test]
+fn declared_move_onto_an_ignored_destination_nets_to_deletion_and_discloses_why() {
+    let repo = unique_repo("rfc144-inc3-p1-ignore-disclosure");
+    init(&repo);
+    std::fs::write(repo.join("a.txt"), b"ignored destination\n").unwrap();
+    std::fs::write(repo.join(".prikkignore"), b"build\n").unwrap();
+    std::fs::create_dir_all(repo.join("build")).unwrap();
+    ok(
+        &commit(&repo, "heads/main", "add a.txt and .prikkignore"),
+        "commit a.txt and .prikkignore",
+    );
+    ok(&seal(&repo, "heads/main"), "seal a.txt and .prikkignore");
+
+    ok(&mv(&repo, "a.txt", "build/a.txt"), "mv a.txt build/a.txt");
+    assert!(!repo.join("a.txt").exists());
+    assert!(
+        repo.join("build/a.txt").exists(),
+        "the file really did move"
+    );
+
+    let commit_out = commit(&repo, "heads/main", "moved into an ignored directory");
+    ok(&commit_out, "commit the deletion");
+    let stdout = stdout_of(&commit_out);
+    assert!(
+        !stdout.contains("rename-path"),
+        "an ignored destination must not author a rename: {stdout}"
+    );
+    assert!(
+        stdout.contains("delete-file a.txt"),
+        "expected a plain delete-file for a.txt: {stdout}"
+    );
+    assert!(
+        stdout.contains("declaration a.txt -> build/a.txt: destination is ignored"),
+        "expected commit to name the ignore-match as the reason, not a generic deletion: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// RFC 144 §4p.2: a declaration whose source was never a tracked baseline node is disclosed too --
+/// reachable via `prikk mv`'s own row 1 (old exists, new doesn't) against an untracked file: the
+/// physical move and the declaration both happen, but the source was never a sealed node.
+#[test]
+fn declared_move_of_a_never_tracked_source_discloses_it() {
+    let repo = unique_repo("rfc144-inc3-p1-never-tracked-disclosure");
+    init(&repo);
+    // Nothing committed yet -- x.txt is a plain untracked file.
+    std::fs::write(repo.join("x.txt"), b"never sealed\n").unwrap();
+
+    ok(&mv(&repo, "x.txt", "y.txt"), "mv x.txt y.txt");
+    assert!(!repo.join("x.txt").exists());
+    assert!(repo.join("y.txt").exists());
+
+    let commit_out = commit(&repo, "heads/main", "first commit, after an untracked mv");
+    ok(&commit_out, "commit");
+    let stdout = stdout_of(&commit_out);
+    assert!(
+        stdout.contains("create-file y.txt"),
+        "y.txt is a real untracked file and must still be created: {stdout}"
+    );
+    assert!(
+        stdout.contains("declaration x.txt -> y.txt: source was never a tracked node"),
+        "expected commit to disclose the never-tracked declaration: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
 }
 
 /// `prikk mv`'s own four worktree states (§4o.1), independent of the controls above: refuses when

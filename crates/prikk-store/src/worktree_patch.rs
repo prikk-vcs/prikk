@@ -35,6 +35,11 @@ pub struct WorktreePatchCommitReport {
     pub text_edit_count: usize,
     /// Operation summaries in emitted order.
     pub changes: Vec<WorktreePatchOperationSummary>,
+    /// Live declarations that did not author the rename they asserted (RFC 144 §4p.2). Disclosure
+    /// only -- none of these change what this commit actually authors; the contradiction case
+    /// (worktree disagrees with a live declaration) refuses the whole commit instead of reaching
+    /// this report at all, so it never appears here.
+    pub declaration_disclosures: Vec<DeclarationDisclosure>,
 }
 
 /// Summary of one generated patch operation.
@@ -44,6 +49,47 @@ pub struct WorktreePatchOperationSummary {
     pub path: String,
     /// Generated operation kind.
     pub operation: WorktreePatchOperationKind,
+}
+
+/// One live declaration that resolved to something other than the rename it asserted (RFC 144
+/// §4p.2: "say what a declaration became" -- every resolution here is correct, and was already
+/// correct before this disclosure existed; only the silence about it was the defect).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclarationDisclosure {
+    /// The declaration's own source path.
+    pub old_path: String,
+    /// The declaration's own destination path.
+    pub new_path: String,
+    /// What actually happened to it.
+    pub resolution: DeclarationDisclosureReason,
+}
+
+/// Why a live declaration did not author the rename it asserted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclarationDisclosureReason {
+    /// `old_path` was never a tracked baseline node -- there was no node to rename.
+    NeverTracked,
+    /// The destination is absent from the worktree because it was deleted -- recorded as a plain
+    /// deletion of `old_path`, not a rename.
+    DestinationDeleted,
+    /// The destination is absent from `commit`'s own worktree view because `.prikkignore` excludes
+    /// it -- recorded as a plain deletion of `old_path`, the same as an outright deletion, since the
+    /// node left the tracked set either way.
+    DestinationIgnored,
+}
+
+impl DeclarationDisclosureReason {
+    /// Stable, human-readable explanation -- the tail of the one-line disclosure the CLI prints.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::NeverTracked => "source was never a tracked node; there was no node to rename",
+            Self::DestinationDeleted => "destination is gone; recorded as a deletion, not a rename",
+            Self::DestinationIgnored => {
+                "destination is ignored; recorded as a deletion, not a rename"
+            }
+        }
+    }
 }
 
 /// Generated operation kind for CLI/reporting.

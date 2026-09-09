@@ -174,6 +174,20 @@ fn run_commit(args: Vec<String>) -> std::result::Result<(), CliError> {
     for change in &report.changes {
         println!("  {} {}", change.operation.as_str(), change.path);
     }
+    // RFC 144 §4p.2: every live declaration that resolved to something other than the rename it
+    // asserted is named here, with what it became -- the outcome was already correct before this
+    // line existed; only the silence about it was the defect.
+    // RFC 144 §4p.2: every live declaration that resolved to something other than the rename it
+    // asserted is named here, with what it became -- the outcome was already correct before this
+    // line existed; only the silence about it was the defect.
+    for disclosure in &report.declaration_disclosures {
+        println!(
+            "  declaration {} -> {}: {}",
+            disclosure.old_path,
+            disclosure.new_path,
+            disclosure.resolution.describe()
+        );
+    }
     println!(
         "note: multi-operation text diff minimization, patch algebra, rename detection, and audit \
          plugins remain later increments"

@@ -44,6 +44,28 @@ pub struct RenameDeclaration {
     pub new_path: String,
 }
 
+/// What `record_rename_declaration` actually did (RFC 144 §4p.2: disclosure, not just effect --
+/// `prikk mv` prints one of these, so a round trip that nets to no move is never silent about it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclarationRecordOutcome {
+    /// A declaration is now live, naming the net move (fresh, chain-extended, or replacing a prior
+    /// unrelated one for the same `old_path`).
+    Recorded {
+        /// Repository-relative source path.
+        old_path: String,
+        /// Repository-relative destination path.
+        new_path: String,
+    },
+    /// This call completed a round trip back to `origin` -- the earlier declaration was dropped
+    /// rather than stored as a no-op `origin -> origin`. `via` is this call's own `old_path`.
+    NetsToNoMove {
+        /// The path the whole chain started from and returned to.
+        origin: String,
+        /// This call's own `old_path` -- the intermediate hop the chain returned from.
+        via: String,
+    },
+}
+
 /// Read every live rename declaration, in `old_path` order. An absent file reads the same as an
 /// empty one -- both mean "no live declarations," matching `ActiveRefMetadata`'s own
 /// absence-is-`Missing` convention (`active.rs`) -- a repository initialized before this store
@@ -131,7 +153,7 @@ pub fn record_rename_declaration(
     layout: &RepositoryLayout,
     old_path: &str,
     new_path: &str,
-) -> Result<()> {
+) -> Result<DeclarationRecordOutcome> {
     // Held across the whole read-modify-write -- see this module's own doc comment for the race
     // this closes (a concurrent `commit` clearing the store between this call's read and write).
     let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
@@ -140,15 +162,29 @@ pub fn record_rename_declaration(
         .iter()
         .find(|(_, dest)| dest.as_str() == old_path)
         .map(|(origin, _)| origin.clone());
-    if let Some(origin) = chained_origin {
+    let outcome = if let Some(origin) = chained_origin {
         map.remove(&origin);
-        if origin != new_path {
-            map.insert(origin, new_path.to_string());
+        if origin == new_path {
+            DeclarationRecordOutcome::NetsToNoMove {
+                origin,
+                via: old_path.to_string(),
+            }
+        } else {
+            map.insert(origin.clone(), new_path.to_string());
+            DeclarationRecordOutcome::Recorded {
+                old_path: origin,
+                new_path: new_path.to_string(),
+            }
         }
     } else {
         map.insert(old_path.to_string(), new_path.to_string());
-    }
-    write_declarations_map(layout, &map)
+        DeclarationRecordOutcome::Recorded {
+            old_path: old_path.to_string(),
+            new_path: new_path.to_string(),
+        }
+    };
+    write_declarations_map(layout, &map)?;
+    Ok(outcome)
 }
 
 /// Clear every live rename declaration. Called once, after a commit that consumed the whole live
