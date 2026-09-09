@@ -107,14 +107,6 @@
 //! reconstruction, no new production code: this probe opens a **real** repository's **real** index
 //! through the same public API `commit`/`verify` use.
 //!
-//! A third self-reexec worker, `object_index_probe_worker`, opens either an `ObjectReadSnapshot` or
-//! an `ObjectWriteSession` against a repository already built at `N` nodes (the same
-//! `generate_tree`/`support::commit`/`support::seal` shape the incremental series uses) and exits —
-//! `rusage_child.py` measures its peak RSS the same way it measures every other worker here. Both
-//! `open()` calls only decode the index (confirmed at source: neither acquires a lock or has any
-//! other side effect), so one built repository per `N` serves every sample of both modes; nothing
-//! mutates between opens.
-//!
 //! **The indexed-object count is derived, not assumed.** `foundation/index.rs`'s own constants,
 //! `INDEX_HEADER_LEN` (50) + `INDEX_BODY_LEN` (83) = 133 bytes, are a **fixed-width** record (no
 //! length-prefixing inside the body) — confirmed at source and independently by the attribution
@@ -122,30 +114,77 @@
 //! INDEX_RECORD_BYTES` is therefore the exact indexed-object count, checked for a zero remainder
 //! rather than trusted.
 //!
+//! ## §6d.3 — the probe was masked, and why fixing it needed a second binary AND a second measuring
+//! process, not just the first
+//!
+//! §6d.1's own first attempt reused this file's self-reexec pattern (spawn `current_exe()` filtered
+//! to one `#[test]`, exactly like `lifecycle_state_probe_worker`). The review found its readings
+//! implausibly low below N=64,000 and traced it to that self-reexec binary's own ~11 MiB startup
+//! cost (every linked crate, the full `libtest` harness) masking a multi-megabyte allocation inside
+//! already-touched heap slack — the handoff's own fix asked for a minimal companion binary.
+//!
+//! **Built one (`rusage-object-index-probe`, `src/bin/rusage_object_index_probe.rs`, gated behind
+//! the `rusage-probe` feature so it never ships in an ordinary `cargo install prikk` — `[[bin]]`
+//! targets never see `[dev-dependencies]`, so it depends on `prikk-store` alone, already a plain
+//! `[dependencies]` entry). Confirmed at source: `[[bin]]` targets are excluded from
+//! `[dev-dependencies]` regardless of how `cargo` is invoked.**
+//!
+//! **That alone did not fix it — confirmed empirically before committing to the rest of the fix,
+//! not assumed.** Spawning the new minimal binary through `rusage_child.py` still read ~11-12 MiB.
+//! So did spawning `/usr/bin/true`. So did spawning a bare `fn main(){}` Rust binary with no
+//! dependencies at all. Measuring Python's own resident size immediately before it forks
+//! (`resource.getrusage(RUSAGE_SELF)`) landed at the same ~10-12 MiB. **The floor tracks the
+//! *spawning parent's* own RSS at fork time, not the child's** — a real Linux fork()+exec()
+//! characteristic (the child's `mm` briefly shares the parent's pages via copy-on-write before
+//! `exec()` replaces the address space, and `hiwater_rss` tracking can latch onto that). The
+//! measured child's own content was never what mattered below N=64,000; the size of whatever
+//! spawns it is.
+//!
+//! **So this one probe uses `tests/support/rusage_child.zsh` instead of `rusage_child.py`** — zsh's
+//! own idle RSS is roughly 1.6-2 MiB, confirmed the same way, small enough that even the smallest
+//! points now clear the standing control below. See that script's own doc comment for the exact
+//! mechanism and why `set -e` at its top level does not work (hit during development, not assumed).
+//! Every other measurement in this file keeps `rusage_child.py` unchanged, per the handoff's own
+//! "do not re-run the other two rounds' series" instruction — their signal sizes (tens of MiB and
+//! up) are not distorted by an 11 MiB floor the way this one's few-hundred-KiB-to-low-single-digit-
+//! MiB signal was.
+//!
+//! **The standing control** (§6d.3's own REQUIRED addition): resident cost, over the floor, can
+//! never read below `IndexEntry`'s own physical minimum size (88 bytes/entry — `object_id`(32) +
+//! `object_type` + `slot` + `offset`(8) + `length`(8) + `container_checksum`(32), rounded up to
+//! Rust's own 8-byte struct alignment; `IndexEntry` is `pub(crate)`, so this cannot be computed via
+//! `size_of` from outside `prikk-store` and is instead stated here, the same bound the review's own
+//! worked example used). A reading below it fails the test — a measurement failure, not a finding.
+//!
 //! ## Running it
 //!
 //! **Must be run with `--release`** — the handoff requires a release build, matching §2.1's own
 //! method, and this is a real behaviour difference: a debug build's allocator/bounds-checking
-//! overhead would not be comparable to §2's figures at all. Needs `python3` on `PATH` (see above)
-//! and, like `dc59`'s own memory pass, is Linux-only (`resource.getrusage` is POSIX and exists on
-//! more than Linux, but this harness is not verified anywhere else and skips cleanly elsewhere).
+//! overhead would not be comparable to §2's figures at all. `rfc133_node_count_memory` and
+//! `rfc133_node_count_memory_attribution` need `python3` on `PATH`;
+//! `rfc133_node_count_memory_object_index` needs `zsh` on `PATH` and **`--features rusage-probe`**
+//! (the minimal companion binary only exists under that feature). All three are Linux-only
+//! (`resource.getrusage`/zsh's `TIMEFMT` are POSIX and likely work elsewhere, but this harness is
+//! not verified anywhere else and skips cleanly elsewhere).
 //!
 //! ```text
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_attribution
-//! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_object_index
+//! cargo test -p prikk --release --locked --test rfc133_node_count_memory --features rusage-probe -- --ignored --nocapture rfc133_node_count_memory_object_index
 //! ```
 //!
 //! `#[ignore]`d: these are measurement instruments, not correctness tests, and their dominant cost
 //! (repositories up to tens of thousands of files, three samples per point) does not belong in the
 //! default suite.
 //!
-//! **Linux-only, in full.** Every measurement here reads `getrusage(RUSAGE_CHILDREN).ru_maxrss`
-//! through `support/rusage_child.py`, matching `dc59_commit_benchmark.rs`'s own memory pass
-//! (DC-62) — verified on Linux and not assumed portable elsewhere. The whole file is gated rather
-//! than each helper: on other platforms there is nothing here to be unused, so nothing needs
-//! `#[allow(dead_code)]` to stay quiet. `dc59`/`dc92` gate per item because most of *their* code is
-//! genuinely cross-platform; none of this file's is.
+//! **Linux-only, in full.** Every measurement here reads `getrusage(RUSAGE_CHILDREN).ru_maxrss`,
+//! matching `dc59_commit_benchmark.rs`'s own memory pass (DC-62) — verified on Linux and not
+//! assumed portable elsewhere. The whole file is gated rather than each helper: on other platforms
+//! there is nothing here to be unused, so nothing needs `#[allow(dead_code)]` to stay quiet.
+//! `dc59`/`dc92` gate per item because most of *their* code is genuinely cross-platform; none of
+//! this file's is. `rfc133_node_count_memory_object_index` and everything it alone needs are
+//! additionally gated behind the `rusage-probe` feature (see that section above) so this file still
+//! compiles cleanly under the workspace's own default-feature gates without it.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
@@ -156,7 +195,6 @@ use std::process::Command;
 
 use prikk_object::{NodeId, NodeKind, ObjectId};
 use prikk_replay::{LiveNode, NodeContent, NodeLifecycleState, RepoPath};
-use prikk_store::{ObjectReadSnapshot, ObjectWriteSession, RepositoryLayout};
 
 mod support;
 
@@ -471,11 +509,13 @@ fn measure_lifecycle_state_probe_rss_kib(node_count: usize) -> i64 {
 /// `INDEX_BODY_LEN` (32+2+1+8+8+32=83) = 133, fixed-width, no length-prefixing inside the body.
 /// Confirmed at source and cross-checked against the attribution round's own measured 133-137
 /// bytes/node for this same file.
+#[cfg(feature = "rusage-probe")]
 const INDEX_RECORD_BYTES: u64 = 133;
 
 /// The exact count of objects `containers/index.container` currently indexes, derived from its
 /// fixed-width record size rather than assumed equal to node count (§6d.1's own instruction: N nodes
 /// produce blobs, patches, blocks, and ref states, so the index holds more entries than N).
+#[cfg(feature = "rusage-probe")]
 fn indexed_object_count(root: &Path) -> u64 {
     let bytes = object_index_file_size(root)
         .unwrap_or_else(|| panic!("no containers/index.container under {}", root.display()));
@@ -487,62 +527,103 @@ fn indexed_object_count(root: &Path) -> u64 {
     bytes / INDEX_RECORD_BYTES
 }
 
-/// Fresh-process worker for §6d.1's resident-object-index probe: does nothing unless
-/// `PRIKK_OBJECT_INDEX_PROBE_MODE` is set (`"read"` or `"write"`), in which case it opens the named
-/// repository's real object index through the public API the commit/verify paths themselves use
-/// (`ObjectReadSnapshot::open` / `ObjectWriteSession::open`) and exits. Neither `open()` call writes
-/// anything or acquires a lock (confirmed at source: both only decode the index), so this is safe to
-/// run repeatedly against the same repository -- no mutation between samples.
-#[test]
-#[ignore = "internal worker process for rfc133_node_count_memory_object_index; never run directly"]
-fn object_index_probe_worker() {
-    let Ok(mode) = std::env::var("PRIKK_OBJECT_INDEX_PROBE_MODE") else {
-        return;
-    };
-    let repo_root = std::env::var("PRIKK_OBJECT_INDEX_PROBE_REPO").expect(
-        "PRIKK_OBJECT_INDEX_PROBE_REPO must be set alongside PRIKK_OBJECT_INDEX_PROBE_MODE",
+/// §6d.3 -- the self-reexec pattern the rest of this file uses for its probes (spawn `current_exe()`
+/// filtered to one `#[test]`) is exactly what made this probe's own floor too large to be usable:
+/// the review found readings implausibly low below N=64,000, and it traced back to the whole
+/// compiled test binary's own ~11 MiB startup cost (every linked crate, the full `libtest` harness)
+/// masking a multi-megabyte allocation inside already-touched heap slack. Building a genuinely
+/// minimal companion binary (`rusage-object-index-probe`, gated behind the `rusage-probe` feature,
+/// `src/bin/rusage_object_index_probe.rs`) turned out **not** to be sufficient on its own --
+/// confirmed empirically before committing to the fix, not assumed: spawning that minimal binary
+/// through `rusage_child.py` still read ~11-12 MiB, and so did spawning `/usr/bin/true` and a bare
+/// `fn main(){}` Rust binary with no dependencies. The floor tracks **Python's own** resident size
+/// at fork time, not the child's -- a real Linux fork()+exec() characteristic (see
+/// `tests/support/rusage_child.zsh`'s own doc comment for the mechanism). So this probe alone uses
+/// `rusage_child.zsh` (zsh's `TIMEFMT`, same underlying syscall, an order of magnitude smaller
+/// spawning process) instead of `rusage_child.py`; every other measurement in this file keeps using
+/// `rusage_child.py` unchanged, per the handoff's own "do not re-run the other two rounds' series"
+/// instruction -- their signal sizes are not distorted by an 11 MiB floor the way this one was.
+#[cfg(feature = "rusage-probe")]
+const RUSAGE_CHILD_ZSH_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/support/rusage_child.zsh"
+);
+
+/// Path to the minimal companion binary, gated behind the `rusage-probe` feature (see
+/// `crates/prikk-cli/Cargo.toml`'s own comment on the `[[bin]]` entry for why `[[bin]]` targets
+/// cannot see `[dev-dependencies]`, and this file's own module docs for why a genuinely separate
+/// binary was needed rather than another self-reexec worker).
+#[cfg(feature = "rusage-probe")]
+const RUSAGE_OBJECT_INDEX_PROBE_BINARY: &str = env!("CARGO_BIN_EXE_rusage-object-index-probe");
+
+/// Like `run_rusage_child`, but via `rusage_child.zsh` instead of `rusage_child.py` -- see that
+/// script's own doc comment for why. No `envs` parameter: this probe's only caller passes
+/// everything as argv, not environment.
+#[cfg(feature = "rusage-probe")]
+fn run_rusage_child_zsh(cwd: &Path, binary: &Path, args: &[&str]) -> i64 {
+    let output = Command::new("zsh")
+        .arg(RUSAGE_CHILD_ZSH_SCRIPT)
+        .arg(cwd)
+        .arg(binary)
+        .args(args)
+        .output()
+        .expect("spawning rusage_child.zsh -- is zsh on PATH?");
+    assert!(
+        output.status.success(),
+        "measured child failed (status {:?})\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
-    let layout = RepositoryLayout::new(&repo_root).expect("opening the probed repository's layout");
-    match mode.as_str() {
-        "read" => {
-            let snapshot = ObjectReadSnapshot::open(&layout).expect("ObjectReadSnapshot::open");
-            std::hint::black_box(&snapshot);
-        }
-        "write" => {
-            let session = ObjectWriteSession::open(&layout).expect("ObjectWriteSession::open");
-            std::hint::black_box(&session);
-        }
-        other => panic!("unrecognized PRIKK_OBJECT_INDEX_PROBE_MODE {other:?}"),
-    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or_else(|err| {
+            panic!(
+                "rusage_child.zsh stdout {:?} is not an integer: {err}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        })
 }
 
-/// Run the object-index probe worker against `repo_root` in `mode` (`"read"` or `"write"`) and
-/// return its peak RSS in KiB. Pass `repo_root` as `CARGO_MANIFEST_DIR` and no mode set (via
-/// `measure_object_index_probe_floor_rss_kib`) for the floor.
+/// Run the minimal companion binary against `repo_root` in `mode` (`"read"` or `"write"`) and
+/// return its peak RSS in KiB.
+#[cfg(feature = "rusage-probe")]
 fn measure_object_index_probe_rss_kib(repo_root: &Path, mode: &str) -> i64 {
-    let current_exe = std::env::current_exe().expect("this test binary's own path");
-    let repo_root_arg = repo_root.to_string_lossy().into_owned();
-    run_rusage_child(
+    run_rusage_child_zsh(
         Path::new(env!("CARGO_MANIFEST_DIR")),
-        &current_exe,
-        &["object_index_probe_worker", "--exact", "--ignored"],
-        &[
-            ("PRIKK_OBJECT_INDEX_PROBE_MODE", mode),
-            ("PRIKK_OBJECT_INDEX_PROBE_REPO", &repo_root_arg),
-        ],
+        Path::new(RUSAGE_OBJECT_INDEX_PROBE_BINARY),
+        &[mode, &repo_root.to_string_lossy()],
     )
 }
 
-/// The floor: the same worker binary, launched the same way, with no mode set so it no-ops --
-/// process-startup cost only, nothing repository-related.
+/// The floor: the same minimal binary, `mode = "floor"` (returns immediately, no repository) --
+/// process-startup cost only.
+#[cfg(feature = "rusage-probe")]
 fn measure_object_index_probe_floor_rss_kib() -> i64 {
-    let current_exe = std::env::current_exe().expect("this test binary's own path");
-    run_rusage_child(
+    run_rusage_child_zsh(
         Path::new(env!("CARGO_MANIFEST_DIR")),
-        &current_exe,
-        &["object_index_probe_worker", "--exact", "--ignored"],
-        &[],
+        Path::new(RUSAGE_OBJECT_INDEX_PROBE_BINARY),
+        &["floor"],
     )
+}
+
+/// §3's own worked lower bound, stated here rather than re-derived silently: `IndexEntry`'s fields
+/// (`object_id: ObjectId` 32 bytes, `object_type` code, `slot`, `offset: u64` 8, `length: u64` 8,
+/// `container_checksum: [u8; 32]` 32 -- `foundation/index.rs`'s own `encode_entry_body`) sum to
+/// 82-83 bytes before Rust's struct alignment rounds up to a multiple of 8: 88. `IndexEntry` itself
+/// is `pub(crate)`, so this cannot be computed via `size_of` from outside the crate that owns it.
+#[cfg(feature = "rusage-probe")]
+const INDEX_ENTRY_MIN_RESIDENT_BYTES: i64 = 88;
+
+/// §6d.3's own REQUIRED standing control: measured resident cost can never read below the
+/// structure's own physical minimum. `growth_kib` is resident cost *over the floor*, since the
+/// floor itself is not part of what the structure costs.
+#[cfg(feature = "rusage-probe")]
+fn object_index_resident_floor_holds(indexed_objects: u64, growth_kib: i64) -> bool {
+    let resident_bytes = growth_kib * 1024;
+    let minimum_bytes = indexed_objects as i64 * INDEX_ENTRY_MIN_RESIDENT_BYTES;
+    resident_bytes >= minimum_bytes
 }
 
 // ---- Reporting. ----
@@ -1006,23 +1087,50 @@ fn rfc133_node_count_memory_attribution() {
     eprintln!("report written to {report_path}");
 }
 
-/// One node-count point's resident-index measurement: both probe modes' RSS series and the exact
-/// indexed-object count the repository held when they were taken.
+/// One node-count point's resident-index measurement: both probe modes' RSS series, the exact
+/// indexed-object count the repository held when they were taken, and whether §6d.3's standing
+/// control (resident cost >= the structure's own physical minimum) holds for each mode.
+#[cfg(feature = "rusage-probe")]
 struct ObjectIndexPoint {
     node_count: usize,
     indexed_objects: u64,
     read_snapshot: RssSeries,
     write_session: RssSeries,
+    read_holds: bool,
+    write_holds: bool,
 }
 
+#[cfg(feature = "rusage-probe")]
 fn render_object_index_report(floor_kib: i64, points: &[ObjectIndexPoint]) -> String {
     let mut out = String::new();
-    out.push_str("# RFC 133 §6d.1 — the object index's resident cost, report v1\n\n");
-    out.push_str("Generated by `cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_object_index`.\n");
-    out.push_str("Re-running that exact command regenerates this file. Comparing this series against the attribution round's own residual is this round's own deliverable and is done by hand in the narrative report, not baked into this file, so this file does not go stale if the attribution report is ever regenerated on different hardware.\n\n");
-    out.push_str(&format!("Revision measured at: `{}`. Release build, Linux, worktrees under a `tmpfs` temp directory, peak RSS from `getrusage(RUSAGE_CHILDREN).ru_maxrss`. {SAMPLES_PER_POINT} samples per point. Process-startup floor (no repository opened), median = {floor_kib} KiB.\n\n", git_revision()));
+    out.push_str(
+        "# RFC 133 §6d.3 — the object index's resident cost, re-measured unmasked, report v1\n\n",
+    );
+    out.push_str("Generated by `cargo test -p prikk --release --locked --test rfc133_node_count_memory --features rusage-probe -- --ignored --nocapture rfc133_node_count_memory_object_index`.\n");
+    out.push_str("Re-running that exact command regenerates this file. Comparing this series against the attribution round's own residual is done by hand in the narrative report, not baked into this file, so this file does not go stale if the attribution report is ever regenerated on different hardware.\n\n");
+    out.push_str(&format!("Revision measured at: `{}`. Release build, Linux, worktrees under a `tmpfs` temp directory, peak RSS from `getrusage(RUSAGE_CHILDREN).ru_maxrss` via `tests/support/rusage_child.zsh` (not `rusage_child.py` -- see module docs for why this one probe needs the smaller spawning process). {SAMPLES_PER_POINT} samples per point. Process-startup floor (minimal companion binary, no repository opened), median = {floor_kib} KiB.\n\n", git_revision()));
 
-    out.push_str("| N | indexed objects | (read) min/median/max KiB | (read) growth over floor | (write) min/median/max KiB | (write) growth over floor |\n");
+    out.push_str("## §6d.3's REQUIRED standing control: resident cost >= structure's own physical minimum (88 bytes/entry)\n\n");
+    out.push_str("| N | indexed objects | minimum resident (bytes) | read growth (bytes) | read holds? | write growth (bytes) | write holds? |\n");
+    out.push_str("|---|---|---|---|---|---|---|\n");
+    for point in points {
+        let minimum_bytes = point.indexed_objects as i64 * INDEX_ENTRY_MIN_RESIDENT_BYTES;
+        let read_growth_bytes = (point.read_snapshot.median() - floor_kib) * 1024;
+        let write_growth_bytes = (point.write_session.median() - floor_kib) * 1024;
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            point.node_count,
+            point.indexed_objects,
+            minimum_bytes,
+            read_growth_bytes,
+            if point.read_holds { "yes" } else { "**NO**" },
+            write_growth_bytes,
+            if point.write_holds { "yes" } else { "**NO**" },
+        ));
+    }
+
+    out.push_str("\n## Full series (min/median/max KiB)\n\n");
+    out.push_str("| N | indexed objects | (read) min/median/max KiB | (read) growth over floor (KiB) | (write) min/median/max KiB | (write) growth over floor (KiB) |\n");
     out.push_str("|---|---|---|---|---|---|\n");
     for point in points {
         out.push_str(&format!(
@@ -1044,21 +1152,24 @@ fn render_object_index_report(floor_kib: i64, points: &[ObjectIndexPoint]) -> St
     out
 }
 
-/// §6d.1 — the object index's resident cost. Does not re-run the attribution round; builds its own
-/// repositories (one per N, reused across every read/write sample -- neither `open()` mutates
-/// anything) and measures `ObjectReadSnapshot`/`ObjectWriteSession` held live, through their public
-/// API, against a real object index. See module docs for why no visibility change or synthetic
-/// reconstruction was needed.
+/// §6d.3 — re-measure the resident-index probe with the masking defeated. Does not re-run the
+/// attribution round or §6d.1's own two other series; builds its own repositories (one per N,
+/// reused across every read/write sample -- neither `open()` mutates anything) and measures
+/// `ObjectReadSnapshot`/`ObjectWriteSession` held live in the minimal companion binary, via
+/// `rusage_child.zsh`. See module docs for the floor-masking finding this exists to fix.
+///
+/// Gated behind the `rusage-probe` feature end to end (the minimal companion binary only exists
+/// under it) -- run with `--features rusage-probe`, not the plain invocation the other two drivers
+/// in this file use.
+#[cfg(feature = "rusage-probe")]
 #[test]
 #[ignore = "long-running measurement instrument; run deliberately, see module docs"]
 fn rfc133_node_count_memory_object_index() {
-    if !Path::new(RUSAGE_CHILD_SCRIPT).exists() {
-        panic!("rusage_child.py not found at {RUSAGE_CHILD_SCRIPT}");
-    }
-    let probe = Command::new("python3").arg("--version").output();
+    let probe = Command::new("zsh").arg("--version").output();
     if probe.is_err() || !probe.unwrap().status.success() {
         eprintln!(
-            "skipping object-index resident-cost measurement: python3 is not on PATH (see module docs)"
+            "skipping object-index resident-cost measurement: zsh is not on PATH (see \
+             rusage_child.zsh's own doc comment for why this probe needs it)"
         );
         return;
     }
@@ -1075,6 +1186,7 @@ fn rfc133_node_count_memory_object_index() {
     eprintln!("object-index probe floor: {:?} KiB", floor_series.peak_kib);
 
     let mut points = Vec::new();
+    let mut any_write_failed = false;
     for &node_count in &NODE_COUNTS {
         let root = unique_dir(&format!("object-index-{node_count}"));
         std::fs::create_dir_all(&root).unwrap();
@@ -1105,20 +1217,32 @@ fn rfc133_node_count_memory_object_index() {
         for _ in 0..SAMPLES_PER_POINT {
             write_kib.push(measure_object_index_probe_rss_kib(&root, "write"));
         }
+        let read_series = RssSeries {
+            node_count,
+            peak_kib: read_kib,
+        };
+        let write_series = RssSeries {
+            node_count,
+            peak_kib: write_kib,
+        };
+        let read_holds =
+            object_index_resident_floor_holds(indexed_objects, read_series.median() - floor_kib);
+        let write_holds =
+            object_index_resident_floor_holds(indexed_objects, write_series.median() - floor_kib);
+        if !write_holds {
+            any_write_failed = true;
+        }
         eprintln!(
-            "object-index N={node_count}: indexed_objects={indexed_objects}, read {read_kib:?} KiB, write {write_kib:?} KiB"
+            "object-index N={node_count}: indexed_objects={indexed_objects}, read {:?} KiB (holds={read_holds}), write {:?} KiB (holds={write_holds})",
+            read_series.peak_kib, write_series.peak_kib
         );
         points.push(ObjectIndexPoint {
             node_count,
             indexed_objects,
-            read_snapshot: RssSeries {
-                node_count,
-                peak_kib: read_kib,
-            },
-            write_session: RssSeries {
-                node_count,
-                peak_kib: write_kib,
-            },
+            read_snapshot: read_series,
+            write_session: write_series,
+            read_holds,
+            write_holds,
         });
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1130,4 +1254,11 @@ fn rfc133_node_count_memory_object_index() {
     );
     std::fs::write(report_path, report).unwrap();
     eprintln!("report written to {report_path}");
+
+    assert!(
+        !any_write_failed,
+        "the standing control failed for at least one point's write-session measurement -- see \
+         the report just written for which; a reading below the structure's own physical minimum \
+         is a measurement failure, not a finding"
+    );
 }

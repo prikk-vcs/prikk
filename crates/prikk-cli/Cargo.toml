@@ -39,3 +39,19 @@ pkg-fmt = "tgz"
 
 [lints]
 workspace = true
+
+# RFC 133 §6d.3: a genuinely minimal companion binary for `tests/rfc133_node_count_memory.rs`'s
+# resident-object-index probe. `[[bin]]` targets never see `[dev-dependencies]` (only test/bench/
+# example targets do, regardless of how `cargo` is invoked), so it depends on `prikk-store` alone --
+# already an ordinary `[dependencies]` entry above, not a new one. `required-features` keeps it out
+# of an ordinary `cargo install prikk` (default features build only `src/main.rs`); the test file
+# itself is `#[cfg(feature = "rusage-probe")]`-gated at the one item that names its `CARGO_BIN_EXE_*`
+# path, so the workspace's own default-feature gates (`cargo test --workspace --locked`, no
+# `--all-features`) still compile the file cleanly without it.
+[[bin]]
+name              = "rusage-object-index-probe"
+path              = "src/bin/rusage_object_index_probe.rs"
+required-features = ["rusage-probe"]
+
+[features]
+rusage-probe = []
