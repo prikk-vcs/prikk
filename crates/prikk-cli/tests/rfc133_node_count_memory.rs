@@ -98,6 +98,30 @@
 //! residual row. (b) and (c) are disk-byte series, reported alongside for context, never subtracted
 //! from an RSS quantity as though the two units were interchangeable without further evidence.
 //!
+//! ## §6d.1 — the object index's resident cost (`rfc133_node_count_memory_object_index`)
+//!
+//! The attribution round filed `.prikk/containers/index.container` under "disk bytes, not RSS" —
+//! **wrong**: `ObjectReadSnapshot::open`/`ObjectWriteSession::open` (`object_store.rs`) both hold the
+//! whole decoded index (`IndexSnapshot`, a `Vec<IndexEntry>`) for the session's lifetime. Both types
+//! are `pub`, re-exported from `prikk-store`'s crate root — no visibility change, no synthetic
+//! reconstruction, no new production code: this probe opens a **real** repository's **real** index
+//! through the same public API `commit`/`verify` use.
+//!
+//! A third self-reexec worker, `object_index_probe_worker`, opens either an `ObjectReadSnapshot` or
+//! an `ObjectWriteSession` against a repository already built at `N` nodes (the same
+//! `generate_tree`/`support::commit`/`support::seal` shape the incremental series uses) and exits —
+//! `rusage_child.py` measures its peak RSS the same way it measures every other worker here. Both
+//! `open()` calls only decode the index (confirmed at source: neither acquires a lock or has any
+//! other side effect), so one built repository per `N` serves every sample of both modes; nothing
+//! mutates between opens.
+//!
+//! **The indexed-object count is derived, not assumed.** `foundation/index.rs`'s own constants,
+//! `INDEX_HEADER_LEN` (50) + `INDEX_BODY_LEN` (83) = 133 bytes, are a **fixed-width** record (no
+//! length-prefixing inside the body) — confirmed at source and independently by the attribution
+//! round's own 133–137 bytes/node figure for this same file. `object_index_file_size(root) /
+//! INDEX_RECORD_BYTES` is therefore the exact indexed-object count, checked for a zero remainder
+//! rather than trusted.
+//!
 //! ## Running it
 //!
 //! **Must be run with `--release`** — the handoff requires a release build, matching §2.1's own
@@ -109,6 +133,7 @@
 //! ```text
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_attribution
+//! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_object_index
 //! ```
 //!
 //! `#[ignore]`d: these are measurement instruments, not correctness tests, and their dominant cost
@@ -123,6 +148,7 @@ use std::process::Command;
 
 use prikk_object::{NodeId, NodeKind, ObjectId};
 use prikk_replay::{LiveNode, NodeContent, NodeLifecycleState, RepoPath};
+use prikk_store::{ObjectReadSnapshot, ObjectWriteSession, RepositoryLayout};
 
 mod support;
 
@@ -430,6 +456,84 @@ fn measure_lifecycle_state_probe_rss_kib(node_count: usize) -> i64 {
         &current_exe,
         &["lifecycle_state_probe_worker", "--exact", "--ignored"],
         &[("PRIKK_LIFECYCLE_PROBE_NODE_COUNT", &node_count_arg)],
+    )
+}
+
+/// `foundation/index.rs`'s own record layout: `INDEX_HEADER_LEN` (8+2+8+32=50) +
+/// `INDEX_BODY_LEN` (32+2+1+8+8+32=83) = 133, fixed-width, no length-prefixing inside the body.
+/// Confirmed at source and cross-checked against the attribution round's own measured 133-137
+/// bytes/node for this same file.
+const INDEX_RECORD_BYTES: u64 = 133;
+
+/// The exact count of objects `containers/index.container` currently indexes, derived from its
+/// fixed-width record size rather than assumed equal to node count (§6d.1's own instruction: N nodes
+/// produce blobs, patches, blocks, and ref states, so the index holds more entries than N).
+fn indexed_object_count(root: &Path) -> u64 {
+    let bytes = object_index_file_size(root)
+        .unwrap_or_else(|| panic!("no containers/index.container under {}", root.display()));
+    assert_eq!(
+        bytes % INDEX_RECORD_BYTES,
+        0,
+        "containers/index.container size {bytes} is not a whole number of {INDEX_RECORD_BYTES}-byte records"
+    );
+    bytes / INDEX_RECORD_BYTES
+}
+
+/// Fresh-process worker for §6d.1's resident-object-index probe: does nothing unless
+/// `PRIKK_OBJECT_INDEX_PROBE_MODE` is set (`"read"` or `"write"`), in which case it opens the named
+/// repository's real object index through the public API the commit/verify paths themselves use
+/// (`ObjectReadSnapshot::open` / `ObjectWriteSession::open`) and exits. Neither `open()` call writes
+/// anything or acquires a lock (confirmed at source: both only decode the index), so this is safe to
+/// run repeatedly against the same repository -- no mutation between samples.
+#[test]
+#[ignore = "internal worker process for rfc133_node_count_memory_object_index; never run directly"]
+fn object_index_probe_worker() {
+    let Ok(mode) = std::env::var("PRIKK_OBJECT_INDEX_PROBE_MODE") else {
+        return;
+    };
+    let repo_root = std::env::var("PRIKK_OBJECT_INDEX_PROBE_REPO").expect(
+        "PRIKK_OBJECT_INDEX_PROBE_REPO must be set alongside PRIKK_OBJECT_INDEX_PROBE_MODE",
+    );
+    let layout = RepositoryLayout::new(&repo_root).expect("opening the probed repository's layout");
+    match mode.as_str() {
+        "read" => {
+            let snapshot = ObjectReadSnapshot::open(&layout).expect("ObjectReadSnapshot::open");
+            std::hint::black_box(&snapshot);
+        }
+        "write" => {
+            let session = ObjectWriteSession::open(&layout).expect("ObjectWriteSession::open");
+            std::hint::black_box(&session);
+        }
+        other => panic!("unrecognized PRIKK_OBJECT_INDEX_PROBE_MODE {other:?}"),
+    }
+}
+
+/// Run the object-index probe worker against `repo_root` in `mode` (`"read"` or `"write"`) and
+/// return its peak RSS in KiB. Pass `repo_root` as `CARGO_MANIFEST_DIR` and no mode set (via
+/// `measure_object_index_probe_floor_rss_kib`) for the floor.
+fn measure_object_index_probe_rss_kib(repo_root: &Path, mode: &str) -> i64 {
+    let current_exe = std::env::current_exe().expect("this test binary's own path");
+    let repo_root_arg = repo_root.to_string_lossy().into_owned();
+    run_rusage_child(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &current_exe,
+        &["object_index_probe_worker", "--exact", "--ignored"],
+        &[
+            ("PRIKK_OBJECT_INDEX_PROBE_MODE", mode),
+            ("PRIKK_OBJECT_INDEX_PROBE_REPO", &repo_root_arg),
+        ],
+    )
+}
+
+/// The floor: the same worker binary, launched the same way, with no mode set so it no-ops --
+/// process-startup cost only, nothing repository-related.
+fn measure_object_index_probe_floor_rss_kib() -> i64 {
+    let current_exe = std::env::current_exe().expect("this test binary's own path");
+    run_rusage_child(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &current_exe,
+        &["object_index_probe_worker", "--exact", "--ignored"],
+        &[],
     )
 }
 
@@ -917,6 +1021,146 @@ fn rfc133_node_count_memory_attribution_linux() {
     let report_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../rfcs/handoffs/133-performance-cost-and-its-evidence/node-count-memory-attribution-report-v1.md"
+    );
+    std::fs::write(report_path, report).unwrap();
+    eprintln!("report written to {report_path}");
+}
+
+/// One node-count point's resident-index measurement: both probe modes' RSS series and the exact
+/// indexed-object count the repository held when they were taken.
+struct ObjectIndexPoint {
+    node_count: usize,
+    indexed_objects: u64,
+    read_snapshot: RssSeries,
+    write_session: RssSeries,
+}
+
+fn render_object_index_report(floor_kib: i64, points: &[ObjectIndexPoint]) -> String {
+    let mut out = String::new();
+    out.push_str("# RFC 133 §6d.1 — the object index's resident cost, report v1\n\n");
+    out.push_str("Generated by `cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_object_index`.\n");
+    out.push_str("Re-running that exact command regenerates this file. Comparing this series against the attribution round's own residual is this round's own deliverable and is done by hand in the narrative report, not baked into this file, so this file does not go stale if the attribution report is ever regenerated on different hardware.\n\n");
+    out.push_str(&format!("Revision measured at: `{}`. Release build, Linux, worktrees under a `tmpfs` temp directory, peak RSS from `getrusage(RUSAGE_CHILDREN).ru_maxrss`. {SAMPLES_PER_POINT} samples per point. Process-startup floor (no repository opened), median = {floor_kib} KiB.\n\n", git_revision()));
+
+    out.push_str("| N | indexed objects | (read) min/median/max KiB | (read) growth over floor | (write) min/median/max KiB | (write) growth over floor |\n");
+    out.push_str("|---|---|---|---|---|---|\n");
+    for point in points {
+        out.push_str(&format!(
+            "| {} | {} | {}/{}/{} | {} | {}/{}/{} | {} |\n",
+            point.node_count,
+            point.indexed_objects,
+            point.read_snapshot.min(),
+            point.read_snapshot.median(),
+            point.read_snapshot.max(),
+            point.read_snapshot.median() - floor_kib,
+            point.write_session.min(),
+            point.write_session.median(),
+            point.write_session.max(),
+            point.write_session.median() - floor_kib,
+        ));
+    }
+    out.push('\n');
+
+    out
+}
+
+/// §6d.1 — the object index's resident cost. Does not re-run the attribution round; builds its own
+/// repositories (one per N, reused across every read/write sample -- neither `open()` mutates
+/// anything) and measures `ObjectReadSnapshot`/`ObjectWriteSession` held live, through their public
+/// API, against a real object index. See module docs for why no visibility change or synthetic
+/// reconstruction was needed.
+#[test]
+#[ignore = "long-running measurement instrument; run deliberately, see module docs"]
+fn rfc133_node_count_memory_object_index() {
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!(
+            "skipping object-index resident-cost measurement: verified on Linux only, matching \
+             this file's other instruments; see module docs"
+        );
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    rfc133_node_count_memory_object_index_linux();
+}
+
+#[cfg(target_os = "linux")]
+fn rfc133_node_count_memory_object_index_linux() {
+    if !Path::new(RUSAGE_CHILD_SCRIPT).exists() {
+        panic!("rusage_child.py not found at {RUSAGE_CHILD_SCRIPT}");
+    }
+    let probe = Command::new("python3").arg("--version").output();
+    if probe.is_err() || !probe.unwrap().status.success() {
+        eprintln!(
+            "skipping object-index resident-cost measurement: python3 is not on PATH (see module docs)"
+        );
+        return;
+    }
+
+    let mut floor_samples = Vec::with_capacity(SAMPLES_PER_POINT);
+    for _ in 0..SAMPLES_PER_POINT {
+        floor_samples.push(measure_object_index_probe_floor_rss_kib());
+    }
+    let floor_series = RssSeries {
+        node_count: 0,
+        peak_kib: floor_samples,
+    };
+    let floor_kib = floor_series.median();
+    eprintln!("object-index probe floor: {:?} KiB", floor_series.peak_kib);
+
+    let mut points = Vec::new();
+    for &node_count in &NODE_COUNTS {
+        let root = unique_dir(&format!("object-index-{node_count}"));
+        std::fs::create_dir_all(&root).unwrap();
+        support::init(&root);
+        let seed = CONTENT_SEED
+            .wrapping_add(0xC000_0000)
+            .wrapping_add(node_count as u64);
+        let mut rng = SplitMix64::new(seed);
+        let files = generate_tree(&root, node_count, &mut rng);
+        support::ok(
+            &support::commit(&root, "heads/main", "rfc133-object-index: baseline"),
+            "baseline commit",
+        );
+        support::ok(&support::seal(&root, "heads/main"), "baseline seal");
+        mutate_one_file(&root, &files, &mut rng);
+        support::ok(
+            &support::commit(&root, "heads/main", "rfc133-object-index: incremental"),
+            "incremental commit",
+        );
+
+        let indexed_objects = indexed_object_count(&root);
+
+        let mut read_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+        for _ in 0..SAMPLES_PER_POINT {
+            read_kib.push(measure_object_index_probe_rss_kib(&root, "read"));
+        }
+        let mut write_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+        for _ in 0..SAMPLES_PER_POINT {
+            write_kib.push(measure_object_index_probe_rss_kib(&root, "write"));
+        }
+        eprintln!(
+            "object-index N={node_count}: indexed_objects={indexed_objects}, read {read_kib:?} KiB, write {write_kib:?} KiB"
+        );
+        points.push(ObjectIndexPoint {
+            node_count,
+            indexed_objects,
+            read_snapshot: RssSeries {
+                node_count,
+                peak_kib: read_kib,
+            },
+            write_session: RssSeries {
+                node_count,
+                peak_kib: write_kib,
+            },
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    let report = render_object_index_report(floor_kib, &points);
+    let report_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../rfcs/handoffs/133-performance-cost-and-its-evidence/object-index-resident-cost-report-v1.md"
     );
     std::fs::write(report_path, report).unwrap();
     eprintln!("report written to {report_path}");
