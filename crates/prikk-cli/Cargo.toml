@@ -23,8 +23,14 @@ prikk-store                 = { workspace = true }
 # `test-support` is a non-default feature on `prikk-store` (design-v1.md §13.9): it is compiled only
 # because these integration tests need it, never in the shipped binary above -- Cargo unifies the
 # feature into the `prikk-store` build used by `tests/`, not into `src/`'s own build.
+#
+# `prikk-replay` (RFC 133 §6c.2): `rfc133_node_count_memory.rs`'s attribution round constructs a
+# synthetic `NodeLifecycleState` via its own public `create_node` API to measure the structure's
+# in-memory cost in isolation -- test-only, same reasoning as `prikk-store`'s own `test-support`
+# feature above; never reachable from `src/`, which does not depend on `prikk-replay` at all.
 [dev-dependencies]
 prikk-store                 = { workspace = true, features = ["test-support"] }
+prikk-replay                 = { workspace = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ version }/prikk-{ target }.tar.gz"

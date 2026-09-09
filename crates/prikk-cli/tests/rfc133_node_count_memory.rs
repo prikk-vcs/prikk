@@ -62,6 +62,42 @@
 //!
 //! File size is held at the constant §2 used (256 bytes) so only the node-count axis moves.
 //!
+//! ## §6c.2 — attribution (`rfc133_node_count_memory_attribution`)
+//!
+//! Step 1's own control found that `lifecycle-state.v1` is linear in `N` from the very first point
+//! with **no** departure, and is ~11x smaller per node than the RSS growth it was checked against —
+//! so it does not explain either the shape or the magnitude of the departure. This second driver
+//! test (same file, same shared helpers, per the attribution handoff's own instruction not to build
+//! a third instrument) measures three named candidates and reports what is left over:
+//!
+//! - **(a) `NodeLifecycleState`'s own in-memory cost, isolated.** `lifecycle_state_probe_worker`
+//!   (below) is a second self-reexec worker, invoked the same way the measured `commit` is (a fresh
+//!   process per sample, via `rusage_child.py`) — except what it does is build a synthetic state of
+//!   exactly `N` live nodes through the type's own public `create_node` API
+//!   (`prikk_replay::NodeLifecycleState`, hence this file's new `[dev-dependencies]` edge) and exit.
+//!   Nothing else runs in that process, so its peak RSS *is* the structure's own in-memory cost —
+//!   measured against a same-process `N=0` floor, never described as the structure's theoretical
+//!   packed size (the handoff's own caution: allocator behaviour, page granularity, and
+//!   `BTreeMap`/`BTreeSet` node overhead all sit between "bytes the structure logically needs" and
+//!   "RSS the process shows", and this measures the latter, honestly).
+//! - **(b) `.prikk/cache/commit-index.v1`'s own growth.** Read off the same measured commits step 1's
+//!   own incremental series already runs — no new repositories, no new commits.
+//! - **(c) A third grower, found by sweeping rather than assumed absent.** `containers/index.container`
+//!   (`FileObjectStore`'s own object index, `foundation/index.rs`) is loaded **wholesale** into a
+//!   `Vec<IndexEntry>` on every write session (`object_store.rs`'s `IndexSnapshot::open`) — confirmed
+//!   at source, the same standard `AUD-01` was originally read at — and its file size scales with `N`
+//!   too. `IndexEntry` itself is `pub(crate)` inside `prikk-store`; reaching it from here would need
+//!   either a production visibility change (forbidden this round) or a second instrument inside that
+//!   crate (disproportionate for a sweep), so this gets the same treatment (b) gets — a real measured
+//!   file-size series — not an isolated RSS probe. A full recursive walk of `.prikk/` after one
+//!   measured commit at each `N` (`sweep_prikk_tree`) backs the claim that nothing else scales
+//!   meaningfully beyond what is named here, rather than leaving it assumed.
+//!
+//! **The residual is computed honestly, not maximally.** Only (a) is RSS-commensurate (both sides
+//! are `getrusage` readings), so only (a) is subtracted from measured RSS growth to produce the
+//! residual row. (b) and (c) are disk-byte series, reported alongside for context, never subtracted
+//! from an RSS quantity as though the two units were interchangeable without further evidence.
+//!
 //! ## Running it
 //!
 //! **Must be run with `--release`** — the handoff requires a release build, matching §2.1's own
@@ -72,16 +108,21 @@
 //!
 //! ```text
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory
+//! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_attribution
 //! ```
 //!
-//! `#[ignore]`d: this is a measurement instrument, not a correctness test, and its dominant cost
-//! (repositories up to tens of thousands of files, three samples per point, two series) does not
-//! belong in the default suite.
+//! `#[ignore]`d: these are measurement instruments, not correctness tests, and their dominant cost
+//! (repositories up to tens of thousands of files, three samples per point) does not belong in the
+//! default suite.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use prikk_object::{NodeId, NodeKind, ObjectId};
+use prikk_replay::{LiveNode, NodeContent, NodeLifecycleState, RepoPath};
 
 mod support;
 
@@ -226,24 +267,76 @@ fn cache_file_size(root: &Path) -> Option<u64> {
         .map(|metadata| metadata.len())
 }
 
+/// §6c.2(b): `.prikk/cache/commit-index.v1`, DC-56's own changed-path cache -- loaded wholesale by
+/// `CommitIndex::load` on every commit (`commit_index.rs`), read off the same measured commit
+/// `cache_file_size` reads its own file from, no new repository or commit needed.
+fn commit_index_file_size(root: &Path) -> Option<u64> {
+    std::fs::metadata(root.join(".prikk/cache/commit-index.v1"))
+        .ok()
+        .map(|metadata| metadata.len())
+}
+
+/// §6c.2(c): `.prikk/containers/index.container`, the object store's own location index --
+/// confirmed at source (`object_store.rs`'s `IndexSnapshot::open`) to be decoded wholesale into a
+/// `Vec<IndexEntry>` on every write session, the found-by-sweeping third candidate this round adds.
+fn object_index_file_size(root: &Path) -> Option<u64> {
+    std::fs::metadata(root.join(".prikk/containers/index.container"))
+        .ok()
+        .map(|metadata| metadata.len())
+}
+
+/// §3's own "sweep for a third": every file under `.prikk/`, path (relative to `.prikk/`) to byte
+/// size. Backs the claim that (a)/(b)/(c) are not an arbitrarily curated list -- the report compares
+/// this snapshot at the smallest and largest `N` and names every path whose size moved.
+fn sweep_prikk_tree(root: &Path) -> BTreeMap<String, u64> {
+    fn walk(dir: &Path, prikk_root: &Path, out: &mut BTreeMap<String, u64>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, prikk_root, out);
+            } else if let Ok(metadata) = entry.metadata() {
+                let relative = path
+                    .strip_prefix(prikk_root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                out.insert(relative, metadata.len());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    let prikk_dir = root.join(".prikk");
+    walk(&prikk_dir, &prikk_dir, &mut out);
+    out
+}
+
 const RUSAGE_CHILD_SCRIPT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/rusage_child.py");
 
-/// Run one measured `prikk commit --ref <ref_name> -m <message>` against `root` via
-/// `rusage_child.py` (see module docs) and return its peak `RUSAGE_CHILDREN` RSS in KiB.
-fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
-    let output = Command::new("python3")
+/// Spawn `binary args...` at `cwd` via `rusage_child.py` (see module docs -- one fresh process per
+/// measurement, so `RUSAGE_CHILDREN`'s running maximum never carries between samples), with `envs`
+/// set on the `python3` invocation so they are inherited by whatever it spawns. Returns the child's
+/// peak `RUSAGE_CHILDREN` RSS in KiB. Shared by the measured-commit and lifecycle-state-probe
+/// measurements below -- one plumbing implementation, not two.
+fn run_rusage_child(cwd: &Path, binary: &Path, args: &[&str], envs: &[(&str, &str)]) -> i64 {
+    let mut command = Command::new("python3");
+    command
         .arg(RUSAGE_CHILD_SCRIPT)
-        .arg(root)
-        .arg(env!("CARGO_BIN_EXE_prikk"))
-        .args(["commit", "--ref", ref_name, "-m", message])
-        .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .arg(cwd)
+        .arg(binary)
+        .args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command
         .output()
         .expect("spawning rusage_child.py -- is python3 on PATH?");
     assert!(
         output.status.success(),
-        "measured commit failed (status {:?})\nstdout: {}\nstderr: {}",
+        "measured child failed (status {:?})\nstdout: {}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -257,6 +350,87 @@ fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
                 String::from_utf8_lossy(&output.stdout)
             )
         })
+}
+
+/// Run one measured `prikk commit --ref <ref_name> -m <message>` against `root` and return its peak
+/// `RUSAGE_CHILDREN` RSS in KiB.
+fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
+    run_rusage_child(
+        root,
+        Path::new(env!("CARGO_BIN_EXE_prikk")),
+        &["commit", "--ref", ref_name, "-m", message],
+        &[
+            ("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID),
+            ("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX),
+        ],
+    )
+}
+
+/// Build a synthetic `NodeLifecycleState` with exactly `node_count` live text-file nodes, through
+/// the type's own public `create_node` API (`prikk_replay::node_lifecycle::mutation`) -- the same
+/// entry point real replay uses, not a second, ad hoc way to populate the structure. Content is
+/// synthetic (a deterministic, non-zero `NodeId`/`ObjectId` pair per index) since this measures the
+/// state's own bookkeeping cost, not blob content, which is never held here.
+fn build_synthetic_lifecycle_state(node_count: usize) -> NodeLifecycleState {
+    let mut state = NodeLifecycleState::new();
+    for index in 0..node_count {
+        let counter = (index as u64) + 1; // NodeId::from_bytes([0; 32]) is the reserved zero id
+        let mut id_bytes = [0_u8; 32];
+        id_bytes[..8].copy_from_slice(&counter.to_le_bytes());
+        let node_id = NodeId::from_bytes(id_bytes);
+        let mut blob_bytes = [0_u8; 32];
+        blob_bytes[..8].copy_from_slice(&counter.to_le_bytes());
+        blob_bytes[8] = 0x01; // distinct from node_id's own bytes; otherwise immaterial
+        let blob_id = ObjectId::from_bytes(blob_bytes);
+        let path = RepoPath::parse(&format!("f{index}.txt")).expect("valid synthetic path");
+        let node = LiveNode {
+            path,
+            kind: NodeKind::TextFile,
+            content: NodeContent::File {
+                blob_id,
+                mode: 0o100644,
+            },
+        };
+        state
+            .create_node(node_id, node)
+            .expect("synthetic node creation must succeed");
+    }
+    state
+}
+
+/// Fresh-process worker for §6c.2(a)'s isolated `NodeLifecycleState` probe: does nothing unless
+/// `PRIKK_LIFECYCLE_PROBE_NODE_COUNT` is set, in which case it builds a synthetic state of exactly
+/// that many nodes and exits. `rusage_child.py` measures this process's own peak RSS from the
+/// outside (see module docs) -- this function never reads `getrusage` itself, and needs no `unsafe`.
+#[test]
+#[ignore = "internal worker process for rfc133_node_count_memory_attribution; never run directly"]
+fn lifecycle_state_probe_worker() {
+    let Ok(node_count) = std::env::var("PRIKK_LIFECYCLE_PROBE_NODE_COUNT") else {
+        return;
+    };
+    let node_count: usize = node_count
+        .parse()
+        .expect("PRIKK_LIFECYCLE_PROBE_NODE_COUNT must be a non-negative integer");
+    let state = build_synthetic_lifecycle_state(node_count);
+    // The peak RSS this process reaches while building `state` is what the caller measures; whether
+    // `state` is still alive at the moment the process actually exits does not change that peak
+    // (freed heap pages are not typically returned to the OS immediately). `black_box` only prevents
+    // the optimizer from proving the loop above has no observable effect and eliding it entirely.
+    std::hint::black_box(&state);
+}
+
+/// Run the lifecycle-state probe worker for `node_count` (`0` is the floor: same process startup,
+/// zero synthetic nodes) and return its peak RSS in KiB.
+fn measure_lifecycle_state_probe_rss_kib(node_count: usize) -> i64 {
+    let current_exe = std::env::current_exe().expect("this test binary's own path");
+    let node_count_arg = node_count.to_string();
+    // The worker touches no files, so any valid directory works as its `cwd`.
+    run_rusage_child(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &current_exe,
+        &["lifecycle_state_probe_worker", "--exact", "--ignored"],
+        &[("PRIKK_LIFECYCLE_PROBE_NODE_COUNT", &node_count_arg)],
+    )
 }
 
 // ---- Reporting. ----
@@ -358,6 +532,122 @@ fn render_report(
             series.min(),
             series.median(),
             series.max()
+        ));
+    }
+    out.push('\n');
+
+    out
+}
+
+/// A snapshot of every file under `.prikk/` at one `N` (`sweep_prikk_tree`'s own output), kept
+/// alongside the node count it was taken at so the report can compare the smallest and largest.
+struct SweepSnapshot {
+    node_count: usize,
+    sizes: BTreeMap<String, u64>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_attribution_report(
+    floor_kib: i64,
+    isolated_floor_kib: i64,
+    incremental_rss: &[RssSeries],
+    isolated_probe: &[RssSeries],
+    commit_index: &[CacheSeries],
+    object_index: &[CacheSeries],
+    sweep_smallest: &SweepSnapshot,
+    sweep_largest: &SweepSnapshot,
+) -> String {
+    let mut out = String::new();
+    out.push_str("# RFC 133 §6c.2 — node-count memory attribution, report v1\n\n");
+    out.push_str("Generated by `cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_attribution`.\n");
+    out.push_str("Re-running that exact command regenerates this file. Follows step 1's own report (`node-count-memory-measurement-report-v1.md`); same method, same ladder.\n\n");
+    out.push_str(&format!("Revision measured at: `{}`. Release build, Linux, worktrees under a `tmpfs` temp directory, peak RSS from `getrusage(RUSAGE_CHILDREN).ru_maxrss` (via `tests/support/rusage_child.py`). {SAMPLES_PER_POINT} samples per point.\n\n", git_revision()));
+
+    out.push_str("## Attribution table — the residual is the result\n\n");
+    out.push_str(&format!(
+        "Baseline (floor): incremental RSS at N=100, median = {floor_kib} KiB. Isolated-probe floor \
+         (N=0 synthetic nodes, same process shape): median = {isolated_floor_kib} KiB. Only (a) is \
+         subtracted from RSS growth below -- it is the only column in the same units \
+         (`getrusage` KiB); (b)/(c) are disk-byte series, shown separately, never assumed \
+         RSS-equivalent.\n\n"
+    ));
+    out.push_str("| N | RSS growth (KiB) | (a) isolated NodeLifecycleState growth (KiB) | residual = RSS growth − (a) (KiB) | (b) commit-index.v1 (bytes) | (c) object index.container (bytes) |\n");
+    out.push_str("|---|---|---|---|---|---|\n");
+    for node_count in NODE_COUNTS {
+        let rss = incremental_rss
+            .iter()
+            .find(|series| series.node_count == node_count)
+            .unwrap();
+        let isolated = isolated_probe
+            .iter()
+            .find(|series| series.node_count == node_count)
+            .unwrap();
+        let commit_idx = commit_index
+            .iter()
+            .find(|series| series.node_count == node_count)
+            .unwrap();
+        let object_idx = object_index
+            .iter()
+            .find(|series| series.node_count == node_count)
+            .unwrap();
+        let rss_growth = rss.median() - floor_kib;
+        let isolated_growth = isolated.median() - isolated_floor_kib;
+        let residual = rss_growth - isolated_growth;
+        out.push_str(&format!(
+            "| {node_count} | {rss_growth} | {isolated_growth} | {residual} | {} | {} |\n",
+            commit_idx.median(),
+            object_idx.median(),
+        ));
+    }
+
+    out.push_str("\n## (a) Isolated `NodeLifecycleState` probe — full series\n\n");
+    out.push_str("Fresh process per sample, builds exactly N synthetic live nodes via `create_node` and exits; nothing else runs in that process. `N=0` is the same-shape floor.\n\n");
+    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
+    out.push_str(&format!("| 0 (floor) | — | {isolated_floor_kib} | — |\n"));
+    for series in isolated_probe {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            series.node_count,
+            series.min(),
+            series.median(),
+            series.max()
+        ));
+    }
+
+    out.push_str("\n## (c) Object index (`.prikk/containers/index.container`) — full series\n\n");
+    out.push_str("`IndexSnapshot::open` (`object_store.rs`) decodes this file into a `Vec<IndexEntry>` on every write session -- confirmed at source, not assumed.\n\n");
+    out.push_str("| N | min (bytes) | median (bytes) | max (bytes) |\n|---|---|---|---|\n");
+    for series in object_index {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            series.node_count,
+            series.min(),
+            series.median(),
+            series.max()
+        ));
+    }
+
+    out.push_str("\n## §3's sweep — every file under `.prikk/`, smallest N vs largest N\n\n");
+    out.push_str(&format!(
+        "N={} vs N={}. Every path present in either snapshot; `-` means the path did not exist at \
+         that N (its container pair had not been allocated yet).\n\n",
+        sweep_smallest.node_count, sweep_largest.node_count
+    ));
+    out.push_str("| path | size at smallest N | size at largest N | ratio |\n|---|---|---|---|\n");
+    let mut paths: std::collections::BTreeSet<&String> = sweep_smallest.sizes.keys().collect();
+    paths.extend(sweep_largest.sizes.keys());
+    for path in paths {
+        let small = sweep_smallest.sizes.get(path).copied();
+        let large = sweep_largest.sizes.get(path).copied();
+        let ratio = match (small, large) {
+            (Some(s), Some(l)) if s > 0 => format!("{:.1}x", l as f64 / s as f64),
+            (Some(0), Some(l)) if l > 0 => "0->nonzero".to_string(),
+            _ => "-".to_string(),
+        };
+        out.push_str(&format!(
+            "| {path} | {} | {} | {ratio} |\n",
+            small.map_or("-".to_string(), |v| v.to_string()),
+            large.map_or("-".to_string(), |v| v.to_string()),
         ));
     }
     out.push('\n');
@@ -468,6 +758,165 @@ fn rfc133_node_count_memory_linux() {
     let report_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../rfcs/handoffs/133-performance-cost-and-its-evidence/node-count-memory-measurement-report-v1.md"
+    );
+    std::fs::write(report_path, report).unwrap();
+    eprintln!("report written to {report_path}");
+}
+
+/// §6c.2 — attribution. Does not re-run step 1's genesis series (out of scope here); reuses the
+/// incremental series' own repositories and measured commits to also read (b)/(c), and adds the
+/// isolated `NodeLifecycleState` probe series (a). See module docs for what each column means and
+/// why only (a) is subtracted from RSS growth in the residual.
+#[test]
+#[ignore = "long-running measurement instrument; run deliberately, see module docs"]
+fn rfc133_node_count_memory_attribution() {
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!(
+            "skipping node-count memory attribution: verified on Linux only, matching step 1's own \
+             instrument; see module docs"
+        );
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    rfc133_node_count_memory_attribution_linux();
+}
+
+#[cfg(target_os = "linux")]
+fn rfc133_node_count_memory_attribution_linux() {
+    if !Path::new(RUSAGE_CHILD_SCRIPT).exists() {
+        panic!("rusage_child.py not found at {RUSAGE_CHILD_SCRIPT}");
+    }
+    let probe = Command::new("python3").arg("--version").output();
+    if probe.is_err() || !probe.unwrap().status.success() {
+        eprintln!(
+            "skipping node-count memory attribution: python3 is not on PATH (see module docs)"
+        );
+        return;
+    }
+
+    // (a): the isolated NodeLifecycleState probe, including the N=0 floor.
+    let mut isolated_floor_samples = Vec::with_capacity(SAMPLES_PER_POINT);
+    for _ in 0..SAMPLES_PER_POINT {
+        isolated_floor_samples.push(measure_lifecycle_state_probe_rss_kib(0));
+    }
+    let isolated_floor_series = RssSeries {
+        node_count: 0,
+        peak_kib: isolated_floor_samples,
+    };
+    let isolated_floor_kib = isolated_floor_series.median();
+    eprintln!(
+        "isolated probe floor (N=0): {:?} KiB",
+        isolated_floor_series.peak_kib
+    );
+
+    let mut isolated_probe_series = Vec::new();
+    for &node_count in &NODE_COUNTS {
+        let mut peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+        for _ in 0..SAMPLES_PER_POINT {
+            peak_kib.push(measure_lifecycle_state_probe_rss_kib(node_count));
+        }
+        eprintln!("isolated probe N={node_count}: {peak_kib:?} KiB");
+        isolated_probe_series.push(RssSeries {
+            node_count,
+            peak_kib,
+        });
+    }
+
+    // (b), (c), and the sweep: reuse the incremental series' own repository generation, adding two
+    // more file reads to each already-measured commit and one full directory sweep per N (taken
+    // from sample 0 only -- §6b.3 step 1 already established these files are deterministic in size
+    // given N and the touched-path shape, not sample noise).
+    let mut incremental_rss_series = Vec::new();
+    let mut commit_index_series = Vec::new();
+    let mut object_index_series = Vec::new();
+    let mut sweep_by_node_count: BTreeMap<usize, BTreeMap<String, u64>> = BTreeMap::new();
+    for &node_count in &NODE_COUNTS {
+        let mut peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+        let mut commit_index_bytes = Vec::with_capacity(SAMPLES_PER_POINT);
+        let mut object_index_bytes = Vec::with_capacity(SAMPLES_PER_POINT);
+        for sample_index in 0..SAMPLES_PER_POINT {
+            let root = unique_dir(&format!("attribution-{node_count}-{sample_index}"));
+            std::fs::create_dir_all(&root).unwrap();
+            support::init(&root);
+            let seed = CONTENT_SEED
+                .wrapping_add(0x4000_0000)
+                .wrapping_add(node_count as u64)
+                .wrapping_add(sample_index as u64);
+            let mut rng = SplitMix64::new(seed);
+            let files = generate_tree(&root, node_count, &mut rng);
+            support::ok(
+                &support::commit(&root, "heads/main", "rfc133-attribution: baseline"),
+                "baseline commit",
+            );
+            support::ok(&support::seal(&root, "heads/main"), "baseline seal");
+            mutate_one_file(&root, &files, &mut rng);
+
+            let kib =
+                measure_commit_rss_kib(&root, "heads/main", "rfc133-attribution: incremental");
+            peak_kib.push(kib);
+            commit_index_bytes.push(commit_index_file_size(&root).unwrap_or_else(|| {
+                panic!(
+                    "no commit-index.v1 cache file after an incremental commit at N={node_count}"
+                )
+            }));
+            object_index_bytes.push(object_index_file_size(&root).unwrap_or_else(|| {
+                panic!(
+                    "no containers/index.container after an incremental commit at N={node_count}"
+                )
+            }));
+            if sample_index == 0 {
+                sweep_by_node_count.insert(node_count, sweep_prikk_tree(&root));
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        eprintln!(
+            "attribution N={node_count}: RSS {peak_kib:?} KiB, commit-index {commit_index_bytes:?} bytes, object-index {object_index_bytes:?} bytes"
+        );
+        incremental_rss_series.push(RssSeries {
+            node_count,
+            peak_kib,
+        });
+        commit_index_series.push(CacheSeries {
+            node_count,
+            bytes: commit_index_bytes,
+        });
+        object_index_series.push(CacheSeries {
+            node_count,
+            bytes: object_index_bytes,
+        });
+    }
+
+    let floor_kib = incremental_rss_series
+        .iter()
+        .find(|series| series.node_count == NODE_COUNTS[0])
+        .expect("NODE_COUNTS[0] must have its own series")
+        .median();
+
+    let smallest_n = *NODE_COUNTS.iter().min().unwrap();
+    let largest_n = *NODE_COUNTS.iter().max().unwrap();
+    let sweep_smallest = SweepSnapshot {
+        node_count: smallest_n,
+        sizes: sweep_by_node_count.remove(&smallest_n).unwrap(),
+    };
+    let sweep_largest = SweepSnapshot {
+        node_count: largest_n,
+        sizes: sweep_by_node_count.remove(&largest_n).unwrap(),
+    };
+
+    let report = render_attribution_report(
+        floor_kib,
+        isolated_floor_kib,
+        &incremental_rss_series,
+        &isolated_probe_series,
+        &commit_index_series,
+        &object_index_series,
+        &sweep_smallest,
+        &sweep_largest,
+    );
+    let report_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../rfcs/handoffs/133-performance-cost-and-its-evidence/node-count-memory-attribution-report-v1.md"
     );
     std::fs::write(report_path, report).unwrap();
     eprintln!("report written to {report_path}");
