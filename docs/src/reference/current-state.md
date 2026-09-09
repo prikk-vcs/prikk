@@ -66,6 +66,11 @@ A few things worth knowing about these numbers before relying on them:
   profiles, chosen deliberately at opposite ends of one axis but also differing 46x in breadth from
   each other, so results are bracketed by two shapes rather than interpolated across every shape a
   real repository might have.
+- The three shapes do not rest on equal evidence. The commit-memory figures come from three samples
+  at each of seven repository sizes, out to 64,000 files. The checkout and merge-evidence exponents
+  come from a purpose-built history ladder reaching depth 256. The sealing exponent comes from a
+  single run reaching depth 128 — so of the three, treat the sealing shape as the least-supported,
+  and the one most worth confirming against your own history before relying on it.
 - Extrapolating the sealing curve to very deep history (a few thousand sealed blocks) lands
   somewhere between roughly 23 and 101 hours, depending on which points the extrapolation is fit
   from — that range is a **projection**, not a measurement; that depth has never actually been
