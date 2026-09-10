@@ -398,6 +398,13 @@ These apply to all work above and are not restated in each handoff.
    "Touching cfg-gated code" includes **adding un-gated code to a file that already contains cfg gating** —
    that is precisely how platform-conditional dead code appears, and it adds no `cfg` line to the diff for
    anyone to notice. A round that says nothing has not established that the rule did not apply.
+
+   **DEMONSTRATED 2026-09-10 at `72f8c60f` (RFC 131 §6d.8) — the addendum bites, with a number.** Every
+   prior report had shown it *passing*, which says nothing about whether it can fail. Breaking one
+   narrowing deliberately in a detached worktree — `MacosDurability` one visibility level further —
+   produced **3 errors under `--target x86_64-apple-darwin` (`E0364`, `E0432`, `E0603`) and 0 on the
+   Linux host.** On a visibility change to `cfg(target_os)`-gated code, the two cross-target runs are not
+   redundancy over the canonical set: **they are the only checks that compile the code at all.**
 10. **Report counts before and after.** Test counts per touched crate, and locked package count where
     dependencies change, so no silent loss or growth can hide.
 

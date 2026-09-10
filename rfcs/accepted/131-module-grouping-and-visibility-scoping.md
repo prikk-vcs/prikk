@@ -709,6 +709,59 @@ accuracy finding, not an access-surface finding.**
 `refs/verify.rs`, which would have made `refs::container`'s two names narrowable; it is `crate::verify`,
 the top-level module. An ambiguous path nearly produced a finding that was not there.
 
+### 6d.8 CLOSED 2026-09-10 — the re-export route ends at 18 names, and a name census can only over-count
+
+**Delivered at `72f8c60f`. The route is closed: 91 censused, 8 narrowable, 8 narrowed.** With
+`lifecycle_cache`'s 10 taken before the census, the route delivered **18 names, of which 16 were real
+access reductions.** Nothing eligible remains and no further sites are to be sought.
+
+#### CORRECTED — §6d.7 said 9 narrowable; it is 8, and the miss is a whole class
+
+`RootDirEntry` cannot be narrowed. `foundation/fsutil/anchored/read.rs:100` is `pub(crate) fn
+list_directory(...) -> Result<Vec<RootDirEntry>>`, and **Rust requires a function's return type to be at
+least as visible as the function.** `list_directory` has real external callers, so the type is pinned at
+`pub(crate)`. **None of those callers ever spells `RootDirEntry`** — it arrives through an inferred
+return type.
+
+**RULED — the bound this puts on any eligibility census.** A census that greps names is blind to
+**type-position reachability**, and that blindness is **one-directional**: it hides constraints that
+*forbid* narrowing, never consumers that would *permit* it. Therefore **a name census's narrowable count
+is an upper bound and only the compiler settles it**, while its load-bearing count is sound. §6d.7's
+89-of-91 stands; its 9 was an upper bound that measured 8.
+
+#### Two of the eight were bookkeeping, not reduction
+
+`analyze_pair_merge_evidence` and `pair_class_report` were already unreachable outside `patch_algebra`:
+`patch_algebra.rs:16` declares `mod report;` **privately**, and `:24`'s onward re-export carries
+`analyze_merge_evidence` and eight `MergeEvidence*` types but **neither of these two**. Same class as
+§6d.3's `node_authoring` case. The narrowing is honest — the declaration now says what was already true —
+but it is not a reduction and is not counted as one.
+
+#### PROVEN — the rule 9 cross-target addendum bites, with a number
+
+Every prior report has shown the addendum *passing*. Breaking one narrowing deliberately
+(`MacosDurability` one level further, detached worktree at `72f8c60f`):
+
+| check | result |
+|---|---|
+| `--target x86_64-apple-darwin` | **3 errors** (`E0364`, `E0432`, `E0603`) |
+| host (Linux) | **0 errors — invisible** |
+
+**Four of this round's six real narrowings sit behind a `cfg(target_os)` the host gate never compiles.**
+On a visibility change to cfg-gated code the addendum is not ceremony — it is the only check that can
+see the change at all. Recorded so the addendum is never treated as optional overhead on such a diff.
+
+#### A bare `use crate::X` is an invisible coupling edge to a reader
+
+Perturbing `patch_replay -> refs` left the gate green after every qualified `crate::refs::` reference was
+removed, because `patch_replay.rs:38` imports `use crate::validate_local_branch_ref;` — a **bare
+crate-root re-export** (`lib.rs:186`) that the gate resolves back to `refs` through `reexports()`.
+
+**This is §6d.6 inverted.** There a `mod` declaration misled a *reader* while the compiler knew; here a
+bare import hides its target from a *reader* while the gate is right. **In both, the machine is correct
+and the source text is the thing that misleads** — the standing caution when a perturbation refuses to
+move a figure.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
