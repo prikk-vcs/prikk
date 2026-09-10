@@ -1,12 +1,10 @@
 # RFC 146 — `--format json` for the three listing commands
 
-**Status.** **PROPOSED 2026-09-10** by the architect, on the project owner's instruction to prepare work
-for an idle team. **Small and deliberately narrow.**
+**Status.** **ACCEPTED by the project owner 2026-09-10**, the same day it was opened. Written on the
+owner's instruction to prepare work for an idle team. **Small and deliberately narrow.**
 
-**Do not start from this record.** RFC-000 makes folder location lifecycle authority, and `proposed/`
-means the design is under review. **The companion handoff is written and must not begin until the
-project owner moves this to `accepted/`.** Recorded here rather than left implicit because the handoff
-exists before the acceptance does, which is unusual for this project.
+**The handoff is live**: `rfcs/handoffs/146-machine-readable-listings/listing-json-handoff-v1.md`. It was
+written while this RFC was still `proposed/` and carried an explicit hold; that hold is now lifted.
 
 **Author-review independence gap:** the architect authored this and will review its implementation.
 Compensated by §5's controls being fixed before any code exists.

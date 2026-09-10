@@ -2,10 +2,8 @@
 
 **Ruled:** `rfcs/proposed/146-machine-readable-listings.md`.
 
-**DO NOT START YET.** RFC 146 is in `proposed/`, and RFC-000 makes folder location lifecycle authority:
-`proposed/` means implementation should not begin. **This handoff exists ahead of its acceptance because
-the team is idle and the owner asked for the work prepared.** When RFC 146 moves to `accepted/`, start.
-**If it does not move, this handoff is void** — do not treat its existence as authorization.
+**LIVE — start.** RFC 146 was **accepted by the project owner 2026-09-10**, the same day it was opened,
+and now sits in `rfcs/accepted/`. The hold this handoff carried while the RFC was `proposed/` is lifted.
 
 ## 1. What to build
 
