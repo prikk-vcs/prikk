@@ -300,6 +300,49 @@ ordinary intra-subtree access written absolutely instead of with `super::`.
 subtree count is unmeasured. **Hold all 8 `DECLARED_CYCLES` entries, both stale hubs, and the 3 new
 undeclared hubs** until it is known.
 
+### 6c.5 RULED 2026-09-10 — generalise from pairs to subtree SCCs, the third blindness in this arc
+
+**Subtree-aware detection delivered at `74e6edc2`** and accepted. Four subtree cycles: `active↔refs`,
+`active↔worktree_patch`, `refs↔trust`, `lifecycle_cache::replay↔patch_replay`. Rule 4 is enforced
+*inside* `subtree_depends`, so an ancestor/descendant pair is structurally unreportable.
+
+**§6c.4's own table was one level too shallow, and the round re-derived it.** `lifecycle_cache.rs`
+never writes `crate::patch_replay` (0 occurrences); `patch_replay.rs` reaches
+`crate::lifecycle_cache::replay::…` and `::incremental::…`. The smallest pair is
+**`lifecycle_cache::replay ↔ patch_replay`**. §6c.4 rule 3 gave `refs`/`active` a worked derivation and
+did not give this pair the same rigour; the round noticed the asymmetry rather than matching the wording.
+
+**Rule 2's pairwise form cannot express a cycle that closes through a third node.** Verified:
+`worktree_patch → patch_replay` has **no return edge** — nothing in `patch_replay` reaches
+`worktree_patch` — so the cycle closes through `active`. Four declared entries (5 edges) are real
+coupling the mechanism cannot name.
+
+**A 3-node cycle is real coupling**: A→B→C→A means none is independently extractable, and RFC 130's
+original component was *six* modules precisely because it is a strongly connected component, not a set
+of pairs.
+
+**RULED: generalise rule 2 from pairs to strongly connected components over `subtree_depends`**, keeping
+rule 3's smallest-granularity reporting and rule 4's exclusion unchanged.
+
+### 6c.6 The pattern: three blindnesses, each revealed by fixing the last, each reporting *fewer* cycles
+
+| # | The gate could not see | Fixed by |
+|---|---|---|
+| 1 | a cycle wholly inside a group (§6a) | qualified nodes |
+| 2 | a cycle leaving a subtree through a child (§6c.4) | subtree-aware `depends` |
+| 3 | a cycle closing through a third node (§6c.5) | SCC over subtrees |
+
+**Every time, the gate reported fewer cycles than reality, and the cleaner number looked like progress.**
+
+**RULED as a standing caution for this gate: a precision change that reduces the number of findings is
+suspect until two of the vanished findings are hand-traced against the source.** That trace is cheap —
+two greps — and it is the only thing that has distinguished *resolved* from *invisible* on all three
+occasions.
+
+**The allowlist stays held.** 3 entries confirmed, 1 needs renaming
+(`lifecycle_cache↔patch_replay` → `lifecycle_cache::replay↔patch_replay`), 4 pend §6c.5. Nothing is
+added, removed or renamed until the generalisation lands.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
