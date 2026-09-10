@@ -552,6 +552,48 @@ extended past `refs`.**
 Defer all further grouping until that rate is known.** Grouping remains available (§6d) and unprohibited;
 it is simply no longer the first move.
 
+### 6d.5 CORRECTED and RULED 2026-09-10 — a re-export is not a grouping problem, and my restriction said it was
+
+**`lifecycle_cache` narrowing delivered at `a1ae661a`: 6 of 23**, with both yields identical (6 declared,
+6 actual) because `replay` is `pub(crate) mod`, not private — nothing was pre-walled.
+
+**7 are genuinely ineligible**, compiler-confirmed at their real callers. **10 were blocked by a
+restriction I wrote.**
+
+§6d.4's handoff said *"do not narrow anything declared directly in `lifecycle_cache.rs` — that one needs
+grouping."* **A `pub(crate) use` re-export is declared there and does not need grouping.** Grouping is
+required when an item's *callers* sit in a sibling module; a re-export requires only that its *consumers*
+sit inside the module. **I conflated where a declaration lives with why it is blocked.**
+
+**The structural fact underneath, verified:** `mod cache_ladder;` and `mod store_resolvers;` are
+**private**, yet `pub(crate) use cache_ladder::{…}` and `pub(crate) use store_resolvers::…`
+**republish their items crate-wide through a separate path** — so the private `mod` does **no walling**
+for those ten. Narrowing an origin alone fails with `E0364`/`E0365`, quoted verbatim by the round after
+narrowing all ten at once.
+
+**This is the same class as the `reexports()` gate bug fixed at `ec59aba7`**: declared visibility
+diverging from actual reachability — once in the gate's model of the crate, once in the crate itself.
+
+**All ten are narrowable, audited by name rather than sampled**: zero have a consumer outside
+`lifecycle_cache`, the one apparent hit being a `//!` doc comment at `wal/tests/proptest_framing.rs:6`.
+**So the ceiling is exactly 16 of 23 (70%), not 26%** — reached by editing a re-export, not by moving a
+module.
+
+**RECORDED, and missed by both the round and this section's first draft: nine of the ten are
+`#[cfg(test)]`.** `mod cache_ladder;` and its re-export both carry `#[cfg(test)]`, and the file declares
+itself test-only scaffolding; `store_resolvers` does not. **So the remaining win is 9 items of test-scope
+hygiene plus 1 production narrowing** — `StoreBackedResolver`, which the code annotates as the crate's E1
+store-access boundary, making it the one that matters. **Against production items the figures are 7 of
+14, not 16 of 23**; both belong in the record, and quoting only the larger overstates the production win
+ninefold.
+
+**RULED: narrowing a `pub(crate) use` re-export is in scope for a narrowing round**, and a narrowing
+round must report production and test-only yields separately — a `#[cfg(test)]` module's items are not
+an access-surface reduction in the shipped artifact. Both ends move together — the
+origin item and the re-export that republishes it — and eligibility is judged on the re-export's
+consumers. **Items declared directly in a module's own top-level file that are not
+re-exports remain deferred to grouping**, which is what §6b.2 actually constrains.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
