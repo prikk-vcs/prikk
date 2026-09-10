@@ -144,7 +144,7 @@ impl From<LifecycleReplayError> for PrikkError {
 /// with the correct structured class. `pub(crate)`: DC-64's incremental baseline cache
 /// (`lifecycle_cache/incremental.rs`) reads a single candidate block directly, without walking the
 /// full lineage, to decide whether it is a single-parent child of a cached predecessor.
-pub(crate) fn read_block(
+pub(in crate::lifecycle_cache) fn read_block(
     reader: &impl ObjectReader,
     block_id: ObjectId,
 ) -> Result<BlockPayload, LifecycleReplayError> {
@@ -180,7 +180,7 @@ type WalkedBlock = (ObjectId, BlockPayload);
 /// both authoritative replay and cache provenance read the lineage, so the two cannot drift on
 /// which blocks are in the window or in what order — and, since the walk returns what it read, on a
 /// file-backed store replay never re-reads a block whose contents could have changed (E4).
-pub(crate) trait LineageBlockReader {
+pub(in crate::lifecycle_cache) trait LineageBlockReader {
     /// What a single lineage-block read yields to the caller.
     type Block;
     /// Read one lineage block exactly once.
@@ -236,7 +236,7 @@ impl<R: ObjectReader> LineageBlockReader for ReaderLineage<'_, R> {
 /// provenance does not yet support merge-aware baselines (`ParentPolicy::Dc13MergeAware` is
 /// reserved for this, unused in v1). Read this function's own behaviour from the `R` its caller
 /// supplies, never assume one caller's shape from another's.
-pub(crate) fn walk_single_parent_chain<R: LineageBlockReader>(
+pub(in crate::lifecycle_cache) fn walk_single_parent_chain<R: LineageBlockReader>(
     blocks: &R,
     baseline: ObjectId,
     horizon: ObjectId,
@@ -305,7 +305,7 @@ fn walk_lineage(
 /// (`super::replay_derived_state`) wraps it through `ReplayDerivedLifecycleState::from_replay`.
 /// Every operation kind has an exact effect; blob kinds and text content are resolved through the
 /// real store-backed [`StoreBackedResolver`].
-pub(crate) fn replay_lineage(
+pub(in crate::lifecycle_cache) fn replay_lineage(
     reader: &impl ObjectReader,
     baseline: ObjectId,
     horizon: ObjectId,
@@ -320,7 +320,7 @@ pub(crate) fn replay_lineage(
 /// necessarily a stored object (see the DC-65 invariant document); a caller that needs the node's
 /// actual current bytes materializes them here, from the diff chain, exactly as this replay pass
 /// already does internally to apply later `EditText` operations against the same node.
-pub(crate) fn replay_lineage_with_materialized_text(
+pub(in crate::lifecycle_cache) fn replay_lineage_with_materialized_text(
     reader: &impl ObjectReader,
     baseline: ObjectId,
     horizon: ObjectId,
@@ -336,7 +336,7 @@ pub(crate) fn replay_lineage_with_materialized_text(
 /// to reading the node's actual current blob content, so an empty cache changes nothing about
 /// correctness. This is not a second implementation of the fold; it is the same fold's tail,
 /// executed in a separate process invocation from the rest of the lineage.
-pub(crate) fn apply_one_block(
+pub(in crate::lifecycle_cache) fn apply_one_block(
     reader: &impl ObjectReader,
     block: &BlockPayload,
     state: &mut NodeLifecycleState,
