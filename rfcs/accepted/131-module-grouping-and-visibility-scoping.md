@@ -505,6 +505,53 @@ to produce.
 **RULED: re-audit comment-aware, narrow what is genuinely eligible, and re-report the yield before any
 decision about the remaining five.** The denominator deserves the same item-level rigour as the numerator.
 
+### 6d.4 RULED 2026-09-10 — the cheap half is the bigger half: submodule narrowings need no grouping
+
+**§6d.3's re-audit closed at `fc38e853`**: all five eligible items narrowed, compiler-verified, with both
+ineligible items actually narrowed, broken at their real callers, and reverted — the negative control run
+rather than asserted.
+
+**Two corrections, one of them mine.** The 8th `pub(crate)` occurrence I flagged in the denominator is
+`commit_boundary/active.rs:113`, a **doc comment** mentioning the literal string. I criticised a raw grep
+for counting comments as code and then used one that did. Their item-level 7 was correct.
+
+**And the yield splits in two, which the round volunteered against its own headline.** `node_authoring`
+is declared `mod node_authoring;` — private — so `AuthorError` and `author_worktree_patch` were already
+unreachable from outside `worktree_patch`:
+
+- **Declared-ceiling tightening: 5 of 7 (71%).**
+- **Actual access reduction: 3 of 7 (43%).**
+
+Both matter. The two already-walled items gain **preventive** value — a later `pub(crate) mod
+node_authoring;` would re-expose them unless pinned — but a declaration that reduces no present access is
+bookkeeping, and §3's goal is coupling. **The two numbers must not be conflated.**
+
+#### 6d.4a The measurement that redirects the work
+
+**§6b.2's constraint was precise and I under-read my own words: it binds items declared *directly* in one
+of the seven.** An item in a **submodule** already has an ancestor — `pub(in crate::worktree_patch)` is
+expressible today for anything under `worktree_patch`, **with no grouping at all.**
+
+Measured across the remaining five:
+
+| module | top-level | **submodule** | already `pub(in …)` |
+|---|---|---|---|
+| `lifecycle_cache` | 9 | **23** | 0 |
+| `patch_replay` | 15 | **19** | 0 |
+| `refs` | 10 | 14 | 32 |
+| `wal` | 1 | 0 | 0 |
+
+**The submodule half is larger than the top-level half and costs nothing structural** — no file moves, no
+reference rewrites, no allowlist renames, no gate risk. Grouping one pair cost 7 moves, 21 rewrites, 6
+allowlist renames and surfaced a latent `reexports()` bug, and it buys access to the **smaller** half.
+
+`refs`' 32 existing `pub(in …)` are §6b.3's own narrowings — **the method is already proven; it was never
+extended past `refs`.**
+
+**RULED: take the submodule narrowings first, one module at a time, and measure their eligibility rate.
+Defer all further grouping until that rate is known.** Grouping remains available (§6d) and unprohibited;
+it is simply no longer the first move.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
