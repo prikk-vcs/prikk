@@ -380,6 +380,48 @@ from here.
 leaving a subtree through a child, and a cycle closing through a third node. **That is RFC 131's own
 next decision and is not part of closing the allowlist.**
 
+### 6c.8 CLOSED 2026-09-10 — the gate is green, and §6a's prohibition is now liftable
+
+**Reconciled at `ba6f1e76`.** `boundary-check` → `{"valid": true, "errors": []}`; 1824 tests pass, zero
+failures. **First green `boundary-check` in the arc** — the four preceding rounds each ended
+deliberately red.
+
+One rename (`lifecycle_cache` → `lifecycle_cache::replay`, all three edge tuples), all eight cycle
+entries standing with no reason text altered, and the hub arithmetic applied exactly: `refs` (min 4) and
+`lifecycle_cache` (min 2) removed, `active`/`wal`/`author::author_key_index` (min 6 each) declared.
+
+**`active` and `wal` recovered their reasons verbatim from `4acd7e8a`'s minus side** — checked
+byte-for-byte at review. That mattered: §6c.7's ruling turned on these being *the same debt returning*,
+and a reworded reason would have quietly made it new.
+
+**The edge count is machine-verified, not counted.** `check()` compares the allowlist against
+`subtree_cycles()` exhaustively in both directions, so `valid: true` *is* the proof that eight entries
+cover exactly thirteen edges.
+
+### 6c.9 The arc, and what it cost to get right
+
+| Round | Mechanism | Cycles reported |
+|---|---|---|
+| `42bcab15` | qualified nodes, raw-node cycles | **0** |
+| `74e6edc2` | subtree-aware pairs | 8 edges |
+| `cc15e616` | SCC over subtrees | **13 edges, six modules** |
+| `ba6f1e76` | allowlist reconciled | gate green |
+
+**The final figure independently reproduces RFC 130's own original measurement**, taken before any of
+these mechanisms existed and fitted to by nobody.
+
+**Three blindnesses, each revealed only by fixing the previous one, each having made the gate report
+*less* than reality.** Every intermediate number looked like progress. §6c.6's standing caution exists so
+a fourth is caught by the same two greps that caught the first three.
+
+**§6a's prohibition is now liftable.** The gate sees a cycle wholly inside a group, one leaving a subtree
+through a child, and one closing through a third node — the three mechanisms §6a's "no two of the
+constrained seven may share a group" was protecting against. **Lifting it is this RFC's own next
+decision**, on evidence, and was deliberately excluded from closing the allowlist.
+
+**And §3's original target is unblocked.** `pub(in crate::<path>)` was inexpressible for the constrained
+seven because §6a forbade them a shared parent; that prohibition now has no mechanical reason to stand.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
