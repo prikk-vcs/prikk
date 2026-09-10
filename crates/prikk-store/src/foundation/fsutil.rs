@@ -49,21 +49,21 @@ pub(crate) use anchored::{
 };
 
 #[cfg(all(test, target_os = "linux"))]
-pub(crate) use anchored::LinuxDurability;
+pub(in crate::foundation::fsutil) use anchored::LinuxDurability;
 #[cfg(all(test, target_os = "macos"))]
-pub(crate) use anchored::MacosDurability;
+pub(in crate::foundation::fsutil) use anchored::MacosDurability;
 // DC-97: conformance.rs's own architecture -- one shared `assert_*` body, a thin per-platform
 // `#[test]` wrapper naming a concrete type -- is what a new platform plugs into. Windows is that
 // platform now.
 #[cfg(all(test, target_os = "windows"))]
-pub(crate) use anchored::WindowsDurability;
+pub(in crate::foundation::fsutil) use anchored::WindowsDurability;
 // DC-82: visible in test builds regardless of platform (`none`'s own gate), but only re-exported
 // here where `fsutil::tests` — the only consumer — actually compiles. Still Linux/macOS-only even
 // though `fsutil::tests` itself now also compiles on Windows (DC-97): `NoDurability` itself has no
 // Windows arm in test builds either (`anchored.rs`'s own gate excludes it there, since Windows has a
 // real `WindowsDurability` now) -- the one test that uses it stays inline-gated to match.
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-pub(crate) use anchored::NoDurability;
+pub(in crate::foundation::fsutil) use anchored::NoDurability;
 // `remove_file_required` itself carries no platform gate at its own definition (it dispatches
 // through `ACTIVE_DURABILITY`, which resolves per-platform internally). Unconditional since RFC 102
 // Stage 6 Step 2's `unlock.rs` (design-v1.md §15.7 decision 3) is a genuine production caller, not
@@ -96,10 +96,10 @@ pub(crate) use anchored::fail_after_for_test;
     test,
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-pub(crate) use anchored::set_directory_create_barrier_for_test;
+pub(in crate::foundation::fsutil) use anchored::set_directory_create_barrier_for_test;
 
 #[cfg(all(test, target_os = "windows"))]
-pub(crate) use anchored::set_anchor_verification_barrier_for_test;
+pub(in crate::foundation::fsutil) use anchored::set_anchor_verification_barrier_for_test;
 
 /// Return a process-unique temporary path next to the destination.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

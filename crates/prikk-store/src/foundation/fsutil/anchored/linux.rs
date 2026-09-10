@@ -24,7 +24,7 @@ use rustix::fs::{self, OFlags};
 
 /// The Linux durability contract implementation. Zero-sized: every method is stateless, dispatched
 /// statically (no `dyn`), exactly as free functions were before this increment.
-pub(crate) struct LinuxDurability;
+pub(in crate::foundation::fsutil) struct LinuxDurability;
 
 impl DurabilityContract for LinuxDurability {
     fn atomic_replace(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {

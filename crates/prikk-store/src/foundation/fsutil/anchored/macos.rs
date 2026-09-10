@@ -31,7 +31,7 @@ use rustix::fs::{self, OFlags};
 
 /// The macOS durability contract implementation. Zero-sized: every method is stateless, dispatched
 /// statically (no `dyn`), matching `LinuxDurability`'s shape exactly.
-pub(crate) struct MacosDurability;
+pub(in crate::foundation::fsutil) struct MacosDurability;
 
 impl DurabilityContract for MacosDurability {
     fn atomic_replace(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {

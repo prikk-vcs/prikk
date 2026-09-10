@@ -22,7 +22,7 @@ use super::unsupported_mutation;
 use crate::foundation::fsutil::contract::DurabilityContract;
 
 /// Zero-sized, matching `LinuxDurability`/`MacosDurability`'s shape exactly.
-pub(crate) struct NoDurability;
+pub(in crate::foundation::fsutil) struct NoDurability;
 
 impl DurabilityContract for NoDurability {
     fn atomic_replace(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {

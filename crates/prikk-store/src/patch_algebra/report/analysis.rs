@@ -67,7 +67,7 @@ pub(crate) fn analyze_merge_evidence<R: PatchAlgebraEvidence>(
 }
 
 #[cfg(test)]
-pub(crate) fn analyze_pair_merge_evidence<R: PatchAlgebraEvidence>(
+pub(in crate::patch_algebra) fn analyze_pair_merge_evidence<R: PatchAlgebraEvidence>(
     baseline_block_id: ObjectId,
     replay_horizon: Option<ObjectId>,
     baseline: &NodeLifecycleState,

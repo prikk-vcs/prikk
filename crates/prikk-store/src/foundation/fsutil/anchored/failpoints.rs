@@ -56,7 +56,7 @@ pub(crate) fn fail_after(point: Point, matching_calls_to_skip: usize) {
 }
 
 #[cfg(test)]
-pub(crate) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
+pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
     DIRECTORY_CREATE_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }
 
@@ -67,7 +67,7 @@ pub(crate) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
 // the reason, not symmetry with `DIRECTORY_CREATE_BARRIER`'s cross-platform gating.
 #[cfg(target_os = "windows")]
 #[cfg(test)]
-pub(crate) fn set_anchor_verification_barrier(barrier: Arc<Barrier>) {
+pub(in crate::foundation::fsutil) fn set_anchor_verification_barrier(barrier: Arc<Barrier>) {
     ANCHOR_VERIFICATION_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }
 

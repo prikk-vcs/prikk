@@ -39,27 +39,29 @@ pub(crate) use read::{
 
 use crate::foundation::fsutil::contract::DurabilityContract;
 #[cfg(target_os = "linux")]
-pub(crate) use linux::LinuxDurability;
+pub(in crate::foundation::fsutil) use linux::LinuxDurability;
 #[cfg(target_os = "macos")]
-pub(crate) use macos::MacosDurability;
+pub(in crate::foundation::fsutil) use macos::MacosDurability;
 #[cfg(any(
     all(test, not(target_os = "windows")),
     not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
 ))]
-pub(crate) use none::NoDurability;
+pub(in crate::foundation::fsutil) use none::NoDurability;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::WindowsDurability;
+pub(in crate::foundation::fsutil) use windows::WindowsDurability;
 
 #[cfg(all(test, target_os = "windows"))]
-pub(crate) use failpoints::set_anchor_verification_barrier as set_anchor_verification_barrier_for_test;
+pub(in crate::foundation::fsutil) use failpoints::set_anchor_verification_barrier as set_anchor_verification_barrier_for_test;
 #[cfg(all(
     test,
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-pub(crate) use failpoints::{
-    Point as TestFailPoint, fail_once as fail_once_for_test,
-    set_directory_create_barrier as set_directory_create_barrier_for_test,
-};
+pub(in crate::foundation::fsutil) use failpoints::set_directory_create_barrier as set_directory_create_barrier_for_test;
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub(crate) use failpoints::{Point as TestFailPoint, fail_once as fail_once_for_test};
 // DC-98: `windows/tests.rs::object_write_sync_failure_retains_and_classifies_windows` needs a
 // specific skip-count -- `RequiredFileSync` at skip 0 (container append's own sync) and skip 1
 // (index append's own sync), the same two ordinals `caller_tests::sync_matrix`'s Unix original

@@ -84,7 +84,7 @@ pub(super) fn witness_report(
 }
 
 #[cfg(test)]
-pub(crate) fn pair_class_report(
+pub(in crate::patch_algebra) fn pair_class_report(
     pair_class: &PairClass,
     candidate_scope: EvidenceScope,
 ) -> (MergeEvidenceOutcome, Vec<MergeEvidenceItem>) {

@@ -278,7 +278,7 @@ fn resolved_prepared_path(root: &MutationRoot, relative: &Path) -> Result<PathBu
 
 /// The Windows durability contract implementation. Zero-sized, matching
 /// `LinuxDurability`/`MacosDurability`/`NoDurability`'s shape exactly.
-pub(crate) struct WindowsDurability;
+pub(in crate::foundation::fsutil) struct WindowsDurability;
 
 impl DurabilityContract for WindowsDurability {
     fn atomic_replace(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {
