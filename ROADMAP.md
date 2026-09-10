@@ -542,6 +542,40 @@ now so it is a recognised threshold rather than a later surprise.
 §6a and §6b followed on 2026-09-03. **`AUD-05` through `AUD-10` are all delivered** — the whole
 no-design-decision half of this program — leaving `AUD-01` through `AUD-04`, which are design work.
 
+### Release position — 0.38.0 tagged 2026-09-10, awaiting publication authorization
+
+**`0.38.0` was cut at `695b7877`** (tag object `fa8c3832`), CI green on **all 15 jobs before the tag**,
+signed tag verified locally before pushing. **crates.io publication is not done and needs its own word**,
+per the standing rule.
+
+**It carries three user-facing changes** — `prikk mv` declared-move and rename authoring (RFC 144
+increment 3; **the first sealed prikk history that can contain a rename**), the
+`rename-destination-conflict` thirteenth conflict witness, and signer attribution on every rendered
+rename — plus the RFC 131 coupling-gate arc and narrowings, which are internal.
+
+**The cut's purpose is the library API reaching crates.io**, which is what an external consumer waits
+on. **Measured, not asserted: `prikk-store`'s root exports go 252 → 264 — twelve added, zero removed.**
+Diffed as exported *names* across two worktrees, because RFC 131 moved `active` and `worktree_patch`
+under `commit_boundary` and the `pub use` **paths** changed while the root names did not. **A consumer on
+`0.37.0` takes `0.38.0` with no edits.** `QueuedOperationContent` lands on `enumerate_queued_patches` —
+the enumeration surface the stikk project consumes.
+
+**A method note worth keeping:** the first name diff reported **ten removals** and every one was false —
+`comm` was fed output sorted under the default locale. `LC_ALL=C sort` before `comm`, and trust the
+"not in sorted order" warning rather than the result above it.
+
+**An architect error, recorded:** asked whether a cut was possible *for* the stikk project, the answer
+given was that nothing in it was for them, because their named CLI asks had all shipped (trust `check`
+0.34.0, queued-patch enumeration 0.35.0, content surface 0.36.0, content at a point 0.37.0). **That read
+"no outstanding feature request" as "no value," and missed that a library consumer's interest is the
+export surface.** The owner's model was correct and the architect's was not.
+
+### Release position — 0.37.0 shipped 2026-09-09
+
+**Recorded late**, 2026-09-10, while cutting 0.38.0 — this series skipped it. `0.37.0` carried the
+bundle-impact preview and RFC 143 content at a point; all eight crates published. **Its own status note
+lives in the architect's memory rather than here**, which is the gap this entry closes.
+
 ### Release position — 0.36.0 shipped 2026-09-08
 
 **`0.36.0` was cut at `0b749d2`**, carrying one user-facing feature: **`prikk show`** (RFC 142). CI
