@@ -68,8 +68,21 @@ missing fails the command rather than rendering a rename with a blank signer. `b
 
 `prikk-store`'s root export surface goes from **252 names to 264 — twelve added, zero removed**,
 measured by diffing the exported *names* at `0.37.0` against this release rather than the `pub use`
-paths, which moved without changing what they export. **A consumer on `0.37.0` can take `0.38.0`
-without editing anything.**
+paths, which moved without changing what they export.
+
+**CORRECTED before publication: this is not source-compatible for every consumer, and the first
+draft of this note said it was.** A *name* diff cannot see a struct's shape. **Four pre-existing
+public structs each gained a public field** — `QueuedOperationEntry` (`content`),
+`MergeEvidenceDisplayOperation` (`content`), `WorktreePatchCommitReport` (`declaration_disclosures`,
+`move_hints`) and `WorktreeStatusReport` (`declarations`) — and **none of the four is
+`#[non_exhaustive]`**. So:
+
+- **Reading fields, calling methods, matching with `..`: unaffected.**
+- **Constructing one of those four with a struct literal, or destructuring one exhaustively without
+  `..`: breaks**, and needs the new field added.
+
+Crate source APIs are an explicitly unstable compatibility surface, so this is permitted; it is
+stated because the alternative was a claim that was simply false.
 
 - **Rename declarations** — `RenameDeclaration`, `read_rename_declarations`,
   `record_rename_declaration`, `clear_rename_declarations`, `DeclarationRecordOutcome`. The durable
@@ -89,8 +102,6 @@ without editing anything.**
 Internal module layout moved under RFC 131 (`active` and `worktree_patch` now live under
 `commit_boundary`), and that is invisible at the crate root by design.
 
-Crate source APIs remain an explicitly unstable compatibility surface; this release happens not to
-break them.
 
 ## 0.37.0 — 2026-09-09
 
