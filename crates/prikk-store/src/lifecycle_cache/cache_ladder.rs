@@ -24,11 +24,11 @@ use super::{
 
 const LIFECYCLE_CACHE_MAGIC: &[u8] = b"PRIKK-NODE-LIFECYCLE-CACHE-v1\0";
 const WINDOW_HASH_DOMAIN: &[u8] = b"PRIKK-LIFECYCLE-CACHE-WINDOW-v1";
-pub(crate) const CACHE_SCHEMA_VERSION: u32 = 1;
+pub(in crate::lifecycle_cache) const CACHE_SCHEMA_VERSION: u32 = 1;
 
 /// Parent-policy of the derivation window (design v3 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ParentPolicy {
+pub(in crate::lifecycle_cache) enum ParentPolicy {
     /// Single-parent authoritative lineage segment (the only v1 policy).
     SingleParent,
     /// Reserved for DC-13 merge-aware baselines; rejected (fail closed) in v1.
@@ -56,7 +56,7 @@ impl ParentPolicy {
 /// `SHA-256(domain || u64be(count) || raw32(block_id_0) || … || raw32(block_id_n))`,
 /// with `block_id_0 == lineage_horizon_id` and `block_id_n == baseline_block_id`. The
 /// caller is responsible for supplying the *actual* walked single-parent chain.
-pub(crate) fn compute_window_hash(ordered_block_ids: &[ObjectId]) -> [u8; 32] {
+pub(in crate::lifecycle_cache) fn compute_window_hash(ordered_block_ids: &[ObjectId]) -> [u8; 32] {
     let mut preimage =
         Vec::with_capacity(WINDOW_HASH_DOMAIN.len() + 8 + ordered_block_ids.len() * 32);
     preimage.extend_from_slice(WINDOW_HASH_DOMAIN);
@@ -70,7 +70,7 @@ pub(crate) fn compute_window_hash(ordered_block_ids: &[ObjectId]) -> [u8; 32] {
 /// A decoded, structurally + cross-set validated lifecycle cache. **Not** authority for
 /// identity decisions (design v3 §0).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DecodedLifecycleCache {
+pub(in crate::lifecycle_cache) struct DecodedLifecycleCache {
     pub(crate) schema_version: u32,
     pub(crate) baseline_block_id: ObjectId,
     pub(crate) lineage_horizon_id: ObjectId,
@@ -604,7 +604,7 @@ fn stale_provenance(detail: String) -> PrikkError {
 /// verification. Empty at genesis. v1 lifecycle windows require a single-parent chain;
 /// more than one parent fails closed. A real store-backed resolver (reading `Block`
 /// objects) is wired in the threading slice; this trait keeps the walk testable.
-pub(crate) trait BlockParentResolver {
+pub(in crate::lifecycle_cache) trait BlockParentResolver {
     fn parent_block_ids(&self, block_id: &ObjectId) -> Result<Vec<ObjectId>>;
 }
 
@@ -615,7 +615,7 @@ pub(crate) trait BlockParentResolver {
 /// require replay-derived or replay-compared state (later rungs). There is deliberately no
 /// method here that yields such a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ValidatedLifecycleCache {
+pub(in crate::lifecycle_cache) struct ValidatedLifecycleCache {
     decoded: DecodedLifecycleCache,
 }
 
@@ -684,7 +684,7 @@ impl ValidatedLifecycleCache {
 /// state/root. A narrowed accessor exposing only the certified entries should land with the first
 /// consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ComparedLifecycleCache {
+pub(in crate::lifecycle_cache) struct ComparedLifecycleCache {
     validated: ValidatedLifecycleCache,
 }
 
@@ -695,7 +695,7 @@ pub(crate) struct ComparedLifecycleCache {
 /// reconstructed and must be surfaced as an integrity fault — never silently bypassed by trusting
 /// the cache.
 #[derive(Debug)]
-pub(crate) enum CacheCertificationError {
+pub(in crate::lifecycle_cache) enum CacheCertificationError {
     /// The cache's declared baseline is not the caller's intended baseline.
     BaselineMismatch { expected: ObjectId, found: ObjectId },
     /// The cache's declared lineage horizon is not the caller's intended horizon.
@@ -784,7 +784,7 @@ impl ComparedLifecycleCache {
 /// returns a structured [`CacheCertificationError`] so callers can distinguish a droppable cache
 /// fault from authoritative-history unavailability. The cache is an accelerator proven equal to
 /// replay — never a root of trust. On any failure, callers fall back to [`replay_derived_state`].
-pub(crate) fn certified_compared_cache<R: ObjectReader>(
+pub(in crate::lifecycle_cache) fn certified_compared_cache<R: ObjectReader>(
     reader: &R,
     decoded: DecodedLifecycleCache,
     expected_baseline_block_id: ObjectId,

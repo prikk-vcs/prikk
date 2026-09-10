@@ -33,7 +33,7 @@ use crate::object_store::ObjectReader;
 mod cache_ladder;
 
 #[cfg(test)]
-pub(crate) use cache_ladder::{
+pub(in crate::lifecycle_cache) use cache_ladder::{
     BlockParentResolver, CACHE_SCHEMA_VERSION, CacheCertificationError, ComparedLifecycleCache,
     DecodedLifecycleCache, ParentPolicy, ValidatedLifecycleCache, certified_compared_cache,
     compute_window_hash,
@@ -58,7 +58,7 @@ pub(crate) trait BlobContentResolver {
 mod store_resolvers;
 
 /// Explicit boundary (E1): authoritative store access enters the lifecycle trust ladder here.
-pub(crate) use store_resolvers::StoreBackedResolver;
+pub(in crate::lifecycle_cache) use store_resolvers::StoreBackedResolver;
 
 /// Authoritative lifecycle replay: lineage walker + dispatch skeleton (4.4-2c-2a).
 pub(crate) mod replay;

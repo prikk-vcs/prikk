@@ -18,7 +18,7 @@ use super::BlockParentResolver;
 use super::{BlobContentResolver, BlobKindResolver};
 use crate::object_store::ObjectReader;
 /// Lifecycle resolver backed by any object reader (file or memory store).
-pub(crate) struct StoreBackedResolver<'a, R: ObjectReader> {
+pub(in crate::lifecycle_cache) struct StoreBackedResolver<'a, R: ObjectReader> {
     reader: &'a R,
     require_schema_one: bool,
 }
