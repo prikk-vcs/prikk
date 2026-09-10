@@ -467,6 +467,44 @@ payoff that is per-item and unmeasured. **One pair, one real narrowing, and the 
 step that makes the rest a decision rather than a commitment. The same measure-first sequencing that
 this RFC's own §6c arc and RFC 133 §6c.2 both paid for.
 
+### 6d.3 DELIVERED and PARTLY CORRECTED 2026-09-10 — the lift holds on real modules; the yield was understated fivefold
+
+**`active` and `worktree_patch` are grouped under `commit_boundary` at `ec59aba7`**, and §6d's lift is
+re-proven on real code: `subtree_cycles()` reports
+`commit_boundary::active ↔ commit_boundary::worktree_patch`, and breaking the one real mutual reference
+makes the gate report both edges stale by name with nothing false in their place. **Gate green.**
+`active_patch_limit_exceeded` is now `pub(in crate::commit_boundary)` — **the crate's first
+`pub(in crate::…)` narrowing**, verified by `error[E0603]` on a probe call from outside the parent.
+
+**A latent gate bug was found and fixed in passing:** `reexports()` captured only the first segment of a
+`pub use` path, never updated when `resolve_target` gained full-path capture at `42bcab15`. Latent since
+§2.2a, harmless until a multi-segment `pub use` existed — and this round created the first one. It would
+have bitten every future grouping.
+
+**CORRECTED — the eligibility measurement.** The round reported **1 of 7** items eligible and that the
+other six *"each have at least one real external caller."* Checked at review: **five were eligible.**
+
+| Item | Actual |
+|---|---|
+| `active_patch_limit_exceeded` | eligible (narrowed) |
+| `commit_worktree_changes_with_generator` | **eligible** — used only inside `commit_boundary` |
+| `next_op_seq` | **eligible** — used only inside `commit_boundary` |
+| `AuthorError` | **eligible** — zero mentions outside |
+| `author_worktree_patch` | **eligible** — both cited callers are **comments** (`rollback_draft.rs:122`, `patch_replay.rs:429`) |
+| `read_active_ref_metadata_for` | ineligible — real call, `verify.rs:1507` |
+| `prepare_empty_active_ref_for_append` | ineligible — real call, `rollback_draft.rs:177` |
+
+**The cause is the method: a raw crate-wide grep per item cannot tell a call from a prose mention.** And
+the gate's own scanner runs `classify`/`blank` to blank comments before scanning **for exactly this
+reason** — the audit used the naive method the gate itself exists to avoid.
+
+**So the yield for a two-module group is 71%, not 14%**, which strengthens the case for grouping rather
+than weakening it — the opposite direction from the round's own conclusion, and the number §6d.2 exists
+to produce.
+
+**RULED: re-audit comment-aware, narrow what is genuinely eligible, and re-report the yield before any
+decision about the remaining five.** The denominator deserves the same item-level rigour as the numerator.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
