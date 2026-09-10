@@ -422,6 +422,51 @@ decision**, on evidence, and was deliberately excluded from closing the allowlis
 **And §3's original target is unblocked.** `pub(in crate::<path>)` was inexpressible for the constrained
 seven because §6a forbade them a shared parent; that prohibition now has no mechanical reason to stand.
 
+## 6d. RULED 2026-09-10 — §6a's prohibition is LIFTED, on evidence
+
+**§6a forbade any two of the constrained seven sharing a group** — `active`, `lifecycle_cache`,
+`patch_replay`, `refs`, `trust`, `worktree_patch`, `wal` — for one stated reason:
+
+> *"grouping merges nodes — and a cycle wholly inside one group **disappears from the graph**. The gate
+> would report no cycle, not because the coupling was resolved but because the grouping hid it."*
+
+**That mechanism no longer exists, and a production-path control proves it rather than an argument
+about the code.** `graph::tests::subtree_control4_a_cycle_inside_one_former_top_level_module_is_still_
+visible` builds two siblings under a shared parent that reference each other, and asserts
+**`subtree_cycles()`** — the mechanism `check()` actually calls — reports **both** directed edges
+`parent::child_a ↔ parent::child_b`. A companion control asserts the same through the raw graph.
+
+**Rule 4 does not suppress it**, which is the detail worth stating: siblings under a common parent are
+not ancestor/descendant of each other, so the *"an edge to a node's own ancestor or descendant
+contributes nothing"* exclusion never applies to the pair grouping would create.
+
+**RULED: §6a's prohibition is lifted.** The seven may be grouped. §6a's other clause — *"each may have
+its own directory"* — was never in question and stands.
+
+### 6d.1 Two consequences to plan for, not discover
+
+**Grouping renames allowlist entries.** `refs` under a parent `g` becomes `g::refs`, and every
+`DECLARED_CYCLES`/`DECLARED_HUBS` mention must move with it — exactly the `lifecycle_cache` →
+`lifecycle_cache::replay` rename §6c.7 just performed, and for the same reason: the coupling is
+unchanged, its name moves to where the module now lives. **A grouping round that leaves the allowlist
+alone will turn the gate red**, correctly.
+
+**§4's constraint still binds.** It protects `foo/tests.rs` beside `foo.rs`; grouping must not collapse
+that arrangement, and §6a.1's ruling that a group whose members *"share only the need to be somewhere is
+worse than none"* is not weakened by this lift. **A lifted prohibition is not an instruction to group.**
+
+### 6d.2 §3's target is now mechanically reachable, and should be proven on one pair first
+
+§6b.2 established that an item declared directly in one of the seven **has no expressible scope narrower
+than `pub(crate)`**, because `pub(in crate::<path>)` needs an ancestor and §6a forbade them a shared one.
+With the lift, a shared parent is available and `pub(in crate::<parent>)` becomes expressible.
+
+**RULED: prove it on one pair before grouping seven.** Grouping all seven means moving seven modules and
+their subtrees and rewriting every `crate::<name>` reference crate-wide — hundreds of sites — for a
+payoff that is per-item and unmeasured. **One pair, one real narrowing, and the cost reported** is the
+step that makes the rest a decision rather than a commitment. The same measure-first sequencing that
+this RFC's own §6c arc and RFC 133 §6c.2 both paid for.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
