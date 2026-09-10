@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.38.0 — 2026-09-10
 
 ### Added — `prikk mv <old> <new>`: declared move and rename authoring
 
@@ -63,6 +63,34 @@ construction for a rename that omits its asserting key id, so a patch whose AUTH
 missing fails the command rather than rendering a rename with a blank signer. `bundle preview`
 (still delete-plus-create, never a `Renamed` effect — RFC 144 §4m) and `checkout --patch-plan
 --format json` (still refuses a `RenamePath` outright) are unaffected; neither presents a rename.
+
+### Added — library API: twelve new exports, nothing removed
+
+`prikk-store`'s root export surface goes from **252 names to 264 — twelve added, zero removed**,
+measured by diffing the exported *names* at `0.37.0` against this release rather than the `pub use`
+paths, which moved without changing what they export. **A consumer on `0.37.0` can take `0.38.0`
+without editing anything.**
+
+- **Rename declarations** — `RenameDeclaration`, `read_rename_declarations`,
+  `record_rename_declaration`, `clear_rename_declarations`, `DeclarationRecordOutcome`. The durable
+  declaration `prikk mv` writes and `prikk commit` consumes.
+- **Commit-time disclosure and move hints** — `DeclarationDisclosure`,
+  `DeclarationDisclosureReason`, `MoveHints`, `MoveHintCandidate`, `MOVE_HINT_SUMMARY_THRESHOLD`.
+  What a commit reports about declarations that resolved to something other than the rename they
+  asserted, and about an undeclared move it noticed.
+- **The asserting signer, recoverable where a rename is rendered** — `QueuedOperationContent` on
+  `enumerate_queued_patches`' entries and `MergeEvidenceDisplayOperationContent` on merge evidence.
+  A signed `RenamePath` asserts that *this signer* rewrote one path to another, so every surface
+  that presents a rename can recover the AUTHOR key id that asserted it. **The guarantee is
+  construction-enforced, not render-enforced**: `kind` remains a stable public string, so a
+  renderer can still present a rename without reading `content` — the types make the signer
+  impossible to *lose*, not impossible to *ignore*.
+
+Internal module layout moved under RFC 131 (`active` and `worktree_patch` now live under
+`commit_boundary`), and that is invisible at the crate root by design.
+
+Crate source APIs remain an explicitly unstable compatibility surface; this release happens not to
+break them.
 
 ## 0.37.0 — 2026-09-09
 
