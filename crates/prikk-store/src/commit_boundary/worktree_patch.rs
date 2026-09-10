@@ -277,7 +277,7 @@ pub fn commit_worktree_changes_signed(
 /// Test-only entry that injects a deterministic node-id generator and an explicit signer so authoring
 /// is reproducible.
 #[cfg(test)]
-pub(crate) fn commit_worktree_changes_with_generator<S, A>(
+pub(in crate::commit_boundary) fn commit_worktree_changes_with_generator<S, A>(
     layout: &RepositoryLayout,
     ref_name: &str,
     message: &str,
@@ -294,7 +294,7 @@ where
 
 /// Assign a contiguous `op_seq` (1-based) for the operation at `index`. Used by node-addressed
 /// worktree authoring.
-pub(crate) fn next_op_seq(index: usize) -> Result<u32> {
+pub(in crate::commit_boundary) fn next_op_seq(index: usize) -> Result<u32> {
     let next = index
         .checked_add(1)
         .ok_or_else(|| PrikkError::CanonicalEncoding("operation count overflow".to_string()))?;

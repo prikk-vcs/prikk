@@ -68,7 +68,7 @@ const EXECUTABLE_FILE_MODE: u32 = 0o100_755;
 /// Structured authoring failure. Kept structured internally (review E2/E3/E4) and flattened into
 /// [`PrikkError`] only at the public command boundary.
 #[derive(Debug)]
-pub(crate) enum AuthorError {
+pub(in crate::commit_boundary) enum AuthorError {
     /// A changed existing path does not resolve to a live node id in the replay-derived baseline
     /// (e.g. a snapshot-only baseline, which carries no node identity). Fails closed; never minted.
     NodeIdentityUnavailable(String),
@@ -178,7 +178,7 @@ fn kind_rank(kind: &OperationKind) -> u8 {
 /// The `generator` is injected (review E2): production passes `NodeIdGenerator::production()`; tests
 /// pass a deterministic generator. State comes only from `replay_derived_state` (review E3); the
 /// snapshot manifest is never consulted as identity authority.
-pub(crate) fn author_worktree_patch<S: NodeIdEntropySource, A: AuthorSigner>(
+pub(in crate::commit_boundary) fn author_worktree_patch<S: NodeIdEntropySource, A: AuthorSigner>(
     layout: &RepositoryLayout,
     ref_name: &str,
     message: &str,
