@@ -49,17 +49,25 @@ use super::{BoundaryError, push};
 
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
-/// `min(fan_in, fan_out)`, today's ranking is 11 (`patch_replay`), 8 (`refs`), 8
-/// (`lifecycle_cache`), 6 (`merge_evidence`, new as of RFC 142), then a clean drop to 5 (`trust`,
-/// `active`). The break sits between 6 and 5.
+/// `min(fan_in, fan_out)` under RFC 131 §6c's qualified-node graph, today's ranking is 7
+/// (`merge_evidence`), 6 (`patch_replay`, `active`, `wal`, `author::author_key_index`), then a
+/// clean drop to 5 (`trust`, `lifecycle_cache::replay`, `patch_set_digest`). The break sits
+/// between 6 and 5.
 ///
-/// **`active` and `wal` dropped out of the declared set at RFC 131 §2.2a's `foundation` grouping
-/// (2026-09-08)**, a real consolidation effect rather than a code change to either module: several
-/// of each one's distinct fan-out edges into `layout`/`fsutil`/`byte_cursor`/etc. collapsed into
-/// one edge into the merged `foundation` node, the same way RFC 122's consolidation concentrated
-/// edges rather than adding unrelated reach. `wal` fell from a fan-out of 6 to 2 (min 6 -> 2);
-/// `active` from 6 to 5 (min 6 -> 5). See `graph::tests::the_scc_has_exactly_this_edge_set` for
-/// the exact numbers this constant is checked against.
+/// **History, resolved as of RFC 131 §6c.7: `active` and `wal` dropped out of the declared set at
+/// RFC 131 §2.2a's `foundation` grouping (2026-09-08)**, a real consolidation effect rather than a
+/// code change to either module -- several of each one's distinct fan-out edges into
+/// `layout`/`fsutil`/`byte_cursor`/etc. collapsed into one edge into the merged `foundation` node,
+/// the same way RFC 122's consolidation concentrated edges rather than adding unrelated reach
+/// (`wal` 6 -> 2, `active` 6 -> 5 at the time). **The qualified-node graph (`42bcab15` onward)
+/// undoes exactly that collapse** -- `foundation`'s own submodules (`foundation::layout`,
+/// `foundation::fsutil`, ...) are separate nodes again, so `active`/`wal`'s fan-out is no longer
+/// concentrated into one shared target, and both are declared again below at their *original*
+/// reasons (§6c.7 ruled: recovered from git history, not reworded). `refs` (28/4) and
+/// `lifecycle_cache` (3/2) were removed from the declared set the same round: `min()` is
+/// deliberately about *bidirectional* traffic, and neither meets it any more once its own
+/// submodules (`refs::evidence`, `lifecycle_cache::replay`, ...) carry their own fan
+/// independently -- `refs` in particular is a sink (high fan-in, low fan-out), not a middle hub.
 const HUB_THRESHOLD: usize = 6;
 
 /// One declared cycle-forming edge: the reason it exists, and — the property that makes a cycle
@@ -77,10 +85,15 @@ struct DeclaredCycle {
 
 /// Every edge found inside `prikk-store`'s one strongly-connected component today. Eight entries,
 /// covering all thirteen directed edges among `active`, `refs`, `trust`, `worktree_patch`,
-/// `patch_replay`, `lifecycle_cache` — four mutual pairs (eight edges) plus four one-way
+/// `patch_replay`, `lifecycle_cache::replay` — four mutual pairs (eight edges) plus four one-way
 /// relationships (one grouped pair, three singles; five edges) that close longer cycles through
-/// them. Checked exhaustively against the real graph by
-/// `graph::tests::every_scc_edge_is_covered_by_a_declared_cycle`.
+/// them. RFC 131 §6c.7: `lifecycle_cache` renamed to `lifecycle_cache::replay` here (the only
+/// submodule that actually writes this component's edges; `lifecycle_cache.rs` itself writes
+/// none) -- the coupling is the same coupling this table has named since RFC 130, just at the
+/// qualified node it always actually lived at. Checked exhaustively against the real graph by
+/// `check()`'s own comparison against `ModuleGraph::subtree_cycles()` (RFC 131 §6c.4/§6c.5) --
+/// `graph::tests::every_scc_edge_is_covered_by_a_declared_cycle` no longer checks this (it studies
+/// the *raw* graph, which has had zero cycles since `74e6edc2`; see that test's own doc).
 const DECLARED_CYCLES: &[DeclaredCycle] = &[
     DeclaredCycle {
         edges: &[("active", "refs"), ("refs", "active")],
@@ -107,8 +120,8 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
     },
     DeclaredCycle {
         edges: &[
-            ("lifecycle_cache", "patch_replay"),
-            ("patch_replay", "lifecycle_cache"),
+            ("lifecycle_cache::replay", "patch_replay"),
+            ("patch_replay", "lifecycle_cache::replay"),
         ],
         reason: "created by RFC 122 (`7a01168`), consolidating two duplicate baseline \
                   derivations into `lifecycle_cache::incremental::resolve_baseline_state` -- \
@@ -152,7 +165,7 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 not attempted here for the same §7 reason as the others",
     },
     DeclaredCycle {
-        edges: &[("worktree_patch", "lifecycle_cache")],
+        edges: &[("worktree_patch", "lifecycle_cache::replay")],
         reason: "found by this round's own re-derivation (2026-08-02, DC-66): worktree_patch's \
                   node authoring uses `lifecycle_cache`'s `TextCache`/`materialize_edited_text` \
                   to author text-edit patches against the cached derived state -- an ordinary \
@@ -198,29 +211,34 @@ struct DeclaredHub {
     reason: &'static str,
 }
 
-/// Today's four hubs by `min(fan_in, fan_out)`. **`wal` and `active` were declared here and are
-/// removed as of RFC 131 §2.2a's `foundation` grouping (2026-09-08)**: consolidating
-/// `layout`/`fsutil`/`byte_cursor`/`file_codec`/`frame_resync`/`container`/`index`/`generation`
-/// into one node collapsed several of each module's distinct fan-out edges into that one shared
-/// target, dropping both below `HUB_THRESHOLD` (`wal` 6 -> 2, `active` 6 -> 5) -- the same
-/// consolidation-not-sprawl shape RFC 122 gave `lifecycle_cache`/`patch_replay`, just moving a
-/// module *out* of the declared set instead of in. `graph::tests::the_scc_has_exactly_this_edge_
-/// set` and `coupling::tests::the_real_repository_passes_with_no_undeclared_cycle_or_hub` pin the
-/// numbers this reflects. `trust` briefly joined this list too, for exactly as long as RFC 138's
-/// own `trust -> recognition_claim` edge existed; carried-defects C removed that edge along with
-/// the cycle it caused, and `trust` dropped back below the threshold with it (see the module doc).
-/// **`merge_evidence` newly crosses it (2026-09-08, RFC 142)**: `show` reuses `merge_evidence::
+/// Today's five hubs by `min(fan_in, fan_out)`, reconciled at RFC 131 §6c.7 against the
+/// qualified-node graph (`cc15e616`): `refs` (28/4, min 4) and `lifecycle_cache` (3/2, min 2) are
+/// **removed** -- neither meets the threshold any more once their own submodules
+/// (`refs::evidence`, `lifecycle_cache::replay`, ...) carry their own fan independently; `refs`
+/// with fan-in 28 is a sink, not a middle hub, which is exactly what `min()`'s bidirectional-only
+/// shape is for. `active` (7/6) and `wal` (13/6) are **declared again**: both were removed at RFC
+/// 131 §2.2a's `foundation` grouping (2026-09-08) purely because several of each module's distinct
+/// fan-out edges into `layout`/`fsutil`/`byte_cursor`/etc. collapsed into one edge into the merged
+/// `foundation` node (`wal` 6 -> 2, `active` 6 -> 5 at the time) -- a recorded artifact of
+/// aggregation, not a code change to either module, and the qualified-node graph undoes it
+/// precisely. Their reasons below are recovered from git history (`4acd7e8a`, the commit whose own
+/// diff shows the text immediately before removal), not reworded. `author::author_key_index`
+/// (6/6) is **genuinely newly visible** -- a submodule no mechanism before `42bcab15` could name at
+/// all. `trust` briefly joined this list too, for exactly as long as RFC 138's own `trust ->
+/// recognition_claim` edge existed; carried-defects C removed that edge along with the cycle it
+/// caused, and `trust` dropped back below the threshold with it (see the module doc).
+/// `merge_evidence` crossed it at RFC 142 (2026-09-08): `show` reuses `merge_evidence::
 /// lifecycle_state_at` rather than duplicating its private `lineage_horizon`/`replay_derived_
 /// state` call sequence, the same "add one narrow function instead of widening internals" shape
-/// RFC 131 §3 argued for -- fan-in 5 -> 6, fan-out unchanged at 8.
+/// RFC 131 §3 argued for.
 const DECLARED_HUBS: &[DeclaredHub] = &[
     DeclaredHub {
-        module: "refs",
-        reason: "the ref-publication layer: every publishing operation (seal, merge, sync seal, \
-                  sync adopt-tag, tag create, branch create/close) reads or writes through it, and \
-                  it in turn reads from most of the object/patch layer it publishes -- high \
-                  fan-in and fan-out are both structural to being the one place publication is \
-                  gated, not a sign the module is doing unrelated things",
+        module: "merge_evidence",
+        reason: "RFC 142's `show` reuses this module's own lineage-horizon-to-replay sequence \
+                  through one new narrow function (`lifecycle_state_at`) rather than duplicating \
+                  it or widening `lifecycle_cache`'s already-`pub(crate)` internals further -- a \
+                  second real consumer sharing one derivation, not two derivations existing \
+                  because reach crept outward",
     },
     DeclaredHub {
         module: "patch_replay",
@@ -230,19 +248,33 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   exists: a correct consolidation, not sprawl",
     },
     DeclaredHub {
-        module: "lifecycle_cache",
-        reason: "the node-lifecycle cache every replay path reads through and every mutation path \
-                  invalidates -- a cache's whole purpose is sitting between a wide set of readers \
-                  and a wide set of writers, so both-sides-high fan is the shape a cache is \
-                  supposed to have",
+        module: "active",
+        reason: "the active-session/ref-metadata layer every commit-boundary operation touches on \
+                  both sides -- readers asking whether an active ref exists and is valid, writers \
+                  preparing or clearing it. Newly crossing the threshold as a trend already flagged \
+                  by the coupling-gate-graph-contradiction round, driven by the same cyclic \
+                  relationships (with refs, worktree_patch, patch_replay) declared above, not by \
+                  unrelated scope creep",
     },
     DeclaredHub {
-        module: "merge_evidence",
-        reason: "RFC 142's `show` reuses this module's own lineage-horizon-to-replay sequence \
-                  through one new narrow function (`lifecycle_state_at`) rather than duplicating \
-                  it or widening `lifecycle_cache`'s already-`pub(crate)` internals further -- a \
-                  second real consumer sharing one derivation, not two derivations existing \
-                  because reach crept outward",
+        module: "wal",
+        reason: "the active write-ahead-log container every active-session operation (commit, \
+                  seal, doctor, unlock, compact) reads or appends through -- a single shared queue \
+                  necessarily has wide fan-in from everything that queues work and wide fan-out to \
+                  everything that shapes a queued record",
+    },
+    DeclaredHub {
+        module: "author::author_key_index",
+        reason: "the durable store for recorded AUTHOR public-key material (DC-53): every path \
+                  that verifies or attributes a Patch's authorship reads it -- bundle export, \
+                  patch-exchange accept and artifact verification, rollback-draft construction, \
+                  `verify`'s own object-level check, and worktree_patch's node authoring, six \
+                  distinct real consumers, not one caller reached six ways. Its own fan-out is \
+                  entirely into this crate's shared durable-file toolkit (`foundation::byte_cursor`, \
+                  `foundation::file_codec`, `foundation::frame_resync`, `foundation::fsutil`, \
+                  `foundation::layout`, plus `lock`) -- the same primitives every other durable \
+                  on-disk container in this crate already depends on to persist an index, not \
+                  reach that crept outward on its own",
     },
 ];
 
