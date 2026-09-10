@@ -38,6 +38,31 @@ scheduling it decides nothing about RFC 145.
 **A request from a consumer would raise its priority, not its justification.** stikk was asked in
 correspondence 005 whether the three are on their path; that answer is not a precondition.
 
+### 2a. CONFIRMED 2026-09-10 — the consumer answered, and it is stronger than a preference
+
+stikk letter 006 §1: **yes, all three, and "those three are the entire remainder of our prose
+parsing."** They name their own call sites — `cli_backend.rs:209` (`log`), `:227` (`branch list --all`),
+`:233` (`tag list`) — and every other prikk command they drive either has `--format json` or has its
+output ignored.
+
+**So this RFC does not merely add consistency for them: it closes their prose-parsing exposure
+completely.** Each of the three has already cost them a re-baseline — `log` at 0.32 when a
+`patch <id>: <message>` line appeared, `branch list` at 0.30, and `tag list` in a sweep that found their
+ref picker had never shown tags at all.
+
+**A second, independent argument arrived with it.** stikk reproduced a parser defect this project
+predicted (letter 005 §3): a renamed path whose first token is `modified`/`missing`/`untracked`/
+`unsupported` is taken for a change entry, making their view report **a file that does not exist**. Their
+root cause is wider than the prediction — their entry scan reads indented lines from the whole document,
+so **any future indented section of prikk's would break it identically.**
+
+**Until this RFC lands, prikk's prose shape is load-bearing for a real consumer.** That is a cost the
+project is carrying whether or not it chose to.
+
+**The order this arrived in matters and is recorded deliberately: RFC 146 was opened, accepted and
+handed off on consistency grounds *before* the answer came back.** The justification never depended on
+a consumer; only the priority did.
+
 ## 3. What it adds
 
 `--format json` on the three, following the convention the existing nine already establish:

@@ -1265,6 +1265,34 @@ and its reachability fix · the honesty invariant.
 command to the person who did not know it existed, name the conflict when two people move one node
 apart, and never present a rename without saying who asserted it.**
 
+## 4t. RECORDED 2026-09-10 — block-addressable content, requested and not blocking
+
+**stikk letter 006 §5.** `checkout --patch-plan --content-path` resolves a **published branch** only.
+Their three attempts, the first reproduced here:
+
+| attempt | result |
+|---|---|
+| `--ref <block-id>` | `integrity error: ref <id> is not published` |
+| `--ref tags/<name>` at that block | `object type mismatch: expected block, got tag` (RFC 147 §3) |
+| `branch create --from <block-id>` | `--from ref <id> does not resolve to a published ref` |
+
+**They tried the mutating route only to establish the gap is in the read surface**, and say they would
+not ship it.
+
+**So two branch tips compare fully today; two blocks on one ref do not** — and the same-ref case is
+exactly what §4's earlier correspondence described: a path edited, reverted, edited again, compared
+across that range. **This RFC's reply said that case was answerable by requesting the path at both
+points. Both points there are blocks, so it is not.** Recorded as a correction to that answer rather
+than left implied.
+
+**Nothing waits on it.** stikk has amended its Compare requirement to branch-tip comparison in full and
+same-ref ranges as state-level difference plus each block's own spans, and **carries block-addressable
+content as a named dependency** — the way they carried `UD-09` for four releases. If it never lands they
+ship a smaller view and a written reason.
+
+**Unruled and unscheduled.** Recorded here rather than in RFC 147, which covers the two smaller
+reporting defects from the same letter and is deliberately not this.
+
 ## 5. What must be ruled before anything is built
 
 1. **Renames** (§2c/§4) — report delete+create honestly, infer renames at comparison time, or author
