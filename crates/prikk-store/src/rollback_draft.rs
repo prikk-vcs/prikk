@@ -12,8 +12,8 @@ use prikk_object::{
     RefStatePayload,
 };
 
-use crate::active::prepare_empty_active_ref_for_append;
 use crate::author::author_signing::{AuthorSigner, author_signature};
+use crate::commit_boundary::active::prepare_empty_active_ref_for_append;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};

@@ -100,7 +100,7 @@ pub(super) fn seal_patches_onto(
     // name the same ref being sealed (`refs/evidence.rs::validate_signer_backed_recovery`) -- the
     // bookkeeping the real `ActiveSession::append_patch` commit path maintains, which the raw
     // `Wal::append_patch` below deliberately bypasses (it only appends bytes).
-    crate::active::write_active_ref_metadata(layout, ref_name)?;
+    crate::commit_boundary::active::write_active_ref_metadata(layout, ref_name)?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     for patch in patches {
         wal.append_patch(patch)?;

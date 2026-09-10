@@ -15,13 +15,15 @@
 //! rollback block classification, and an internal patch-algebra foundation. Production confluence,
 //! plugin execution, and remote sync remain separate increments.
 
-mod active;
 // RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
 mod author;
 mod blob_access;
 mod block_state;
 mod bundle;
 mod checkout;
+// RFC 131 §6d.2's first grouping under the lifted §6a prohibition: `active` and `worktree_patch`,
+// two co-designed layers each checking the half of a commit boundary the other owns.
+mod commit_boundary;
 mod commit_index;
 mod compact;
 mod doctor;
@@ -80,10 +82,10 @@ mod verify;
 mod wal;
 // RFC 131 §2.2a: the `worktree` name family is NOT grouped -- measured to reconnect into the
 // coupling gate's own SCC (worktree_patch -> worktree -> active/patch_replay/lifecycle_cache ->
-// ... -> active); see the report. `worktree_patch` is one of §2's constrained modules regardless.
+// ... -> active); see the report. `worktree_patch` itself moved to `commit_boundary` at §6d.2,
+// grouped with `active` specifically, not with this family.
 mod worktree;
 mod worktree_marker;
-mod worktree_patch;
 mod worktree_status;
 
 // RFC 131 §2.2a ruling (a): these eight were already one contiguous #[cfg(test)] run above --
@@ -93,11 +95,6 @@ mod worktree_status;
 #[cfg(test)]
 mod test_gates;
 
-pub use active::{
-    ActiveCommitResult, ActiveRefMetadata, ActiveRefOwnership, ActiveSession, active_ref_ownership,
-    finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
-    require_active_ref_for_non_empty_wal, write_active_ref_metadata,
-};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 pub use block_state::{
     BlockStateOutcome, BlockStateStatus, derive_next_state_root, validate_block_v2_shape,
@@ -111,6 +108,17 @@ pub use bundle::{
 pub use checkout::{
     CheckoutMaterialization, CheckoutPlan, DEFAULT_CHECKOUT_REF, SnapshotCheckoutPlan,
     prepare_checkout_plan, prepare_snapshot_checkout_plan,
+};
+pub use commit_boundary::active::{
+    ActiveCommitResult, ActiveRefMetadata, ActiveRefOwnership, ActiveSession, active_ref_ownership,
+    finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
+    require_active_ref_for_non_empty_wal, write_active_ref_metadata,
+};
+pub use commit_boundary::worktree_patch::{
+    DEFAULT_ACTIVE_PATCH_LIMIT, DeclarationDisclosure, DeclarationDisclosureReason,
+    MOVE_HINT_SUMMARY_THRESHOLD, MoveHintCandidate, MoveHints, WorktreePatchCommitOptions,
+    WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
+    commit_worktree_changes_signed,
 };
 pub use commit_index::CommitIndexDivergence;
 pub use compact::{
@@ -228,12 +236,6 @@ pub use verify::{
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};
-pub use worktree_patch::{
-    DEFAULT_ACTIVE_PATCH_LIMIT, DeclarationDisclosure, DeclarationDisclosureReason,
-    MOVE_HINT_SUMMARY_THRESHOLD, MoveHintCandidate, MoveHints, WorktreePatchCommitOptions,
-    WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
-    commit_worktree_changes_signed,
-};
 pub use worktree_status::{
     QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,
     WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,

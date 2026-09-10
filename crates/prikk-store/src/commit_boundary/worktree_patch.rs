@@ -172,8 +172,11 @@ pub const DEFAULT_ACTIVE_PATCH_LIMIT: usize = 1000;
 /// active WAL's record count — and this is the one comparison every authoring path
 /// (`node_authoring.rs::author_inner`, `active.rs::ActiveSession::append_patch`) calls, rather than
 /// each reimplementing it. `>=`, not `>`: once the queue already holds the limit, no more may join it.
+/// RFC 131 §6d.2: narrowed to `commit_boundary` — every caller is `active` or `worktree_patch`'s own
+/// `node_authoring`, both under this parent, and grouping under a shared parent is what makes this
+/// narrower visibility expressible at all.
 #[must_use]
-pub(crate) const fn active_patch_limit_exceeded(
+pub(in crate::commit_boundary) const fn active_patch_limit_exceeded(
     current_count: usize,
     active_patch_limit: usize,
 ) -> bool {

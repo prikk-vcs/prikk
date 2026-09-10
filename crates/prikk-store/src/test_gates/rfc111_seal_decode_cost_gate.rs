@@ -41,12 +41,14 @@
 
 use prikk_error::Result;
 
+use crate::commit_boundary::worktree_patch::{
+    WorktreePatchCommitOptions, commit_worktree_changes_signed,
+};
 use crate::foundation::index::{
     replay_index_decode_count_for_test, reset_replay_index_decode_count_for_test,
 };
 use crate::rfc111_seal_simulation::simulate_one_seal;
 use crate::test_gates::test_support::unique_temp_dir;
-use crate::worktree_patch::{WorktreePatchCommitOptions, commit_worktree_changes_signed};
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout,
     add_trusted_maintainer,

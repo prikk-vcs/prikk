@@ -461,9 +461,23 @@ fn collect_production_modules(
 }
 
 /// `lib.rs`'s own `pub use <module>::{A, B, ...};` / `pub use <module>::Item;` re-export table:
-/// item name -> the single module that re-exports it. An item re-exported from more than one
+/// item name -> the qualified module that re-exports it. An item re-exported from more than one
 /// module is dropped from the map entirely (never resolved), rather than guessed -- correctness
 /// here means "no edge" is always safer than "the wrong edge."
+///
+/// **The module path is captured in full** (`scan_qualified_path`, the same shared scanner
+/// `crate_idents`/`extract_grouped_idents` use), not just its first segment -- found necessary at
+/// RFC 131 §6d.2 when `active` grouped under `commit_boundary` and `pub use
+/// commit_boundary::active::{...}` first exercised a multi-segment module path here. A
+/// first-segment-only capture would have registered `"commit_boundary"` (the group, wrong) as the
+/// owner of every re-exported item, or -- for the `{`-group case specifically, since a bare
+/// first-segment capture leaves `after_module` starting with the *second* segment rather than
+/// `{`, missing the group delimiter check entirely -- registered a spurious item named after that
+/// second segment instead (`"active"`) and silently dropped every real item name. Latent since RFC
+/// 131 §2.2a's own `author::author_signing`/`lifecycle_cache::incremental`/`foundation::layout`
+/// re-exports (already two segments) but never manifested as a wrong edge because nothing
+/// referenced those particular re-exported names via a bare `crate::<name>` path -- this fixes
+/// them too, not only the new grouping.
 fn reexports(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
     let lib_rs = src_root.join("lib.rs");
     let raw = fs::read_to_string(&lib_rs)
@@ -474,9 +488,10 @@ fn reexports(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
     let mut rest = text.as_str();
     while let Some(rel) = rest.find("pub use ") {
         rest = &rest[rel + "pub use ".len()..];
-        let Some(module_len) = rest.find(|c: char| !(c.is_alphanumeric() || c == '_')) else {
+        let module_len = scan_qualified_path(rest.as_bytes());
+        if module_len == 0 {
             break;
-        };
+        }
         let module = rest[..module_len].to_owned();
         let after_module = rest[module_len..].trim_start();
         let after_module = after_module.strip_prefix("::").unwrap_or(after_module);

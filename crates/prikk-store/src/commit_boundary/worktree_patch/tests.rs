@@ -12,12 +12,12 @@ use prikk_object::{
     PatchPurpose, RefStatePayload, SignatureAlgorithm, SignerRole,
 };
 
+use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
 use crate::node::node_id_gen::{NodeIdGenerator, SequenceEntropySource};
 use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, signed_block, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir,
 };
-use crate::worktree_patch::commit_worktree_changes_with_generator;
 use crate::{
     ActiveLock, ActiveRefMetadata, AuthorSigner, DEFAULT_ACTIVE_NAME, Ed25519AuthorSigner,
     FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore, RepoPath,

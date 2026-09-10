@@ -15,10 +15,10 @@ use prikk_object::{
 
 use super::{QueuedPathResolution, enumerate_queued_patches};
 use crate::author::author_signing::author_signature;
+use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::wal::Wal;
-use crate::worktree_patch::commit_worktree_changes_signed;
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout,
     WorktreeChangeKind, WorktreePatchCommitOptions, worktree_status,

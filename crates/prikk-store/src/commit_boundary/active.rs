@@ -80,7 +80,7 @@ impl ActiveSession {
                 "active WAL has a damaged record; run doctor before appending".to_string(),
             ));
         }
-        if crate::worktree_patch::active_patch_limit_exceeded(
+        if crate::commit_boundary::worktree_patch::active_patch_limit_exceeded(
             replay.records.len(),
             active_patch_limit,
         ) {

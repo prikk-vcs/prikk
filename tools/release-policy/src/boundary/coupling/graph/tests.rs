@@ -112,8 +112,11 @@ fn walk_finds_the_confirmed_production_module_count() {
     // coupling-gate-graph-contradiction round's own count shrank to 51 at RFC 131 §2.2a's grouping
     // 2026-09-08 -- `foundation` 8 -> 1, `author` 2 -> 1, `node` 2 -> 1, `received_index` folding
     // into `received` (-1); RFC 142 added `show` (51 -> 52); RFC 144 §4o.2 added
-    // `rename_declaration` (52 -> 53).)
-    assert_eq!(modules.len(), 127, "modules: {modules:?}");
+    // `rename_declaration` (52 -> 53). RFC 131 §6d.2 (2026-09-10) grouped `active` and
+    // `worktree_patch` under a new parent `commit_boundary`: two file-backed modules become
+    // three (`commit_boundary`, `commit_boundary::active`, `commit_boundary::worktree_patch`) --
+    // net +1, 127 -> 128.
+    assert_eq!(modules.len(), 128, "modules: {modules:?}");
     assert!(modules.contains("foundation"));
     assert!(modules.contains("show"));
     // The bare, pre-amendment names no longer exist as keys at all -- only their qualified forms
@@ -124,18 +127,28 @@ fn walk_finds_the_confirmed_production_module_count() {
     assert!(modules.contains("foundation::layout"));
     assert!(!modules.contains("dc55_identity_evidence"));
     assert!(!modules.contains("test_support"));
+    // RFC 131 §6d.2: `active`/`worktree_patch` no longer exist as bare keys either, the same
+    // pattern `foundation` established for its own members.
+    assert!(!modules.contains("active"));
+    assert!(!modules.contains("worktree_patch"));
+    assert!(modules.contains("commit_boundary"));
+    assert!(modules.contains("commit_boundary::active"));
+    assert!(modules.contains("commit_boundary::worktree_patch"));
 }
 
 #[test]
-fn reexports_resolve_active_ref_metadata_to_active() {
+fn reexports_resolve_active_ref_metadata_to_commit_boundary_active() {
+    // RFC 131 §6d.2: `active` grouped under `commit_boundary`, so `lib.rs`'s own `pub use
+    // commit_boundary::active::{...}` now names a two-segment module -- the owner these items
+    // resolve to moved with it, exactly like every other qualified-name rename in this arc.
     let owners = reexports_for_tests(&store_src_root()).expect("reexports parse");
     assert_eq!(
         owners.get("read_active_ref_metadata").map(String::as_str),
-        Some("active")
+        Some("commit_boundary::active")
     );
     assert_eq!(
         owners.get("ActiveRefMetadata").map(String::as_str),
-        Some("active")
+        Some("commit_boundary::active")
     );
 }
 
@@ -143,20 +156,25 @@ fn reexports_resolve_active_ref_metadata_to_active() {
 /// `patch_replay.rs` never writes `crate::active::` anywhere, only the re-exported names.
 #[test]
 fn patch_replay_never_writes_crate_active_directly() {
+    // RFC 131 §6d.2: checks the *current* qualified path -- checking the pre-move string here
+    // would be vacuously true regardless of whether this fact still holds.
     let text = std::fs::read_to_string(store_src_root().join("patch_replay.rs")).unwrap();
-    assert!(!text.contains("crate::active::"));
+    assert!(!text.contains("crate::commit_boundary::active::"));
 }
 
 #[test]
-fn graph_finds_the_re_export_only_edge_from_patch_replay_to_active() {
+fn graph_finds_the_re_export_only_edge_from_patch_replay_to_commit_boundary_active() {
+    // RFC 131 §6d.2: `active` grouped under `commit_boundary`; the re-export-only edge itself is
+    // unchanged, only its target's qualified name moved.
     let graph = build(&store_src_root()).expect("graph builds");
     assert!(
-        graph
-            .edges
-            .contains(&("patch_replay".to_owned(), "active".to_owned())),
-        "patch_replay -> active must be found through the read_active_ref_metadata/\
-         ActiveRefMetadata re-exports even though the module never writes crate::active:: \
-         directly"
+        graph.edges.contains(&(
+            "patch_replay".to_owned(),
+            "commit_boundary::active".to_owned()
+        )),
+        "patch_replay -> commit_boundary::active must be found through the \
+         read_active_ref_metadata/ActiveRefMetadata re-exports even though the module never \
+         writes crate::commit_boundary::active:: directly"
     );
 }
 
@@ -174,21 +192,27 @@ fn graph_finds_the_re_export_only_edge_from_patch_replay_to_active() {
 /// against nine concrete, previously-relied-upon cases rather than one).
 #[test]
 fn every_previously_cited_cycle_leg_survives_at_its_correct_qualified_node() {
+    // RFC 131 §6d.2 (2026-09-10): `active`/`worktree_patch` grouped under `commit_boundary` --
+    // every edge below that named either bare is updated to its new qualified name; none of the
+    // underlying textual references changed, only where the modules that write them now live.
     let graph = build(&store_src_root()).expect("graph builds");
     for (from, to) in [
         // Unchanged: the referencing file already was the top-level file itself.
-        ("active", "refs"),
+        ("commit_boundary::active", "refs"),
         ("trust", "refs"),
-        ("active", "worktree_patch"),
-        ("patch_replay", "active"),
+        ("commit_boundary::active", "commit_boundary::worktree_patch"),
+        ("patch_replay", "commit_boundary::active"),
         // Re-attributed: the old top-level pair named the *group*; the real writer is one of its
         // submodules, on one or both ends.
-        ("refs::evidence", "active"),
+        ("refs::evidence", "commit_boundary::active"),
         ("refs::evidence", "trust"),
         ("lifecycle_cache::replay", "patch_replay::decode"),
         ("patch_replay", "lifecycle_cache::incremental"),
         ("patch_replay", "lifecycle_cache::replay"),
-        ("worktree_patch::node_authoring", "patch_replay"),
+        (
+            "commit_boundary::worktree_patch::node_authoring",
+            "patch_replay",
+        ),
     ] {
         assert!(
             graph.edges.contains(&(from.to_owned(), to.to_owned())),
@@ -200,10 +224,10 @@ fn every_previously_cited_cycle_leg_survives_at_its_correct_qualified_node() {
     // patch_replay` were always the *group's* aggregate attribution of a submodule's own
     // reference, never something refs.rs/lifecycle_cache.rs/worktree_patch.rs wrote itself.
     for (from, to) in [
-        ("refs", "active"),
+        ("refs", "commit_boundary::active"),
         ("refs", "trust"),
         ("lifecycle_cache", "patch_replay"),
-        ("worktree_patch", "patch_replay"),
+        ("commit_boundary::worktree_patch", "patch_replay"),
     ] {
         assert!(
             !graph.edges.contains(&(from.to_owned(), to.to_owned())),
@@ -242,30 +266,31 @@ fn fsutil_has_zero_production_out_edges() {
     assert_eq!(graph.fan_in("foundation"), 0);
 }
 
-/// RFC 131 §6c (2026-09-10): before this amendment, these six top-level names closed a real
+/// RFC 131 §6c (2026-09-10): before that amendment, these six top-level names closed a real
 /// strongly-connected component -- six modules, thirteen edges, pinned here exactly. **That SCC
 /// does not survive qualified naming.** Every one of the thirteen edges was contributed by
 /// concatenating a submodule's own text into its top-level ancestor; measured directly against the
 /// per-file graph, none of the six top-level names has any edge back into the group once each
 /// submodule's own reference is attributed to itself rather than its parent (verified: zero
-/// elementary cycles anywhere in the full 127-node graph, not merely among these six -- see the
-/// round's own report). This test is renamed and repurposed from pinning the SCC's edge set to
-/// pinning its **dissolution**: the exact top-level-to-top-level edge set that remains among the
-/// six (five edges, all of them one-directional -- `graph_matches_every_cited_cycle_leg`'s
-/// successor above shows where each of the old thirteen actually went), plus a direct assertion
-/// that none of the six sits in any multi-member component any more. `DECLARED_CYCLES` is
-/// deliberately left untouched by this round (RFC 131 §6c.2: "populate no allowlist, fix no
-/// cycle") -- its eight entries are now stale against this graph, reported as such rather than
-/// removed; `boundary::coupling::tests::the_real_repository_passes_with_no_undeclared_cycle_or_hub`
-/// documents that failure as the round's own expected, ruled-after-the-number outcome.
+/// elementary cycles anywhere in the full graph, not merely among these six -- see that round's own
+/// report). This test is renamed and repurposed from pinning the SCC's edge set to pinning its
+/// **dissolution**: the exact top-level-to-top-level edge set that remains among the six (five
+/// edges, all of them one-directional -- `every_previously_cited_cycle_leg_survives_at_its_correct_
+/// qualified_node` above shows where each of the old thirteen actually went), plus a direct
+/// assertion that none of the six sits in any multi-member component any more.
+///
+/// **RFC 131 §6d.2 (2026-09-10) moved two of the six**: `active`/`worktree_patch` grouped under
+/// `commit_boundary`, so this test's own node list is updated to `commit_boundary::active`/
+/// `commit_boundary::worktree_patch` -- the same five edges, same shape, just two of the six names
+/// now qualified. Re-measured directly against the real repository rather than assumed unchanged.
 #[test]
 fn the_former_scc_has_dissolved_into_this_five_edge_dag_fragment() {
     let graph = build(&store_src_root()).expect("graph builds");
     let scc_nodes = [
-        "active",
+        "commit_boundary::active",
         "refs",
         "trust",
-        "worktree_patch",
+        "commit_boundary::worktree_patch",
         "patch_replay",
         "lifecycle_cache",
     ];
@@ -277,9 +302,9 @@ fn the_former_scc_has_dissolved_into_this_five_edge_dag_fragment() {
         .collect();
     edges.sort();
     let mut expected: Vec<(String, String)> = [
-        ("active", "refs"),
-        ("active", "worktree_patch"),
-        ("patch_replay", "active"),
+        ("commit_boundary::active", "commit_boundary::worktree_patch"),
+        ("commit_boundary::active", "refs"),
+        ("patch_replay", "commit_boundary::active"),
         ("patch_replay", "refs"),
         ("trust", "refs"),
     ]
@@ -521,13 +546,16 @@ fn control5_a_reexported_item_accessed_with_a_further_segment_still_resolves() {
 /// case specifically.
 #[test]
 fn control5_patch_replay_to_active_survives_through_the_real_repository() {
+    // RFC 131 §6d.2: `active` grouped under `commit_boundary`; the edge itself is unchanged.
     let graph = build(&store_src_root()).expect("graph builds");
     assert!(
-        graph
-            .edges
-            .contains(&("patch_replay".to_owned(), "active".to_owned())),
-        "patch_replay -> active must still be found through crate::ActiveRefMetadata::Valid/\
-         Missing/Invalid -- a multi-segment reference to a re-exported item, not a bare one"
+        graph.edges.contains(&(
+            "patch_replay".to_owned(),
+            "commit_boundary::active".to_owned()
+        )),
+        "patch_replay -> commit_boundary::active must still be found through \
+         crate::ActiveRefMetadata::Valid/Missing/Invalid -- a multi-segment reference to a \
+         re-exported item, not a bare one"
     );
 }
 
@@ -555,15 +583,17 @@ fn control5_patch_replay_to_active_survives_through_the_real_repository() {
 /// the handoff's literal wording; see the round's own report.
 #[test]
 fn subtree_control1_both_traced_pairs_are_reported() {
+    // RFC 131 §6d.2: `active` moved under `commit_boundary` -- the traced pair is unchanged,
+    // only the node's qualified name moved.
     let graph = build(&store_src_root()).expect("graph builds");
     let cycles = graph.subtree_cycles();
     assert!(
-        cycles.contains(&("active".to_owned(), "refs".to_owned())),
-        "expected active -> refs among {cycles:?}"
+        cycles.contains(&("commit_boundary::active".to_owned(), "refs".to_owned())),
+        "expected commit_boundary::active -> refs among {cycles:?}"
     );
     assert!(
-        cycles.contains(&("refs".to_owned(), "active".to_owned())),
-        "expected refs -> active among {cycles:?}"
+        cycles.contains(&("refs".to_owned(), "commit_boundary::active".to_owned())),
+        "expected refs -> commit_boundary::active among {cycles:?}"
     );
     assert!(
         cycles.contains(&(
@@ -759,13 +789,15 @@ fn scc_control1_a_three_node_cycle_is_reported() {
 /// these are the only findings this arc has independently confirmed by hand so far.
 #[test]
 fn scc_control2_the_four_current_pairs_still_report_identically() {
+    // RFC 131 §6d.2: `active`/`worktree_patch` grouped under `commit_boundary` -- the pair
+    // relationships are unchanged, only two of the eight edges' node names moved.
     let graph = build(&store_src_root()).expect("graph builds");
     let cycles: BTreeSet<(String, String)> = graph.subtree_cycles().into_iter().collect();
     for (from, to) in [
-        ("active", "refs"),
-        ("refs", "active"),
-        ("active", "worktree_patch"),
-        ("worktree_patch", "active"),
+        ("commit_boundary::active", "refs"),
+        ("refs", "commit_boundary::active"),
+        ("commit_boundary::active", "commit_boundary::worktree_patch"),
+        ("commit_boundary::worktree_patch", "commit_boundary::active"),
         ("refs", "trust"),
         ("trust", "refs"),
         ("lifecycle_cache::replay", "patch_replay"),

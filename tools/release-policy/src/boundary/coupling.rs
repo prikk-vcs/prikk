@@ -96,7 +96,10 @@ struct DeclaredCycle {
 /// the *raw* graph, which has had zero cycles since `74e6edc2`; see that test's own doc).
 const DECLARED_CYCLES: &[DeclaredCycle] = &[
     DeclaredCycle {
-        edges: &[("active", "refs"), ("refs", "active")],
+        edges: &[
+            ("commit_boundary::active", "refs"),
+            ("refs", "commit_boundary::active"),
+        ],
         reason: "the only cycle anyone had evaluated before this gate: active-session/WAL state \
                   and ref publication are two views of the same commit boundary, and each \
                   legitimately needs to ask the other about it (RFC 130 §2.1's own grandfather)",
@@ -133,7 +136,10 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 better, and not a change this gate should ever encourage",
     },
     DeclaredCycle {
-        edges: &[("active", "worktree_patch"), ("worktree_patch", "active")],
+        edges: &[
+            ("commit_boundary::active", "commit_boundary::worktree_patch"),
+            ("commit_boundary::worktree_patch", "commit_boundary::active"),
+        ],
         reason: "found by this round's own re-derivation, present since 2026-07-03/2026-08-02 \
                   (git log -S on each leg) and missed by every prior pass: `active` asks \
                   `worktree_patch::active_patch_limit_exceeded` whether the queue is full, and \
@@ -148,8 +154,8 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
     },
     DeclaredCycle {
         edges: &[
-            ("worktree_patch", "patch_replay"),
-            ("patch_replay", "active"),
+            ("commit_boundary::worktree_patch", "patch_replay"),
+            ("patch_replay", "commit_boundary::active"),
         ],
         reason: "the original RFC 130 §4a.2/§4b.4 3-cycle's own two edges (its third leg, `active \
                   -> worktree_patch`, now has its own entry above since this round also found the \
@@ -165,7 +171,7 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 not attempted here for the same §7 reason as the others",
     },
     DeclaredCycle {
-        edges: &[("worktree_patch", "lifecycle_cache::replay")],
+        edges: &[("commit_boundary::worktree_patch", "lifecycle_cache::replay")],
         reason: "found by this round's own re-derivation (2026-08-02, DC-66): worktree_patch's \
                   node authoring uses `lifecycle_cache`'s `TextCache`/`materialize_edited_text` \
                   to author text-edit patches against the cached derived state -- an ordinary \
@@ -178,7 +184,7 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 (RFC 122's own consolidation) -- not a change worth making",
     },
     DeclaredCycle {
-        edges: &[("worktree_patch", "refs")],
+        edges: &[("commit_boundary::worktree_patch", "refs")],
         reason: "found by this round's own re-derivation (2026-07-15, DC-38): worktree_patch's \
                   node authoring calls `refs::ensure_no_incomplete_publication` before authoring, \
                   the identical pre-mutation guard `trust.rs` calls at two of its own call sites -- \
@@ -248,7 +254,7 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   exists: a correct consolidation, not sprawl",
     },
     DeclaredHub {
-        module: "active",
+        module: "commit_boundary::active",
         reason: "the active-session/ref-metadata layer every commit-boundary operation touches on \
                   both sides -- readers asking whether an active ref exists and is valid, writers \
                   preparing or clearing it. Newly crossing the threshold as a trend already flagged \

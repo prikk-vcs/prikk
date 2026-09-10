@@ -304,8 +304,8 @@ mod trust;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockPayload, ObjectId, ObjectType, RefKind, RefStatePayload};
 
-use crate::active::ActiveRefMetadata;
 use crate::block_state::{BlockStateOutcome, BlockStateStatus};
+use crate::commit_boundary::active::ActiveRefMetadata;
 use crate::commit_index::{CommitIndexDivergence, verify_divergence};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
 use crate::lifecycle_cache::incremental::{
@@ -1504,7 +1504,7 @@ pub(crate) fn classify_active_wal_metadata(
 ) -> Result<ActiveWalMetadataStatus> {
     match (
         wal_is_empty,
-        crate::active::read_active_ref_metadata_for(layout, name)?,
+        crate::commit_boundary::active::read_active_ref_metadata_for(layout, name)?,
     ) {
         (true, ActiveRefMetadata::Missing) => Ok(ActiveWalMetadataStatus::MissingForEmptyWal),
         (true, ActiveRefMetadata::Valid(ref_name)) => {

@@ -908,11 +908,11 @@ fn a_pbndl001_bundle_imports_and_its_patch_reads_unverifiable() -> prikk_error::
         &prikk_hash::to_hex(&maintainer.public_key_bytes()),
     )?;
     std::fs::write(source.root().join("v1-import.txt"), b"v1 import\n")?;
-    crate::worktree_patch::commit_worktree_changes_signed(
+    crate::commit_boundary::worktree_patch::commit_worktree_changes_signed(
         &source,
         "heads/main",
         "dc53 pbndl001 fixture",
-        crate::worktree_patch::WorktreePatchCommitOptions::default(),
+        crate::commit_boundary::worktree_patch::WorktreePatchCommitOptions::default(),
         &author,
     )?;
     // Records `author`'s key material locally on `source` as a side effect (the same production
@@ -1546,11 +1546,11 @@ fn a_pbndl002_bundle_imports_with_no_manifest_but_recorded_author_key_material()
         source.root().join("dc44-pbndl002.txt"),
         b"dc44 pbndl002 fixture\n",
     )?;
-    crate::worktree_patch::commit_worktree_changes_signed(
+    crate::commit_boundary::worktree_patch::commit_worktree_changes_signed(
         &source,
         "heads/main",
         "dc44 pbndl002 fixture",
-        crate::worktree_patch::WorktreePatchCommitOptions::default(),
+        crate::commit_boundary::worktree_patch::WorktreePatchCommitOptions::default(),
         &author,
     )?;
     crate::rfc111_seal_simulation::simulate_one_seal(&source, "heads/main", &maintainer)?;
@@ -1857,11 +1857,11 @@ fn export_of_a_tag_ref_succeeds_and_the_imported_bundle_verifies() -> prikk_erro
         &prikk_hash::to_hex(&maintainer.public_key_bytes()),
     )?;
     std::fs::write(source.root().join("dc78-tag.txt"), b"dc78 tag fixture\n")?;
-    crate::worktree_patch::commit_worktree_changes_signed(
+    crate::commit_boundary::worktree_patch::commit_worktree_changes_signed(
         &source,
         "heads/main",
         "dc78 tag fixture",
-        crate::worktree_patch::WorktreePatchCommitOptions::default(),
+        crate::commit_boundary::worktree_patch::WorktreePatchCommitOptions::default(),
         &author,
     )?;
     let sealed_ref_state_id =
@@ -1995,11 +1995,11 @@ fn verify_of_a_real_export_succeeds_and_matches_the_export_report() -> prikk_err
         source.root().join("dc44-verify-good.txt"),
         b"dc44 manifest fixture\n",
     )?;
-    crate::worktree_patch::commit_worktree_changes_signed(
+    crate::commit_boundary::worktree_patch::commit_worktree_changes_signed(
         &source,
         "heads/main",
         "dc44 manifest fixture",
-        crate::worktree_patch::WorktreePatchCommitOptions::default(),
+        crate::commit_boundary::worktree_patch::WorktreePatchCommitOptions::default(),
         &author,
     )?;
     let sealed_ref_state_id =

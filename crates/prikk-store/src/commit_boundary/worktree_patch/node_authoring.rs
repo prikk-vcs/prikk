@@ -30,8 +30,15 @@ use prikk_object::{
     PATCH_MESSAGE_SCHEMA, PatchPayload, PatchPurpose, RenamePath, ReplaceBinary,
 };
 
-use crate::active::{prepare_empty_active_ref_for_append, require_active_ref_for_non_empty_wal};
 use crate::author::author_signing::AuthorSigner;
+use crate::commit_boundary::active::{
+    prepare_empty_active_ref_for_append, require_active_ref_for_non_empty_wal,
+};
+use crate::commit_boundary::worktree_patch::{
+    DeclarationDisclosure, DeclarationDisclosureReason, MOVE_HINT_SUMMARY_THRESHOLD,
+    MoveHintCandidate, MoveHints, WorktreePatchCommitOptions, WorktreePatchCommitReport,
+    WorktreePatchOperationKind, WorktreePatchOperationSummary, next_op_seq,
+};
 use crate::commit_index::{self, CommitIndex, CommitIndexEntry};
 use crate::foundation::fsutil::{RootFileStat, read_file_if_exists};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
@@ -45,11 +52,6 @@ use crate::rename_declaration::{clear_rename_declarations, read_rename_declarati
 use crate::text_span;
 use crate::wal::Wal;
 use crate::worktree_marker::worktree_is_dirty;
-use crate::worktree_patch::{
-    DeclarationDisclosure, DeclarationDisclosureReason, MOVE_HINT_SUMMARY_THRESHOLD,
-    MoveHintCandidate, MoveHints, WorktreePatchCommitOptions, WorktreePatchCommitReport,
-    WorktreePatchOperationKind, WorktreePatchOperationSummary, next_op_seq,
-};
 use crate::{
     ActiveRefMetadata, read_active_ref_metadata, remove_active_ref_metadata,
     validate_local_branch_ref,
@@ -255,7 +257,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // computation site: the active WAL's record count, read once above. `>=` (not `>`) is deliberate:
     // once the queue already holds `active_patch_limit` patches, no more may be added; the boundary
     // tests are 799/800/999/1000/1001 against the count *before* this commit's own patch.
-    if crate::worktree_patch::active_patch_limit_exceeded(
+    if crate::commit_boundary::worktree_patch::active_patch_limit_exceeded(
         active_replay.records.len(),
         active_patch_limit,
     ) {
