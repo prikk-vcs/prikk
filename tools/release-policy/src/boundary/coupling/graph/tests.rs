@@ -716,3 +716,153 @@ fn subtree_control5_a_one_directional_dependency_reports_nothing() {
         graph.subtree_cycles()
     );
 }
+
+// RFC 131 §6c.5 -- generalizing subtree cycles from pairs to SCCs. Controls 1-5, named after
+// `subtree-scc-generalisation-handoff-v1.md` §4. `74e6edc2`'s own controls above (prefixed
+// `subtree_control`) are untouched (§5: "do not reopen node identity, resolution, grouped
+// imports, subtree_depends's rule-4 guard, or the hub computation").
+
+/// SCC control 1 (the round's whole point): a 3-node subtree cycle -- `A -> B -> C -> A`, no
+/// mutual 2-node pair anywhere in it -- is reported as one 3-member component, not missed the way
+/// `74e6edc2`'s pairwise-only mechanism would (rule 2 was explicitly two-variable and could not
+/// express this).
+#[test]
+fn scc_control1_a_three_node_cycle_is_reported() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod a;\nmod b;\nmod c;\n");
+    write_module(root, "a.rs", "pub fn f() { crate::b::g(); }\n");
+    write_module(root, "b.rs", "pub fn g() { crate::c::h(); }\n");
+    write_module(root, "c.rs", "pub fn h() { crate::a::f(); }\n");
+    let graph = build(root).expect("graph builds");
+    let cycles: BTreeSet<(String, String)> = graph.subtree_cycles().into_iter().collect();
+    for (from, to) in [("a", "b"), ("b", "c"), ("c", "a")] {
+        assert!(
+            cycles.contains(&(from.to_owned(), to.to_owned())),
+            "expected {from} -> {to} among {cycles:?}"
+        );
+    }
+    // No two of the three form a 2-member component on their own: neither direction of any
+    // "reverse" pair (b->a, c->b, a->c) exists -- this is a genuine 3-cycle, not three separate
+    // mutual pairs coincidentally sharing members.
+    for (from, to) in [("b", "a"), ("c", "b"), ("a", "c")] {
+        assert!(
+            !cycles.contains(&(from.to_owned(), to.to_owned())),
+            "{from} -> {to} must not exist -- this is a one-way 3-cycle, not mutual pairs: \
+             {cycles:?}"
+        );
+    }
+}
+
+/// SCC control 2 (perturbed below): the four pairs `74e6edc2` already found still report
+/// identically -- a regression guard against the real repository, not a synthetic case, since
+/// these are the only findings this arc has independently confirmed by hand so far.
+#[test]
+fn scc_control2_the_four_current_pairs_still_report_identically() {
+    let graph = build(&store_src_root()).expect("graph builds");
+    let cycles: BTreeSet<(String, String)> = graph.subtree_cycles().into_iter().collect();
+    for (from, to) in [
+        ("active", "refs"),
+        ("refs", "active"),
+        ("active", "worktree_patch"),
+        ("worktree_patch", "active"),
+        ("refs", "trust"),
+        ("trust", "refs"),
+        ("lifecycle_cache::replay", "patch_replay"),
+        ("patch_replay", "lifecycle_cache::replay"),
+    ] {
+        assert!(
+            cycles.contains(&(from.to_owned(), to.to_owned())),
+            "expected {from} -> {to} among {cycles:?}"
+        );
+    }
+    // "Reports identically" also means *not diluted* -- a `contains`-only check on the four known
+    // pairs would stay green even if an implementation lumped the whole graph into one blob and
+    // reported hundreds of extra edges alongside them (exactly the failure mode this control's own
+    // perturbation targets). `show` and `text_span` have zero raw `crate::` references to/from
+    // `refs` in either direction (checked directly); their presence here would mean something well
+    // outside the known six-module family got swept in.
+    for (from, to) in [
+        ("show", "refs"),
+        ("refs", "show"),
+        ("text_span", "refs"),
+        ("refs", "text_span"),
+        ("show", "text_span"),
+        ("text_span", "show"),
+    ] {
+        assert!(
+            !cycles.contains(&(from.to_owned(), to.to_owned())),
+            "{from} -> {to} must not be reported -- it is unrelated to the known family: \
+             {cycles:?}"
+        );
+    }
+}
+
+/// SCC control 3: smallest granularity survives at N>2 -- a 3-node cycle where one member's real
+/// participation is entirely through its own child, both directions. `a.rs` itself writes nothing;
+/// only `a::inner` writes `crate::b`, and `c` writes back specifically to `crate::a::inner` (not
+/// bare `crate::a`) -- so the minimal representative must be `a::inner`, not `a`.
+#[test]
+fn scc_control3_smallest_granularity_survives_at_more_than_two_members() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod a;\nmod b;\nmod c;\n");
+    write_module(root, "a.rs", "mod inner;\n");
+    write_module(root, "a/inner.rs", "pub fn f() { crate::b::g(); }\n");
+    write_module(root, "b.rs", "pub fn g() { crate::c::h(); }\n");
+    write_module(root, "c.rs", "pub fn h() { crate::a::inner::f(); }\n");
+    let graph = build(root).expect("graph builds");
+    let cycles: BTreeSet<(String, String)> = graph.subtree_cycles().into_iter().collect();
+    assert!(
+        cycles.contains(&("a::inner".to_owned(), "b".to_owned())),
+        "expected a::inner -> b (the child, not the parent) among {cycles:?}"
+    );
+    assert!(
+        cycles.contains(&("c".to_owned(), "a::inner".to_owned())),
+        "expected c -> a::inner (the child, not the parent) among {cycles:?}"
+    );
+    assert!(
+        !cycles.iter().any(|(from, to)| from == "a" || to == "a"),
+        "the bare parent `a` must not appear -- only `a::inner` is minimal: {cycles:?}"
+    );
+}
+
+/// SCC control 4: rule 4 (ancestor/descendant contributes nothing) still holds, unchanged --
+/// `74e6edc2`'s own two control-3 variants (synthetic and real-repository) are untouched by this
+/// round's diff and still pass on their own; this is a direct pointer to them, not a duplicate.
+/// See `subtree_control3_a_child_referencing_its_own_parent_is_not_a_cycle` and
+/// `subtree_control3_no_reported_pair_is_ancestor_or_descendant_in_the_real_repository` above.
+#[test]
+fn scc_control4_rule_4_still_holds_see_subtree_control3_variants() {
+    let graph = build(&store_src_root()).expect("graph builds");
+    for (from, to) in graph.subtree_cycles() {
+        assert!(
+            !from.starts_with(&format!("{to}::")) && !to.starts_with(&format!("{from}::")),
+            "{from} and {to} are ancestor/descendant -- must never be reported as a cycle"
+        );
+    }
+}
+
+/// SCC control 5: a DAG of subtrees, at any depth and any width, reports nothing -- generalizing
+/// `subtree_control5_a_one_directional_dependency_reports_nothing` from two subtrees to four in a
+/// diamond shape (`a -> b -> d`, `a -> c -> d`, no edge back anywhere).
+#[test]
+fn scc_control5_a_dag_of_subtrees_reports_nothing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod a;\nmod b;\nmod c;\nmod d;\n");
+    write_module(
+        root,
+        "a.rs",
+        "pub fn f() { crate::b::g(); crate::c::h(); }\n",
+    );
+    write_module(root, "b.rs", "pub fn g() { crate::d::i(); }\n");
+    write_module(root, "c.rs", "pub fn h() { crate::d::i(); }\n");
+    write_module(root, "d.rs", "pub fn i() {}\n");
+    let graph = build(root).expect("graph builds");
+    assert!(
+        graph.subtree_cycles().is_empty(),
+        "a DAG must never be reported: {:?}",
+        graph.subtree_cycles()
+    );
+}

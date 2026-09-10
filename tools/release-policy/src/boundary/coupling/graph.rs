@@ -653,34 +653,98 @@ impl ModuleGraph {
             .collect()
     }
 
-    /// RFC 131 §6c.4's subtree-aware cycle detection: every **minimal** pair `(A, B)` whose
-    /// subtrees mutually depend on each other (rule 2), reported as both directed edges `(A, B)`
-    /// and `(B, A)` so the result is directly comparable to `DECLARED_CYCLES`'s own shape.
-    /// "Minimal" (rule 3): neither side can be replaced by one of its own children while the other
-    /// side is held fixed and mutual dependency still holds -- the unique, unambiguous
-    /// local-minimality condition this reduces to (no search-order dependence: if some longer
-    /// narrowing sequence existed, its first step would itself be a single-child narrowing that
-    /// preserves mutuality, which this checks for directly on both sides at once).
-    pub(crate) fn subtree_cycles(&self) -> Vec<(String, String)> {
+    /// RFC 131 §6c.5: strongly-connected components over the [`Self::subtree_depends`] relation
+    /// across every module in this graph -- generalizes §6c.4's pairwise rule 2 to a cycle that
+    /// closes through any number of intermediate nodes, not just a direct mutual pair. Returned
+    /// components have two or more members (Tarjan's own `len() >= 2` filter; `subtree_depends`
+    /// never produces a self-loop, since rule 4 already excludes a node depending on itself).
+    fn subtree_depends_components(&self) -> Vec<BTreeSet<String>> {
         let nodes: Vec<&str> = self.modules.iter().map(String::as_str).collect();
-        let mut reported = Vec::new();
+        let mut successors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for &a in &nodes {
             for &b in &nodes {
-                if a >= b {
-                    continue; // unordered pair; visit each combination once (a < b)
+                if a != b && self.subtree_depends(a, b) {
+                    successors.entry(a).or_default().push(b);
                 }
-                if !self.subtree_depends(a, b) || !self.subtree_depends(b, a) {
-                    continue;
+            }
+        }
+        tarjan_scc(&self.modules, &successors)
+            .into_iter()
+            .map(|component| component.into_iter().map(str::to_owned).collect())
+            .collect()
+    }
+
+    /// Whether `nodes`, considered alone (edges to/from anything outside `nodes` ignored), forms
+    /// exactly one strongly-connected component under `subtree_depends` covering all of `nodes` --
+    /// the test [`Self::minimize_component`] uses to check whether swapping one member for one of
+    /// its own children still holds the whole set together.
+    fn is_one_subtree_scc(&self, nodes: &BTreeSet<String>) -> bool {
+        let node_refs: Vec<&str> = nodes.iter().map(String::as_str).collect();
+        let mut successors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for &a in &node_refs {
+            for &b in &node_refs {
+                if a != b && self.subtree_depends(a, b) {
+                    successors.entry(a).or_default().push(b);
                 }
-                let a_is_minimal = self.children_of(a).into_iter().all(|child| {
-                    !(self.subtree_depends(child, b) && self.subtree_depends(b, child))
-                });
-                let b_is_minimal = self.children_of(b).into_iter().all(|child| {
-                    !(self.subtree_depends(a, child) && self.subtree_depends(child, a))
-                });
-                if a_is_minimal && b_is_minimal {
-                    reported.push((a.to_owned(), b.to_owned()));
-                    reported.push((b.to_owned(), a.to_owned()));
+            }
+        }
+        let components = tarjan_scc(nodes, &successors);
+        components.len() == 1
+            && components
+                .first()
+                .is_some_and(|only| only.len() == nodes.len())
+    }
+
+    /// RFC 131 §6c.5 rule 3, generalized from pairs to N members: repeatedly replace any member
+    /// with one of its own children when doing so still holds the *whole* set together as one SCC
+    /// ([`Self::is_one_subtree_scc`]) -- "a member replaceable by one of its own children while the
+    /// rest of the component is held fixed is not minimal," checked directly rather than assumed.
+    /// Iterates to a fixed point in a fixed, deterministic order (`BTreeSet`/`children_of` are
+    /// already sorted): unlike the N=2 pairwise case -- provably order-independent because
+    /// checking both sides at once has no search order at all -- this N-member reduction is a
+    /// greedy narrowing, and global uniqueness of the minimal set is not proven for N>2. What is
+    /// guaranteed is the fixed point itself: on return, no member can be narrowed to a child
+    /// without breaking the set's own SCC property, which is exactly rule 3's stated condition.
+    fn minimize_component(&self, component: BTreeSet<String>) -> BTreeSet<String> {
+        let mut current = component;
+        loop {
+            let mut narrowed = None;
+            'search: for member in &current {
+                for child in self.children_of(member) {
+                    let mut candidate = current.clone();
+                    candidate.remove(member);
+                    candidate.insert(child.to_owned());
+                    if self.is_one_subtree_scc(&candidate) {
+                        narrowed = Some(candidate);
+                        break 'search;
+                    }
+                }
+            }
+            match narrowed {
+                Some(next) => current = next,
+                None => return current,
+            }
+        }
+    }
+
+    /// RFC 131 §6c.4/§6c.5's subtree-aware cycle detection: every strongly-connected component of
+    /// the `subtree_depends` relation, each reduced to its minimal member set (rule 3), reported as
+    /// the *full* induced edge set among those minimal members -- every pair with `subtree_depends`
+    /// true between them, both directions where mutual, directly comparable to `DECLARED_CYCLES`'s
+    /// own shape (which itself has always meant "every edge found inside the SCC," not a minimal
+    /// cycle cover -- the pre-`42bcab15` raw-node check read the same way: every raw edge with both
+    /// endpoints in the same component). A 2-member component reduces to exactly the pairwise
+    /// `74e6edc2` result -- see `subtree_control2_the_four_current_pairs_still_report_identically`.
+    pub(crate) fn subtree_cycles(&self) -> Vec<(String, String)> {
+        let mut reported = Vec::new();
+        for component in self.subtree_depends_components() {
+            let minimized = self.minimize_component(component);
+            let members: Vec<&String> = minimized.iter().collect();
+            for &a in &members {
+                for &b in &members {
+                    if a != b && self.subtree_depends(a, b) {
+                        reported.push((a.clone(), b.clone()));
+                    }
                 }
             }
         }
@@ -775,8 +839,10 @@ fn search<'a>(
 
 /// Tarjan's strongly-connected-components algorithm, iterative-free (this crate's graphs are far
 /// too small to need it) -- returns every component with two or more members or a self-loop;
-/// callers only care about components that can contain a cycle.
-#[cfg(test)]
+/// callers only care about components that can contain a cycle. RFC 131 §6c.5: a production call
+/// site again (`ModuleGraph::subtree_depends_components`/`is_one_subtree_scc`), not test-only --
+/// unlike `elementary_cycles`/`strongly_connected_components`/`search`/`find_cycles_through`
+/// below, which remain `#[cfg(test)]` (still no production caller of their own).
 fn tarjan_scc<'a>(
     nodes: &'a BTreeSet<String>,
     successors: &BTreeMap<&'a str, Vec<&'a str>>,
