@@ -184,7 +184,9 @@ That is a candidate increment, not a dependency.
 consider very carefully on it, the advancement, before start."* Review request drafted as
 `external-arch/send/draft/009-…`. **Nothing below is to be implemented until that discussion closes.**
 
-### 8a. The prior art runs against this recommendation, and it is recorded before the recommendation
+### 8a. SUPERSEDED by §8b — the prior art, sorted by tool, appeared to run against the recommendation
+
+**WITHDRAWN 2026-09-10.** The sort was by tool; sorted by *where the browse server lives* the same evidence **supports** the ruling — see §8b. Kept because the counterweight was recorded before the recommendation and removing it would rewrite the reasoning's order.
 
 **Git is the outlier, not the rule.** Most comparable systems ship the serving:
 
@@ -230,13 +232,110 @@ available under C at no cost.
 **If the owner prefers A regardless — which is their call — then it should be the hand-rolled variant,
 never a server framework**, and §5's list becomes the increment's requirement set rather than its risk
 register.
+### 8b. RESHAPED 2026-09-10 by external review — the axis was a proxy, and there is a fourth shape
+
+**Reply received** (`external-arch/receive/audit-20260910-web/010-…`), reviewed at
+`.git-exclude/reviewed/external-arch-010-hosting-shape-reply-review-v1.md`. **The conclusion — not A —
+stands. Its foundation, its ordering, and the shape list all change.**
+
+#### CORRECTED — §4's decisive axis was the wrong one
+
+§4 made **prikk's five-crate dependency surface** decisive. **That count is a proxy, and it is exactly
+what the prior art beats**: Fossil ships a built-in server at a low count, and §8 had already conceded
+that a hand-rolled responder costs zero crates. **On the count, the argument loses.**
+
+**The real axis:**
+
+> **What capability does this add to the process that writes repositories and holds the signing paths,
+> and does that capability belong there?**
+
+Shape A's cost is **a listening socket and a permanent inbound attack surface in the binary with write
+authority and key access** — incurred in full by a zero-dependency implementation. §4 stands as a
+description of prikk's posture; **it is no longer the reason for the ruling.**
+
+#### §7's "no writes, structurally" is answered, and it is the same axis
+
+§7 required that a browse view be unable to write and left "how, structurally" open. **The answer is
+not a runtime guard: do not link the write code at all.** A view built on a read-only facet that never
+names `seal`, `publish`, the WAL or lock acquisition makes the refusal a property of what is compiled
+in. **Shape A cannot have that property — it *is* the writing binary.**
+
+#### CORRECTED — §8a's prior art supports the ruling once sorted by the right trait
+
+§8a sorted by tool and concluded "git is the outlier." **Sorted by where the browse server lives:**
+
+- **git's ecosystem is B/C** — `gitweb` (CGI), **`cgit`** (a separate program, dynamic over large
+  history), **`stagit`** (a static generator — a working exemplar that C is viable). git ships none.
+- **Mercurial is both, and its production shape is B** — `hg serve` is A; **`hgweb`** deploys as a WSGI
+  application behind a web server, which is how hg is hosted at scale.
+- **The patch-theory cousins all separated** — `darcsweb`, `darcsden`, Pijul's Nest. **None puts the
+  server in the VCS binary**, and that is the family closest to prikk in model.
+- **Fossil is the lone pure-A, and it is monolithic.**
+
+**A tracks monolithic tools; B/C tracks modular ones and the patch-theory family.** prikk is both
+modular and patch-theoretic.
+
+**And the principled reason §8a declined to invent: Fossil had no B available** — no published library,
+no separable read surface — so it put the server in-binary out of architectural constraint. **prikk can
+buy the dynamic-server capability without paying A's cost, a trade Fossil could not make.** §8a's
+counterweight is withdrawn.
+
+#### NEW — shape D: ship plumbing, not a server
+
+**Git's real lesson is not "borrow an httpd."** It is that git exposed **plumbing**, and every browse
+view — gitweb, cgit, stagit — was built by others on it. **prikk already has the plumbing**: §6's
+exported read surface *is* the browse substrate, today.
+
+**Shape D: prikk commits to a stable-enough read library and ships no server at all.** §6's observation
+that "shape B needs no new prikk feature to start" was half-seeing this — **that is not B, it is D
+already existing.**
+
+#### The reshaped recommendation
+
+- **D is the posture.** prikk provides the read library as the browse substrate and keeps it stable —
+  plumbing, not porcelain, which fits prikk's modular, low-surface identity best.
+- **C is the right first *first-party* convenience** — a literal `export` of the log/index and
+  per-block/per-patch views, **honest about its ceiling**: content-at-a-point over large history is
+  O(paths × points) statically and does not export.
+- **B is the intended answer for the dynamic/large-history case — not "held for later."** It is where
+  cgit, hgweb and darcsden all landed.
+- **A is out**, on the capability axis, not the crate count.
+
+### 8c. CHALLENGED — the reply's own load-bearing assumption fails today, and narrowly
+
+The reply names the assumption its argument rests on: that `prikk-store`'s read surface can be
+presented as a clean read-only facet.
+
+**Measured, it fails as stated.** `history.rs` imports `crate::refs::RefStore`, and **`RefStore::publish`
+is `pub` on that same type** (`refs.rs:272`, `publish_with_object_store` at `:280`). A browse binary
+calling `load_ref_history` links write authority. **"Provable by absence" is not available today.**
+
+**It fails narrowly, on three findings:**
+
+1. **Locks are already clean** — `refs.rs` references `RefLock` / `acquire_container_locks` /
+   `ContainerLockGuard` **zero** times.
+2. **`prikk-store` already carries a feature** (`test-support`), so the `#[cfg]` mechanism for a
+   `read-only` facet is proven in this crate.
+3. **A feature gate is not a crate split**, so RFC 130 §6's ruling against splitting `prikk-store` does
+   not bind it.
+
+**RECORDED, and it changes what "provable" means.** Rust links a crate's whole API; only dead-code
+elimination strips uncalled code from the artifact. **Absence is provable by symbol inspection of the
+built binary, not by construction — unless a `#[cfg]` gate removes it at compile time.** "Do not call
+it" and "do not compile it" look identical in source and are not the same guarantee. **A `read-only`
+feature is what would give the construction-level guarantee**, and it is the concrete next design
+question if D or B is taken.
+
 
 ## 9. Decisions that are the owner's
 
 0. **Whether the external review changes the recommendation.** Held open by the owner's own
    instruction; §8a is the reason it may.
-1. **Shape.** C, B, A, or none. The architect recommends **C**, with B held for later — **at reduced
-   confidence, per §8a**.
+1. **Shape.** **Four now, not three — §8b adds D.** The reshaped recommendation after external review:
+   **D as the posture** (prikk ships the read library as the browse substrate and no server), **C as the
+   first first-party convenience** (`export`, honest about its large-history ceiling), **B as the
+   intended dynamic answer** rather than an afterthought, **A out** on the capability axis. §8a's
+   reduced-confidence caveat is withdrawn — the corrected prior-art sort supports the ruling.
 2. **Whether this is scheduled at all, and against what.** It is currently ranked second and the owner
    has already said it need not be first. **It competes with nothing urgent**, and the honest position is
    that no adopter has asked for it — the stikk project asked for a content surface, which shipped.
