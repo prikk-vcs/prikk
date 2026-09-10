@@ -332,10 +332,12 @@ fn recognition_claim_to_trust_survives_but_is_no_longer_cyclic() {
     );
 }
 
-/// Every SCC-internal edge must be accounted for by some [`super::super::DECLARED_CYCLES`] entry
-/// -- the property the gate itself checks, proven directly against the real graph rather than only
-/// trusted because `check()` is green (which could also be green from a bug that finds no edges at
-/// all).
+/// RFC 131 §6c.4: **no longer the property the gate itself checks** -- `check()` compares
+/// `subtree_cycles()` against `DECLARED_CYCLES` now, not raw-node SCC edges (the raw graph has
+/// zero cycles at all, confirmed at `42bcab15`, so this loop's body never executes -- vacuously
+/// true, not a defect). Kept as a historical fact about the *raw* graph rather than deleted, the
+/// same reasoning `recognition_claim_to_trust_survives_but_is_no_longer_cyclic` and
+/// `the_former_scc_has_dissolved_into_this_five_edge_dag_fragment` already apply.
 #[test]
 fn every_scc_edge_is_covered_by_a_declared_cycle() {
     let graph = build(&store_src_root()).expect("graph builds");
@@ -526,5 +528,191 @@ fn control5_patch_replay_to_active_survives_through_the_real_repository() {
             .contains(&("patch_replay".to_owned(), "active".to_owned())),
         "patch_replay -> active must still be found through crate::ActiveRefMetadata::Valid/\
          Missing/Invalid -- a multi-segment reference to a re-exported item, not a bare one"
+    );
+}
+
+// RFC 131 §6c.4 -- subtree-aware cycle detection. Controls 1-5, named after
+// `subtree-aware-cycles-handoff-v1.md` §4. `42bcab15`'s own controls above are untouched (§5:
+// "do not reopen 42bcab15's node identity, resolution rule, or grouped-import handling").
+
+/// Subtree control 1 (the round's whole point): both pairs traced by hand at review are now
+/// reported. `42bcab15` reported neither (0 cycles anywhere).
+///
+/// **`refs <-> active` is reported exactly as traced** -- `refs.rs` itself never writes
+/// `crate::active::` (only `refs::evidence` does), and `active.rs` writes `crate::refs::`
+/// directly, so `refs` is the smallest subtree on that side (§6c.4 rule 3's own worked example).
+///
+/// **`lifecycle_cache <-> patch_replay` is reported at a node one level deeper than the handoff's
+/// own informal wording** -- checked directly against source, not assumed: `lifecycle_cache.rs`
+/// itself never writes `crate::patch_replay` (confirmed by grep, zero hits); only
+/// `lifecycle_cache/replay.rs` does. `patch_replay.rs` in turn writes `crate::lifecycle_cache::
+/// replay::TextCache` and `crate::lifecycle_cache::replay::apply_queued_patch_envelopes`
+/// (`lifecycle_cache::replay` is a real module, so these resolve there, not to the coarser
+/// `lifecycle_cache`). So the smallest pair the rule actually derives is `lifecycle_cache::replay
+/// <-> patch_replay`, not `lifecycle_cache <-> patch_replay` -- the handoff's own table names the
+/// pair the way the *old*, now-superseded `DECLARED_CYCLES` entry did, not independently re-traced
+/// the way it explicitly did for `refs`/`active`. Reported as a finding, not silently matched to
+/// the handoff's literal wording; see the round's own report.
+#[test]
+fn subtree_control1_both_traced_pairs_are_reported() {
+    let graph = build(&store_src_root()).expect("graph builds");
+    let cycles = graph.subtree_cycles();
+    assert!(
+        cycles.contains(&("active".to_owned(), "refs".to_owned())),
+        "expected active -> refs among {cycles:?}"
+    );
+    assert!(
+        cycles.contains(&("refs".to_owned(), "active".to_owned())),
+        "expected refs -> active among {cycles:?}"
+    );
+    assert!(
+        cycles.contains(&(
+            "lifecycle_cache::replay".to_owned(),
+            "patch_replay".to_owned()
+        )),
+        "expected lifecycle_cache::replay -> patch_replay among {cycles:?}"
+    );
+    assert!(
+        cycles.contains(&(
+            "patch_replay".to_owned(),
+            "lifecycle_cache::replay".to_owned()
+        )),
+        "expected patch_replay -> lifecycle_cache::replay among {cycles:?}"
+    );
+}
+
+/// Subtree control 2: the reported pair is neither the top-level pair by default nor the deepest
+/// node pair -- a synthetic tree where the true minimal pair sits one level below the top on one
+/// side, with a deeper leaf on that same side excluded because the *return* edge does not reach
+/// it. `x::mid::leaf -> y` (forward, from the deepest node on the x side) and `y -> x::mid`
+/// (return, landing at `x::mid`, not at `x::mid::leaf` and not at bare `x`). The deepest node
+/// (`x::mid::leaf`) cannot be the reported pair (nothing reaches specifically into it), and the
+/// top-level node (`x`) is not minimal either (`x::mid` still works and is deeper) -- `x::mid` is
+/// the unique node satisfying both.
+#[test]
+fn subtree_control2_reports_the_smallest_pair_not_top_level_not_deepest() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod x;\nmod y;\n");
+    write_module(root, "x.rs", "mod mid;\n");
+    write_module(root, "x/mid.rs", "mod leaf;\n");
+    write_module(
+        root,
+        "x/mid/leaf.rs",
+        "pub fn f() { crate::y::something(); }\n",
+    );
+    write_module(root, "y.rs", "pub fn g() { crate::x::mid::something(); }\n");
+    let graph = build(root).expect("graph builds");
+    let cycles = graph.subtree_cycles();
+    assert_eq!(
+        cycles,
+        vec![
+            ("x::mid".to_owned(), "y".to_owned()),
+            ("y".to_owned(), "x::mid".to_owned()),
+        ],
+        "expected exactly the (x::mid, y) pair -- neither the top-level (x, y) pair nor the \
+         deepest (x::mid::leaf, y) pair"
+    );
+}
+
+/// Subtree control 3 (perturbed below): a child referencing its own parent absolutely is not a
+/// cycle. Synthetic (a lone child->parent reference, nothing else) plus a direct structural
+/// invariant against the real repository: no reported pair is ever an ancestor/descendant of the
+/// other -- the general form of "none of the 35 files that reference their own parent absolutely
+/// become a reported cycle" the handoff names, checked without needing to enumerate all 35 by
+/// name.
+#[test]
+fn subtree_control3_a_child_referencing_its_own_parent_is_not_a_cycle() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod parent;\n");
+    write_module(root, "parent.rs", "mod child;\n");
+    write_module(
+        root,
+        "parent/child.rs",
+        "pub fn f() { crate::parent::something(); }\n",
+    );
+    let graph = build(root).expect("graph builds");
+    assert!(
+        graph.subtree_cycles().is_empty(),
+        "a child referencing its own parent must not report a cycle: {:?}",
+        graph.subtree_cycles()
+    );
+    assert!(
+        !graph.subtree_depends("parent::child", "parent"),
+        "rule 4: an ancestor/descendant edge contributes nothing, not even one-directional \
+         dependency"
+    );
+}
+
+/// Subtree control 3's real-repository corroboration: no pair `subtree_cycles` reports is ever an
+/// ancestor/descendant of the other, checked against the full 127-node graph rather than trusted
+/// from the synthetic case alone.
+#[test]
+fn subtree_control3_no_reported_pair_is_ancestor_or_descendant_in_the_real_repository() {
+    let graph = build(&store_src_root()).expect("graph builds");
+    for (from, to) in graph.subtree_cycles() {
+        assert!(
+            !from.starts_with(&format!("{to}::")) && !to.starts_with(&format!("{from}::")),
+            "{from} and {to} are ancestor/descendant -- must never be reported as a cycle"
+        );
+    }
+}
+
+/// Subtree control 4: `42bcab15`'s own control 1 (a cycle wholly inside one former top-level
+/// module, `parent::child_a <-> parent::child_b`) must still be *visible* -- subtree-awareness
+/// must not re-hide what qualified naming exposed. `elementary_cycles` (the raw-node check that
+/// test itself uses) is untouched and still passes on its own; this control additionally checks
+/// that `subtree_cycles` -- the new, now-production mechanism -- reports the same pair, since two
+/// leaf-level siblings with no descendants of their own is the degenerate case where subtree
+/// cycles and raw-node cycles coincide.
+#[test]
+fn subtree_control4_a_cycle_inside_one_former_top_level_module_is_still_visible() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod parent;\n");
+    write_module(root, "parent.rs", "mod child_a;\nmod child_b;\n");
+    write_module(
+        root,
+        "parent/child_a.rs",
+        "pub fn a() { crate::parent::child_b::b(); }\n",
+    );
+    write_module(
+        root,
+        "parent/child_b.rs",
+        "pub fn b() { crate::parent::child_a::a(); }\n",
+    );
+    let graph = build(root).expect("graph builds");
+    let cycles = graph.subtree_cycles();
+    assert!(
+        cycles.contains(&("parent::child_a".to_owned(), "parent::child_b".to_owned())),
+        "{cycles:?}"
+    );
+    assert!(
+        cycles.contains(&("parent::child_b".to_owned(), "parent::child_a".to_owned())),
+        "{cycles:?}"
+    );
+}
+
+/// Subtree control 5: a genuinely acyclic pair -- one-directional dependency between two
+/// subtrees, at depth -- reports nothing, at any depth on either side.
+#[test]
+fn subtree_control5_a_one_directional_dependency_reports_nothing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_module(root, "lib.rs", "mod x;\nmod y;\n");
+    write_module(root, "x.rs", "mod inner;\n");
+    write_module(
+        root,
+        "x/inner.rs",
+        "pub fn f() { crate::y::something(); }\n",
+    );
+    write_module(root, "y.rs", "mod inner;\n");
+    write_module(root, "y/inner.rs", "");
+    let graph = build(root).expect("graph builds");
+    assert!(
+        graph.subtree_cycles().is_empty(),
+        "a one-directional dependency must never be reported: {:?}",
+        graph.subtree_cycles()
     );
 }

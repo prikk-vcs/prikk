@@ -246,16 +246,6 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
     },
 ];
 
-/// Whether `cycle` (a sequence of module names, implicitly closing back to its own first member)
-/// traverses the directed edge `from -> to` at some point, wraparound included.
-fn cycle_contains_edge(cycle: &[String], from: &str, to: &str) -> bool {
-    cycle
-        .windows(2)
-        .any(|pair| matches!(pair, [a, b] if a == from && b == to))
-        || cycle.last().is_some_and(|last| last == from)
-            && cycle.first().is_some_and(|first| first == to)
-}
-
 pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
     check_allowlists_are_well_formed(errors);
     let src_root = root.join("crates/prikk-store/src");
@@ -280,39 +270,24 @@ pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
                 .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
         })
         .collect();
-    // Computed once, only to make an undeclared-edge finding actionable: pointing at one concrete
-    // elementary cycle the new edge participates in is far more useful than the bare edge alone.
-    let elementary_cycles = graph.elementary_cycles();
-    for component in graph::strongly_connected_components(&graph) {
-        if component.len() < 2 {
-            continue;
-        }
-        let members: BTreeSet<&str> = component.iter().map(String::as_str).collect();
-        for (from, to) in &graph.edges {
-            if members.contains(from.as_str())
-                && members.contains(to.as_str())
-                && !declared_edges.contains(&(from.clone(), to.clone()))
-            {
-                let example = elementary_cycles
-                    .iter()
-                    .find(|cycle| cycle_contains_edge(cycle, from, to));
-                let cycle_note = example
-                    .and_then(|cycle| {
-                        cycle
-                            .first()
-                            .map(|first| format!(" (e.g. {} -> {first})", cycle.join(" -> ")))
-                    })
-                    .unwrap_or_default();
-                push(
-                    errors,
-                    "module-coupling",
-                    format!(
-                        "undeclared cycle-forming edge: {from} -> {to}{cycle_note} -- add a \
-                         DECLARED_CYCLES entry with a reason and a statement of what would remove \
-                         it, or this is real accidental coupling to fix instead"
-                    ),
-                );
-            }
+    // RFC 131 §6c.4: cycles are computed over subtrees, not raw nodes -- `subtree_cycles` already
+    // reports each mutually-dependent pair at its own smallest exhibiting nodes (rule 3), as both
+    // directed edges, so no separate "find an example cycle" step is needed the way the raw-SCC
+    // check above this once required: the pair itself is the whole explanation. Computed once,
+    // shared with `check_declared_entries_still_exist` below rather than recomputed.
+    let subtree_cycle_edges: BTreeSet<(String, String)> =
+        graph.subtree_cycles().into_iter().collect();
+    for (from, to) in &subtree_cycle_edges {
+        if !declared_edges.contains(&(from.clone(), to.clone())) {
+            push(
+                errors,
+                "module-coupling",
+                format!(
+                    "undeclared subtree-cycle edge: {from} -> {to} -- add a DECLARED_CYCLES entry \
+                     with a reason and a statement of what would remove it, or this is real \
+                     accidental coupling to fix instead"
+                ),
+            );
         }
     }
 
@@ -333,7 +308,7 @@ pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
         }
     }
 
-    check_declared_entries_still_exist(&graph, &declared_edges, errors);
+    check_declared_entries_still_exist(&graph, &declared_edges, &subtree_cycle_edges, errors);
 }
 
 /// Reverse binding (review v1 §5, required follow-up): the allowlist is a ledger of structural
@@ -346,10 +321,15 @@ pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
 fn check_declared_entries_still_exist(
     graph: &graph::ModuleGraph,
     declared_edges: &BTreeSet<(String, String)>,
+    subtree_cycle_edges: &BTreeSet<(String, String)>,
     errors: &mut Vec<BoundaryError>,
 ) {
+    // RFC 131 §6c.4: "still exists" means "still a subtree cycle", not "still a raw edge" -- a
+    // declared pair like `refs -> active` was never a raw edge even before this amendment (the
+    // raw writer is `refs::evidence`), so checking raw `graph.edges` here would flag it stale for
+    // a reason that has nothing to do with whether the coupling it names is still real.
     for (from, to) in declared_edges {
-        if !graph.edges.contains(&(from.clone(), to.clone())) {
+        if !subtree_cycle_edges.contains(&(from.clone(), to.clone())) {
             push(
                 errors,
                 "module-coupling",

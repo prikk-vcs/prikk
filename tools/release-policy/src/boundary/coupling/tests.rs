@@ -90,8 +90,12 @@ fn stale_declared_entries_are_rejected() {
                 .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
         })
         .collect();
+    // No subtree cycles at all in this synthetic graph (empty `edges`) -- every declared edge
+    // must be reported stale, the same way an empty raw `graph.edges` did before RFC 131 §6c.4
+    // moved staleness from "is this a raw edge" to "is this a subtree cycle".
+    let subtree_cycle_edges: BTreeSet<(String, String)> = BTreeSet::new();
     let mut errors = Vec::new();
-    check_declared_entries_still_exist(&graph, &declared_edges, &mut errors);
+    check_declared_entries_still_exist(&graph, &declared_edges, &subtree_cycle_edges, &mut errors);
 
     for (from, to) in &declared_edges {
         assert!(
@@ -147,7 +151,12 @@ fn non_stale_declared_entries_are_accepted() {
         }
     }
     let graph = super::graph::ModuleGraph { modules, edges };
+    // Synthesize that every declared edge is still a current subtree cycle -- this test exercises
+    // `check_declared_entries_still_exist`'s own comparison logic, not `subtree_cycles`'s
+    // computation (covered separately in `graph::tests`), so the "current truth" it compares
+    // against is handed in directly rather than derived from `graph`.
+    let subtree_cycle_edges = declared_edges.clone();
     let mut errors = Vec::new();
-    check_declared_entries_still_exist(&graph, &declared_edges, &mut errors);
+    check_declared_entries_still_exist(&graph, &declared_edges, &subtree_cycle_edges, &mut errors);
     assert!(errors.is_empty(), "{errors:?}");
 }

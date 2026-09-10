@@ -597,6 +597,14 @@ fn crate_idents(edge_text: &str) -> Vec<String> {
     idents
 }
 
+/// Whether `candidate` is `node` itself or a qualified-path ancestor of it (RFC 131 §6c.4 rule 4:
+/// an ancestor/descendant relationship is never coupling). `"refs"` is an ancestor-or-self of
+/// `"refs::evidence"` and of `"refs"` itself; it is not an ancestor of `"refs_other"` (a plain
+/// string-prefix check would wrongly say otherwise without the `::` boundary).
+fn is_ancestor_or_self(candidate: &str, node: &str) -> bool {
+    node == candidate || node.starts_with(&format!("{candidate}::"))
+}
+
 /// The production module coupling graph: distinct (from, to) module pairs, self-loops excluded.
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleGraph {
@@ -613,11 +621,86 @@ impl ModuleGraph {
         self.edges.iter().filter(|(from, _)| from == module).count()
     }
 
+    /// RFC 131 §6c.4 rule 2: whether *any* descendant-or-self of `from` has a raw edge to *any*
+    /// descendant-or-self of `to` -- the question the pre-`42bcab15` gate answered correctly at
+    /// fixed top-level granularity by concatenating descendant text, restored here without that
+    /// fixed granularity. Rule 4: an edge between a node and its own ancestor or descendant is not
+    /// coupling, so `from`/`to` in an ancestor-or-descendant relationship never depend on each
+    /// other by this definition, regardless of what raw edges exist between their subtrees.
+    pub(crate) fn subtree_depends(&self, from: &str, to: &str) -> bool {
+        if is_ancestor_or_self(from, to) || is_ancestor_or_self(to, from) {
+            return false;
+        }
+        let from_prefix = format!("{from}::");
+        let to_prefix = format!("{to}::");
+        self.edges.iter().any(|(a, b)| {
+            (a == from || a.starts_with(&from_prefix)) && (b == to || b.starts_with(&to_prefix))
+        })
+    }
+
+    /// Direct children of `node` among this graph's own known modules (one more `::`-segment than
+    /// `node`, no further).
+    fn children_of(&self, node: &str) -> Vec<&str> {
+        let prefix = format!("{node}::");
+        self.modules
+            .iter()
+            .filter(|module| {
+                module
+                    .strip_prefix(&prefix)
+                    .is_some_and(|rest| !rest.contains("::"))
+            })
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// RFC 131 §6c.4's subtree-aware cycle detection: every **minimal** pair `(A, B)` whose
+    /// subtrees mutually depend on each other (rule 2), reported as both directed edges `(A, B)`
+    /// and `(B, A)` so the result is directly comparable to `DECLARED_CYCLES`'s own shape.
+    /// "Minimal" (rule 3): neither side can be replaced by one of its own children while the other
+    /// side is held fixed and mutual dependency still holds -- the unique, unambiguous
+    /// local-minimality condition this reduces to (no search-order dependence: if some longer
+    /// narrowing sequence existed, its first step would itself be a single-child narrowing that
+    /// preserves mutuality, which this checks for directly on both sides at once).
+    pub(crate) fn subtree_cycles(&self) -> Vec<(String, String)> {
+        let nodes: Vec<&str> = self.modules.iter().map(String::as_str).collect();
+        let mut reported = Vec::new();
+        for &a in &nodes {
+            for &b in &nodes {
+                if a >= b {
+                    continue; // unordered pair; visit each combination once (a < b)
+                }
+                if !self.subtree_depends(a, b) || !self.subtree_depends(b, a) {
+                    continue;
+                }
+                let a_is_minimal = self.children_of(a).into_iter().all(|child| {
+                    !(self.subtree_depends(child, b) && self.subtree_depends(b, child))
+                });
+                let b_is_minimal = self.children_of(b).into_iter().all(|child| {
+                    !(self.subtree_depends(a, child) && self.subtree_depends(child, a))
+                });
+                if a_is_minimal && b_is_minimal {
+                    reported.push((a.to_owned(), b.to_owned()));
+                    reported.push((b.to_owned(), a.to_owned()));
+                }
+            }
+        }
+        reported
+    }
+
     /// Every elementary (simple, node-disjoint-except-for-the-repeated-start) cycle in the graph,
     /// each canonicalised to start at its own lexicographically smallest member so it is reported
     /// exactly once regardless of which node a search happens to begin from. Restricted to one
     /// strongly-connected component at a time (via [`tarjan_scc`]) so the search space is always
     /// just the offending cluster, never the whole graph.
+    ///
+    /// `#[cfg(test)]`, not merely `pub(crate)`: RFC 131 §6c.4 moved `check()`'s own cycle
+    /// comparison from raw-node SCCs to [`Self::subtree_cycles`] -- this and
+    /// [`strongly_connected_components`] are no longer called by production code, only by tests
+    /// studying facts about the *raw* graph directly (e.g. that the pre-`42bcab15` six-module SCC
+    /// no longer forms a multi-member component at all). Kept, not deleted: still a real, tested
+    /// capability, just not a production call site any more -- the same reasoning already applied
+    /// to `production_edge_text_for_tests` and its siblings.
+    #[cfg(test)]
     pub(crate) fn elementary_cycles(&self) -> Vec<Vec<String>> {
         let mut successors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for (from, to) in &self.edges {
@@ -642,6 +725,7 @@ impl ModuleGraph {
     }
 }
 
+#[cfg(test)]
 fn find_cycles_through<'a>(
     start: &'a str,
     remaining: &BTreeSet<&'a str>,
@@ -661,6 +745,7 @@ fn find_cycles_through<'a>(
     );
 }
 
+#[cfg(test)]
 fn search<'a>(
     start: &'a str,
     current: &'a str,
@@ -691,6 +776,7 @@ fn search<'a>(
 /// Tarjan's strongly-connected-components algorithm, iterative-free (this crate's graphs are far
 /// too small to need it) -- returns every component with two or more members or a self-loop;
 /// callers only care about components that can contain a cycle.
+#[cfg(test)]
 fn tarjan_scc<'a>(
     nodes: &'a BTreeSet<String>,
     successors: &BTreeMap<&'a str, Vec<&'a str>>,
@@ -777,8 +863,11 @@ fn tarjan_scc<'a>(
         .collect()
 }
 
-/// Owned-`String` wrapper over [`tarjan_scc`], for callers (this module's own gate check, and its
-/// tests) that need components outliving the graph's borrow.
+/// Owned-`String` wrapper over [`tarjan_scc`], for tests that need components outliving the
+/// graph's borrow. RFC 131 §6c.4: no longer a production call site (`check()` uses
+/// [`ModuleGraph::subtree_cycles`]) -- see that method's own doc for why this stays `#[cfg(test)]`
+/// rather than deleted.
+#[cfg(test)]
 pub(crate) fn strongly_connected_components(graph: &ModuleGraph) -> Vec<Vec<String>> {
     let mut successors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (from, to) in &graph.edges {
