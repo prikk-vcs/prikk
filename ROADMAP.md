@@ -542,11 +542,29 @@ now so it is a recognised threshold rather than a later surprise.
 §6a and §6b followed on 2026-09-03. **`AUD-05` through `AUD-10` are all delivered** — the whole
 no-design-decision half of this program — leaving `AUD-01` through `AUD-04`, which are design work.
 
-### Release position — 0.38.0 tagged 2026-09-10, awaiting publication authorization
+### Release position — 0.38.0 shipped 2026-09-10
 
 **`0.38.0` was cut at `695b7877`** (tag object `fa8c3832`), CI green on **all 15 jobs before the tag**,
-signed tag verified locally before pushing. **crates.io publication is not done and needs its own word**,
-per the standing rule.
+signed tag verified locally before pushing. **`Release` green with 16 assets, all eight crates published
+to crates.io and confirmed live against the sparse index, none yanked.**
+
+**Verified past the workflows' own reports:**
+
+- The Linux asset's SHA-256 matched its declared checksum, and its `build-info.txt` names commit
+  `695b7877` and tag `0.38.0`.
+- **The headline feature works on the shipped binary**, end to end: `prikk commit --from-worktree`
+  authored `create-file a.txt`; `prikk mv a.txt b.txt` printed `moved a.txt -> b.txt` with its
+  authored-into-the-next-commit note; `prikk worktree-status` printed `live rename declarations: 1` and
+  the indented `  a.txt -> b.txt`.
+- **`cargo install prikk --version 0.38.0` from crates.io builds and runs**, which also proves the seven
+  library crates resolve from the registry.
+
+**Publishing as tagged was safe on evidence, not on judgement.** `CHANGELOG.md` is **not in the published
+package** (only `README.md` ships), and **nothing under `crates/`, `tools/`, `Cargo.toml` or `Cargo.lock`
+changed between the tag and the publishing commit** — only three markdown files. So the corrected
+compatibility note reaching `main` after the tag never affected a published byte, and the packaged
+content is identical to the tag's. **The GitHub release needed no recreation** — it was already published,
+not a draft, with all 16 assets.
 
 **It carries three user-facing changes** — `prikk mv` declared-move and rename authoring (RFC 144
 increment 3; **the first sealed prikk history that can contain a rename**), the
