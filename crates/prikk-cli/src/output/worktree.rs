@@ -1,7 +1,8 @@
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::stdout::println;
 use prikk_store::{
-    RefHistory, RenameDeclaration, RepositoryLayout, WorktreeChangeKind, WorktreeStatusReport,
+    HistoryEntry, RefHistory, RenameDeclaration, RepositoryLayout, WorktreeChangeKind,
+    WorktreeStatusReport,
 };
 
 use super::verification::escape_json_string;
@@ -179,4 +180,100 @@ pub(crate) fn print_history(layout: &RepositoryLayout, history: &RefHistory) {
             None => println!("  previous-ref-state: <none>"),
         }
     }
+}
+
+/// `prikk log --format json` (RFC 146): `log-report-v1`, carrying every fact
+/// [`print_history`] does, mirroring `HistoryEntry`'s own nesting rather than flattening it. The
+/// `repository` field matches `status-report-v1`/`worktree-status-report-v1`'s own precedent
+/// (`layout.prikk_dir().display()`), for the same reason: it is already crate-wide convention
+/// (RFC 146 §5's own deliberate-choice question is answered by following it, not departing from
+/// it for this one schema alone).
+///
+/// **`previous_ref_state_id: None` becomes `null`, never an error** (RFC 146 rule 2, the genesis
+/// block's own case) — `patch_messages` mirrors `HistoryEntry`'s own split from `patch_count`
+/// rather than inventing a `null`-padded entry per unmessaged patch, which would require
+/// enumerating every patch in the block (RFC 146 rule 2's "no new computation").
+pub(crate) fn print_history_json(layout: &RepositoryLayout, history: &RefHistory) {
+    let mut json = String::new();
+    json.push_str("{\n");
+    json.push_str("  \"schema_version\": \"log-report-v1\",\n");
+    json.push_str(&format!(
+        "  \"repository\": {},\n",
+        escape_json_string(&layout.prikk_dir().display().to_string())
+    ));
+    json.push_str(&format!(
+        "  \"ref\": {},\n",
+        escape_json_string(&history.ref_name)
+    ));
+    json.push_str("  \"blocks\": [");
+    for (index, entry) in history.entries.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    ");
+        push_history_entry(&mut json, entry);
+    }
+    if !history.entries.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push_str("]\n");
+    json.push('}');
+    println!("{json}");
+}
+
+fn push_history_entry(json: &mut String, entry: &HistoryEntry) {
+    json.push_str("{\n");
+    json.push_str(&format!(
+        "      \"block_id\": {},\n",
+        escape_json_string(&entry.block_id.to_string())
+    ));
+    json.push_str(&format!(
+        "      \"ref_state_id\": {},\n",
+        escape_json_string(&entry.ref_state_id.to_string())
+    ));
+    json.push_str(&format!("      \"update_seq\": {},\n", entry.update_seq));
+    json.push_str(&format!(
+        "      \"kind\": {},\n",
+        escape_json_string(&format!("{:?}", entry.block_kind))
+    ));
+    json.push_str(&format!(
+        "      \"rollback_block\": {},\n",
+        entry.is_rollback_block
+    ));
+    json.push_str(&format!(
+        "      \"parent_count\": {},\n",
+        entry.parent_count
+    ));
+    json.push_str(&format!("      \"patch_count\": {},\n", entry.patch_count));
+    json.push_str(&format!(
+        "      \"rollback_patch_count\": {},\n",
+        entry.rollback_patch_count
+    ));
+    json.push_str(&format!(
+        "      \"required_attestation_count\": {},\n",
+        entry.required_attestation_count
+    ));
+    json.push_str("      \"patch_messages\": [");
+    for (index, patch_message) in entry.patch_messages.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n        {\"patch_id\": ");
+        json.push_str(&escape_json_string(&patch_message.patch_id.to_string()));
+        json.push_str(", \"message\": ");
+        json.push_str(&escape_json_string(&patch_message.message));
+        json.push('}');
+    }
+    if !entry.patch_messages.is_empty() {
+        json.push_str("\n      ");
+    }
+    json.push_str("],\n");
+    match entry.previous_ref_state_id {
+        Some(previous) => json.push_str(&format!(
+            "      \"previous_ref_state_id\": {}\n",
+            escape_json_string(&previous.to_string())
+        )),
+        None => json.push_str("      \"previous_ref_state_id\": null\n"),
+    }
+    json.push_str("    }");
 }

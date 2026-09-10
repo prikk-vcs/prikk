@@ -50,8 +50,8 @@ use args::{
 use commands::CliError;
 use output::{
     QueueTarget, QueueThresholdStatus, print_active_session_repairs, print_checkout_plan,
-    print_command_help, print_doctor_report, print_help, print_history, print_merge_evidence,
-    print_merge_plan, print_patch_deletion_plan, print_patch_inverse_plan,
+    print_command_help, print_doctor_report, print_help, print_history, print_history_json,
+    print_merge_evidence, print_merge_plan, print_patch_deletion_plan, print_patch_inverse_plan,
     print_patch_materialization_report, print_patch_plan_content_json, print_patch_replay_plan,
     print_rollback_draft_report, print_rollback_draft_verification, print_rollback_preview_plan,
     print_show, print_show_json, print_snapshot_checkout_plan,
@@ -644,7 +644,11 @@ fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
         load_ref_history(&layout, &args.ref_name, args.limit)
     }
     .map_err(|err| err.to_string())?;
-    print_history(&layout, &history);
+    if args.format_json {
+        print_history_json(&layout, &history);
+    } else {
+        print_history(&layout, &history);
+    }
     Ok(())
 }
 

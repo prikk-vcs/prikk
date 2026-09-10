@@ -75,9 +75,22 @@ pub fn run_branch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), C
 
 fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut show_all = false;
-    for arg in args {
+    let mut format_json = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--all" => mark_seen(&mut show_all, "--all")?,
+            // RFC 146: the same restricted-value pattern `worktree-status --format json` already
+            // uses -- the only supported value is `json`.
+            "--format" => {
+                let value = flag_value(&mut iter, "branch list --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "branch list --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
             other => return Err(unknown_argument("branch list", other)),
         }
     }
@@ -87,7 +100,7 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     let entries = ref_store
         .list_ref_pointers()
         .map_err(|err| err.to_string())?;
-    let mut printed_any = false;
+    let mut branches = Vec::new();
     for entry in entries {
         let envelope = object_store
             .read_typed(entry.ref_state_id, ObjectType::RefState)
@@ -104,23 +117,43 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
         if payload.closed && !show_all {
             continue;
         }
-        if payload.closed {
-            println!("{} {} (closed)", entry.ref_name, entry.ref_state_id);
-        } else {
-            println!("{} {}", entry.ref_name, entry.ref_state_id);
-        }
-        printed_any = true;
+        branches.push(crate::output::BranchListEntry {
+            ref_name: entry.ref_name,
+            ref_state_id: entry.ref_state_id,
+            closed: payload.closed,
+        });
     }
     // Received refs (DC-78 ruling 4) live entirely outside refs/by-id/ and are never a local
     // branch — listed separately, never interleaved with the loop above, so a received ref can
     // never be mistaken for one this repository can seal to.
-    let received = prikk_store::list_received_pointers(&layout).map_err(|err| err.to_string())?;
-    for pointer in received {
-        println!("{} {} (received)", pointer.ref_name, pointer.ref_state_id);
-        printed_any = true;
-    }
-    if !printed_any {
-        println!("no branches");
+    let received: Vec<crate::output::ReceivedListEntry> =
+        prikk_store::list_received_pointers(&layout)
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .map(|pointer| crate::output::ReceivedListEntry {
+                ref_name: pointer.ref_name,
+                ref_state_id: pointer.ref_state_id,
+            })
+            .collect();
+    if format_json {
+        crate::output::print_branch_list_json(&branches, &received);
+    } else {
+        let mut printed_any = false;
+        for branch in &branches {
+            if branch.closed {
+                println!("{} {} (closed)", branch.ref_name, branch.ref_state_id);
+            } else {
+                println!("{} {}", branch.ref_name, branch.ref_state_id);
+            }
+            printed_any = true;
+        }
+        for entry in &received {
+            println!("{} {} (received)", entry.ref_name, entry.ref_state_id);
+            printed_any = true;
+        }
+        if !printed_any {
+            println!("no branches");
+        }
     }
     Ok(())
 }

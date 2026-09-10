@@ -9,22 +9,26 @@ use prikk_store::{
     SnapshotMaterializationReport,
 };
 
+mod branch;
 mod bundle_preview;
 mod help;
 mod merge_evidence;
 mod patch_plan;
 mod show;
 mod status;
+mod tag;
 mod trust;
 mod verification;
 mod worktree;
 
+pub(crate) use branch::{BranchListEntry, ReceivedListEntry, print_branch_list_json};
 pub(crate) use bundle_preview::{print_bundle_preview_json, print_bundle_preview_plain};
 pub(crate) use help::{print_command_help, print_help};
 pub(crate) use merge_evidence::{print_merge_evidence, print_merge_plan};
 pub(crate) use patch_plan::print_patch_plan_content_json;
 pub(crate) use show::{print_show, print_show_json};
 pub(crate) use status::{QueueTarget, QueueThresholdStatus, print_status_json};
+pub(crate) use tag::{TagListEntry, print_tag_list_json};
 pub(crate) use trust::{
     print_trust_check, print_trust_check_json, print_trust_list, print_trust_list_json,
 };
@@ -32,7 +36,9 @@ pub(crate) use verification::{
     print_active_session_repairs, print_doctor_report, print_verify_report,
     print_verify_report_json,
 };
-pub(crate) use worktree::{print_history, print_worktree_status, print_worktree_status_json};
+pub(crate) use worktree::{
+    print_history, print_history_json, print_worktree_status, print_worktree_status_json,
+};
 
 /// Print a checkout plan.
 pub(crate) fn print_checkout_plan(layout: &RepositoryLayout, plan: &CheckoutPlan) {

@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
-use crate::arg_scan::{SetOnce, flag_value, unknown_argument};
+use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 use crate::stdout::println;
 use prikk_object::{ObjectId, ObjectType, RefKind, RefStatePayload, TagPayload};
@@ -29,9 +29,18 @@ use prikk_store::{
 /// Dispatch `prikk tag [list|create]`.
 pub fn run_tag(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut iter = args.into_iter();
-    match iter.next().as_deref() {
+    let first = iter.next();
+    match first.as_deref() {
         None | Some("list") => run_list(root, iter.collect()),
         Some("create") => run_create(root, iter.collect()),
+        // RFC 146: no explicit subcommand keyword, matching `branch`'s own dispatch
+        // (`branch.rs::run_branch`) -- a leading flag (e.g. bare `prikk tag --format json`) is an
+        // argument to the implicit default, `list`, the same default `None` above already takes.
+        Some(flag) if flag.starts_with('-') => {
+            let mut rest = vec![flag.to_string()];
+            rest.extend(iter);
+            run_list(root, rest)
+        }
         Some(other) => Err(CliError::Usage(format!(
             "unknown tag subcommand: {other} (expected list or create)"
         ))),
@@ -39,8 +48,23 @@ pub fn run_tag(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
 }
 
 fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
-    if let Some(arg) = args.into_iter().next() {
-        return Err(unknown_argument("tag list", &arg));
+    let mut format_json = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            // RFC 146: the same restricted-value pattern `worktree-status --format json` already
+            // uses -- the only supported value is `json`.
+            "--format" => {
+                let value = flag_value(&mut iter, "tag list --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "tag list --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
+            other => return Err(unknown_argument("tag list", other)),
+        }
     }
     let layout = crate::open_repository(root)?;
     let ref_store = RefStore::new(layout.clone());
@@ -48,7 +72,7 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     let entries = ref_store
         .list_ref_pointers()
         .map_err(|err| err.to_string())?;
-    let mut printed_any = false;
+    let mut tags = Vec::new();
     for entry in entries {
         let ref_state_envelope = object_store
             .read_typed(entry.ref_state_id, ObjectType::RefState)
@@ -78,11 +102,22 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             })?;
         let tag_payload = TagPayload::decode_canonical(&tag_envelope.canonical_payload)
             .map_err(|err| err.to_string())?;
-        println!("{} {}", entry.ref_name, tag_payload.target_block_id);
-        printed_any = true;
+        tags.push(crate::output::TagListEntry {
+            ref_name: entry.ref_name,
+            target_block_id: tag_payload.target_block_id,
+        });
     }
-    if !printed_any {
-        println!("no tags");
+    if format_json {
+        crate::output::print_tag_list_json(&tags);
+    } else {
+        let mut printed_any = false;
+        for tag in &tags {
+            println!("{} {}", tag.ref_name, tag.target_block_id);
+            printed_any = true;
+        }
+        if !printed_any {
+            println!("no tags");
+        }
     }
     Ok(())
 }

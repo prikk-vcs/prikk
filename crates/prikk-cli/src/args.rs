@@ -35,6 +35,8 @@ pub(crate) struct LogArgs {
     pub(crate) ref_name: String,
     /// Maximum entries to display.
     pub(crate) limit: usize,
+    /// RFC 146: `true` for `--format json` (`log-report-v1`).
+    pub(crate) format_json: bool,
 }
 
 /// Parsed inverse-plan command arguments.
@@ -161,6 +163,7 @@ pub(crate) fn parse_log_args(args: Vec<String>) -> std::result::Result<LogArgs, 
     let mut path = None;
     let mut ref_name = None;
     let mut limit = None;
+    let mut format_json = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -178,6 +181,17 @@ pub(crate) fn parse_log_args(args: Vec<String>) -> std::result::Result<LogArgs, 
                 })?;
                 limit.set_once("--limit", parsed)?;
             }
+            // RFC 146: the same restricted-value pattern `worktree-status --format json` already
+            // uses -- the only supported value is `json`.
+            "--format" => {
+                let value = flag_value(&mut iter, "log --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "log --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
             other if other.starts_with('-') => return Err(unknown_argument("log", other)),
             _ => {
                 if path.is_some() {
@@ -191,6 +205,7 @@ pub(crate) fn parse_log_args(args: Vec<String>) -> std::result::Result<LogArgs, 
         root: optional_path_or_current(path)?,
         ref_name: ref_name.unwrap_or_else(|| "heads/main".to_string()),
         limit: limit.unwrap_or(DEFAULT_HISTORY_LIMIT),
+        format_json,
     })
 }
 
