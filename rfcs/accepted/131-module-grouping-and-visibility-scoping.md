@@ -71,6 +71,11 @@ each group from §2 as the natural scope. This attacks side-effect predictabilit
 crate-count cost, zero published-API cost, zero release-procedure cost** — and it is reversible one
 item at a time.
 
+**QUALIFIED 2026-09-10 by §6d.7 — this paragraph is about value, not availability.** Censused, the
+middle-hubs turned out to yield **0 of 15** narrowable names: their re-exports are load-bearing
+*because* they are middle-hubs. Pick a narrowing round's files from a measured eligibility census, never
+from the coupling graph alone.
+
 **Start where the cost is real, not where it is easy:** RFC 130 §2.2's four middle-hubs (`refs`,
 `patch_replay`, `wal`, `lifecycle_cache`) and the `active ↔ refs` cycle. Those five are where a change
 propagates in both directions; the wide foundation (`layout`, `fsutil`) is high-impact but
@@ -642,6 +647,67 @@ paths resolving in two test files, test-only either way.
 **RULED generally: a re-export that carries a boundary annotation or holds an established import path is
 kept and narrowed, not removed.** Narrowing achieves the reach reduction; removal only moves the churn
 into consumers. This is settled and is not to be re-opened per module.
+
+### 6d.7 CENSUSED and RULED 2026-09-10 — the route yields 9 names of 91, and §3's "start where the cost is real" is wrong about availability
+
+**The census is a negative result, and it closes the route.** Of the 91 names republished through a
+private `mod` in `prikk-store/src`, **89 are load-bearing** — a real consumer outside the declaring
+module, confirmed by reading each hit and, for the largest contested site, by compiling.
+
+**Corrected figures (mine were wrong twice).** §6d.6 said 37 sites / 89 names. The truth is **25 sites,
+91 names, 39 statements**: 37 was the count of `use` *statements*, not sites — and §6d.6's own per-file
+breakdown already summed to 25, so the section published an unreconciled pair. The name count was short
+because the pattern required a statement to end at the name and therefore **silently skipped every
+aliased re-export** (`use failpoints::fail_after as fail_after_for_test;`) — the construct a reachability
+census least wants to miss.
+
+#### The remaining yield, and where it is
+
+**9 of 91.** `patch_algebra/report.rs`: `analyze_pair_merge_evidence`, `mapping::pair_class_report`
+(verified: zero hits outside `patch_algebra`, against live totals of 9 and 6). `foundation/fsutil`:
+`RootDirEntry`, the four durability implementors (`LinuxDurability`, `MacosDurability`,
+`WindowsDurability`, `NoDurability`), and two `*_barrier_for_test` helpers.
+
+#### CORRECTED — §3's targeting advice inverts availability
+
+§3 says to start where the cost is real: RFC 130 §2.2's middle-hubs, `refs` among them. §6d.6's handoff
+followed that and sent the round at `refs` and `text_span`. **Yield: 0 of 15.** Every one of their
+re-exported names is consumed from outside — `compact.rs:51` (production) for `pointer_index`,
+`node_authoring.rs:992` for `text_span::authoring`, `bundle.rs:98` and `verify.rs:316` for
+`refs::verify`.
+
+**A middle-hub's re-exports are load-bearing *because* it is a middle-hub.** The cross-module traffic
+that makes narrowing valuable is the same traffic that makes it unavailable — **§3 is right about value
+and wrong about feasibility, and they run opposite.** Both of the crate's narrowable names sit in a
+module §6d.6 deferred.
+
+**RULED: census before choosing the target.** §3's "start where the cost is real" stands as a statement
+about *value*; it must not be read as a statement about where narrowing is *possible*. A narrowing round
+picks its files from a measured eligibility census, never from the coupling graph alone.
+
+#### What §6d.6's framing got wrong, and what survives
+
+§6d.6 called the 37 declarations gates that "wall nothing they appear to wall." **The
+declared-visibility half stands: a private `mod` beside a `pub(crate) use` tells a reader something
+false.** That is a §1-column-one readability and accuracy cost and it is real. **The implied reclaimable
+reach does not stand** — 89 of 91 of those names genuinely are consumed crate-wide. **This route is an
+accuracy finding, not an access-surface finding.**
+
+#### AMENDED — §6d.5's "both ends move together" was stated from one case
+
+`fsutil` chains two hops: every name `anchored.rs` re-exports, `fsutil.rs` re-exports again. But
+**`fsutil.rs`'s outer hop has its own genuine crate-wide consumers**, so the inner hop can narrow to
+`pub(in crate::foundation::fsutil)` while the outer hop stays `pub(crate)`.
+
+**Both ends move together only when the outer hop has no independent consumers** — true in
+`lifecycle_cache`, where the re-export existed solely to republish. Where the outer hop is itself used,
+**the inner hop narrows alone.** Found unprompted on deferred work and flagged rather than acted on.
+
+#### Reporting requirement
+
+**Paths in a census table must be root-relative.** `verify/tests/ref_cluster.rs` reads as belonging to
+`refs/verify.rs`, which would have made `refs::container`'s two names narrowable; it is `crate::verify`,
+the top-level module. An ambiguous path nearly produced a finding that was not there.
 
 ### 6b.3 What the round delivered under those constraints
 
