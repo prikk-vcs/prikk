@@ -343,6 +343,43 @@ occasions.
 (`lifecycle_cache↔patch_replay` → `lifecycle_cache::replay↔patch_replay`), 4 pend §6c.5. Nothing is
 added, removed or renamed until the generalisation lands.
 
+### 6c.7 RULED 2026-09-10 — the allowlist decision, deferred three times and now made
+
+**The SCC generalisation at `cc15e616` reproduces RFC 130's own original measurement**: one component,
+**six members, thirteen directed edges**, against RFC 130's line 16 — *"8 `DECLARED_CYCLES` entries
+covering 13 directed edges across a six-module"* component. **That figure predates all three of this
+arc's mechanisms**, so reproducing it is independent evidence the arc has landed on the truth rather
+than on a fourth blindness. The two intermediate mechanisms reported 8 edges and 0.
+
+**CYCLES — all eight entries stand. One rename, applied everywhere the bare name appears.**
+
+`lifecycle_cache` → **`lifecycle_cache::replay`** in every `DECLARED_CYCLES` mention (the
+`lifecycle_cache↔patch_replay` entry and `worktree_patch->lifecycle_cache`). `lifecycle_cache.rs` itself
+writes no component edge; `patch_replay.rs` reaches `crate::lifecycle_cache::replay::…`. **No entry is
+removed, and no reason text changes** — the coupling is the same coupling, named where it actually lives.
+
+**HUBS — the arithmetic settles all five, since `HUB_THRESHOLD` is `min(fan_in, fan_out) >= 6`.**
+
+- **Remove `refs` (28/4, min 4) and `lifecycle_cache` (3/2, min 2).** Neither is a hub. **`refs` with
+  fan-in 28 is a sink, not a middle hub**, and the threshold's `min()` form is deliberately about
+  bidirectional traffic — so removal loses no information that the threshold was ever measuring.
+- **Declare `active` (7/6), `wal` (13/6), `author::author_key_index` (6/6).**
+
+**`active` and `wal` are a recorded artifact returning, not new debt.** `coupling.rs:56-61` already
+states both *"dropped out of the declared set at RFC 131 §2.2a's `foundation` grouping … a real
+consolidation effect rather than a code change to either module"* — `wal`'s min fell 6→2, `active`'s
+6→5. **Qualified naming undoes precisely that collapse**, so each recovers its own previous declared
+reason from git history rather than receiving a newly-invented one.
+
+**`author::author_key_index` is genuinely newly visible** — a submodule no mechanism before
+`42bcab15` could name. Its reason and its *what-would-remove-it* must be written from its actual edge
+list, which is work for whoever has that list in front of them; I will review the reason, not supply it
+from here.
+
+**§6a's prohibition may now be lifted** — the gate can see a cycle wholly inside a group, a cycle
+leaving a subtree through a child, and a cycle closing through a third node. **That is RFC 131's own
+next decision and is not part of closing the allowlist.**
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
