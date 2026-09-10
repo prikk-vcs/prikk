@@ -180,6 +180,32 @@ That is a candidate increment, not a dependency.
 
 ## 8. Recommendation
 
+**HELD FOR EXTERNAL REVIEW 2026-09-10, on the project owner's instruction** — *"I want to discuss and
+consider very carefully on it, the advancement, before start."* Review request drafted as
+`external-arch/send/draft/009-…`. **Nothing below is to be implemented until that discussion closes.**
+
+### 8a. The prior art runs against this recommendation, and it is recorded before the recommendation
+
+**Git is the outlier, not the rule.** Most comparable systems ship the serving:
+
+- **Fossil** — `fossil ui` / `fossil server`, a built-in HTTP server in the same single binary that
+  writes the repository, in a project that is deliberately self-contained and low-dependency. **That is
+  §5's exact objection embodied by the project whose posture most resembles the one §4 is protecting.**
+- **Mercurial** — `hg serve`, built in.
+- **Git** — borrows an external httpd, which is what shape C models.
+
+**So the design this RFC calls wrong is what most comparable systems chose.** No principled reason for
+the split has been found, and one is not invented here. **The most likely candidate, unmeasured and
+stated as a suspicion rather than a finding: a static export must decide in advance what to
+materialize, and a large history makes that either enormous or lossy** — which is precisely what an
+on-demand server avoids.
+
+**These are claims about external projects, not measurements taken here**, and the review request asks
+the external architect to confirm or correct them. **The recommendation below is held at lower
+confidence than the rest of this RFC because of this section.**
+
+
+
 **Recommended: C first, then B if demand survives it. Not A.**
 
 **Why C first.** It costs prikk nothing on the axis that matters — zero dependencies, zero network code,
@@ -207,12 +233,30 @@ register.
 
 ## 9. Decisions that are the owner's
 
-1. **Shape.** C, B, A, or none. The architect recommends **C**, with B held for later.
+0. **Whether the external review changes the recommendation.** Held open by the owner's own
+   instruction; §8a is the reason it may.
+1. **Shape.** C, B, A, or none. The architect recommends **C**, with B held for later — **at reduced
+   confidence, per §8a**.
 2. **Whether this is scheduled at all, and against what.** It is currently ranked second and the owner
    has already said it need not be first. **It competes with nothing urgent**, and the honest position is
    that no adopter has asked for it — the stikk project asked for a content surface, which shipped.
 3. **Whether the `--format json` gap on `log`/`branch`/`tag` (§6a) is worth closing now**, independently
    of the shape decision. The architect thinks yes, on consistency grounds, and it is small.
+
+### 9a. The name is not `instaweb`, and the owner is right
+
+**Owner, 2026-09-10: *"the name of `instaweb` seems unfamiliar with prikk."*** Recorded because it is
+correct and because the reason generalizes.
+
+prikk's command vocabulary is plain and literal throughout — `init`, `commit`, `status`, `seal`,
+`branch`, `tag`, `bundle`, `log`, `checkout`, `show`, `verify`, `doctor`, `unlock`, `compact`, `sync`,
+`mv`. **There is not one portmanteau or coinage in it.** `instaweb` is both, and it is *borrowed* —
+which asserts that prikk's browse view is git's browse view.
+
+**RULED: `instaweb` is not the name, whatever the shape.** The actual name follows the shape and is not
+settled here: under C the thing being named is an **export**, not a server, and `instaweb` would be
+actively misleading for it. **`instaweb` is used in this RFC only as the owner's shorthand for the
+question**, never as a proposed command name.
 
 ## 10. Non-goals
 
