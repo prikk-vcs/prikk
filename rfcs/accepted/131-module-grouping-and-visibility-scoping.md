@@ -594,6 +594,55 @@ origin item and the re-export that republishes it — and eligibility is judged 
 consumers. **Items declared directly in a module's own top-level file that are not
 re-exports remain deferred to grouping**, which is what §6b.2 actually constrains.
 
+### 6d.6 DELIVERED and CORRECTED 2026-09-10 — the ceiling is reached, and §6d.4's actual-access test is unsound
+
+**Delivered at `da8fc40c`: all 10 narrowed at both ends, `lifecycle_cache` now 16 of 23 (70%)** — the
+§6d.5 ceiling fully realized, with the 7 remaining being exactly §6d.4's compiler-confirmed ineligible
+set. **Production 7 of 14, test-only 9 of 9**, reported separately as §6d.5 requires.
+
+#### The correction: an origin-side test cannot see re-export-side reach
+
+§6d.4 says to compute actual access reduction by asking whether an item's own module is `mod x;` or
+`pub(crate) mod x;`, *"the first already limits reach."* **Applied here it returns zero, and the truth is
+ten.** Proven in a detached worktree at the parent commit `03b628bf`:
+
+| path | result |
+|---|---|
+| `crate::lifecycle_cache::StoreBackedResolver` | **compiles** — crate-wide reach existed |
+| `crate::lifecycle_cache::store_resolvers::StoreBackedResolver` | `E0603: module 'store_resolvers' is private` |
+
+Both true at once. The private `mod` **does** wall the origin path, and the reach ran through the
+re-export instead. **My test inspected the wrong path.**
+
+**RULED — the actual-access test is replaced.** Do not read reach off the `mod` line. **Reach is what a
+module outside the scope can name.** Determine it by writing the `use` and letting the compiler answer,
+at the commit *before* the change as well as after — an `E0603` after a narrowing proves unreachability,
+not reduction; only the before/after pair distinguishes a reduction from an item nothing ever reached.
+
+#### The shape is crate-wide: 37 sites, 89 names
+
+Swept `prikk-store/src` for a private `mod x;` with a sibling `pub(crate|super) use x::…`:
+**37 sites republishing 89 names across 8 files** — `refs.rs`, `refs/verify.rs`, `text_span.rs`,
+`patch_algebra.rs`, `patch_algebra/report.rs`, `foundation/fsutil.rs`, `foundation/fsutil/anchored.rs`,
+`test_gates/test_support.rs`. **`refs` is one of RFC 130 §2.2's four middle-hubs**, which §3 names as
+where this RFC should start.
+
+**89 is the count of names whose declared visibility is misread by an origin-side audit — not a count of
+narrowable items.** A re-export exists because something consumes it, and some consumers will be genuine
+crate-wide ones. **Measuring how many are narrowable is the next round's first task** and no figure
+should be quoted before it.
+
+#### The re-export removal question, ruled and closed
+
+Both `lifecycle_cache` re-exports **stay**. `StoreBackedResolver`'s is the documentation site for the E1
+store-access boundary (`lifecycle_cache.rs:60`) — removing it would push that annotation away from the
+module root. The nine `cache_ladder` names' re-export is a §2.2a compatibility shim keeping `super::X`
+paths resolving in two test files, test-only either way.
+
+**RULED generally: a re-export that carries a boundary annotation or holds an established import path is
+kept and narrowed, not removed.** Narrowing achieves the reach reduction; removal only moves the churn
+into consumers. This is settled and is not to be re-opened per module.
+
 ### 6b.3 What the round delivered under those constraints
 
 - **The eight `#[cfg(test)]` modules → `test_gates/`**, eight declarations to one, zero graph impact.
