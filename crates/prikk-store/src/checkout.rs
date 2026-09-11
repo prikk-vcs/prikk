@@ -9,7 +9,7 @@ use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayloa
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
-use crate::refs::RefStore;
+use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::snapshot::SnapshotManifest;
 
 /// Default ref used by checkout planning.
@@ -136,7 +136,12 @@ pub fn prepare_checkout_plan(layout: &RepositoryLayout, ref_name: &str) -> Resul
     };
 
     let ref_state = load_ref_state(&object_store, ref_state_id, ref_name)?;
-    let block_id = ref_state.target_object_id;
+    // RFC 147 §3b: a `Tag` ref-state names a Tag object, not a Block -- one hop away. Resolved
+    // through the same `refs::resolve_ref_tip_block` `bundle`, `patch_set_digest` and
+    // `patch_exchange` already use, rather than a fourth copy of the two-hop walk. It resolves and
+    // never validates (see its own doc); `validate_block_references` below is unchanged and still
+    // does that job.
+    let (block_id, _tag_envelope) = resolve_ref_tip_block(&object_store, &ref_state)?;
     let block = load_block(&object_store, block_id)?;
     validate_block_references(&object_store, &block)?;
     let materialization = materialization_status(&block);

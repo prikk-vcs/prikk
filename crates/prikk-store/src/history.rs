@@ -11,7 +11,7 @@ use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayloa
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::decode_patch_message;
-use crate::refs::RefStore;
+use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::rollback_verify::verify_rollback_patch_envelope;
 
 /// Default number of history entries shown by the CLI.
@@ -99,14 +99,17 @@ pub fn load_ref_history(
             )));
         }
         let ref_state = read_ref_state(&object_store, ref_state_id, ref_name)?;
-        let block = read_block(&object_store, ref_state.target_object_id)?;
+        // RFC 147 §3b: a `Tag` ref-state names a Tag object one hop from its Block. Resolving here
+        // is what removes `read_block`'s "is Tag, expected Block" refusal for a valid tag ref --
+        // that message stays for a genuinely wrong object type, which is all it ever meant to say.
+        let (block_id, _tag_envelope) = resolve_ref_tip_block(&object_store, &ref_state)?;
+        let block = read_block(&object_store, block_id)?;
         let rollback_patch_count =
-            count_rollback_patches(&object_store, ref_state.target_object_id, &block.patch_ids)?;
-        let patch_messages =
-            read_patch_messages(&object_store, ref_state.target_object_id, &block.patch_ids)?;
+            count_rollback_patches(&object_store, block_id, &block.patch_ids)?;
+        let patch_messages = read_patch_messages(&object_store, block_id, &block.patch_ids)?;
         entries.push(HistoryEntry {
             ref_state_id,
-            block_id: ref_state.target_object_id,
+            block_id,
             update_seq: ref_state.update_seq,
             previous_ref_state_id: ref_state.previous_ref_state_id,
             block_kind: block.kind,
@@ -164,14 +167,17 @@ pub fn load_received_ref_history(
             )));
         }
         let ref_state = read_ref_state(&object_store, ref_state_id, origin_ref_name)?;
-        let block = read_block(&object_store, ref_state.target_object_id)?;
+        // RFC 147 §3b, the received half: a received *tag* is reachable today (`bundle export
+        // --ref tags/x` then `bundle import` records `remotes/tags/x`), so this path meets the same
+        // Tag ref-state the local one does and resolves it the same way.
+        let (block_id, _tag_envelope) = resolve_ref_tip_block(&object_store, &ref_state)?;
+        let block = read_block(&object_store, block_id)?;
         let rollback_patch_count =
-            count_rollback_patches(&object_store, ref_state.target_object_id, &block.patch_ids)?;
-        let patch_messages =
-            read_patch_messages(&object_store, ref_state.target_object_id, &block.patch_ids)?;
+            count_rollback_patches(&object_store, block_id, &block.patch_ids)?;
+        let patch_messages = read_patch_messages(&object_store, block_id, &block.patch_ids)?;
         entries.push(HistoryEntry {
             ref_state_id,
-            block_id: ref_state.target_object_id,
+            block_id,
             update_seq: ref_state.update_seq,
             previous_ref_state_id: ref_state.previous_ref_state_id,
             block_kind: block.kind,

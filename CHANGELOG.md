@@ -60,6 +60,22 @@ checked in either case. Both are now `precondition not met`, and both now say wh
 key-binding failure — a trusted key id whose material does not match — still reports `invalid
 signature`.
 
+### Fixed — `prikk log` and `prikk checkout` accept a tag ref
+
+Both refused one. `prikk log --ref tags/v1` reported `integrity error: history object … is tag,
+expected Block` and `prikk checkout --ref tags/v1` reported `object type mismatch: expected block,
+got tag` — a tag ref-state names a tag object, which names the Block one hop further on, and neither
+command took that hop. `prikk bundle export --ref tags/v1` always did, through a shared resolver;
+these now use the same one rather than a fourth copy of the walk.
+
+A tag below the branch tip now reports the **tagged** Block: `log` shows its history, `checkout
+--plan-only` names it as `target block:`, and `checkout --patch-plan --content-path <path>` returns
+the content at that Block rather than at the tip. `prikk inverse-plan` resolves a tag ref for the
+same reason, sharing the same lookup.
+
+Branch refs are unaffected, byte for byte. `prikk worktree-status --ref tags/v1` still refuses — a
+worktree baseline is a branch, and that refusal is correct.
+
 ## 0.38.0 — 2026-09-10
 
 ### Added — `prikk mv <old> <new>`: declared move and rename authoring

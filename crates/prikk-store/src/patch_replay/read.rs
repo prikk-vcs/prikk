@@ -42,7 +42,12 @@ pub(super) fn current_target_block(
             ref_state.ref_name
         )));
     }
-    Ok(ref_state.target_object_id)
+    // RFC 147 §3b: the third un-resolved site, and the one `checkout --patch-plan`/`--content-path`
+    // actually reaches -- `checkout.rs`'s own planner does not serve those modes (`patch_replay.rs`
+    // does, through here), so resolving only there would have left §3b's own control-1 case failing.
+    // Shared with `patch_inverse`, which resolves a tag ref the same way as a result.
+    let (block_id, _tag_envelope) = crate::refs::resolve_ref_tip_block(object_store, &ref_state)?;
+    Ok(block_id)
 }
 
 pub(crate) fn single_parent_chain(

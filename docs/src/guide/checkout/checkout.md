@@ -6,8 +6,12 @@ PR-017 includes a read-only checkout plan:
 prikk checkout --plan-only [path] [--ref heads/main]
 ```
 
-The command validates the current RefState target and reports whether checkout would need snapshot
-materialization or patch application.
+The command resolves the current RefState to its Block and reports whether checkout would need
+snapshot materialization or patch application.
+
+`--ref` takes any published ref, not only a branch: a tag ref resolves through its tag object to the
+Block that object names, so `--ref tags/v1` plans against the tagged Block rather than the branch
+tip. That applies to `--patch-plan` and its `--content-path` reporting too.
 
 For snapshot-backed blocks, first validate the snapshot manifest:
 

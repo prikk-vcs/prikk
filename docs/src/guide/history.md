@@ -6,7 +6,11 @@ PR-014 added a small read-only history view for early sealed repositories. PR-03
 prikk log [path] [--limit N] [--ref REF]
 ```
 
-The command follows the current `RefState` chain from newest to oldest and validates that each entry targets a persisted Block object.
+The command follows the current `RefState` chain from newest to oldest and validates that each entry resolves to a persisted Block object.
+
+`--ref` takes any published ref, not only a branch. A tag ref resolves through its tag object to the
+Block that object names — so `prikk log --ref tags/v1` reports the tagged Block, which need not be
+the branch tip.
 
 For each entry, the CLI reports:
 
