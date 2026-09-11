@@ -80,6 +80,29 @@ embedder, the CLI ceasing to flatten errors to strings, and a move toward librar
 the wrong existing variant is a defect against the taxonomy that already exists, not evidence that it
 needs more variants.** Both are fixable today with nothing reopened.
 
+### 2d. LOCATED 2026-09-12 — the two `Integrity`/`InvalidSignature` sites, a third found, and the fix shape
+
+The RFC 135 docs round (`6fac3575`) located §2c's two sites precisely, and verifying it produced a
+third. All three opened at source.
+
+| site | today | what actually happened | belongs to |
+|---|---|---|---|
+| `trust.rs:214-217` `load_maintainer_trust_policy` | `Integrity("publication trust policy is missing or unreadable")` | `Ok(None)`: **nothing adopted yet**. The `?` already propagates real read errors; the damaged-snapshot case has its own message at `trust_index.rs:533` | `Precondition` |
+| `trust.rs` `add_trusted_maintainer`, collision arm | `InvalidSignature("… already adopted with a different public key")` | a key-id collision detected **before any verification**; the adjacent arm makes re-adding the same key idempotent | `Precondition` |
+| `seal`, signer id absent from policy | `InvalidSignature("maintainer signer key id X is not trusted by policy")` | policy **membership**, not a signature check | `Precondition` |
+
+**One nuance that makes the first a wording decision, not a variant swap**: `Ok(None)` also arises from
+a container truncated below its own header, which replays as no entries. The message therefore leads
+with the overwhelmingly common cause and the actionable step (`prikk trust maintainer add`) **without
+claiming the damage case impossible.**
+
+**RULED: fix all three per-site, in RFC 132's established mould.** `rfcs/handoffs/132-error-taxonomy-structure/`
+already holds per-site moves (`precondition-variant-handoff-v1.md`,
+`six-preconditions-and-the-broad-arm-handoff-v1.md`) that explicitly did not open increment 2, enabled by
+increment 1's `#[non_exhaustive]`. §2c's ruling stands — no RFC 132 trigger fires — and **this is not
+waiting on this RFC's Case A/B rulings**, which are about *reporting* and are separate. Handoff:
+`rfcs/handoffs/132-error-taxonomy-structure/trust-precondition-sites-handoff-v1.md`.
+
 ## 3. Case B — a tag prikk lets you create, then declines to resolve
 
 ```
