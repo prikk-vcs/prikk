@@ -1,9 +1,8 @@
 # RFC 147 §2e — a worktree-status entry says whether `commit` will refuse it, from one classifier
 
-**Ruled:** `rfcs/proposed/147-refusal-visibility.md` §2e.
+**Ruled:** `rfcs/accepted/147-refusal-visibility.md` §2e.
 
-**HOLD: RFC 147 is in `proposed/`.** Do not start until the owner moves it to `accepted/`. **If it does
-not move, this handoff is void.**
+**LIVE — start.** RFC 147 was **accepted by the project owner 2026-09-12** and sits in `rfcs/accepted/`; the hold this handoff carried is lifted.
 
 ## 1. The change, in three parts that land together
 

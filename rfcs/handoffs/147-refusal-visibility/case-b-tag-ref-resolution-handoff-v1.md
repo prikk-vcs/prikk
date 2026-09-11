@@ -1,9 +1,8 @@
 # RFC 147 §3b — `log` and `checkout` resolve a tag ref through the resolver that already exists
 
-**Ruled:** `rfcs/proposed/147-refusal-visibility.md` §3b.
+**Ruled:** `rfcs/accepted/147-refusal-visibility.md` §3b.
 
-**HOLD: RFC 147 is in `proposed/`.** RFC-000 makes folder location lifecycle authority; do not start until
-the owner moves it to `accepted/`. **If it does not move, this handoff is void.**
+**LIVE — start.** RFC 147 was **accepted by the project owner 2026-09-12** and sits in `rfcs/accepted/`; the hold this handoff carried is lifted.
 
 ## 1. The change
 

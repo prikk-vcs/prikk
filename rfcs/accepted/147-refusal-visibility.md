@@ -1,6 +1,6 @@
 # RFC 147 — What the read surface promises about what a write will refuse
 
-**Status.** **PROPOSED 2026-09-10; both cases RULED by the architect 2026-09-12 (§2e, §3b) on the owner's instruction — acceptance is the owner's.** Opened on two reports from the stikk project (letter 006 §4, §6),
+**Status.** **ACCEPTED by the project owner 2026-09-12**, with both cases as ruled in §2e and §3b. Opened 2026-09-10; both handoffs are live. Opened on two reports from the stikk project (letter 006 §4, §6),
 **both reproduced here against the shipped 0.38.0 binary** before this RFC was opened.
 
 **Author-review independence gap:** the architect authored this and will review its implementation.
