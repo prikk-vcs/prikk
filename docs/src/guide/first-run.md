@@ -54,9 +54,49 @@ echo "hello prikk" > ./my-repo/readme.txt
 either flag a path and that seed is written there instead (mode `0600`, refusing to overwrite) and
 **never printed** — see below.
 
+**"Nowhere else" cuts both ways: nothing can recover a printed seed once the terminal is gone.**
+There is no copy anywhere — not in the repository, not in a keyring, not on disk. Lose the AUTHOR
+seed and you can no longer sign patches with that identity; lose the MAINTAINER seed and you can no
+longer seal to a repository that already trusts it. Save both before you close the terminal, or use
+the `--*-seed-out` flags below so they are written instead of printed.
+
 **The trust decision is always shown, never performed silently.** `trusted maintainer key: maintainer`
 is the same line `prikk trust maintainer add` itself prints — registering a maintainer key is a trust
 act, and composing the steps removes the *typing*, never the *seeing*.
+
+## After a reboot: `export` lasts only as long as the shell
+
+`export` sets a variable for *that shell session*. A reboot, a new terminal window, or a new tmux
+pane starts with none of them, and prikk stops working until they are exported again:
+
+```sh
+prikk commit --from-worktree -m "second change"
+```
+
+```
+error: author signing is required: set PRIKK_AUTHOR_KEY_ID (no signing key configured)
+```
+
+**The error names the variable and the cause; what it cannot tell you is where your seed went.**
+prikk never manages a secret's lifecycle — it does not store your seed, look it up, or know where
+you keep it — so re-exporting is yours to arrange. Two facts are all you need to arrange it:
+
+- **A seed written to a file re-exports from that file.** Both `prikk setup --author-seed-out
+  <path>`/`--maintainer-seed-out <path>` and `prikk key generate --out <path>` write the seed at mode
+  `0600` and print the matching `export` line for it, ready to re-run:
+
+  ```
+  export PRIKK_AUTHOR_SEED="$(cat ./author.seed)"
+  ```
+
+  (On Windows these refuse outright — see [`--out`](#prikk-key-generate--a-fresh-seed) below.)
+- **A seed you already hold re-exports from wherever you keep it.** Any value that reaches the
+  environment variable works; prikk only reads the variable. Choosing where a secret lives — a
+  password manager, an encrypted file, a secrets service — is a decision prikk deliberately does not
+  make for you, so this page does not make it either.
+
+Whichever you choose, the public key never needs saving: `prikk key public --seed-env` derives it
+from the seed again at any time.
 
 ## The commands `setup` composes — and when you'd use them directly
 
@@ -138,9 +178,77 @@ Two independent roles, two independent seeds:
 - **MAINTAINER** signs the Block, RefState, and RefUpdate a `seal` publishes, and must be registered
   with `trust maintainer add` first.
 
+**Trust is per-repository.** The trust policy a maintainer key is adopted into belongs to one
+repository, so **the same maintainer key must be trusted again in every repository you seal in** —
+adoption is a trust act about *this* repository, not a machine-wide or account-wide setting. An
+AUTHOR key has no such step anywhere, which is why it travels for free.
+
 `setup` generates one of each, but a single seed works as either role — `key generate` prints the
 maintainer framing because that is the one role requiring a visible trust step, but the same seed
 exported as `PRIKK_AUTHOR_KEY_ID`/`PRIKK_AUTHOR_SEED` works too, with no trust step at all.
+
+## A second project
+
+Two routes, and which one is right depends on whether the projects share a trust domain.
+
+**Fresh keys — `prikk setup` again.** The right default when the projects are unrelated:
+
+```sh
+prikk setup ./other-repo
+```
+
+Everything above applies unchanged, including saving the printed seeds. Run it in a directory that
+does not already contain a repository: pointed at an existing one, `setup` re-runs `init`
+(harmless — it is idempotent) and then fails on the already-adopted key id, leaving the existing
+repository intact but giving you no next step.
+
+**Reuse the keys you already have.** Right when it is the same person and the same trust domain.
+Only one extra step over the first project — the maintainer key must be trusted here too:
+
+```sh
+cd ./second-project
+prikk init .
+# export the same PRIKK_AUTHOR_* and PRIKK_MAINTAINER_* values as before
+prikk commit --from-worktree -m "genesis"
+```
+
+The commit succeeds: an AUTHOR key is registered nowhere, so it needs nothing from this repository.
+The seal does not, yet:
+
+```sh
+prikk seal --allow-no-audit
+```
+
+```
+error: integrity error: publication trust policy is missing or unreadable
+```
+
+**Nothing is damaged — this repository has simply adopted no maintainer key yet**, which is the
+state every new repository starts in. Adopt it, deriving the public key from the seed you already
+hold:
+
+```sh
+export MY_SEED="<your maintainer seed>"   # or: export MY_SEED="$(cat ./maintainer.seed)"
+prikk key public --seed-env MY_SEED
+```
+
+```
+public key: 27b081593fa86489f9356ef4bc0cbf5f4a5a5b708aa1a10f1a8187fd56a34801
+```
+
+```sh
+prikk trust maintainer add --key-id maintainer --public-key 27b081593fa86489f9356ef4bc0cbf5f4a5a5b708aa1a10f1a8187fd56a34801
+prikk seal --allow-no-audit
+```
+
+```
+trusted maintainer key: maintainer
+adopted maintainer keys: 1
+sealed active WAL into block
+```
+
+The `--key-id` must match the `PRIKK_MAINTAINER_KEY_ID` you export; `seal` checks the exported
+signer against what this repository trusts under that id.
 
 ## Claim-to-Source Anchors
 
@@ -150,6 +258,7 @@ exported as `PRIKK_AUTHOR_KEY_ID`/`PRIKK_AUTHOR_SEED` works too, with no trust s
 | A generated seed draws from the OS CSPRNG and is never accepted on argv; `key public` reads it from a named environment variable. | [`prikk-crypto/src/lib.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-crypto/src/lib.rs) (`generate_seed`), [`key.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/key.rs) |
 | `--out` writes the seed at mode `0600`, refuses to overwrite, and refuses a path inside `.prikk/`; it refuses outright on Windows. | [`key.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/key.rs) (`write_seed_to_path`) |
 | `setup` shows the trust decision it makes, and prints nothing that reproduces without your own OS entropy. | [`setup.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/setup.rs) |
+| Maintainer trust is per-repository: `seal` checks the exported signer against the trust policy of the repository being sealed, so the same key must be adopted again in each one. | [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs) (`verify_signer_trusted`, which resolves the policy from the `RepositoryLayout` it is given) |
 
 ## Provenance
 
