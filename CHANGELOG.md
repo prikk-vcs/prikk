@@ -22,10 +22,18 @@ malformed `--format`, unchanged everywhere else.
 all: unlike `branch`, `tag` had no leading-flag dispatch arm, so a flag-first argument list was an
 unknown subcommand. That arm now exists, matching `branch`. No prose line changed.
 
-Known and carried: `prikk branch` has always listed tag refs alongside branches, because the
-listing never filtered by ref kind while `prikk tag` did. `branch-list-v1` therefore reports a tag
-under `branches` today, with a `closed` field that means nothing for it. Fixed in the next
-increment rather than widened into the schema.
+### Fixed — `prikk branch` no longer lists tag refs
+
+`prikk branch` had always listed tag refs alongside branches: the listing never filtered by ref
+kind, while `prikk tag` always did. In prose that was a display slip; in `branch-list-v1` it would
+have been structured data asserting a tag is a branch, carrying a `closed` field that means nothing
+for one. The listing now filters to branch refs in both forms, so the schema never shipped the
+wrong row. `prikk tag` is unchanged and still lists every tag.
+
+A received *tag* — imported by `bundle import` from an origin's own tag ref — is still reported in
+`branch-list-v1`'s `received` array, which carries no kind. It is the only listing that reports it
+at all today (`prikk tag` lists local tags only), so this is left as-is pending a decision rather
+than removed.
 
 ## 0.38.0 — 2026-09-10
 

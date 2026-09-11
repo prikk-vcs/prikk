@@ -395,12 +395,22 @@ fn branch_prose_and_json_agree_open_and_closed() {
         &support::branch_close(&repo, "heads/topic"),
         "branch close heads/topic",
     );
+    // RFC 146 §8a: a tag ref in the fixture, so its *absence* from `branch` is asserted rather
+    // than merely incidental -- `list_ref_pointers` returns every kind and the listing must filter.
+    support::ok(
+        &support::tag_create(&repo, "tags/v1", "heads/main"),
+        "tag create tags/v1",
+    );
 
     // Without --all: closed branch omitted in both forms.
     let prose = support::prikk(&repo).args(["branch"]).output().unwrap();
     support::ok(&prose, "branch prose");
     let prose_text = stdout_of(&prose);
     assert!(!prose_text.contains("heads/topic"));
+    assert!(
+        !prose_text.contains("tags/v1"),
+        "a tag ref must not be listed as a branch: {prose_text}"
+    );
 
     let json_out = support::prikk(&repo)
         .args(["branch", "--format", "json"])
@@ -410,7 +420,11 @@ fn branch_prose_and_json_agree_open_and_closed() {
     let value = json_of(&json_out);
     assert_eq!(value.get("schema_version").as_str(), "branch-list-v1");
     let branches = value.get("branches").as_array();
-    assert_eq!(branches.len(), 1, "the closed branch must be omitted");
+    assert_eq!(
+        branches.len(),
+        1,
+        "the closed branch and the tag must both be omitted: {branches:?}"
+    );
     assert_eq!(branches[0].get("ref_name").as_str(), "heads/main");
     assert!(!branches[0].get("closed").as_bool());
 
@@ -423,6 +437,12 @@ fn branch_prose_and_json_agree_open_and_closed() {
     assert!(
         stdout_of(&prose_all).contains("heads/topic") && stdout_of(&prose_all).contains("(closed)")
     );
+    // `--all` widens *closed-ness*, never kind: the tag stays out of the branch listing either way.
+    assert!(
+        !stdout_of(&prose_all).contains("tags/v1"),
+        "--all must not admit a tag ref into the branch listing: {}",
+        stdout_of(&prose_all)
+    );
 
     let json_all = support::prikk(&repo)
         .args(["branch", "--format", "json", "--all"])
@@ -431,16 +451,75 @@ fn branch_prose_and_json_agree_open_and_closed() {
     support::ok(&json_all, "branch --all json");
     let value_all = json_of(&json_all);
     let branches_all = value_all.get("branches").as_array();
-    assert_eq!(branches_all.len(), 2);
+    assert_eq!(
+        branches_all.len(),
+        2,
+        "--all admits the closed branch and nothing else: {branches_all:?}"
+    );
     let topic = branches_all
         .iter()
         .find(|b| b.get("ref_name").as_str() == "heads/topic")
         .expect("heads/topic must be present with --all");
     assert!(topic.get("closed").as_bool());
     assert!(
+        branches_all
+            .iter()
+            .all(|b| b.get("ref_name").as_str() != "tags/v1"),
+        "--all must not admit a tag ref into `branches`: {branches_all:?}"
+    );
+    assert!(
         !stdout_of(&json_all).contains("(closed)"),
         "JSON must never carry the prose marker text"
     );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// RFC 146 §8a control 2: the kind filter belongs to `branch` alone. A filter that leaked into the
+/// wrong command -- `tag` dropping the very refs it exists to list -- is the failure this round
+/// could introduce, so the same fixture that proves `branch` excludes a tag proves `tag` includes
+/// it, in both forms.
+#[test]
+fn tag_still_lists_what_branch_now_filters_out() {
+    let repo = support::unique_repo("rfc146-kind-filter-no-leak");
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "a.txt", b"hello\n", "genesis");
+    support::ok(
+        &support::tag_create(&repo, "tags/v1", "heads/main"),
+        "tag create tags/v1",
+    );
+
+    let branch_json = support::prikk(&repo)
+        .args(["branch", "--format", "json"])
+        .output()
+        .unwrap();
+    support::ok(&branch_json, "branch json");
+    let branches = json_of(&branch_json);
+    let branches = branches.get("branches").as_array();
+    assert!(
+        branches
+            .iter()
+            .all(|b| b.get("ref_name").as_str() != "tags/v1"),
+        "branch must exclude the tag: {branches:?}"
+    );
+    assert_eq!(branches.len(), 1, "heads/main alone: {branches:?}");
+
+    let tag_prose = support::prikk(&repo).args(["tag"]).output().unwrap();
+    support::ok(&tag_prose, "tag prose");
+    assert!(
+        stdout_of(&tag_prose).contains("tags/v1"),
+        "tag must still list it: {}",
+        stdout_of(&tag_prose)
+    );
+
+    let tag_json = support::prikk(&repo)
+        .args(["tag", "--format", "json"])
+        .output()
+        .unwrap();
+    support::ok(&tag_json, "tag json");
+    let tags = json_of(&tag_json);
+    let tags = tags.get("tags").as_array();
+    assert_eq!(tags.len(), 1, "tag must still list it: {tags:?}");
+    assert_eq!(tags[0].get("ref_name").as_str(), "tags/v1");
     let _ = std::fs::remove_dir_all(&repo);
 }
 

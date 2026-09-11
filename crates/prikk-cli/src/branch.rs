@@ -114,6 +114,15 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
         let payload =
             RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)
                 .map_err(|err| err.to_string())?;
+        // RFC 146 §8a: `list_ref_pointers` returns every kind, so without this a tag ref was
+        // listed as a branch -- a display slip in prose, but in `branch-list-v1` structured data
+        // asserting a tag *is* a branch, carrying a `closed` boolean that means nothing for one.
+        // `tag.rs`'s own listing has filtered on `RefKind::Tag` since it was written; this is the
+        // same check on the other side. No new decode: `kind` comes from the payload the `closed`
+        // flag below already needed.
+        if payload.kind != RefKind::Branch {
+            continue;
+        }
         if payload.closed && !show_all {
             continue;
         }
