@@ -1,6 +1,6 @@
 # RFC 147 — What the read surface promises about what a write will refuse
 
-**Status.** **PROPOSED 2026-09-10**, on two reports from the stikk project (letter 006 §4, §6),
+**Status.** **PROPOSED 2026-09-10; both cases RULED by the architect 2026-09-12 (§2e, §3b) on the owner's instruction — acceptance is the owner's.** Opened on two reports from the stikk project (letter 006 §4, §6),
 **both reproduced here against the shipped 0.38.0 binary** before this RFC was opened.
 
 **Author-review independence gap:** the architect authored this and will review its implementation.
@@ -120,6 +120,43 @@ increment 1's `#[non_exhaustive]`. §2c's ruling stands — no RFC 132 trigger f
 waiting on this RFC's Case A/B rulings**, which are about *reporting* and are separate. Handoff:
 `rfcs/handoffs/132-error-taxonomy-structure/trust-precondition-sites-handoff-v1.md`.
 
+### 2e. RULED 2026-09-12 — Case A: a per-entry field, one shared classifier, and the class fixed with it
+
+**Three facts, checked at source, decide §2b:**
+
+1. **`unsupported-path` is documented as a name category.** `WorktreeChangeKind::UnsupportedPath`'s own
+   doc: *"A worktree path could not be safely represented as a Prikk repo path."* Widening it (option 1)
+   would redefine a documented, shipped, machine-branchable value. **Rejected.**
+2. **The refusal is a class, and status already half-sees it in prose.** `AuthorError` carries
+   `UnsupportedSymlinkAuthoring` and `UnsupportedKindTransition` (create, modify, rename and delete of a
+   symlink; file↔directory transitions). `worktree_status.rs:172-173` already detects a tracked path that
+   is now a symlink or directory — and reports it as **`kind: modified`, detail: "tracked path is not a
+   regular file"**. So the tracked case is genuinely *modified* **and** will be refused: **two truths, one
+   `kind` slot.** A new `kind` (option 2) cannot carry both. **Rejected.**
+3. **Adding a field within `-v1` is settled precedent.** `worktree-status-report-v1` gained
+   `declarations` at 0.38.0 (`output/worktree.rs:125`) without a version bump; JSON consumers ignore
+   unknown fields by construction. **Additive.**
+
+**RULED: option 3, per entry.** Each worktree change entry gains an orthogonal field — `authoring`, with
+values `"authored"` or `"refused"`, and when refused a `refusal` string naming why. `kind` keeps its
+meaning; `unsupported-path` keeps its documented meaning. The report gains a count: prose
+`refused paths: N`, JSON `refused_count`. **This answers the consumer's actual question — "will this
+commit succeed, and on which path?" — per path, which is what client-side prevention needs.**
+
+**The predicate comes from one place.** Status may mark `refused` **only** from a classifier
+`node_authoring` itself exposes and uses — one function, both callers. **Two copies of authoring's
+refusal rules is how they drift**, and drift here would recreate the exact defect this rules out. RFC
+108's own lesson: one shared classifier makes parity a property, not a decision.
+
+**The class travels with it.** `node_authoring.rs:121`, `impl From<AuthorError> for PrikkError`, is where
+`UnsupportedSymlinkAuthoring` and `UnsupportedKindTransition` become `Integrity`. **They are
+preconditions**, and the round that adds the field reclassifies them in RFC 132's per-site mould — the
+messages will be quoted by the new `refusal` strings, so the two must land together. The other
+`AuthorError` variants are the round's to judge by the same rule, not to move by momentum.
+
+**`commit --dry-run` (option 4): not now.** With `refused` on every entry, status *is* the dry run for
+this class. Recorded as the shape to revisit if a refusal ever depends on state status cannot see.
+
 ## 3. Case B — a tag prikk lets you create, then declines to resolve
 
 ```
@@ -158,6 +195,47 @@ for exactly this situation**, which is what makes it an inconsistency rather tha
 **Unruled.** stikk is not asking for this and says so; they raised it as an internal inconsistency and
 asked that it be weighed apart from their real request.
 
+### 3b. RULED 2026-09-12 — Case B: dereference, through the resolver that already exists; the §6 lean is withdrawn
+
+**The fact that decides it, found by measuring rather than reading:** `refs::resolve_ref_tip_block`
+already exists, documented as *the* two-hop ref-tip resolution — *"`Branch` names a Block directly;
+`Tag` names a Tag object one hop away"* — **consolidated after the same analysis had been re-derived
+three times.** Its callers are `bundle.rs`, `patch_set_digest.rs`, `patch_exchange.rs`. **Checkout and
+log are not among them.**
+
+A tag ref driven through the read surface, on a real repository:
+
+| command | result |
+|---|---|
+| `bundle export --ref tags/v1` | **exit 0, exported** — uses the resolver |
+| `checkout --plan-only --ref tags/v1` | exit 1, `object type mismatch: expected block, got tag` |
+| `checkout --patch-plan --content-path … --ref tags/v1` | exit 1, same |
+| `log --ref tags/v1` | exit 1, **`integrity error: history object … is Tag, expected Block`** |
+| `worktree-status --ref tags/v1` | exit 1, `invalid name: ref namespace is reserved` |
+
+**Two sites re-derive the resolution and get it wrong**: `checkout.rs:138-139` takes
+`ref_state.target_object_id` as a block; `history.rs:277-279` does the same and calls the result
+`Integrity`. Both `checkout` modes flow through the first (`patch_checkout.rs` has no resolution of its
+own). **`worktree-status`'s refusal is different and correct** — `validate_local_branch_ref`
+(`refs.rs:551-557`) deliberately admits only `heads/`; a worktree baseline is a branch concept, and the
+class is `InvalidName`. Untouched.
+
+**RULED: option 2.** Route `checkout.rs:138` and `history.rs:277` through `refs::resolve_ref_tip_block`.
+A tag reads as its target block in `log`, `checkout --plan-only`, `--patch-plan`, and `--content-path`.
+No new capability is invented — the resolver, the model (ref → tag object → block, per `tag.rs`'s own
+module doc) and the working precedent (`bundle`) all exist; this is the fourth and fifth call site
+joining the first three. **`history.rs`'s `Integrity` on a tag disappears with the fix rather than
+needing its own reclassification.**
+
+**§6's lean — option 3, refuse at `tag create` — is withdrawn.** It would break `bundle export --ref
+tags/x`, which works today, and it would contradict the tag model to protect a resolver two commands
+never adopted. **Option 1 is subsumed**: with dereferencing, `materialization:` reports the target
+block's real state, which is the vocabulary §3a asked for.
+
+**A byproduct worth naming:** this gives the stikk project **block-addressable content for any tagged
+block** — the `--ref tags/<name>` row of their RFC 144 §4t table stops failing. It does not answer bare
+`--ref <block-id>`, which stays RFC 144's question.
+
 ## 4. What this RFC does not cover
 
 - **Block-addressable content** (stikk letter 006 §5) — a real request, larger than these two, and
@@ -173,6 +251,8 @@ asked that it be weighed apart from their real request.
 - **No `--dry-run` by default.** If §2b lands on option 4, it is its own increment with its own design.
 
 ## 6. The architect's lean, stated so the owner can disagree with something concrete
+
+**SUPERSEDED 2026-09-12 by §2e and §3b, which rule on measured facts.** Kept so the reversal on Case B is visible: the lean below preferred refusing at `tag create`; the facts preferred the resolver that already existed.
 
 - **Case A: option 2 or 3, not option 1.** A shipped machine-branchable value should not gain members
   silently, and a consumer's real question — *"will this commit succeed?"* — is about the commit, not

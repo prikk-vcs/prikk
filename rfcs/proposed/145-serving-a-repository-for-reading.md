@@ -1,6 +1,6 @@
 # RFC 145 — Serving a repository for reading
 
-**Status.** **PROPOSED 2026-09-10.** Opened by the architect on the project owner's direction of
+**Status.** **PROPOSED 2026-09-10; RULED by the architect 2026-09-12 (§9) on the owner's instruction — acceptance is the owner's.** Opened by the architect on the project owner's direction of
 2026-09-06, scheduled in `ROADMAP.md` as *"Open the hosting-shape RFC — `prikk instaweb` vs. a separate
 small server"* and deliberately not ranked first (owner: *"No need to take it as the most
 prioritized."*).
@@ -327,20 +327,59 @@ feature is what would give the construction-level guarantee**, and it is the con
 question if D or B is taken.
 
 
-## 9. Decisions that are the owner's
+### 8d. RULED 2026-09-12 — shape D's substrate is the CLI, not the crate; the architect's own §8b was a stability promise in disguise
 
-0. **Whether the external review changes the recommendation.** Held open by the owner's own
-   instruction; §8a is the reason it may.
-1. **Shape.** **Four now, not three — §8b adds D.** The reshaped recommendation after external review:
-   **D as the posture** (prikk ships the read library as the browse substrate and no server), **C as the
-   first first-party convenience** (`export`, honest about its large-history ceiling), **B as the
-   intended dynamic answer** rather than an afterthought, **A out** on the capability axis. §8a's
-   reduced-confidence caveat is withdrawn — the corrected prior-art sort supports the ruling.
-2. **Whether this is scheduled at all, and against what.** It is currently ranked second and the owner
-   has already said it need not be first. **It competes with nothing urgent**, and the honest position is
-   that no adopter has asked for it — the stikk project asked for a content surface, which shipped.
-3. **Whether the `--format json` gap on `log`/`branch`/`tag` (§6a) is worth closing now**, independently
-   of the shape decision. The architect thinks yes, on consistency grounds, and it is small.
+**§8b's shape D, verbatim: *"prikk commits to a stable-enough read library and ships no server at all."***
+**That sentence is RFC 132 §5's third re-open trigger in six words** — *"any move toward a library
+stability promise"* — and it contradicts the standing line every release note carries: *"crate source
+APIs are an explicitly unstable compatibility surface."* Checked, not recalled: RFC 132 §5 line 220; the
+changelog at two places. **D as written cannot be adopted without breaking two settled positions.**
+
+**The surface prikk already commits to is the CLI.** RFC 121 is its boundary contract; RFC 146 mints
+`-v1` schemas on it; RFC 140 §7b / RFC 142 §6b bind what those schemas may do. **And the only real
+consumer building a view — the stikk project — builds it over the CLI, not the crate.** D is not a
+posture to adopt; **it is what is already happening, on the surface that is already stable.**
+
+**RULED: D, re-founded.** prikk's browse substrate is **the CLI's machine-readable read surface**. The
+ecosystem builds views on it; prikk ships no server. The crate library is not the substrate and no
+stability is promised for it — §8b's sentence is withdrawn, and this section replaces it.
+
+**This dissolves §8c.** "No writes, structurally" for a view that drives the CLI is trivially true — a
+subprocess invoking read commands has no write authority to link, and prikk's own preconditions hold at
+the boundary. The read-only-facet question in §8c survives only for a **library-linked** B, which nobody
+is building and which this ruling does not encourage.
+
+**Consequences for the other shapes, and they are sharper than §8b's:**
+
+- **A is out** — the capability axis (§8b) stands unchanged.
+- **B and C are ecosystem shapes over the CLI, not prikk deliverables.** A separate dynamic server and a
+  static exporter are both things the CLI already makes buildable; stikk is the proof. **Neither is
+  scheduled as prikk work.**
+- **If prikk ever ships a first-party convenience, it is C** — an `export`, hand-built like the JSON
+  emitters, with no HTML or templating dependency — and **it is not scheduled**, because nothing asks
+  for it and the CLI already carries every fact it would render.
+- **prikk's actual obligation under D is the completeness and machine-readability of the CLI's read
+  surface**, delivered as its own increments: RFC 146 (done), RFC 147's Case A and Case B (next — a view
+  needs refusals visible and tags resolvable), and block-addressable content per RFC 144 §4t when it comes.
+
+## 9. RULED by the architect 2026-09-12, on the owner's instruction — acceptance remains the owner's
+
+**Reviewed carefully, as instructed, and every item below moved under the facts rather than the
+argument.** The owner accepts or rejects; nothing here is implemented until this RFC leaves
+`proposed/`.
+
+0. **Did the external review change the recommendation? Yes, twice.** The reviewer moved the axis from
+   dependency count to capability-in-the-writing-process and moved A→not-A onto ground the prior art
+   supports (§8b). **Then the facts moved D itself** — off the crate, whose stability prikk explicitly
+   refuses to promise, and onto the CLI, whose stability prikk already commits to (§8d).
+1. **Shape: D over the CLI.** prikk ships no server and promises no library. **A out. B and C are
+   ecosystem shapes over the CLI, not prikk's to build.** A first-party `export` (C) is the only
+   convenience prikk would ever ship itself, hand-built and dependency-free, and it is not scheduled.
+2. **Scheduled? Not as a project.** Under D there is no browse-view project. There is the CLI read
+   surface, and its gaps are closed as their own increments — RFC 146 closed one; RFC 147 A/B are the
+   next two; RFC 144 §4t names the one after.
+3. **The `--format json` gap: closed.** RFC 146 delivered all three at `3ccf6f69`/`fa872c19`, and the
+   consumer confirmed they were the entire remainder of its prose parsing.
 
 ### 9a. The name is not `instaweb`, and the owner is right
 
