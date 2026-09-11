@@ -43,6 +43,30 @@ written. If you know a key *was* adopted here before, run `prikk doctor`.
 Earlier releases reported this same refusal as `error: integrity error: publication trust policy is
 missing or unreadable`, which sent readers looking for corruption that was not there.
 
+## `error: precondition not met: <path>: worktree symlink authoring is out of scope`
+
+`commit` found a symlink where it needs a regular file — either an untracked symlink in the
+worktree, or a tracked file that has been replaced by one. Symlink authoring is not implemented yet,
+so the commit refuses rather than authoring something it cannot faithfully replay. Replace the
+symlink with a regular file, or move it outside the repository (or add it to `.prikkignore` if it is
+not meant to be tracked), then commit again.
+
+You do not have to run `commit` to find these. `prikk worktree-status` reports the same paths, with
+the same reason, under `refused paths:` — see [Worktree Status](worktree-status.md).
+
+Earlier releases reported this as `error: integrity error: worktree authoring: unsupported symlink
+authoring: ...`, which sent readers looking for repository corruption. Nothing is damaged.
+
+## `error: precondition not met: <path>: existing TextFile cannot accept non-UTF-8 content`
+
+A path tracked as a text node now holds bytes that are not valid UTF-8. Changing a node's kind from
+text to binary (or back) is out of scope, so the commit refuses rather than silently changing what
+the node is. Restore valid UTF-8 content at that path, or delete the path and add it again as a new
+node, then commit again.
+
+Earlier releases reported this as `error: integrity error: worktree authoring: unsupported kind
+transition: ...`. Same refusal, correct class: it is a state you fix, not damage.
+
 ## `error: active WAL has no patch records to seal`
 
 You ran `seal` with nothing queued — every commit since the last seal has already been published.

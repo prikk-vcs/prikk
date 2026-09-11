@@ -18,6 +18,12 @@ use crate::node::node_id_gen::NodeIdGenerator;
 
 mod node_authoring;
 
+/// RFC 147 §2e: the authoring refusal rule, republished for `worktree_status` -- the only reader of
+/// it outside `commit_boundary`. The module itself stays private (RFC 131 §6d.3) and `AuthorError`
+/// stays `pub(in crate::commit_boundary)`; what crosses the boundary is the *decision*, already
+/// rendered, so no caller outside can reconstruct or diverge from the rule.
+pub(crate) use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
+
 /// Result of authoring and appending a node-addressed patch from worktree changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreePatchCommitReport {

@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 
 use prikk_error::PrikkError;
 
-use super::{AuthorError, EXECUTABLE_FILE_MODE, REGULAR_FILE_MODE, RepoPath, RepositoryLayout};
+use super::{
+    AuthorError, EXECUTABLE_FILE_MODE, REGULAR_FILE_MODE, RepoPath, RepositoryLayout,
+    WorktreeEntryShape, authoring_refusal,
+};
 use crate::foundation::fsutil::{
     EntryKind, RootFileStat, list_directory, stat_file_state_if_exists,
 };
@@ -75,24 +78,21 @@ fn walk_dir(
                 continue;
             }
         }
-        match entry.kind {
-            EntryKind::Symlink => {
-                return Err(AuthorError::UnsupportedSymlinkAuthoring(format!(
-                    "{}: worktree symlink authoring is out of scope",
-                    path.to_string_lossy()
-                )));
-            }
-            EntryKind::Directory => {
-                walk_dir(layout, &path, rules, tracked, out)?;
-                continue;
-            }
-            EntryKind::Regular => {}
-            EntryKind::Other => {
-                return Err(AuthorError::Store(PrikkError::InvalidName(format!(
-                    "{}: worktree entry is not a regular file",
-                    path.to_string_lossy()
-                ))));
-            }
+        if matches!(entry.kind, EntryKind::Directory) {
+            walk_dir(layout, &path, rules, tracked, out)?;
+            continue;
+        }
+        // RFC 147 §2e(a): the refusal comes from the one shared classifier, so `worktree-status`
+        // reporting a path as refused and `commit` refusing it are the same decision rendered
+        // twice, not two rules that happen to agree today. Baseline kind is `None` here: the walk
+        // reports what is *on disk*, and a tracked path that is now a symlink refuses on that fact
+        // before authoring ever consults the baseline.
+        if let Some(refusal) = authoring_refusal(
+            &path.to_string_lossy(),
+            None,
+            WorktreeEntryShape::from_entry_kind(entry.kind),
+        ) {
+            return Err(refusal);
         }
         insert_regular_file(layout, &path, out)?;
     }

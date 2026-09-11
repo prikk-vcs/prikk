@@ -40,7 +40,7 @@ use crate::commit_boundary::worktree_patch::{
     WorktreePatchOperationKind, WorktreePatchOperationSummary, next_op_seq,
 };
 use crate::commit_index::{self, CommitIndex, CommitIndexEntry};
-use crate::foundation::fsutil::{RootFileStat, read_file_if_exists};
+use crate::foundation::fsutil::{EntryKind, RootFileStat, read_file_if_exists};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
@@ -128,9 +128,103 @@ impl From<AuthorError> for PrikkError {
             // precondition -- nothing is held and no other writer is racing this one; waiting does
             // not help, only changing the worktree or the declaration does.
             AuthorError::DeclarationContradicted(detail) => PrikkError::Precondition(detail),
+            // RFC 147 §2e(c): a symlink in the worktree and a text/binary kind change are both
+            // states the caller can fix and nothing else can -- no lock is held, no retry helps,
+            // and nothing is damaged. `worktree-status` now reports them *before* the commit, which
+            // makes classifying them as damage doubly wrong: the tool said the commit would refuse.
+            AuthorError::UnsupportedSymlinkAuthoring(detail)
+            | AuthorError::UnsupportedKindTransition(detail) => PrikkError::Precondition(detail),
             other => PrikkError::Integrity(other.to_string()),
         }
     }
+}
+
+/// What a worktree entry looks like to an authoring decision -- the only shape facts the rule below
+/// depends on. Two constructors, because the two callers legitimately hold different things: the
+/// authoring walk sees `fsutil`'s root-scoped [`EntryKind`] (it must never touch `std::fs` directly),
+/// and `worktree_status` holds a `symlink_metadata` it already read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorktreeEntryShape {
+    /// An ordinary regular file: authorable.
+    Regular,
+    /// A symlink, by `symlink_metadata` -- never followed.
+    Symlink,
+    /// Present, but neither a regular file nor a symlink (FIFO, socket, device).
+    Other,
+}
+
+impl WorktreeEntryShape {
+    pub(crate) fn from_symlink_metadata(metadata: &std::fs::Metadata) -> Self {
+        if metadata.file_type().is_symlink() {
+            Self::Symlink
+        } else if metadata.is_file() {
+            Self::Regular
+        } else {
+            Self::Other
+        }
+    }
+
+    pub(in crate::commit_boundary) const fn from_entry_kind(kind: EntryKind) -> Self {
+        match kind {
+            EntryKind::Regular => Self::Regular,
+            EntryKind::Symlink => Self::Symlink,
+            EntryKind::Directory | EntryKind::Other => Self::Other,
+        }
+    }
+}
+
+/// **The authoring refusal rule, in one place** (RFC 147 §2e(a)): given what the baseline says this
+/// path is (if it tracks it at all) and what the worktree entry now looks like, the error `commit`
+/// will raise for it -- or `None` when `commit` will author it.
+///
+/// **Shape is tested before baseline kind, because that is the order `commit` actually refuses in**:
+/// the worktree walk (`worktree_files.rs`) meets a symlink and fails closed before node authoring
+/// ever consults the baseline, so a tracked *file* replaced by a symlink refuses as a worktree
+/// symlink, not as a symlink node. Verified against the binary rather than read off the call graph.
+///
+/// Content-dependent refusals are deliberately out of reach here:
+/// [`AuthorError::UnsupportedKindTransition`] needs the bytes, and a status scan that read every
+/// file to predict it would stop being a status scan.
+pub(in crate::commit_boundary) fn authoring_refusal(
+    path: &str,
+    baseline_kind: Option<NodeKind>,
+    shape: WorktreeEntryShape,
+) -> Option<AuthorError> {
+    match shape {
+        WorktreeEntryShape::Symlink => Some(AuthorError::UnsupportedSymlinkAuthoring(format!(
+            "{path}: worktree symlink authoring is out of scope"
+        ))),
+        WorktreeEntryShape::Other => Some(AuthorError::Store(PrikkError::InvalidName(format!(
+            "{path}: worktree entry is not a regular file"
+        )))),
+        WorktreeEntryShape::Regular => match baseline_kind {
+            Some(NodeKind::Symlink) => Some(AuthorError::UnsupportedSymlinkAuthoring(format!(
+                "{path}: symlink node modification is out of scope"
+            ))),
+            _ => None,
+        },
+    }
+}
+
+/// [`authoring_refusal`] rendered exactly as `commit` will render it, for readers outside
+/// `commit_boundary`.
+///
+/// `worktree_status` cannot name [`AuthorError`] -- it is `pub(in crate::commit_boundary)` (RFC 131
+/// §6d.3) and stays that way. It gets the same decision through the same function.
+///
+/// **Rendered through `PrikkError`, not through `AuthorError`'s own `Display`.** §2e(c) reclassifies
+/// these refusals, and `From<AuthorError> for PrikkError` carries the *detail* across for a
+/// `Precondition` rather than the whole `AuthorError` line -- so the two forms had genuinely
+/// different text the moment the class changed. Converting here is what makes the agreement
+/// mechanical instead of coincidental: `commit`'s stderr is `"error: "` followed by exactly this
+/// string, which is what the status-and-commit-agree test asserts.
+pub(crate) fn authoring_refusal_reason(
+    path: &str,
+    baseline_kind: Option<NodeKind>,
+    shape: WorktreeEntryShape,
+) -> Option<String> {
+    authoring_refusal(path, baseline_kind, shape)
+        .map(|refusal| PrikkError::from(refusal).to_string())
 }
 
 impl From<PrikkError> for AuthorError {

@@ -7,6 +7,10 @@
 
 #![allow(dead_code)]
 
+/// RFC 147 §2e: the one JSON value parser for CLI end-to-end tests, so a test that reads
+/// `--format json` does not carry a third hand-written copy of one.
+pub mod json;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 

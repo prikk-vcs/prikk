@@ -32,16 +32,26 @@ pub(crate) fn print_worktree_status(layout: &RepositoryLayout, report: &Worktree
         "unsupported paths: {}",
         report.count_kind(WorktreeChangeKind::UnsupportedPath)
     );
+    // RFC 147 §2e: beside `unsupported paths:`, never folded into it -- an unrepresentable *name*
+    // and an unauthorable *entry* are different facts, and a path can be one without the other.
+    println!("refused paths: {}", report.refused_count());
     if report.is_clean() {
         println!("worktree: clean against baseline");
     } else {
         println!("worktree: changed against baseline");
         for change in &report.changes {
+            // The marker is a bracketed suffix, deliberately: the entry line's first word is still
+            // the change kind, so a consumer splitting on it reads exactly what it read before.
+            let refused = match &change.refusal {
+                Some(reason) => format!(" [refused: {reason}]"),
+                None => String::new(),
+            };
             println!(
-                "  {} {} — {}",
+                "  {} {} — {}{}",
                 change.kind.as_str(),
                 change.path,
-                change.detail
+                change.detail,
+                refused
             );
         }
     }
@@ -98,6 +108,12 @@ pub(crate) fn print_worktree_status_json(layout: &RepositoryLayout, report: &Wor
         report.unchanged_files
     ));
     json.push_str(&format!("  \"clean\": {},\n", report.is_clean()));
+    // RFC 147 §2e: additive within `worktree-status-report-v1`, on the `declarations` precedent --
+    // a consumer reading the old field set reads this document unchanged.
+    json.push_str(&format!(
+        "  \"refused_count\": {},\n",
+        report.refused_count()
+    ));
     match &report.queued_elsewhere {
         Some(other_ref) => json.push_str(&format!(
             "  \"queued_elsewhere\": {},\n",
@@ -116,6 +132,16 @@ pub(crate) fn print_worktree_status_json(layout: &RepositoryLayout, report: &Wor
         json.push_str(&escape_json_string(change.kind.as_str()));
         json.push_str(", \"detail\": ");
         json.push_str(&escape_json_string(&change.detail));
+        // RFC 147 §2e: `authoring` is always present so a consumer branches on a field rather than
+        // on a field's absence; `refusal` is `null` unless there is one, since "no refusal" is not
+        // an empty reason.
+        match &change.refusal {
+            Some(reason) => {
+                json.push_str(", \"authoring\": \"refused\", \"refusal\": ");
+                json.push_str(&escape_json_string(reason));
+            }
+            None => json.push_str(", \"authoring\": \"authored\", \"refusal\": null"),
+        }
         json.push('}');
     }
     if !report.changes.is_empty() {

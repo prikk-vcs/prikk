@@ -18,6 +18,7 @@ use prikk_object::{NodeId, ObjectEnvelope, ObjectId};
 
 use crate::author::author_signing::require_author_key_id;
 use crate::blob_access::ensure_blob_matches_node_kind;
+use crate::commit_boundary::worktree_patch::{WorktreeEntryShape, authoring_refusal_reason};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::ignore::{IgnoreRules, should_skip_discovery};
 use crate::lifecycle_cache::replay::TextCache;
@@ -71,6 +72,17 @@ impl WorktreeStatusReport {
             .filter(|change| change.kind == kind)
             .count()
     }
+
+    /// RFC 147 §2e: how many entries `commit` would refuse. **Not a change kind and not a subset of
+    /// one** -- refused entries are counted here *and* under their own `kind`, because a refused
+    /// path is still a real worktree change.
+    #[must_use]
+    pub fn refused_count(&self) -> usize {
+        self.changes
+            .iter()
+            .filter(|change| change.refusal.is_some())
+            .count()
+    }
 }
 
 /// A single worktree change detected by the read-only status scanner.
@@ -82,6 +94,15 @@ pub struct WorktreeChange {
     pub kind: WorktreeChangeKind,
     /// Short explanation intended for CLI display.
     pub detail: String,
+    /// RFC 147 §2e: the refusal `commit` would raise for this path, or `None` when it would author
+    /// it. **Orthogonal to `kind`**, which still answers *how did the worktree change* — a tracked
+    /// file replaced by a symlink is `Modified` *and* refused, and the two facts are reported in
+    /// one entry precisely because neither implies the other.
+    ///
+    /// The string is produced by the authoring classifier itself
+    /// (`node_authoring::authoring_refusal_reason`), not re-derived here, so it is the same text
+    /// `commit` prints when it refuses the same path.
+    pub refusal: Option<String>,
 }
 
 /// Worktree change kind.
@@ -166,15 +187,24 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
                 path: path_text,
                 kind: WorktreeChangeKind::Missing,
                 detail: "tracked file is absent from the worktree".to_string(),
+                refusal: None,
             });
             continue;
         }
         let metadata = fs::symlink_metadata(&target)?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
+            // RFC 147 §2e control 1: both truths in one entry. The kind stays `Modified` -- the
+            // worktree really did change -- and the refusal says `commit` will not take it.
+            let refusal = authoring_refusal_reason(
+                &path_text,
+                Some(node.kind),
+                WorktreeEntryShape::from_symlink_metadata(&metadata),
+            );
             changes.push(WorktreeChange {
                 path: path_text,
                 kind: WorktreeChangeKind::Modified,
                 detail: "tracked path is not a regular file".to_string(),
+                refusal,
             });
             continue;
         }
@@ -186,6 +216,7 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
                 path: path_text,
                 kind: WorktreeChangeKind::Modified,
                 detail: "tracked file bytes differ from the baseline".to_string(),
+                refusal: None,
             });
         }
     }
@@ -265,20 +296,32 @@ fn scan_untracked(
         match repo_path.and_then(|text| RepoPath::parse(&text).map(|_| text)) {
             Ok(text) => {
                 if !baseline_paths.contains(&text) && !seen_paths.contains(&text) {
+                    // RFC 147 §2e: an untracked symlink (or FIFO, socket, device) is still
+                    // `untracked` -- that is what happened to the worktree -- and is also what
+                    // `commit` refuses. No baseline kind: the path is not tracked.
+                    let refusal = authoring_refusal_reason(
+                        &text,
+                        None,
+                        WorktreeEntryShape::from_symlink_metadata(&metadata),
+                    );
                     changes.push(WorktreeChange {
                         path: text,
                         kind: WorktreeChangeKind::Untracked,
                         detail: "worktree file is not in the baseline".to_string(),
+                        refusal,
                     });
                 }
             }
             Err(err) => {
+                // `unsupported-path` keeps its own meaning: an unrepresentable *name*, which is a
+                // different fact from an unauthorable *entry* (RFC 147 §2e(b)). Not conflated.
                 changes.push(WorktreeChange {
                     path: path.display().to_string(),
                     kind: WorktreeChangeKind::UnsupportedPath,
                     detail: format!(
                         "worktree path is not representable as a safe Prikk path: {err}"
                     ),
+                    refusal: None,
                 });
             }
         }

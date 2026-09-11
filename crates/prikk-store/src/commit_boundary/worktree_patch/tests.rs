@@ -835,10 +835,22 @@ fn existing_text_node_rejects_non_utf8_content() {
         &test_signer(),
     );
     assert!(report.is_err());
-    let message = report.err().unwrap().to_string();
+    // RFC 147 §2e(c): this refusal used to surface as `Integrity` and this assertion used to read
+    // the `AuthorError` display's own `unsupported kind transition` wording through it. The class
+    // moved to `Precondition`, so the wording is gone from the rendered message -- and this test
+    // failing on the class change is the point: it is the one assertion in the suite that was
+    // already pinning the class, and it caught the move rather than passing through it. Asserting
+    // the *variant* now, so nothing about the prose can make it pass by accident.
+    let error = report.err().unwrap();
     assert!(
-        message.contains("unsupported kind transition"),
-        "expected kind-transition class, got: {message}"
+        matches!(error, prikk_error::PrikkError::Precondition(_)),
+        "a text->binary transition is a caller precondition, not damage; got: {error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("existing TextFile cannot accept non-UTF-8 content"),
+        "and the detail still names what the caller must fix: {error}"
     );
     let _ = std::fs::remove_dir_all(root);
 }

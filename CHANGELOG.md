@@ -60,6 +60,54 @@ checked in either case. Both are now `precondition not met`, and both now say wh
 key-binding failure — a trusted key id whose material does not match — still reports `invalid
 signature`.
 
+### Added — `prikk worktree-status` says which paths `prikk commit` would refuse
+
+`worktree-status` answers "what would the next commit author?". It could not answer the other half:
+a path the commit would *refuse* was listed as an ordinary change, and the only way to find out was
+to run the commit and read the error. Every change entry now carries an authoring verdict, and a
+refused entry carries the reason.
+
+In prose, a `refused paths: N` counter sits beside `unsupported paths: N`, and a refused entry line
+gains a bracketed suffix: `modified a.txt — tracked path is not a regular file [refused: ...]`. The
+suffix is bracketed and trailing on purpose — the first word of an entry line is still the change
+kind, so a reader that splits on it is unaffected. In `--format json`, a top-level `refused_count`
+and, per change, `"authoring": "authored" | "refused"` with `"refusal": null` or the reason string.
+Both fields are additive within `worktree-status-report-v1` (the `declarations` precedent); a
+consumer written against the older field set reads the new documents unchanged, and there is a test
+that does exactly that.
+
+The verdict is not a second opinion. `commit`'s own refusal paths and `worktree-status` call one
+shared classifier and render its decision through one conversion, so the reason string the status
+report prints is the string `commit` prints — a single test drives both commands against one
+worktree and compares them to each other rather than to two hand-written expectations.
+
+`refused` is orthogonal to `kind`: an entry can be `modified` and refused, or `untracked` and
+refused. In particular it is not `unsupported-path`, which keeps its existing meaning of a name the
+repository cannot represent.
+
+**Known limit.** A worktree that contradicts a live `prikk mv` declaration is refused by `commit`
+but is not a property of any single path's entry, so it is not reported as a refused path; the
+existing `live rename declarations` lines are where that case is visible. `refused paths: 0` means
+no path's own entry is unauthorable, not that the next commit will certainly succeed.
+
+**Library note.** `WorktreeChange` gains a public `refusal: Option<String>` field and
+`WorktreeStatusReport` a `refused_count()` method. The method is additive; the field is not — a
+downstream struct-literal construction or exhaustive pattern match of `WorktreeChange` needs
+updating. The Rust type carries one `Option`, not the JSON's two fields, so an "authored" entry with
+a reason attached cannot be represented at all; `authoring` is derived at the emitter.
+
+### Changed — two authoring refusals now say what they are: a precondition, not damage
+
+A worktree symlink where a file is expected, and a text↔binary kind change on a tracked node, were
+both reported as `integrity error:` — the class that means the repository is damaged. Neither
+damages anything: no lock is held, no retry helps, and the caller fixes both by changing the
+worktree. They now report as `precondition not met:`, alongside the rename-declaration refusal that
+already did. Exit codes are unchanged (`1`), and this is the same RFC 132 per-site reclassification
+practice as the trust sites above — no error variant was added or removed.
+
+The reclassification is what made the new `worktree-status` field possible to state honestly: a
+command that tells you in advance that the commit will refuse cannot then call that refusal damage.
+
 ### Fixed — `prikk log` and `prikk checkout` accept a tag ref
 
 Both refused one. `prikk log --ref tags/v1` reported `integrity error: history object … is tag,
