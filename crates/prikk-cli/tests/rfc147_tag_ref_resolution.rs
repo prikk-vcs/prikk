@@ -219,3 +219,61 @@ fn bundle_export_of_a_tag_is_unaffected() {
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// The **received** tag-history path, which nothing covered until now.
+///
+/// `history.rs` resolves in two loops — `load_ref_history` and `load_received_ref_history` — and the
+/// perturbation pass found that reverting the second one broke no test in the workspace: it was a
+/// site changed on faith. `prikk log --ref remotes/tags/v1` is how a reader reaches it (RFC 102
+/// Stage 5: received refs live in their own container and `run_log` routes `remotes/`-prefixed names
+/// there), so the coverage hole was reachable, not theoretical.
+///
+/// The fixture is the same shape as every other here — the tag is below the tip — so the assertion
+/// distinguishes resolution from a label reprinted.
+#[test]
+fn log_resolves_a_received_tag_ref_to_its_target_block() {
+    let (origin, tagged, tip) = repo_with_a_tag_below_the_tip("rfc147b-received");
+    let bundle = origin.join("tag.bundle");
+    support::ok(
+        &run(
+            &origin,
+            &[
+                "bundle",
+                "export",
+                "--ref",
+                "tags/v1",
+                "--output",
+                bundle.to_str().unwrap(),
+            ],
+        ),
+        "bundle export --ref tags/v1",
+    );
+
+    let receiver = support::unique_repo("rfc147b-received-in");
+    support::init(&receiver);
+    let imported = run(
+        &receiver,
+        &["bundle", "import", "--input", bundle.to_str().unwrap()],
+    );
+    support::ok(&imported, "bundle import");
+    assert!(
+        stdout_of(&imported).contains("received remotes/tags/v1"),
+        "the tag arrives under its remotes/ name: {}",
+        stdout_of(&imported)
+    );
+
+    let out = run(&receiver, &["log", "--ref", "remotes/tags/v1"]);
+    support::ok(&out, "log --ref remotes/tags/v1");
+    let stdout = stdout_of(&out);
+    assert!(
+        stdout.contains(&format!("block {tagged}")),
+        "the received tag must resolve to the tagged block: {stdout}"
+    );
+    assert!(
+        !stdout.contains(&tip),
+        "and not to the origin's tip: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&origin);
+    let _ = std::fs::remove_dir_all(&receiver);
+}
