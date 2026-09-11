@@ -80,12 +80,12 @@ embedder, the CLI ceasing to flatten errors to strings, and a move toward librar
 the wrong existing variant is a defect against the taxonomy that already exists, not evidence that it
 needs more variants.** Both are fixable today with nothing reopened.
 
-### 2d. LOCATED 2026-09-12 — the two `Integrity`/`InvalidSignature` sites, a third found, and the fix shape
+### 2d. LOCATED and DELIVERED 2026-09-12 (`97f19b8d`) — three trust preconditions reclassified
 
 The RFC 135 docs round (`6fac3575`) located §2c's two sites precisely, and verifying it produced a
 third. All three opened at source.
 
-| site | today | what actually happened | belongs to |
+| site | was | what actually happened | now |
 |---|---|---|---|
 | `trust.rs:214-217` `load_maintainer_trust_policy` | `Integrity("publication trust policy is missing or unreadable")` | `Ok(None)`: **nothing adopted yet**. The `?` already propagates real read errors; the damaged-snapshot case has its own message at `trust_index.rs:533` | `Precondition` |
 | `trust.rs` `add_trusted_maintainer`, collision arm | `InvalidSignature("… already adopted with a different public key")` | a key-id collision detected **before any verification**; the adjacent arm makes re-adding the same key idempotent | `Precondition` |
@@ -96,7 +96,24 @@ a container truncated below its own header, which replays as no entries. The mes
 with the overwhelmingly common cause and the actionable step (`prikk trust maintainer add`) **without
 claiming the damage case impossible.**
 
-**RULED: fix all three per-site, in RFC 132's established mould.** `rfcs/handoffs/132-error-taxonomy-structure/`
+**DELIVERED at `97f19b8d`, all three now `Precondition`, exit codes unchanged, the adjacent
+public-key-mismatch arm (`trust.rs:335`) still `InvalidSignature` and now pinned in both test layers.**
+Review: `.git-exclude/reviewed/rfc147-trust-precondition-sites-review-v1.md`.
+
+**What the round found that the handoff had not:** before it, a three-site variant change **passed the
+whole suite** — every trust test asserted `.is_err()` and nothing more, so nothing could tell
+`Integrity` from `Precondition`. And site 1's old message was quoted in **four** places, not one:
+`beginners_tutorial.rs:97` asserted the exact rendered line and **would have failed in CI**;
+`troubleshooting.md`'s H2 **was the old message verbatim, above a body that already described the true
+cause correctly** — the docs had the right explanation under the wrong error text for as long as both
+existed. The heading now carries the new message; the old text is kept on the page so a search lands.
+
+**Recorded, not actioned — the round's own observation:** the adjacent arm compares two public keys,
+so it is arguably not a *signature* check either. It is a key-binding failure rather than a caller
+precondition, it was outside the three, and it is now guarded in both directions so a later ruling on
+it cannot move silently. Weigh it or leave it; nothing waits on it.
+
+**RULED (2026-09-12, before delivery): fix all three per-site, in RFC 132's established mould.** `rfcs/handoffs/132-error-taxonomy-structure/`
 already holds per-site moves (`precondition-variant-handoff-v1.md`,
 `six-preconditions-and-the-broad-arm-handoff-v1.md`) that explicitly did not open increment 2, enabled by
 increment 1's `#[non_exhaustive]`. §2c's ruling stands — no RFC 132 trigger fires — and **this is not
