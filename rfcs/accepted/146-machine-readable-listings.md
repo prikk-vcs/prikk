@@ -168,6 +168,43 @@ silently, because fixing it would need a decode this RFC forbids.
   necessary parity change, with no prose line touched. **Verified on the shipped binary: the bare form
   errors at 0.38.0 and works at `3ccf6f69`.**
 
+### 8d. DELIVERED and RULED 2026-09-12 (`fa872c19`) — `branch` filters; `received` stays kind-agnostic, by design
+
+**`prikk branch` now lists only `RefKind::Branch`, in both forms**, on the payload already decoded for
+`closed`. Verified on a fresh fixture: the tag is absent from prose and from `branch-list-v1`, present
+in `tag-list-v1`. 1837 → 1838 tests. Review:
+`.git-exclude/reviewed/rfc146-branch-ref-kind-filter-review-v1.md`.
+
+**§8a's attached question, measured end to end: a received *tag* does appear in `branch-list-v1`'s
+`received` array** — `bundle export --ref tags/v1`, `bundle import` into a fresh repository, and the
+receiver reports `{"ref_name": "remotes/tags/v1", …}` under `received`.
+
+**RULED: `received` is kind-agnostic under `-v1`, and that is its contract, not a gap.** Three findings,
+each verified at source, decide it:
+
+1. **There is no kind to filter on.** `ReceivedPointer` and `ReceivedIndexEntry` carry `ref_name` and
+   `ref_state_id` only. Kind-partitioning means decoding each received `RefState` — new computation
+   §4.2 forbids, and, more to the point, **decoding an untrusted received object in a listing in order
+   to label it.** Classification of received material belongs to `verify`, not to `branch`.
+2. **A name-prefix filter is ruled out.** `validate_received_ref` enforces the `remotes/` prefix and
+   nothing about what follows — the remainder is the origin's own ref name, which this repository does
+   not control. **Filtering on `remotes/tags/` would trust a convention nothing enforces.** Recorded
+   because it is the fix an engineer reaches for first.
+3. **Dropping the row would lose the only listing of a received tag.** `prikk tag` reads
+   `list_ref_pointers()` only, never the received namespace.
+
+**So `received` means exactly what its name says: every pointer that arrived, in the form it arrived,
+with no claim about what it is.** That is consistent with the settled position that repositories are
+anonymous and peers do not exist — a received ref is an artifact, not a branch or a tag until this
+repository says so. **The schema's contract, stated so a consumer branching on it knows: `received` is
+not kind-partitioned and will not become so under `-v1`.** A received-ref listing surface of its own
+(the round's option c) is real scope and is not opened here; nothing asks for it.
+
+**The round edited the architect's changelog entry, and was right to.** The entry's *"known and
+carried … fixed in the next increment"* became false in the same unreleased window; shipping it would
+have advertised a fixed defect as carried. Replaced with `### Fixed` and one paragraph on the received
+tag, flagged in the report's own section. Accepted as written.
+
 ## 7. What would make this not worth doing
 
 If the answer to RFC 145 is **shape D** and the ecosystem is expected to build on `prikk-store`
