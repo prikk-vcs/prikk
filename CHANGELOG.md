@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added — `--format json` for `prikk log`, `prikk branch` and `prikk tag`
+
+The three listing commands were the only read surfaces without machine-readable output; nine
+others already had it. Schemas `log-report-v1`, `branch-list-v1` and `tag-list-v1`, hand-built like
+every other emitter — no serialization dependency was added and the crate count is unchanged.
+
+`log` mirrors the prose per block: id, ref-state id, update sequence, kind, rollback flag, parent /
+patch / rollback-patch / required-attestation counts, and the patch messages that exist (only
+patches carrying a message get an entry, alongside the separate count — the asymmetry the history
+struct already has, not padded out). A genesis block's previous ref-state is `null`, not omitted and
+not an error. `branch` reports open branches (closed ones only with `--all`, as prose does), each
+with a `closed` boolean rather than the prose marker, and lists received refs in their own array
+because their closed state is never decoded by the listing path. `tag` reports each tag's ref name
+and target block id. An empty listing is `[]` at exit `0`. Exit codes are RFC 121's: `2` for a
+malformed `--format`, unchanged everywhere else.
+
+`prikk tag --format json` — the bare form, without `list` — did not previously reach the listing at
+all: unlike `branch`, `tag` had no leading-flag dispatch arm, so a flag-first argument list was an
+unknown subcommand. That arm now exists, matching `branch`. No prose line changed.
+
+Known and carried: `prikk branch` has always listed tag refs alongside branches, because the
+listing never filtered by ref kind while `prikk tag` did. `branch-list-v1` therefore reports a tag
+under `branches` today, with a `closed` field that means nothing for it. Fixed in the next
+increment rather than widened into the schema.
+
 ## 0.38.0 — 2026-09-10
 
 ### Added — `prikk mv <old> <new>`: declared move and rename authoring

@@ -123,6 +123,51 @@ expensive possible way to buy consistency.
 - **No schema stability promise beyond what the other nine carry.** These are `-v1` names in the same
   namespace under the same terms.
 
+## 8. DELIVERED 2026-09-10 (`3ccf6f69`) — and pushed before it was reviewed
+
+**All three schemas shipped as ruled**: `log-report-v1`, `branch-list-v1`, `tag-list-v1`, hand-built,
+crate count unchanged at 216. 1824 → 1837 tests. **Every field verified on the binary against the same
+repository the shipped 0.38.0 binary populated.** Review: `.git-exclude/reviewed/rfc146-listing-json-review-v1.md`.
+
+**A process breach, recorded against the architect.** `3ccf6f69` was the implementing team's local
+commit. The architect read the ahead-list before pushing, saw two commits, and pushed both — carrying
+unreviewed code to `origin/main` under a documentation commit. CI was green on it before it was read;
+that is luck, not process. **The ahead-list check exists to be acted on, not run.**
+
+### 8a. RULED — `branch` must filter by ref kind before `-v1` ships
+
+The round found, correctly flagged as pre-existing and out of scope, that `prikk branch` lists tag refs:
+`tag.rs:91` filters on `RefKind::Tag`, `branch.rs:101`→`:120` never filters. **Verified: the shipped
+0.38.0 prose already prints `tags/v9` under `branch`.**
+
+**RULED: fix it in this RFC's next increment, not later.** In prose it is a display slip; in
+`branch-list-v1` it is **structured data asserting a tag is a branch, with a meaningless `closed`
+field**. A shipped schema is fixed by changing what `-v1` returns or by minting `-v2`; an unreleased one
+is fixed by a filter. Handoff: `rfcs/handoffs/146-machine-readable-listings/branch-ref-kind-filter-handoff-v1.md`,
+carrying one question — whether `received` has the same hole — to be measured and reported, not fixed
+silently, because fixing it would need a decode this RFC forbids.
+
+### 8b. Two decisions the round made deliberately, both accepted
+
+- **`log`'s `repository` field carries the absolute `.prikk` path.** The handoff named it as the field to
+  decide rather than copy; they decided: it is the existing convention (`status-report-v1`,
+  `worktree-status-report-v1`, both verified at source), repositories have no other identity, and a third
+  convention would be the surprising choice. **Accepted.** Whether the convention itself should carry an
+  absolute path is a separate question about the convention, not about this emitter.
+- **Received refs carry no `closed` field** — a separate array, not a `null`. The listing path never
+  decodes a received ref's state and §4.2 forbids new computation. **This is rule 5 applied, not rule 2
+  avoided**: the missing fact is a different kind of entry, not an absence on a uniform one.
+
+### 8c. Two things the handoff got wrong, recorded
+
+- **It omitted the changelog.** The round left the entry to review, correctly. **A handoff that omits
+  the changelog ships an undocumented feature** — 0.33.0's lesson, repeated here. Closed by the
+  architect under `## Unreleased`.
+- **`prikk tag [list]` in §3's table implied a bare form that did not dispatch.** `tag` had no
+  leading-flag arm; `branch` did. The round found it by running the RFC's own example and fixed it as a
+  necessary parity change, with no prose line touched. **Verified on the shipped binary: the bare form
+  errors at 0.38.0 and works at `3ccf6f69`.**
+
 ## 7. What would make this not worth doing
 
 If the answer to RFC 145 is **shape D** and the ecosystem is expected to build on `prikk-store`
