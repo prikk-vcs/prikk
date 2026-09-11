@@ -154,6 +154,44 @@ preconditions**, and the round that adds the field reclassifies them in RFC 132'
 messages will be quoted by the new `refusal` strings, so the two must land together. The other
 `AuthorError` variants are the round's to judge by the same rule, not to move by momentum.
 
+**DELIVERED 2026-09-12 (`3fd0ed68`).** Reproduced on a rebuilt binary: a tracked file replaced by a
+symlink reports `modified … [refused: …]`, `refused paths: 1`, `unsupported paths: 0`, and **`commit`'s
+stderr is byte-for-byte `error: ` + the JSON `refusal`**. Review:
+`.git-exclude/reviewed/rfc147-case-a-authoring-refusal-field-review-v1.md`.
+
+**CORRECTED — the handoff's premise that status and commit "cannot disagree" was false.**
+`From<AuthorError> for PrikkError` carries the *detail* into `Precondition`, not the display line, so
+the class change alone would have split the two strings. The round's first build shipped that; its first
+verification caught it; the fix renders the refusal *through* `PrikkError::from(..).to_string()`
+(`node_authoring.rs:227`). Parts (b) and (c) above were in tension and this section did not say so.
+
+**RULED — three decisions the round raised:**
+
+1. **Struct shape: one `refusal: Option<String>`, two fields on the wire.** The round diverged from
+   this section's two-field wording so that `authored`-with-a-reason is unrepresentable. **Accepted.** The
+   wire shape is the contract; the struct that cannot lie is the better struct.
+2. **`#[non_exhaustive]` on `WorktreeChange`: add it, in the residue round.** This is the fourth public
+   struct in three releases to gain a field without it (0.38.0 added fields to four, and the changelog was
+   corrected for exactly that). Breaking once; free thereafter. Judge the 0.38.0 four by the same rule —
+   report, do not move by momentum.
+3. **`NodeIdentityUnavailable` stays `Integrity`.** A property of the repository's history, not a state
+   the caller can change — the §2e test applied, not skipped.
+
+**Three blind spots upstream of the classifier, none a divergence in the rule:**
+
+- **G1 (theirs):** a contradicted rename declaration is refused by `commit` and is not a property of any
+  path's entry, so `refused paths: 0` **does not mean the next commit succeeds**. Pinned by a test that
+  asserts the incomplete truth and fails when a later round closes it; stated in the user's words in
+  `worktree-status.md`. Not in scope of a per-path field; a separate ruling if wanted.
+- **G2 (theirs):** baseline symlink nodes are skipped at `worktree_status.rs:177` — pre-existing.
+- **G3 (the architect's, found by a fixture that differed from theirs by one target file):** a
+  **dangling** symlink at a tracked path takes the `Missing` branch — the presence check follows the link
+  — so **the classifier is never consulted** while `commit` refuses. A non-dangling link reproduces the
+  round's result exactly. Residue handoff.
+
+**Windows: the field has no test coverage**, stated by the round rather than hidden behind the file's
+`#![cfg(target_family = "unix")]` — every refusal needs a non-regular entry no test can create portably.
+
 **`commit --dry-run` (option 4): not now.** With `refused` on every entry, status *is* the dry run for
 this class. Recorded as the shape to revisit if a refusal ever depends on state status cannot see.
 
@@ -231,6 +269,33 @@ needing its own reclassification.**
 tags/x`, which works today, and it would contradict the tag model to protect a resolver two commands
 never adopted. **Option 1 is subsumed**: with dereferencing, `materialization:` reports the target
 block's real state, which is the vocabulary §3a asked for.
+
+### 3c. DELIVERED 2026-09-12 (`d00d7768`, `7c9c06f3`) — and §3b's site inventory was wrong twice
+
+**Delivered for the four scoped surfaces**, proven on a **non-tip** tag: `log` shows history from the
+tagged block; `checkout --plan-only` names it; `--patch-plan --content-path` returns **its** content
+(`first`, not the tip's `second`); a **received** tag resolves to the tagged block after `bundle import`.
+`worktree-status` and `bundle export` unchanged. Reviews:
+`.git-exclude/reviewed/rfc147-case-b-tag-ref-resolution-review-v1.md`.
+
+**CORRECTED — §3b named two sites; there were four, and then a fifth.** The round found, by confirming
+rather than trusting §3b's claim, that `--patch-plan` and `--content-path` never reach `checkout.rs` —
+they reach **`patch_replay/read.rs::current_target_block`** — and that `history.rs` has **two** loops
+(`load_ref_history`, `load_received_ref_history`). All four now call `refs::resolve_ref_tip_block`. **One
+of the four had no test until the round perturbed it** and found the whole suite green; they wrote the
+test (`7c9c06f3`) rather than only reporting the gap.
+
+**Then the round claimed one more than it fixed.** *"`patch_inverse` shares `current_target_block`, so it
+resolves a tag ref now as a consequence"* — **false on the binary**: `inverse-plan --ref tags/v1` still
+fails with `object type mismatch`. **There are two functions named `current_target_block`**,
+`patch_replay/read.rs:21` and `patch_inverse/read.rs:16`, each `pub(super)` in its own module. A name in
+two modules is two functions.
+
+**RULED — §3b's "unreachable from a valid tag ref" is scoped to the four surfaces.** The residue,
+measured across every `--ref`-taking read command: **`inverse-plan` and `rollback-preview` still
+mismatch** (the unfixed duplicate); **`merge-evidence` and `merge-plan` refuse tags deliberately**, by
+`validate_local_branch_ref`, the same branch-only rule as `worktree-status`, class `InvalidName` —
+correct and untouched. The duplicate goes to the residue handoff.
 
 **A byproduct worth naming:** this gives the stikk project **block-addressable content for any tagged
 block** — the `--ref tags/<name>` row of their RFC 144 §4t table stops failing. It does not answer bare
