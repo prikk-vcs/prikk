@@ -93,8 +93,9 @@ fn tutorial_sequence_runs_exactly_as_the_page_shows_it() {
         .unwrap();
     fail(&out, "seal with an untrusted maintainer key");
     assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("error: integrity error: publication trust policy is missing or unreadable"),
+        String::from_utf8_lossy(&out.stderr).contains(
+            "error: precondition not met: no maintainer key is adopted in this repository yet"
+        ),
         "tutorial quotes this exact refusal: {}",
         String::from_utf8_lossy(&out.stderr)
     );

@@ -29,12 +29,19 @@ You ran `seal` without `PRIKK_MAINTAINER_KEY_ID`/`PRIKK_MAINTAINER_SEED` set. `s
 [why the tutorial needs a second key](tutorial.md#sealing--and-the-second-key). Set both variables
 and seal again.
 
-## `error: integrity error: publication trust policy is missing or unreadable`
+## `error: precondition not met: no maintainer key is adopted in this repository yet`
 
 Your maintainer key is configured but not yet trusted by this repository. Run
 `prikk trust maintainer add --key-id ID --public-key HEX` with the public half of your maintainer
 key, then seal again. This is a repository-local, trust-on-first-use step — every fresh repository
 needs it once, even with a key you have used elsewhere.
+
+The message's parenthetical names the one other way this refusal can be reached: a trust policy
+container damaged so badly it replays as empty is indistinguishable, at this read, from one never
+written. If you know a key *was* adopted here before, run `prikk doctor`.
+
+Earlier releases reported this same refusal as `error: integrity error: publication trust policy is
+missing or unreadable`, which sent readers looking for corruption that was not there.
 
 ## `error: active WAL has no patch records to seal`
 

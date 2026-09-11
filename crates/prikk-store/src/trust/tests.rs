@@ -17,6 +17,7 @@
 #![allow(clippy::indexing_slicing)]
 
 use prikk_crypto::Ed25519KeyPair;
+use prikk_error::PrikkError;
 
 use crate::{
     GatedOperation, RepositoryLayout, acquire_container_locks, add_trusted_maintainer,
@@ -165,7 +166,14 @@ fn readopting_an_existing_key_id_with_a_different_key_is_refused() {
         let original = public_key_hex(&[4_u8; 32]);
         let conflicting = public_key_hex(&[5_u8; 32]);
         assert!(add_trusted_maintainer(&layout, "maintainer", &original).is_ok());
-        assert!(add_trusted_maintainer(&layout, "maintainer", &conflicting).is_err());
+        // RFC 147 §2d site 2: a trust-on-first-use collision is a caller precondition, detected
+        // before anything is verified -- it reported `InvalidSignature` until this was pinned, and
+        // `.is_err()` alone could not tell the difference.
+        let refused = add_trusted_maintainer(&layout, "maintainer", &conflicting);
+        assert!(
+            matches!(refused, Err(PrikkError::Precondition(_))),
+            "a key-id collision is a precondition, not a signature failure: {refused:?}"
+        );
         // The refusal must not have changed anything.
         let loaded = load_maintainer_trust_policy(&layout);
         assert!(loaded.is_ok());
@@ -238,7 +246,67 @@ fn signer_trust_binding_rejects_seed_public_key_mismatch() {
             Ok(signer) => signer,
             Err(error) => panic!("test maintainer signer should be constructible: {error}"),
         };
-        assert!(verify_signer_trusted(&layout, &signer, GatedOperation::Seal).is_err());
+        // RFC 147 §2d: the *adjacent* site, deliberately unchanged. The id matched and the material
+        // did not, which is a real key-binding failure -- pinned here so the round that reclassified
+        // its neighbour (membership, below) cannot quietly take this one with it. RFC 132's own
+        // follow-up lesson: guard what you preserved, not only what you changed.
+        let refused = verify_signer_trusted(&layout, &signer, GatedOperation::Seal);
+        assert!(
+            matches!(refused, Err(PrikkError::InvalidSignature(_))),
+            "a trusted id with the wrong material stays a signature failure: {refused:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 147 §2d site 1: a repository that has adopted nothing yet. Not a mocked snapshot -- a
+/// genuinely fresh `init`, which is the state every second project starts in, reached end to end
+/// through the CLI by `rfc132_trust_precondition_sites.rs` and `beginners_tutorial.rs`.
+#[test]
+fn loading_policy_before_any_adoption_is_a_precondition_not_damage() {
+    let root = unique_temp_dir("trust-nothing-adopted");
+    let layout = RepositoryLayout::init(root.clone());
+    assert!(layout.is_ok());
+    if let Ok(layout) = layout {
+        let loaded = load_maintainer_trust_policy(&layout);
+        assert!(
+            matches!(loaded, Err(PrikkError::Precondition(_))),
+            "nothing adopted yet is a precondition, not an integrity failure: {loaded:?}"
+        );
+        // The honesty clause the wording ruling required: the message must not claim the narrow
+        // replays-empty case impossible, so it names `doctor` alongside the common cause.
+        let message = match loaded {
+            Err(error) => error.to_string(),
+            Ok(_) => unreachable!("asserted Err above"),
+        };
+        assert!(
+            message.contains("trust maintainer add") && message.contains("doctor"),
+            "both halves of the message must survive: {message}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 147 §2d site 3: policy *membership*, tested before any signature is verified. Distinct from
+/// `signer_trust_binding_rejects_seed_public_key_mismatch` above, which keeps `InvalidSignature`.
+#[test]
+fn signing_with_an_unadopted_key_id_is_a_precondition() {
+    let root = unique_temp_dir("trust-id-not-in-policy");
+    let layout = RepositoryLayout::init(root.clone());
+    assert!(layout.is_ok());
+    if let Ok(layout) = layout {
+        let seed = [9_u8; 32];
+        let public_key = public_key_hex(&seed);
+        assert!(add_trusted_maintainer(&layout, "adopted", &public_key).is_ok());
+        let signer = match Ed25519MaintainerSigner::from_seed("not-adopted", &seed) {
+            Ok(signer) => signer,
+            Err(error) => panic!("test maintainer signer should be constructible: {error}"),
+        };
+        let refused = verify_signer_trusted(&layout, &signer, GatedOperation::Seal);
+        assert!(
+            matches!(refused, Err(PrikkError::Precondition(_))),
+            "an unadopted key id is a precondition, not a signature failure: {refused:?}"
+        );
     }
     let _ = std::fs::remove_dir_all(root);
 }

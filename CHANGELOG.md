@@ -35,6 +35,31 @@ A received *tag* — imported by `bundle import` from an origin's own tag ref �
 at all today (`prikk tag` lists local tags only), so this is left as-is pending a decision rather
 than removed.
 
+### Changed — three trust refusals now say what they are: a precondition, not damage
+
+Three refusals on the trust path reported the wrong class, and one of them is the first thing every
+second project hits. **Sealing in a repository that has adopted no maintainer key yet** said
+`integrity error: publication trust policy is missing or unreadable` — nothing was missing and
+nothing was damaged; no key had been adopted. It now reads:
+
+```
+error: precondition not met: no maintainer key is adopted in this repository yet; run `prikk trust maintainer add` (a trust policy container that replays empty reads the same way -- run `prikk doctor` if a key was adopted here before)
+```
+
+The parenthetical is deliberate: a trust policy container damaged badly enough to replay as empty is
+indistinguishable, at that read, from one never written, so the message names the common cause and
+the step without claiming the narrow case impossible. A genuinely damaged container still has its
+own separate message.
+
+The other two: **adopting a key id already adopted with different material** (a trust-on-first-use
+collision, which is why `prikk setup` in an existing repository always refuses) and **sealing under
+a key id the repository has not adopted** both reported `invalid signature` — no signature was
+checked in either case. Both are now `precondition not met`, and both now say what to do.
+
+**Exit codes are unchanged** (RFC 121's `1` for all three), and the neighbouring refusal that *is* a
+key-binding failure — a trusted key id whose material does not match — still reports `invalid
+signature`.
+
 ## 0.38.0 — 2026-09-10
 
 ### Added — `prikk mv <old> <new>`: declared move and rename authoring

@@ -113,9 +113,15 @@ pub fn add_trusted_maintainer(
 
     match lookup_trust_key_entry(layout, key_id)? {
         Some(existing) if existing.public_key == public_key => {}
+        // RFC 147 §2d: a trust-on-first-use collision, detected before anything is verified -- no
+        // signature was checked here, so `InvalidSignature` named the wrong axis. The arm above is
+        // idempotent for the same key, which is why `prikk setup` on an existing repository always
+        // lands here: fresh material every run, under the fixed key id `maintainer`.
         Some(_) => {
-            return Err(PrikkError::InvalidSignature(format!(
-                "maintainer key id {key_id} is already adopted with a different public key"
+            return Err(PrikkError::Precondition(format!(
+                "maintainer key id {key_id} is already adopted with a different public key; adopt \
+                 the new key under a different id, or export the seed already adopted under this \
+                 one"
             )));
         }
         None => {
@@ -212,8 +218,20 @@ fn validate_no_maintainer_key_id_collision(key_ids: &[String], key_id: &str) -> 
 /// every publication, exactly as the old missing-`policy.toml` case was
 /// (`PublicationTrustVerifier`'s `PRIKK-TRUST-POLICY-INVALID`).
 pub fn load_maintainer_trust_policy(layout: &RepositoryLayout) -> Result<MaintainerTrustPolicy> {
+    // RFC 147 §2d / RFC 132's per-site practice: this arm fires on `Ok(None)` -- nothing adopted
+    // yet -- which is a caller precondition, not damage. The `?` above already propagates a real
+    // read failure, and a damaged snapshot has its own message
+    // (`trust_index.rs`'s "damaged snapshot; run doctor before reading"), so `Integrity` here sent
+    // every second project looking for corruption instead of running `trust maintainer add`. The
+    // parenthetical stays: a container truncated below its own header length replays empty and is
+    // indistinguishable from never-adopted at this read, so the message must not claim otherwise.
     let key_ids = read_current_trust_policy_snapshot(layout)?.ok_or_else(|| {
-        PrikkError::Integrity("publication trust policy is missing or unreadable".to_string())
+        PrikkError::Precondition(
+            "no maintainer key is adopted in this repository yet; run `prikk trust maintainer add` \
+             (a trust policy container that replays empty reads the same way -- run `prikk doctor` \
+             if a key was adopted here before)"
+                .to_string(),
+        )
     })?;
     let mut keys = Vec::with_capacity(key_ids.len());
     for key_id in key_ids {
@@ -301,9 +319,13 @@ pub fn verify_signer_trusted(
     _operation: GatedOperation,
 ) -> Result<MaintainerTrustPolicy> {
     let policy = load_maintainer_trust_policy(layout)?;
+    // RFC 147 §2d: policy *membership*, tested before any signature is verified -- the exported key
+    // id is simply not among the adopted ones. The public-key comparison below is a different
+    // question and keeps `InvalidSignature`: there the id matched and the material did not.
     let Some(matched) = policy.find(signer.key_id()) else {
-        return Err(PrikkError::InvalidSignature(format!(
-            "maintainer signer key id {} is not trusted by policy",
+        return Err(PrikkError::Precondition(format!(
+            "maintainer signer key id {} is not trusted by policy; run `prikk trust maintainer \
+             add` for it, or export a key id this repository already trusts",
             signer.key_id()
         )));
     };

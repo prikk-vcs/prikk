@@ -88,7 +88,7 @@ prikk seal --allow-no-audit
 ```
 
 ```
-error: integrity error: publication trust policy is missing or unreadable
+error: precondition not met: no maintainer key is adopted in this repository yet; run `prikk trust maintainer add` (a trust policy container that replays empty reads the same way -- run `prikk doctor` if a key was adopted here before)
 ```
 
 **One more refusal, and it is also expected.** Having a maintainer key configured is not the same as

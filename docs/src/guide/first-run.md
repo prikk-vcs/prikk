@@ -220,12 +220,11 @@ prikk seal --allow-no-audit
 ```
 
 ```
-error: integrity error: publication trust policy is missing or unreadable
+error: precondition not met: no maintainer key is adopted in this repository yet; run `prikk trust maintainer add` (a trust policy container that replays empty reads the same way -- run `prikk doctor` if a key was adopted here before)
 ```
 
-**Nothing is damaged — this repository has simply adopted no maintainer key yet**, which is the
-state every new repository starts in. Adopt it, deriving the public key from the seed you already
-hold:
+**That is the state every new repository starts in**, not a fault. Adopt the key, deriving the
+public half from the seed you already hold:
 
 ```sh
 export MY_SEED="<your maintainer seed>"   # or: export MY_SEED="$(cat ./maintainer.seed)"
