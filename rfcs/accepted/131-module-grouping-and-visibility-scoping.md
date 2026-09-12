@@ -843,7 +843,7 @@ worktree and gated, and the architect independently collapsed the emitted graph'
 | candidate | result | ruling |
 |---|---|---|
 | **A** `rollback_{draft,preview,verify}` → `rollback/` | 4 rewrites, no allowlist change, no cycle gained or lost, gate green | **DONE 2026-09-12 (`05ac6b29`).** `rollback::{draft,preview,verify}`; architect's own graph diff: nodes 128 → 129, edges 483 → 483, hub set equal, the 13 subtree-cycle edges identical; root-export names unchanged. §2.2a's earlier refusal is **superseded, not overturned**: it measured a collapsed-node graph that §6c's qualified naming retired, and the architect's union-collapse check finds A clean today under either method |
-| **C** `merge_{evidence,execute}` → `merge/` | no cycle gained or lost; the declared hub `merge_evidence` re-detected at `merge::merge_evidence` and the stale allowlist entry reported in the same run | second — `merge-grouping-handoff-v1.md` (live); the two-line allowlist rename is the whole cost |
+| **C** `merge_{evidence,execute}` → `merge/` | no cycle gained or lost; the declared hub `merge_evidence` re-detected at its qualified name and the stale allowlist entry reported in the same run | **DONE 2026-09-12 (`e15a1ea5`).** `merge::{evidence,execute}` (prefix dropped, the parent carries the word); architect's graph diff: nodes 129 → 130, edges 483 → 483, cycles identical, hub set equal with `merge::evidence` at 7/10 and declared; 12 rewrites in `prikk-store`, **0 in `prikk-cli`** (the census's 3 were the CLI's own same-named modules); root-export names unchanged |
 | **B** `worktree{,_status,_marker}` → `worktree/` | **seven new undeclared cycles**, one between two modules the grouping does not contain (`checkout -> refs`); the three sit on opposite sides of the commit boundary | **REFUSED by measurement.** Recorded so it is not rediscovered: it is the grouping anyone would try first from the module list |
 
 **Not candidates**: `patch_*` (six modules, a noun not a role: a leaf engine, a hub orchestrator, a
@@ -855,3 +855,8 @@ being groupable; nothing moved.
 
 **The census's own finding, generalising §6d.7:** name similarity was the worst predictor of grouping
 safety in this tree. The families that look most alike are the three not to touch.
+
+**§6f closed 2026-09-12.** Both viable candidates are in; `worktree/` stays refused by measurement;
+`patch_*`, `commit_*`, `trust*` are not candidates. Top-level modules 52 → 49. **A census's rewrite
+counts are estimates** — two of them were corrected at implementation, both times in the safe direction
+by luck; the census's decisions held every time. Further structure is RFC 149's cut, not grouping.
