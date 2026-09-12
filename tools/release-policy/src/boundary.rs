@@ -7,6 +7,8 @@ mod publication;
 mod rfc_naming;
 mod unsafe_boundary;
 
+pub(crate) use coupling::GraphReport;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -56,6 +58,16 @@ pub(crate) struct BoundaryReport {
 struct BoundaryError {
     category: &'static str,
     detail: String,
+}
+
+/// `boundary-check --graph` (RFC 131 §6e step 0): emit the module coupling graph the gate builds.
+///
+/// Read-only, and it can fail nothing. It runs the same `graph::build` and applies the same
+/// `HUB_THRESHOLD` as [`run`]'s own hub check, so a census taken from this output and the gate's own
+/// verdict cannot disagree — which is the entire reason it exists rather than the census being
+/// assembled by reading imports, which is how the two came to disagree before.
+pub(crate) fn graph(root: &Path) -> std::result::Result<GraphReport, String> {
+    coupling::graph_report(root)
 }
 
 pub(crate) fn run(root: &Path) -> Result<BoundaryReport> {

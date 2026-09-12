@@ -40,6 +40,20 @@ fn oracle_check(root: &std::path::Path, arguments: &[String]) -> Result<()> {
 }
 
 fn boundary_check(root: &std::path::Path, arguments: &[String]) -> Result<()> {
+    // RFC 131 §6e step 0: `--graph` emits the coupling graph instead of the verdict. It checks
+    // nothing and can fail nothing -- a separate flag rather than extra fields on the verdict, so
+    // the gate's own output stays exactly what every caller already parses.
+    if arguments.iter().any(|argument| argument == "--graph") {
+        let rest: Vec<String> = arguments
+            .iter()
+            .filter(|argument| *argument != "--graph")
+            .cloned()
+            .collect();
+        parse_json_mode(&rest, false)?;
+        let report = boundary::graph(root).map_err(Error::new)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     parse_json_mode(arguments, false)?;
     let report = boundary::run(root)?;
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -162,5 +176,5 @@ fn repository_root() -> Result<PathBuf> {
 }
 
 fn usage() -> &'static str {
-    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check> [--format json] [--self-test]\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>"
+    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>"
 }

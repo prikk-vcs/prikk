@@ -160,3 +160,62 @@ fn non_stale_declared_entries_are_accepted() {
     check_declared_entries_still_exist(&graph, &declared_edges, &subtree_cycle_edges, &mut errors);
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+/// RFC 131 §6e step 0: `--graph`'s hub list and the gate's own hub check must agree, on the real
+/// repository.
+///
+/// **The census this emission exists for is only worth taking if it says what the gate says.** Both
+/// sides are recomputed here from the same source tree — the emission through `graph_report`, the
+/// gate's view by applying `HUB_THRESHOLD` to `graph::build` exactly as `check` does — and compared
+/// as sets. A future change that alters one path and not the other fails here rather than producing
+/// a census that quietly disagrees with the gate it was meant to match.
+#[test]
+fn the_graph_emission_and_the_gate_agree_on_the_hub_list() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    let src_root = root.join("crates/prikk-store/src");
+
+    let emitted = super::graph_report(root).expect("graph report");
+    let graph = super::graph::build(&src_root).expect("graph build");
+
+    let gate_hubs: BTreeSet<String> = graph
+        .modules
+        .iter()
+        .filter(|module| graph.fan_in(module).min(graph.fan_out(module)) >= super::HUB_THRESHOLD)
+        .cloned()
+        .collect();
+    let emitted_hubs: BTreeSet<String> = emitted.hubs.iter().cloned().collect();
+    assert_eq!(
+        emitted_hubs, gate_hubs,
+        "`--graph`'s hub list must be the gate's own"
+    );
+
+    // And the per-node flags must agree with the list, so a reader can filter on `is_hub` instead of
+    // recomputing `hub_score >= hub_threshold` themselves.
+    for node in &emitted.modules {
+        assert_eq!(
+            node.is_hub,
+            gate_hubs.contains(&node.module),
+            "{}: is_hub disagrees with the gate",
+            node.module
+        );
+        assert_eq!(
+            node.hub_score,
+            node.fan_in.min(node.fan_out),
+            "{}: hub_score must be min(fan_in, fan_out)",
+            node.module
+        );
+    }
+
+    // The emission is not vacuous: this repository has modules, edges and at least one hub.
+    assert!(
+        emitted.modules.len() > 40,
+        "{} modules",
+        emitted.modules.len()
+    );
+    assert!(!emitted.edges.is_empty());
+    assert!(!emitted.hubs.is_empty());
+    assert_eq!(emitted.hub_threshold, super::HUB_THRESHOLD);
+}

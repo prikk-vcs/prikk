@@ -284,6 +284,81 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
     },
 ];
 
+/// One module in the emitted graph.
+#[derive(Debug, serde::Serialize)]
+pub struct GraphNode {
+    pub module: String,
+    pub fan_in: usize,
+    pub fan_out: usize,
+    /// `min(fan_in, fan_out)` — the value `HUB_THRESHOLD` is compared against, emitted so a reader
+    /// never has to recompute the gate's own arithmetic and risk getting it wrong.
+    pub hub_score: usize,
+    pub is_hub: bool,
+    pub is_declared_hub: bool,
+}
+
+/// `boundary-check --graph`: the coupling graph the gate already builds, emitted.
+///
+/// RFC 131 §6e step 0. The gate printed only `valid` and `errors`, so every census of this graph had
+/// to be assembled by reading imports by hand — which is exactly how a census and the gate come to
+/// disagree. **This adds no check and changes no verdict**; it emits what `check` below already
+/// computes, from the same `graph::build` and the same `HUB_THRESHOLD`, so the two cannot diverge.
+#[derive(Debug, serde::Serialize)]
+pub struct GraphReport {
+    pub schema_version: &'static str,
+    pub hub_threshold: usize,
+    pub modules: Vec<GraphNode>,
+    pub edges: Vec<[String; 2]>,
+    /// Every module the gate would call a hub, declared or not — the list a census must match.
+    pub hubs: Vec<String>,
+    /// Subtree-cycle edges, as `check` detects them.
+    pub subtree_cycles: Vec<[String; 2]>,
+}
+
+/// Build the emission. Same source root, same builder, same threshold as [`check`].
+pub(super) fn graph_report(root: &Path) -> Result<GraphReport, String> {
+    let src_root = root.join("crates/prikk-store/src");
+    let graph = graph::build(&src_root)?;
+    let declared: BTreeSet<&str> = DECLARED_HUBS.iter().map(|entry| entry.module).collect();
+
+    let mut modules = Vec::with_capacity(graph.modules.len());
+    let mut hubs = Vec::new();
+    for module in &graph.modules {
+        let fan_in = graph.fan_in(module);
+        let fan_out = graph.fan_out(module);
+        let hub_score = fan_in.min(fan_out);
+        let is_hub = hub_score >= HUB_THRESHOLD;
+        if is_hub {
+            hubs.push(module.clone());
+        }
+        modules.push(GraphNode {
+            module: module.clone(),
+            fan_in,
+            fan_out,
+            hub_score,
+            is_hub,
+            is_declared_hub: declared.contains(module.as_str()),
+        });
+    }
+
+    Ok(GraphReport {
+        schema_version: "release-policy-module-graph-v1",
+        hub_threshold: HUB_THRESHOLD,
+        modules,
+        edges: graph
+            .edges
+            .iter()
+            .map(|(from, to)| [from.clone(), to.clone()])
+            .collect(),
+        hubs,
+        subtree_cycles: graph
+            .subtree_cycles()
+            .into_iter()
+            .map(|(from, to)| [from, to])
+            .collect(),
+    })
+}
+
 pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
     check_allowlists_are_well_formed(errors);
     let src_root = root.join("crates/prikk-store/src");
