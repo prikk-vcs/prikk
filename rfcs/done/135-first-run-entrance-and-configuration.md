@@ -267,12 +267,13 @@ knobs that exist today rather than remembered:
 |---|---|---|
 | `PRIKK_AUTHOR_KEY_ID` / `PRIKK_MAINTAINER_KEY_ID` | env, repeated per shell | **defaulted** to `author` / `maintainer`; env is an override |
 | the two seeds | env, repeated per shell | **default directory, `0600` files**; no env channel |
-| `PRIKK_ACTIVE_PATCH_LIMIT` (the threshold pair, §5a) | env override of `DEFAULT_ACTIVE_PATCH_LIMIT` (`main.rs:603-608`) | unchanged — **the one user-facing env knob that remains** |
+| the threshold pair, §5a — `PRIKK_ACTIVE_PATCH_WARN` and `PRIKK_ACTIVE_PATCH_LIMIT` | env overrides of `DEFAULT_ACTIVE_PATCH_WARN` / `DEFAULT_ACTIVE_PATCH_LIMIT` (`main.rs:600-608`, warn ≤ limit enforced) | unchanged — **the one mechanism whose two thresholds remain env-configured** |
 | `--allow-no-audit` on every `seal` (21 docs mentions) | a flag | **deliberately not a default**: it is a per-seal trust decision and must stay loud |
 | `--ref` on every command (14) | a flag | belongs to the `branch switch` / current-branch direction, not to config |
 
-**So after RFC 148 lands, (a) would hold one knob.** That is not a beneficiary; it is the same picture
-§9.1 deferred on. **(a) re-opens when a second per-user or per-repository setting appears that cannot
+**So after RFC 148 lands, (a) would hold one mechanism's two thresholds.** That is not a beneficiary; it
+is the same picture §9.1 deferred on. (First written as "one knob" and corrected the same day: the pair
+is two variables, and this section exists to be read exactly.) **(a) re-opens when a second per-user or per-repository setting appears that cannot
 be defaulted, or when an adopter asks** — and both are now things a reader can check rather than infer.
 
 **When it re-opens, §4's format question returns with these facts already gathered (2026-09-12):**
