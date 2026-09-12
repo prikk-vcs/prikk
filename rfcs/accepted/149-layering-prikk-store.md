@@ -226,6 +226,27 @@ block — never the operations-layer contract.
 
 **3a.2 delivered 2026-09-13 (`bb43c86d`)**: the 18, plus four closure types the compiler named (`MutationRoot`, `AuthoredTextSpan`, `TextSpanSelectionError`, `TextSpanSpliceError`) and the v1 fixture chain — 25 names, all feature-gated, default exports unchanged, graph and package unchanged. `NodeLifecycleState` is `prikk_replay`'s type behind a waypoint; the entry can go when `prikk-operations` depends on `prikk-replay` directly. `prikk-operations` consumes the surface as a **dev-dependency** with the feature on.
 
+### 6d. The fourth stop, and the rule it makes (2026-09-13)
+
+The first trial move (`bundle`) failed on sixteen items no list had named: ten infrastructure items
+(`file_codec`, `ByteCursor`, `author_key_index`…), the `pub(crate)` fields of `pub` contract types, and
+surface-to-surface churn. **Step 2b's census asked what the surfaces reach in the core; the move needs
+what they reach anywhere below the cut.** Architect's count from the 21 families' production files: 54
+infrastructure names and 6 core names not root-exported; 24 more from tests.
+
+**RULED.** (1) **The contract is derived by the compiler, once** (increment 3b.0): every movable family
+into `prikk-operations` in a scratch worktree, compile-fix to green, the error stream is the list —
+production items to the operations-layer contract (core or infrastructure alike), test items to the
+test-support surface, fields and constructors per type. *A list of what code references is never the
+list of what a crate boundary needs.* (2) **`checkout` stays** — `worktree.rs:12` depends on it in
+production; a module a stayer depends on is store-level by construction. Movable families **21 → 20**.
+(3) **`merge` moves** — `block_state.rs:325` is a doc link, not code; it becomes a code span in `merge`'s
+move commit. (4) Fields read by the operations layer become `pub`; `#[non_exhaustive]` stays on
+report-shaped types; constructors are added where construction is needed, or `non_exhaustive` dropped
+for plain carriers with the reason written. (5) The widening — roughly sixty production and twenty test
+names beyond the 46 — is internal to the workspace (no library consumer known) and is ruled by the
+architect with the owner told the count; the owner may read 3b.0's list before anything moves.
+
 ## 7. Owner rulings
 
 1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**

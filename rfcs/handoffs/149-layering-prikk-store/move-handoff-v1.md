@@ -119,3 +119,43 @@ One commit, one report, then 3b.
    if `text_span` carries `cfg` gating — say so from the diff.
 
 Then **3b** as v2 says, with the order for 21 families at the top of its first report.
+
+---
+
+# v4 — 2026-09-13: increment 3b.0 derives the contract; then 3b moves 20 (RFC 149 §6d)
+
+Your recommendation is adopted. `checkout` stays (`worktree.rs:12` is production); `merge` moves
+(`block_state.rs:325` is a doc link — a code span in `merge`'s commit). 20 families; your §1 order minus
+`checkout`.
+
+## 3b.0 — derive, in a scratch worktree, no commit to `main` until the list is reviewed
+
+1. Detached worktree. Move **all 20 families** into `prikk-operations` at once (`git mv`, path rewrite,
+   both `lib.rs`); `prikk-operations` takes `prikk-store = { features = ["test-support"] }` as a
+   dev-dependency. Compile-fix (`cargo check --workspace --all-targets --all-features`, then `cargo
+   test --workspace --no-run`) until green, making **only** visibility, `cfg`, re-export, field, and
+   constructor changes in the store — never a move back, never a content rewrite. Every change is a
+   line in the report.
+2. **Report three lists**, each item with module, kind, and which family needs it:
+   - **Contract additions** (production, core or infrastructure) → the operations-layer contract block;
+   - **Test-support additions** → the test-support block;
+   - **Fields and constructors**: per contract type, which fields become `pub`, whether
+     `non_exhaustive` stays (report-shaped) or goes (plain carrier, reason written), and which types
+     need a `pub` constructor because the operations layer constructs them.
+   Plus the surface-to-surface churn list with the family whose move retires each entry (not a
+   contract; not in either block), and the final root-export counts (default and feature).
+3. Then the worktree is discarded. **Nothing lands from 3b.0 except the report**; the architect reviews
+   it and the owner may read it (RFC 149 §6d.5).
+
+## 3b.1 — the contract, as one or two commits on `main`
+
+The store side only: the contract additions, the test-support additions, the fields and constructors —
+from the reviewed list, no more. Gates; graph unchanged (no module moves); default and feature export
+counts as the list predicts; `cargo check` of a *second* scratch worktree with all 20 moved must now be
+green with **zero** store changes — that is the control that the list was complete.
+
+## 3b.2 — the moves, in order
+
+As v1 §3 / v2, 20 commits (19 plus the pair), each a `git mv`, a path rewrite, two `lib.rs` edits, the
+churn edits its position in the order requires, and a gate run with the cycle count pasted.
+`bundle.rs`'s wildcard arm and `block_state.rs:325`'s code span in the commits that need them.
