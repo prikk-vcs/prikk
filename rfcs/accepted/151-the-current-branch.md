@@ -73,3 +73,13 @@ is a superset of both trees, never a torn file.
 
 No branch rename or delete (DC-61 closed branches instead). No remote branches. No detached state — the
 pointer always names a branch. No change to trust, signing, sync, or any format.
+
+## 5. Increment 1 delivered (2026-09-13, `c1222a8f`)
+
+The pointer, written by `init` only when absent; the reader in `refs`; 17 default sites resolved through
+one function (seven `checkout` modes, `commit`, `seal`, `log`, `worktree-status`, `inverse-plan`, the
+three `rollback-*`, `bundle preview`, `branch create --from`); two production readers, held by a test;
+`doctor` warns (ruled: warning, not error); visibility in `worktree-status`, `log`, `branch list`.
+Measured by the architect on the binary. **Rulings at review:** the `--help`/faq/git-mapping texts are
+made true before increment 2 (my "unchanged until increment 2" was wrong once the pointer landed);
+`status` follows the pointer in increment 2.

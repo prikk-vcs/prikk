@@ -361,3 +361,8 @@ re-scoped to one job — CI runs `check`, `boundary-check`, `reference-check` an
 push** — and nothing about publication moves, since publication is manual by the owner's word and has
 been safe under that. The four commands exit non-zero on findings, which is what a CI step wants;
 `command_scan`'s inventory gains the four invocations. Small. **RULED yes 2026-09-13** (owner: *"Will be handed to dev team"*); handoff `141-publication-through-ci/policy-gates-in-ci-handoff-v1.md`.
+
+**Increment 4 DELIVERED 2026-09-13 (`70e2f98e`)**: CI's `policy` job runs the four gates; the workflow is a
+required live reference (deleting the `check` step fails `reference-check`); the other three are exact
+procedure entries. **One gap ruled closed in the follow-up**: the three non-`check` steps are accepted
+but not yet required — a required-procedure list makes them so. Publication stays manual.

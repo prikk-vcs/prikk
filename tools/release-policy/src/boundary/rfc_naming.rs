@@ -232,7 +232,6 @@ const RFC_HANDOFFS_LEGACY: &[&str] = &[
     "DC-40-state-merkle-format-transition",
     "DC-41-integrity-evidence-campaign",
     "DC-42-performance-maintainability-gates-superseded",
-    "DC-43-release-security-controls",
     "DC-44-migration-backup-restore-evidence",
     "DC-49-portable-logic-platform-matrix",
     "DC-50-first-party-sha256-roi-decision",
