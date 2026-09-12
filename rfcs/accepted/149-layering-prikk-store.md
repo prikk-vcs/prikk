@@ -131,6 +131,27 @@ seven test-only helpers (six in `refs`, one in `patch_replay`, all reached by `v
 existing `test-support` cargo feature, never into the public API; and the list shows what a first cut
 without `verify` (24 of the items) would need, as a column.
 
+### 5.2b. The census, resolved (2026-09-13) — the list for the owner
+
+Step 2b (`rfc149-step-2b-report-v1.md`, reviewed) resolves every entry to file, line, kind and
+visibility; the team re-read all 77 rows at the line named. After the architect moved six rows (three
+variants of already-exported enums to "already public"; three proptest strategies declared under
+`tests/` to test-support):
+
+| column | items | note |
+|---|---|---|
+| **become `pub`** | **41** | `patch_replay` 25, `refs` 7, `lifecycle_cache` 8, `commit_boundary` 4, `trust` 0 |
+| test-support (behind the existing `test-support` feature, never public API) | 10 | all referenced only from test code |
+| already public | 26 | cost nothing |
+
+**Recommendation to the owner:** approve the 41 as one deliberate widening, recorded in `lib.rs` under
+an "operations-layer contract" section; `#[non_exhaustive]` on the enums and structs among them (RFC 147
+ruling 2). `verify` stays in the first cut — dropping it saves 6 public items and 6 test-support ones,
+and the feature gate handles the latter anyway.
+
+**Owner decisions queued:** (1) the 41-item list; (2) the consumer notice of §4b. The move handoff
+(§6 step 4, one commit per surface family) is written when both are ruled.
+
 ## 5. Decision criteria — the increment stops if any fails
 
 1. `boundary-check --graph` confirms zero core→surface edges on the resolved graph.
