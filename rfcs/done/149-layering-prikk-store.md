@@ -1,6 +1,6 @@
 # RFC 149 — Layering `prikk-store`: a core that stops growing, and a surfaces crate that may
 
-**Status.** **RULED 2026-09-13 by the owner: path B — one crate, the layer enforced as a coupling-gate rule.** The crate cut is not made; the layer invariant, the census and the reclassification are this RFC's product. Handoff: `149-…/path-b-layer-rule-handoff-v1.md`. Moves to `done/` when B lands. Earlier: **HELD at §6e**; Earlier: **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
+**Status.** **DONE 2026-09-13** — path B complete (`7214c039`, `feec231b`, `2c82fb76`): the layer is a `boundary-check` rule with zero violations; one crate; the store's exports are 0.41.0's again (269 names, measured by diff against the tag). Earlier: **RULED 2026-09-13 by the owner: path B — one crate, the layer enforced as a coupling-gate rule.** The crate cut is not made; the layer invariant, the census and the reclassification are this RFC's product. Handoff: `149-…/path-b-layer-rule-handoff-v1.md`. Moves to `done/` when B lands. Earlier: **HELD at §6e**; Earlier: **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
 direction *"not only now but also for the future."* Measured first; the design follows the measurement.
 
 **Direction APPROVED by the project owner 2026-09-12** — *"it is approved to split the crate into
@@ -298,3 +298,14 @@ to `cfg(test)`.
 No change to the format, the object model, or any command's behaviour. No stability promise. No
 removal of a declared cycle — that is separate work, scheduled by the owner from the gate's
 `what_would_remove_it` list.
+
+## 9. Closed 2026-09-13
+
+B1 `7214c039` — `UPPER_LAYER` (20) / `LOWER_LAYER` (29) partition every top-level module; no production
+edge lower → upper; unclassified, stale and doubly-listed names fail. B2 `feec231b` — `prikk-operations`
+and its six registrations removed; eight publishable crates. B3 `2c82fb76` — the 46-name contract and the
+49 fixture-round names reverted; `lib.rs` differs from `0.41.0` by zero non-comment lines; the store's
+source differs beyond comments and attributes only by the retired alias and two rustfmt reflows; 22
+`#[non_exhaustive]` kept; graph 130 / 483 / 13 / 5. **What this RFC leaves:** the invariant, the census
+(§4a), the reclassification (§6b, §6d), and the rule for the next time a split is proposed — derive the
+contract with the compiler first and judge its size (§6e).
