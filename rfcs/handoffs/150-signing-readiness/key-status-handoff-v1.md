@@ -1,6 +1,6 @@
 # RFC 150 — `prikk key status`: handoff v1
 
-**HELD until the owner accepts RFC 150.** Scheduled for 0.41.0 if accepted; the retired-variable
+**LIVE — RFC 150 accepted 2026-09-12.** Scheduled for 0.41.0; the retired-variable
 detection removal (0.41 item 0) lands in the same release and not before this.
 
 ## 1. The change

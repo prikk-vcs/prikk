@@ -1,7 +1,7 @@
 # RFC 150 — Signing readiness: `prikk key status`
 
-**Status:** proposed 2026-09-12 by the architect, on stikk's letter 007 (received the same day, before
-0.40.0 publishes). Awaits the owner's acceptance. **Scheduled if accepted: 0.41.0, and the removal of
+**Status:** ACCEPTED by the owner 2026-09-12 (proposed the same day by the architect, on stikk's letter 007, received before
+0.40.0 publishes). **Scheduled: 0.41.0, and the removal of
 the retired `PRIKK_*_SEED` detection (RFC 148 rule 1's window) does not ship before it.**
 
 ## 1. The question a front-end cannot answer without copying our rule
