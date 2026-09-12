@@ -101,6 +101,16 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
         ));
     }
 
+    // RFC 148 §2c: the **second** check, and it must also come before anything is created. With
+    // keys already in the key directory, the previous version printed "initialized Prikk repository
+    // at ..." and then failed on `refusing to overwrite an existing file: .../author.seed`, leaving
+    // a repository with no maintainer adopted -- the same half-run shape the check above exists to
+    // prevent, reintroduced one release later by a failure mode that check could not see.
+    //
+    // Deciding here, before `create_dir_all`, is what makes the refusal arm honest: a missing
+    // counterpart seed stops the command with nothing written and nothing printed.
+    let existing_keys = classify_existing_keys(&author_seed_out, &maintainer_seed_out)?;
+
     // Property 1: one command reaches a working repository, without the user running anything
     // else first -- `RepositoryLayout::init` itself does not create a missing leading directory
     // (the same is true of plain `prikk init`), so `setup` must, or naming a path that does not
@@ -122,23 +132,46 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
         _ => Some(crate::key_material::ensure_key_dir()?),
     };
 
-    let author_seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
-    let author_output = write_role_seed(
-        &author_seed,
-        author_seed_out,
-        key_dir.as_deref(),
-        crate::key_material::Role::Author,
-    )?;
+    let author_output = match existing_keys.author_is_reused {
+        // RFC 148 §2c: a second project reuses the keys you already have. Nothing is generated and
+        // nothing is written -- `setup` here is `init` plus the trust act, which is the only step a
+        // new repository actually needs when the keys already exist.
+        true => SeedOutput::DefaultDirectory(crate::key_material::seed_path(
+            crate::key_material::Role::Author,
+        )?),
+        false => {
+            let seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
+            write_role_seed(
+                &seed,
+                author_seed_out,
+                key_dir.as_deref(),
+                crate::key_material::Role::Author,
+            )?
+        }
+    };
 
-    let maintainer_seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
-    let maintainer_public_key = Ed25519KeyPair::from_seed(&maintainer_seed).public_key_bytes();
-    let maintainer_public_key_hex = prikk_hash::to_hex(&maintainer_public_key);
-    let maintainer_output = write_role_seed(
-        &maintainer_seed,
-        maintainer_seed_out,
-        key_dir.as_deref(),
-        crate::key_material::Role::Maintainer,
-    )?;
+    let (maintainer_output, maintainer_public_key_hex) =
+        match &existing_keys.maintainer_public_key_hex {
+            // Already derived, and already mode-checked, during classification above.
+            Some(hex) => (
+                SeedOutput::DefaultDirectory(crate::key_material::seed_path(
+                    crate::key_material::Role::Maintainer,
+                )?),
+                hex.clone(),
+            ),
+            None => {
+                let seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
+                let public_key = Ed25519KeyPair::from_seed(&seed).public_key_bytes();
+                let hex = prikk_hash::to_hex(&public_key);
+                let output = write_role_seed(
+                    &seed,
+                    maintainer_seed_out,
+                    key_dir.as_deref(),
+                    crate::key_material::Role::Maintainer,
+                )?;
+                (output, hex)
+            }
+        };
 
     // Property 4: the trust decision is shown, not performed invisibly -- this is the one step in
     // the composed sequence that is a trust act, and `setup` must print it exactly as `trust
@@ -157,8 +190,16 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     match (&author_output, &maintainer_output) {
         (SeedOutput::DefaultDirectory(author), SeedOutput::DefaultDirectory(_)) => {
             // The whole point of RFC 148: no export block, because there is nothing to export.
+            // "using" rather than "your keys are in" when nothing was minted -- a user who just ran
+            // this in a second project should be able to tell, from one word, that no new key was
+            // created and their existing one is now trusted here too.
             let dir = author.parent().unwrap_or(author);
-            println!("your keys are in {}", dir.display());
+            let verb = if existing_keys.any_reused() {
+                "using your keys in"
+            } else {
+                "your keys are in"
+            };
+            println!("{verb} {}", dir.display());
             println!("every new shell finds them -- nothing to export");
         }
         _ => {
@@ -183,6 +224,96 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
          `prikk seal --help`"
     );
     Ok(())
+}
+
+/// Which roles already have a seed in the key directory, and therefore reuse it (RFC 148 §2c).
+struct ExistingKeys {
+    author_is_reused: bool,
+    maintainer_is_reused: bool,
+    /// The reused maintainer key's public half, derived **during classification** — that is, before
+    /// `init` — so that a seed failing the mode rule refuses with nothing created. Deriving it later
+    /// would print "initialized Prikk repository at ..." and *then* refuse, which is the exact
+    /// half-run this whole check exists to prevent.
+    maintainer_public_key_hex: Option<String>,
+}
+
+impl ExistingKeys {
+    fn any_reused(&self) -> bool {
+        self.author_is_reused || self.maintainer_is_reused
+    }
+}
+
+/// Decide, **before anything is created**, what each role does: reuse the key directory's seed, or
+/// mint a new one.
+///
+/// A role given `--*-seed-out` always mints to that path, as it always has — the user named a
+/// destination, so there is nothing to reuse and nothing to refuse.
+///
+/// A role left to the default follows the key directory: present means reuse, absent means mint.
+/// **Exactly one of the two present is refused outright**, and that is the case worth explaining:
+/// minting the missing one would silently pair a brand-new key with an existing one the user may
+/// have adopted elsewhere, and reusing the present one alone would leave the other role unusable.
+/// Neither is a guess `setup` should make, so it names the missing file and the one command that
+/// creates it.
+fn classify_existing_keys(
+    author_seed_out: &Option<PathBuf>,
+    maintainer_seed_out: &Option<PathBuf>,
+) -> std::result::Result<ExistingKeys, CliError> {
+    let author_defaulted = author_seed_out.is_none();
+    let maintainer_defaulted = maintainer_seed_out.is_none();
+    if !author_defaulted && !maintainer_defaulted {
+        return Ok(ExistingKeys {
+            author_is_reused: false,
+            maintainer_is_reused: false,
+            maintainer_public_key_hex: None,
+        });
+    }
+
+    let author_path = crate::key_material::seed_path(crate::key_material::Role::Author)?;
+    let maintainer_path = crate::key_material::seed_path(crate::key_material::Role::Maintainer)?;
+    let author_present = author_defaulted && author_path.exists();
+    let maintainer_present = maintainer_defaulted && maintainer_path.exists();
+
+    // Only a run where *both* roles default can be half-present; if one role was given a path, the
+    // other's presence is simply reuse-or-mint on its own.
+    if author_defaulted && maintainer_defaulted && author_present != maintainer_present {
+        let missing = if author_present {
+            &maintainer_path
+        } else {
+            &author_path
+        };
+        return Err(CliError::Failure(
+            prikk_error::PrikkError::Precondition(format!(
+                "your key directory has one seed but not the other: {} is missing. Create it with \
+                 `prikk key generate --out {}`, then run `prikk setup` again",
+                missing.display(),
+                missing.display()
+            ))
+            .to_string(),
+        ));
+    }
+
+    // Read every seed that will be reused, here and now. `key_material::read_seed` is what applies
+    // the mode rule and the retired-variable refusal, so reading through it is what makes a reused
+    // key clear the same checks a used key clears -- and doing it *before* the caller creates
+    // anything is what keeps a refusal from arriving after "initialized".
+    if author_present {
+        let _ = crate::key_material::read_seed(crate::key_material::Role::Author)?;
+    }
+    let maintainer_public_key_hex = match maintainer_present {
+        true => {
+            let seed = crate::key_material::read_seed(crate::key_material::Role::Maintainer)?;
+            let public_key = Ed25519KeyPair::from_seed(&seed).public_key_bytes();
+            Some(prikk_hash::to_hex(&public_key))
+        }
+        false => None,
+    };
+
+    Ok(ExistingKeys {
+        author_is_reused: author_present,
+        maintainer_is_reused: maintainer_present,
+        maintainer_public_key_hex,
+    })
 }
 
 /// Write one role's seed to the path the user named, or to the default key directory.

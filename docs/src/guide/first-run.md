@@ -98,7 +98,7 @@ error: precondition not met: PRIKK_AUTHOR_SEED is no longer read; your keys are 
 /home/you/.config/prikk (or set PRIKK_AUTHOR_SEED_FILE)
 ```
 
-Remove it from your shell profile. The refusal itself is removed in 0.42.0, after which a stale
+Remove it from your shell profile. The refusal itself is removed in 0.41.0, after which a stale
 variable is simply unused.
 
 ## The commands `setup` composes — and when you'd use them directly
@@ -194,40 +194,55 @@ saved as `author.seed` works too, with no trust step at all.
 
 ## A second project
 
-Two routes, and which one is right depends on whether the projects share a trust domain.
+```sh
+prikk setup ./second-project
+```
 
-**Fresh keys — `prikk setup` again.** The right default when the projects are unrelated:
+```
+initialized Prikk repository at ./second-project/.prikk
+trusted maintainer key: maintainer
+adopted maintainer keys: 1
+
+using your keys in /home/you/.config/prikk
+every new shell finds them -- nothing to export
+```
+
+**`using` rather than `your keys are in` is the whole difference.** `setup` found the seeds already
+in your key directory, so it minted nothing and wrote nothing — it initialized the repository and
+adopted the maintainer key you already have, which is the one step a new repository genuinely needs.
+Both projects sign with the same identity, which is usually what you want when it is the same person.
+
+Pointed at a directory that *already holds a repository*, `setup` refuses before doing anything at
+all:
+
+```
+error: precondition not met: ./second-project already holds a repository; to use your existing keys
+here run `prikk trust maintainer add` (see `prikk key public`), or pick a different directory for a
+new project
+```
+
+**If you want the second project to have its own identity**, give the new seeds their own paths:
 
 ```sh
-prikk setup ./other-repo
+prikk setup ./second-project \
+  --author-seed-out ~/keys/second-author.seed \
+  --maintainer-seed-out ~/keys/second-maintainer.seed
 ```
 
-Everything above applies unchanged, including saving the printed seeds. Pointed at a directory that
-already holds a repository, `setup` refuses before doing anything at all — no `init`, no keys, no
-seed file — and tells you which route you probably wanted:
+`setup` prints the `PRIKK_*_SEED_FILE` lines for them, since prikk will not find them on its own.
 
-```
-error: precondition not met: ./other-repo already holds a repository; to use your existing keys here
-run `prikk trust maintainer add` (see `prikk key public`), or pick a different directory for a new
-project
-```
+### The same thing by hand
 
-**Reuse the keys you already have.** Right when it is the same person and the same trust domain.
-Only one extra step over the first project — the maintainer key must be trusted here too:
+`setup` composes it; these are the steps if you would rather run them yourself:
 
 ```sh
 cd ./second-project
 prikk init .
-# export the same PRIKK_AUTHOR_* and PRIKK_MAINTAINER_* values as before
-prikk commit --from-worktree -m "genesis"
+prikk trust maintainer add --key-id maintainer --public-key "$(prikk key public --role maintainer)"
 ```
 
-The commit succeeds: an AUTHOR key is registered nowhere, so it needs nothing from this repository.
-The seal does not, yet:
-
-```sh
-prikk seal --allow-no-audit
-```
+`prikk commit` needs nothing extra — an AUTHOR key is registered nowhere, so it needs nothing from
+any repository. Only `seal` needs the trust act above; without it:
 
 ```
 error: precondition not met: no maintainer key is adopted in this repository yet; run `prikk trust maintainer add` (a trust policy container that replays empty reads the same way -- run `prikk doctor` if a key was adopted here before)

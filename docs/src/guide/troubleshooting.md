@@ -17,7 +17,7 @@ seed. See [First Run](first-run.md) for where the key directory is on each platf
 Your shell still exports a seed as an environment variable. prikk stopped reading that channel in
 0.40 and **refuses rather than ignoring it**, so a stale variable can never silently become the key
 you are not signing with. Remove it from your shell profile; your keys are in the key directory the
-message names, or wherever `PRIKK_AUTHOR_SEED_FILE` points. The refusal itself is removed in 0.42.0.
+message names, or wherever `PRIKK_AUTHOR_SEED_FILE` points. The refusal itself is removed in 0.41.0.
 
 ## `error: <path> is readable by group or other (mode 0644); run `chmod 600 <path>``
 

@@ -277,3 +277,177 @@ fn control7_help_names_seed_file_and_no_seed_env_remains() {
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// RFC 148 §2c control (a): a **second project** reuses the keys you already have, writes no seed,
+/// and reaches a sealed, verified commit — all with no `PRIKK_*` variable set.
+///
+/// The reuse is asserted on the seed files' **bytes and mtimes**, not on the absence of an error: a
+/// `setup` that regenerated and rewrote them would still print a plausible success.
+#[test]
+fn control_a_a_second_project_reuses_the_existing_keys() {
+    let config_home = unique_dir("second-project");
+    let workspace = unique_dir("second-project-work");
+    let first = workspace.join("first");
+    let second = workspace.join("second");
+
+    let setup = |target: &Path| {
+        support::prikk(&workspace)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .args(["setup", target.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    support::ok(&setup(&first), "first setup");
+
+    let key_dir = config_home.join("prikk");
+    let fingerprint = |path: &Path| {
+        let bytes = std::fs::read(path).expect("read seed");
+        let mtime = std::fs::metadata(path)
+            .expect("stat seed")
+            .modified()
+            .expect("mtime");
+        (bytes, mtime)
+    };
+    let before = [
+        fingerprint(&key_dir.join("author.seed")),
+        fingerprint(&key_dir.join("maintainer.seed")),
+    ];
+
+    let out = setup(&second);
+    support::ok(&out, "second setup");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        stdout.contains("using your keys in"),
+        "the second project must say it is reusing, not minting: {stdout}"
+    );
+    assert!(
+        stdout.contains("adopted maintainer keys: 1"),
+        "and the reused maintainer key must be adopted here too: {stdout}"
+    );
+    assert!(
+        !stdout
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(64)
+            .any(|window| window.iter().all(char::is_ascii_hexdigit)),
+        "no 64-hex run may reach stdout: {stdout}"
+    );
+
+    let after = [
+        fingerprint(&key_dir.join("author.seed")),
+        fingerprint(&key_dir.join("maintainer.seed")),
+    ];
+    assert_eq!(
+        before, after,
+        "a second setup must not write either seed -- bytes and mtimes must be untouched"
+    );
+
+    // And the second project actually works, on those reused keys, with nothing exported.
+    std::fs::write(second.join("a.txt"), b"hi").unwrap();
+    for args in [
+        &["commit", "-m", "one"][..],
+        &["seal", "--allow-no-audit"][..],
+        &["verify"][..],
+    ] {
+        let out = support::prikk(&workspace)
+            .current_dir(&second)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .args(args)
+            .output()
+            .unwrap();
+        support::ok(&out, &format!("{args:?} in the second project"));
+    }
+}
+
+/// RFC 148 §2c control (b): exactly one seed present is refused **before anything is created** — no
+/// `.prikk`, no second seed file, nothing on stdout.
+///
+/// The three absences are the assertion. A refusal that arrived after `init` would still produce
+/// this message, and would still be wrong.
+#[test]
+fn control_b_one_seed_without_the_other_refuses_before_creating_anything() {
+    let config_home = unique_dir("half-keys");
+    let workspace = unique_dir("half-keys-work");
+    let key_dir = config_home.join("prikk");
+    std::fs::create_dir_all(&key_dir).unwrap();
+    write_seed(&key_dir.join("author.seed"), SEED_A, 0o600);
+
+    let target = workspace.join("half");
+    let out = support::prikk(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["setup", target.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(1), "must refuse: {}", stderr(&out));
+    assert!(
+        stderr(&out).starts_with("error: precondition not met: your key directory has one seed"),
+        "a caller-fixable state: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("maintainer.seed is missing")
+            && stderr(&out).contains("prikk key generate --out "),
+        "the refusal names the missing file and the command that creates it: {}",
+        stderr(&out)
+    );
+
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "nothing may be printed: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        !target.join(".prikk").exists(),
+        "no repository may be created"
+    );
+    assert!(
+        !key_dir.join("maintainer.seed").exists(),
+        "no seed may be written"
+    );
+}
+
+/// RFC 148 §2c control (c): reuse with a group-readable maintainer seed refuses **before `init`**.
+///
+/// The mode rule already existed; what this pins is *when* it fires. Deriving the reused key's
+/// public half after `init` would print "initialized Prikk repository at …" and then refuse — which
+/// is what the first implementation of this round did, and exactly the half-run shape RFC 135's own
+/// round closed a week earlier.
+#[test]
+fn control_c_a_group_readable_reused_seed_refuses_before_init() {
+    let config_home = unique_dir("reuse-mode");
+    let workspace = unique_dir("reuse-mode-work");
+    let first = workspace.join("first");
+    support::ok(
+        &support::prikk(&workspace)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .args(["setup", first.to_str().unwrap()])
+            .output()
+            .unwrap(),
+        "first setup",
+    );
+    write_seed(&config_home.join("prikk/maintainer.seed"), SEED_A, 0o644);
+
+    let second = workspace.join("second");
+    let out = support::prikk(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["setup", second.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(1), "must refuse: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("readable by group or other (mode 0644)"),
+        "the mode refusal: {}",
+        stderr(&out)
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("initialized"),
+        "and it must arrive before `init`: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        !second.join(".prikk").exists(),
+        "no repository may be created"
+    );
+}

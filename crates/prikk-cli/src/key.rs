@@ -56,25 +56,39 @@ fn run_generate(args: Vec<String>) -> std::result::Result<(), CliError> {
             println!("public key: {public_key_hex}");
             println!();
             println!("next steps:");
-            println!(
-                "  prikk trust maintainer add --key-id maintainer --public-key {public_key_hex}"
-            );
-            // RFC 148: a seed reaches prikk through a file. If this one landed in the key
-            // directory it is already found automatically; anywhere else needs the `_FILE` line,
-            // and saying which of the two is the case is more useful than printing a line the
-            // reader may not need.
-            match crate::key_material::default_key_dir() {
-                Ok(dir) if path.parent() == Some(dir.as_path()) => {
-                    println!("this seed is in your key directory -- prikk finds it automatically");
+            // RFC 148 §4: inside the key directory the *file name* is the role, so the next steps
+            // are the ones that actually apply to this file. Printing the maintainer trust step
+            // beside a file called `author.seed` and then telling the reader to ignore it would be
+            // worse than not printing it: advice you have to un-read is not advice.
+            match key_directory_role(&path) {
+                Some(crate::key_material::Role::Author) => {
+                    println!(
+                        "  nothing -- this is your AUTHOR key, prikk finds it automatically, and \
+                         an AUTHOR key needs no trust step"
+                    );
                 }
-                _ => {
+                Some(crate::key_material::Role::Maintainer) => {
+                    println!(
+                        "  prikk trust maintainer add --key-id maintainer --public-key \
+                         {public_key_hex}"
+                    );
+                    println!(
+                        "note: prikk finds this seed automatically; the step above adopts it in one \
+                         repository"
+                    );
+                }
+                None => {
+                    println!(
+                        "  prikk trust maintainer add --key-id maintainer --public-key \
+                         {public_key_hex}"
+                    );
                     println!("  export PRIKK_MAINTAINER_SEED_FILE=\"{}\"", path.display());
+                    println!(
+                        "note: the same seed works as an AUTHOR key instead -- set \
+                         PRIKK_AUTHOR_SEED_FILE to it and skip the trust step"
+                    );
                 }
             }
-            println!(
-                "note: the same seed works as an AUTHOR key instead -- name it author.seed (or set \
-                 PRIKK_AUTHOR_SEED_FILE) and skip the trust step"
-            );
         }
         None => {
             let seed_hex = prikk_hash::to_hex(&seed);
@@ -179,6 +193,26 @@ pub(crate) fn write_seed_to_path(
         }
     }
     write_seed_to_path_platform(seed, path)
+}
+
+/// Which role a path names, when it is inside the key directory — `author.seed` or
+/// `maintainer.seed` — and `None` for any other location.
+///
+/// RFC 148 §4: inside that directory the file name *is* the role, so `key generate --out` can tell a
+/// reader which of its two next steps actually applies to the file they just created rather than
+/// printing both and leaving them to work it out.
+fn key_directory_role(path: &Path) -> Option<crate::key_material::Role> {
+    let key_dir = crate::key_material::default_key_dir().ok()?;
+    if path.parent() != Some(key_dir.as_path()) {
+        return None;
+    }
+    let name = path.file_name()?.to_str()?;
+    [
+        crate::key_material::Role::Author,
+        crate::key_material::Role::Maintainer,
+    ]
+    .into_iter()
+    .find(|role| role.seed_file_name() == name)
 }
 
 /// Write a seed into prikk's own key directory (RFC 148).

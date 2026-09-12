@@ -392,11 +392,22 @@ const GUARDED: &[GuardedFunction] = &[
 /// the same offset), but that barrier cannot survive the fix — the second thread can no longer enter
 /// the region, so waiting inside it deadlocks.
 ///
-/// **Both assertions can fail, and fail for different reasons.** Remove the lock from
-/// `append_object_under_lock` and the conflict count drops to zero *deterministically*, whatever the
-/// thread timing does; the offset assertion is the correctness property itself, and is the one that
-/// caught the real defect — twelve concurrent `prikk tag create` left two index entries claiming one
-/// offset and `prikk verify` failing, in two runs of four.
+/// **It does not assert that a racer was refused.** It did, and that assertion flaked in the
+/// architect's own gate run: `left: 0, right: 1`, both `Ok`. A fail-fast lock does not guarantee a
+/// conflict — the loser can reach it after the winner has already released — so "exactly one
+/// refused" was a claim about *timing*, not about the lock, and a control that depends on winning a
+/// race is a control that fails for the wrong reason. What is asserted instead is what must hold
+/// under every interleaving: **at most one conflict, at least one success, and no two index entries
+/// sharing a location.**
+///
+/// The refusal itself is proved deterministically by
+/// `an_append_meeting_a_held_object_store_lock_is_refused`, which holds the lock from the test and
+/// cannot flake. That is the division of labour: the racing test guards the *invariant*, the held-lock
+/// test guards the *behaviour*.
+///
+/// The offset assertion is still the one that caught the real defect — twelve concurrent
+/// `prikk tag create` left two index entries claiming one offset and `prikk verify` failing, in two
+/// runs of four.
 #[test]
 fn two_racing_object_appends_serialise_and_never_share_an_offset() -> prikk_error::Result<()> {
     use std::sync::{Arc, Barrier};
@@ -438,9 +449,13 @@ fn two_racing_object_appends_serialise_and_never_share_an_offset() -> prikk_erro
         2,
         "every outcome must be either a success or a lock conflict: {results:?}"
     );
-    assert_eq!(
-        conflicts, 1,
-        "exactly one racer must be refused -- zero means nothing serialised them: {results:?}"
+    assert!(
+        succeeded >= 1,
+        "at least one racer must get through: {results:?}"
+    );
+    assert!(
+        conflicts <= 1,
+        "at most one racer may be refused -- two would mean nobody made progress: {results:?}"
     );
 
     // The correctness property: whatever the index holds, no two entries may claim one location.

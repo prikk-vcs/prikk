@@ -57,9 +57,9 @@ impl Role {
 
     /// The variable that used to carry a raw seed. **Read only to refuse.**
     ///
-    /// REMOVE THIS DETECTION IN 0.42.0 — one release after 0.40.0, which is the release that stops
-    /// reading it. After that window a stale `PRIKK_AUTHOR_SEED` in someone's shell profile is
-    /// simply an unused variable, and this refusal becomes noise.
+    /// REMOVE THIS DETECTION IN 0.41.0 — 0.40.0 is the release that stops reading it and refuses,
+    /// and the very next release drops the refusal. After that window a stale `PRIKK_AUTHOR_SEED` in
+    /// someone's shell profile is simply an unused variable, and this refusal becomes noise.
     pub(crate) const fn retired_seed_var(self) -> &'static str {
         match self {
             Role::Author => "PRIKK_AUTHOR_SEED",

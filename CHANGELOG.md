@@ -34,7 +34,7 @@ error: precondition not met: PRIKK_AUTHOR_SEED is no longer read; your keys are 
 **Refusing, not ignoring, is the point.** An environment variable is readable by every child process,
 lands in process listings, and survives in shell profiles long after the key it holds has changed —
 so a silent ignore would let automation keep running while signing with a key nobody meant. The
-detection is removed in **0.42.0**, one release from now; after that a stale variable is simply
+detection is removed in **0.41.0**, one release from now; after that a stale variable is simply
 unused.
 
 On Unix the key directory is created `0700` and each seed `0600`, and **prikk refuses to read a seed
@@ -46,6 +46,11 @@ refuses on Windows for the same reason it always has.
 `prikk key public --seed-env <NAME>` is replaced by `prikk key public [--seed-file <path>]
 [--role author|maintainer]` — with no arguments it reads your key directory's `author.seed`. There is
 no longer an environment variable for it to name.
+
+`prikk setup` in a **second** project reuses the keys already in your key directory rather than
+minting new ones — it initializes the repository, adopts the maintainer key you already have, and
+prints `using your keys in <dir>`. Nothing is written, and a key directory holding one seed but not
+the other is refused before anything is created rather than half-completed.
 
 **Migrating:** run `prikk setup` in a new project directory, or write your existing seed to
 `<key dir>/author.seed` at mode `0600` (`prikk key generate --out <that path>` creates the directory
