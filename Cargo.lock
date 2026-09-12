@@ -1084,6 +1084,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "prikk-operations"
+version = "0.41.0"
+dependencies = [
+ "prikk-error",
+ "prikk-object",
+ "prikk-store",
+]
+
+[[package]]
 name = "prikk-release-policy"
 version = "0.41.0"
 dependencies = [

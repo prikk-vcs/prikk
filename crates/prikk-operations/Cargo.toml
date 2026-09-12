@@ -1,0 +1,22 @@
+[package]
+name        = "prikk-operations"
+description = "Repository operations for Prikk -- bundles, checkout, merge, rollback, sync, verification reporting, and the other surfaces built on prikk-store. Internal to the prikk CLI; its API may change without notice before 1.0."
+readme      = "README.md"
+documentation = "https://docs.rs/prikk-operations"
+version.workspace       = true
+edition.workspace       = true
+rust-version.workspace  = true
+license.workspace       = true
+authors.workspace       = true
+repository.workspace    = true
+homepage.workspace      = true
+categories.workspace    = true
+keywords.workspace      = true
+
+[dependencies]
+prikk-error                 = { workspace = true }
+prikk-object                = { workspace = true }
+prikk-store                 = { workspace = true }
+
+[lints]
+workspace = true

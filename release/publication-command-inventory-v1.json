@@ -8,6 +8,7 @@
     "prikk-object",
     "prikk-replay",
     "prikk-store",
+    "prikk-operations",
     "prikk"
   ],
   "procedures": [
@@ -18,6 +19,7 @@
     {"phase": "package", "argv": ["cargo", "package", "--locked", "-p", "prikk-object"]},
     {"phase": "package", "argv": ["cargo", "package", "--locked", "-p", "prikk-replay"]},
     {"phase": "package", "argv": ["cargo", "package", "--locked", "-p", "prikk-store"]},
+    {"phase": "package", "argv": ["cargo", "package", "--locked", "-p", "prikk-operations"]},
     {"phase": "package", "argv": ["cargo", "package", "--locked", "-p", "prikk"]},
     {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk-error"]},
     {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk-ffi"]},
@@ -26,6 +28,7 @@
     {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk-object"]},
     {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk-replay"]},
     {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk-store"]},
+    {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk-operations"]},
     {"phase": "publish", "argv": ["cargo", "publish", "--locked", "-p", "prikk"]}
   ]
 }

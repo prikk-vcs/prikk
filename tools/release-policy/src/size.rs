@@ -133,8 +133,9 @@ struct CrateSize {
 /// than derived from `cargo metadata`: this gate must also cover the three `tools/` members, which
 /// `PRODUCTS` deliberately does not list, and a member that disappears from here without being
 /// removed from the workspace is caught by `members_are_covered` below.
-const MEMBERS: [&str; 11] = [
+const MEMBERS: [&str; 12] = [
     "crates/prikk-cli",
+    "crates/prikk-operations",
     "crates/prikk-crypto",
     "crates/prikk-error",
     "crates/prikk-ffi",

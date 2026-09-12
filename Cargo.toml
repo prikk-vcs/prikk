@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/prikk-cli",
+    "crates/prikk-operations",
     "crates/prikk-crypto",
     "crates/prikk-error",
     "crates/prikk-ffi",
@@ -15,6 +16,7 @@ members = [
 ]
 default-members = [
     "crates/prikk-cli",
+    "crates/prikk-operations",
     "crates/prikk-crypto",
     "crates/prikk-error",
     "crates/prikk-ffi",
@@ -45,6 +47,7 @@ prikk-error                 = { version = "0.41.0", path = "crates/prikk-error" 
 prikk-ffi                   = { version = "0.41.0", path = "crates/prikk-ffi" }
 prikk-hash                  = { version = "0.41.0", path = "crates/prikk-hash" }
 prikk-object                = { version = "0.41.0", path = "crates/prikk-object" }
+prikk-operations            = { version = "0.41.0", path = "crates/prikk-operations" }
 prikk-replay                = { version = "0.41.0", path = "crates/prikk-replay" }
 prikk-store                 = { version = "0.41.0", path = "crates/prikk-store" }
 

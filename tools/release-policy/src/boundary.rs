@@ -17,7 +17,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
-const PRODUCTS: [(&str, &str); 8] = [
+const PRODUCTS: [(&str, &str); 9] = [
     ("prikk-error", "crates/prikk-error/Cargo.toml"),
     ("prikk-ffi", "crates/prikk-ffi/Cargo.toml"),
     ("prikk-hash", "crates/prikk-hash/Cargo.toml"),
@@ -25,6 +25,8 @@ const PRODUCTS: [(&str, &str); 8] = [
     ("prikk-object", "crates/prikk-object/Cargo.toml"),
     ("prikk-replay", "crates/prikk-replay/Cargo.toml"),
     ("prikk-store", "crates/prikk-store/Cargo.toml"),
+    // RFC 149: the operations layer, above the store and below the CLI.
+    ("prikk-operations", "crates/prikk-operations/Cargo.toml"),
     ("prikk", "crates/prikk-cli/Cargo.toml"),
 ];
 const CATEGORY_ORDER: [&str; 17] = [

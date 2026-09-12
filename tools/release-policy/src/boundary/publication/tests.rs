@@ -13,6 +13,7 @@ fn valid() -> Inventory {
         "prikk-object",
         "prikk-replay",
         "prikk-store",
+        "prikk-operations",
         "prikk",
     ]
     .map(str::to_owned)
