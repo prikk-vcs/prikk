@@ -57,6 +57,7 @@ These records are under design review. All proposed RFCs must respect the depend
 | 133 | [Performance Cost and Its Evidence](./proposed/133-performance-cost-and-its-evidence.md) | Unscheduled. Extracted from RFC 126 on the owner's instruction 2026-09-03. **Owner ruling required** — whether peak RSS gets standing protection. Carries the measured commit-memory shape: O(nodes), not O(bytes) |
 | 136 | [Block Aggregation Payoff](./proposed/136-block-aggregation-payoff.md) | Opened and **accepted 2026-09-04**; §7 ruled Option A. The snapshot format, the when-to-snapshot policy and §9 items 1/2/4 are still unruled, so it stays here. No handoff issued |
 | 145 | [Serving a Repository for Reading](./proposed/145-serving-a-repository-for-reading.md) | Unscheduled, ranked second. Opened 2026-09-10 on the owner's 2026-09-06 direction. Rules the shape of a read-only browse view — static export, a separate server project, or a serving subcommand. **Owner rulings required** (§9). **Decides no build** |
+| 148 | [Key Material Across Sessions](./proposed/148-key-material-across-sessions.md) | Unscheduled. Opened 2026-09-12 on the owner's reboot question. `PRIKK_*_SEED_FILE` path variables: one non-secret line persisted once; prikk never invents the location. The trade RFC 135 §9 deferred to the owner. **Owner rulings required** |
 
 **Blocked, not available:** **DC-43** waits on a release-lane event, and additionally
 inherits DC-35's unamended key lifecycle and criterion 4's signer bootstrap, which only the project owner

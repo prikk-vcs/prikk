@@ -8,14 +8,24 @@ advice and got 0 of 15 — value and availability ran opposite. Grouping has the
 form: §6a/§6c showed a grouping can *hide* a declared cycle, and §2 forbids inventing a home for a
 module that has none. **Measure first.**
 
+## 0. CORRECTED 2026-09-12 — the gate does not emit the numbers §1 tells you to use
+
+`boundary-check` prints only `schema_version`, `valid`, `errors`. **There is no fan-in/fan-out, hub or
+graph output to read.** §1's *"use the gate's numbers"* was written without checking that; the graph
+exists inside `boundary/coupling/graph.rs` and is never emitted.
+
+**Step 0 of this round: add `boundary-check --graph`** — JSON with every node, every edge, and the
+hub set as `HUB_THRESHOLD` computes it, built from the same `walk` the gate uses so the census and the
+gate cannot disagree. No change to what the gate *checks*; a new read-only emission. Land it as its own
+commit before the census, with one test asserting `--graph` and the gate agree on the hub list.
+
 ## 1. The census, one row per top-level module (52 today)
 
 | module | files / lines | role family (§2) | name family (§2) | fan-in / fan-out (gate) | in a declared cycle? | proposed home, or "singleton — stays" |
 
 - **Role family** — foundation, orchestrator, or one you find and name; §2's two suggestions are
   starting material, not the answer.
-- **Fan-in / fan-out** from `boundary-check`'s own graph, not from reading imports. Use the gate's
-  numbers.
+- **Fan-in / fan-out** from `boundary-check --graph` (step 0), not from reading imports.
 - **Declared cycle** — from `DECLARED_CYCLES` in `tools/release-policy/src/boundary/coupling.rs`.
 - **"Singleton — stays"** is a valid, expected answer. §2 counted 38 of 69; say how many remain.
 

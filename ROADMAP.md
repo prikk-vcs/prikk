@@ -243,6 +243,7 @@ item is open.
 - [`133-performance-cost-and-its-evidence.md`](rfcs/proposed/133-performance-cost-and-its-evidence.md) — RFC 133, What performance costs this project has, and what evidence holds them (extracted from RFC 126 §5/§5a on the owner's instruction 2026-09-03; **owner ruling required** — whether peak RSS gets standing protection; absorbs `AUD-01`/`AUD-02`'s cost description and the measured commit-memory shape)
 - [`136-block-aggregation-payoff.md`](rfcs/proposed/136-block-aggregation-payoff.md) — RFC 136, The block aggregation payoff: what sealing a block should make cheap (opened and **ACCEPTED 2026-09-04**; the block already bounds merge work to the sealed window, but `snapshot_blob_ref` is written `None` by all three block-creating paths and `SnapshotManifest::encode` is called only from tests, so the materialization half was never built. **§9.1 measured 2026-09-04 eliminates Option B** — composition collapses only 1.16-1.25x at realistic block sizes and that is a ceiling. **§7 RULED 2026-09-04: Option A, the acceleration travels**; Option C refused. Two consequences recorded: **§7.1** blocks travel verbatim by `bundle` but never by `sync`, which re-seals under the receiver's own key by design — so the ruling is met on the path where it matters and cannot be met on the other; **§7.2** nothing checks a snapshot's content against `state_merkle_root` today, and a travelling snapshot cannot lean on local provenance, so that check is a **precondition** of Option A. **Still unruled**: the snapshot format, the when-to-snapshot policy, and §9 items 1/2/4. No handoff issued)
 - [`145-serving-a-repository-for-reading.md`](rfcs/proposed/145-serving-a-repository-for-reading.md) — RFC 145, Serving a repository for reading (opened 2026-09-10 on the owner's 2026-09-06 direction; the hosting-shape RFC). **Rules the shape, does not decide to build.** Finds **three candidate shapes, not two** — `git instaweb` does not contain a web server, it launches one the machine already has, so "static export served by anything" is the shape the owner's own example actually is. **The decisive axis is the dependency surface: prikk's entire third-party runtime surface is five crates**, and a browse view is the wrong thing to spend it on. **Architect recommends static export (C) first, a separate server project (B) held for later, and not a serving subcommand (A)** — A's hand-rolled variant is feasible at zero dependency cost, but it puts an HTTP parser and a listening socket permanently in the binary that writes repositories. **Owner rulings required** (§9): the shape, whether it is scheduled at all, and whether `--format json` on `log`/`branch`/`tag` is worth closing independently
+- [`148-key-material-across-sessions.md`](rfcs/proposed/148-key-material-across-sessions.md) — RFC 148, key material across sessions (opened 2026-09-12 on the owner's question *"what happens when the local machine is rebooted?"*). **prikk reads seeds from the environment only, so a reboot leaves it keyless** unless the user arranged something prikk never suggested. RFC 135 §9 deferred exactly this trade to the owner by name; the owner has now asked. Design: `PRIKK_*_SEED_FILE` path variables — one non-secret line persisted once, the secret stays in the `0600` file, prikk still never invents a location. **Owner rulings required** (§6)
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here
@@ -550,6 +551,80 @@ now so it is a recognised threshold rather than a later surprise.
 **Band 3 is complete except RFC 126 §5.** RFC 123's interim, RFC 124, and RFC 126 §2 all landed;
 §6a and §6b followed on 2026-09-03. **`AUD-05` through `AUD-10` are all delivered** — the whole
 no-design-decision half of this program — leaving `AUD-01` through `AUD-04`, which are design work.
+
+## Remaining work — the inventory, 2026-09-12
+
+**The architect told the owner the priority queue was empty on 2026-09-12. That was false**, and the
+owner named two counterexamples. This section is the thorough search that should have preceded the
+claim: every source of open work that is not a numbered row — RFC prose, done-RFC triggers and carried
+items, handoff "not in this round" sections, review "reported, not actioned" notes, changelog known
+limits, source `TODO`/`#[ignore]`, the coupling gate's declared debt, and the owner's own complaints in
+this file's prose. **A row exists only for what is handed off; everything else lives here until it is.**
+
+### A. Waiting on the owner — rulings, no team capacity
+
+| item | source | what is asked |
+|---|---|---|
+| **RFC 148** — key material across sessions | `rfcs/proposed/148-…` | accept; Unix mode rule (refuse vs warn) |
+| **RFC 130 §8** — growth controls for `prikk-store` | `rfcs/done/130-…` §8 | adopt evidence line / 1,200-line file gate / `read-only` feature instrument, or a subset; the threshold |
+| **RFC 145** — browse-view shape (D over the CLI) | `rfcs/proposed/145-…` §9 | accept or reject the ruling |
+| RFC 120 §9.4, §9.4a | `rfcs/accepted/120-…` | two rulings; §9.4a stops an error on its third occurrence |
+| RFC 133 §6 — memory as a stated requirement | `rfcs/proposed/133-…` §6a.4 | refuse the unqualified form, state it on the bytes axis |
+| Two letters | `external-communication/*/send/draft/` | stikk 006; external-arch 011 |
+
+### B. Handed off, live with the team
+
+| item | handoff |
+|---|---|
+| `prikk setup` refuses on an existing repository before touching anything | `135-…/setup-existing-repository-handoff-v1.md` |
+| RFC 146 §8e — three listing synopses advertise `[--format json]` | `146-…/help-synopsis-handoff-v1.md` |
+| RFC 131 §6e — grouping census, **with step 0: `boundary-check --graph`** (the gate emits no graph today; the handoff had assumed it did — corrected) | `131-…/grouping-census-handoff-v1.md` |
+
+### C. Small, ready when scheduled — each one round
+
+| item | source | note |
+|---|---|---|
+| `checkout --snapshot-plan`: `Integrity` for a by-design missing snapshot → `Precondition` | RFC 147 §3d | per-site, RFC 132 mould |
+| G1 — a contradicted rename declaration is refused by `commit` but is not per-path | RFC 147 §2e | needs a shape ruling first |
+| G2 — baseline symlink nodes skipped by `worktree-status` | RFC 147 §2e | out of scope until symlink authoring is |
+| Bare `--ref <block-id>` for content at a point | RFC 144 §4t | stikk's remaining named dependency; tagged blocks now work |
+| `import_bundle` does not hold `ActiveLock` across its object writes | `docs/…/concurrency-locking.md:202` | *"deferred, tracked follow-up scope"* — a real concurrency gap, documented and unrowed |
+| Repeated-flag rejection across the whole CLI | DC-78 backup-restore amendment §157 | RFC 146 did it for three commands' `--format`; the rest is a sweep |
+| Operation identifier in trust-gate refusal messages | RFC 118 stage 3 handoff | *"report it as a follow-up if worth doing"* — never reported back |
+| Windows has zero test coverage of the refusal field | RFC 147 §2e | stated by the round; every refusal needs a non-regular entry |
+| `verify`'s O(N³) in sealed blocks (DC-75 §0) — after DC-92's memoization, **is the cubic term gone? unmeasured** | DC-75 prerequisite §0; DC-92 review §104 | an RFC 133-shaped measurement, not a fix |
+| `security-setup.md:22`'s AUTHOR-trust sentence: DC-53's changelog trace not found by grep; confirm before editing | `security-setup.md:22` | docs currency |
+
+### D. Product gaps by design — unscheduled, and `--help` says so
+
+| gap | since | note |
+|---|---|---|
+| **No `branch switch`, no current-branch pointer** — every command takes `--ref` | DC-61; DC-67's sequence_06 works around it | the `--help` note itself: *"switching needs a separate, not-yet-designed increment"*. **The largest usability gap in the product and it has no RFC.** |
+| No path-aware history (`log` filters no file) | `history.md:28` | documented limit |
+| Symlink authoring out of scope | DC-32 onward | the source of G2, the refusal field's whole reason to exist |
+| Key lifecycle — rotation, revocation beyond the trust store | RFC-025 (deferred) | RFC 148 makes long-lived keys easier to keep; RFC 135 named this as the cost |
+| `prikk config` | RFC 135 §9.1 | trigger: a first real adopter |
+| BSD mutation | this file, `### BSD mutation` | blocker is CI evidence |
+| Network transport | RFC 116 §1 | deferred by accepted ruling, in its own crate if ever |
+
+### E. Blocked on a named external answer
+
+RFC 137 increment 5 (`prikk.org` DNS — plus the missing site-root `404.html` and absent TLS on `www.`
+found at review); RFC 136 (snapshot format, when-to-snapshot policy, §9 items); DC-43 (signer
+bootstrap); RFCs 109/110/113 (a direction).
+
+### F. Declared debt — the coupling gate's own list
+
+**8 declared cycles, 5 declared hubs**, each with a `reason` and a `what_would_remove_it` in
+`tools/release-policy/src/boundary/coupling.rs`. Unchanged since RFC 130's baseline. Removing one is a
+design change to the modules involved, scheduled by the owner; the list *is* the work breakdown.
+
+### G. Checked and found closed — so they do not resurface
+
+RFC 121 §6c/§6d (= AUD-09/AUD-10, delivered per this file); DC-41's fuzz-found encode/decode
+path-safety asymmetry (**checked, closed** — the minimized reproducer is committed at `proptest-regressions/patch_replay/tests/proptest_round_trip.txt` and the suite is green, so the asymmetry is pinned); DC-41 §177's `[dependencies]` allowlist increment (DC-51's gate);
+every `#[ignore]` in the tree is a measurement instrument by design, not deferred work.
+
 
 ### Release position — 0.39.0 shipped 2026-09-12
 

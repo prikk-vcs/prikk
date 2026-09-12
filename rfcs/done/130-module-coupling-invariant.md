@@ -411,3 +411,53 @@ pending cfg is still counted — guarding the fix against over-reaching into "sk
 **The implementing round was right not to patch this itself** — it is architect tooling, and it
 reported the diagnosis precisely enough that the fix was ten minutes' work. **It routed around the
 bug instead**, moving a fixture into `test_gates/` where the scanner already behaved, and said so.
+
+## 8. MEASURED 2026-09-12 — the crate's growth per release, and a direction for the owner to rule on
+
+**The project owner: *"The crate is getting larger and larger at recent releases … not only now but also
+for the future."*** Measured across every tag from 0.30.0, `crates/prikk-store/src` only:
+
+| tag | date | production lines | test lines | total | files |
+|---|---|---|---|---|---|
+| 0.30.0 | 09-04 | 40,474 | 36,510 | 76,984 | 256 |
+| 0.35.0 | 09-06 | 41,785 | 37,345 | 79,130 | 257 |
+| 0.36.0 | 09-08 | 38,616¹ | 41,912 | 80,528 | 263 |
+| 0.37.0 | 09-09 | 39,793 | 44,204 | 83,997 | 271 |
+| 0.38.0 | 09-10 | 40,758 | 45,098 | 85,856 | 276 |
+| **0.39.0** | **09-12** | **40,959** | **45,178** | **86,137** | **276** |
+
+¹ RFC 131 §6b moved the `#[cfg(test)]` modules under `test_gates/`, which this count classes as test —
+a reclassification, not a shrink. Like-for-like production growth over the window is roughly +9%.
+
+**Total +11.9% in eight days. Tests +23.7%; production roughly +9%. Tests are now 52% of the crate.**
+Top-level entries 125 → 102 (RFC 131 §6b); declared coupling cycles **8 → 8**. Three production files
+exceed 1,200 lines (`verify.rs` 1,677, `node_authoring.rs` 1,415, `bundle.rs` 1,411); one more exceeds
+1,000 (`foundation/layout.rs`).
+
+**§6's ruling against a crate split stands on its own evidence** — `fsutil` is still the one clean seam
+and is already decoupled; a split would remove no coupling. **But §6 answered "split now?", not "how is
+growth controlled?"** — and the trend answers that nothing controls it. Every feature lands here
+because this crate holds the only store, and the test volume per feature is roughly double the
+production volume.
+
+**Direction proposed, for the owner to rule on — three controls, all evidence-shaped like RFC 133:**
+
+1. **Record it.** RFC 141's release evidence gains production lines, test lines and file count for
+   `prikk-store` per release. A trend nobody records is a trend nobody rules on; this section had to
+   be computed from tags because no release carried the number.
+2. **Bound the file, not the crate.** A `size-check` in release-policy: a production file over
+   **1,200 lines** fails unless allowlisted with a reason and a `what_would_split_it`, exactly as
+   `DECLARED_CYCLES` treats a cycle. Three files enter the allowlist today, each with its reason; the
+   next file to cross the line is a decision, not a drift. Production-line delta per release is
+   **reported**, not failed — a budget the owner sets later if the report shows one is needed.
+3. **Build the instrument a split ruling would need.** RFC 145 §8c found the read surface is not a
+   clean facet — `history.rs` imports `RefStore`, which carries `publish`. A **`read-only` cargo
+   feature** that `#[cfg]`s the write paths out is the cheapest way to *measure* read/write
+   separability: the compiler names every entanglement. §6's "no split" was ruled without that
+   evidence because it did not exist. It should exist before the question is asked again.
+
+**What is deliberately not proposed:** relocating tests away from their code (RFC 131 §4 forbids it,
+rightly); a line budget on the crate as a whole (it would be met by compressing tests, which is the
+wrong thing to reward); a split now.
+
+**Owner rulings:** adopt 1, 2, 3 or a subset; the 1,200 threshold. Nothing is handed off until ruled.
