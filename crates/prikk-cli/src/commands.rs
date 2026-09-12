@@ -170,7 +170,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "branch",
         run: crate::run_branch,
         help_lines: &[
-            "  prikk branch [list] [--all]                List branches deterministically (name, RefState id); --all also shows closed branches, marked",
+            "  prikk branch [list] [--all] [--format json]  List branches deterministically (name, RefState id); --all also shows closed branches, marked",
             "  prikk branch create <name> [--from REF]   Publish a branch at an existing target",
             "  prikk branch close <name>                 Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
             "  note: there is no `branch switch` yet, and no current-branch pointer; switching needs a separate, not-yet-designed increment; every command resolves --ref explicitly in the meantime",
@@ -180,7 +180,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "tag",
         run: crate::run_tag,
         help_lines: &[
-            "  prikk tag [list]                          List tags deterministically (name, target block)",
+            "  prikk tag [list] [--format json]          List tags deterministically (name, target block)",
             "  prikk tag create <name> --target <ref|block> [-m|--message <message>]  Publish a tag at a block",
         ],
     },
@@ -198,7 +198,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "log",
         run: crate::run_log,
         help_lines: &[
-            "  prikk log [path] [--limit N] [--ref REF]  Show sealed ref history including rollback blocks",
+            "  prikk log [path] [--limit N] [--ref REF] [--format json]  Show sealed ref history including rollback blocks",
         ],
     },
     Command {

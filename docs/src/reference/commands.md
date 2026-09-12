@@ -23,7 +23,7 @@ prikk commit [--from-worktree] [--text-edits] [--ref heads/<branch>] -m <message
 prikk mv <old> <new>
 prikk seal --allow-no-audit [--ref heads/<branch>]
 prikk status [--format json]
-prikk log [path] [--limit N] [--ref REF]
+prikk log [path] [--limit N] [--ref REF] [--format json]
 prikk checkout --plan-only [path] [--ref REF]
 prikk checkout --snapshot-plan [path] [--ref REF]
 prikk checkout --snapshot-materialize [path] [--ref REF]
@@ -40,10 +40,10 @@ prikk rollback-preview [path] [--ref REF]
 prikk rollback-draft --append-inverse [path] [--ref REF] -m <message>
 prikk rollback-draft-verify [path] [--ref REF]
 
-prikk branch [list] [--all]
+prikk branch [list] [--all] [--format json]
 prikk branch create heads/<name> [--from REF]
 prikk branch close heads/<name>
-prikk tag [list]
+prikk tag [list] [--format json]
 prikk tag create tags/<name> --target <ref|block> [-m <message>]
 prikk bundle export --ref REF --output <file> [--force]
 prikk bundle import --input <file>

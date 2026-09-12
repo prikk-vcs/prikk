@@ -19,6 +19,20 @@ error: precondition not met: ./r already holds a repository; to use your existin
 Nothing runs: no `init`, no key generation, no seed file, no output line. Creating a fresh
 repository — including at a path whose parent directories do not exist yet — is unchanged.
 
+### Fixed — `prikk --help` now says that `log`, `branch` and `tag` take `--format json`
+
+The three listing commands gained `--format json` in 0.39.0 and their synopsis lines did not mention
+it, while nine other commands' did. The flag worked; it was undiscoverable from `--help`.
+
+The check that keeps this from recurring is derived rather than listed: a test reads `prikk --help`,
+extracts every invocation it advertises, and asks each one's parser — by whether it distinguishes
+`--format` from a flag nothing could know — whether it accepts the flag. It then asserts the two
+agree **in both directions**, so a synopsis cannot advertise a flag the parser refuses either. No
+command is named in the test, so the next one to gain the flag is covered without anyone remembering
+to add it.
+
+`docs/src/reference/commands.md` and the history guide's synopsis carry the flag too.
+
 ## 0.39.0 — 2026-09-12
 
 ### Added — `--format json` for `prikk log`, `prikk branch` and `prikk tag`

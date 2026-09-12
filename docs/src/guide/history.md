@@ -3,7 +3,7 @@
 PR-014 added a small read-only history view for early sealed repositories. PR-030 extends that view with rollback block classification.
 
 ```sh
-prikk log [path] [--limit N] [--ref REF]
+prikk log [path] [--limit N] [--ref REF] [--format json]
 ```
 
 The command follows the current `RefState` chain from newest to oldest and validates that each entry resolves to a persisted Block object.
