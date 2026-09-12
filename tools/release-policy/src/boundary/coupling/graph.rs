@@ -389,59 +389,85 @@ fn production_edge_text(raw: &str) -> String {
     blank(&with_inline_blanked, &kinds, true, true)
 }
 
-/// The production module tree, walked from `lib.rs`, keyed by qualified path from the crate root
-/// (RFC 131 §6c) -- `foundation::layout` is a distinct key from `foundation`, each holding only its
-/// own file's edge-scan text. `mod.rs`-style files and `#[path = "..."]` overrides are not resolved
-/// (neither is used anywhere in `prikk-store` today, confirmed directly) -- every child of a file
-/// `x.rs` resolves to `x/<name>.rs`, and every top-level child of the crate root resolves directly
-/// under `src/`.
-fn walk(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
-    let lib_rs = src_root.join("lib.rs");
-    let raw = fs::read_to_string(&lib_rs)
-        .map_err(|error| format!("read {}: {error}", lib_rs.display()))?;
-    let kinds = classify(&raw);
-    let comment_blanked = blank(&raw, &kinds, true, false);
-    let mut modules = BTreeMap::new();
-    for decl in find_mod_declarations(&comment_blanked) {
-        if decl.inline_block.is_some() {
-            return Err(format!(
-                "lib.rs declares inline module `{}` -- the walker assumes every top-level module \
-                 is file-based",
-                decl.name
-            ));
-        }
-        if !cfg_expr::is_possibly_production(decl.cfg.as_ref()) {
-            continue;
-        }
-        let file = src_root.join(format!("{}.rs", decl.name));
-        collect_production_modules(&file, decl.name.clone(), &mut modules)?;
-    }
-    Ok(modules)
+/// One production source file, as the shared walk found it.
+///
+/// **RFC 130 §8's size gate reads the same walk this graph does**, deliberately: "a production file"
+/// must mean one thing in this tool, and a second directory scan would drift from this one the first
+/// time a `#[cfg(test)]` module moved. The graph wants [`text`](Self::text); the size gate wants
+/// [`path`](Self::path) and the raw line count; both want exactly the same *set* of files.
+pub(crate) struct ProductionFile {
+    /// The file on disk.
+    pub(crate) path: std::path::PathBuf,
+    /// Qualified module path from the crate root; `None` for the crate root file itself, which is a
+    /// file the size gate must weigh but not a node this graph has ever had.
+    pub(crate) qualified_name: Option<String>,
+    /// Edge-scan text: comments, string and char literals blanked, and any test-only inline
+    /// `mod name { ... }` body blanked out.
+    pub(crate) text: String,
+    /// Physical lines of the file, counting the raw source but **not** the body of any test-only
+    /// inline module -- those lines are test lines that happen to share a production file.
+    pub(crate) production_lines: usize,
+    /// Physical lines in test-only inline modules within this file.
+    pub(crate) test_lines: usize,
 }
 
-/// Recursively insert one node per production file reachable from `file`, each keyed by its own
-/// qualified path (`qualified_name`) and holding only its own edge-scan text -- never a
-/// descendant's (RFC 131 §6c: "a module's text is its own file's, not its descendants'"). Walks
-/// further `mod` declarations (file-based only -- see [`walk`]'s doc) relative to `file`'s own
-/// stem-named sibling directory, extending `qualified_name` with `::<child>` at each step.
-fn collect_production_modules(
+/// Every production file reachable from one crate root (`src/lib.rs`, `src/main.rs`, or a
+/// `src/bin/*.rs`), the root file included.
+///
+/// The definition of "production" is the walk's own and not a separate rule: a `mod` declaration
+/// whose `cfg` cannot hold in any production configuration is not followed, so neither a
+/// `#[cfg(test)] mod tests;` file nor a whole `#[cfg(test)]` subtree is ever read. Inline
+/// production modules stay part of their parent file, as they do for the graph.
+pub(crate) fn production_files(root_file: &Path) -> Result<Vec<ProductionFile>, String> {
+    let mut files = Vec::new();
+    collect_production_files(root_file, None, &mut files)?;
+    Ok(files)
+}
+
+/// Recursive half of [`production_files`]; also the walk [`walk`] itself runs.
+fn collect_production_files(
     file: &Path,
-    qualified_name: String,
-    modules: &mut BTreeMap<String, String>,
+    qualified_name: Option<String>,
+    files: &mut Vec<ProductionFile>,
 ) -> Result<(), String> {
     let raw =
         fs::read_to_string(file).map_err(|error| format!("read {}: {error}", file.display()))?;
-    modules.insert(qualified_name.clone(), production_edge_text(&raw));
     let kinds = classify(&raw);
     let comment_blanked = blank(&raw, &kinds, true, false);
-    let children_dir = file
+    let decls = find_mod_declarations(&comment_blanked);
+
+    let total_lines = raw.lines().count();
+    let test_lines = decls
+        .iter()
+        .filter(|decl| !cfg_expr::is_possibly_production(decl.cfg.as_ref()))
+        .filter_map(|decl| decl.inline_block)
+        .map(|(open, close)| lines_spanned(&raw, open, close))
+        .sum::<usize>();
+
+    files.push(ProductionFile {
+        path: file.to_path_buf(),
+        qualified_name: qualified_name.clone(),
+        text: production_edge_text(&raw),
+        production_lines: total_lines.saturating_sub(test_lines),
+        test_lines,
+    });
+
+    let parent = file
         .parent()
-        .ok_or_else(|| format!("{} has no parent directory", file.display()))?
-        .join(
+        .ok_or_else(|| format!("{} has no parent directory", file.display()))?;
+    // **The crate root's children sit beside it, not under a `lib/` directory.** `src/lib.rs`
+    // declares `mod author;` resolving to `src/author.rs`; only a non-root file `x.rs` owns a
+    // `x/` directory for its own children. Getting this wrong reads `src/lib/author.rs`, which
+    // does not exist -- caught immediately, because the coupling graph is built through this same
+    // function and went from 130 nodes to an I/O error.
+    let children_dir = match &qualified_name {
+        Some(_) => parent.join(
             file.file_stem()
                 .ok_or_else(|| format!("{} has no stem", file.display()))?,
-        );
-    for decl in find_mod_declarations(&comment_blanked) {
+        ),
+        None => parent.to_path_buf(),
+    };
+    for decl in &decls {
         if decl.inline_block.is_some() {
             // A production inline `mod name { ... }` block's own text stays part of its parent
             // file's text (via `production_edge_text`, which only excises a *test-only* inline
@@ -454,10 +480,66 @@ fn collect_production_modules(
             continue;
         }
         let child_file = children_dir.join(format!("{}.rs", decl.name));
-        let child_qualified = format!("{qualified_name}::{}", decl.name);
-        collect_production_modules(&child_file, child_qualified, modules)?;
+        let child_qualified = match &qualified_name {
+            Some(parent) => format!("{parent}::{}", decl.name),
+            None => decl.name.clone(),
+        };
+        collect_production_files(&child_file, Some(child_qualified), files)?;
     }
     Ok(())
+}
+
+/// Physical lines spanned by the byte range `open..=close` of `raw`, counted the way a reader would:
+/// the line holding `open` through the line holding `close`, inclusive.
+///
+/// **Newlines before the offset, plus one** — not `lines().count()` of the prefix, which is short by
+/// one whenever the offset happens to be the first character of its line, as a block's closing brace
+/// usually is. That slip cost one line per inline test module and was found by counting a real one
+/// by hand (`node_authoring.rs`'s `mode_change_tests`, lines 1367-1415, reported as 48).
+///
+/// The `#[cfg(test)]` attribute line above the block is not included: the span is the module, and
+/// one attribute line either way does not change what the threshold is measuring.
+fn lines_spanned(raw: &str, open: usize, close: usize) -> usize {
+    let line_of = |offset: usize| {
+        raw.get(..offset.min(raw.len()))
+            .unwrap_or("")
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1
+    };
+    line_of(close)
+        .saturating_sub(line_of(open))
+        .saturating_add(1)
+}
+
+/// The production module tree, walked from `lib.rs`, keyed by qualified path from the crate root
+/// (RFC 131 §6c) -- `foundation::layout` is a distinct key from `foundation`, each holding only its
+/// own file's edge-scan text. `mod.rs`-style files and `#[path = "..."]` overrides are not resolved
+/// (neither is used anywhere in `prikk-store` today, confirmed directly) -- every child of a file
+/// `x.rs` resolves to `x/<name>.rs`, and every top-level child of the crate root resolves directly
+/// under `src/`.
+fn walk(src_root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let lib_rs = src_root.join("lib.rs");
+    let raw = fs::read_to_string(&lib_rs)
+        .map_err(|error| format!("read {}: {error}", lib_rs.display()))?;
+    let kinds = classify(&raw);
+    let comment_blanked = blank(&raw, &kinds, true, false);
+    for decl in find_mod_declarations(&comment_blanked) {
+        if decl.inline_block.is_some() {
+            return Err(format!(
+                "lib.rs declares inline module `{}` -- the walker assumes every top-level module \
+                 is file-based",
+                decl.name
+            ));
+        }
+    }
+    // The crate root itself is a file, not a node: it has never been one here, and adding it now
+    // would change every fan-in number the hub threshold is calibrated against.
+    Ok(production_files(&lib_rs)?
+        .into_iter()
+        .filter_map(|file| file.qualified_name.map(|name| (name, file.text)))
+        .collect())
 }
 
 /// `lib.rs`'s own `pub use <module>::{A, B, ...};` / `pub use <module>::Item;` re-export table:

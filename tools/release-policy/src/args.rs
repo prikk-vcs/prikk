@@ -8,6 +8,7 @@ use crate::policy;
 use crate::reference;
 use crate::release_evidence;
 use crate::release_notes;
+use crate::size;
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let (command, rest) = arguments.split_first().ok_or_else(|| Error::new(usage()))?;
@@ -17,6 +18,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         "oracle-check" => oracle_check(&root, rest),
         "boundary-check" => boundary_check(&root, rest),
         "reference-check" => reference_check(&root, rest),
+        "size-check" => size_check(&root, rest),
         "produce-release-evidence" => produce_release_evidence_command(&root, rest),
         "release-notes" => release_notes_command(&root, rest),
         "generate-installer" => generate_installer_command(rest),
@@ -61,6 +63,18 @@ fn boundary_check(root: &std::path::Path, arguments: &[String]) -> Result<()> {
         Ok(())
     } else {
         Err(Error::new("workspace boundary verification failed"))
+    }
+}
+
+/// RFC 130 §8: a production file over the line must be a recorded decision.
+fn size_check(root: &std::path::Path, arguments: &[String]) -> Result<()> {
+    parse_json_mode(arguments, false)?;
+    let report = size::run(root)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if report.valid {
+        Ok(())
+    } else {
+        Err(Error::new("release-policy file size verification failed"))
     }
 }
 
@@ -176,5 +190,5 @@ fn repository_root() -> Result<PathBuf> {
 }
 
 fn usage() -> &'static str {
-    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>"
+    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check|size-check> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>"
 }

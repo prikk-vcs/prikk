@@ -14,6 +14,7 @@ mod reference;
 mod release_evidence;
 mod release_notes;
 mod schema;
+mod size;
 mod time;
 
 use std::process::ExitCode;

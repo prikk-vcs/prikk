@@ -40,7 +40,9 @@
 //! pin both facts against the real repository.
 
 mod cfg_expr;
-mod graph;
+// RFC 130 §8: the size gate reads the same production-file walk this graph does, so that "a
+// production file" means one thing in this tool.
+pub(crate) mod graph;
 
 use std::collections::BTreeSet;
 use std::path::Path;

@@ -1,5 +1,5 @@
 mod changelog_history;
-mod coupling;
+pub(crate) mod coupling;
 mod open_work_index;
 mod package;
 mod placement;
