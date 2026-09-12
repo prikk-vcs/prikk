@@ -78,8 +78,9 @@ provides a JSON settings file at a platform path with load/save. **What this RFC
 directory convention, two `0600` files, and two default labels — none of which is a settings file.**
 So it is not the tool for this increment. **It becomes a real candidate the day `prikk config` opens**
 (RFC 135 §9.1, deferred on "a first real adopter" — and the owner's word *integrated* points there),
-evaluated then against a hand-built reader as a reviewable `ALLOWED_THIRD_PARTY` decision per §4, with
-one benefit already visible: the CLI's tests carry three copies of a hand-written JSON parser that
+evaluated then against a hand-built reader as a reviewable `ALLOWED_THIRD_PARTY` decision per §4 — **now
+recorded at RFC 135 §9.1a, where the deferral lives, on the owner's question** — with one benefit already
+visible: the CLI's tests carry three copies of a hand-written JSON parser that
 `serde_json` would retire.
 
 **§3 is rewritten below: default directory, overrides, zero flags in the common case.**

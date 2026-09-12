@@ -617,7 +617,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 | No path-aware history (`log` filters no file) | `history.md:28` | documented limit |
 | Symlink authoring out of scope | DC-32 onward | the source of G2, the refusal field's whole reason to exist |
 | Key lifecycle — rotation, revocation beyond the trust store | RFC-025 (deferred) | RFC 148 makes long-lived keys easier to keep; RFC 135 named this as the cost |
-| `prikk config` | RFC 135 §9.1 | trigger: a first real adopter |
+| `prikk config` — durable non-secret settings | RFC 135 §9.1, **§9.1a (2026-09-12)** | Trigger: *a first real adopter*, restated concretely in §9.1a: after RFC 148 defaults the key ids and moves the seeds to a directory, **the only user-facing env knob left is `PRIKK_ACTIVE_PATCH_LIMIT`** — one knob is not a beneficiary. `--allow-no-audit` stays a loud per-seal decision by design; `--ref` is the branch-switch question. **Re-opens when a second undefaultable per-user/per-repo setting appears or an adopter asks.** **Format candidate recorded in §9.1a so it is not forgotten: `app-json-settings` 2.7.0 (`serde`+`serde_json`, MSRV 1.85), to be weighed against a hand-built reader as an `ALLOWED_THIRD_PARTY` decision per RFC 135 §4 when the trigger fires** |
 | BSD mutation | this file, `### BSD mutation` | blocker is CI evidence |
 | Network transport | RFC 116 §1 | deferred by accepted ruling, in its own crate if ever |
 
