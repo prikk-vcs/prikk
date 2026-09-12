@@ -78,3 +78,11 @@ architect in every state of §2's table against the signing commands' behaviour 
 shared-query control fails if and only if `commit` and `key status` stop sharing one computation.
 `legacy_variable_set` is removed before 0.41.0 publishes the schema (retire-legacy-seed-detection
 handoff), so `key-status-v1`'s first published form carries no field that means nothing.
+
+**As shipped (0.41.0), corrected against stikk's letter 008, 2026-09-13.** `source` has **two** values,
+`seed-file-override` and `key-directory`; an unusable key is `usable: false` with `reason` — the better
+shape, accepted at review; §2's `absent` did not ship. `legacy_variable_set` never shipped (removed with the
+detection before the schema published). **Contract for `key-status-v1`:** `public_key` and `binding` are
+`null` when the seed is unusable, and `binding` is `null` when no repository was asked; `null` there means
+*no claim* and will not be given another meaning within `-v1`. The architect's reply 007 described the RFC,
+not the binary, and was sent after the binary had diverged from it — recorded as a process miss.

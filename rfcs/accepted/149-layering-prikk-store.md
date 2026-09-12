@@ -151,6 +151,18 @@ and the feature gate handles the latter anyway.
 
 **RULED 2026-09-13.** (1) **The 41 become `pub` — approved.** (2) **§4b: a notice to stikk is required; acknowledgement is not a gate** — prikk has no production use, so the move does not wait on a reply. brygge: no library dependency on `prikk-store` is recorded anywhere in this repository (RFC 128 names it as the history-import tooling project); a copy of the notice is the owner's option, not a requirement. The move handoff (§6 step 4) is live: `149-…/move-handoff-v1.md`.
 
+### 5.2c. Increment 1 delivered; five types widened as entries 42–46 (2026-09-13)
+
+`4c7019b4`: 30 contract names root-exported under `// Operations-layer contract`, 7 test-support helpers
+behind the feature, the alias retired, `#[non_exhaustive]` on the types; root exports 269 → 306 (299
+default). **Hard stop reported, as §5 requires:** the 41 are not closed under their own signatures —
+`RefVerification`, `PointerIndexReplay`, `PatchReplaySnapshot`, `FoldedWorktreeBaseline` and
+`TextSpanResolutionFailure` (infrastructure, carried by `LifecycleReplayError`) are returned or carried by
+seven approved items and were never spelled by any caller, so the reference census could not see them.
+**RULED by the architect: widened, as contract entries 42–46**, `#[non_exhaustive]`; the alternative is a
+content change to the core inside a move. The owner's approved list is thereby extended by five names of
+this kind only; the owner may object before increment 3 reaches the families that use them.
+
 ## 5. Decision criteria — the increment stops if any fails
 
 1. `boundary-check --graph` confirms zero core→surface edges on the resolved graph.
