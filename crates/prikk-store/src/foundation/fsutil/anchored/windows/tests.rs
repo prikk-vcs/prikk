@@ -551,31 +551,59 @@ fn unlink_failure_retains_file_and_is_retryable() {
 /// `use` statements for a single test's sake. Same body, same `skip` values, reusing
 /// `windows.rs`'s own `ACTIVE_DURABILITY.durable_append` call path unchanged.
 ///
-/// **The two `RequiredFileSync` ordinals below are an established fact, not a call-graph
-/// assumption**: a probe ported this exact body to Windows unchanged and it passed
+/// **The `RequiredFileSync` ordinals below were an established fact, not a call-graph assumption**:
+/// a probe ported this exact body to Windows unchanged and it passed
 /// (`.git-exclude/reviewed/DC-98-stage-2-followups-ruling-v1.md` §2, CI run `31983187612`) --
-/// `RequiredFileSync` fires at the same two ordinals on Windows as on Linux/macOS: the container
-/// append's own sync (skip 0), then the index append's own sync (skip 1).
+/// `RequiredFileSync` fired at the same ordinals on Windows as on Linux/macOS: the container
+/// append's own sync, then the index append's own sync.
+///
+/// **RFC 102's 2026-09-12 object-store lock shifts all of them by one**, because
+/// `append_object_under_lock` now creates a lock file first and `create_exclusive` fires
+/// `required_file_sync` exactly once on this platform too (`windows.rs:355` -- once, not twice:
+/// Windows performs no directory sync at all, so there is no second firing here the way Linux's
+/// `create_exclusive` has). The Linux/macOS rows were re-measured directly; **this platform's were
+/// not re-probed, only re-derived from that single call**, so the honest status of these three
+/// ordinals is "inferred from one visible call site", weaker than the probe that established the
+/// original two. CI's Windows job running this test is what converts it back into a fact.
 #[test]
 fn object_write_sync_failure_retains_and_classifies_windows() -> prikk_error::Result<()> {
     use crate::{FileObjectStore, ObjectWriter};
     use prikk_object::{ObjectEnvelope, ObjectType};
 
-    for (skip, indexed_after_error) in [(0, false), (1, true)] {
+    for (skip, indexed_after_error, retry_succeeds) in [
+        // The object-store lock file's own creation sync: nothing written, and the lock is left
+        // behind, so the retry meets `LockConflict`.
+        (0, false, false),
+        // The container append itself.
+        (1, false, true),
+        // The index append.
+        (2, true, true),
+    ] {
         let root = unique_temp_dir("windows-object-sync-matrix");
         let layout = RepositoryLayout::init(root.clone())?;
         let mut object = ObjectEnvelope::unsigned(ObjectType::Blob, 1, b"sync".to_vec());
         object.add_signature(crate::test_gates::test_support::dummy_signature())?;
         let object_id = object.object_id();
+        let lock_path = layout.containers_dir().join("objects.lock");
         let mut store = FileObjectStore::new(layout);
         fail_after_for_test(TestFailPoint::RequiredFileSync, skip);
-        assert!(store.write_object(&object).is_err());
+        assert!(store.write_object(&object).is_err(), "skip {skip}");
         assert_eq!(
             store.contains_object(ObjectType::Blob, object_id),
-            indexed_after_error
+            indexed_after_error,
+            "skip {skip}"
         );
-        assert_eq!(store.write_object(&object)?, object_id);
-        assert!(store.contains_object(ObjectType::Blob, object_id));
+        assert_eq!(
+            lock_path.is_file(),
+            !retry_succeeds,
+            "skip {skip}: stale lock"
+        );
+        let retry = store.write_object(&object);
+        assert_eq!(retry.is_ok(), retry_succeeds, "skip {skip}");
+        if retry_succeeds {
+            assert_eq!(retry?, object_id);
+            assert!(store.contains_object(ObjectType::Blob, object_id));
+        }
         let _ = std::fs::remove_dir_all(root);
     }
     Ok(())

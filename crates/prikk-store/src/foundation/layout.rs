@@ -126,17 +126,32 @@ pub enum LockableContainer {
     /// (design-v1.md §15.7 decision 2) -- so a `prikk compact` run on this container never contends
     /// with unrelated `ActiveLock` holders (a `commit`, a `seal`) that never touch it.
     TrustPolicy,
+    /// `containers/` -- every object container **and** the single `index.container` beside them,
+    /// taken together as one resource (RFC 102 §, ruled 2026-09-12).
+    ///
+    /// One lock for all of them, not one per object type, because the index is a *single shared
+    /// file*: a `commit` appending a Patch and a `tag create` appending a Tag write to different
+    /// object containers but to the same index, so per-type locks would not serialise them.
+    ///
+    /// **Declared last, and that is load-bearing.** This lock is a leaf -- `append_object_to_container`
+    /// acquires and releases it around one append, and nothing is ever acquired while it is held --
+    /// so it can take part in no cycle. Sorting last additionally means that if a future caller ever
+    /// *did* request it alongside another container in one `acquire_container_locks` call, it would
+    /// still be taken after them, matching the nesting `publish_ref` already performs by holding
+    /// `RefLock` + `{RefPointerIndex, RefLog}` across an object write.
+    ObjectStore,
 }
 
 impl LockableContainer {
     /// Every variant, in the declared total order -- the one enumeration `prikk unlock` (and anything
     /// else that needs to sweep every container lock) should use, rather than hand-rolling the list
     /// and risking it drift from the enum's own declaration.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::RefPointerIndex,
         Self::RefLog,
         Self::ReceivedIndex,
         Self::TrustPolicy,
+        Self::ObjectStore,
     ];
 }
 
@@ -855,7 +870,7 @@ impl RepositoryLayout {
         self.trust_dir().join("policy-generation.log")
     }
 
-    /// Return the lock file path for one of Stage 6 Step 2's four `LockableContainer`s
+    /// Return the lock file path for one of the `LockableContainer`s
     /// (design-v1.md §15.8). Ephemeral, like every other lock file in this codebase
     /// (`ActiveLock`/`RefLock`): created on acquire, removed on release, never pre-allocated at
     /// `init` -- criterion 2's "every name created at `init`" obligation is about durability-bearing
@@ -872,6 +887,7 @@ impl RepositoryLayout {
                 self.refs_containers_dir().join("received-index.lock")
             }
             LockableContainer::TrustPolicy => self.trust_dir().join("policy.lock"),
+            LockableContainer::ObjectStore => self.containers_dir().join("objects.lock"),
         }
     }
 }

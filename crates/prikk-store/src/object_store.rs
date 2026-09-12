@@ -11,7 +11,8 @@ use crate::foundation::index::{
     self, IndexEntry, WriteDecision, append_object_to_container, decide_write_outcome,
     lookup_object_location, read_object_envelope_at,
 };
-use crate::foundation::layout::RepositoryLayout;
+use crate::foundation::layout::{LockableContainer, RepositoryLayout};
+use crate::lock::acquire_container_locks;
 
 /// Read-only object access boundary.
 pub trait ObjectReader {
@@ -109,11 +110,47 @@ impl ObjectWriter for FileObjectStore {
         )? {
             WriteDecision::AlreadyPresent(id) => Ok(id),
             WriteDecision::New => {
-                append_object_to_container(&self.layout, envelope.object_type, envelope)
+                append_object_under_lock(&self.layout, envelope.object_type, envelope)
                     .map(|entry| entry.object_id)
             }
         }
     }
+}
+
+/// Append one object under the object-store lock — **the only production route to
+/// [`append_object_to_container`]**, and the whole of RFC 102's 2026-09-12 ruling.
+///
+/// The lock spans the entire append: the container length read, the container append, and the index
+/// append. That span is the requirement, not an implementation detail — `offset` is derived from the
+/// length *before* the append and written to the index *after* it, so two writers that read the same
+/// length both record the same offset and one index entry ends up pointing at the other's record.
+/// `O_APPEND` keeps the container bytes intact either way, which is why the damage surfaced as an
+/// unreadable index entry rather than a torn container.
+///
+/// **Measured before this lock existed**: twelve concurrent `prikk tag create` in one repository left
+/// two index entries claiming one offset and `prikk verify` failing — two runs of four here, four of
+/// four on the reviewer's machine. Ordinary commands: `commit` holds `ActiveLock`, while `tag
+/// create`, `merge` and `sync build` held nothing at all, so nothing serialised them.
+///
+/// **Taken here, not inside `append_object_to_container`**, because `foundation` is the bottom layer
+/// and must not depend on `crate::lock` — the coupling gate rejected `foundation -> lock` when the
+/// acquisition was placed there. Taken here, not per caller, because the eleven object-append call
+/// sites across `commit`, `seal`, `merge`, `bundle import`, `sync accept/build/seal`, `tag create`
+/// and ref publication all funnel through `ObjectWriter::write_object` — five of them holding no
+/// lock whatsoever.
+///
+/// **This lock is a leaf: nothing is acquired while it is held**, which is what makes it safe to take
+/// inside a call `publish_ref` already makes while holding `RefLock` plus the ref container locks.
+/// The nesting is one-directional and no inversion is expressible. It is fail-fast like every other
+/// lock here, so two overlapping object appends now produce one visible `lock conflict` instead of a
+/// silently wrong index.
+fn append_object_under_lock(
+    layout: &RepositoryLayout,
+    object_type: ObjectType,
+    envelope: &ObjectEnvelope,
+) -> Result<IndexEntry> {
+    let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
+    append_object_to_container(layout, object_type, envelope)
 }
 
 /// Read validation shared by every reader below (`FileObjectStore`, `ObjectReadSnapshot`,
@@ -314,7 +351,7 @@ impl ObjectWriter for ObjectWriteSession {
             WriteDecision::AlreadyPresent(id) => Ok(id),
             WriteDecision::New => {
                 let object_id = envelope.object_id();
-                append_object_to_container(&self.layout, envelope.object_type, envelope)?;
+                append_object_under_lock(&self.layout, envelope.object_type, envelope)?;
                 // Do not trust the append's own return value for what changed (RFC 111 Stage 1
                 // review v1, B1): re-derive by re-checking freshness through the same primitive
                 // every other read decision uses. `ensure_current`'s tail-decode is frame-aligned

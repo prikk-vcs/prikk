@@ -489,6 +489,25 @@ pub(crate) fn append_object_to_container(
     let record_bytes = container::encode_container_record(object_type, envelope)?;
     let container_relative =
         layout.repository_relative(&layout.container_slot_path(object_type, ContainerSlot::A))?;
+
+    // RFC 102, ruled 2026-09-12: **this function must run under the object-store lock**, which
+    // `object_store::append_object_under_lock` -- its only production caller -- holds across the
+    // whole call. The exclusive region has to span from the length read just below through the index
+    // append at the end of this function, and nothing shorter is correct: `offset` is derived from
+    // the container's length *before* the append and recorded in the index *after* it, so two
+    // writers that read the same length both record the same offset and one index entry ends up
+    // pointing at the other's record.
+    //
+    // `O_APPEND` (`fsutil/anchored/regular.rs:81`) already makes the container *bytes* safe -- both
+    // records land intact, in some order -- which is exactly why the damage showed up as an
+    // unreadable index entry rather than a torn container, and why guarding only the write would
+    // have fixed nothing.
+    //
+    // The lock is taken one level up rather than here because `foundation` is the bottom layer and
+    // must not depend on `crate::lock` (the coupling gate rejects `foundation -> lock`; it caught
+    // this placement on the first attempt). `append_object_under_lock` is the single chokepoint that
+    // enforces it, and `every_object_append_goes_through_the_locked_wrapper` is the test that keeps
+    // it the only one.
     let existing_len = read_file_if_exists(layout.repository_mutation_root(), &container_relative)?
         .map_or(0, |bytes| bytes.len());
     let offset = len_to_u64(existing_len)?;

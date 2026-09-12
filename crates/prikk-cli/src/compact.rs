@@ -102,6 +102,11 @@ fn print_report(report: &CompactionReport, plan_only: bool) {
         prikk_store::LockableContainer::ReceivedIndex => "received-index",
         prikk_store::LockableContainer::TrustPolicy => "trust-policy",
         prikk_store::LockableContainer::RefLog => "ref-log",
+        // Unreachable in practice -- the object store is not a compaction target and no
+        // `CompactionReport` is ever built for it (`compact.rs`'s own `Target` has three variants).
+        // Spelled out rather than reached by a wildcard so that adding a sixth `LockableContainer`
+        // still breaks this match, which is exactly how the object-store variant itself was caught.
+        prikk_store::LockableContainer::ObjectStore => "object-store",
     };
     let verb = if plan_only {
         "would reclaim"

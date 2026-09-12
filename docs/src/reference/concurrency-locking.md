@@ -63,9 +63,10 @@ Lock release is best-effort file removal when the lock guard is dropped. If a pr
 that usually removes the lock. If a process dies while holding the lock, the file can remain and later
 commands fail closed instead of guessing whether the repository is safe to mutate.
 
-The four container locks are acquired by whichever operation is touching that container — the writer
-(ref publication, trust add/remove, bundle import) or `prikk compact`/`prikk compact --plan-only` — and
-held for that operation's whole critical section, never just the final write. Multi-container
+The container locks are acquired by whichever operation is touching that container — the writer
+(ref publication, trust add/remove, bundle import, and any object append) or `prikk compact`/`prikk
+compact --plan-only` — and held for that operation's whole critical section, never just the final
+write. Multi-container
 operations (ref publication touches the pointer-index and ref-log locks together; trust add touches
 only the policy lock, since the key container is not lockable) acquire their whole set through one
 internal helper that sorts it into a single fixed order first, so no call site can express an inverted
@@ -157,14 +158,17 @@ always refused, regardless of repository state.
 
 ## Container Locking and Compaction
 
-Four containers — the ref-pointer index, the ref log, the received-ref index, and the trust policy
-container — each have their own lock, held for the whole critical section by whichever operation is
-touching that container: an ordinary writer (ref publication, trust add/remove, bundle import) or
+Four of the five container locks concern compaction. The ref-pointer index, the ref log, the
+received-ref index, and the trust policy container each have their own lock, held for the whole
+critical section by whichever operation is touching that container: an ordinary writer (ref publication, trust add/remove, bundle import) or
 `prikk compact`/`prikk compact --plan-only`. This excludes a compaction run and an ordinary write from
 interleaving; it is not about protecting the container's *content* the way CAS protects a ref's
 baseline, but about protecting *which physical slot* is currently authoritative while it is being
 read, written, or switched. For what a container lock actually protects against and how compaction
 itself works, see [repository layout — Compaction](./repository-layout.md#compaction).
+
+The fifth, the object-store lock, is not a compaction target and is described in its own section
+below; it is a leaf taken and released around a single object append.
 
 Ref publication acquires the ref-pointer-index and ref-log container locks together, in that order, in
 addition to (not instead of) the per-ref lock above. Trust add/remove acquires the trust-policy
@@ -172,40 +176,49 @@ container lock in addition to `active.lock`. Bundle import acquires only the rec
 container lock — it previously acquired no lock at all for this write, which is what surfaced the
 container-locking work in the first place.
 
-## Object Container Writes Are Not Among the Four Locked Containers
+## The Object Store Lock
 
-The content-addressed object containers (`write_object_to_container`, `index.rs`) are not one of
-the four containers above — there is no `LockableContainer` variant for them, and no dedicated lock
-file protects a write into one. An object write is safe under concurrency only when something else
-already holds a lock across it:
+Every object append — a Patch from `commit`, a Block from `seal` or `merge`, a Tag from
+`tag create`, a RefState from any ref publication, the objects `bundle import` and `sync accept`
+bring in — goes through one function, `append_object_under_lock` (`object_store.rs`), which holds the
+`ObjectStore` container lock across the whole append. That span is the point: the container's length
+is read, the record is appended, and the index entry recording that offset is appended, all inside
+one exclusive region.
 
-- **`seal`** (`crates/prikk-cli/src/seal.rs`) acquires `ActiveLock` before persisting the WAL's
-  Patch envelopes and building a Block, and holds it for the whole operation — object writes there
-  are incidentally serialized against any other session by the same lock that serializes everything
-  else `seal` does.
-- **`import_bundle`** (`bundle.rs`) does not. Its object-writing loop runs before any lock is
-  acquired at all; the received-ref-index container lock above is taken only afterward, to protect
-  the received-pointer write, and covers none of the object writes that already happened.
+**Why the whole span and not just the write.** The container is opened `O_APPEND`, so the kernel
+already makes two concurrent appends land intact and in some order — the *bytes* were never the
+problem. What raced was `offset`: derived from the container length *before* the append, and written
+into the index *after* it. Two writers reading the same length both recorded the same offset, and one
+index entry then pointed at the other's record. The container stayed well-formed while the index
+became wrong, which is why the symptom was `index entry for <id> resolves to an envelope with
+computed id <other>` and a failing `verify`, not a torn file.
 
-This matters because `write_object_to_container`'s own write path (`index.rs`) reads the target
-container's current length, then appends at that offset and records it in the index — a
-read-then-append that is not atomic across two unsynchronized writers. Content-addressed
-idempotency (RFC 102 Stage 3's same-id-same-bytes no-op, preserving the old `publish_immutable`
-contract) makes writing the *same* object twice from two racing writers safe, but does not cover
-two *different* concurrent unprotected appends into the same container computing offsets against
-the same stale length.
+This was reachable by anyone running two ordinary commands at once: `commit` held `ActiveLock`, while
+`merge`, `tag create` and `sync build` held nothing at all, so nothing serialized them against each
+other. Twelve concurrent `prikk tag create` in one repository reproduced it readily.
 
-**Known and accepted, not fixed here.** This predates DC-98 — it was previously recorded only as a
-comment pointing at `FINDINGS.md` and a `DurabilityContract::publish_immutable` row, both since
-removed, leaving it unregistered anywhere. Re-registered here in its own terms rather than by
-reference to either. The mechanism that would close it (a dedicated object-container lock, or
-extending `import_bundle` to hold `ActiveLock` across its object writes) is out of scope for this
-page to design; it is deferred, tracked follow-up scope, not a defect this document is claiming is
-fixed.
+**The lock is a leaf.** Nothing is acquired while it is held, which is what makes it safe to take
+inside a call that `publish_ref` already makes while holding a `RefLock` and the ref container locks.
+The nesting is one-directional and no inversion is expressible, so the fixed order above gains one
+line rather than a new pairwise rule:
+
+> The object-store lock is never held while acquiring any other lock.
+
+**It is fail-fast, like every other lock here, and that is a visible change.** Two commands that both
+append objects at the same moment no longer both proceed: one gets `lock conflict` and does nothing.
+Before, they both usually succeeded — and sometimes left the index wrong instead. A refusal you can
+see and retry replaces a corruption you cannot.
+
+**A failed acquisition leaves the lock file behind.** If the lock file's own creation fails partway —
+a sync error, a full disk — the file can remain while the acquisition reports failure, and every
+later object write meets `lock conflict` until an operator clears it with `prikk unlock`. This is the
+same deliberate posture described below for every other lock: prikk does not decide on its own that a
+lock is stale. It reaches the object-write path for the first time here, so it is worth knowing that
+a transient I/O error during a `commit` can require `prikk unlock` before the next one.
 
 ## Stale Locks and Manual Cleanup
 
-If a process dies while holding any lock — `active.lock`, a ref lock, or one of the four container
+If a process dies while holding any lock — `active.lock`, a ref lock, or one of the five container
 locks — the lock file can remain. Current Prikk does not steal stale locks, expire them, or use doctor
 to clear them, and this is deliberate, not merely unimplemented: automatically clearing a lock whose
 process turns out to still be running would let two writers hold the same container simultaneously,
@@ -239,7 +252,10 @@ The current model is conservative:
   single global lock — but ref publication to *any* ref also acquires the shared ref-pointer-index and
   ref-log container locks, so two publications to different refs still serialize against each other on
   those, even though their per-ref locks differ;
-- one writer or one `prikk compact` run can hold each of the four container locks;
+- one writer or one `prikk compact` run can hold each of the four compaction-related container
+  locks;
+- one object append at a time holds the object-store lock, so two commands that both write objects
+  serialize against each other: the second is refused with `lock conflict` rather than queued;
 - the default active WAL still serializes public command flows that author then seal active state;
 - read-only verification, doctor analysis, history inspection, checkout planning, merge evidence, and
   merge planning do not create these lock files, though they still read mutable repository state.

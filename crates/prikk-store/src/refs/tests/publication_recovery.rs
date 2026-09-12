@@ -131,10 +131,14 @@ fn complete_record_sync_failure_retries_without_duplicate() -> prikk_error::Resu
     // fourth `RequiredFileSync`). RFC 102 Stage 6 Step 2, design-v1.md §15.8, adds two more before
     // that -- `acquire_container_locks`'s own `RefPointerIndex`/`RefLog` lock creations, each firing
     // `RequiredFileSync` via `create_exclusive`, the same as `RefLock`'s own creation always has.
-    // Skip 6, not 4, to land the injected failure on the ref log's own append -- the "complete
-    // record" this test is named for -- so the object and pointer are already durably committed by
-    // the time it fails, matching the scenario this test exists to prove.
-    fail_after_for_test(TestFailPoint::RequiredFileSync, 6);
+    // RFC 102's 2026-09-12 object-store lock adds one more
+    // before the object write -- `append_object_under_lock`'s own lock file creation, which
+    // fires this point through `create_new_file_required` exactly as every other lock creation
+    // here does. Skip 7, not 6, to land the injected failure on the ref
+    // log's own append -- the "complete record" this test is named for -- so the object and pointer
+    // are already durably committed by the time it fails, matching the scenario this test exists to
+    // prove.
+    fail_after_for_test(TestFailPoint::RequiredFileSync, 7);
     assert!(store.publish(&publication).is_err());
     assert_eq!(store.replay_log("heads/main")?.records.len(), 1);
     assert!(!verify_repository(&layout)?.has_blocking_ref_publication_issues());

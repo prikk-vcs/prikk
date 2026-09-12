@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Fixed — concurrent object writes no longer corrupt the object index
+
+Two commands that both wrote objects at the same moment could leave the repository failing `prikk
+verify`, with no user-reachable repair. Reproduced with twelve concurrent `prikk tag create` in one
+repository:
+
+```
+error: integrity error: index entry for 51ad40b6… resolves to an envelope with computed id 95b7a194…
+```
+
+The object containers are opened `O_APPEND`, so the records themselves were never at risk — both
+landed intact. What raced was the *index*: an entry's offset is read from the container's length
+before the append and written to the index after it, so two writers reading the same length recorded
+the same offset and one entry then pointed at the other's record.
+
+Every object append — `commit`, `seal`, `merge`, `tag create`, `branch create`, `bundle import`,
+`sync accept/build/seal`, and ref publication — now takes a new object-store lock across the whole
+append. It is held at the single function all of them funnel through, which is what closes the five
+paths (`merge`, `tag create`, `sync build`, `bundle import`'s object loop, `sync accept`'s first
+phase) that previously held no lock whatsoever.
+
+### Changed — two commands that both write objects now refuse instead of interleaving
+
+The object-store lock is fail-fast, like every other lock in prikk. Two commands appending objects at
+the same moment no longer both proceed: one reports
+
+```
+error: lock conflict: container:object-store lock already exists: …/containers/objects.lock
+```
+
+and does nothing. Previously both usually succeeded — and sometimes left the index wrong instead. A
+refusal you can see and retry replaces a corruption you cannot.
+
+One consequence worth knowing: if the lock file's own creation fails partway (a sync error, a full
+disk), the file can remain while the acquisition reports failure, and later object writes meet `lock
+conflict` until `prikk unlock` clears it. That is prikk's existing, deliberate posture for every lock
+— it never decides on its own that a lock is stale — but this is the first time it applies to the
+object-write path.
+
 ### Fixed — `prikk setup` refuses an existing repository instead of half-running on it
 
 Pointed at a directory that already held a repository, `setup` printed `initialized Prikk repository

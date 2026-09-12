@@ -268,9 +268,12 @@ fn first_publication_retries_completed_log_sync_without_duplicate() -> prikk_err
         // (a fourth). RFC 102 Stage 6 Step 2, design-v1.md §15.8, adds two more before that --
         // `acquire_container_locks`'s own `RefPointerIndex`/`RefLog` lock creations, each firing
         // both `RequiredFileSync` and `RequiredDirectorySync` via `create_exclusive`, the same as
-        // `RefLock`'s own creation always has. Skip 6, not 4, to land the injected failure on the
-        // ref log's own completed append.
-        fail_after_for_test(point, 6);
+        // `RefLock`'s own creation always has. RFC 102's 2026-09-12 object-store lock adds one
+        // more before the object write -- `append_object_under_lock`'s own lock file creation,
+        // which fires this point through `create_new_file_required` exactly as every other lock
+        // creation here does. Skip 7, not 6, to
+        // land the injected failure on the ref log's own completed append.
+        fail_after_for_test(point, 7);
         assert!(store.publish(&publication).is_err());
         assert_eq!(store.replay_log("heads/main")?.records.len(), 1);
         assert_eq!(store.publish(&publication)?, ref_state_id);

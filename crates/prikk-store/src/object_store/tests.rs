@@ -261,3 +261,183 @@ fn write_session_catches_up_after_a_nested_unmediated_writer() -> prikk_error::R
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+/// RFC 102, ruled 2026-09-12: `append_object_under_lock` must stay the **only** production route to
+/// `append_object_to_container`.
+///
+/// The lock is correct only if nothing bypasses it, and that is a property of the *call graph*, not
+/// of any one function — no assertion inside the append can observe it. So this reads the source: in
+/// production code, the name may appear only where it is defined, where it is imported, and inside
+/// the wrapper. A twelfth caller added anywhere else reopens the exact defect this round closed, and
+/// would otherwise pass every other test in the suite.
+#[test]
+fn every_object_append_goes_through_the_locked_wrapper() {
+    let crate_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders = Vec::new();
+    let mut wrapper_calls = 0_usize;
+
+    let mut files_scanned = 0_usize;
+    let mut stack = vec![crate_src.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            // Test code legitimately drives the raw append -- `foundation/index/tests.rs` exists to
+            // exercise the write protocol itself, below the lock.
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if name == "tests.rs" || path.components().any(|c| c.as_os_str() == "tests") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            files_scanned += 1;
+            for (number, line) in text.lines().enumerate() {
+                if !line.contains("append_object_to_container") {
+                    continue;
+                }
+                let relative = path.strip_prefix(&crate_src).unwrap_or(&path);
+                let is_definition = line.contains("pub(crate) fn append_object_to_container");
+                let is_import = line.trim_start().starts_with("self,")
+                    || line.contains("use crate::foundation::index");
+                let is_comment =
+                    line.trim_start().starts_with("//") || line.trim_start().starts_with("///");
+                let in_wrapper = relative == std::path::Path::new("object_store.rs")
+                    && line
+                        .contains("    append_object_to_container(layout, object_type, envelope)");
+                if in_wrapper {
+                    wrapper_calls += 1;
+                    continue;
+                }
+                if is_definition || is_import || is_comment {
+                    continue;
+                }
+                offenders.push(format!(
+                    "{}:{}: {}",
+                    relative.display(),
+                    number + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    // Two guards against a vacuous pass: the walk must have read a realistic number of production
+    // files, and the wrapper's own call must have been seen. A scan that silently read nothing
+    // would otherwise report "no offenders" and look exactly like success.
+    assert!(
+        files_scanned > 100,
+        "expected to scan the whole production tree; scanned only {files_scanned} files"
+    );
+    assert_eq!(
+        wrapper_calls, 1,
+        "the wrapper's own call must still be there -- if this is 0 the scan is vacuous"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these production sites reach `append_object_to_container` without the object-store lock: {offenders:#?}"
+    );
+}
+
+/// RFC 102 control 1, ruled 2026-09-12: two writers appending **different** objects to the object
+/// store at the same time.
+///
+/// The rendezvous is in the test, immediately before `write_object`, and deliberately **not** inside
+/// the exclusive region: the pre-fix version of this race was demonstrated with a barrier at the
+/// `AppendWrite` failpoint (both threads read the same container length, both proceed, both record
+/// the same offset), but that barrier cannot survive the fix — the second thread can no longer enter
+/// the region, so waiting inside it deadlocks.
+///
+/// **Both assertions can fail, and fail for different reasons.** Remove the lock from
+/// `append_object_under_lock` and the conflict count drops to zero *deterministically*, whatever the
+/// thread timing does; the offset assertion is the correctness property itself, and is the one that
+/// caught the real defect — twelve concurrent `prikk tag create` left two index entries claiming one
+/// offset and `prikk verify` failing, in two runs of four.
+#[test]
+fn two_racing_object_appends_serialise_and_never_share_an_offset() -> prikk_error::Result<()> {
+    use std::sync::{Arc, Barrier};
+
+    let root = unique_temp_dir("object-store-race");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let start = Arc::new(Barrier::new(2));
+
+    let mut handles = Vec::new();
+    for tag in [b"racer-one".as_slice(), b"racer-two".as_slice()] {
+        let layout = layout.clone();
+        let start = Arc::clone(&start);
+        handles.push(std::thread::spawn(move || {
+            let mut object = ObjectEnvelope::unsigned(ObjectType::Blob, 1, tag.to_vec());
+            let signed = object.add_signature(dummy_signature());
+            let mut store = FileObjectStore::new(layout);
+            // Everything expensive is done; from here the two threads are as close together as this
+            // process can put them.
+            start.wait();
+            signed.and_then(|()| store.write_object(&object))
+        }));
+    }
+
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| match handle.join() {
+            Ok(result) => result,
+            Err(_) => panic!("a racing writer thread panicked"),
+        })
+        .collect();
+
+    let conflicts = results
+        .iter()
+        .filter(|result| matches!(result, Err(prikk_error::PrikkError::LockConflict(_))))
+        .count();
+    let succeeded = results.iter().filter(|result| result.is_ok()).count();
+    assert_eq!(
+        conflicts + succeeded,
+        2,
+        "every outcome must be either a success or a lock conflict: {results:?}"
+    );
+    assert_eq!(
+        conflicts, 1,
+        "exactly one racer must be refused -- zero means nothing serialised them: {results:?}"
+    );
+
+    // The correctness property: whatever the index holds, no two entries may claim one location.
+    let index_bytes = std::fs::read(layout.container_index_path())?;
+    let replay = crate::foundation::index::decode_index_records(&index_bytes, 0)?;
+    assert!(
+        !replay.entries.is_empty(),
+        "the index must hold the winner's entry -- an empty index would pass the loop below vacuously"
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in replay.entries {
+        assert!(
+            seen.insert((entry.object_type, entry.offset)),
+            "two index entries claim (type {:?}, offset {}) -- the defect this lock exists to \
+             prevent",
+            entry.object_type,
+            entry.offset
+        );
+    }
+
+    // And the winner's object is readable back through the ordinary path.
+    let store = ObjectReadSnapshot::open(&layout)?;
+    for result in results.into_iter().flatten() {
+        assert!(
+            store.read_object(result)?.is_some(),
+            "winner must be readable"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

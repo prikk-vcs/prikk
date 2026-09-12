@@ -165,6 +165,7 @@ fn container_lock_kind(container: LockableContainer) -> &'static str {
         LockableContainer::RefLog => "container:ref-log",
         LockableContainer::ReceivedIndex => "container:received-index",
         LockableContainer::TrustPolicy => "container:trust-policy",
+        LockableContainer::ObjectStore => "container:object-store",
     }
 }
 

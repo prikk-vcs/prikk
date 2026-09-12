@@ -52,27 +52,57 @@ fn repository_format_create_sync_failure_retains_and_retries() -> prikk_error::R
 /// diverge.
 #[test]
 fn object_write_sync_failure_retains_and_classifies() -> prikk_error::Result<()> {
-    // RFC 102 Stage 3: an object write no longer goes through the old immutable-install
-    // primitive -- it durably appends to its container, then to the index, both through
-    // `RequiredFileSync`. Skip 0 to fail the container append itself (the object is not durably
-    // indexed at all); skip 1 to fail the index append instead (the container record and the
-    // index entry's own bytes are both already on disk -- only the index append's own sync is
-    // interrupted -- so the object is already visible to a same-process read).
-    for (skip, indexed_after_error) in [(0, false), (1, true)] {
+    // RFC 102 Stage 3: an object write durably appends to its container, then to the index, both
+    // through `RequiredFileSync`. RFC 102's 2026-09-12 object-store lock adds one `RequiredFileSync`
+    // *before* both -- the lock file's own creation -- so every index here shifted by one, and skip
+    // 0 now names an operation that did not exist before.
+    //
+    // The three rows were measured, not reasoned: skip 0 leaves the lock behind and blocks the
+    // retry; skip 1 writes nothing and retries clean; skip 2 leaves the object readable in-process
+    // and retries clean; skip 3 does not fail at all, which is what says there are exactly three
+    // syncs on this path.
+    for (skip, indexed_after_error, retry_succeeds) in [
+        // The lock file's own creation sync. Nothing is written -- and the lock file is **left
+        // behind**, so the retry meets `LockConflict` and the repository needs `prikk unlock`.
+        // That is prikk's documented posture for every lock ("the tool never decides a lock is
+        // stale on its own", `concurrency-locking.md`), applied for the first time to the object
+        // write path: an operator-visible refusal rather than a silent unlock. Pinned here so the
+        // cost of the ruling is a tested fact rather than a paragraph.
+        (0, false, false),
+        // The container append itself: the object is not durably indexed at all.
+        (1, false, true),
+        // The index append: the container record and the index entry's bytes are both already on
+        // disk and only the index sync is interrupted, so the object is already visible to a
+        // same-process read.
+        (2, true, true),
+    ] {
         let root = unique_temp_dir("object-sync-matrix");
         let layout = RepositoryLayout::init(root.clone())?;
         let mut object = ObjectEnvelope::unsigned(ObjectType::Blob, 1, b"sync".to_vec());
         object.add_signature(dummy_signature())?;
         let object_id = object.object_id();
+        let lock_path = layout.containers_dir().join("objects.lock");
         let mut store = FileObjectStore::new(layout);
         fail_after_for_test(TestFailPoint::RequiredFileSync, skip);
-        assert!(store.write_object(&object).is_err());
+        assert!(store.write_object(&object).is_err(), "skip {skip}");
         assert_eq!(
             store.contains_object(ObjectType::Blob, object_id),
-            indexed_after_error
+            indexed_after_error,
+            "skip {skip}"
         );
-        assert_eq!(store.write_object(&object)?, object_id);
-        assert!(store.contains_object(ObjectType::Blob, object_id));
+        // The lock is released on every failure *after* acquisition, and only retained when the
+        // acquisition itself failed -- the two halves of the posture, asserted together.
+        assert_eq!(
+            lock_path.is_file(),
+            !retry_succeeds,
+            "skip {skip}: stale lock"
+        );
+        let retry = store.write_object(&object);
+        assert_eq!(retry.is_ok(), retry_succeeds, "skip {skip}: {retry:?}");
+        if retry_succeeds {
+            assert_eq!(retry?, object_id);
+            assert!(store.contains_object(ObjectType::Blob, object_id));
+        }
         let _ = std::fs::remove_dir_all(root);
     }
     Ok(())
@@ -136,9 +166,13 @@ fn ref_log_parent_sync_failure_retains_one_update_and_retries() -> prikk_error::
     // design-v1.md §15.8, adds two more before that -- `acquire_container_locks`'s own
     // `RefPointerIndex` and `RefLog` lock file creations, hoisted to right after `RefLock::acquire`
     // and each firing this same failpoint via `create_new_file_required` the same way `RefLock`'s
-    // own creation always has. Skip 6, not 4, to land the injected failure on the log append's own
-    // directory sync -- see `refs::tests`'s equivalent fix for the full accounting.
-    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 6);
+    // own creation always has. RFC 102's 2026-09-12 object-store lock adds one more
+    // before the object write -- `append_object_under_lock`'s own lock file creation, which
+    // fires this point through `create_new_file_required` exactly as every other lock creation
+    // here does. Skip 7, not 6, to land the
+    // injected failure on the log append's own directory sync -- see `refs::tests`'s equivalent fix
+    // for the full accounting.
+    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 7);
     assert!(store.publish(&publication).is_err());
     assert_eq!(store.replay_log("heads/main")?.records.len(), 1);
     assert_eq!(store.publish(&publication)?, ref_state_id);
