@@ -326,3 +326,8 @@ by installs of a stale scan. **RULED: the repair is a writer to `index.container
 `LockableContainer::ObjectStore` from `doctor::repair_object_index` (surface layer, same reason as the
 wrapper) for its whole scan-and-install; still a leaf.** Generalised: *any new writer to a locked
 resource takes that resource's lock, and a repair verb is a writer.*
+
+**Closed 2026-09-12 at `00f4d7e7`.** The repair acquires the object-store lock across scan and install;
+the bypass guard became a table of guarded writers, each with its one legal caller. Architect's
+measurement on the fixed binary: forty repairs beside forty `tag create`, every writer refused with a
+lock conflict, `verify` clean, nothing to repair afterwards. Both RFC 102 items of 0.40.0 are delivered.
