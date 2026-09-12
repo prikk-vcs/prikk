@@ -879,7 +879,7 @@ the previous two cuts, and said plainly in the notes after them. The one behavio
 two error prefixes, which is a compatibility event for the stikk front-end that matches on message text.
 
 **This cut released the held stikk reply**
-(`.git-exclude/external-communication/stikk/send/001-reply-commit-precondition-error-classes.md`), whose two owed
+(`.git-exclude/upstream/stikk/send/001-reply-commit-precondition-error-classes.md`), whose two owed
 edits — name the shipped version, quote the entry rather than promise it — came due with it.
 
 **One process defect this cut caught, for the second time.** `prikk key`/`prikk setup` had **no

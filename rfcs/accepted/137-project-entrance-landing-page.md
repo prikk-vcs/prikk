@@ -408,7 +408,7 @@ not built. Its install section ends at *installed*, not at *working*. If RFC 135
 
 **§9 put visual design out of scope as "settled in the drafts review".** The project owner commissioned
 an external visual/UX review of the published page
-(`.git-exclude/external-communication/external-arch/receive/audit-20260907-landing-page/`) and
+(`.git-exclude/upstream/external-arch/receive/audit-20260907-landing-page/`) and
 instructed that its findings be acted on. **§9's exclusion is lifted for a finishing pass, and only for
 that** — content, the truth mechanism, and the three-surface division are untouched.
 

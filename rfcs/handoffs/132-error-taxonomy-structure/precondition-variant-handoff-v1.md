@@ -2,7 +2,7 @@
 
 **Authority:** `rfcs/done/132-error-taxonomy-structure.md` — increment 1's `#[non_exhaustive]` is what
 makes this non-breaking; **increment 2 stays deferred and this is not it.**
-**Source:** `.git-exclude/external-communication/stikk/receive/001-commit-precondition-error-classes.md`, from the
+**Source:** `.git-exclude/upstream/stikk/receive/001-commit-precondition-error-classes.md`, from the
 stikk project (a TUI/GUI front-end driving prikk through the public CLI).
 **Review:** `.git-exclude/reviewed/stikk-001-commit-precondition-error-classes-review-v1.md`.
 **Base:** `main` at `251f8ba`.

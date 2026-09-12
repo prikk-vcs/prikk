@@ -28,7 +28,7 @@ keeps `check` inside RFC 121's exit-code contract rather than filing a negative 
 operational failure. **Nothing in this RFC now awaits the owner.** **Handoff issued:** `rfcs/handoffs/138-trust-policy-read-surface/trust-read-surface-handoff-v1.md`.
 
 Originally opened as: **PROPOSED, 2026-09-06.** Opened at the project owner's instruction after the stikk
-project asked for it (`.git-exclude/external-communication/stikk/receive/002-trust-listing-and-the-no-audit-flag.md`),
+project asked for it (`.git-exclude/upstream/stikk/receive/002-trust-listing-and-the-no-audit-flag.md`),
 and the owner approved the architect's recommendation that it is worth doing.
 
 **Author-review independence.** The architect wrote this and is its only reviewer — the standing gap

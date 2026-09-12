@@ -365,7 +365,7 @@ instead. **The first real consumer of this entrance independently drew the bound
 refused to cross for them**, which is the strongest evidence available that (d)'s refusal was right,
 and it arrived four days after the refusal was written. Recorded here because §9.6 was reasoned from
 first principles with no consumer to check it against. Source:
-`.git-exclude/external-communication/stikk/receive/003-standing-requests-content-and-enumeration.md`.
+`.git-exclude/upstream/stikk/receive/003-standing-requests-content-and-enumeration.md`.
 
 ### 9.7 The entrance and `git-mapping.md` are one surface
 

@@ -165,7 +165,7 @@ next deferral is written.
 **SECOND INSTANCE 2026-09-06, and it is now a pattern rather than an incident.** The same consumer
 reported the identical class a second time, four days later, with **six more sites** — every
 remaining `LockConflict` construction site that is not a lock
-(`.git-exclude/external-communication/stikk/receive/004-four-more-preconditions-under-lock-conflict.md`).
+(`.git-exclude/upstream/stikk/receive/004-four-more-preconditions-under-lock-conflict.md`).
 The architect re-derived all ten sites independently and agrees on all ten, including the four the
 reporter excluded. **Still no trigger fires**, for the same reason the amendment above already gave.
 **Handoff issued:** `rfcs/handoffs/132-error-taxonomy-structure/six-preconditions-and-the-broad-arm-handoff-v1.md`.
