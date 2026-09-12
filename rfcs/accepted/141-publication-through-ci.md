@@ -222,7 +222,7 @@ increment 4 must choose deliberately and say why:** derive the expected set from
 update the fixtures with it. **The first is consistent with everything this RFC argues; the second is
 cheaper and keeps the fixtures untouched.** It is a real trade and it is not being pre-empted here.
 
-**2026-09-13, still open, and larger by one:** `CRATE_ORDER` is still seven entries without `prikk-ffi`; RFC 149's `prikk-operations` makes the real count nine. The choice above (derive from the workspace, or update fixtures deliberately) is unchanged and is increment 4's first task; RFC 149 does not touch it.
+**CLOSED 2026-09-13 at `063c3e77`.** The expected crate set is derived from the workspace on every call (`workspace_crate_order`, the `publish_levels` way): nine publishable members today; `crate_set_mismatch` names what differs. **The frozen oracle keeps the one list it was written against** (`FROZEN_CORPUS_CRATES`), pinned by a test to exactly the corpus — a live derivation judging frozen fixtures would go red on every honest membership change (measured: 13 cases). The genuine-document control lives in `cargo test`, because **no CI workflow runs any `release-policy` command** — the policy gates are local-only today; that, the `check-release-evidence <document>` caller, and two eight-name test helpers are increment 4's first tasks.
 
 ## 7b. RULED — the schema permits a dishonest document, and should not
 
