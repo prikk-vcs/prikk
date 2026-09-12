@@ -72,3 +72,9 @@ slips, the removal slips with it.
 
 No key lifecycle (RFC-025). No `prikk config`. No change to how a seed is found (RFC 148 owns that). No
 signing performed by `key status`.
+
+**Delivered 2026-09-12** at `2212f7f9`, reviewed (`rfc150-key-status-review-v1.md`). Measured by the
+architect in every state of §2's table against the signing commands' behaviour in the same state; the
+shared-query control fails if and only if `commit` and `key status` stop sharing one computation.
+`legacy_variable_set` is removed before 0.41.0 publishes the schema (retire-legacy-seed-detection
+handoff), so `key-status-v1`'s first published form carries no field that means nothing.
