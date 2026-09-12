@@ -149,8 +149,7 @@ an "operations-layer contract" section; `#[non_exhaustive]` on the enums and str
 ruling 2). `verify` stays in the first cut — dropping it saves 6 public items and 6 test-support ones,
 and the feature gate handles the latter anyway.
 
-**Owner decisions queued:** (1) the 41-item list; (2) the consumer notice of §4b. The move handoff
-(§6 step 4, one commit per surface family) is written when both are ruled.
+**RULED 2026-09-13.** (1) **The 41 become `pub` — approved.** (2) **§4b: a notice to stikk is required; acknowledgement is not a gate** — prikk has no production use, so the move does not wait on a reply. brygge: no library dependency on `prikk-store` is recorded anywhere in this repository (RFC 128 names it as the history-import tooling project); a copy of the notice is the owner's option, not a requirement. The move handoff (§6 step 4) is live: `149-…/move-handoff-v1.md`.
 
 ## 5. Decision criteria — the increment stops if any fails
 
