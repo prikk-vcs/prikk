@@ -182,82 +182,14 @@ fn control6_a_missing_override_refuses_rather_than_falling_back() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Control 4: a retired `PRIKK_AUTHOR_SEED` is **simply unread** — RFC 148 rule 1's window closed in
-/// 0.41.0.
-///
-/// 0.40.0 refused it for exactly one release so that no automation could silently start signing with
-/// a different key than it thought. That release has shipped; a stale export in someone's shell
-/// profile is now an unused variable like any other name prikk knows nothing about, and refusing it
-/// forever would be noise. **What replaced the refusal is `key status`** — so this control asserts
-/// both halves of the replacement at once: `commit` succeeds with the variable set, and `key status`
-/// names the key that actually signed.
-///
-/// The expected public key is derived from the key-directory file rather than written down here, so
-/// the assertion is "the key in the directory is the one in effect" and not "this hex string is".
-#[test]
-fn control4_a_retired_seed_variable_is_unread() {
-    let config_home = unique_dir("retired");
-    // SEED_B in the *variable*, SEED_A in the *directory*: if the retired channel were read at all,
-    // the public key below would be the wrong one and this control would say so.
-    let repo = repo_with_a_key("rfc148-retired", &config_home, SEED_A);
-    std::fs::write(repo.join("f.txt"), b"hi").unwrap();
-
-    let out = support::prikk(&repo)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("HOME", &config_home)
-        .env("APPDATA", &config_home)
-        .env("PRIKK_AUTHOR_SEED", SEED_B)
-        .args(["commit", "-m", "one"])
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "a retired variable is no longer a refusal: {}",
-        stderr(&out)
-    );
-
-    let from_file = support::prikk(&repo)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("HOME", &config_home)
-        .env("APPDATA", &config_home)
-        .args([
-            "key",
-            "public",
-            "--seed-file",
-            config_home.join("prikk/author.seed").to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert_eq!(from_file.status.code(), Some(0), "{}", stderr(&from_file));
-    let expected = String::from_utf8_lossy(&from_file.stdout)
-        .trim()
-        .strip_prefix("public key: ")
-        .expect("`key public` prints `public key: <hex>`")
-        .to_string();
-    assert_eq!(expected.len(), 64, "a public key is 64 hex characters");
-
-    let status = support::prikk(&repo)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("HOME", &config_home)
-        .env("APPDATA", &config_home)
-        .env("PRIKK_AUTHOR_SEED", SEED_B)
-        .args(["key", "status", "--role", "author", "--format", "json"])
-        .output()
-        .unwrap();
-    assert_eq!(status.status.code(), Some(0), "{}", stderr(&status));
-    let reported = String::from_utf8_lossy(&status.stdout).into_owned();
-    assert!(
-        reported.contains(&format!("\"public_key\": \"{expected}\"")),
-        "`key status` must name the key-directory key, not the retired variable's: {reported}"
-    );
-    assert!(
-        !reported.contains("legacy_variable_set"),
-        "the field went with the detection, before `key-status-v1` was ever published: {reported}"
-    );
-
-    let _ = std::fs::remove_dir_all(&repo);
-}
+// **Control 4 lives in `rfc150_key_status.rs`**, not here.
+//
+// It asserts that a retired `PRIKK_AUTHOR_SEED` is simply unread (RFC 148 rule 1's window closed in
+// 0.41.0) and that `key status` names the key that actually signs. Nothing about that is
+// platform-specific, and this file is `#![cfg(target_family = "unix")]` wholesale, so keeping it here
+// meant Windows CI never ran it — on a change whose entire subject is which environment variables get
+// read, which is exactly where this repository has been burned before. `rfc150_key_status.rs` is
+// gated per-control instead, so the assertion runs on every platform CI builds.
 
 /// Control 5: a seed file group or others can read is refused, naming the mode.
 #[test]

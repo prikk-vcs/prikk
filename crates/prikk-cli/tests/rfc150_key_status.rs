@@ -362,3 +362,80 @@ fn control6_commit_and_key_status_agree_on_every_state() {
         let _ = std::fs::remove_dir_all(&repo);
     }
 }
+
+/// Control 7 (RFC 148 rule 1, moved here for the platform): a retired `PRIKK_AUTHOR_SEED` is **simply
+/// unread**, and `key status` names the key that actually signs.
+///
+/// 0.40.0 refused while the variable was set, for exactly one release, so that no automation could
+/// silently start signing with a different key than it thought. That release shipped; a stale export
+/// is now an unused variable like any other name prikk knows nothing about. **What replaced the
+/// refusal is this command** — so the control asserts both halves at once: `commit` succeeds with the
+/// variable set, and `key status` reports the key-directory key.
+///
+/// **The variable and the directory hold different seeds on purpose.** If the retired channel were
+/// read anywhere, by any path, the reported public key would be the other one and this names it. Two
+/// copies of the same seed would pass whichever channel won.
+///
+/// The expected key is derived from the directory file through `key public --seed-file` rather than
+/// written down, so the assertion is "the key in the directory is the one in effect", not "this hex
+/// string is".
+///
+/// It lives in this file rather than beside RFC 148's other key-discovery controls because that file
+/// is Unix-gated wholesale and this claim is not platform-specific — a variable being unread on
+/// Windows is exactly as much of a claim, and untested there is where this repository has been burned.
+#[test]
+fn control7_a_retired_seed_variable_is_unread() {
+    let (repo, config_home) = fixture("retired");
+    std::fs::write(repo.join("f.txt"), b"hi").unwrap();
+
+    let mut command = support::prikk(&repo);
+    with_key_home(&mut command, &config_home);
+    let out = command
+        .env("PRIKK_AUTHOR_SEED", SEED_B)
+        .args(["commit", "-m", "one"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a retired variable is no longer a refusal: {}",
+        stderr(&out)
+    );
+
+    let mut command = support::prikk(&repo);
+    with_key_home(&mut command, &config_home);
+    let from_file = command
+        .args([
+            "key",
+            "public",
+            "--seed-file",
+            config_home.join("prikk/author.seed").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(from_file.status.code(), Some(0), "{}", stderr(&from_file));
+    let expected = stdout(&from_file)
+        .trim()
+        .strip_prefix("public key: ")
+        .expect("`key public` prints `public key: <hex>`")
+        .to_string();
+    assert_eq!(expected.len(), 64, "a public key is 64 hex characters");
+
+    let mut command = support::prikk(&repo);
+    with_key_home(&mut command, &config_home);
+    let reported = command
+        .env("PRIKK_AUTHOR_SEED", SEED_B)
+        .args(["key", "status", "--role", "author", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(reported.status.code(), Some(0), "{}", stderr(&reported));
+    let author = json::parse(&stdout(&reported));
+    let author = role_json(&author, "author");
+    assert_eq!(
+        author.get("public_key").as_str(),
+        expected,
+        "`key status` must name the key-directory key, not the retired variable's"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
