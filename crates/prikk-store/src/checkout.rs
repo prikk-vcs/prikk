@@ -91,12 +91,23 @@ pub fn prepare_snapshot_checkout_plan(
     ref_name: &str,
 ) -> Result<SnapshotCheckoutPlan> {
     let checkout = prepare_checkout_plan(layout, ref_name)?;
+    // RFC 132 per-site: a block with **no** snapshot reference is by design, not damage. RFC 136 §7
+    // ruled that no block-creating path writes a snapshot yet, so every block in every repository is
+    // in this state today -- reporting the normal case as `integrity error:` told a user their
+    // repository was broken when nothing was wrong. `Precondition`, and the message now carries the
+    // route that works instead of only the fact.
     let Some(snapshot_blob_id) = checkout.snapshot_blob_ref else {
-        return Err(PrikkError::Integrity(format!(
-            "checkout target for {ref_name} does not contain a snapshot blob"
+        return Err(PrikkError::Precondition(format!(
+            "checkout target for {ref_name} does not contain a snapshot blob; no block-creating \
+             path writes one yet, so use `prikk checkout --patch-plan --ref {ref_name}`, which \
+             replays without a snapshot"
         )));
     };
     let object_store = ObjectReadSnapshot::open(layout)?;
+    // **The adjacent arm stays `Integrity`, deliberately.** A block that *references* a snapshot
+    // Blob which is not there is a different fact entirely: something wrote the reference and the
+    // Blob is gone. That is damage, and the two must not be reclassified together just because they
+    // sit one line apart.
     let Some(envelope) = object_store.read_typed(snapshot_blob_id, ObjectType::Blob)? else {
         return Err(PrikkError::Integrity(format!(
             "snapshot Blob {snapshot_blob_id} is missing"

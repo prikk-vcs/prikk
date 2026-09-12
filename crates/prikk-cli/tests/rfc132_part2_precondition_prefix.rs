@@ -97,3 +97,55 @@ fn rollback_draft_verify_prefix_changes_to_precondition() {
     );
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// RFC 132 per-site (0.40 item 5): `checkout --snapshot-plan` on a block with no snapshot is a
+/// **precondition**, not damage.
+///
+/// **This site had no test at all before this one.** The reclassification was made, the whole suite
+/// stayed green, and the ruled perturbation — flip it back, watch a test fail — had nothing to fail.
+/// A classification nothing asserts is a classification the next round can undo by accident.
+///
+/// Every block in every repository is in this state today (no block-creating path writes a snapshot
+/// yet), so the fixture is simply an ordinary sealed repository.
+#[test]
+fn snapshot_plan_without_a_snapshot_is_a_precondition() {
+    let repo = support::unique_repo("rfc132-snapshot-plan");
+    support::init(&repo);
+    write_and_commit(&repo, "a.txt", "hello", "genesis");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::prikk(&repo)
+        .args(["checkout", "--snapshot-plan"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "must refuse");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.starts_with(
+            "error: precondition not met: checkout target for heads/main does not \
+                            contain a snapshot blob"
+        ),
+        "the class must be a precondition: {stderr}"
+    );
+    // The fact is kept and the route is added -- a refusal that names no way forward is where this
+    // one started.
+    assert!(
+        stderr.contains("prikk checkout --patch-plan --ref heads/main"),
+        "the refusal must name the route that works: {stderr}"
+    );
+    assert!(
+        !stderr.contains("integrity error"),
+        "the old class must be absent, not merely accompanied: {stderr}"
+    );
+
+    // And the route it names actually works from here, rather than being advice that fails.
+    support::ok(
+        &support::prikk(&repo)
+            .args(["checkout", "--patch-plan", "--ref", "heads/main"])
+            .output()
+            .unwrap(),
+        "the named route",
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}

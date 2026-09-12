@@ -130,6 +130,19 @@ This happened when two commands that both write objects ran at the same moment �
 refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
 exists for repositories damaged before that.
 
+## `error: precondition not met: checkout target for <ref> does not contain a snapshot blob`
+
+The block you asked to check out has no snapshot, which is the normal state of every block in every
+repository today — no block-creating path writes one yet. Use the patch-replay route instead, which
+does not need a snapshot:
+
+```sh
+prikk checkout --patch-plan --ref <ref>
+```
+
+Earlier releases reported this as `error: integrity error: checkout target for <ref> does not contain
+a snapshot blob`, which read as damage. Nothing is damaged, and nothing was ever missing.
+
 ## `error: active WAL has no patch records to seal`
 
 You ran `seal` with nothing queued — every commit since the last seal has already been published.

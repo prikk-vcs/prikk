@@ -19,8 +19,22 @@ paths, see [repository layout and authority](../reference/repository-layout.md).
   stops you from bringing your own matched seed/public-key pair instead.
 - Maintainer trust is repository-local, held as a set of adopted MAINTAINER keys with `required = 1`
   (any one adopted key's signature suffices), and enforces trust-on-first-use per key id.
-- AUTHOR signatures are real Ed25519 signatures, but Prikk does not currently enforce a
-  repository-wide AUTHOR trust policy.
+- AUTHOR signatures are real Ed25519 signatures, and there is **no AUTHOR trust policy**: no list of
+  adopted author keys, and nothing to adopt one into. A patch signed by an author key this repository
+  has never seen commits, seals, and passes `verify` — verified by doing it, not inferred.
+- What *is* enforced for AUTHOR keys is **one key id, one public key**. Committing under a key id the
+  repository has already recorded, with different key material, is refused:
+
+  ```
+  error: integrity error: author key_id author already has a different recorded public key (…); one
+  key_id binds to one public key -- this looks like a key-rotation attempt, which is not supported and
+  is indistinguishable from impersonation
+  ```
+
+  That is an impersonation guard, not a trust decision: it stops one identity being silently reused by
+  a different key, and says nothing about whether that identity is *trusted*. `verify` reports
+  `unverifiable author signatures: 0` when every author signature checks out against the material
+  recorded for its key id.
 - MAINTAINER key revocation exists (`prikk trust maintainer remove`); there is no key rotation, hardware
   signing, remote trust, sync trust, hosted identity, multi-maintainer threshold policy, or stable
   migration policy yet.

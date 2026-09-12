@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed — `checkout --snapshot-plan` on a block with no snapshot is a precondition, not damage
+
+No block-creating path writes a snapshot yet, so *every* block is in this state — and reporting it as
+`integrity error:` told users their repository was broken when nothing was wrong. It now reports as
+`precondition not met:` and names the route that works:
+
+```
+error: precondition not met: checkout target for heads/main does not contain a snapshot blob; no block-creating path writes one yet, so use `prikk checkout --patch-plan --ref heads/main`, which replays without a snapshot
+```
+
+The adjacent case — a block that *references* a snapshot Blob which is not there — stays
+`integrity error:`, deliberately: that one is damage.
+
 ### Changed — breaking once: your keys live in a directory, and a seed is never an environment variable
 
 `prikk setup` now writes `author.seed` and `maintainer.seed` into a key directory and prints
