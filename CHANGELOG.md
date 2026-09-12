@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Added — `prikk key status`: can I sign here, and with which key?
+
+```text
+prikk key status [path] [--role author|maintainer] [--format json]
+```
+
+Reports, per role, which seed input is in effect, the path it resolves to, whether that file is
+usable and if not why (missing, an override naming a file that is not there, readable by group or
+others, undecodable), the key id, and how that key id relates to what this repository has already
+recorded — `unrecorded`, `matches`, `mismatch`, or `not-adopted` for a maintainer key. Public
+material only; it never prints a seed and never signs anything.
+
+**Every not-ready state exits `0`.** "No, because the seed is missing" is an answer to "can I sign?",
+and a non-zero exit would make it indistinguishable from a repository that cannot be read.
+
+`--format json` emits a `key-status-v1` document. This is for [stikk](https://github.com/prikk-vcs/stikk),
+which needs to know whether to offer a commit button before the user presses it rather than after,
+and which asked for exactly this in its letter 007.
+
+`commit`, `seal` and `key status` now answer from one computation rather than three copies of the
+rules, so a `usable: true` is a prediction of what the signing path will do, not a second opinion.
+`prikk key public` reports a missing default seed through the same query and so now names the same
+three routes to a key that `commit` does.
+
 ## 0.40.0 — 2026-09-12
 
 ### Changed — `checkout --snapshot-plan` on a block with no snapshot is a precondition, not damage

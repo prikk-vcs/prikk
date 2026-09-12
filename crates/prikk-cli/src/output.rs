@@ -18,7 +18,7 @@ mod show;
 mod status;
 mod tag;
 mod trust;
-mod verification;
+pub(crate) mod verification;
 mod worktree;
 
 pub(crate) use branch::{BranchListEntry, ReceivedListEntry, print_branch_list_json};

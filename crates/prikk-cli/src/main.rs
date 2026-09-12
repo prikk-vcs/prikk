@@ -29,6 +29,7 @@ mod compact;
 mod durable_output;
 mod key;
 mod key_material;
+mod key_status;
 mod merge;
 mod mv;
 mod output;

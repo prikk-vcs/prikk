@@ -9,7 +9,8 @@ paths, see [repository layout and authority](../reference/repository-layout.md).
 ## Core Caveats
 
 - Prikk is early implementation software and is not a production Git replacement.
-- Current key input is environment-variable based and intentionally minimal.
+- Key input is a seed **file** per role — a path you name, or the role's file in your key
+  directory — and intentionally minimal. `prikk key status` reports what is in effect.
 - Seeds are secret key material. Prikk does not store, encrypt, rotate, revoke, expire, or back up
   private keys — `prikk key generate --out` writes one, once, to a path you name, and never reads it
   back or manages it afterward (see [First Run](first-run.md)).
@@ -76,6 +77,32 @@ closed before signing.
 `prikk key public --role maintainer` derives the matching public key directly — see
 [First Run](first-run.md). Nothing computes it automatically; deriving it is a separate, explicit
 step.
+
+## Can I Sign Here?
+
+`prikk key status` answers that question without signing anything, and without printing a seed:
+
+```text
+prikk key status [path] [--role author|maintainer] [--format json]
+```
+
+It reports, per role, which of the two inputs above is in effect (`source`), the file it resolves to,
+whether that file is usable and if not why (`reason` — missing, an override that names a file which is
+not there, readable by group or others, or undecodable), the key id, and how that key id relates to
+what this repository has already recorded (`binding`): `unrecorded`, `matches`, `mismatch`, or — for
+MAINTAINER — `not-adopted`.
+
+It answers the same question `commit` and `seal` answer when they refuse, from the same computation, so
+a `usable: true` here is a prediction of what the signing path will do rather than a second opinion.
+**Not-ready is an answer, not a failure**: every state above exits `0`. A non-zero exit is reserved for
+a repository that cannot be read at all.
+
+```sh
+prikk key status --role author --format json
+```
+
+`--format json` emits a `key-status-v1` document and is the form front-ends should read; it carries
+public material only.
 
 ## Maintainer Trust Store Setup
 

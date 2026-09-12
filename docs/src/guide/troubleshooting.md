@@ -4,6 +4,11 @@ Refusals a newcomer actually hits, in the [Tutorial](tutorial.md)'s own sequence
 verbatim from the CLI. If a message here reads as confusing, that is worth reporting — this page
 explains what exists today; it does not change any wording.
 
+For the three key-material refusals below — a missing seed, a seed others can read, and an
+undecodable one — `prikk key status` reports the same state without needing a commit to provoke it,
+and exits `0` while doing so. It names the file in effect, whether it is usable, and why not. See
+[Can I Sign Here?](security-setup.md#can-i-sign-here).
+
 ## `error: author signing is required: no seed at <path>`
 
 prikk looked for your AUTHOR seed and did not find it. Every commit produces a signed Patch; there is
@@ -11,6 +16,11 @@ no unsigned path. The message names the exact file and three ways to get one —
 `prikk key generate --out <that path>`, run `prikk setup` in a new project directory, or point
 `PRIKK_AUTHOR_SEED_FILE` at a seed file you already have. `seal` says the same for the MAINTAINER
 seed. See [First Run](first-run.md) for where the key directory is on each platform.
+
+`prikk key status --role author` shows which of the two inputs it is resolving and to which path —
+useful when the file you created is not the file it is looking for. An override that is set and
+points at nothing reports `reason: override-missing`, which distinguishes "you have no key" from
+"your `PRIKK_AUTHOR_SEED_FILE` is wrong".
 
 ## `error: precondition not met: PRIKK_AUTHOR_SEED is no longer read`
 
@@ -23,13 +33,15 @@ message names, or wherever `PRIKK_AUTHOR_SEED_FILE` points. The refusal itself i
 
 A seed file anyone but you can read is refused before signing. Run the `chmod` the message names.
 (Unix only — on Windows the key directory relies on `%APPDATA%`'s per-user ACL instead.)
+`prikk key status` reports the same file as `usable: false` with the mode in its `reason`, and
+running it again is how you confirm the `chmod` took.
 
 ## `error: <path> must be 64 hex characters, got 8`
 
 A seed file must hold exactly 64 lowercase hex characters (32 raw bytes) — the number after `got`
 reports how many your file actually had, so it will differ from the `8` shown here. A shorter,
 longer, or non-hex value is rejected before anything is signed; nothing is written to the repository
-when this fires.
+when this fires. `prikk key status` reports such a file as `reason: undecodable`.
 
 ## `error: invalid name: worktree has no node-addressed changes to commit`
 

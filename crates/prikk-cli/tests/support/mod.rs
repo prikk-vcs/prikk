@@ -68,16 +68,6 @@ pub fn isolate_key_environment_for(cmd: &mut Command, repo: Option<&Path>) {
         // seam that neutralises a different set of variables per platform is a seam with a second
         // way to be incomplete. `isolated_key_dir` resolves to `<home>/prikk` either way.
         .env("APPDATA", &home)
-        // **`APPDATA` too, unconditionally.** `key_material::default_key_dir` reads `XDG_CONFIG_HOME`
-        // / `HOME` on Unix and `APPDATA` on Windows, and the first version of this seam set only the
-        // first two -- so on Windows every test's `setup` wrote into the *runner's own*
-        // `%APPDATA%\prikk`, in parallel, and the second one collided with the first's seeds. `main`
-        // went red on the "Windows mutation test suite" while every host gate and both cross-target
-        // compiles were green, because compiling Windows code is not running it.
-        //
-        // Set on every platform rather than behind a `cfg`: it is inert where it is unread, and a
-        // seam that neutralises a different set of variables per platform is a seam with a second
-        // way to be incomplete. `isolated_key_dir` resolves to `<home>/prikk` either way.
         .env_remove("PRIKK_AUTHOR_SEED")
         .env_remove("PRIKK_MAINTAINER_SEED")
         .env_remove("PRIKK_AUTHOR_SEED_FILE")

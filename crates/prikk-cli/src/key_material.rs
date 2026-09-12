@@ -141,6 +141,159 @@ pub(crate) fn seed_path(role: Role) -> std::result::Result<PathBuf, CliError> {
     Ok(default_key_dir()?.join(role.seed_file_name()))
 }
 
+/// Where a seed was looked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeedSource {
+    /// `PRIKK_<ROLE>_SEED_FILE` was set and names this path.
+    Override,
+    /// No override; the key directory's own file for this role.
+    KeyDirectory,
+}
+
+impl SeedSource {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            SeedSource::Override => "seed-file-override",
+            SeedSource::KeyDirectory => "key-directory",
+        }
+    }
+}
+
+/// Why a seed is not usable. RFC 150 §2's `reason` vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Unusable {
+    /// The key directory's file is not there.
+    Missing,
+    /// `PRIKK_<ROLE>_SEED_FILE` was set and that file is not there. Distinct from `Missing` on
+    /// purpose: the operator named a path, and the answer must be about *that* path.
+    OverrideMissing,
+    /// Unix mode rule: group or other can read it.
+    ReadableByOthers { mode: u32 },
+    /// Present and private, but not 64 hex characters.
+    Undecodable { detail: String },
+}
+
+impl Unusable {
+    /// The machine-readable reason, RFC 150 §2's own vocabulary.
+    pub(crate) fn code(&self) -> String {
+        match self {
+            Unusable::Missing => "missing".to_string(),
+            Unusable::OverrideMissing => "override-missing".to_string(),
+            Unusable::ReadableByOthers { mode } => format!("readable-by-others (mode {mode:04o})"),
+            Unusable::Undecodable { .. } => "undecodable".to_string(),
+        }
+    }
+}
+
+/// One role's key material, as a **question answered** rather than an operation attempted.
+///
+/// RFC 150 §1: `commit`/`seal` and `key status` must not drift, so there is one computation and two
+/// readers. This is it. The signing path calls [`read_seed`], which is a thin turn of a not-usable
+/// status into the refusal message it has always printed; `key status` renders the same status
+/// without signing anything. A change to the rule changes both, or neither.
+pub(crate) struct KeyStatus {
+    pub(crate) role: Role,
+    pub(crate) source: SeedSource,
+    pub(crate) path: PathBuf,
+    pub(crate) key_id: String,
+    /// `true` when `PRIKK_<ROLE>_KEY_ID` supplied it, `false` when it defaulted to the role's name.
+    pub(crate) key_id_from_environment: bool,
+    /// `Ok` with the seed when usable; `Err` with the reason when not.
+    pub(crate) seed: std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], Unusable>,
+    /// RFC 148 rule 1's retired variable, still set. **Reported, not refused, here** — the refusal
+    /// belongs to the signing path, and `key status` exists precisely to be answerable in states
+    /// where signing is not.
+    pub(crate) legacy_variable_set: bool,
+}
+
+impl KeyStatus {
+    pub(crate) fn usable(&self) -> bool {
+        self.seed.is_ok()
+    }
+
+    pub(crate) fn public_key_hex(&self) -> Option<String> {
+        self.seed.as_ref().ok().map(|seed| {
+            prikk_hash::to_hex(&prikk_crypto::Ed25519KeyPair::from_seed(seed).public_key_bytes())
+        })
+    }
+}
+
+/// Answer "what key material does this role have, and can it sign?" — reading, never refusing.
+///
+/// Every check the signing path applies lives here: the override-versus-default resolution, the Unix
+/// mode rule, the decode. The only thing it does *not* do is turn a negative answer into an error,
+/// because the whole point of RFC 150 is a command that can answer in exactly the states where
+/// signing cannot.
+pub(crate) fn status(role: Role) -> std::result::Result<KeyStatus, CliError> {
+    let override_path = non_empty_var(role.seed_file_var());
+    let (source, path) = match override_path {
+        Some(path) => (SeedSource::Override, PathBuf::from(path)),
+        None => (
+            SeedSource::KeyDirectory,
+            default_key_dir()?.join(role.seed_file_name()),
+        ),
+    };
+    let (key_id, key_id_from_environment) = match std::env::var(role.key_id_var()) {
+        Ok(value) if value.trim().is_empty() => {
+            return Err(CliError::Usage(format!(
+                "{} must not be empty",
+                role.key_id_var()
+            )));
+        }
+        Ok(value) => (value, true),
+        Err(_) => (role.default_key_id().to_string(), false),
+    };
+
+    let seed = read_seed_at(&path, source);
+    Ok(KeyStatus {
+        role,
+        source,
+        path,
+        key_id,
+        key_id_from_environment,
+        seed,
+        legacy_variable_set: std::env::var_os(role.retired_seed_var()).is_some(),
+    })
+}
+
+fn read_seed_at(
+    path: &Path,
+    source: SeedSource,
+) -> std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], Unusable> {
+    if !path.exists() {
+        return Err(match source {
+            SeedSource::Override => Unusable::OverrideMissing,
+            SeedSource::KeyDirectory => Unusable::Missing,
+        });
+    }
+    if let Some(mode) = group_or_other_readable_mode(path) {
+        return Err(Unusable::ReadableByOthers { mode });
+    }
+    let contents = std::fs::read_to_string(path).map_err(|err| Unusable::Undecodable {
+        detail: format!("cannot read {}: {err}", path.display()),
+    })?;
+    crate::decode_seed_hex(contents.trim(), &path.display().to_string())
+        .map_err(|detail| Unusable::Undecodable { detail })
+}
+
+/// The mode, when group or other can read this file. Unix only: there is a mode to check.
+///
+/// On Windows the key directory relies on `%APPDATA%`'s per-user ACL (see [`default_key_dir`]) and an
+/// arbitrary `--*-seed-out` path is refused outright by `key.rs`, so there is no
+/// silent-inherited-permissions case left to check for.
+#[cfg(unix)]
+fn group_or_other_readable_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    (mode & 0o077 != 0).then_some(mode)
+}
+
+#[cfg(not(unix))]
+fn group_or_other_readable_mode(_path: &Path) -> Option<u32> {
+    None
+}
+
 /// Refuse a retired `PRIKK_<ROLE>_SEED`, naming where the key lives now.
 ///
 /// Checked before anything is read, and refused whether or not a seed file also exists: an operator
@@ -163,58 +316,39 @@ fn refuse_retired_env(role: Role) -> std::result::Result<(), CliError> {
     ))
 }
 
-/// Refuse a seed file any other user can read.
+/// Read this role's seed for **signing**: refuse a retired variable, then turn [`status`]'s answer
+/// into the refusal the signing path has always printed.
 ///
-/// Unix only: there is a mode to check. On Windows the default directory relies on `%APPDATA%`'s
-/// per-user ACL (see [`default_key_dir`]) and an arbitrary `--*-seed-out` path is refused outright
-/// by `key.rs`, so there is no silent-inherited-permissions case left to check for.
-#[cfg(unix)]
-fn require_private_mode(path: &Path) -> std::result::Result<(), CliError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::metadata(path)
-        .map_err(|err| CliError::Failure(format!("cannot read {}: {err}", path.display())))?;
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(CliError::Failure(format!(
-            "{} is readable by group or other (mode {mode:04o}); run `chmod 600 {}`",
-            path.display(),
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn require_private_mode(_path: &Path) -> std::result::Result<(), CliError> {
-    Ok(())
-}
-
-/// Read this role's seed: refuse a retired variable, resolve the path, refuse a readable file, then
-/// decode.
+/// RFC 150 §1: this is the thin half. Every rule it enforces is computed in [`status`], so
+/// `key status` cannot say "usable" where `commit` refuses, or the reverse —
+/// `commit_and_key_status_agree_on_every_state` perturbs the shared query to prove it.
 pub(crate) fn read_seed(
     role: Role,
 ) -> std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], CliError> {
     refuse_retired_env(role)?;
-    let path = seed_path(role)?;
-    if !path.exists() {
-        // Both named routes are checked to work from here, which is not automatic: `prikk setup`
-        // refuses a directory that already holds a repository (RFC 135), so naming only that would
-        // send a user with an existing repository in a circle -- `commit` to `setup` and back. The
-        // `key generate` route creates the key directory itself when the path is prikk's own.
-        let shown = path.display().to_string();
-        return Err(CliError::Failure(format!(
+    let status = status(role)?;
+    match &status.seed {
+        Ok(seed) => Ok(*seed),
+        Err(reason) => Err(refusal_for(&status, reason)),
+    }
+}
+
+/// The message the signing path prints for a not-usable status. Unchanged wording from RFC 148.
+fn refusal_for(status: &KeyStatus, reason: &Unusable) -> CliError {
+    let shown = status.path.display().to_string();
+    match reason {
+        Unusable::Missing | Unusable::OverrideMissing => CliError::Failure(format!(
             "{} signing is required: no seed at {shown}. Create one with `prikk key generate --out \
              {shown}`, run `prikk setup` in a new project directory, or set {} to an existing seed \
              file",
-            role.label(),
-            role.seed_file_var()
-        )));
+            status.role.label(),
+            status.role.seed_file_var()
+        )),
+        Unusable::ReadableByOthers { mode } => CliError::Failure(format!(
+            "{shown} is readable by group or other (mode {mode:04o}); run `chmod 600 {shown}`"
+        )),
+        Unusable::Undecodable { detail } => CliError::Failure(detail.clone()),
     }
-    require_private_mode(&path)?;
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|err| CliError::Failure(format!("cannot read {}: {err}", path.display())))?;
-    crate::decode_seed_hex(contents.trim(), &path.display().to_string()).map_err(CliError::Failure)
 }
 
 /// This role's key id: the environment variable if set and non-empty, otherwise the role's own name.

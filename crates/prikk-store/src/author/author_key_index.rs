@@ -318,14 +318,50 @@ pub(crate) enum AuthorKeyCheck {
 /// validate an entire transported key set before recording any entry of it, so a caller that must
 /// validate many entries up front does not hand-write a second notion of conflict (DC-53 Stage 2
 /// follow-up, `multi-key-import-partial-write-v1.md`).
+/// What this repository has recorded for one author `key_id`, against one public key.
+///
+/// RFC 150 §2: the three-valued answer `prikk key status` reports, and the **same computation**
+/// `check_author_key_conflict` below turns into its refusal — so a front-end asking "will this key
+/// be accepted here?" and `commit` answering it cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorKeyBinding {
+    /// No entry for this id: any seed is accepted and becomes the recording.
+    Unrecorded,
+    /// An entry for this id exists and matches this public key.
+    Matches,
+    /// An entry exists under this id with different key material. `commit` refuses.
+    Mismatch,
+}
+
+/// Ask what [`AuthorKeyBinding`] holds for `key_id` and `public_key`, reading and never refusing.
+pub fn author_key_binding(
+    layout: &RepositoryLayout,
+    key_id: &str,
+    public_key: [u8; ED25519_KEY_LEN],
+) -> Result<AuthorKeyBinding> {
+    let existing = lookup_author_key_entries(layout, key_id)?;
+    if existing.iter().any(|entry| entry.public_key == public_key) {
+        return Ok(AuthorKeyBinding::Matches);
+    }
+    if existing.is_empty() {
+        return Ok(AuthorKeyBinding::Unrecorded);
+    }
+    Ok(AuthorKeyBinding::Mismatch)
+}
+
 pub(crate) fn check_author_key_conflict(
     layout: &RepositoryLayout,
     key_id: &str,
     public_key: [u8; ED25519_KEY_LEN],
 ) -> Result<AuthorKeyCheck> {
+    // RFC 150 §2: the three-valued answer is computed once, in `author_key_binding` above, and this
+    // function is the half that turns `Mismatch` into the refusal. `key status` reads the same
+    // query, so the two cannot drift -- `author_binding_and_commit_agree` perturbs it to prove so.
     let existing = lookup_author_key_entries(layout, key_id)?;
-    if existing.iter().any(|entry| entry.public_key == public_key) {
-        return Ok(AuthorKeyCheck::AlreadyRecorded);
+    match author_key_binding(layout, key_id, public_key)? {
+        AuthorKeyBinding::Matches => return Ok(AuthorKeyCheck::AlreadyRecorded),
+        AuthorKeyBinding::Unrecorded => return Ok(AuthorKeyCheck::New),
+        AuthorKeyBinding::Mismatch => {}
     }
     if let Some(conflicting) = existing.first() {
         return Err(PrikkError::Integrity(format!(

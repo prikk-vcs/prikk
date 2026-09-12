@@ -21,12 +21,14 @@ pub fn run_key(args: Vec<String>) -> std::result::Result<(), CliError> {
     match iter.next().as_deref() {
         Some("generate") => run_generate(iter.collect()),
         Some("public") => run_public(iter.collect()),
+        Some("status") => crate::key_status::run_key_status(iter.collect()),
         Some(other) => Err(CliError::Usage(format!(
-            "unknown key subcommand: {other} (expected generate or public)"
+            "unknown key subcommand: {other} (expected generate, public or status)"
         ))),
         None => Err(CliError::Usage(
             "usage: prikk key generate [--out <path>]\n       \
-             prikk key public [--seed-file <path>] [--role author|maintainer]"
+             prikk key public [--seed-file <path>] [--role author|maintainer]\n       \
+             prikk key status [path] [--role author|maintainer] [--format json]"
                 .to_string(),
         )),
     }
@@ -151,11 +153,13 @@ fn run_public(args: Vec<String>) -> std::result::Result<(), CliError> {
             other => return Err(unknown_argument("key public", other)),
         }
     }
-    let path = match seed_file {
-        Some(path) => std::path::PathBuf::from(path),
-        None => crate::key_material::seed_path(role.unwrap_or(Role::Author))?,
+    // RFC 150 §3: with no `--seed-file`, the missing-file answer comes from the same query
+    // `key status` and the signing path use, so "why can I not derive this?" has one answer
+    // everywhere. An explicit `--seed-file` still reads that exact path and says so itself.
+    let seed = match seed_file {
+        Some(path) => crate::read_seed_file(&std::path::PathBuf::from(path))?,
+        None => crate::key_material::read_seed(role.unwrap_or(Role::Author))?,
     };
-    let seed = crate::read_seed_file(&path)?;
     let public_key = Ed25519KeyPair::from_seed(&seed).public_key_bytes();
     println!("public key: {}", prikk_hash::to_hex(&public_key));
     Ok(())

@@ -14,6 +14,7 @@ prikk <command> --help
 prikk init [path]
 prikk key generate [--out <path>]
 prikk key public [--seed-file <path>] [--role author|maintainer]
+prikk key status [path] [--role author|maintainer] [--format json]
 prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]
 prikk trust maintainer add --key-id ID --public-key HEX
 prikk trust maintainer remove --key-id ID

@@ -17,12 +17,24 @@
 //! means `--format` was treated as just another unknown token — the parser does not know it.
 //! Different means it does.
 //!
-//! That probe is side-effect free by construction, which was measured rather than assumed: every
-//! invocation below fails before doing any work, and the temp directory is asserted empty
-//! afterwards. `init` and `setup` are the two that could create something, and both refuse
-//! `--format` at parse time.
+//! That probe is side-effect free by construction, which was measured rather than assumed: the temp
+//! directory is asserted empty afterwards. `init` and `setup` are the two that could create
+//! something, and both refuse `--format` at parse time.
+//!
+//! **A succeeding invocation is not a broken probe.** The first version asserted that every
+//! invocation *fails* outside a repository, reading that as the guarantee of side-effect freedom.
+//! RFC 150's `key status` then shipped as a reader that answers outside a repository and exits `0`
+//! by design, and the assertion fired on a command that had done nothing. Success and failure are
+//! both fine here; what must hold is that nothing was written, and that is what the leftovers check
+//! at the end actually measures. A command that succeeds has an empty first stderr line, which
+//! differs from the unknown-flag arm exactly as a parser that knows `--format` should.
+//!
+//! The key environment is neutralised for every invocation: this file builds its own `Command`s, so
+//! without the seam the probe would read whatever keys the person running it happens to have.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
+
+mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -49,18 +61,14 @@ fn invocation_path(help_line: &str) -> Option<Vec<String>> {
 const UNKNOWN_FLAG: &str = "--zzz-not-a-real-flag";
 
 fn first_stderr_line(cwd: &Path, path: &[String], flag: &str) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_prikk"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_prikk"));
+    support::isolate_key_environment(&mut command);
+    let output = command
         .current_dir(cwd)
         .args(path)
         .args([flag, "json"])
         .output()
         .unwrap();
-    assert!(
-        !output.status.success(),
-        "the probe assumes every invocation fails outside a repository, but `prikk {} {flag} json` \
-         succeeded -- re-check that this probe is still side-effect free before trusting it",
-        path.join(" ")
-    );
     String::from_utf8_lossy(&output.stderr)
         .lines()
         .next()

@@ -117,13 +117,14 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk key generate [--out <path>]         Generate an Ed25519 seed; --out writes it (mode 0600) and never prints it",
             "  prikk key public [--seed-file <path>] [--role author|maintainer]  Derive a public key from a seed file (default: the role's own file in your key directory)",
+            "  prikk key status [path] [--role author|maintainer] [--format json]  Report whether this machine can sign, and with which key -- reads only, signs nothing",
         ],
     },
     Command {
         name: "setup",
         run: crate::run_setup,
         help_lines: &[
-            "  prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]  Init, generate both keys, trust the maintainer key, and print the exports",
+            "  prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]  Init, put both keys in your key directory (created, or reused if already there), and trust the maintainer key",
         ],
     },
     Command {
