@@ -92,6 +92,8 @@ pub(crate) struct DoctorArgs {
     pub(crate) repair_wal_tail: bool,
     /// Whether `--repair-main-ref` was supplied. Always refused -- no repair is implemented.
     pub(crate) repair_main_ref: bool,
+    /// Whether to rebuild the object index from the containers (RFC 102's repair round).
+    pub(crate) repair_index: bool,
 }
 
 /// `prikk verify`'s output format (RFC 118 stage 5). `Prose` is the default and must remain
@@ -432,11 +434,13 @@ pub(crate) fn parse_worktree_status_args(
 pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<DoctorArgs, CliError> {
     let mut repair_wal_tail = false;
     let mut repair_main_ref = false;
+    let mut repair_index = false;
     let mut path = None;
     for arg in args {
         match arg.as_str() {
             "--repair-wal-tail" => mark_seen(&mut repair_wal_tail, "--repair-wal-tail")?,
             "--repair-main-ref" => mark_seen(&mut repair_main_ref, "--repair-main-ref")?,
+            "--repair-index" => mark_seen(&mut repair_index, "--repair-index")?,
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
             _ => {
                 if path.is_some() {
@@ -452,6 +456,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         root: optional_path_or_current(path)?,
         repair_wal_tail,
         repair_main_ref,
+        repair_index,
     })
 }
 

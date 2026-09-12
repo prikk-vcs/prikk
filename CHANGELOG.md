@@ -23,6 +23,25 @@ append. It is held at the single function all of them funnel through, which is w
 paths (`merge`, `tag create`, `sync build`, `bundle import`'s object loop, `sync accept`'s first
 phase) that previously held no lock whatsoever.
 
+### Added — `prikk doctor --repair-index`
+
+Rebuilds the object index from the containers, for a repository that already hit the defect above.
+`rebuild_index_from_containers` has existed and been tested since format 3, but nothing a user could
+type reached it; `prikk verify` would fail, `prikk tag` would error, and there was no way forward.
+
+```
+$ prikk doctor --repair-index
+object index: rebuilt from containers (7 -> 7 entries)
+  entries relocated: 1
+  objects recovered: 1
+```
+
+The containers are the source of truth and are never written — the repair touches the index alone,
+which is asserted by comparing container bytes across a repair, not merely intended. The new index is
+installed atomically (write, fsync, rename), so an interruption leaves one whole index and the retry
+still works. On a healthy repository it reports `object index: nothing to repair` and writes nothing,
+so running it twice changes nothing. `prikk doctor` without the flag still only diagnoses.
+
 ### Changed — two commands that both write objects now refuse instead of interleaving
 
 The object-store lock is fail-fast, like every other lock in prikk. Two commands appending objects at

@@ -27,9 +27,12 @@ use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::container::{self, ContainerRecordStatus, container_magic};
 use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::resync_to_next_magic;
-use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
+use crate::foundation::fsutil::{
+    append_file_required, len_to_u64, read_file_if_exists, write_file_atomically,
+};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use prikk_hash::sha256;
+use std::collections::BTreeMap;
 
 const INDEX_MAGIC: &[u8; 8] = b"PIDXENT1";
 const INDEX_VERSION: u16 = 1;
@@ -570,11 +573,10 @@ fn frame_checksum(object_type: ObjectType, record_bytes: &[u8]) -> Result<[u8; 3
 /// callers that need to know about damage should inspect the container replay themselves, not rely
 /// on this function's silence about it.
 ///
-/// **No `doctor` repair caller yet.** Proven correct by its own tests (including the crash-ordering
-/// acceptance criterion, handoff §5 criterion 3), but wiring an actual `prikk doctor --repair`
-/// rebuild command is not required by this round's acceptance criteria and was not assumed into
-/// scope.
-#[allow(dead_code)]
+/// **Reachable since RFC 102's repair round**: [`repair_index_from_containers`] is the caller, wired
+/// to `prikk doctor --repair-index`. This function still only *computes* the rebuilt entries and
+/// writes nothing -- the atomic replacement is that function's job, deliberately kept separate so
+/// this one stays a pure scan that tests can assert against without touching the index on disk.
 pub(crate) fn rebuild_index_from_containers(layout: &RepositoryLayout) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
     for object_type in persisted_object_types() {
@@ -612,6 +614,113 @@ pub(crate) fn rebuild_index_from_containers(layout: &RepositoryLayout) -> Result
         }
     }
     Ok(entries)
+}
+
+/// What one `--repair-index` run changed. Counts, not a narrative: an operator needs to know whether
+/// the repair did anything, and a reader of the report needs to tell "nothing was wrong" from
+/// "nothing could be done".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexRepairReport {
+    /// Sound entries the index held before the repair.
+    pub entries_before: usize,
+    /// Entries the rebuilt index holds, scanned from the containers themselves.
+    pub entries_after: usize,
+    /// Objects whose recorded location changed -- the defect's own signature. A non-zero count here
+    /// means entries were pointing at the wrong record, which is exactly what concurrent appends
+    /// used to produce.
+    pub entries_relocated: usize,
+    /// Objects the index did not resolve to their own bytes before the repair and does after. This
+    /// is the count that answers "did this fix my repository?"
+    pub objects_recovered: usize,
+    /// True when the rebuilt index is byte-identical to the existing one, so nothing was written.
+    pub already_correct: bool,
+}
+
+/// Rebuild the object index from the containers and install it atomically.
+///
+/// RFC 102's repair round: concurrent object appends could record an entry against a stale container
+/// length, leaving one entry pointing at another record's bytes -- the containers stayed intact
+/// (`O_APPEND`) while the index did not, so every byte needed to rebuild is still on disk. This
+/// scans them and replaces the index.
+///
+/// **Idempotent by construction**: the rebuilt bytes are compared against the existing ones and the
+/// write is skipped entirely when they match, so a clean repository is not rewritten and
+/// `already_correct` says so. Nothing here touches a container -- repair is an index-only operation,
+/// and that is asserted by test, not just intended.
+///
+/// The install is [`write_file_atomically`]: write a temporary, fsync it, rename over the
+/// destination, sync the parent. A crash before the rename leaves the old index whole; after it,
+/// the new one. There is no window in which a reader sees a partial index.
+pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<IndexRepairReport> {
+    let index_relative = layout.repository_relative(&layout.container_index_path())?;
+    let existing_bytes = read_file_if_exists(layout.repository_mutation_root(), &index_relative)?
+        .unwrap_or_default();
+    let before = decode_index_records(&existing_bytes, 0)?.entries;
+
+    let rebuilt = rebuild_index_from_containers(layout)?;
+
+    // "Recovered" is measured against what the *read path* would have done, not against entry
+    // counts: an object whose entry pointed at the wrong record was indexed but unreadable, and that
+    // is the case an operator is actually asking about.
+    let before_locations: BTreeMap<ObjectId, (u64, u64)> = before
+        .iter()
+        .map(|entry| (entry.object_id, (entry.offset, entry.length)))
+        .collect();
+    let mut entries_relocated = 0_usize;
+    let mut objects_recovered = 0_usize;
+    for entry in &rebuilt {
+        match before_locations.get(&entry.object_id) {
+            Some(&(offset, length)) if offset == entry.offset && length == entry.length => {}
+            Some(_) => {
+                entries_relocated += 1;
+                objects_recovered += 1;
+            }
+            None => objects_recovered += 1,
+        }
+    }
+
+    let mut rebuilt_bytes = Vec::with_capacity(rebuilt.len() * (INDEX_HEADER_LEN + INDEX_BODY_LEN));
+    for entry in &rebuilt {
+        rebuilt_bytes.extend_from_slice(&encode_index_record(entry)?);
+    }
+
+    // **Compared as a set, not as bytes.** The rebuild walks `persisted_object_types()` in type
+    // order while the live index is in write order, so a perfectly healthy index is a permutation of
+    // the rebuilt one and a byte comparison would rewrite it on every run -- the opposite of the
+    // idempotence this verb promises. Measured, not predicted: the first version of this function
+    // reported "rebuilt (4 -> 4 entries)" on an untouched repository.
+    //
+    // Order carries no meaning in the index (every reader decodes all records and looks up by id),
+    // so equal sets mean equal indexes. Duplicates and stale entries both make the sets differ, which
+    // is what should trigger a rewrite.
+    let mut existing_sorted = before.clone();
+    let mut rebuilt_sorted = rebuilt.clone();
+    let sort_key = |entry: &IndexEntry| {
+        (
+            entry.object_id,
+            entry.object_type.code(),
+            entry.offset,
+            entry.length,
+        )
+    };
+    existing_sorted.sort_by_key(sort_key);
+    rebuilt_sorted.sort_by_key(sort_key);
+    let already_correct = existing_sorted == rebuilt_sorted;
+    if !already_correct {
+        write_file_atomically(
+            layout.repository_mutation_root(),
+            &index_relative,
+            &rebuilt_bytes,
+        )?;
+    }
+
+    Ok(IndexRepairReport {
+        entries_before: before.len(),
+        entries_after: rebuilt.len(),
+        entries_relocated,
+        objects_recovered,
+        already_correct,
+    })
 }
 
 /// Remove exactly one object's index entry, leaving its container bytes untouched -- the container-

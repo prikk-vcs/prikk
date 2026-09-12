@@ -864,6 +864,38 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     let doctor_args = parse_doctor_args(args)?;
     let layout = open_repository(doctor_args.root)?;
+    // RFC 102's repair round: the object index rebuild. Handled before the WAL/active-session
+    // repairs and independently of them -- the two share no state, and combining the flags runs both
+    // rather than making one win. Like `--repair-wal-tail`, it is explicit: `doctor` with no flag
+    // still only diagnoses.
+    if doctor_args.repair_index {
+        let report = prikk_store::repair_object_index(&layout).map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        if report.already_correct {
+            println!(
+                "object index: nothing to repair ({} entries)",
+                report.entries_after
+            );
+        } else {
+            println!(
+                "object index: rebuilt from containers ({} -> {} entries)",
+                report.entries_before, report.entries_after
+            );
+            println!("  entries relocated: {}", report.entries_relocated);
+            println!("  objects recovered: {}", report.objects_recovered);
+        }
+        if !doctor_args.repair_wal_tail && !doctor_args.repair_main_ref {
+            let after = doctor_repository(&layout);
+            print_doctor_report(&layout, &after);
+            return if after.is_healthy() {
+                Ok(())
+            } else {
+                Err("doctor reported unresolved repository issues"
+                    .to_string()
+                    .into())
+            };
+        }
+    }
     if doctor_args.repair_wal_tail || doctor_args.repair_main_ref {
         let options = DoctorRepairOptions {
             truncate_wal_tail: doctor_args.repair_wal_tail,

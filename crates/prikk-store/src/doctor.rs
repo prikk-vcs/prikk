@@ -740,6 +740,24 @@ fn empty_wal_repair() -> WalRepair {
     }
 }
 
+/// Rebuild the object index from the containers and install it atomically —
+/// `prikk doctor --repair-index`.
+///
+/// RFC 102's repair round. Separate from [`repair_repository`] rather than a third
+/// `DoctorRepairOptions` flag: that function's whole body is per-active-session WAL work, taking one
+/// `ActiveLock` at a time, and an index rebuild shares none of it — it touches no active session, no
+/// WAL, and no ref. Folding it in would mean one report type describing two unrelated repairs and an
+/// exit rule ("every skip is a failure") that was reasoned about for WAL tails only.
+///
+/// Reads and writes the index only. The containers are the source of truth here and are never
+/// touched, which is asserted by test rather than merely intended.
+pub fn repair_object_index(
+    layout: &RepositoryLayout,
+) -> Result<crate::foundation::index::IndexRepairReport> {
+    layout.require_current_format()?;
+    crate::foundation::index::repair_index_from_containers(layout)
+}
+
 /// Run an explicitly requested, narrow repair action, now per-active-session (RFC 108 §D3.3,
 /// increment 3d).
 ///

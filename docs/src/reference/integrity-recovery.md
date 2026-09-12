@@ -141,8 +141,30 @@ issues by themselves.
 
 ## Doctor Repair Boundary
 
-Doctor's supported repair switch is `--repair-wal-tail`. `--repair-main-ref` is a recognized input that
-performs no repair and is always refused.
+Doctor's supported repair switches are `--repair-wal-tail` and `--repair-index`.
+`--repair-main-ref` is a recognized input that performs no repair and is always refused.
+
+### `--repair-index`
+
+Rebuilds `containers/index.container` by scanning the object containers themselves. Use it when
+`verify` reports
+
+```
+error: integrity error: index entry for <id> resolves to an envelope with computed id <other>
+```
+
+which means an index entry points at a different record's bytes. The containers are self-describing —
+each record carries its own magic, framed length, and checksum — so everything needed to rebuild is
+still on disk, and a rebuild is a recovery rather than a reconstruction.
+
+The repair reads and writes the index only; container bytes are never touched. It is idempotent: on a
+healthy repository it reports `object index: nothing to repair` and writes nothing. The new index is
+installed atomically — written to a temporary file, fsynced, renamed over the old one — so an
+interruption leaves one whole index, never a mix.
+
+This state was reachable before prikk 0.40 by running two object-writing commands concurrently; the
+object-store lock now prevents it (see [concurrency and locking](./concurrency-locking.md)). This verb
+exists for repositories damaged before that lock existed.
 
 Repair refuses to run when repository health has error-severity issues. The detailed recovery
 mechanics and safety preconditions for those repairs live in the

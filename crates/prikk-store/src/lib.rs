@@ -127,8 +127,10 @@ pub use compact::{
 };
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
-    DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_repository,
+    DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,
+    repair_repository,
 };
+pub use foundation::index::IndexRepairReport;
 pub use foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
 };

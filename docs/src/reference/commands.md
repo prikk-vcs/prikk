@@ -62,6 +62,7 @@ prikk worktree-status [path] [--ref REF] [--format json]
 prikk verify [path] [--stop-on-first-error] [--format json]
 prikk doctor [path]
 prikk doctor [path] --repair-wal-tail
+prikk doctor [path] --repair-index
 prikk doctor [path] --repair-main-ref
 prikk unlock
 prikk unlock --lock <path> [--yes|--force]

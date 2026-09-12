@@ -441,3 +441,64 @@ fn two_racing_object_appends_serialise_and_never_share_an_offset() -> prikk_erro
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+/// RFC 102 repair control 2: a crash during `--repair-index` leaves one whole index, never a mix.
+///
+/// The repair installs through `write_file_atomically` — write a temporary, fsync, rename, sync the
+/// parent — so the two interesting interruption points are *before* the rename (the old index must
+/// survive intact) and *at* it. Driven through the same `MutableFileSync`/`MutableRename` failpoints
+/// `fsutil::tests` already uses for this primitive, rather than a new harness.
+///
+/// The assertion is deliberately about **bytes**, not about a report: a repair that half-wrote the
+/// index would still return a plausible-looking `IndexRepairReport`.
+#[test]
+fn a_crash_during_index_repair_leaves_the_previous_index_intact() -> prikk_error::Result<()> {
+    use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
+
+    for point in [TestFailPoint::MutableFileSync, TestFailPoint::MutableRename] {
+        let root = unique_temp_dir("index-repair-crash");
+        let layout = RepositoryLayout::init(root.clone())?;
+        let mut store = FileObjectStore::new(layout.clone());
+        for content in [b"one".as_slice(), b"two".as_slice(), b"three".as_slice()] {
+            let mut object = ObjectEnvelope::unsigned(ObjectType::Blob, 1, content.to_vec());
+            object.add_signature(dummy_signature())?;
+            store.write_object(&object)?;
+        }
+
+        // Damage the index so the repair has real work to do -- otherwise it short-circuits on
+        // `already_correct` and never reaches the write at all, and this control would pass
+        // without ever exercising the thing it names.
+        let index_relative = layout.repository_relative(&layout.container_index_path())?;
+        let healthy = std::fs::read(layout.container_index_path())?;
+        let truncated: Vec<u8> = healthy.iter().take(healthy.len() / 2).copied().collect();
+        crate::foundation::fsutil::write_file_atomically(
+            layout.repository_mutation_root(),
+            &index_relative,
+            &truncated,
+        )?;
+        let before = std::fs::read(layout.container_index_path())?;
+
+        fail_once_for_test(point);
+        assert!(
+            crate::doctor::repair_object_index(&layout).is_err(),
+            "{point:?}: the injected failure must surface"
+        );
+        assert_eq!(
+            std::fs::read(layout.container_index_path())?,
+            before,
+            "{point:?}: the index on disk must be exactly what it was before the repair"
+        );
+
+        // And the repair still works on the retry, which is what makes the failure recoverable
+        // rather than merely non-destructive.
+        let report = crate::doctor::repair_object_index(&layout)?;
+        assert!(
+            !report.already_correct,
+            "{point:?}: the retry must do the work"
+        );
+        assert_eq!(report.entries_after, 3, "{point:?}");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+    Ok(())
+}

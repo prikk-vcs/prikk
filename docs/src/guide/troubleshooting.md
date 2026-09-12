@@ -99,6 +99,24 @@ two keys, wrote any `--*-seed-out` file, and only then reported `maintainer key 
 already adopted with a different public key`. If you hit that version, the seed files it left behind
 belong to keys **no repository adopted** — they are not your keys, and can be deleted.
 
+## `error: integrity error: index entry for <id> resolves to an envelope with computed id <other>`
+
+The object index points at the wrong record: the entry claims an object lives at a location that
+actually holds a different one. Your objects are intact — the containers are self-describing and
+carry every byte needed — it is only the index that is wrong. Run
+
+```sh
+prikk doctor --repair-index
+```
+
+which rebuilds the index by scanning the containers, touches no container bytes, and reports how many
+entries it moved. Then `prikk verify` again.
+
+This happened when two commands that both write objects ran at the same moment — for example a
+`prikk commit` and a `prikk tag create`. Since prikk 0.40 that is prevented: the second command is
+refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
+exists for repositories damaged before that.
+
 ## `error: active WAL has no patch records to seal`
 
 You ran `seal` with nothing queued — every commit since the last seal has already been published.
