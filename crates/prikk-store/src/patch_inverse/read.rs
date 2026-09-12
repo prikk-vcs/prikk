@@ -37,7 +37,14 @@ pub(super) fn current_target_block(
             ref_state.ref_name
         )));
     }
-    Ok(ref_state.target_object_id)
+    // RFC 147 §3c: the fifth resolution site, and the one §3b missed -- this is a *separate*
+    // function from `patch_replay/read.rs::current_target_block` despite the identical name and
+    // nearly identical body, so fixing that one left `inverse-plan`, `rollback-preview` and
+    // `rollback-draft-verify` reporting `object type mismatch: expected block, got tag` for a
+    // perfectly valid tag ref. Same shared resolver as the other four; it resolves and never
+    // validates, and `single_parent_chain` below is unchanged and still walks what it is given.
+    let (block_id, _tag_envelope) = crate::refs::resolve_ref_tip_block(object_store, &ref_state)?;
+    Ok(block_id)
 }
 
 /// Return the single-parent chain from oldest to newest.

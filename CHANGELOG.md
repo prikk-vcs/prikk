@@ -85,6 +85,11 @@ worktree and compares them to each other rather than to two hand-written expecta
 refused. In particular it is not `unsupported-path`, which keeps its existing meaning of a name the
 repository cannot represent.
 
+A **dangling** symlink at a tracked path — one whose target does not exist — is refused here too.
+Presence is checked without following the link, so such a path reports as `modified` and refused
+rather than as `missing`, which is what `commit` has always seen. A path that is genuinely absent is
+still `missing`, with no refusal.
+
 **Known limit.** A worktree that contradicts a live `prikk mv` declaration is refused by `commit`
 but is not a property of any single path's entry, so it is not reported as a refused path; the
 existing `live rename declarations` lines are where that case is visible. `refused paths: 0` means
@@ -92,9 +97,17 @@ no path's own entry is unauthorable, not that the next commit will certainly suc
 
 **Library note.** `WorktreeChange` gains a public `refusal: Option<String>` field and
 `WorktreeStatusReport` a `refused_count()` method. The method is additive; the field is not — a
-downstream struct-literal construction or exhaustive pattern match of `WorktreeChange` needs
-updating. The Rust type carries one `Option`, not the JSON's two fields, so an "authored" entry with
-a reason attached cannot be represented at all; `authoring` is derived at the emitter.
+downstream struct-literal construction of `WorktreeChange` needs updating. The Rust type carries one
+`Option`, not the JSON's two fields, so an "authored" entry with a reason attached cannot be
+represented at all; `authoring` is derived at the emitter.
+
+`WorktreeChange`, `WorktreeStatusReport`, `QueuedOperationEntry`, `MergeEvidenceDisplayOperation` and
+`WorktreePatchCommitReport` are now `#[non_exhaustive]`. **This is breaking once, deliberately:** a
+downstream struct literal of any of the five stops compiling (`error[E0639]`), and every later field
+added to them is then free. All five are report types the library *produces* — none is an input to
+any public function — so nothing outside this crate has a reason to construct one. Reading every
+field, matching on one, and cloning are all unaffected. Four of the five gained a field in 0.38.0,
+which was the same breakage without the attribute to end it.
 
 ### Changed — two authoring refusals now say what they are: a precondition, not damage
 
@@ -107,6 +120,16 @@ practice as the trust sites above — no error variant was added or removed.
 
 The reclassification is what made the new `worktree-status` field possible to state honestly: a
 command that tells you in advance that the commit will refuse cannot then call that refusal damage.
+
+### Fixed — `prikk inverse-plan`, `rollback-preview` and `rollback-draft-verify` accept a tag ref
+
+All three answered `error: object type mismatch: expected block, got tag` for a perfectly valid tag
+ref. They reach a resolution site of their own — a second function with the same name and nearly the
+same body as the one the `log`/`checkout` fix below routed through the shared resolver — so fixing
+that one did not fix these. Both now call `refs::resolve_ref_tip_block`; neither calls the other.
+
+`prikk rollback-draft --append-inverse` still requires a branch ref, unchanged: it appends to that
+ref's active WAL, and a tag names no WAL.
 
 ### Fixed — `prikk log` and `prikk checkout` accept a tag ref
 

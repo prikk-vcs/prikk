@@ -8,6 +8,10 @@ The command is:
 prikk rollback-preview [path] [--ref REF]
 ```
 
+`--ref` takes any published ref, not only a branch — a tag ref resolves through its tag object to
+the Block it names, so `--ref tags/v1` previews the rollback of the tagged Block. See
+[inverse planning](../patches/patch-inverse.md), which shares the resolution.
+
 The preview performs two read-only validations:
 
 1. derive the unsigned inverse Patch payload for the supported operation subset;

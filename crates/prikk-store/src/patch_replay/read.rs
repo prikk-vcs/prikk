@@ -45,7 +45,11 @@ pub(super) fn current_target_block(
     // RFC 147 §3b: the third un-resolved site, and the one `checkout --patch-plan`/`--content-path`
     // actually reaches -- `checkout.rs`'s own planner does not serve those modes (`patch_replay.rs`
     // does, through here), so resolving only there would have left §3b's own control-1 case failing.
-    // Shared with `patch_inverse`, which resolves a tag ref the same way as a result.
+    //
+    // RFC 147 §3c: `patch_inverse/read.rs` has a **separate function of the same name and nearly the
+    // same body** -- this one does not serve it, and an earlier note here claiming they were shared
+    // was wrong. Fixing one left `inverse-plan`/`rollback-preview`/`rollback-draft-verify` failing.
+    // Both now call the same resolver; neither calls the other. If one is ever changed, change both.
     let (block_id, _tag_envelope) = crate::refs::resolve_ref_tip_block(object_store, &ref_state)?;
     Ok(block_id)
 }

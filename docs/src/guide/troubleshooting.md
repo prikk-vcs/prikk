@@ -45,8 +45,9 @@ missing or unreadable`, which sent readers looking for corruption that was not t
 
 ## `error: precondition not met: <path>: worktree symlink authoring is out of scope`
 
-`commit` found a symlink where it needs a regular file — either an untracked symlink in the
-worktree, or a tracked file that has been replaced by one. Symlink authoring is not implemented yet,
+`commit` found a symlink where it needs a regular file — an untracked symlink in the worktree, or a
+tracked file that has been replaced by one, including a **dangling** symlink whose target does not
+exist. Symlink authoring is not implemented yet,
 so the commit refuses rather than authoring something it cannot faithfully replay. Replace the
 symlink with a regular file, or move it outside the repository (or add it to `.prikkignore` if it is
 not meant to be tracked), then commit again.

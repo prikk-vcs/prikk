@@ -35,6 +35,9 @@ fn stderr_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// One agreement case: a fixture tag, the path it refuses, and the builder that produces the tree.
+type Case = (&'static str, &'static str, fn(&str) -> PathBuf);
+
 /// `worktree-status` exits **1** for any worktree that differs from the baseline — refused or not.
 /// That is the pre-existing contract (it is the "is this tree clean" question), and this round does
 /// not change it: see `a_merely_modified_tree_exits_the_same_way`, which pins the other half.
@@ -68,6 +71,22 @@ fn repo_with_a_tracked_file_now_a_symlink(tag: &str) -> PathBuf {
     let repo = repo_with_one_tracked_file(tag);
     std::fs::remove_file(repo.join("a.txt")).unwrap();
     std::os::unix::fs::symlink("/etc/hostname", repo.join("a.txt")).unwrap();
+    repo
+}
+
+/// A tracked regular file replaced by a **dangling** symlink — one whose target does not exist.
+///
+/// RFC 147 §2e G3: this is the case that used to read as `Missing`, because the tracked-path
+/// presence check resolved the link. `commit`'s own walk sees the directory entry and refuses, so
+/// the two commands disagreed. The fixture deliberately points at a name that will never exist.
+fn repo_with_a_tracked_file_now_a_dangling_symlink(tag: &str) -> PathBuf {
+    let repo = repo_with_one_tracked_file(tag);
+    std::fs::remove_file(repo.join("a.txt")).unwrap();
+    std::os::unix::fs::symlink("nope-does-not-exist.txt", repo.join("a.txt")).unwrap();
+    assert!(
+        !repo.join("a.txt").exists(),
+        "the fixture is only meaningful if the link really dangles"
+    );
     repo
 }
 
@@ -172,6 +191,55 @@ fn an_untracked_symlink_is_refused_without_becoming_an_unsupported_path() {
     assert_eq!(change.get("authoring").as_str(), "refused");
 }
 
+/// RFC 147 §2e G3: a **dangling** symlink at a tracked path is refused, not reported as missing.
+///
+/// The presence check used to resolve the link, so this exact tree read as `missing a.txt —
+/// tracked file is absent from the worktree` with `refused paths: 0`, while `commit` refused it.
+/// The rule never changed; the path simply never reached the rule. Both halves are asserted here:
+/// the entry is refused **and** `missing files: 0`, because a report that called this both missing
+/// and refused would be describing two different worktrees.
+#[test]
+fn a_dangling_symlink_at_a_tracked_path_is_refused_not_missing() {
+    let repo = repo_with_a_tracked_file_now_a_dangling_symlink("rfc147a-dangling");
+
+    let prose = stdout_of(&worktree_status(&repo, &[]));
+    assert_eq!(counter(&prose, "missing files"), "0", "{prose}");
+    assert_eq!(counter(&prose, "modified files"), "1", "{prose}");
+    assert_eq!(counter(&prose, "unsupported paths"), "0", "{prose}");
+    assert_eq!(counter(&prose, "refused paths"), "1", "{prose}");
+
+    let line = prose_line_for(&prose, "a.txt");
+    assert_eq!(line.split_whitespace().next(), Some("modified"), "{line}");
+    assert!(line.contains(" [refused: "), "{line}");
+
+    let report = json::parse(&stdout_of(&worktree_status(&repo, &["--format", "json"])));
+    let change = change_for(&report, "a.txt");
+    assert_eq!(change.get("kind").as_str(), "modified");
+    assert_eq!(change.get("authoring").as_str(), "refused");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The other half of the presence change: a path that is **genuinely absent** is still `Missing`,
+/// and carries no refusal. Making presence non-following must not turn deletions into refusals.
+#[test]
+fn a_genuinely_absent_tracked_path_is_still_missing() {
+    let repo = repo_with_one_tracked_file("rfc147a-absent");
+    std::fs::remove_file(repo.join("a.txt")).unwrap();
+
+    let prose = stdout_of(&worktree_status(&repo, &[]));
+    assert_eq!(counter(&prose, "missing files"), "1", "{prose}");
+    assert_eq!(counter(&prose, "refused paths"), "0", "{prose}");
+
+    let report = json::parse(&stdout_of(&worktree_status(&repo, &["--format", "json"])));
+    let change = change_for(&report, "a.txt");
+    assert_eq!(change.get("kind").as_str(), "missing");
+    assert_eq!(change.get("authoring").as_str(), "authored");
+    assert!(change.get("refusal").is_null(), "{change:?}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Control 2: status and commit agree, on one tree, by comparison rather than by two expectations
 // ---------------------------------------------------------------------------------------------
@@ -181,15 +249,27 @@ fn an_untracked_symlink_is_refused_without_becoming_an_unsupported_path() {
 /// wording, so the test cannot pass by two expectations drifting together.
 #[test]
 fn status_and_commit_agree_on_the_same_tree() {
-    for (tag, path) in [
-        ("rfc147a-agree-modified", "a.txt"),
-        ("rfc147a-agree-untracked", "link.txt"),
-    ] {
-        let repo = if path == "a.txt" {
-            repo_with_a_tracked_file_now_a_symlink(tag)
-        } else {
-            repo_with_an_untracked_symlink(tag)
-        };
+    let cases: [Case; 3] = [
+        (
+            "rfc147a-agree-modified",
+            "a.txt",
+            repo_with_a_tracked_file_now_a_symlink,
+        ),
+        (
+            "rfc147a-agree-untracked",
+            "link.txt",
+            repo_with_an_untracked_symlink,
+        ),
+        // RFC 147 §2e G3: one more fixture through this same test, not a second test with its own
+        // expectations -- a dangling symlink is the case where the two commands actually diverged.
+        (
+            "rfc147a-agree-dangling",
+            "a.txt",
+            repo_with_a_tracked_file_now_a_dangling_symlink,
+        ),
+    ];
+    for (tag, path, build) in cases {
+        let repo = build(tag);
 
         let report = json::parse(&stdout_of(&worktree_status(&repo, &["--format", "json"])));
         let reported = change_for(&report, path)

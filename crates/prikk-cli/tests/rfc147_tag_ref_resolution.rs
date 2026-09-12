@@ -277,3 +277,38 @@ fn log_resolves_a_received_tag_ref_to_its_target_block() {
     let _ = std::fs::remove_dir_all(&origin);
     let _ = std::fs::remove_dir_all(&receiver);
 }
+
+/// RFC 147 §3c: `inverse-plan` and `rollback-preview` reach a **fifth** resolution site —
+/// `patch_inverse/read.rs::current_target_block`, a *separate* function from
+/// `patch_replay/read.rs::current_target_block` despite the identical name and nearly identical
+/// body. §3b fixed the latter and a comment there claimed the two were shared; they were not, so
+/// both commands still answered `object type mismatch: expected block, got tag` for a valid tag ref.
+///
+/// One test drives both commands because they share that one site: if it regresses, both fail
+/// together, and a reader should see that they are one fact and not two.
+#[test]
+fn inverse_planning_resolves_a_tag_ref_to_its_target_block() {
+    let (repo, tagged, tip) = repo_with_a_tag_below_the_tip("rfc147c-inverse");
+
+    for command in ["inverse-plan", "rollback-preview"] {
+        let out = run(&repo, &[command, "--ref", "tags/v1"]);
+        support::ok(&out, command);
+        let stdout = stdout_of(&out);
+        assert!(
+            stdout.contains(&format!("target block: {tagged}")),
+            "{command} must target the tagged block: {stdout}"
+        );
+        assert!(
+            !stdout.contains(&tip),
+            "{command} must not reach the tip: {stdout}"
+        );
+        // The exact refusal this fix removes, asserted absent rather than inferred from success.
+        assert!(
+            !stderr_of(&out).contains("object type mismatch"),
+            "{command}: ObjectTypeMismatch must be unreachable from a valid tag ref: {}",
+            stderr_of(&out)
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&repo);
+}

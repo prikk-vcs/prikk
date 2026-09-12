@@ -34,6 +34,12 @@ use crate::wal::Wal;
 use crate::{ActiveRefMetadata, RenameDeclaration, read_active_ref_metadata};
 
 /// Read-only worktree status report against the replay baseline.
+///
+/// `#[non_exhaustive]` (RFC 147 §3c): a report type consumers read, never one they construct -- it is
+/// not an input to any public function and every construction in this workspace is inside the
+/// defining crate. It gained a field at 0.38.0, which was breaking then; this is what keeps the next
+/// one from being.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeStatusReport {
     /// Human-readable ref name used as the baseline.
@@ -86,6 +92,14 @@ impl WorktreeStatusReport {
 }
 
 /// A single worktree change detected by the read-only status scanner.
+///
+/// `#[non_exhaustive]` (RFC 147 §3c, on `PrikkError`'s own RFC 132 precedent): this type is
+/// *produced* by `worktree_status` and only ever read by a consumer -- it is not an input to any
+/// public function, and nothing outside this crate has a reason to build one. Adding the `refusal`
+/// field broke downstream struct literals once; this attribute is what makes every later field free
+/// instead of repeating that. Verified free to add: every construction in this workspace is inside
+/// the defining crate, where the attribute does not apply.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeChange {
     /// Repository-relative path, when it could be represented safely.
@@ -182,7 +196,17 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
         baseline_paths.insert(path_text.clone());
         seen_paths.insert(path_text.clone());
         let target = join_repo_path_to_root(&node.path, layout.root());
-        if !target.exists() {
+        // RFC 147 §2e G3: presence is **non-following**. `Path::exists()` resolves the link, so a
+        // tracked path replaced by a *dangling* symlink read as absent, took the `Missing` branch,
+        // and never reached the classifier at all -- `worktree-status` said `refused paths: 0` for a
+        // tree `commit` refuses, because `commit`'s own walk sees the directory entry and this did
+        // not. A path exists here if it has a directory entry, whatever that entry points at; the
+        // shape logic below then classifies it exactly as it does a resolvable symlink.
+        //
+        // `symlink_metadata` failing for any other reason still reads as absent, which is precisely
+        // what `exists()` did -- this changes the follow/no-follow question and nothing else. It
+        // also replaces the second `symlink_metadata` call this branch used to make.
+        let Ok(metadata) = fs::symlink_metadata(&target) else {
             changes.push(WorktreeChange {
                 path: path_text,
                 kind: WorktreeChangeKind::Missing,
@@ -190,8 +214,7 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
                 refusal: None,
             });
             continue;
-        }
-        let metadata = fs::symlink_metadata(&target)?;
+        };
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             // RFC 147 §2e control 1: both truths in one entry. The kind stays `Modified` -- the
             // worktree really did change -- and the refusal says `commit` will not take it.
@@ -376,6 +399,12 @@ pub enum QueuedPathResolution {
 /// same idiom as [`WorktreeChangeKind::as_str`]) plus the path(s) it affects, in payload order.
 /// Every kind reports exactly one path except `rename-path`, which reports two:
 /// `[old_path, new_path]`.
+///
+/// `#[non_exhaustive]` (RFC 147 §3c): a report type consumers read, never one they construct -- it is
+/// not an input to any public function and every construction in this workspace is inside the
+/// defining crate. It gained a field at 0.38.0, which was breaking then; this is what keeps the next
+/// one from being.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedOperationEntry {
     /// Stable kind label: `create-file`, `delete-node`, `edit-text`, `rename-path`,

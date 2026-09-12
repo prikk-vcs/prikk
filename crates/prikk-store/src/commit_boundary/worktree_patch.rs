@@ -25,6 +25,12 @@ mod node_authoring;
 pub(crate) use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
 
 /// Result of authoring and appending a node-addressed patch from worktree changes.
+///
+/// `#[non_exhaustive]` (RFC 147 §3c): a report type consumers read, never one they construct -- it is
+/// not an input to any public function and every construction in this workspace is inside the
+/// defining crate. It gained a field at 0.38.0, which was breaking then; this is what keeps the next
+/// one from being.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreePatchCommitReport {
     /// Baseline ref used to classify changes.

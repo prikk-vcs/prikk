@@ -42,6 +42,11 @@ In `--format json` the same facts are a top-level `refused_count` and, on each c
 additive within `worktree-status-report-v1`: a consumer written against the older field set reads
 these documents unchanged.
 
+A **dangling** symlink — one whose target does not exist — is refused here too. Presence is checked
+without following the link, so the path reports as `modified` and refused rather than as `missing`,
+which is what `prikk commit` has always seen. A path that is genuinely absent is still `missing`,
+with no refusal.
+
 **One refusal is not yet reported here.** A worktree that contradicts a live `prikk mv` declaration
 — the declared source back on disk, or the destination already occupied — is refused by
 `prikk commit` but is not a property of any single path's entry, so it does not appear as a refused
