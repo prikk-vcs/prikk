@@ -3,6 +3,17 @@
 **Status.** **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
 direction *"not only now but also for the future."* Measured first; the design follows the measurement.
 
+**Direction APPROVED by the project owner 2026-09-12** — *"it is approved to split the crate into
+multiple crates (aka cutting out). It is not forced. Just reference. I want 'finally clean, safe and
+secure, robust and sophisticated design'."* **That sentence is this RFC's acceptance criterion**, and
+"not forced" is why §5's four decision criteria stay as hard stops: a cut that fails one is not made.
+**What keeps this in `proposed/`: the surfaces crate has no name yet** — the first move commit needs
+one. The architect recommends **`prikk-operations`** (literal, no coinage, no borrowed frame — the layer
+*operates on* the store: checkout, merge, rollback, sync, verify, show), with `prikk-ops` as the short
+form if preferred. One word from the owner moves this to `accepted/`. Steps 1–2 of §6 (the graph
+emission and the public-API census) are already live under the RFC 131 census handoff and need no
+name.
+
 **Author-review independence gap:** the architect authored this and will review its implementation.
 
 ---
@@ -102,8 +113,8 @@ load-bearing. That is the trade, named.
 
 ## 7. Owner rulings
 
-1. Accept the direction: cut above the core.
-2. The surfaces crate's name.
+1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**
+2. The surfaces crate's name — architect recommends `prikk-operations`.
 3. Whether the file-size gate (RFC 130 §8 item 2) lands before or alongside.
 
 ## 8. Non-goals
