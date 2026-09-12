@@ -61,11 +61,11 @@ mod recognition_claim;
 mod refs;
 mod rename_declaration;
 mod rfc111_seal_simulation;
-// RFC 131 §2.2a: the `rollback` name family is NOT grouped -- measured to introduce a new
-// verify<->rollback coupling-graph cycle via a shared `patch` dependency; see the report.
-mod rollback_draft;
-mod rollback_preview;
-mod rollback_verify;
+// RFC 131 §6f, grouping increment 1: the three `rollback_*` modules became `rollback::{draft,
+// preview, verify}`. §2.2a had refused this grouping for a `verify <-> rollback` cycle; qualified
+// node naming removed the collapse that created it, re-measured before and after the move. Root
+// export names below are unchanged -- this is grouping, not an API change.
+mod rollback;
 mod seal_from_accepted;
 // RFC 142: `prikk show` -- what a block or patch changed.
 mod show;
@@ -198,11 +198,11 @@ pub use rename_declaration::{
 };
 #[cfg(feature = "test-support")]
 pub use rfc111_seal_simulation::simulate_one_seal_for_test_support;
-pub use rollback_draft::{RollbackDraftReport, append_rollback_draft};
-pub use rollback_preview::{
+pub use rollback::draft::{RollbackDraftReport, append_rollback_draft};
+pub use rollback::preview::{
     RollbackPreviewChange, RollbackPreviewChangeKind, RollbackPreviewPlan, prepare_rollback_preview,
 };
-pub use rollback_verify::{RollbackDraftVerification, verify_active_rollback_draft};
+pub use rollback::verify::{RollbackDraftVerification, verify_active_rollback_draft};
 pub use seal_from_accepted::{SealFromAcceptedOutcome, seal_from_accepted_claim};
 pub use show::{
     ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent, ShowPatch,

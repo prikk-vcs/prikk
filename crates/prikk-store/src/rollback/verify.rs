@@ -18,7 +18,7 @@ use crate::patch_inverse::prepare_patch_inverse_plan;
 use crate::patch_replay::decode::{
     decode_patch_message, decode_patch_operations, ensure_apply_supported,
 };
-use crate::rollback_draft::is_rollback_draft_envelope;
+use crate::rollback::draft::is_rollback_draft_envelope;
 use crate::wal::{Wal, WalRecord};
 
 const LEGACY_ROLLBACK_MARKER_KEY_ID: &str = "dev-placeholder-rollback-author";

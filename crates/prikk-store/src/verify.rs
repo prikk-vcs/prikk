@@ -314,7 +314,7 @@ use crate::lifecycle_cache::incremental::{
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::received::list_received_pointers;
 use crate::refs::{RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid, verify_refs};
-use crate::rollback_verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
+use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
 };

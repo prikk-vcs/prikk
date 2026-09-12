@@ -12,7 +12,7 @@ use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::decode_patch_message;
 use crate::refs::{RefStore, resolve_ref_tip_block};
-use crate::rollback_verify::verify_rollback_patch_envelope;
+use crate::rollback::verify::verify_rollback_patch_envelope;
 
 /// Default number of history entries shown by the CLI.
 pub const DEFAULT_HISTORY_LIMIT: usize = 20;

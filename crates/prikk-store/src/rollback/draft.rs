@@ -19,7 +19,7 @@ use crate::lock::ActiveLock;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_inverse::{PatchInverseOperationSummary, prepare_patch_inverse_plan};
 use crate::refs::RefStore;
-use crate::rollback_preview::{RollbackPreviewChange, prepare_rollback_preview};
+use crate::rollback::preview::{RollbackPreviewChange, prepare_rollback_preview};
 use crate::wal::Wal;
 use crate::{
     ActiveRefMetadata, read_active_ref_metadata, remove_active_ref_metadata,
