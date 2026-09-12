@@ -1,6 +1,6 @@
 # RFC 149 — Layering `prikk-store`: a core that stops growing, and a surfaces crate that may
 
-**Status.** **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
+**Status.** **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
 direction *"not only now but also for the future."* Measured first; the design follows the measurement.
 
 **Direction APPROVED by the project owner 2026-09-12** — *"it is approved to split the crate into
@@ -114,8 +114,8 @@ load-bearing. That is the trade, named.
 ## 7. Owner rulings
 
 1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**
-2. The surfaces crate's name — architect recommends `prikk-operations`.
-3. Whether the file-size gate (RFC 130 §8 item 2) lands before or alongside.
+2. ~~The surfaces crate's name — architect recommends `prikk-operations`.~~ **RULED 2026-09-12: `prikk-operations`.**
+3. ~~Whether the file-size gate (RFC 130 §8 item 2) lands before or alongside.~~ **RULED 2026-09-12: before.** The gate gives a measured baseline the cut is then checked against. Read with RFC 130 §8: this adopts its controls 1 and 2 at the proposed 1,200-line threshold; control 3 is subsumed by this RFC.
 
 ## 8. Non-goals
 

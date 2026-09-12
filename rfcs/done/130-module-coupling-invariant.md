@@ -461,6 +461,7 @@ rightly); a line budget on the crate as a whole (it would be met by compressing 
 wrong thing to reward); a split now.
 
 **Owner rulings:** adopt 1, 2, 3 or a subset; the 1,200 threshold. Nothing is handed off until ruled.
+**RULED 2026-09-12, through RFC 149 §7.3 ("before"):** controls 1 and 2 adopted at 1,200 lines, landing before the crate cut; control 3 subsumed by RFC 149. Handoff: `130-module-coupling-invariant/size-check-handoff-v1.md`.
 
 **AMENDED 2026-09-12, same day — the three controls are interim.** The owner asked for the direction to be
 reconsidered rather than gated. **RFC 149** measures a one-directional layer cut above the six cycle
