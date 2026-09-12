@@ -353,3 +353,11 @@ document's shape; nothing checks that anyone consults it. This RFC does not solv
 **Related:** DC-35 (release compatibility, status correction, and the authority composition §4 reads),
 DC-43 (release security controls — release-blocked, and the signer bootstrap it inherits), RFC 121
 (the exit-code vocabulary whose reasoning §5.1 borrows), RFC 107 (release distribution surface).
+
+## 7c. Re-reviewed 2026-09-13 — increment 4, scoped down
+
+No CI workflow runs any `release-policy` command (§7a closure). **Recommendation: increment 4 is
+re-scoped to one job — CI runs `check`, `boundary-check`, `reference-check` and `size-check` on every
+push** — and nothing about publication moves, since publication is manual by the owner's word and has
+been safe under that. The four commands exit non-zero on findings, which is what a CI step wants;
+`command_scan`'s inventory gains the four invocations. Small; handed off when the owner says yes.

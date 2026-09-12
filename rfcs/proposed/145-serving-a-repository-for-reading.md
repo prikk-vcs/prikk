@@ -1,6 +1,6 @@
 # RFC 145 — Serving a repository for reading
 
-**Status.** **PROPOSED 2026-09-10; RULED by the architect 2026-09-12 (§9) on the owner's instruction — acceptance is the owner's.** Opened by the architect on the project owner's direction of
+**Status.** **PROPOSED 2026-09-10; RULED by the architect 2026-09-12 (§9) on the owner's instruction — acceptance is the owner's.** **Re-reviewed 2026-09-13 on the owner's instruction: recommendation unchanged — accept §9 as ruled and close this RFC to `done/`; under D there is nothing to implement, and the read surface's gaps close as their own increments (RFC 146 and 147 did).** Opened by the architect on the project owner's direction of
 2026-09-06, scheduled in `ROADMAP.md` as *"Open the hosting-shape RFC — `prikk instaweb` vs. a separate
 small server"* and deliberately not ranked first (owner: *"No need to take it as the most
 prioritized."*).

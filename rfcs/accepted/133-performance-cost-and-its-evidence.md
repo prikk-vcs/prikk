@@ -738,3 +738,16 @@ phrase; correcting `architecture.md`'s stale `O(N³)` row.
 conditions; this RFC is where their cost is described, not where it is repaired. **No increment
 should be handed over from this RFC until §6 is ruled**, because the ruling decides whether a fix
 needs to arrive with a standing measurement or without one.
+
+## 6a. Re-reviewed 2026-09-13 — the architect's recommendation on §6
+
+**Yes: state the requirement** — *incremental commit cost does not scale with repository size, in
+memory as `NFR-PERF-01` states it for latency* — **and keep it by evidence at release time, not at gate
+time.** The instrument already exists: `crates/prikk-cli/tests/rfc133_node_count_memory.rs`, `#[ignore]`d,
+the shape this project uses for measurements. The release-prep sweep (template §1) gains one step: run
+it, record the two-size ratio in the prep report, and stop the cut if the ratio moved. No build-time cost
+on every gate run, which was the whole cost of "yes"; no silent regression to a user, which was the whole
+cost of "no". The `NFR-PERF-01` "unmet" record is a separate measurement the same step can take.
+
+**Filing corrected 2026-09-13:** this RFC's own status says accepted by the owner on 2026-09-03; it sat in
+`proposed/` with a handoff directory — the lifecycle miss RFC 120 §9.4a names. Moved to `accepted/`.

@@ -268,6 +268,10 @@ was issued.
 land whenever the owner wants it — including before any drain, and including if the drain is never
 done. See RFC 135 §9.9, where it was first written down.
 
+### 9.4b Re-reviewed 2026-09-13 — the recommendation, with today's numbers
+
+**23 finished RFCs sit in `rfcs/accepted/`** (status line says done/delivered/closed) of 59. The §9.4 recommendation stands: drain gradually — *an RFC moves to `done/` in the release that ships it* — and widen the index when the folder is empty of finished work. **§9.4a should land now**: measured today it would have fired on **RFC 133 and RFC 136**, both accepted by the owner (2026-09-03, 2026-09-04) and both still filed in `proposed/` until this commit moved them — the third and fourth instances of the miss it exists to catch. Its cost is a directory listing inside `boundary-check`; the handoff is written when the owner says yes.
+
 ### 9.5 What is not proposed
 
 No change to Q1, Q2 or Q4. No change to the gate's implementation until §9.2 step 3. No change to
