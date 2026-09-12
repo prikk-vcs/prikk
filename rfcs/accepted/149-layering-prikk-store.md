@@ -277,6 +277,15 @@ the store's internals. **The layer is real as a direction and not narrow as an i
 boundary is for, and there is none here that is narrow. What RFC 149 produced stands either way: the
 layer invariant, the census, the five modules that were surfaces by census and store by nature.
 
+### 6f. B1 delivered (2026-09-13, `7214c039`)
+
+`boundary-check` enforces the layer: `UPPER_LAYER` (20) and `LOWER_LAYER` (30, listed) partition the
+top-level modules exactly; a production edge lower → upper fails naming the edge; an unclassified,
+stale or doubly-listed module fails. Real tree: 0 violations, 222 edges upward; verified by the
+architect from the emitted graph independently of the gate's verdict. `--graph` carries the `layer`
+block from the same function. B3 removes `test_gates` from the lower list when `test_support` returns
+to `cfg(test)`.
+
 ## 7. Owner rulings
 
 1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**

@@ -47,6 +47,7 @@ unchanged. Full gate set; CI green on the push (a member removal changes every j
   for `missing_docs`, `#[non_exhaustive]` where it was added (RFC 147 ruling 2's posture costs nothing
   on a `pub(crate)` type), the size-check pins re-measured (`test_gates` leaves the graph again: 134 →
   130 nodes, 502 → 483 edges — paste before/after).
+- **Remove `test_gates` from `LOWER_LAYER`** in the same commit — once `test_support` is `cfg(test)` again the module leaves the graph and the gate reports the entry stale. Expect `lower 29`.
 - Full gate set; the addendum applies (`failpoints.rs`, `anchored/*` change `cfg` back).
 
 ## Not in scope
