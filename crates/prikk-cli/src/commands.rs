@@ -141,7 +141,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "commit",
         run: crate::run_commit,
         help_lines: &[
-            "  prikk commit --from-worktree [--text-edits] [--ref REF] -m|--message <message>  Append worktree changes",
+            "  prikk commit [--from-worktree] [--text-edits] [--ref REF] -m|--message <message>  Append worktree changes",
             "  note: .prikkignore at the repository root excludes matching worktree paths from being authored",
         ],
     },
@@ -172,8 +172,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_branch,
         help_lines: &[
             "  prikk branch [list] [--all] [--format json]  List branches deterministically (name, RefState id); --all also shows closed branches, marked",
-            "  prikk branch create <name> [--from REF]   Publish a branch at an existing target",
-            "  prikk branch close <name>                 Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
+            "  prikk branch create heads/<name> [--from REF]  Publish a branch at an existing target",
+            "  prikk branch close heads/<name>           Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
             "  note: there is no `branch switch` yet, and no current-branch pointer; switching needs a separate, not-yet-designed increment; every command resolves --ref explicitly in the meantime",
         ],
     },
@@ -182,7 +182,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_tag,
         help_lines: &[
             "  prikk tag [list] [--format json]          List tags deterministically (name, target block)",
-            "  prikk tag create <name> --target <ref|block> [-m|--message <message>]  Publish a tag at a block",
+            "  prikk tag create tags/<name> --target <ref|block> [-m|--message <message>]  Publish a tag at a block",
         ],
     },
     Command {

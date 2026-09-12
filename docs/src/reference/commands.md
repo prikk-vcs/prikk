@@ -48,6 +48,7 @@ prikk tag [list] [--format json]
 prikk tag create tags/<name> --target <ref|block> [-m <message>]
 prikk bundle export --ref REF --output <file> [--force]
 prikk bundle import --input <file>
+prikk bundle preview --input <file> [--ref REF] [--format json]
 prikk bundle verify --input <file>
 prikk sync summary --output <file>
 prikk sync compare --summary <file>
@@ -68,6 +69,7 @@ prikk doctor [path] --repair-main-ref
 prikk unlock
 prikk unlock --lock <path> [--yes|--force]
 prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]
+prikk --version
 ```
 
 **What `--from` and `--target` accept.** `branch create --from REF` takes any published ref: a
