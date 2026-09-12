@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use cargo_metadata::{DependencyKind, MetadataCommand};
+use cargo_metadata::{DependencyKind, Metadata, MetadataCommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -110,6 +110,18 @@ pub(crate) fn produce(
         })?;
         crate_rows.push(crate_row(crate_observation, level));
     }
+    // Dependency order -- publish level, then name -- which is the order a release publishes in
+    // and the order `policy::evidence` checks a document against. Emitting rows in whatever order
+    // the caller happened to list observations would make a correct document fail on position.
+    crate_rows.sort_by(|left, right| {
+        let key = |row: &Value| {
+            (
+                row.get("publish_level").and_then(Value::as_u64),
+                row.get("name").and_then(Value::as_str).map(str::to_owned),
+            )
+        };
+        key(left).cmp(&key(right))
+    });
 
     let (sequence, prior_snapshot, mut attempts) = match prior {
         Some(link) => {
@@ -332,19 +344,60 @@ fn hex_sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Handoff §3 item 2: `publish_level` is the topological level in the workspace's own dependency
-/// graph, derived via `cargo_metadata` -- never a hardcoded list. `policy/evidence.rs`'s own
-/// `CRATE_ORDER` constant is exactly the hazard named here materialized: it has seven entries,
-/// today's workspace has eight (`prikk-ffi` is absent from it), because it was hand-written against
-/// an earlier workspace and nothing forces it to track additions. This function cannot go stale the
-/// same way, because it has no list to fall out of sync with -- it re-derives from
-/// `cargo_metadata` on every call.
-fn publish_levels(root: &Path) -> Result<BTreeMap<String, u32>> {
-    let metadata = MetadataCommand::new()
+/// The crates a release publishes, in the order a release-evidence document must list them.
+///
+/// RFC 141 §7a: this replaces `policy/evidence.rs`'s hand-written `CRATE_ORDER`, which had seven
+/// entries when the workspace published eight and nothing forced it to track the difference.
+/// Derived on every call -- workspace members, minus any with `publish = false`, sorted by publish
+/// level and then by name -- so a member added, removed or re-pointed changes the answer with no
+/// list to update.
+// RFC 141 §7a: `cfg(test)` because nothing shipped judges a *live* document yet -- the oracle
+// judges frozen fixtures, and `produce` records rather than refuses (RFC 141 §7b.1). The
+// derivation is exercised by the controls; its first production caller is increment 4's.
+#[cfg(test)]
+pub(crate) fn workspace_crate_order(root: &Path) -> Result<Vec<(String, u64)>> {
+    let metadata = workspace_metadata(root)?;
+    let levels = levels_from_metadata(&metadata)?;
+    let mut order: Vec<(String, u64)> = metadata
+        .workspace_members
+        .iter()
+        .filter_map(|id| metadata.packages.iter().find(|package| &package.id == id))
+        // `Some([])` is `publish = false`; `None` is publishable anywhere.
+        .filter(|package| {
+            package
+                .publish
+                .as_ref()
+                .is_none_or(|registries| !registries.is_empty())
+        })
+        .filter_map(|package| {
+            let name = package.name.to_string();
+            levels.get(&name).map(|level| (name, u64::from(*level)))
+        })
+        .collect();
+    order.sort_by(|(left_name, left_level), (right_name, right_level)| {
+        left_level
+            .cmp(right_level)
+            .then_with(|| left_name.cmp(right_name))
+    });
+    Ok(order)
+}
+
+fn workspace_metadata(root: &Path) -> Result<Metadata> {
+    MetadataCommand::new()
         .manifest_path(root.join("Cargo.toml"))
         .other_options(vec!["--locked".to_owned(), "--offline".to_owned()])
         .exec()
-        .map_err(|error| Error::new(format!("cargo metadata failed: {error}")))?;
+        .map_err(|error| Error::new(format!("cargo metadata failed: {error}")))
+}
+
+/// Handoff §3 item 2: `publish_level` is the topological level in the workspace's own dependency
+/// graph, derived via `cargo_metadata` -- never a hardcoded list, so it has nothing to fall out of
+/// sync with.
+fn publish_levels(root: &Path) -> Result<BTreeMap<String, u32>> {
+    levels_from_metadata(&workspace_metadata(root)?)
+}
+
+fn levels_from_metadata(metadata: &Metadata) -> Result<BTreeMap<String, u32>> {
     let workspace_names: BTreeSet<String> = metadata
         .workspace_members
         .iter()

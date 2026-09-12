@@ -261,8 +261,8 @@ fn control3_one_mismatched_checksum_forces_partial_not_complete() {
 /// Control 4: `publish_level` is derived from the workspace dependency graph, not hardcoded --
 /// proven against a synthetic workspace, where reordering/adding a member changes the derived
 /// level. A test asserting only today's eight literal levels would pass against a hardcoded list
-/// (`policy/evidence.rs`'s own `CRATE_ORDER` is exactly that hardcoded list, and it is stale: it
-/// has seven entries, missing `prikk-ffi`, today's real eighth crate).
+/// (`policy/evidence.rs`'s old `CRATE_ORDER` was exactly that hardcoded list, and went stale: seven
+/// entries, missing `prikk-ffi`. RFC 141 §7a replaced it with `workspace_crate_order`).
 ///
 /// **Seen to fail**: perturbed `level_of` to always take its `own_deps.is_empty()` branch
 /// (`if true { 1 } else { ... }`), simulating a derivation that ignores the graph. `b`'s expected
@@ -595,4 +595,100 @@ fn synthetic_workspace(members: &[&str], edges: &[(&str, &[&str])]) -> tempfile:
         .unwrap();
     assert!(status.success(), "cargo generate-lockfile failed");
     directory
+}
+
+// RFC 141 §7a: the crate set a real document is judged against, derived from the workspace rather
+// than written down.
+
+fn rows_document(order: &[(String, u64)]) -> Value {
+    json!({
+        "crates": order
+            .iter()
+            .map(|(name, level)| json!({"name": name, "publish_level": level}))
+            .collect::<Vec<_>>()
+    })
+}
+
+/// The control §7a called unreachable: a document produced from this tree passes the policy
+/// validator, judged against the crate set derived from this same tree.
+///
+/// The count is not asserted, deliberately -- the day this was written the workspace published
+/// nine crates, and a number here would be the stale list this round removed. What is asserted is
+/// what must hold whatever the count: `prikk-ffi` is present (the crate the old list lost), and no
+/// `publish = false` tool is.
+#[test]
+fn a_document_produced_from_this_tree_passes_the_policy_validator() {
+    let root = repo_root();
+    let order = workspace_crate_order(&root).unwrap();
+    let names: Vec<&str> = order.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(names.contains(&"prikk-ffi"), "{names:?}");
+    assert!(names.contains(&"prikk"), "{names:?}");
+    for tool in ["prikk-release-policy", "prikk-benchmarks", "prikk-corpus"] {
+        assert!(
+            !names.contains(&tool),
+            "`publish = false` member {tool} must not be listed: {names:?}"
+        );
+    }
+    let mut observations = pending_observations();
+    observations.crates = order
+        .iter()
+        .map(|(name, _)| unobserved_crate(name, "9.9.9"))
+        .collect();
+    let document = produce(&root, observations, None).unwrap();
+    assert_eq!(
+        crate::policy::release_evidence_crate_set_mismatch(&document, &order),
+        None,
+        "{document:#}"
+    );
+    assert_eq!(
+        crate::policy::release_evidence_reason(&document, &order),
+        None,
+        "{document:#}"
+    );
+}
+
+/// Rows come out in dependency order whatever order the observations went in, so a correct
+/// document cannot fail on position.
+#[test]
+fn produced_rows_are_in_dependency_order_whatever_order_the_observations_came_in() {
+    let root = repo_root();
+    let order = workspace_crate_order(&root).unwrap();
+    let mut observations = pending_observations();
+    observations.crates = order
+        .iter()
+        .rev()
+        .map(|(name, _)| unobserved_crate(name, "9.9.9"))
+        .collect();
+    let document = produce(&root, observations, None).unwrap();
+    assert_eq!(
+        crate::policy::release_evidence_crate_set_mismatch(&document, &order),
+        None,
+        "{document:#}"
+    );
+}
+
+/// Perturbation: the workspace the derivation reads loses a member -- the document still lists it,
+/// and the mismatch names it.
+#[test]
+fn a_member_removed_from_the_workspace_is_named() {
+    let with_c = synthetic_workspace(&["a", "b", "c"], &[("b", &["a"]), ("c", &["b"])]);
+    let without_c = synthetic_workspace(&["a", "b"], &[("b", &["a"])]);
+    let document = rows_document(&workspace_crate_order(with_c.path()).unwrap());
+    let expected = workspace_crate_order(without_c.path()).unwrap();
+    let mismatch =
+        crate::policy::release_evidence_crate_set_mismatch(&document, &expected).unwrap();
+    assert!(mismatch.contains("unexpected [\"c\"]"), "{mismatch}");
+}
+
+/// Perturbation: the workspace gains a bogus member no document mentions, and the mismatch names
+/// it.
+#[test]
+fn a_member_added_to_the_workspace_is_named() {
+    let base = synthetic_workspace(&["a", "b"], &[("b", &["a"])]);
+    let with_bogus = synthetic_workspace(&["a", "b", "bogus"], &[("b", &["a"])]);
+    let document = rows_document(&workspace_crate_order(base.path()).unwrap());
+    let expected = workspace_crate_order(with_bogus.path()).unwrap();
+    let mismatch =
+        crate::policy::release_evidence_crate_set_mismatch(&document, &expected).unwrap();
+    assert!(mismatch.contains("missing [\"bogus\"]"), "{mismatch}");
 }

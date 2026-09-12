@@ -9,7 +9,24 @@ use crate::oracle::{Case, Oracle};
 use crate::schema::SchemaProfile;
 use crate::time::parse_utc_second;
 
-const CRATE_ORDER: [(&str, u64); 7] = [
+/// The crate set **the frozen oracle corpus** was written against -- and only that.
+///
+/// RFC 141 §7a's trade, argued rather than dodged: this used to be `CRATE_ORDER`, the list every
+/// release-evidence document was judged against, and it went stale (seven entries, no `prikk-ffi`)
+/// because nothing tied it to the workspace. A real document is now judged against
+/// `release_evidence::workspace_crate_order`, derived from `cargo metadata` on every call, so that
+/// list can no longer fall behind the workspace.
+///
+/// **This literal survives for a different job, and cannot go stale the same way.** The oracle's
+/// fixtures are frozen 0.18.0-era documents: of the 89 in its 57 cases, 88 list exactly these seven
+/// crates, and the 89th (`crate-graph-order-mismatch`) lists `prikk-hash` twice on purpose, to
+/// exercise this check. Judging them against the *live* workspace would turn `release-policy check` red on every
+/// membership change -- the day this was written the workspace already publishes nine crates -- and
+/// the only ways back to green would be rewriting frozen fixtures or flipping thirteen `valid`
+/// verdicts to `invalid`, which would stop those thirteen reaching every later check on the valid
+/// path. A list that describes a frozen corpus is correct exactly as long as the corpus is frozen,
+/// and `the_frozen_literal_is_what_the_corpus_lists` fails the moment the two disagree.
+const FROZEN_CORPUS_CRATES: [(&str, u64); 7] = [
     ("prikk-error", 1),
     ("prikk-hash", 1),
     ("prikk-crypto", 2),
@@ -18,6 +35,13 @@ const CRATE_ORDER: [(&str, u64); 7] = [
     ("prikk-store", 4),
     ("prikk", 5),
 ];
+
+pub(super) fn frozen_corpus_crates() -> Vec<(String, u64)> {
+    FROZEN_CORPUS_CRATES
+        .iter()
+        .map(|(name, level)| ((*name).to_owned(), *level))
+        .collect()
+}
 
 pub(super) fn evaluate<'a>(
     oracle: &Oracle,
@@ -39,12 +63,13 @@ pub(super) fn evaluate<'a>(
             "schema-instance",
         ));
     }
+    let expected_crates = frozen_corpus_crates();
     let mut reasons = Vec::new();
-    if let Some(reason) = single_reason(current) {
+    if let Some(reason) = single_reason(current, &expected_crates) {
         reasons.push(reason);
     }
     if let Some(prior) = prior {
-        if let Some(reason) = single_reason(prior) {
+        if let Some(reason) = single_reason(prior, &expected_crates) {
             reasons.push(reason);
         }
         if let Some(reason) = sequence::reason(
@@ -74,7 +99,10 @@ pub(super) fn evaluate<'a>(
     ))
 }
 
-pub(super) fn single_reason(snapshot: &Value) -> Option<&'static str> {
+pub(super) fn single_reason(
+    snapshot: &Value,
+    expected_crates: &[(String, u64)],
+) -> Option<&'static str> {
     if let Some(reason) = governance::reason(snapshot.get("governance")) {
         return Some(reason);
     }
@@ -83,7 +111,7 @@ pub(super) fn single_reason(snapshot: &Value) -> Option<&'static str> {
     {
         return Some("governance-review-or-hold");
     }
-    if tag_or_artifact_invalid(snapshot) {
+    if tag_or_artifact_invalid(snapshot, expected_crates) {
         return Some("evidence-tag-or-artifact");
     }
     if attempts_invalid(snapshot) {
@@ -97,7 +125,7 @@ pub(super) fn single_reason(snapshot: &Value) -> Option<&'static str> {
     None
 }
 
-fn tag_or_artifact_invalid(snapshot: &Value) -> bool {
+fn tag_or_artifact_invalid(snapshot: &Value, expected_crates: &[(String, u64)]) -> bool {
     let Some(version) = snapshot.get("version").and_then(Value::as_str) else {
         return true;
     };
@@ -122,19 +150,74 @@ fn tag_or_artifact_invalid(snapshot: &Value) -> bool {
     let Some(crates) = value_array(snapshot, "crates") else {
         return true;
     };
-    if crates.len() != CRATE_ORDER.len() {
+    if crate_set_mismatch(crates, expected_crates).is_some() {
         return true;
     }
-    crates.iter().zip(CRATE_ORDER).any(|(item, (name, level))| {
-        item.get("name").and_then(Value::as_str) != Some(name)
-            || item.get("publish_level").and_then(Value::as_u64) != Some(level)
-            || item.get("version").and_then(Value::as_str) != Some(version)
+    crates.iter().any(|item| {
+        item.get("version").and_then(Value::as_str) != Some(version)
             || item
                 .get("exact_internal_requirements")
                 .and_then(Value::as_bool)
                 != Some(true)
             || !crate_checksum_state_valid(item)
     })
+}
+
+/// Compare a document's crate rows with the set it must describe, in dependency order.
+///
+/// `Some` names what differs -- crates missing, crates unexpected, or the first row whose name or
+/// publish level is out of place -- so a failure says *which* crate, not only that a count is off.
+pub(super) fn crate_set_mismatch(crates: &[Value], expected: &[(String, u64)]) -> Option<String> {
+    let found: Vec<(Option<&str>, Option<u64>)> = crates
+        .iter()
+        .map(|item| {
+            (
+                item.get("name").and_then(Value::as_str),
+                item.get("publish_level").and_then(Value::as_u64),
+            )
+        })
+        .collect();
+    let missing: Vec<&str> = expected
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| {
+            !found
+                .iter()
+                .any(|(found_name, _)| *found_name == Some(*name))
+        })
+        .collect();
+    let unexpected: Vec<&str> = found
+        .iter()
+        .filter(|(name, _)| {
+            !expected
+                .iter()
+                .any(|(expected_name, _)| *name == Some(expected_name.as_str()))
+        })
+        .map(|(name, _)| name.unwrap_or("<unnamed>"))
+        .collect();
+    if !missing.is_empty() || !unexpected.is_empty() {
+        return Some(format!(
+            "crate set differs from the workspace: missing {missing:?}, unexpected {unexpected:?}"
+        ));
+    }
+    if found.len() != expected.len() {
+        return Some(format!(
+            "{} crate rows for {} crates: a crate is listed twice",
+            found.len(),
+            expected.len()
+        ));
+    }
+    found.iter().zip(expected).enumerate().find_map(
+        |(index, ((name, level), (expected_name, expected_level)))| {
+            (*name != Some(expected_name.as_str()) || *level != Some(*expected_level)).then(|| {
+                format!(
+                    "crate row {index}: expected {expected_name} at publish level \
+                     {expected_level}, found {} at {level:?}",
+                    name.unwrap_or("<unnamed>")
+                )
+            })
+        },
+    )
 }
 
 fn tag_verification_valid(value: Option<&Value>) -> bool {

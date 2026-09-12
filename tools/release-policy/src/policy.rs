@@ -29,6 +29,35 @@ pub(crate) fn run_check(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The release-evidence validator for a document produced from this tree, rather than a frozen
+/// oracle fixture: the crate set is the caller's -- normally
+/// `release_evidence::workspace_crate_order` -- never the corpus literal (RFC 141 §7a).
+// RFC 141 §7a: `cfg(test)` because nothing shipped judges a *live* document yet -- the oracle
+// judges frozen fixtures, and `produce` records rather than refuses (RFC 141 §7b.1). The
+// derivation is exercised by the controls; its first production caller is increment 4's.
+#[cfg(test)]
+pub(crate) fn release_evidence_reason(
+    document: &Value,
+    expected_crates: &[(String, u64)],
+) -> Option<&'static str> {
+    evidence::single_reason(document, expected_crates)
+}
+
+/// What differs between a document's crate rows and `expected_crates`, naming the crate.
+// RFC 141 §7a: `cfg(test)` because nothing shipped judges a *live* document yet -- the oracle
+// judges frozen fixtures, and `produce` records rather than refuses (RFC 141 §7b.1). The
+// derivation is exercised by the controls; its first production caller is increment 4's.
+#[cfg(test)]
+pub(crate) fn release_evidence_crate_set_mismatch(
+    document: &Value,
+    expected_crates: &[(String, u64)],
+) -> Option<String> {
+    evidence::crate_set_mismatch(
+        evidence::value_array(document, "crates").unwrap_or_default(),
+        expected_crates,
+    )
+}
+
 pub(crate) fn evaluate(oracle: &Oracle) -> Result<PolicyOutput> {
     let schema_bytes = oracle.manifest.normative_schema.path.as_str();
     let schema_value = json::parse(&std::fs::read(oracle.root().join(schema_bytes))?)
