@@ -454,6 +454,7 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**4**~~ | ~~RFC 146 §8e — three listing synopses advertise `[--format json]`~~ | Product | **DONE 2026-09-12** (`7fbea90b`). The control is derived: it probes every advertised invocation with `--format json` and with a flag nothing could know, compares, and asserts both directions — after a first wording-based classifier misclassified six commands |
 | **5** | `checkout --snapshot-plan`'s by-design missing snapshot → `Precondition`; `security-setup.md:22`'s AUTHOR-trust sentence verified against `verify` | Product / Docs | **Handed off** — `132-error-taxonomy-structure/snapshot-plan-precondition-and-docs-handoff-v1.md` |
 | **0.41.0 — "the store stops growing"** | | | |
+| **0 — URGENT** | **`main` is red on Windows since `0609ee51`**: the test isolation seam does not redirect `APPDATA`, so every Windows `setup` test wrote the runner's real key directory in parallel (CI 34686656667, three tests). RFC 148 handoff v3. **Blocks the 0.40.0 cut**; the fix is verifiable only by CI's Windows job | Product / CI | Handed off |
 | 0 | Remove the retired `PRIKK_*_SEED` detection — RFC 148 rule 1's one-release window ends | Product | Trivial; the comment in `key_material.rs` names this release |
 | **6** | **`boundary-check --graph`** (RFC 131 §6e step 0) | Tooling | **Live**, inside the census handoff; the instrument RFC 149 and the census both need. No product change — may land in 0.40.0 |
 | **7** | **RFC 149 — layer `prikk-store`: core stays, 26 surfaces move above it** | Product | **Direction APPROVED by the owner 2026-09-12** — *"approved to split … not forced … finally clean, safe and secure, robust and sophisticated design"*, now the RFC's acceptance criterion. **Pending: the surfaces crate's name** (architect recommends `prikk-operations`). Measured cut: zero core→surface edges, zero through 264 root re-exports. Sequenced after step 0 and a public-API census; one move commit per family |
@@ -593,7 +594,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 |---|---|
 | `prikk setup` refuses on an existing repository before touching anything | `135-…/setup-existing-repository-handoff-v1.md` |
 | RFC 146 §8e — three listing synopses advertise `[--format json]` | `146-…/help-synopsis-handoff-v1.md` |
-| RFC 131 §6e — grouping census, **with step 0: `boundary-check --graph`** (the gate emits no graph today; the handoff had assumed it did — corrected) | `131-…/grouping-census-handoff-v1.md` |
+| ~~RFC 131 §6e — grouping census~~ **DONE 2026-09-12** (`60f17dcf` step 0; census reviewed; §6f ruled: A first, C second, B refused by measurement). **Next: `rollback/` grouping** — `131-…/rollback-grouping-handoff-v1.md`. Was: grouping census, **with step 0: `boundary-check --graph`** (the gate emits no graph today; the handoff had assumed it did — corrected) | `131-…/grouping-census-handoff-v1.md` |
 
 ### C. Small, ready when scheduled — each one round
 

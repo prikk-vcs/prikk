@@ -135,3 +135,42 @@ the file to `author.seed`. Inside the key directory, read the role from the file
 
 The full set, verbatim, against the final commit; the addendum applies (this round's diff is
 platform-conditional by design). The first full `cargo test` must be green — that is what §2 is for.
+
+---
+
+# v3 — 2026-09-12, URGENT: `main` is red on Windows; the isolation seam does not redirect `APPDATA`
+
+CI run 34686656667 on `0609ee51`: **"Windows mutation test suite" failed**, three tests in
+`rfc135_key_and_setup.rs`:
+
+```
+stdout: initialized Prikk repository at C:\Users\RUNNER~1\AppData\Local\Temp\…\r\.prikk
+stderr: error: refusing to overwrite an existing file: C:\Users\runneradmin\AppData\Roaming\prikk\author.seed
+```
+
+`support::isolate_key_environment_for` sets `XDG_CONFIG_HOME` and `HOME` and removes the `PRIKK_*`
+variables — and on Windows `key_material::default_key_dir` reads **`APPDATA`**, which the seam never
+touches. Every test's `setup` on the Windows runner wrote into the runner's real
+`%APPDATA%\prikk`, in parallel, and the second and later ones collided. The same hermeticity problem
+you solved for Unix in v1 §4, one platform over. Every other job is green, including the Windows
+build and the Windows read-only conformance job.
+
+## Required, before anything else
+
+1. `isolate_key_environment_for` also sets `APPDATA` to the isolated config home (unconditionally —
+   harmless on Unix), so the Windows key directory is `<home>\prikk`, which is what
+   `isolated_key_dir` already computes. Remove `USERPROFILE`-derived surprises only if a test reads
+   them; none should.
+2. Any test file that builds its own `Command` and was given the seam in v1 gets this through the
+   same function — confirm none re-sets `APPDATA` itself.
+3. **This cannot be verified here.** The cross-target addendum compiles Windows code; it does not run
+   Windows tests. The check is CI's "Windows mutation test suite" on the pushed commit, and the
+   architect will read it before the 0.40.0 cut. Say in the report that this is the case.
+
+## Note, not required this round
+
+The Windows transcript also shows the mint path can still print `initialized` and then fail — when
+two `setup`s share one key directory *concurrently*, classification in both sees no seeds and the
+second's `create_new` loses. The v2 precondition phase closes every single-process case; this one is
+two processes racing on the user's own key directory, which the isolation seam is what prevents in
+tests. Recorded as the one remaining path to that message.

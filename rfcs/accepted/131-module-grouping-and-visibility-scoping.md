@@ -831,3 +831,27 @@ crate split.
 No crate split. No compile-time work. No change to `prikk-object`, `prikk-cli`, or any other member.
 No new dependency. No renaming of modules — grouping moves files, it does not rename what they
 contain.
+
+### 6f. The grouping census — measured 2026-09-12, RULED
+
+`boundary-check --graph` (step 0, `60f17dcf`) emits the graph the gate builds: 128 nodes, 483 edges,
+5 hubs, 13 subtree-cycle edges, threshold 6. Census over the 52 top-level modules: 34 are singletons by
+name; three name families are viable to test and three are not. Every candidate was **performed** in a
+worktree and gated, and the architect independently collapsed the emitted graph's nodes per candidate
+— same direction for all three.
+
+| candidate | result | ruling |
+|---|---|---|
+| **A** `rollback_{draft,preview,verify}` → `rollback/` | 4 rewrites, no allowlist change, no cycle gained or lost, gate green | **first increment** — `rollback-grouping-handoff-v1.md` |
+| **C** `merge_{evidence,execute}` → `merge/` | no cycle gained or lost; the declared hub `merge_evidence` re-detected at `merge::merge_evidence` and the stale allowlist entry reported in the same run | second, after A; the two-line allowlist rename is the whole cost |
+| **B** `worktree{,_status,_marker}` → `worktree/` | **seven new undeclared cycles**, one between two modules the grouping does not contain (`checkout -> refs`); the three sit on opposite sides of the commit boundary | **REFUSED by measurement.** Recorded so it is not rediscovered: it is the grouping anyone would try first from the module list |
+
+**Not candidates**: `patch_*` (six modules, a noun not a role: a leaf engine, a hub orchestrator, a
+command surface and a transport share the word), `commit_*` (`commit_boundary` carries ten
+declared-cycle endpoints), `trust`+`trust_index` (29 callers rewritten for one fewer name). The three
+top-level modules with zero internal callers (`patch_checkout`, `worktree_status`, `merge_execute`)
+are command surfaces reached through `lib.rs` — zero callers is a property of being a surface, not of
+being groupable; nothing moved.
+
+**The census's own finding, generalising §6d.7:** name similarity was the worst predictor of grouping
+safety in this tree. The families that look most alike are the three not to touch.
