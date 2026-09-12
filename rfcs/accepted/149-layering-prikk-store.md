@@ -180,6 +180,17 @@ this kind only; the owner may object before increment 3 reaches the families tha
 5. **RFC 130 §8's file-size gate and evidence line land regardless** — they are interim controls and
    remain useful after the cut.
 
+### 6a. Increment 2 delivered; `CRATE_ORDER` ruled out of scope (2026-09-13)
+
+`0184f7bb` closed the contract (entries 42–46; root exports 269 → 318, 311 default). `73a9a378` created
+`prikk-operations` empty and registered it in **six** lists — two of them fixture copies in
+`unsafe_boundary/tests.rs` and `publication/tests.rs` that no grep for `PRODUCTS` finds; the hardcoded
+member list is five lists, of which only `size-check`'s is self-checking against `Cargo.toml`.
+**`policy/evidence.rs::CRATE_ORDER` is not among them, by ruling:** it has held seven entries and lacked
+`prikk-ffi` since RFC 141 §7a (2026-09-06), so the evidence validator already rejects every genuine
+document this workspace produces; nothing on the live release path consumes it. It stays RFC 141 §7a's
+task, now for nine crates. Not a 0.42.0 blocker.
+
 ## 7. Owner rulings
 
 1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**

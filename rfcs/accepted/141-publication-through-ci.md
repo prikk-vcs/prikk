@@ -222,6 +222,8 @@ increment 4 must choose deliberately and say why:** derive the expected set from
 update the fixtures with it. **The first is consistent with everything this RFC argues; the second is
 cheaper and keeps the fixtures untouched.** It is a real trade and it is not being pre-empted here.
 
+**2026-09-13, still open, and larger by one:** `CRATE_ORDER` is still seven entries without `prikk-ffi`; RFC 149's `prikk-operations` makes the real count nine. The choice above (derive from the workspace, or update fixtures deliberately) is unchanged and is increment 4's first task; RFC 149 does not touch it.
+
 ## 7b. RULED — the schema permits a dishonest document, and should not
 
 **Increment 1's most valuable finding, and it is a defect in a guard this RFC's own handoff
