@@ -591,7 +591,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 | **RFC 145** — browse-view shape (D over the CLI) | `rfcs/proposed/145-…` §9 | accept or reject the ruling |
 | RFC 120 §9.4, §9.4a | `rfcs/accepted/120-…` | two rulings; §9.4a stops an error on its third occurrence |
 | RFC 133 §6 — memory as a stated requirement | `rfcs/proposed/133-…` §6a.4 | refuse the unqualified form, state it on the bytes axis |
-| Two letters | `external-communication/*/send/draft/` | stikk 006; external-arch 011 |
+| One letter | `.git-exclude/upstream/*/send/draft/` | external-arch 011 held (stikk: nothing held; 006 superseded, 007–010 sent) |
 
 ### B. Handed off, live with the team
 
