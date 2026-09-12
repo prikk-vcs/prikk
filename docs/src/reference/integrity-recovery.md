@@ -162,6 +162,20 @@ healthy repository it reports `object index: nothing to repair` and writes nothi
 installed atomically — written to a temporary file, fsynced, renamed over the old one — so an
 interruption leaves one whole index, never a mix.
 
+**The repair holds the object-store lock for its whole run** — it is a writer to the index like any
+other, and it takes the same lock every other writer takes. Three consequences, all ordinary lock
+behaviour:
+
+- a writer (`commit`, `seal`, `tag create`, …) that arrives while a repair is running is refused with
+  `lock conflict`, and retrying after the repair finishes succeeds;
+- a repair that arrives while a write is running is refused the same way;
+- a **stale** `objects.lock`, left behind by a failed acquisition, refuses the repair with the message
+  naming `prikk unlock` — the one case where an operator must act before the repair can run at all.
+
+Acquiring the lock only around the final install would not be enough: the repair scans the containers
+first, and a writer appending between the scan and the install would have its object discarded by an
+index rebuilt from the older state. The lock covers the scan and the install together.
+
 This state was reachable before prikk 0.40 by running two object-writing commands concurrently; the
 object-store lock now prevents it (see [concurrency and locking](./concurrency-locking.md)). This verb
 exists for repositories damaged before that lock existed.

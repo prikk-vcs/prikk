@@ -26,6 +26,7 @@ mod support;
 use std::path::Path;
 
 const RACERS: usize = 12;
+const REPAIR_ROUNDS: usize = 40;
 
 fn seal_a_block(repo: &Path) -> String {
     std::fs::write(repo.join("a.txt"), "hello\n").unwrap();
@@ -99,6 +100,82 @@ fn twelve_concurrent_tag_creates_leave_a_verifiable_repository() {
         "every refusal must be a lock conflict, not corruption: {other:?}"
     );
     support::ok(&verify, "verify after the race");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// RFC 102 v3 control (a): `doctor --repair-index` racing ordinary writers.
+///
+/// The repair is a writer to `index.container` like any other, and the first version of the verb
+/// took no lock: forty repairs launched beside forty `tag create` runs left `verify` failing in four
+/// rounds of six here — the repair scanned, a writer appended, and the repair installed a rebuilt
+/// index that predated the append, discarding it.
+///
+/// `#[ignore]`d for the same reason as its sibling above: timing-dependent by construction. Its
+/// deterministic counterpart is
+/// `prikk-store`'s `a_repair_meeting_a_held_object_store_lock_is_refused_and_writes_nothing`, which
+/// is the one that must never flake.
+#[test]
+#[ignore = "measurement instrument; timing-dependent by construction"]
+fn repairs_racing_writers_leave_a_verifiable_repository() {
+    let repo = support::unique_repo("rfc102-repair-race");
+    support::init(&repo);
+    let block = seal_a_block(&repo);
+    support::trust_maintainer(&repo);
+
+    let outcomes: Vec<_> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for index in 0..REPAIR_ROUNDS {
+            let repo_tag = repo.clone();
+            let block = block.clone();
+            handles.push(scope.spawn(move || {
+                let out = support::tag_create(&repo_tag, &format!("tags/race{index}"), &block);
+                (
+                    "tag create",
+                    out.status.success(),
+                    String::from_utf8_lossy(&out.stderr).into_owned(),
+                )
+            }));
+            let repo_repair = repo.clone();
+            handles.push(scope.spawn(move || {
+                let out = support::prikk(&repo_repair)
+                    .args(["doctor", "--repair-index"])
+                    .output()
+                    .unwrap();
+                (
+                    "doctor --repair-index",
+                    out.status.success(),
+                    String::from_utf8_lossy(&out.stderr).into_owned(),
+                )
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("racer"))
+            .collect()
+    });
+
+    let mut unexpected = Vec::new();
+    for (what, ok, stderr) in &outcomes {
+        if !*ok && !stderr.contains("container:object-store") {
+            unexpected.push(format!("{what}: {}", stderr.trim()));
+        }
+    }
+    let succeeded = outcomes.iter().filter(|(_, ok, _)| *ok).count();
+    println!(
+        "rounds={REPAIR_ROUNDS} invocations={} succeeded={succeeded} object-store-conflicts={}",
+        outcomes.len(),
+        outcomes.len() - succeeded - unexpected.len()
+    );
+
+    assert!(
+        unexpected.is_empty(),
+        "every failure must be an object-store lock conflict, not damage: {unexpected:#?}"
+    );
+    support::ok(
+        &support::verify(&repo),
+        "verify after repairs raced writers",
+    );
 
     let _ = std::fs::remove_dir_all(&repo);
 }

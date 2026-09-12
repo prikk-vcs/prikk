@@ -8,8 +8,8 @@ use prikk_error::{PrikkError, Result};
 
 use crate::block_state::BlockStateStatus;
 use crate::foundation::fsutil::{EntryKind, inspect_entry};
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
-use crate::lock::ActiveLock;
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
+use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::refs::{RefFileStatus, RefItemStatus};
 use crate::verify::{
     ActiveWalMetadataStatus, ObjectItemStatus, RepositoryVerification, StageOutcome, StageStatus,
@@ -751,10 +751,32 @@ fn empty_wal_repair() -> WalRepair {
 ///
 /// Reads and writes the index only. The containers are the source of truth here and are never
 /// touched, which is asserted by test rather than merely intended.
+///
+/// **Holds [`LockableContainer::ObjectStore`] for the whole repair.** A repair is a *writer* to
+/// `index.container` like any other, and the first version of this verb took no lock — measured
+/// afterwards, forty `doctor --repair-index` runs launched beside forty `tag create` runs left
+/// `verify` failing in four rounds of six: the repair scans, a concurrent writer appends, and the
+/// repair then installs a rebuilt index that predates the append, discarding it. Acquired before the
+/// first read, so the scan and the install are one exclusive region — a lock taken only around the
+/// install would still write a stale scan.
+///
+/// Acquired here rather than in `foundation::index`, for the same reason
+/// `append_object_under_lock` sits in `object_store.rs`: `foundation` is the bottom layer and must
+/// not reach `crate::lock`. Nothing else is acquired while it is held, so it stays a leaf.
+///
+/// Three consequences, all of them ordinary lock behaviour and none of them silent:
+///
+/// - a writer (`commit`, `seal`, `tag create`, …) arriving during a repair is refused with
+///   `lock conflict`;
+/// - a repair arriving during a write is refused the same way;
+/// - a stale `objects.lock` — left by a failed acquisition, see `concurrency-locking.md` — refuses
+///   the repair with the message naming `prikk unlock`, which is the one case where the operator
+///   must act before the repair can run.
 pub fn repair_object_index(
     layout: &RepositoryLayout,
 ) -> Result<crate::foundation::index::IndexRepairReport> {
     layout.require_current_format()?;
+    let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
     crate::foundation::index::repair_index_from_containers(layout)
 }
 

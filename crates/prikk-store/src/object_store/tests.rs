@@ -262,19 +262,25 @@ fn write_session_catches_up_after_a_nested_unmediated_writer() -> prikk_error::R
     Ok(())
 }
 
-/// RFC 102, ruled 2026-09-12: `append_object_under_lock` must stay the **only** production route to
-/// `append_object_to_container`.
+/// RFC 102: **every writer to the object store must go through a function that holds the lock**, and
+/// there are two such functions — `append_object_under_lock` for appends and
+/// `doctor::repair_object_index` for the rebuild.
 ///
 /// The lock is correct only if nothing bypasses it, and that is a property of the *call graph*, not
-/// of any one function — no assertion inside the append can observe it. So this reads the source: in
-/// production code, the name may appear only where it is defined, where it is imported, and inside
-/// the wrapper. A twelfth caller added anywhere else reopens the exact defect this round closed, and
-/// would otherwise pass every other test in the suite.
+/// of any one function — no assertion inside either can observe it. So this reads the source: in
+/// production code, each guarded name may appear only where it is defined, where it is imported, and
+/// inside its own locked caller.
+///
+/// **`repair_index_from_containers` joined this guard after the fact, and that is the point.** The
+/// repair verb shipped taking no lock at all: a lock was added for every writer, and then a new
+/// writer was written that did not take it. Forty concurrent `doctor --repair-index` runs beside
+/// forty `tag create` runs left `verify` failing in four rounds of six. A guard that already covered
+/// the repair path would have caught that without anyone having to think of it.
 #[test]
-fn every_object_append_goes_through_the_locked_wrapper() {
+fn every_object_store_writer_goes_through_a_locked_caller() {
     let crate_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
-    let mut wrapper_calls = 0_usize;
+    let mut locked_calls = 0_usize;
 
     let mut files_scanned = 0_usize;
     let mut stack = vec![crate_src.clone()];
@@ -304,32 +310,33 @@ fn every_object_append_goes_through_the_locked_wrapper() {
                 continue;
             };
             files_scanned += 1;
+            let relative = path.strip_prefix(&crate_src).unwrap_or(&path).to_path_buf();
             for (number, line) in text.lines().enumerate() {
-                if !line.contains("append_object_to_container") {
-                    continue;
+                for guarded in GUARDED {
+                    if !line.contains(guarded.name) {
+                        continue;
+                    }
+                    let is_definition = line.contains(guarded.definition);
+                    let is_import = line.trim_start().starts_with("self,")
+                        || line.contains("use crate::foundation::index");
+                    let is_comment =
+                        line.trim_start().starts_with("//") || line.trim_start().starts_with("///");
+                    let in_locked_caller = relative == std::path::Path::new(guarded.caller_file)
+                        && line.contains(guarded.locked_call);
+                    if in_locked_caller {
+                        locked_calls += 1;
+                        continue;
+                    }
+                    if is_definition || is_import || is_comment {
+                        continue;
+                    }
+                    offenders.push(format!(
+                        "{}:{}: {}",
+                        relative.display(),
+                        number + 1,
+                        line.trim()
+                    ));
                 }
-                let relative = path.strip_prefix(&crate_src).unwrap_or(&path);
-                let is_definition = line.contains("pub(crate) fn append_object_to_container");
-                let is_import = line.trim_start().starts_with("self,")
-                    || line.contains("use crate::foundation::index");
-                let is_comment =
-                    line.trim_start().starts_with("//") || line.trim_start().starts_with("///");
-                let in_wrapper = relative == std::path::Path::new("object_store.rs")
-                    && line
-                        .contains("    append_object_to_container(layout, object_type, envelope)");
-                if in_wrapper {
-                    wrapper_calls += 1;
-                    continue;
-                }
-                if is_definition || is_import || is_comment {
-                    continue;
-                }
-                offenders.push(format!(
-                    "{}:{}: {}",
-                    relative.display(),
-                    number + 1,
-                    line.trim()
-                ));
             }
         }
     }
@@ -342,14 +349,39 @@ fn every_object_append_goes_through_the_locked_wrapper() {
         "expected to scan the whole production tree; scanned only {files_scanned} files"
     );
     assert_eq!(
-        wrapper_calls, 1,
-        "the wrapper's own call must still be there -- if this is 0 the scan is vacuous"
+        locked_calls,
+        GUARDED.len(),
+        "each guarded function's own locked call must still be seen -- a lower count means the scan \
+         is not reading what it thinks it is"
     );
     assert!(
         offenders.is_empty(),
-        "these production sites reach `append_object_to_container` without the object-store lock: {offenders:#?}"
+        "these production sites reach the object store without its lock: {offenders:#?}"
     );
 }
+
+/// One function that may only be reached from a caller holding the object-store lock.
+struct GuardedFunction {
+    name: &'static str,
+    definition: &'static str,
+    caller_file: &'static str,
+    locked_call: &'static str,
+}
+
+const GUARDED: &[GuardedFunction] = &[
+    GuardedFunction {
+        name: "append_object_to_container",
+        definition: "pub(crate) fn append_object_to_container",
+        caller_file: "object_store.rs",
+        locked_call: "    append_object_to_container(layout, object_type, envelope)",
+    },
+    GuardedFunction {
+        name: "repair_index_from_containers",
+        definition: "pub(crate) fn repair_index_from_containers",
+        caller_file: "doctor.rs",
+        locked_call: "    crate::foundation::index::repair_index_from_containers(layout)",
+    },
+];
 
 /// RFC 102 control 1, ruled 2026-09-12: two writers appending **different** objects to the object
 /// store at the same time.
@@ -500,5 +532,88 @@ fn a_crash_during_index_repair_leaves_the_previous_index_intact() -> prikk_error
 
         let _ = std::fs::remove_dir_all(root);
     }
+    Ok(())
+}
+
+/// RFC 102 v3 control (b): a repair that meets a held object-store lock is **refused**, and leaves
+/// the index exactly as it found it.
+///
+/// Deterministic, unlike the racing form — the lock is taken by the test and simply never released
+/// until the assertion is done, so there is no timing to lose. It is also the control that states
+/// the operator-visible consequence: a repair arriving during a write does not wait, it refuses.
+#[test]
+fn a_repair_meeting_a_held_object_store_lock_is_refused_and_writes_nothing()
+-> prikk_error::Result<()> {
+    let root = unique_temp_dir("index-repair-locked");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+    for content in [b"one".as_slice(), b"two".as_slice()] {
+        let mut object = ObjectEnvelope::unsigned(ObjectType::Blob, 1, content.to_vec());
+        object.add_signature(dummy_signature())?;
+        store.write_object(&object)?;
+    }
+    // Damage it, so a repair that ran would visibly change the file -- otherwise `already_correct`
+    // would short-circuit and this control could pass without the lock doing anything.
+    let index_relative = layout.repository_relative(&layout.container_index_path())?;
+    let healthy = std::fs::read(layout.container_index_path())?;
+    let truncated: Vec<u8> = healthy.iter().take(healthy.len() / 2).copied().collect();
+    crate::foundation::fsutil::write_file_atomically(
+        layout.repository_mutation_root(),
+        &index_relative,
+        &truncated,
+    )?;
+    let before = std::fs::read(layout.container_index_path())?;
+
+    let held = crate::lock::acquire_container_locks(
+        &layout,
+        &[crate::foundation::layout::LockableContainer::ObjectStore],
+    )?;
+    let refused = crate::doctor::repair_object_index(&layout);
+    assert!(
+        matches!(refused, Err(prikk_error::PrikkError::LockConflict(_))),
+        "a repair must refuse while the object store is locked, got {refused:?}"
+    );
+    assert_eq!(
+        std::fs::read(layout.container_index_path())?,
+        before,
+        "a refused repair must not have written"
+    );
+    drop(held);
+
+    // And it works once the lock is free, which is what makes the refusal a wait-and-retry rather
+    // than a dead end.
+    let report = crate::doctor::repair_object_index(&layout)?;
+    assert!(!report.already_correct);
+    assert_eq!(report.entries_after, 2);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// The same shape for an ordinary append (v3 §3's optional companion): a deterministic counterpart to
+/// `two_racing_object_appends_serialise_and_never_share_an_offset`, which depends on two threads
+/// actually overlapping. That racing test has not flaked here, so this is insurance against a faster
+/// filesystem rather than a fix for anything observed.
+#[test]
+fn an_append_meeting_a_held_object_store_lock_is_refused() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("append-locked");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let held = crate::lock::acquire_container_locks(
+        &layout,
+        &[crate::foundation::layout::LockableContainer::ObjectStore],
+    )?;
+
+    let mut object = ObjectEnvelope::unsigned(ObjectType::Blob, 1, b"blocked".to_vec());
+    object.add_signature(dummy_signature())?;
+    let mut store = FileObjectStore::new(layout.clone());
+    let refused = store.write_object(&object);
+    assert!(
+        matches!(refused, Err(prikk_error::PrikkError::LockConflict(_))),
+        "an append must refuse while the object store is locked, got {refused:?}"
+    );
+    drop(held);
+    assert!(store.write_object(&object).is_ok(), "and succeed once free");
+
+    let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

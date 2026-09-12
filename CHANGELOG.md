@@ -36,6 +36,10 @@ object index: rebuilt from containers (7 -> 7 entries)
   objects recovered: 1
 ```
 
+The repair takes the object-store lock for its whole run, scan and install together, so it refuses
+with `lock conflict` rather than racing a concurrent writer — and cannot install a rebuilt index that
+predates someone else's append.
+
 The containers are the source of truth and are never written — the repair touches the index alone,
 which is asserted by comparing container bytes across a repair, not merely intended. The new index is
 installed atomically (write, fsync, rename), so an interruption leaves one whole index and the retry

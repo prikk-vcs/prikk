@@ -619,6 +619,11 @@ pub(crate) fn rebuild_index_from_containers(layout: &RepositoryLayout) -> Result
 /// What one `--repair-index` run changed. Counts, not a narrative: an operator needs to know whether
 /// the repair did anything, and a reader of the report needs to tell "nothing was wrong" from
 /// "nothing could be done".
+///
+/// `#[non_exhaustive]` (RFC 147's ruling on report types, applied here): a type the library produces
+/// and a consumer only reads, which will gain fields as the repair learns to report more. Breaking a
+/// downstream struct literal once is the price of never breaking one again.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexRepairReport {
     /// Sound entries the index held before the repair.
@@ -632,7 +637,9 @@ pub struct IndexRepairReport {
     /// Objects the index did not resolve to their own bytes before the repair and does after. This
     /// is the count that answers "did this fix my repository?"
     pub objects_recovered: usize,
-    /// True when the rebuilt index is byte-identical to the existing one, so nothing was written.
+    /// True when the rebuilt index is equal to the existing one **as a set of entries**, so nothing
+    /// was written. Not byte equality: see `repair_index_from_containers` on why order differs
+    /// between a healthy index and its own rebuild.
     pub already_correct: bool,
 }
 
@@ -643,9 +650,11 @@ pub struct IndexRepairReport {
 /// (`O_APPEND`) while the index did not, so every byte needed to rebuild is still on disk. This
 /// scans them and replaces the index.
 ///
-/// **Idempotent by construction**: the rebuilt bytes are compared against the existing ones and the
-/// write is skipped entirely when they match, so a clean repository is not rewritten and
-/// `already_correct` says so. Nothing here touches a container -- repair is an index-only operation,
+/// **Idempotent by construction**: the rebuilt entries are compared against the existing ones **as a
+/// set**, and the write is skipped entirely when they match, so a clean repository is not rewritten
+/// and `already_correct` says so. A byte comparison would not do — the rebuild walks containers in
+/// type order while a live index is in write order, so a healthy index is a permutation of its own
+/// rebuild and would be rewritten on every run. Nothing here touches a container -- repair is an index-only operation,
 /// and that is asserted by test, not just intended.
 ///
 /// The install is [`write_file_atomically`]: write a temporary, fsync it, rename over the
