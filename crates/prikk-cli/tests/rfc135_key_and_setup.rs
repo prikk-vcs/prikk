@@ -6,6 +6,15 @@ mod support;
 
 use std::path::Path;
 
+/// Only the `unix_only` round-trip test uses this now: RFC 148 removed the `export PRIKK_*_SEED=`
+/// lines the cross-platform setup test used to parse out of `setup`'s output, and with them its last
+/// non-Unix caller. Gated rather than blanket-`allow(dead_code)`d, so the absence stays a
+/// compile-time fact matching where the function is actually reachable.
+///
+/// Found by the cross-target addendum, not by the host build: `-D warnings` on
+/// `x86_64-pc-windows-gnu` failed with `function \`extract_after\` is never used` while every
+/// host gate was green.
+#[cfg(unix)]
 fn extract_after(stdout: &str, prefix: &str) -> Option<String> {
     stdout
         .lines()
