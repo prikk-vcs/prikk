@@ -94,6 +94,43 @@ candidates are `prikk-ops` and `prikk-surface`.
 — crate APIs stay explicitly unstable — but it does make the store's public surface larger and more
 load-bearing. That is the trade, named.
 
+### 4a. Corrections from step 1 (2026-09-13) — the architect's premises, fixed by measurement
+
+- **The core is five top-level modules, not six.** `DECLARED_CYCLES` holds thirteen edges over
+  `commit_boundary`, `lifecycle_cache`, `patch_replay`, `refs`, `trust`. `wal` is a declared *hub*, not a
+  cycle member; the "six" in this RFC counted qualified nodes.
+- **`prikk-store` has 49 production top-level modules**, not 32; after `rollback/` and `merge/`.
+- **A surface is a module the core does not reach, transitively.** That definition yields exactly the
+  26 this RFC named. The other 18 non-core modules (`foundation`, `path`, `lock`, `node`, `object_store`,
+  `wal`, `author`, `blob_access`, `format`, `snapshot`, `text_span`, `commit_index`, `ignore`,
+  `maintainer_signing`, `rename_declaration`, `signature_diagnostics`, `trust_index`, `worktree_marker`)
+  are the infrastructure the core is built on and stay in `prikk-store` with it. Under the literal
+  "every other module" reading there are 88 core→infrastructure edges and the cut is impossible; that
+  reading was never the intent.
+- **§5.1 holds**: core→surface edges 0 by construction; lower layer (core + infrastructure) → upper
+  layer edges 0, re-derived by the architect from the emitted graph; the re-export pass the graph cannot
+  make (29 bare `crate::<ident>` imports in core files) finds none owned by a surface.
+
+### 4b. Consumer impact — must be decided before any move
+
+The 26 surfaces are the modules external consumers use: `show`, `history`, `verify`, `worktree_status`,
+`bundle`, `merge`, `checkout`, `patch_*`. After the cut their root exports live in **`prikk-operations`**;
+a consumer adds that dependency and renames `prikk_store::` to `prikk_operations::` for those names.
+Mechanical, breaking once, and it lands on stikk — the consumer whose API surface RFCs 142–150 built.
+**Owner decision:** proceed with a letter to stikk ahead of the move and a `### Changed — breaking once`
+release entry naming every moved name; or hold. This RFC's "no stability promise" (§8) does not make the
+notice optional.
+
+### 5.2a. The census needs one more pass before the owner rules (2026-09-13)
+
+Step 2 (`0.42.0-round-1-review-request.md` §C2/§D) found 65 distinct core items reached by the 26
+surfaces, 14 already `pub` and root-exported, **51 to change — of which 26 are `not-found`** (module
+paths, enum variants, and unresolved functions). Step 2b resolves every entry to a declaration and a
+visibility and expands module paths to items. **Two recommendations travel with the resolved list:** the
+seven test-only helpers (six in `refs`, one in `patch_replay`, all reached by `verify`) go behind the
+existing `test-support` cargo feature, never into the public API; and the list shows what a first cut
+without `verify` (24 of the items) would need, as a column.
+
 ## 5. Decision criteria — the increment stops if any fails
 
 1. `boundary-check --graph` confirms zero core→surface edges on the resolved graph.

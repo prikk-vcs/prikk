@@ -469,3 +469,13 @@ members — zero core→surface edges, including through root re-exports — and
 surface modules, where all recent growth landed, into their own crate. §6 is not contradicted: it ruled
 on extracting a module; RFC 149 rules on cutting a layer. Controls 1 and 2 above stay useful after the
 cut; control 3 is subsumed by it.
+
+**DELIVERED 2026-09-13 (`6ab66fbd`), rulings at review:** `size-check` shares the coupling gate's
+production-file walk (one definition of "production file"); three files declared with reasons and
+`what_would_split_it`; per-crate lines and delta reported, never failed. **Ruled:** (1) no oracle cases —
+the manifest's 57 are all `release-evidence`, the sibling gates have none, and an oracle for gate
+subcommands is its own design question; the ten controls stand in. (2) **The size line is its own
+artifact** (`release-policy-size-v1`), referenced by the release report; `release-evidence-v1` is
+hash-pinned in every oracle case and is not reopened for this — a `release-evidence-v2` would be scheduled
+as such. (3) `size-check` joins EXECUTION-ORDER §6 rule 9. Observation for whoever next touches `args.rs`:
+both `size-check --bogus` and `boundary-check --bogus` exit 1, not the 2 the tool's own convention names.
