@@ -53,7 +53,8 @@ pub(crate) const TEXT_ANCHOR_WINDOW: usize = 64;
 /// Why anchor-filtered span localization failed (FDD-01 §5.1). Shared with replay (which wraps it
 /// with `node_id`/`span_id` context) and, later, worktree authoring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TextSpanResolutionFailure {
+#[non_exhaustive]
+pub enum TextSpanResolutionFailure {
     /// No occurrence's anchors matched the record's anchor hashes.
     AnchorMismatch,
     /// Anchors matched, but no anchor-filtered occurrence reproduced the record's `span_id`.

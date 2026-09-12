@@ -45,8 +45,9 @@ pub use pointer_index::{
 // RFC 149 §5.2b: widened from `pub(crate)` with the items themselves -- the operations-layer
 // contract re-exports these three from `lib.rs`, and a `pub(crate)` waypoint on the path would
 // block that (E0364). The set is unchanged; only the road to it is.
-pub(crate) use pointer_index::replay_pointer_index;
-pub use pointer_index::{PointerIndexEntry, encode_pointer_index_record};
+pub use pointer_index::{
+    PointerIndexEntry, PointerIndexReplay, encode_pointer_index_record, replay_pointer_index,
+};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -90,10 +91,8 @@ pub use container::{RefLogRecord, RefLogReplay};
 pub use verify::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefPublicationIssue,
 };
-// RFC 149 §5.2b: same widening, same reason as `pointer_index`'s above. `verify_refs` is held at
-// `pub(crate)` -- see the contract block in `lib.rs` for why.
-pub use verify::ensure_ref_target_valid;
-pub(crate) use verify::verify_refs;
+// RFC 149 §5.2b: same widening, same reason as `pointer_index`'s above.
+pub use verify::{RefVerification, ensure_ref_target_valid, verify_refs};
 
 /// The two-hop ref-tip resolution `bundle.rs`, `patch_set_digest.rs`, and `patch_exchange.rs` each
 /// need: `Branch` names a Block directly; `Tag` names a Tag object one hop away, whose own

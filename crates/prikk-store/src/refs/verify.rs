@@ -71,11 +71,17 @@ pub struct RefItemOutcome {
 /// narrows safely: `verify.rs`, the sole external reader, destructures every field directly and
 /// never calls it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RefVerification {
+#[non_exhaustive]
+pub struct RefVerification {
+    /// Pointer files scanned under `refs/by-id/`.
     pub pointer_count: usize,
+    /// Records read from the shared ref log container.
     pub log_record_count: usize,
+    /// Every `RefUpdate` envelope the scan decoded, for the caller's own signature checking.
     pub ref_update_envelopes: Vec<prikk_object::ObjectEnvelope>,
+    /// Publications that are incomplete or inconsistent.
     pub publication_issues: Vec<RefPublicationIssue>,
+    /// Envelopes whose signature could not be checked, with why.
     pub signature_envelope_issues: Vec<SignatureEnvelopeIssue>,
     /// One outcome per pointer file scanned under `refs/by-id/`, in scan order (DC-95 Stage 2
     /// Level 2).
@@ -112,7 +118,12 @@ impl RefVerification {
     }
 }
 
-pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> {
+/// Read every ref pointer and log record and report what they say, without repairing anything.
+///
+/// Read-only by construction (RFC 111 §6.1): it never writes an object, and it takes its own decoded
+/// index snapshot rather than sharing the repository verifier's, so the two cannot disagree about
+/// what they read.
+pub fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> {
     // RFC 111 §6.1: `verify_refs` is read-only (never calls `write_object`), so it takes its own
     // decoded index snapshot here rather than sharing `verify_repository_with_options`'s -- they are
     // two separate top-level constructions today (this one predates this change), and unifying them

@@ -272,7 +272,8 @@ impl ReplayManifest {
 
 /// In-memory replay result used by patch checkout materialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PatchReplaySnapshot {
+#[non_exhaustive]
+pub struct PatchReplaySnapshot {
     /// Ref used as the replay target.
     pub(crate) ref_name: String,
     /// Target block ID.
@@ -360,7 +361,7 @@ pub fn apply_operation_sequence(
 }
 
 /// Replay the supported operation subset into a validated in-memory manifest.
-pub(crate) fn replay_supported_patch_chain(
+pub fn replay_supported_patch_chain(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchReplaySnapshot> {
@@ -516,7 +517,8 @@ pub(crate) fn resolve_worktree_baseline(
 /// The baseline lifecycle state a worktree operation should compare or author against: the sealed
 /// baseline (or an empty genesis state), with any already-queued (unsealed) patches for this ref
 /// folded on top (DC-66) exactly as `commit` folds them.
-pub(crate) struct FoldedWorktreeBaseline {
+#[non_exhaustive]
+pub struct FoldedWorktreeBaseline {
     /// Baseline lifecycle state, with the active queue folded on top when it belongs to this ref.
     pub(crate) state: NodeLifecycleState,
     /// `Some((baseline_block, horizon))` when the ref is published; `None` for a genesis baseline.
@@ -554,7 +556,7 @@ pub(crate) struct FoldedWorktreeBaseline {
 /// own cache afterward for `plan_edit_text`'s own text materialization — folding into a cache the
 /// caller keeps, not a throwaway internal to this call, so that later reuse still sees what folding
 /// already materialized. `worktree-status` has no further use for it and passes a fresh, empty one.
-pub(crate) fn resolve_folded_worktree_baseline(
+pub fn resolve_folded_worktree_baseline(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     ref_name: &str,

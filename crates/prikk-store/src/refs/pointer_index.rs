@@ -72,7 +72,8 @@ pub(in crate::refs) struct PointerIndexRecordOutcome {
 /// narrow safely: `compact::compact_ref_pointer_index`, the sole external caller, reads only
 /// `entries` and calls `has_item_failure`, never these two.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PointerIndexReplay {
+#[non_exhaustive]
+pub struct PointerIndexReplay {
     pub(crate) entries: Vec<PointerIndexEntry>,
     pub(in crate::refs) trailing_partial_bytes: usize,
     pub(in crate::refs) record_outcomes: Vec<PointerIndexRecordOutcome>,
@@ -273,7 +274,7 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
 /// empty, the same reader-equivalence rule Stage 1 established for the WAL. Generation-aware (RFC 102
 /// Stage 6 Step 1, design-v1.md §15.6): resolves to `A` today, since nothing has ever appended a
 /// generation record -- Step 2's compactor is what will ever make this resolve to `B`.
-pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerIndexReplay> {
+pub fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerIndexReplay> {
     let slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {

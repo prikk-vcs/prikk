@@ -274,17 +274,25 @@ pub use worktree_status::{
 // declaration: a consumer in another crate reads these, it does not construct or exhaustively match
 // them, and the first time it wants to is a conversation rather than a silent break.
 //
-// One item the census named is **not** here: `lifecycle_cache::replay::LifecycleReplayError`. Its
-// `TextSpanResolutionFailed` variant carries a `text_span::TextSpanResolutionFailure`, which is
-// infrastructure that stays in `prikk-store`; exposing the error would expose that type too --
-// a 42nd item, beyond the 41 the owner ruled on. RFC 149 §5's hard stop, reported rather than
-// widened.
+// **Entries 42-46 are the closure, not an extension** (RFC 149 §5.2c). The census measured what the
+// surfaces *reference*; a crate boundary is crossed by types in *signatures*, and a caller that
+// writes `verify_refs(layout)?` and matches the result never spells `RefVerification` anywhere. Five
+// types were reachable only that way -- `RefVerification`, `PointerIndexReplay`,
+// `PatchReplaySnapshot`, `FoldedWorktreeBaseline`, `TextSpanResolutionFailure` -- and increment 1
+// stopped rather than widen them unasked. Ruled in: a `pub` function returning a private type is not
+// a contract at all. `TextSpanResolutionFailure` crosses from `text_span`, which is infrastructure
+// that stays here; it belongs with the replay error that carries it.
+//
+// `cargo check --workspace --all-targets --all-features` is the closure test: it names every type a
+// public signature reaches and nothing else. Run it before adding to this block, not after.
 pub use commit_boundary::active::{
     prepare_empty_active_ref_for_append, read_active_ref_metadata_for,
 };
 pub use commit_boundary::worktree_patch::{WorktreeEntryShape, authoring_refusal_reason};
 pub use lifecycle_cache::incremental::verify_divergence;
-pub use lifecycle_cache::replay::TextCache;
+pub use lifecycle_cache::replay::{
+    LifecycleReplayError, TextCache, apply_candidate_patches, apply_one_block_with_text_cache,
+};
 pub use lifecycle_cache::{
     ReplayDerivedLifecycleState, materialize_edited_text, replay_derived_state,
 };
@@ -295,9 +303,13 @@ pub use patch_replay::decode::{
 };
 pub use patch_replay::read::{load_snapshot_files, read_block, read_patch, single_parent_chain};
 pub use patch_replay::{
-    PatchReplayDeletedFile, ReplayManifest, ReplayManifestEntry, apply_operation_sequence,
+    FoldedWorktreeBaseline, PatchReplayDeletedFile, PatchReplaySnapshot, ReplayManifest,
+    ReplayManifestEntry, apply_operation_sequence, replay_supported_patch_chain,
+    resolve_folded_worktree_baseline,
 };
 pub use refs::{
-    PointerIndexEntry, encode_pointer_index_record, ensure_no_incomplete_publication,
-    ensure_ref_target_valid, read_current_ref_tip_block,
+    PointerIndexEntry, PointerIndexReplay, RefVerification, encode_pointer_index_record,
+    ensure_no_incomplete_publication, ensure_ref_target_valid, read_current_ref_tip_block,
+    replay_pointer_index, verify_refs,
 };
+pub use text_span::TextSpanResolutionFailure;

@@ -36,36 +36,67 @@ pub type TextCache = BTreeMap<NodeId, Vec<u8>>;
 ///
 /// These are the classes a replay / fallback caller branches on.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LifecycleReplayError {
+#[non_exhaustive]
+pub enum LifecycleReplayError {
     /// A block referenced by the lineage walk is absent. Never treated as genesis (P2-1).
-    MissingBlockInLineage { block_id: ObjectId },
+    MissingBlockInLineage {
+        /// The block the lineage walk expected and did not find.
+        block_id: ObjectId,
+    },
     /// A block object exists but cannot be read as a `Block` (wrong type, decode failure).
-    UnreadableBlockInLineage { block_id: ObjectId, detail: String },
+    UnreadableBlockInLineage {
+        /// The block that exists but would not decode.
+        block_id: ObjectId,
+        /// What decoding said.
+        detail: String,
+    },
     /// A block in the lineage window has more parents than this walk can follow: either a
     /// non-`Merge` block with more than one parent, or a `Merge` block whose `mainline_parent_id`
     /// is missing or does not name one of its own `parent_block_ids` (DC-75).
     MergeLineageUnsupported {
+        /// The block whose parentage the walk cannot follow.
         block_id: ObjectId,
+        /// How many parents it declares.
         parent_count: usize,
     },
     /// The single-parent walk revisited a block — a cycle in a store that should be a DAG.
-    LineageCycle { block_id: ObjectId },
+    LineageCycle {
+        /// The block reached a second time.
+        block_id: ObjectId,
+    },
     /// The walk reached genesis, but genesis is not the claimed horizon (v1 adequate-horizon).
-    HorizonNotInLineage { horizon_id: ObjectId },
+    HorizonNotInLineage {
+        /// The horizon that was claimed and not met.
+        horizon_id: ObjectId,
+    },
     /// A decoded operation could not be applied to the replayed state: the target node is not
     /// live, a path is occupied, restoration-equivalence failed, or a stated old-state field
     /// (mode/path) disagrees with the replayed reality. Distinct from a decode failure.
-    InconsistentLifecycleEffect { detail: String },
+    InconsistentLifecycleEffect {
+        /// Which state the operation disagreed with, and how.
+        detail: String,
+    },
     /// A patch referenced by a block is missing or cannot be decoded.
-    MalformedPatchInLineage { patch_id: ObjectId, detail: String },
+    MalformedPatchInLineage {
+        /// The patch a block referenced.
+        patch_id: ObjectId,
+        /// Why it could not be read.
+        detail: String,
+    },
     /// A blob required to resolve a lifecycle state effect is absent. (2c-2b onward.)
-    MissingBlobForLifecycleEffect { blob_id: ObjectId },
+    MissingBlobForLifecycleEffect {
+        /// The blob an effect needed.
+        blob_id: ObjectId,
+    },
     /// An `EditText` span could not be uniquely localized in the replayed text during sealed-history
     /// replay. This is an integrity failure (the sealed edit applied cleanly when authored), not a
     /// user/merge conflict.
     TextSpanResolutionFailed {
+        /// The node whose text was being replayed.
         node_id: NodeId,
+        /// The span identity that could not be localized.
         span_id: [u8; 32],
+        /// Which way the localization failed -- absent, ambiguous, or anchored elsewhere.
         reason: TextSpanResolutionFailure,
     },
 }
@@ -359,7 +390,7 @@ pub(in crate::lifecycle_cache) fn apply_one_block(
 }
 
 /// Apply exactly one already-read block's patches to an existing lifecycle state **and** an
-/// existing, externally-carried `TextCache` (DC-92). Unlike [`apply_one_block`], which creates a
+/// existing, externally-carried `TextCache` (DC-92). Unlike `apply_one_block`, which creates a
 /// fresh cache per call — correct only when the caller processes one block in isolation — this
 /// variant is for a caller replaying **several separate blocks in sequence** and needing text
 /// materialization to survive between them, exactly as a single continuous full replay would
@@ -367,10 +398,10 @@ pub(in crate::lifecycle_cache) fn apply_one_block(
 /// `EditText` (a content identity, not necessarily a stored object — see the DC-65 invariant
 /// document) would be unreachable once that earlier call's own local cache was discarded, and a
 /// later `EditText` against the same node would fail looking for a blob that was never stored.
-/// [`crate::lifecycle_cache::incremental`]'s own one-block step hits exactly this gap and falls
+/// `crate::lifecycle_cache::incremental`'s own one-block step hits exactly this gap and falls
 /// back to full replay rather than solving it (see its module doc); this function is DC-92's
 /// solution for the case where blocks are visited **in order**, so there is a real cache to carry.
-pub(crate) fn apply_one_block_with_text_cache(
+pub fn apply_one_block_with_text_cache(
     reader: &impl ObjectReader,
     block: &BlockPayload,
     state: &mut NodeLifecycleState,
@@ -394,7 +425,7 @@ pub(crate) fn apply_one_block_with_text_cache(
 /// deriving the state a new block's own transition would produce before that block has been signed
 /// or persisted. Takes the same carried `text_cache` its parent's lineage resolution accumulated,
 /// for the identical reason `apply_one_block_with_text_cache` needs it.
-pub(crate) fn apply_candidate_patches(
+pub fn apply_candidate_patches(
     reader: &impl ObjectReader,
     state: &mut NodeLifecycleState,
     text_cache: &mut TextCache,
