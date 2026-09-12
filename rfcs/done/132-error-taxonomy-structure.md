@@ -266,3 +266,5 @@ asserting on message text must pass untouched. **A diff that changes message tex
 **Out:** `source()`; re-classifying the 45 sites; any `Display` change; any CLI change. The CLI's
 240-site string flattening is real and worth its own decision, but it is not this RFC's — recorded in
 §3 so nobody mistakes this work for a user-visible improvement.
+
+**Per-site, 2026-09-12 (`f06125f1`):** `checkout --snapshot-plan` on a block with no snapshot is `Precondition` with the `--patch-plan` route named; the adjacent missing-referenced-Blob arm stays `Integrity`. Delivered with `security-setup.md`'s AUTHOR sentence corrected against a measurement the architect repeated. Reviewed without a report (`rfc132-snapshot-plan-precondition-review-v1.md`).

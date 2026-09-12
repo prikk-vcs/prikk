@@ -158,7 +158,7 @@ detection. Carried in `ROADMAP.md`'s 0.41 theme.
 (`rfc148-default-key-directory-review-v1.md`, `rfc148-second-project-review-v1.md`). Measured by the
 architect on the binary: bare `setup` to a sealed, verified commit with zero `PRIKK_*`; a second
 project reuses the keys with both seed files byte- and mtime-identical; one-seed and bad-mode states
-refuse with nothing created. Open from this RFC: the 0.41.0 removal of the retired-variable detection. **2026-09-12, later: CI's Windows suite failed on the pushed commit — the test isolation seam never redirected `APPDATA`; handoff v3, urgent.**
+refuse with nothing created. Open from this RFC: the 0.41.0 removal of the retired-variable detection. **2026-09-12, later: CI's Windows suite failed on the pushed commit — the test isolation seam never redirected `APPDATA`; handoff v3, urgent. Fixed at `2f9434ac` with a guard that reads the resolver's own variable list; pushed 2026-09-12, CI's Windows job is the verification.**
 
 ## 4. Why this shape and not the others
 
