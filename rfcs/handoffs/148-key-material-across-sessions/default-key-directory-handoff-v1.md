@@ -1,9 +1,8 @@
 # RFC 148 — a default key directory, two `0600` files, environment variables as overrides only
 
-**Ruled:** `rfcs/proposed/148-key-material-across-sessions.md` §3 (as amended twice on 2026-09-12).
+**Ruled:** `rfcs/accepted/148-key-material-across-sessions.md` §3 (as amended twice on 2026-09-12).
 
-**HOLD: RFC 148 is in `proposed/`.** Do not start until the owner moves it to `accepted/`. **If it does
-not move, this handoff is void.** It is written now so the team is not blocked the moment it does.
+**LIVE — start.** RFC 148 was **accepted by the project owner 2026-09-12** and sits in `rfcs/accepted/`; the hold this handoff carried is lifted.
 
 **Coordinate with `135-…/setup-existing-repository-handoff-v1.md`** — same command, same docs page. If
 both are live when you start, do them as **one round**; if that one has already landed, this round

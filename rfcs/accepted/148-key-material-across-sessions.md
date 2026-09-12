@@ -1,6 +1,6 @@
 # RFC 148 — Key material across sessions: a path in the environment, never a secret
 
-**Status.** **PROPOSED 2026-09-12**, on the project owner's question — *"What happens when the local
+**Status.** **ACCEPTED by the project owner 2026-09-12**, as amended twice that day (§2a, §2b); the handoff is live. Opened the same day on the project owner's question — *"What happens when the local
 machine is rebooted?"* — after the `first-run.md` round had documented the answer rather than changed
 it. **This is the decision RFC 135 §9 deferred to the owner by name**, and the owner has now asked for
 it.
