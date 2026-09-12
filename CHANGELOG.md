@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.40.0 — 2026-09-12
 
 ### Changed — `checkout --snapshot-plan` on a block with no snapshot is a precondition, not damage
 
