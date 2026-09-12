@@ -58,6 +58,7 @@ These records are under design review. All proposed RFCs must respect the depend
 | 136 | [Block Aggregation Payoff](./proposed/136-block-aggregation-payoff.md) | Opened and **accepted 2026-09-04**; §7 ruled Option A. The snapshot format, the when-to-snapshot policy and §9 items 1/2/4 are still unruled, so it stays here. No handoff issued |
 | 145 | [Serving a Repository for Reading](./proposed/145-serving-a-repository-for-reading.md) | Unscheduled, ranked second. Opened 2026-09-10 on the owner's 2026-09-06 direction. Rules the shape of a read-only browse view — static export, a separate server project, or a serving subcommand. **Owner rulings required** (§9). **Decides no build** |
 | 148 | [Key Material Across Sessions](./proposed/148-key-material-across-sessions.md) | Unscheduled. Opened 2026-09-12 on the owner's reboot question. `PRIKK_*_SEED_FILE` path variables: one non-secret line persisted once; prikk never invents the location. The trade RFC 135 §9 deferred to the owner. **Owner rulings required** |
+| 149 | [Layering prikk-store](./proposed/149-layering-prikk-store.md) | Unscheduled. Opened 2026-09-12. A measured one-directional cut above the six-module cyclic core; the 26 surface modules — where recent growth landed — move to a crate the owner names. Supersedes RFC 130 §6's scope, not its ruling. **Owner rulings required** |
 
 **Blocked, not available:** **DC-43** waits on a release-lane event, and additionally
 inherits DC-35's unamended key lifecycle and criterion 4's signer bootstrap, which only the project owner

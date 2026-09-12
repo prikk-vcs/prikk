@@ -461,3 +461,10 @@ rightly); a line budget on the crate as a whole (it would be met by compressing 
 wrong thing to reward); a split now.
 
 **Owner rulings:** adopt 1, 2, 3 or a subset; the 1,200 threshold. Nothing is handed off until ruled.
+
+**AMENDED 2026-09-12, same day — the three controls are interim.** The owner asked for the direction to be
+reconsidered rather than gated. **RFC 149** measures a one-directional layer cut above the six cycle
+members — zero core→surface edges, including through root re-exports — and proposes moving the 26
+surface modules, where all recent growth landed, into their own crate. §6 is not contradicted: it ruled
+on extracting a module; RFC 149 rules on cutting a layer. Controls 1 and 2 above stay useful after the
+cut; control 3 is subsumed by it.
