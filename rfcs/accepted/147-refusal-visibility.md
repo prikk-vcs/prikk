@@ -337,6 +337,29 @@ Handoff: `rfcs/handoffs/147-refusal-visibility/tag-target-semantics-handoff-v1.m
 **Carried, not acted on:** `snapshot-plan`'s *does not contain a snapshot blob* renders as `Integrity`
 for a by-design absence (RFC 136 §7) — same class as the sites already moved; a later per-site pass.
 
+### 3e. DELIVERED 2026-09-12 (`df3c57eb`) — the §3 arc is closed
+
+**All three §3d items landed.** `branch create --from tags/<t>` resolves — **a sixth site, the first
+outside `prikk-store`** (`branch.rs::resolve_published_target`), with its existence check moved onto the
+resolved block. `tag create --target tags/<t>` refuses as `Precondition` on the kind the CLI already
+held, naming both accepted forms, and both forms are proven to create. The two `current_target_block`s
+are one: **`refs::read_current_ref_tip_block`**, placed in `refs` rather than either sibling so that no
+lateral edge is invented — both `read.rs` files now mention `refs` zero times, the dependency having
+moved up to parents that already carried it. Review:
+`.git-exclude/reviewed/rfc147-tag-target-semantics-review-v1.md`.
+
+**One root export added**: `resolve_ref_tip_block` is now `pub` and re-exported from `lib.rs`, chosen
+over a seventh hand-written copy of the two hops in `prikk-cli`. The next release's API diff shows
+264 → 265 and should.
+
+**Coverage of the one resolver, measured by breaking it under `--no-fail-fast`**: 184 tests across 91
+binaries reach it; three pin the tag hop specifically.
+
+**Nothing remains in §3.** Every `--ref`-taking command either dereferences a tag, refuses it by the
+deliberate branch-only validator, or — `tag create --target` alone — refuses it as a precondition
+because the model is one hop. **Carried out of this RFC**: `checkout --snapshot-plan`'s `integrity
+error` on a by-design missing snapshot, a per-site class fix for a later pass.
+
 **A byproduct worth naming:** this gives the stikk project **block-addressable content for any tagged
 block** — the `--ref tags/<name>` row of their RFC 144 §4t table stops failing. It does not answer bare
 `--ref <block-id>`, which stays RFC 144's question.
