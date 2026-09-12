@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.41.0 — 2026-09-12
 
 ### Added — `prikk key status`: can I sign here, and with which key?
 
@@ -36,6 +36,22 @@ refusal past its purpose would only make a harmless leftover look like a fault.
 
 What replaced it is `prikk key status`, above: instead of learning which key is in effect from a
 command that refuses, you ask.
+
+### Changed — `--help` now describes what the commands actually accept
+
+Five corrections to the help text, all of them cases where following `prikk --help` literally produced
+a refusal or a wrong expectation:
+
+- `setup` was described as *"Init, generate both keys, trust the maintainer key, and print the
+  exports"*. Since 0.40.0 the default path prints nothing to export and, on a second project,
+  generates nothing — it reuses the keys already in your key directory. It now says so.
+- `commit --from-worktree` was shown as required. It is optional, and has been since worktree
+  authoring became the only commit behaviour.
+- `branch create`, `branch close` and `tag create` were shown taking a bare `<name>`. They require the
+  qualified form — `heads/<name>`, `heads/<name>`, `tags/<name>` — and refuse anything else.
+
+The command inventory in the documentation also regained `bundle preview` (shipped in 0.37.0) and
+`prikk --version`, both of which it had never listed.
 
 ## 0.40.0 — 2026-09-12
 
