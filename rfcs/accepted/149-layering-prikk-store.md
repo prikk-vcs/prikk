@@ -1,6 +1,6 @@
 # RFC 149 — Layering `prikk-store`: a core that stops growing, and a surfaces crate that may
 
-**Status.** **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
+**Status.** **HELD 2026-09-13 at §6e — the compiler-derived contract shows the layer is a direction, not a narrow interface; the owner chooses between cutting anyway and enforcing the layer as a gate rule (architect recommends the gate rule).** Earlier: **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
 direction *"not only now but also for the future."* Measured first; the design follows the measurement.
 
 **Direction APPROVED by the project owner 2026-09-12** — *"it is approved to split the crate into
@@ -246,6 +246,36 @@ report-shaped types; constructors are added where construction is needed, or `no
 for plain carriers with the reason written. (5) The widening — roughly sixty production and twenty test
 names beyond the 46 — is internal to the workspace (no library consumer known) and is ruled by the
 architect with the owner told the count; the owner may read 3b.0's list before anything moves.
+
+### 6e. The derived contract, and the fork it creates (2026-09-13) — OWNER DECISION
+
+Increment 3b.0 moved all twenty families in a scratch worktree and read the compiler: **58 items, 30
+struct fields, 18 methods, 14 waypoints, 9 closure types** beyond the 46-item contract; `foundation`
+alone supplies 24 items — file-codec encoders, `fsutil` file primitives, `ByteCursor` and its readers,
+container/index replay, `RepositoryLayout`'s mutation roots; the operations crate needs eight
+dependencies, `rustix` among them. The derive converged but did not reach zero. The architect's
+per-family count agrees, and adds: the surfaces depend on each other in the direction that forbids a
+narrower cut (the heaviest families depend on the lightest).
+
+**Finding.** §5.1 holds — zero production edges from the lower layer into the 26. But *a list of what
+code references is never the list of what a crate boundary needs*, and the boundary needs roughly half
+the store's internals. **The layer is real as a direction and not narrow as an interface.**
+
+**Two paths, the owner's to choose:**
+
+- **A — cut anyway**: the derived contract under a named `prikk_store::contract` module ("for
+  `prikk-operations`; may change without notice"), closed to green first, then twenty move commits.
+  Compile-enforced direction; two crates; the store's plumbing becomes its public API; `CRATE_ORDER`,
+  oracle, two-crate coordination follow.
+- **B — one crate, the layer as a gate rule**: `boundary-check` gains `LAYER` — no production edge from
+  the lower set (core, infrastructure, the five stayers, `checkout`) into the upper set — failing with
+  the edge named; `size-check` bounds growth. Remove the empty `prikk-operations` and its registrations;
+  revert the 46-item contract to `pub(crate)`; keep the test-support surface (feature-gated, inert, and
+  used by `prikk-cli`). RFC 130 §6's no-split stands on a better measurement.
+
+**Architect's recommendation: B.** A direction is enforced by a rule; an interface is what a crate
+boundary is for, and there is none here that is narrow. What RFC 149 produced stands either way: the
+layer invariant, the census, the five modules that were surfaces by census and store by nature.
 
 ## 7. Owner rulings
 
