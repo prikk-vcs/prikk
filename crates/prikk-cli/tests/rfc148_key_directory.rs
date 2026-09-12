@@ -451,3 +451,54 @@ fn control_c_a_group_readable_reused_seed_refuses_before_init() {
         "no repository may be created"
     );
 }
+
+/// RFC 148 v3: **the isolation seam must neutralise every environment variable the key-directory
+/// resolver consults — on every platform, not on this one.**
+///
+/// This is the guard the seam did not have. Its first version set `XDG_CONFIG_HOME` and `HOME`,
+/// which is the complete set *on Unix*, and shipped; `default_key_dir` reads `APPDATA` on Windows,
+/// so every test's `setup` on the Windows runner wrote into the runner's own `%APPDATA%\prikk` and
+/// `main` went red on the "Windows mutation test suite" — while every host gate and both
+/// cross-target compiles were green, because compiling Windows code is not running it.
+///
+/// So the check is not a list of three names: it **reads `key_material.rs`** for every
+/// `non_empty_var("…")` the resolver consults and asserts the seam sets each one. A fourth variable
+/// added for a fourth platform fails here, on Linux, without anyone having to think of it.
+#[test]
+fn the_isolation_seam_sets_every_variable_the_key_directory_resolver_reads() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/key_material.rs"),
+    )
+    .expect("read key_material.rs");
+
+    let mut consulted: Vec<String> = Vec::new();
+    let mut rest = source.as_str();
+    while let Some(at) = rest.find("non_empty_var(\"") {
+        let after = &rest[at + "non_empty_var(\"".len()..];
+        let end = after.find('"').expect("closing quote");
+        consulted.push(after[..end].to_string());
+        rest = &after[end..];
+    }
+    consulted.sort();
+    consulted.dedup();
+    assert!(
+        consulted.len() >= 3,
+        "expected to find the resolver's variables; found {consulted:?} -- if this scan stops \
+         matching, the guard is vacuous and must be repaired, not deleted"
+    );
+
+    let mut command = std::process::Command::new("true");
+    support::isolate_key_environment(&mut command);
+    let set: Vec<String> = command
+        .get_envs()
+        .filter_map(|(name, value)| value.map(|_| name.to_string_lossy().into_owned()))
+        .collect();
+
+    for name in &consulted {
+        assert!(
+            set.contains(name),
+            "`{name}` is read by key_material::default_key_dir but the isolation seam does not set \
+             it -- a test on that platform would read the machine it runs on. Seam sets: {set:?}"
+        );
+    }
+}
