@@ -612,15 +612,16 @@ fn rows_document(order: &[(String, u64)]) -> Value {
 /// The control §7a called unreachable: a document produced from this tree passes the policy
 /// validator, judged against the crate set derived from this same tree.
 ///
-/// The count is not asserted, deliberately -- the day this was written the workspace published
-/// nine crates, and a number here would be the stale list this round removed. What is asserted is
-/// what must hold whatever the count: `prikk-ffi` is present (the crate the old list lost), and no
-/// `publish = false` tool is.
+/// The count **is** asserted, since RFC 149 path B2 removed `prikk-operations`: the derivation must
+/// report eight again **by itself**, with no list anywhere edited to say so. A crate added later
+/// changes this number on purpose, in the commit that adds it. Also asserted whatever the count:
+/// `prikk-ffi` present (the crate the old hand-written list lost), and no `publish = false` tool.
 #[test]
 fn a_document_produced_from_this_tree_passes_the_policy_validator() {
     let root = repo_root();
     let order = workspace_crate_order(&root).unwrap();
     let names: Vec<&str> = order.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(order.len(), 8, "{names:?}");
     assert!(names.contains(&"prikk-ffi"), "{names:?}");
     assert!(names.contains(&"prikk"), "{names:?}");
     for tool in ["prikk-release-policy", "prikk-benchmarks", "prikk-corpus"] {

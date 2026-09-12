@@ -10,7 +10,7 @@ fn write_manifest(root: &Path, relative: &str, body: &str) {
     std::fs::write(full, body).unwrap();
 }
 
-const MEMBER_MANIFESTS: [(&str, &str); 10] = [
+const MEMBER_MANIFESTS: [(&str, &str); 9] = [
     ("prikk-error", "crates/prikk-error/Cargo.toml"),
     ("prikk-ffi", "crates/prikk-ffi/Cargo.toml"),
     ("prikk-hash", "crates/prikk-hash/Cargo.toml"),
@@ -18,7 +18,6 @@ const MEMBER_MANIFESTS: [(&str, &str); 10] = [
     ("prikk-object", "crates/prikk-object/Cargo.toml"),
     ("prikk-replay", "crates/prikk-replay/Cargo.toml"),
     ("prikk-store", "crates/prikk-store/Cargo.toml"),
-    ("prikk-operations", "crates/prikk-operations/Cargo.toml"),
     ("prikk", "crates/prikk-cli/Cargo.toml"),
     ("prikk-release-policy", "tools/release-policy/Cargo.toml"),
 ];
