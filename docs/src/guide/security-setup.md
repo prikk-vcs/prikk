@@ -66,9 +66,15 @@ The key directory is `$XDG_CONFIG_HOME/prikk` (else `$HOME/.config/prikk`) on Un
 recorded in signatures and default to `author` / `maintainer`.
 
 **A seed never travels through the environment.** `PRIKK_AUTHOR_SEED` and `PRIKK_MAINTAINER_SEED`
-carried one until prikk 0.40; they are now detected and **refused**, not ignored, for one release. An
-environment variable is readable by every child process, survives in shell profiles long after the
-key changed, and lands in process listings — none of which is true of a file the operator places.
+carried one until prikk 0.40. An environment variable is readable by every child process, survives in
+shell profiles long after the key changed, and lands in process listings — none of which is true of a
+file the operator places.
+
+0.40 *refused* while either variable was set, for exactly one release, so that no automation could
+quietly start signing with a different key than it thought it was using; 0.41 removed that refusal
+and the variables are now simply unread. `prikk key status` answers the question the refusal was
+standing in for — which key will actually sign here — without needing a signing attempt to provoke
+it.
 
 Each seed file holds a 32-byte Ed25519 secret seed as 64 hex characters. A missing file, a file
 readable by group or others (Unix), an empty key id, wrong-length seed hex, and non-hex bytes all fail

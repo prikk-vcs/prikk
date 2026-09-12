@@ -26,6 +26,17 @@ rules, so a `usable: true` is a prediction of what the signing path will do, not
 `prikk key public` reports a missing default seed through the same query and so now names the same
 three routes to a key that `commit` does.
 
+### Changed — a stale `PRIKK_AUTHOR_SEED` is now ignored rather than refused
+
+0.40.0 stopped reading `PRIKK_AUTHOR_SEED` / `PRIKK_MAINTAINER_SEED` and **refused** while either was
+set, so that no automation could quietly start signing with a different key than it thought it was
+using. That window was deliberately one release wide, and it has closed: either variable may now sit
+in a shell profile indefinitely, unread, like any other name prikk knows nothing about. Keeping the
+refusal past its purpose would only make a harmless leftover look like a fault.
+
+What replaced it is `prikk key status`, above: instead of learning which key is in effect from a
+command that refuses, you ask.
+
 ## 0.40.0 — 2026-09-12
 
 ### Changed — `checkout --snapshot-plan` on a block with no snapshot is a precondition, not damage

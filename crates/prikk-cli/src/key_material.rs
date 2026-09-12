@@ -5,11 +5,13 @@
 //! 1. `PRIKK_<ROLE>_SEED_FILE`, if set — a path, an override, the escape hatch;
 //! 2. otherwise `<default key directory>/<role>.seed`.
 //!
-//! **There is no environment channel for a seed.** `PRIKK_AUTHOR_SEED` and
-//! `PRIKK_MAINTAINER_SEED` are not read; they are *detected and refused*, for one release, so that
-//! nobody's automation silently starts signing with a different key than it thinks it is using. A
-//! silent ignore would be the worst available behaviour here, which is why it is forbidden rather
-//! than merely avoided.
+//! **There is no environment channel for a seed.** `PRIKK_AUTHOR_SEED` and `PRIKK_MAINTAINER_SEED`
+//! were that channel until 0.40.0, which stopped reading them and *refused* rather than ignoring
+//! them, so that nobody's automation could silently start signing with a different key than it
+//! thought it was using. That window was deliberately one release wide and closed in 0.41.0: the
+//! variables are now simply unread, like any other name prikk knows nothing about. What replaced the
+//! refusal is `prikk key status`, which answers "which key will actually sign here" directly instead
+//! of waiting for a signing attempt to object.
 //!
 //! The default directory is resolved by prikk itself, with no dependency, and has exactly one
 //! candidate per platform — never a repository, never a parent directory, never a fallback chain
@@ -52,18 +54,6 @@ impl Role {
         match self {
             Role::Author => "PRIKK_AUTHOR_SEED_FILE",
             Role::Maintainer => "PRIKK_MAINTAINER_SEED_FILE",
-        }
-    }
-
-    /// The variable that used to carry a raw seed. **Read only to refuse.**
-    ///
-    /// REMOVE THIS DETECTION IN 0.41.0 — 0.40.0 is the release that stops reading it and refuses,
-    /// and the very next release drops the refusal. After that window a stale `PRIKK_AUTHOR_SEED` in
-    /// someone's shell profile is simply an unused variable, and this refusal becomes noise.
-    pub(crate) const fn retired_seed_var(self) -> &'static str {
-        match self {
-            Role::Author => "PRIKK_AUTHOR_SEED",
-            Role::Maintainer => "PRIKK_MAINTAINER_SEED",
         }
     }
 
@@ -132,8 +122,8 @@ fn non_empty_var(name: &str) -> Option<String> {
 ///
 /// **An override that is set always wins, even when the file is missing.** Falling back to the
 /// default file would mean a typo in `PRIKK_AUTHOR_SEED_FILE` signs with a different key than the
-/// operator named, silently — the same class of failure the retired environment channel is being
-/// removed to prevent.
+/// operator named, silently — the same class of failure the retired environment channel was removed
+/// to prevent.
 pub(crate) fn seed_path(role: Role) -> std::result::Result<PathBuf, CliError> {
     if let Some(path) = non_empty_var(role.seed_file_var()) {
         return Ok(PathBuf::from(path));
@@ -200,10 +190,6 @@ pub(crate) struct KeyStatus {
     pub(crate) key_id_from_environment: bool,
     /// `Ok` with the seed when usable; `Err` with the reason when not.
     pub(crate) seed: std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], Unusable>,
-    /// RFC 148 rule 1's retired variable, still set. **Reported, not refused, here** — the refusal
-    /// belongs to the signing path, and `key status` exists precisely to be answerable in states
-    /// where signing is not.
-    pub(crate) legacy_variable_set: bool,
 }
 
 impl KeyStatus {
@@ -252,7 +238,6 @@ pub(crate) fn status(role: Role) -> std::result::Result<KeyStatus, CliError> {
         key_id,
         key_id_from_environment,
         seed,
-        legacy_variable_set: std::env::var_os(role.retired_seed_var()).is_some(),
     })
 }
 
@@ -294,30 +279,8 @@ fn group_or_other_readable_mode(_path: &Path) -> Option<u32> {
     None
 }
 
-/// Refuse a retired `PRIKK_<ROLE>_SEED`, naming where the key lives now.
-///
-/// Checked before anything is read, and refused whether or not a seed file also exists: an operator
-/// whose environment still carries the old variable must be told, not quietly switched.
-fn refuse_retired_env(role: Role) -> std::result::Result<(), CliError> {
-    if std::env::var_os(role.retired_seed_var()).is_none() {
-        return Ok(());
-    }
-    let location = match default_key_dir() {
-        Ok(dir) => dir.display().to_string(),
-        Err(_) => "your key directory".to_string(),
-    };
-    Err(CliError::Failure(
-        prikk_error::PrikkError::Precondition(format!(
-            "{} is no longer read; your keys are in {location} (or set {})",
-            role.retired_seed_var(),
-            role.seed_file_var()
-        ))
-        .to_string(),
-    ))
-}
-
-/// Read this role's seed for **signing**: refuse a retired variable, then turn [`status`]'s answer
-/// into the refusal the signing path has always printed.
+/// Read this role's seed for **signing**: turn [`status`]'s answer into the refusal the signing path
+/// has always printed.
 ///
 /// RFC 150 §1: this is the thin half. Every rule it enforces is computed in [`status`], so
 /// `key status` cannot say "usable" where `commit` refuses, or the reverse —
@@ -325,7 +288,6 @@ fn refuse_retired_env(role: Role) -> std::result::Result<(), CliError> {
 pub(crate) fn read_seed(
     role: Role,
 ) -> std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], CliError> {
-    refuse_retired_env(role)?;
     let status = status(role)?;
     match &status.seed {
         Ok(seed) => Ok(*seed),

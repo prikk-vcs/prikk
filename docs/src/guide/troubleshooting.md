@@ -22,12 +22,10 @@ useful when the file you created is not the file it is looking for. An override 
 points at nothing reports `reason: override-missing`, which distinguishes "you have no key" from
 "your `PRIKK_AUTHOR_SEED_FILE` is wrong".
 
-## `error: precondition not met: PRIKK_AUTHOR_SEED is no longer read`
-
-Your shell still exports a seed as an environment variable. prikk stopped reading that channel in
-0.40 and **refuses rather than ignoring it**, so a stale variable can never silently become the key
-you are not signing with. Remove it from your shell profile; your keys are in the key directory the
-message names, or wherever `PRIKK_AUTHOR_SEED_FILE` points. The refusal itself is removed in 0.41.0.
+prikk 0.40 also reported `error: precondition not met: PRIKK_AUTHOR_SEED is no longer read` when a
+seed was still exported as an environment variable. That refusal was deliberately one release wide
+and is gone as of 0.41: a stale `PRIKK_AUTHOR_SEED` or `PRIKK_MAINTAINER_SEED` is now simply unread,
+and `prikk key status` is where you check which key is in effect instead.
 
 ## `error: <path> is readable by group or other (mode 0644); run `chmod 600 <path>``
 

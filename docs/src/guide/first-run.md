@@ -90,16 +90,22 @@ export PRIKK_AUTHOR_SEED_FILE="$HOME/keys/author.seed"
 
 Before prikk 0.40 a seed was passed as an environment variable. That channel is removed: a seed in
 the environment leaks into process listings, shell history, and any child process, and it silently
-survived in profiles long after the key had changed. If either variable is still set, prikk
-**refuses** rather than ignoring it:
+survived in profiles long after the key had changed.
 
-```
-error: precondition not met: PRIKK_AUTHOR_SEED is no longer read; your keys are in
-/home/you/.config/prikk (or set PRIKK_AUTHOR_SEED_FILE)
+**A stale export is now simply ignored.** prikk 0.40 *refused* while either variable was set — one
+release wide, so that no automation could quietly start signing with a different key than it thought
+it was using — and 0.41 stopped doing even that. Either variable may sit in your shell profile
+indefinitely; prikk does not read it, and does not object to it.
+
+You can still remove it, and should, because it is a secret sitting in a file for no reason. To see
+which key is actually in effect before you commit anything:
+
+```sh
+prikk key status
 ```
 
-Remove it from your shell profile. The refusal itself is removed in 0.41.0, after which a stale
-variable is simply unused.
+That names the file each role resolves to and whether it is usable — see
+[Can I Sign Here?](security-setup.md#can-i-sign-here).
 
 ## The commands `setup` composes — and when you'd use them directly
 

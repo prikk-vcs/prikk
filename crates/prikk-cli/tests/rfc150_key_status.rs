@@ -101,11 +101,18 @@ fn role_json<'a>(report: &'a json::Value, role: &str) -> &'a json::Value {
         .unwrap_or_else(|| panic!("no {role} entry in {report:?}"))
 }
 
-/// Control 1, both directions of stikk's table: ready, and ready-but-with-a-stale-variable. Both
-/// exit 0 — **a not-ready answer is still an answer**, and a non-zero exit would make it
-/// indistinguishable from a broken repository.
+/// Control 1: the ready state — **exit 0 with an answer**, which is the whole point. A not-ready
+/// answer exits 0 too (controls 2, 3 and 6); a non-zero exit would make "no key here" indistinguishable
+/// from a broken repository.
+///
+/// The second half of this control used to assert that a stale `PRIKK_AUTHOR_SEED` was *reported* as
+/// `legacy_variable_set`. RFC 148 rule 1's window closed in 0.41.0 and the field went with the
+/// detection, before `key-status-v1` was ever published. The replacement assertion — a set retired
+/// variable is unread and `key status` names the key that actually signs — lives in
+/// `rfc148_key_directory.rs::control4_a_retired_seed_variable_is_unread`, beside the other key
+/// discovery controls.
 #[test]
-fn control1_ready_and_legacy_variable_both_answer_at_exit_zero() {
+fn control1_the_ready_state_answers_at_exit_zero() {
     let (repo, config_home) = fixture("ready");
 
     let out = status(&repo, &config_home, &["--format", "json"]);
@@ -119,25 +126,8 @@ fn control1_ready_and_legacy_variable_both_answer_at_exit_zero() {
     let author = role_json(&report, "author");
     assert!(author.get("usable").as_bool());
     assert_eq!(author.get("source").as_str(), "key-directory");
-    assert!(!author.get("legacy_variable_set").as_bool());
-
-    // The retired variable is *reported*, not refused: `key status` must answer in exactly the
-    // states where signing cannot, which is the whole reason it exists.
-    let mut command = support::prikk(&repo);
-    with_key_home(&mut command, &config_home);
-    let out = command
-        .env("PRIKK_AUTHOR_SEED", SEED_A)
-        .args(["key", "status", "--role", "author", "--format", "json"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    let report = json::parse(&stdout(&out));
-    let author = role_json(&report, "author");
-    assert!(author.get("legacy_variable_set").as_bool());
-    assert!(
-        author.get("usable").as_bool(),
-        "every other field is still computed"
-    );
+    assert_eq!(author.get("key_id").as_str(), "author");
+    assert_eq!(author.get("key_id_source").as_str(), "default");
 
     let _ = std::fs::remove_dir_all(&repo);
 }

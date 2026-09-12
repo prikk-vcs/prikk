@@ -583,7 +583,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
 /// DC-57 (NFR-PERF-02): active-patch warn/hard-block thresholds, read once from the environment and
 /// validated together — a warn threshold above the hard limit, a non-numeric value, or zero for
 /// either is rejected rather than silently kept at the default (the same fail-closed precedent as
-/// `PRIKK_AUTHOR_KEY_ID`/`PRIKK_AUTHOR_SEED`). Per-invocation only; never persisted in the
+/// `PRIKK_AUTHOR_KEY_ID`/`PRIKK_AUTHOR_SEED_FILE`). Per-invocation only; never persisted in the
 /// repository — a durable policy belongs to a future general configuration increment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ActivePatchThresholds {
@@ -956,9 +956,9 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
 /// Build the AUTHOR signer, failing closed if no key material is configured.
 ///
 /// RFC 148: the seed comes from a **file** — `PRIKK_AUTHOR_SEED_FILE` if set, otherwise
-/// `<key dir>/author.seed` — never from the environment. `key_material` owns both the lookup and the
-/// refusal of the retired `PRIKK_AUTHOR_SEED`; this function only assembles the signer, so the two
-/// roles below cannot drift apart in where they look.
+/// `<key dir>/author.seed` — never from the environment. `key_material` owns the lookup and the
+/// refusal it turns into; this function only assembles the signer, so the two roles below cannot
+/// drift apart in where they look.
 fn author_signer_from_env() -> std::result::Result<Ed25519AuthorSigner, CliError> {
     let key_id = key_material::key_id(key_material::Role::Author)?;
     let seed = key_material::read_seed(key_material::Role::Author)?;

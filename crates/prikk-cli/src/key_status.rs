@@ -138,12 +138,6 @@ fn print_prose(statuses: &[(KeyStatus, Option<Binding>)]) {
             Some(binding) => println!("binding: {}", binding.as_str()),
             None => println!("binding: <not computed>"),
         }
-        if status.legacy_variable_set {
-            println!(
-                "note: {} is set and is no longer read; remove it from your shell profile",
-                status.role.retired_seed_var()
-            );
-        }
     }
 }
 
@@ -198,10 +192,6 @@ fn print_json(statuses: &[(KeyStatus, Option<Binding>)]) {
             )),
             None => json.push_str("      \"public_key\": null,\n"),
         }
-        json.push_str(&format!(
-            "      \"legacy_variable_set\": {},\n",
-            status.legacy_variable_set
-        ));
         match binding {
             Some(binding) => json.push_str(&format!(
                 "      \"binding\": {}\n",

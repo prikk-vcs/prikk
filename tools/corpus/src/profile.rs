@@ -125,13 +125,15 @@ pub struct BuilderInputs {
     pub generator_seed: u64,
     /// `PRIKK_AUTHOR_KEY_ID` the builder must use for every authored commit.
     pub author_key_id: String,
-    /// `PRIKK_AUTHOR_SEED`, 64 lowercase hex characters, the builder must use for every authored
-    /// commit -- fixed here, not drawn from the OS CSPRNG, so two builds from this profile sign
-    /// identically.
+    /// The AUTHOR seed, 64 lowercase hex characters, the builder must use for every authored commit
+    /// -- fixed here, not drawn from the OS CSPRNG, so two builds from this profile sign
+    /// identically. Reaches prikk as a file through `PRIKK_AUTHOR_SEED_FILE` (RFC 148); the retired
+    /// `PRIKK_AUTHOR_SEED` variable this field used to name is unread as of 0.41.
     pub author_seed_hex: String,
     /// `PRIKK_MAINTAINER_KEY_ID` the builder must use for every seal.
     pub maintainer_key_id: String,
-    /// `PRIKK_MAINTAINER_SEED`, 64 lowercase hex characters, the builder must use for every seal.
+    /// The MAINTAINER seed, 64 lowercase hex characters, the builder must use for every seal;
+    /// reaches prikk as a file, as `author_seed_hex` does.
     pub maintainer_seed_hex: String,
     /// **Found while building this increment, not resolved by it** (out of scope: "any change to
     /// `crates/`"). Each entry names one thing that varies between two builds of the *same*
