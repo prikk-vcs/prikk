@@ -782,6 +782,43 @@ production out-edges"*. **After grouping, `fsutil`'s own figure is no longer sep
 only `foundation`'s aggregate. The conclusion holds; the evidence is one level less granular, and the
 implementing round disclosed this against its own result.
 
+## 6e. MEASURED and RULED 2026-09-12 — the readability half is a sixth done, and it has no next increment
+
+**The project owner asked whether the bloatedness of `prikk-store` was still open. It is, and this RFC's
+own record had let it read as settled.** Measured today:
+
+| | RFC 131 opened (§2) | after §6b | **today** |
+|---|---|---|---|
+| top-level entries in `src/` | 123 | 100 | **102** |
+| top-level `mod` declarations | 69 | 52 | **52** |
+| declared coupling cycles (RFC 130) | 8 entries / 13 edges | 8 | **8 — unchanged** |
+| `pub(in crate::…)` items | 0 | 27 | **61** |
+
+86,137 lines across 276 files, 47% of them tests. Largest production files: `verify.rs` 1,677,
+`node_authoring.rs` 1,415, `bundle.rs` 1,411, `foundation/layout.rs` 1,038. (Visibility counts here are
+column-zero items; §3's 641/271/0 baseline was counted by a method not recorded, so the two are not
+strictly comparable — the direction is.)
+
+**What this says.** §6d's narrowing route closed honestly at 18 names, and the coupling gate now *sees*
+the truth — but **the eight declared cycles are declared, not removed**, and **the grouping half — the
+one §1 says addresses readability directly — moved 123 → 102 and then stopped.** §2's central question
+(role-based or name-based grouping; what to do with the singletons) is still the open design question
+it was on 2026-09-01. **The architect's recent report called this "unscheduled by design"; it is
+unfinished, and that wording is withdrawn.**
+
+**RULED — the next increment is a grouping census, not a grouping.** §6d.7 ruled census-before-target
+for narrowing after aiming a round at the wrong files; the same rule applies here. Of the 52 top-level
+modules: which share a role with others (§2's foundation/orchestrator families), which are genuine
+singletons that §2 says must not be given an invented home, and — per §6a/§6c — which groupings would
+merge or expose a declared cycle. **The census is the deliverable; the first grouping increment after
+it is chosen from the census, one family at a time, under §4's four must-nots** (no crate split, no
+outward-API change, no test relocation, no provenance-comment reflow) **and §5's move-only-commit
+rule.** Handoff: `rfcs/handoffs/131-module-grouping-and-visibility-scoping/grouping-census-handoff-v1.md`.
+
+**The cycles are a separate theme and are not folded in.** Removing a declared cycle is a design change
+to the modules involved, not a file move; each entry's `what_would_remove_it` in `coupling.rs` is where
+that work starts, and it is scheduled by the owner, not by this section.
+
 ## 7. Revisit triggers
 
 Inherited from RFC 130 §6, restated because they bound this RFC too: **watch coupling, not lines.** A
