@@ -272,17 +272,21 @@ fn status_and_commit_agree_on_the_same_tree() {
         let repo = build(tag);
 
         let report = json::parse(&stdout_of(&worktree_status(&repo, &["--format", "json"])));
-        let reported = change_for(&report, path)
-            .get("refusal")
-            .as_str()
-            .to_string();
+        let change = change_for(&report, path);
+        // Checked before reading, so a case that reports *no* refusal fails here naming itself,
+        // rather than deep inside the JSON accessor with no clue which fixture it was.
+        assert!(
+            !change.get("refusal").is_null(),
+            "{tag}: status must report a refusal for {path}, got {change:?}"
+        );
+        let reported = change.get("refusal").as_str().to_string();
 
         let attempt = commit_attempt(&repo, "would this author?");
-        assert_eq!(attempt.status.code(), Some(1), "{path}: commit must refuse");
+        assert_eq!(attempt.status.code(), Some(1), "{tag}: commit must refuse");
         assert_eq!(
             stderr_of(&attempt),
             format!("error: {reported}\n"),
-            "{path}: commit's message must be the reason status reported"
+            "{tag}: commit's message must be the reason status reported"
         );
     }
 }
