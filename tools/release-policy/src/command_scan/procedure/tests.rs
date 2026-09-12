@@ -1,6 +1,34 @@
 #![allow(clippy::unwrap_used)]
 
-use super::yaml_scripts;
+use super::{allowed, yaml_scripts};
+
+fn cargo_allowed(line: &str) -> bool {
+    let tokens: Vec<String> = line.split(' ').map(str::to_owned).collect();
+    allowed(&tokens, 0, "cargo")
+}
+
+/// RFC 141 increment 4: CI's `policy` job. `check` is accepted through `rust_policy`; the other three
+/// only in exactly the form the job spells, so a flag or a different subcommand is still refused.
+#[test]
+fn the_four_policy_gates_are_accepted_exactly() {
+    for gate in ["check", "boundary-check", "reference-check", "size-check"] {
+        assert!(
+            cargo_allowed(&format!(
+                "cargo run --locked -p prikk-release-policy -- {gate}"
+            )),
+            "{gate}"
+        );
+    }
+    for refused in [
+        "cargo run --locked -p prikk-release-policy -- boundary-check --graph",
+        "cargo run --locked -p prikk-release-policy -- size-check extra",
+        "cargo run -p prikk-release-policy -- reference-check",
+        "cargo run --locked -p prikk-release-policy -- release-evidence",
+        "cargo run --locked -p prikk-release-policy -- publish-check",
+    ] {
+        assert!(!cargo_allowed(refused), "{refused}");
+    }
+}
 
 #[test]
 fn extracts_scalar_sequence_flow_and_blocks() {

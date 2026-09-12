@@ -10,6 +10,7 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
                 || publication(tail).is_some()
                 || release_notes_procedure(tail)
                 || generate_installer_procedure(tail)
+                || policy_gate_procedure(tail)
                 || tail
                     .split_first()
                     .is_some_and(|(command, arguments)| cargo(command, arguments))
@@ -262,6 +263,25 @@ fn generate_installer_procedure(tail: &[String]) -> bool {
         "generate-installer",
         "dist",
     ]
+}
+
+/// RFC 141 increment 4: CI's `policy` job runs the three gates besides `check` (which `rust_policy`
+/// already accepts) in the invocation form EXECUTION-ORDER §6 rule 9 names. Exact match, no flag
+/// and no other subcommand -- `boundary-check --graph` is a read-only report, not a gate step, and
+/// is refused here like anything else the job does not spell.
+fn policy_gate_procedure(tail: &[String]) -> bool {
+    let [run, locked, package_flag, package, separator, gate] = tail else {
+        return false;
+    };
+    run == "run"
+        && locked == "--locked"
+        && package_flag == "-p"
+        && package == "prikk-release-policy"
+        && separator == "--"
+        && matches!(
+            gate.as_str(),
+            "boundary-check" | "reference-check" | "size-check"
+        )
 }
 
 fn cargo(command: &str, arguments: &[String]) -> bool {

@@ -10,6 +10,11 @@
   ],
   "references": [
     {
+      "path": ".github/workflows/ci.yml",
+      "classification": "live-invocation",
+      "command": "cargo run --locked -p prikk-release-policy -- check"
+    },
+    {
       "path": "docs/src/contributing/development.md",
       "classification": "live-invocation",
       "command": "cargo run --locked -p prikk-release-policy -- check"

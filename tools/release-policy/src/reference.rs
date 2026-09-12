@@ -11,7 +11,11 @@ use crate::error::{Error, Result};
 use crate::json;
 
 const INVENTORY_PATH: &str = "release/release-policy-command-inventory-v1.json";
-const REQUIRED_LIVE_PATHS: [&str; 3] = [
+// RFC 141 increment 4: CI's `policy` job runs `check` as a step, so the workflow is a live
+// invocation site like the three documents, and required like them -- a step deleted from the job
+// fails this gate rather than leaving the policy gates unrun in CI again.
+const REQUIRED_LIVE_PATHS: [&str; 4] = [
+    ".github/workflows/ci.yml",
     "docs/src/contributing/development.md",
     "docs/src/reference/release-compatibility.md",
     "release/README.md",

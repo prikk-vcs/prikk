@@ -53,6 +53,17 @@ fn fixture() -> (tempfile::TempDir, Inventory) {
     let path = "tools/release-policy/Cargo.toml";
     let command = rust_command();
     let mut references = Vec::new();
+    // RFC 141 increment 4: CI's `policy` job is a required live site; the fixture's workflow keeps
+    // its MSRV lines and gains the step.
+    let workflow = ".github/workflows/ci.yml";
+    let mut workflow_text = fs::read_to_string(temporary.path().join(workflow)).unwrap();
+    workflow_text.push_str(&format!("  policy:\n    steps:\n      - run: {command}\n"));
+    fs::write(temporary.path().join(workflow), workflow_text).unwrap();
+    references.push(Reference {
+        path: workflow.to_owned(),
+        classification: Classification::LiveInvocation,
+        command: command.clone(),
+    });
     for path in [
         "docs/src/contributing/development.md",
         "docs/src/reference/release-compatibility.md",

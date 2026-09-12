@@ -55,6 +55,29 @@ jobs:
           RUSTDOCFLAGS: -D rustdoc::private_intra_doc_links
         run: cargo doc --workspace --no-deps
 
+  # RFC 141 increment 4: the four release-policy gates, which until now ran only locally. Each step
+  # exits non-zero on findings, so a finding fails the job. It publishes nothing; publication stays
+  # manual. Tags are fetched for the changelog-history category and the size report's delta, and
+  # every target's dependencies are fetched because the boundary gate resolves the graph offline.
+  policy:
+    name: policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-tags: true
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch dependencies for every target
+        run: cargo fetch --locked
+      - name: Release policy
+        run: cargo run --locked -p prikk-release-policy -- check
+      - name: Boundary
+        run: cargo run --locked -p prikk-release-policy -- boundary-check
+      - name: References
+        run: cargo run --locked -p prikk-release-policy -- reference-check
+      - name: Size
+        run: cargo run --locked -p prikk-release-policy -- size-check
+
   msrv-1-85-0:
     name: msrv-1.85.0
     runs-on: ubuntu-latest
