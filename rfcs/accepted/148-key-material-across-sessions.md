@@ -199,3 +199,9 @@ refuse with nothing created. Open from this RFC: the 0.41.0 removal of the retir
    architect recommends it ship as **0.40.0's own headline**, with the setup-existing-repository fix
    (same command, same page), and that the stikk project be told in the next letter with the
    one-release window stated.
+
+**Rule 1's window closed 2026-09-12 at `4c30c854`** (ships in 0.41.0 with RFC 150's `key status`, per
+RFC 150 §4): the retired variables are unread; `legacy_variable_set` never published. Measured: a stale
+variable holding a different seed changes nothing, and `key status` names the directory's key.
+**RFC 148 is closed.** Remaining follow-up: the unread assertion also on Windows, first line of the
+0.41.0 release-prep handoff.
