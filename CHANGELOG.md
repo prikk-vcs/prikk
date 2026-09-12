@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.39.0 — 2026-09-12
 
 ### Added — `--format json` for `prikk log`, `prikk branch` and `prikk tag`
 
