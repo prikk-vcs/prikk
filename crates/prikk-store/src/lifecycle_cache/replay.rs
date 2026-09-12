@@ -30,14 +30,14 @@ use crate::text_span::{self, TextSpanResolutionFailure};
 
 /// Replay-local materialized text for edited text nodes, keyed by `node_id`. Transient to a replay
 /// pass; never part of the persisted lifecycle index (which stores only `blob_id` + `mode`).
-pub type TextCache = BTreeMap<NodeId, Vec<u8>>;
+pub(crate) type TextCache = BTreeMap<NodeId, Vec<u8>>;
 
 /// Structured lifecycle-replay error taxonomy (carry-forward P2-3).
 ///
 /// These are the classes a replay / fallback caller branches on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum LifecycleReplayError {
+pub(crate) enum LifecycleReplayError {
     /// A block referenced by the lineage walk is absent. Never treated as genesis (P2-1).
     MissingBlockInLineage {
         /// The block the lineage walk expected and did not find.
@@ -401,7 +401,7 @@ pub(in crate::lifecycle_cache) fn apply_one_block(
 /// `crate::lifecycle_cache::incremental`'s own one-block step hits exactly this gap and falls
 /// back to full replay rather than solving it (see its module doc); this function is DC-92's
 /// solution for the case where blocks are visited **in order**, so there is a real cache to carry.
-pub fn apply_one_block_with_text_cache(
+pub(crate) fn apply_one_block_with_text_cache(
     reader: &impl ObjectReader,
     block: &BlockPayload,
     state: &mut NodeLifecycleState,
@@ -425,7 +425,7 @@ pub fn apply_one_block_with_text_cache(
 /// deriving the state a new block's own transition would produce before that block has been signed
 /// or persisted. Takes the same carried `text_cache` its parent's lineage resolution accumulated,
 /// for the identical reason `apply_one_block_with_text_cache` needs it.
-pub fn apply_candidate_patches(
+pub(crate) fn apply_candidate_patches(
     reader: &impl ObjectReader,
     state: &mut NodeLifecycleState,
     text_cache: &mut TextCache,

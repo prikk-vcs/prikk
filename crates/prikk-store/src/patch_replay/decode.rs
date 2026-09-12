@@ -30,7 +30,7 @@ use tlv::TlvCursor;
 /// not discard the operation envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct DecodedPatchOperation {
+pub(crate) struct DecodedPatchOperation {
     pub(crate) op_seq: u32,
     pub(crate) kind: DecodedOperationKind,
 }
@@ -45,7 +45,7 @@ pub struct DecodedPatchOperation {
 /// then.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum DecodedOperationKind {
+pub(crate) enum DecodedOperationKind {
     /// Create a file from a persisted Blob.
     CreateFile {
         /// Repository-relative path.
@@ -130,7 +130,7 @@ pub enum DecodedOperationKind {
 /// Discriminated `DeleteNode` deletion preimage (§9.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum DecodedDeletePreimage {
+pub(crate) enum DecodedDeletePreimage {
     /// Text/binary file: old blob + old mode.
     File {
         /// Whether the deleted node was text or binary.
@@ -161,7 +161,7 @@ pub enum DecodedDeletePreimage {
 /// consecutive `RenamePath` runs and resolving each through
 /// `super::apply::apply_rename_batch` instead, per RFC 144 §4h.7 — this function only says the
 /// kind is *admitted*, not which code path admits it.
-pub fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Result<()> {
+pub(crate) fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Result<()> {
     match &operation.kind {
         DecodedOperationKind::CreateFile { .. }
         | DecodedOperationKind::DeleteNode {
@@ -212,7 +212,7 @@ pub(crate) fn applied_operation_kind_label(kind: &DecodedOperationKind) -> &'sta
 /// `RefStatePayload::decode_canonical`'s own shape (Patch schema 2 handoff): a present tag 2
 /// (`parent_patch_ids`) is legal-but-ignored at schema 1 (every patch already written keeps
 /// decoding unchanged) and refused outright at `PATCH_PARENT_IDS_RETIRED_SCHEMA` and above.
-pub fn decode_patch_operations(
+pub(crate) fn decode_patch_operations(
     bytes: &[u8],
     schema_version: u32,
 ) -> Result<Vec<DecodedPatchOperation>> {
@@ -295,7 +295,7 @@ pub fn decode_patch_operations(
 /// the field is legal-but-must-be-empty) or schema 2 (where the field is not legal at all). Do not
 /// reorder `accept.rs`, and do not read this function's continued existence as redundant with
 /// `decode_patch_operations`'s own schema-2 refusal -- it is broader, not duplicate.
-pub fn decode_patch_parent_ids(bytes: &[u8]) -> Result<Vec<ObjectId>> {
+pub(crate) fn decode_patch_parent_ids(bytes: &[u8]) -> Result<Vec<ObjectId>> {
     let mut cursor = TlvCursor::new(bytes);
     let mut parent_patch_ids = Vec::new();
     while let Some(field) = cursor.next_field()? {
@@ -316,7 +316,7 @@ pub fn decode_patch_parent_ids(bytes: &[u8]) -> Result<Vec<ObjectId>> {
 ///
 /// Refuses `Some("")` (§8.4: "absent" and "empty" must never both mean "no message") and a duplicate
 /// tag 6, exactly as `PatchPayload::validate` does on the write side.
-pub fn decode_patch_message(bytes: &[u8], schema_version: u32) -> Result<Option<String>> {
+pub(crate) fn decode_patch_message(bytes: &[u8], schema_version: u32) -> Result<Option<String>> {
     let mut cursor = TlvCursor::new(bytes);
     let mut message = None;
     while let Some(field) = cursor.next_field()? {

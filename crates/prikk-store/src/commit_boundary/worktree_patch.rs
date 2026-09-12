@@ -22,9 +22,7 @@ mod node_authoring;
 /// it outside `commit_boundary`. The module itself stays private (RFC 131 §6d.3) and `AuthorError`
 /// stays `pub(in crate::commit_boundary)`; what crosses the boundary is the *decision*, already
 /// rendered, so no caller outside can reconstruct or diverge from the rule.
-// RFC 149 §5.2b: widened with the items; `node_authoring` itself stays private, so what crosses
-// is still only the decision these two render, not the rule behind it.
-pub use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
+pub(crate) use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
 
 /// Result of authoring and appending a node-addressed patch from worktree changes.
 ///

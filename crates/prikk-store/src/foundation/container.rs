@@ -115,7 +115,7 @@ impl ContainerReplay {
 }
 
 /// Encode one object envelope as a durable container record for `object_type`'s container.
-pub fn encode_container_record(
+pub(crate) fn encode_container_record(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
@@ -125,8 +125,8 @@ pub fn encode_container_record(
 
 /// Encode one container record exactly as the writer would, for a test that needs the bytes without
 /// the write.
-#[cfg(any(test, feature = "test-support"))]
-pub fn encode_container_record_for_test(
+#[cfg(test)]
+pub(crate) fn encode_container_record_for_test(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {

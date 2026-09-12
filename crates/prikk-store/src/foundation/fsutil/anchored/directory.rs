@@ -55,11 +55,8 @@ type Authority = PathOnlyAuthority;
 /// every other platform, at a validated path alone with no per-component validation at all
 /// (`PathOnlyAuthority`).
 #[derive(Clone)]
-// RFC 149 §6c closure: a type in the signature of an item the test-support surface exposes.
-// Same rule as contract entries 42-46 -- a `pub` item returning or taking a private type is not
-// reachable in any useful sense.
 #[non_exhaustive]
-pub struct MutationRoot {
+pub(crate) struct MutationRoot {
     path: Arc<PathBuf>,
     authority: Authority,
 }

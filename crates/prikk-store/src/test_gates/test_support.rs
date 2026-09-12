@@ -1,16 +1,5 @@
 //! Shared test fixtures and cross-module test harnesses.
 //!
-//! **Reachable under `test-support` as well as `cfg(test)`** (RFC 149 §6b), because the operations
-//! layer's tests move to `prikk-operations` and their fixtures cannot follow them. Only the
-//! fixtures a moving test actually reaches are re-exported from `lib.rs`; the rest are `pub` for
-//! uniformity within this module and dead in a feature-only build, which is what the `allow` below
-//! states. Adding a name to `lib.rs`'s block is a decision, exactly as it is for the
-//! operations-layer contract.
-
-// Under `cfg(test)` every fixture here has a caller. In a `--features test-support` build with no
-// tests compiled, only the re-exported ones do -- and a fixture nobody has needed cross-crate yet
-// is not a defect.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use prikk_object::{
     BlockKind, BlockPayload, CanonicalEncode, CreateFile, CreateSymlink, EditText, MerkleRoot,
@@ -23,7 +12,7 @@ use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryL
 use prikk_object::{BlobKind, BlobPayload};
 
 /// A signed `Patch` envelope with one create operation, for fixtures that only need a valid patch.
-pub fn signed_patch_envelope() -> ObjectEnvelope {
+pub(crate) fn signed_patch_envelope() -> ObjectEnvelope {
     let blob_id = signed_patch_blob_envelope().object_id();
     let payload = PatchPayload {
         operations: vec![Operation {
@@ -51,14 +40,14 @@ pub fn signed_patch_envelope() -> ObjectEnvelope {
 }
 
 /// The `Blob` a [`signed_patch_envelope`] refers to, signed.
-pub fn signed_patch_blob_envelope() -> ObjectEnvelope {
+pub(crate) fn signed_patch_blob_envelope() -> ObjectEnvelope {
     signed_text_blob_envelope(b"patch fixture\n")
 }
 
 /// RFC 123 §8: a schema-4 patch carrying `message`, otherwise identical in shape to
 /// `signed_patch_envelope` above -- used to prove `history::load_ref_history`'s `patch_messages`
 /// surfaces a real message, the counterpart to that function's own `message: None` (schema 1).
-pub fn signed_patch_envelope_with_message(message: &str) -> ObjectEnvelope {
+pub(crate) fn signed_patch_envelope_with_message(message: &str) -> ObjectEnvelope {
     let blob_id = signed_patch_blob_envelope().object_id();
     let payload = PatchPayload {
         operations: vec![Operation {
@@ -86,7 +75,7 @@ pub fn signed_patch_envelope_with_message(message: &str) -> ObjectEnvelope {
 }
 
 /// Return a supported rollback-marked Patch envelope for sealed-history classification tests.
-pub fn rollback_patch_envelope() -> ObjectEnvelope {
+pub(crate) fn rollback_patch_envelope() -> ObjectEnvelope {
     let blob_id = rollback_patch_blob_envelope().object_id();
     let payload = PatchPayload {
         operations: vec![Operation {
@@ -114,7 +103,7 @@ pub fn rollback_patch_envelope() -> ObjectEnvelope {
 }
 
 /// The `Blob` a rollback `Patch` refers to, signed.
-pub fn rollback_patch_blob_envelope() -> ObjectEnvelope {
+pub(crate) fn rollback_patch_blob_envelope() -> ObjectEnvelope {
     signed_text_blob_envelope(b"rollback fixture\n")
 }
 
@@ -127,7 +116,7 @@ fn signed_text_blob_envelope(content: &[u8]) -> ObjectEnvelope {
 }
 
 /// A signed `Block` with no patches -- the smallest publishable block.
-pub fn signed_empty_block_envelope() -> ObjectEnvelope {
+pub(crate) fn signed_empty_block_envelope() -> ObjectEnvelope {
     let payload = BlockPayload {
         parent_block_ids: Vec::new(),
         kind: BlockKind::Root,
@@ -146,7 +135,7 @@ pub fn signed_empty_block_envelope() -> ObjectEnvelope {
 }
 
 /// A signed `RefState` envelope naming `block_id` as the ref tip.
-pub fn signed_ref_state_envelope(
+pub(crate) fn signed_ref_state_envelope(
     ref_name: &str,
     previous_ref_state_id: Option<ObjectId>,
     target_object_id: ObjectId,
@@ -170,7 +159,7 @@ pub fn signed_ref_state_envelope(
 }
 
 /// A signed `RefUpdate` envelope recording one ref moving to `ref_state_id`.
-pub fn signed_ref_update_envelope(
+pub(crate) fn signed_ref_update_envelope(
     ref_name: &str,
     old_ref_state_id: Option<ObjectId>,
     new_ref_state_id: ObjectId,
@@ -195,12 +184,12 @@ pub fn signed_ref_update_envelope(
 }
 
 /// A deterministic `ObjectId` derived from `label`, for fixtures that need a stable id nothing stores.
-pub fn sample_object_id(label: &str) -> ObjectId {
+pub(crate) fn sample_object_id(label: &str) -> ObjectId {
     ObjectId::from_canonical_payload(ObjectType::Blob, 1, label.as_bytes())
 }
 
 /// A syntactically valid signature that verifies against nothing.
-pub fn dummy_signature() -> Signature {
+pub(crate) fn dummy_signature() -> Signature {
     Signature {
         algorithm: SignatureAlgorithm::Ed25519,
         key_id: "author-key".to_string(),
@@ -211,7 +200,7 @@ pub fn dummy_signature() -> Signature {
 }
 
 /// A rollback-purpose AUTHOR signature, for fixtures exercising the rollback authority rules.
-pub fn rollback_author_signature() -> Signature {
+pub(crate) fn rollback_author_signature() -> Signature {
     Signature {
         algorithm: SignatureAlgorithm::Ed25519,
         key_id: "rollback-author-key".to_string(),
@@ -222,7 +211,7 @@ pub fn rollback_author_signature() -> Signature {
 }
 
 /// The retired rollback marker-key signature, kept so the refusal of it can still be tested.
-pub fn legacy_rollback_marker_signature() -> Signature {
+pub(crate) fn legacy_rollback_marker_signature() -> Signature {
     Signature {
         algorithm: SignatureAlgorithm::Ed25519,
         key_id: "dev-placeholder-rollback-author".to_string(),
@@ -234,7 +223,7 @@ pub fn legacy_rollback_marker_signature() -> Signature {
 
 /// A MAINTAINER-role fixture signature. Distinct from `maintainer_signing::maintainer_signature`,
 /// which signs for real -- this one is a value, not a signer.
-pub fn maintainer_signature() -> Signature {
+pub(crate) fn maintainer_signature() -> Signature {
     Signature {
         algorithm: SignatureAlgorithm::Ed25519,
         key_id: "maintainer-key".to_string(),
@@ -279,7 +268,7 @@ pub(crate) fn create_fifo_for_test(path: &std::path::Path, mode: u32) -> std::io
 
 /// DC-84: routed through `unique_suffix()` below, which is the only part that actually guarantees
 /// collision-freedom under thread contention.
-pub fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+pub(crate) fn unique_temp_dir(name: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!("prikk-pr014-{name}-{}", unique_suffix()));
     assert!(std::fs::create_dir_all(&path).is_ok());
@@ -306,21 +295,16 @@ fn unique_suffix() -> String {
 }
 
 mod rename_history;
-// Not in the test-support surface: no movable family's test reaches these two, so they stay
-// crate-internal. RFC 149 §6b exposes what was measured, not the module. `cfg(test)` on the
-// re-export, not just the module, because in a feature-only build their only consumers -- this
-// crate's own tests -- are not compiled.
-#[cfg(test)]
 pub(crate) use rename_history::{
     publish_two_nodes_then_rename_cycle_block,
     publish_two_nodes_then_rename_onto_occupied_path_block,
 };
 
 mod snapshot_history;
-pub use snapshot_history::publish_snapshot_then_patch_block;
+pub(crate) use snapshot_history::publish_snapshot_then_patch_block;
 
 /// Publish one block creating a text node and a second editing it, and return the sealed ids.
-pub fn publish_text_create_then_edit_block(
+pub(crate) fn publish_text_create_then_edit_block(
     layout: &RepositoryLayout,
     old: &[u8],
     new: &[u8],
@@ -528,12 +512,8 @@ pub(crate) fn publish_binary_create_then_replace(
 // refuses the crate. The dependency is on a pre-existing platform gate elsewhere, which is why the
 // increment that added this carried no `#[cfg(target_os)]` of its own and still broke both
 // non-Linux jobs.
-//
-// RFC 149 §6c took that trade: `plan_authored_text_span_v1` and `AuthoredTextSpanV1` are reachable
-// under the feature, `left_anchor`/`right_anchor` are untouched (they were already production), and
-// the platform half of this gate is unchanged.
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-pub fn publish_text_create_then_edit_block_v1(
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn publish_text_create_then_edit_block_v1(
     layout: &RepositoryLayout,
     old: &[u8],
     new: &[u8],
@@ -616,7 +596,7 @@ pub fn publish_text_create_then_edit_block_v1(
 /// `patch_replay::decode::ensure_apply_supported`) pending a later increment's inverse-planning
 /// support, which is why `patch_inverse`/`rollback_preview`/`rollback_draft`'s own
 /// fails-closed-on-unsupported-operation tests still use this fixture and still pass.
-pub fn publish_text_edit_then_rename_path_block(
+pub(crate) fn publish_text_edit_then_rename_path_block(
     layout: &RepositoryLayout,
 ) -> prikk_error::Result<()> {
     let mut object_store = FileObjectStore::new(layout.clone());
@@ -800,7 +780,7 @@ pub(crate) fn publish_text_edit_then_unsupported_create_symlink_block(
 }
 
 /// Write one `Blob` through the object store and return its id.
-pub fn write_blob(
+pub(crate) fn write_blob(
     store: &mut FileObjectStore,
     bytes: &[u8],
 ) -> prikk_error::Result<prikk_object::ObjectId> {
@@ -811,7 +791,7 @@ pub fn write_blob(
 }
 
 /// A signed `Block` over the given patches, with the given parents.
-pub fn signed_block(
+pub(crate) fn signed_block(
     kind: BlockKind,
     parent_block_ids: Vec<prikk_object::ObjectId>,
     patch_ids: Vec<prikk_object::ObjectId>,
@@ -827,7 +807,7 @@ pub fn signed_block(
 }
 
 /// A signed `Block` carrying an explicit state root, for fixtures that assert on it.
-pub fn signed_block_with_state_root(
+pub(crate) fn signed_block_with_state_root(
     kind: BlockKind,
     parent_block_ids: Vec<prikk_object::ObjectId>,
     patch_ids: Vec<prikk_object::ObjectId>,

@@ -13,8 +13,7 @@ use crate::signature_diagnostics::{
 
 mod scan;
 
-// RFC 149 §5.2b: a waypoint on the operations-layer contract's path to `scan`.
-pub use scan::ensure_ref_target_valid;
+pub(crate) use scan::ensure_ref_target_valid;
 pub use scan::{RefFileOutcome, RefFileStatus};
 
 use scan::{LogState, PointerState, read_logs, read_pointers};
@@ -72,7 +71,7 @@ pub struct RefItemOutcome {
 /// never calls it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct RefVerification {
+pub(crate) struct RefVerification {
     /// Pointer files scanned under `refs/by-id/`.
     pub pointer_count: usize,
     /// Records read from the shared ref log container.
@@ -123,7 +122,7 @@ impl RefVerification {
 /// Read-only by construction (RFC 111 §6.1): it never writes an object, and it takes its own decoded
 /// index snapshot rather than sharing the repository verifier's, so the two cannot disagree about
 /// what they read.
-pub fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> {
+pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> {
     // RFC 111 §6.1: `verify_refs` is read-only (never calls `write_object`), so it takes its own
     // decoded index snapshot here rather than sharing `verify_repository_with_options`'s -- they are
     // two separate top-level constructions today (this one predates this change), and unifying them

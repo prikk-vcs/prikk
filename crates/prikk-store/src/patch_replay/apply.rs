@@ -21,7 +21,7 @@ use super::read::read_blob_bytes_with_kind;
 /// most recent operation left it with. The unit a materializing caller writes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ReplayLiveNode {
+pub(crate) struct ReplayLiveNode {
     pub(crate) path: String,
     pub(crate) kind: NodeKind,
     /// Current mode bits, as recorded by the operation that most recently set them

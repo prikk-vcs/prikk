@@ -230,7 +230,7 @@ pub fn prepare_patch_plan_content_report(
 /// operations, and never crosses the object-format boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ReplayManifestEntry {
+pub(crate) struct ReplayManifestEntry {
     /// Validated repository-relative path.
     pub(crate) path: RepoPath,
     /// File content bytes.
@@ -256,7 +256,7 @@ pub struct ReplayManifestEntry {
 /// `crate::snapshot::SnapshotManifest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ReplayManifest {
+pub(crate) struct ReplayManifest {
     /// File entries, sorted by path.
     pub(crate) files: Vec<ReplayManifestEntry>,
 }
@@ -273,7 +273,7 @@ impl ReplayManifest {
 /// In-memory replay result used by patch checkout materialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct PatchReplaySnapshot {
+pub(crate) struct PatchReplaySnapshot {
     /// Ref used as the replay target.
     pub(crate) ref_name: String,
     /// Target block ID.
@@ -301,7 +301,7 @@ pub struct PatchReplaySnapshot {
 /// A file explicitly deleted while replaying the supported patch subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct PatchReplayDeletedFile {
+pub(crate) struct PatchReplayDeletedFile {
     /// Validated repository-relative path that was removed.
     pub(crate) path: RepoPath,
     /// Blob ID recorded as the delete precondition.
@@ -322,7 +322,7 @@ pub struct PatchReplayDeletedFile {
 /// bundle's own candidate operations, applied onto a copy of the local ref's current replayed
 /// state rather than operations read patch-by-patch while walking a block chain -- "one replay of
 /// current state, plus the bundle's own patches applied in memory," in the design's own words.
-pub fn apply_operation_sequence(
+pub(crate) fn apply_operation_sequence(
     object_store: &impl ObjectReader,
     files: &mut BTreeMap<String, Vec<u8>>,
     live_nodes: &mut BTreeMap<NodeId, apply::ReplayLiveNode>,
@@ -361,7 +361,7 @@ pub fn apply_operation_sequence(
 }
 
 /// Replay the supported operation subset into a validated in-memory manifest.
-pub fn replay_supported_patch_chain(
+pub(crate) fn replay_supported_patch_chain(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchReplaySnapshot> {
@@ -518,7 +518,7 @@ pub(crate) fn resolve_worktree_baseline(
 /// baseline (or an empty genesis state), with any already-queued (unsealed) patches for this ref
 /// folded on top (DC-66) exactly as `commit` folds them.
 #[non_exhaustive]
-pub struct FoldedWorktreeBaseline {
+pub(crate) struct FoldedWorktreeBaseline {
     /// Baseline lifecycle state, with the active queue folded on top when it belongs to this ref.
     pub(crate) state: NodeLifecycleState,
     /// `Some((baseline_block, horizon))` when the ref is published; `None` for a genesis baseline.
@@ -556,7 +556,7 @@ pub struct FoldedWorktreeBaseline {
 /// own cache afterward for `plan_edit_text`'s own text materialization — folding into a cache the
 /// caller keeps, not a throwaway internal to this call, so that later reuse still sees what folding
 /// already materialized. `worktree-status` has no further use for it and passes a fresh, empty one.
-pub fn resolve_folded_worktree_baseline(
+pub(crate) fn resolve_folded_worktree_baseline(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     ref_name: &str,

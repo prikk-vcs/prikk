@@ -1,19 +1,11 @@
 //! Test-only failure seams for required filesystem boundaries.
 
-// RFC 149 §6b: the failpoint machinery compiles under `test-support` as well as `cfg(test)`,
-// because `patch_checkout`'s tests use it and they move to `prikk-operations`. Only `Point` and
-// `fail_once` become `pub`; everything else here stays crate-internal and merely exists in one
-// more configuration.
-// Under `cfg(test)` every hook here has a caller; in a feature-only build only the two the
-// operations layer drives do.
-#![cfg_attr(not(test), allow(dead_code))]
-
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 use prikk_error::PrikkError;
 use prikk_error::Result;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 use std::cell::RefCell;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 use std::sync::{Arc, Barrier};
 
 // DC-98 Stage 2, classification rows #10-#14: these five variants inject at directory-entry
@@ -22,14 +14,14 @@ use std::sync::{Arc, Barrier};
 // Linux/macOS specifically rather than left reachable-but-uncalled on Windows, so the absence is a
 // compile-time fact matching the classification, not a silent dead-code warning `-D warnings` would
 // otherwise catch on every Windows build once this module compiles there too.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 /// One required filesystem boundary a test can make fail exactly once.
 ///
 /// Each variant names the syscall-level point the anchored writer must survive a failure at; the
 /// platform-gated ones exist only where that boundary exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Point {
+pub(crate) enum Point {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     /// The fsync of a newly created directory's parent.
     CreatedDirectoryParentSync,
@@ -63,7 +55,7 @@ pub enum Point {
     CleanupDirectorySync,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 std::thread_local! {
     static NEXT: RefCell<Option<(Point, usize)>> = const { RefCell::new(None) };
     static DIRECTORY_CREATE_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
@@ -71,18 +63,18 @@ std::thread_local! {
     static ANCHOR_VERIFICATION_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 /// Arm `point` to fail on its next occurrence, once, on this thread.
-pub fn fail_once(point: Point) {
+pub(crate) fn fail_once(point: Point) {
     fail_after(point, 0);
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub(crate) fn fail_after(point: Point, matching_calls_to_skip: usize) {
     NEXT.with(|next| *next.borrow_mut() = Some((point, matching_calls_to_skip)));
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
     DIRECTORY_CREATE_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }
@@ -93,7 +85,7 @@ pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<B
 // directory-sync `Point` variants (this module's own comment on `Point`, above) -- the compiler is
 // the reason, not symmetry with `DIRECTORY_CREATE_BARRIER`'s cross-platform gating.
 #[cfg(target_os = "windows")]
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub(in crate::foundation::fsutil) fn set_anchor_verification_barrier(barrier: Arc<Barrier>) {
     ANCHOR_VERIFICATION_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }
@@ -211,7 +203,7 @@ fn check_test_point(point: TestPoint) -> Result<()> {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl From<TestPoint> for Point {
     fn from(value: TestPoint) -> Self {
         match value {
@@ -286,7 +278,7 @@ fn wait_at_test_barrier(barrier: TestBarrier) {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 fn check(point: Point) -> Result<()> {
     NEXT.with(|next| {
         let mut next = next.borrow_mut();

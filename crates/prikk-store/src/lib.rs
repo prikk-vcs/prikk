@@ -91,11 +91,7 @@ mod worktree_status;
 // gates, evidence harnesses and shared fixtures, not production code -- and are now one directory
 // (`test_gates/`) rather than eight top-level entries. `rfc111_seal_simulation` is production and
 // stays where it was.
-// RFC 149 §6b: reachable under `test-support` as well as `cfg(test)`, because the operations
-// layer's tests move to another crate and their fixtures cannot follow them. **Only
-// `test_support` is exposed** -- every gate inside stays `cfg(test)`, since a gate is a test of
-// this crate and has no meaning to a consumer.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 mod test_gates;
 
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
@@ -196,16 +192,6 @@ pub use refs::{
     force_ref_pointer_to_arbitrary_state_for_test_support,
     remove_ref_pointer_entry_for_test_support,
 };
-// RFC 149 increment 1: the seven `refs` helpers the operations layer's own tests reach. They are
-// test-support by every measure -- no surface's production path touches one -- so they go behind the
-// feature rather than into the operations-layer contract below, and never become public API.
-#[cfg(feature = "test-support")]
-pub use refs::{
-    append_log_record_for_signature_test, append_torn_ref_log_tail_for_test,
-    encode_log_record_for_test, encode_ref_container_record_for_test,
-    remove_pointer_entries_for_test, write_ref_pointer_candidate_for_test,
-    write_ref_pointer_entry_with_explicit_key_for_test,
-};
 pub use rename_declaration::{
     DeclarationRecordOutcome, RenameDeclaration, clear_rename_declarations,
     read_rename_declarations, record_rename_declaration,
@@ -257,141 +243,3 @@ pub use worktree_status::{
     WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,
     worktree_status,
 };
-
-// ---------------------------------------------------------------------------------------------
-// Operations-layer contract (RFC 149 §5.2b)
-//
-// **One named set, not a drift.** These are the items the operations layer -- the 26 modules RFC 149
-// moves to `prikk-operations` -- reaches inside this crate's core (`commit_boundary`,
-// `lifecycle_cache`, `patch_replay`, `refs`, `trust`). They are `pub` because that layer will live in
-// another crate, and they are listed here, together, so that the cost of the cut is one reviewable
-// block rather than a `pub` scattered across thirteen files.
-//
-// Derived from the step-2b census, not from what happened to compile: every entry is an item a
-// surface module actually references today, resolved to its declaration. `trust` appears nowhere
-// below because everything the surfaces reach in it was already public.
-//
-// **Adding to this block is a decision, not a fix.** An item that needs `pub` and is not here means
-// the census missed a dependency; say so and measure it rather than appending quietly.
-//
-// **`#[non_exhaustive]` on every enum and struct among them** (RFC 147 ruling 2), applied at the
-// declaration: a consumer in another crate reads these, it does not construct or exhaustively match
-// them, and the first time it wants to is a conversation rather than a silent break.
-//
-// **Entries 42-46 are the closure, not an extension** (RFC 149 §5.2c). The census measured what the
-// surfaces *reference*; a crate boundary is crossed by types in *signatures*, and a caller that
-// writes `verify_refs(layout)?` and matches the result never spells `RefVerification` anywhere. Five
-// types were reachable only that way -- `RefVerification`, `PointerIndexReplay`,
-// `PatchReplaySnapshot`, `FoldedWorktreeBaseline`, `TextSpanResolutionFailure` -- and increment 1
-// stopped rather than widen them unasked. Ruled in: a `pub` function returning a private type is not
-// a contract at all. `TextSpanResolutionFailure` crosses from `text_span`, which is infrastructure
-// that stays here; it belongs with the replay error that carries it.
-//
-// `cargo check --workspace --all-targets --all-features` is the closure test: it names every type a
-// public signature reaches and nothing else. Run it before adding to this block, not after.
-pub use commit_boundary::active::{
-    prepare_empty_active_ref_for_append, read_active_ref_metadata_for,
-};
-pub use commit_boundary::worktree_patch::{WorktreeEntryShape, authoring_refusal_reason};
-pub use lifecycle_cache::incremental::verify_divergence;
-pub use lifecycle_cache::replay::{
-    LifecycleReplayError, TextCache, apply_candidate_patches, apply_one_block_with_text_cache,
-};
-pub use lifecycle_cache::{
-    ReplayDerivedLifecycleState, materialize_edited_text, replay_derived_state,
-};
-pub use patch_replay::apply::ReplayLiveNode;
-pub use patch_replay::decode::{
-    DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_message,
-    decode_patch_operations, decode_patch_parent_ids, ensure_apply_supported,
-};
-pub use patch_replay::read::{load_snapshot_files, read_block, read_patch, single_parent_chain};
-pub use patch_replay::{
-    FoldedWorktreeBaseline, PatchReplayDeletedFile, PatchReplaySnapshot, ReplayManifest,
-    ReplayManifestEntry, apply_operation_sequence, replay_supported_patch_chain,
-    resolve_folded_worktree_baseline,
-};
-pub use refs::{
-    PointerIndexEntry, PointerIndexReplay, RefVerification, encode_pointer_index_record,
-    ensure_no_incomplete_publication, ensure_ref_target_valid, read_current_ref_tip_block,
-    replay_pointer_index, verify_refs,
-};
-pub use text_span::TextSpanResolutionFailure;
-
-// ---------------------------------------------------------------------------------------------
-// Test-support surface (RFC 149 §6b)
-//
-// **The fixtures the operations layer's own tests reach, and nothing else.** When a module moves to
-// `prikk-operations`, its tests move with it (RFC 149 §5.3) -- but `test_gates::test_support` stays
-// here, and a `#[cfg(test)]` module is reachable from no other crate at any visibility. So the
-// fixtures those tests use are exposed under the existing `test-support` feature, the same
-// mechanism the ten `refs` helpers use.
-//
-// Derived by reading the twenty-one movable families' test files, not by exposing the module
-// wholesale: `test_support` has more fixtures than these, and the ones nobody moved a test against
-// are deliberately absent. **Adding a name here is a decision**, and the one that says whether it is
-// needed is a compile of `prikk-operations`' tests, not a convenience.
-//
-// Never in a shipped build: the feature is non-default and nothing in `src/` may reference it
-// (`prikk-store`'s own `[features]` comment states that rule).
-#[cfg(feature = "test-support")]
-pub use test_gates::test_support::{
-    dummy_signature, legacy_rollback_marker_signature,
-    maintainer_signature as fixture_maintainer_signature, publish_snapshot_then_patch_block,
-    publish_text_create_then_edit_block, publish_text_edit_then_rename_path_block,
-    rollback_author_signature, rollback_patch_blob_envelope, rollback_patch_envelope,
-    sample_object_id, signed_block, signed_block_with_state_root, signed_empty_block_envelope,
-    signed_patch_blob_envelope, signed_patch_envelope, signed_patch_envelope_with_message,
-    signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir, write_blob,
-};
-// The lower-layer helpers a moving test reaches, beyond the fixtures: the index and container
-// record editors a durability test needs, and the anchored-write failpoints `patch_checkout`'s
-// tests drive. The failpoints follow their own pre-existing platform gate rather than widening it.
-#[cfg(feature = "test-support")]
-pub use foundation::container::encode_container_record_for_test;
-#[cfg(all(
-    feature = "test-support",
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
-))]
-pub use foundation::fsutil::{TestFailPoint, fail_once_for_test};
-
-// RFC 149 §6c: the production items a moving test calls directly. **Under the feature, not in the
-// operations-layer contract** -- a test reaching an internal function is not the operations layer
-// depending on it, and the two sets must not blur: the contract is what `prikk-operations` compiles
-// against, this is what its tests do.
-#[cfg(feature = "test-support")]
-pub use author::author_key_index::{
-    AuthorKeyEntry, force_conflicting_author_key_entry_for_test, record_author_key_material,
-};
-#[cfg(feature = "test-support")]
-pub use foundation::container::encode_container_record;
-#[cfg(feature = "test-support")]
-pub use foundation::fsutil::{len_to_u64, read_file_if_exists};
-#[cfg(feature = "test-support")]
-pub use foundation::generation::resolve_live_slot;
-#[cfg(feature = "test-support")]
-pub use foundation::index::{IndexEntry, encode_index_record};
-#[cfg(feature = "test-support")]
-pub use foundation::layout::{persisted_object_types, ref_name_key_bytes};
-#[cfg(feature = "test-support")]
-pub use node::node_lifecycle::NodeLifecycleState;
-#[cfg(feature = "test-support")]
-pub use text_span::{
-    derive_inverse_edit_text, plan_authored_text_span, resolve_text_span, splice_text,
-};
-#[cfg(feature = "test-support")]
-pub use wal::{WalRecordStatus, encode_record_for_test};
-// The v1 fixture and the planner behind it, Linux-only as the fixture's only caller is.
-#[cfg(all(feature = "test-support", target_os = "linux"))]
-pub use test_gates::test_support::publish_text_create_then_edit_block_v1;
-#[cfg(feature = "test-support")]
-pub use text_span::{AuthoredTextSpanV1, plan_authored_text_span_v1};
-// The closure of the two blocks above: types a feature-gated signature names. Same rule as contract
-// entries 42-46, and found the same way -- `cargo build --features test-support` reports each one as
-// "more private than" the item that exposes it.
-#[cfg(feature = "test-support")]
-pub use foundation::fsutil::MutationRoot;
-#[cfg(feature = "test-support")]
-pub use foundation::index::remove_index_entry_for_test;
-#[cfg(feature = "test-support")]
-pub use text_span::{AuthoredTextSpan, TextSpanSelectionError, TextSpanSpliceError};

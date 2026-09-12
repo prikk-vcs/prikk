@@ -339,7 +339,6 @@ fn verify_repository_detects_ref_container_record_key_mismatch() -> Result<()> {
 /// (`refs/publication.rs:164`) rejects exactly this disagreement between `publication.ref_name`
 /// and the `RefState`'s internal name before anything is ever written, so this fixture cannot be
 /// built through the public API at all -- it needs `refs::write_ref_pointer_candidate_for_test`
-/// directly (a re-export behind `cfg(test)` or the `test-support` feature, alongside the other
 /// container and pointer-index test helpers in `refs.rs`, for the same reason:
 /// the production write path enforces the very invariant this check exists to catch when it's
 /// violated some other way). The candidate is written for `heads/other`, pointing at `heads/

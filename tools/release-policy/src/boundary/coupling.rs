@@ -89,7 +89,7 @@ const UPPER_LAYER: [&str; 20] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 30] = [
+const LOWER_LAYER: [&str; 29] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -124,10 +124,6 @@ const LOWER_LAYER: [&str; 30] = [
     "rfc111_seal_simulation",
     "state_root",
     "worktree",
-    // Test fixtures. In the production graph only while `test_support` is reachable under the
-    // `test-support` feature (RFC 149 §6b); when that returns to `cfg(test)`, this entry must leave
-    // with it, or the gate reports it as listed but absent.
-    "test_gates",
 ];
 
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,

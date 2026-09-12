@@ -72,7 +72,7 @@ pub(crate) mod incremental;
 /// against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ReplayDerivedLifecycleState {
+pub(crate) struct ReplayDerivedLifecycleState {
     baseline_block_id: ObjectId,
     state: NodeLifecycleState,
 }
@@ -108,7 +108,7 @@ impl ReplayDerivedLifecycleState {
 /// it through `ReplayDerivedLifecycleState::from_replay`, which validates internal consistency
 /// before the state can be used as the reference truth. This is the only sanctioned way to obtain
 /// a `ReplayDerivedLifecycleState`.
-pub fn replay_derived_state(
+pub(crate) fn replay_derived_state(
     reader: &impl ObjectReader,
     baseline_block_id: ObjectId,
     lineage_horizon_id: ObjectId,
@@ -123,7 +123,7 @@ pub fn replay_derived_state(
 /// invariant this implements. Returns `Ok(None)` if the node was never edited (nothing was
 /// materialized for it — callers should already have a real stored blob to fall back to in that
 /// case, since only `EditText` produces an unstored identity).
-pub fn materialize_edited_text(
+pub(crate) fn materialize_edited_text(
     reader: &impl ObjectReader,
     baseline_block_id: ObjectId,
     lineage_horizon_id: ObjectId,

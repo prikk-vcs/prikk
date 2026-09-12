@@ -145,7 +145,7 @@ impl From<AuthorError> for PrikkError {
 /// and `worktree_status` holds a `symlink_metadata` it already read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum WorktreeEntryShape {
+pub(crate) enum WorktreeEntryShape {
     /// An ordinary regular file: authorable.
     Regular,
     /// A symlink, by `symlink_metadata` -- never followed.
@@ -219,7 +219,7 @@ pub(in crate::commit_boundary) fn authoring_refusal(
 /// different text the moment the class changed. Converting here is what makes the agreement
 /// mechanical instead of coincidental: `commit`'s stderr is `"error: "` followed by exactly this
 /// string, which is what the status-and-commit-agree test asserts.
-pub fn authoring_refusal_reason(
+pub(crate) fn authoring_refusal_reason(
     path: &str,
     baseline_kind: Option<NodeKind>,
     shape: WorktreeEntryShape,
