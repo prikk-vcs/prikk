@@ -185,7 +185,7 @@ pub use recognition_claim::{
 pub use refs::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord, RefLogReplay,
     RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate, RefStore,
-    resolve_ref_tip_block, validate_local_branch_ref, validate_local_tag_ref,
+    current_branch, resolve_ref_tip_block, validate_local_branch_ref, validate_local_tag_ref,
 };
 #[cfg(feature = "test-support")]
 pub use refs::{

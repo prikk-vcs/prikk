@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use prikk_store::{DEFAULT_CHECKOUT_REF, RepoPath};
+use prikk_store::RepoPath;
 
 use super::optional_path_or_current;
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
@@ -13,7 +13,7 @@ pub(crate) struct CheckoutArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
     /// Ref to inspect.
-    pub(crate) ref_name: String,
+    pub(crate) ref_name: Option<String>,
     /// Checkout mode.
     pub(crate) mode: CheckoutMode,
     /// Whether `--format json` was given. RFC 143: meaningful only for `--patch-plan`; rejected
@@ -131,7 +131,7 @@ pub(crate) fn parse_checkout_args(
     }
     Ok(CheckoutArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
         mode,
         format_json,
         content_paths,

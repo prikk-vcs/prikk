@@ -39,8 +39,7 @@ use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
 use crate::stdout::println;
 use prikk_store::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, DEFAULT_CHECKOUT_REF, export_bundle, import_bundle,
-    preview_bundle, verify_bundle,
+    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, preview_bundle, verify_bundle,
 };
 
 /// Dispatch `prikk bundle [export|import|preview|verify]`.
@@ -129,8 +128,10 @@ fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
         )
     })?;
     let options = bundle_import_options_from_env()?;
-    let report = preview_bundle(&layout, &bytes, &options, &parsed.ref_name)
-        .map_err(|err| err.to_string())?;
+    // RFC 151 §2.2: the local branch the preview compares against, not anything the bundle carries.
+    let ref_name = crate::current_branch::resolve_ref(&layout, parsed.ref_name)?;
+    let report =
+        preview_bundle(&layout, &bytes, &options, &ref_name).map_err(|err| err.to_string())?;
     if parsed.format_json {
         print_bundle_preview_json(&report);
     } else {
@@ -141,7 +142,7 @@ fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
 
 struct PreviewArgs {
     input: PathBuf,
-    ref_name: String,
+    ref_name: Option<String>,
     format_json: bool,
 }
 
@@ -181,7 +182,7 @@ fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, Cli
         input.ok_or_else(|| CliError::Usage("bundle preview requires --input".to_string()))?;
     Ok(PreviewArgs {
         input,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
         format_json,
     })
 }

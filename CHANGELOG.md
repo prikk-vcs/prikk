@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added — the current branch: `--ref` defaults to it
+
+`.prikk/current-branch` holds one local branch ref name. `init` and `setup` write `heads/main`, and
+every command whose `--ref` used to default to `heads/main` now defaults to that file instead:
+`commit`, `seal`, `log`, `checkout` (every mode), `worktree-status`, `inverse-plan`,
+`rollback-preview`, `rollback-draft`, `rollback-draft-verify`, `bundle preview`, and `branch create
+--from`. `--ref` given explicitly behaves exactly as before.
+
+**Nothing changes for an existing repository.** A repository created before this release has no
+file and reads as `heads/main`; no command writes the file for you.
+
+The pointer is a default, never an authority: `verify`, trust, signing, `bundle` and `sync` do not
+read it, and it is carried by no object or artifact. A file that is malformed, or names a branch
+that does not exist or is closed, makes those defaults refuse with a precondition naming the file;
+`prikk doctor` reports the same as a warning.
+
+`worktree-status` and `log` print `current branch:` and carry `"current_branch"` in their JSON
+documents; `branch list` marks the current branch with `*` and carries `"current"` on each entry.
+All three JSON additions are additive within their existing schema versions.
+
 ## 0.41.0 — 2026-09-12
 
 ### Added — `prikk key status`: can I sign here, and with which key?

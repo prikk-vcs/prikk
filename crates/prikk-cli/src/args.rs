@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use prikk_store::{DEFAULT_CHECKOUT_REF, DEFAULT_HISTORY_LIMIT};
+use prikk_store::DEFAULT_HISTORY_LIMIT;
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
@@ -21,8 +21,8 @@ pub(crate) use merge_execute::{MergeExecuteArgs, parse_merge_execute_args};
 pub(crate) struct CommitArgs {
     /// Commit message.
     pub(crate) message: String,
-    /// Baseline ref for worktree commits.
-    pub(crate) ref_name: String,
+    /// Baseline ref for worktree commits; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
     /// Compatibility flag retained for text edit generation.
     pub(crate) text_edits: bool,
 }
@@ -31,8 +31,8 @@ pub(crate) struct CommitArgs {
 pub(crate) struct LogArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
-    /// Ref to inspect.
-    pub(crate) ref_name: String,
+    /// Ref to inspect; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
     /// Maximum entries to display.
     pub(crate) limit: usize,
     /// RFC 146: `true` for `--format json` (`log-report-v1`).
@@ -43,24 +43,24 @@ pub(crate) struct LogArgs {
 pub(crate) struct InversePlanArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
-    /// Ref to inspect.
-    pub(crate) ref_name: String,
+    /// Ref to inspect; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
 }
 
 /// Parsed rollback-preview command arguments.
 pub(crate) struct RollbackPreviewArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
-    /// Ref to inspect.
-    pub(crate) ref_name: String,
+    /// Ref to inspect; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
 }
 
 /// Parsed rollback-draft command arguments.
 pub(crate) struct RollbackDraftArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
-    /// Ref to inspect.
-    pub(crate) ref_name: String,
+    /// Ref to inspect; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
     /// Rollback draft message.
     pub(crate) message: String,
 }
@@ -69,16 +69,16 @@ pub(crate) struct RollbackDraftArgs {
 pub(crate) struct RollbackDraftVerifyArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
-    /// Ref to inspect.
-    pub(crate) ref_name: String,
+    /// Ref to inspect; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
 }
 
 /// Parsed worktree-status command arguments.
 pub(crate) struct WorktreeStatusArgs {
     /// Repository root.
     pub(crate) root: PathBuf,
-    /// Ref to use as baseline.
-    pub(crate) ref_name: String,
+    /// Ref to use as baseline; `None` resolves to the current branch (RFC 151).
+    pub(crate) ref_name: Option<String>,
     /// RFC 144 §4o.3: `true` for `--format json`, the machine-branchable form that carries live
     /// rename declarations as a real field rather than a prose line.
     pub(crate) format_json: bool,
@@ -205,7 +205,7 @@ pub(crate) fn parse_log_args(args: Vec<String>) -> std::result::Result<LogArgs, 
     }
     Ok(LogArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| "heads/main".to_string()),
+        ref_name,
         limit: limit.unwrap_or(DEFAULT_HISTORY_LIMIT),
         format_json,
     })
@@ -242,7 +242,7 @@ pub(crate) fn parse_inverse_plan_args(
     }
     Ok(InversePlanArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
     })
 }
 
@@ -279,7 +279,7 @@ pub(crate) fn parse_rollback_preview_args(
     }
     Ok(RollbackPreviewArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
     })
 }
 
@@ -338,7 +338,7 @@ pub(crate) fn parse_rollback_draft_args(
     }
     Ok(RollbackDraftArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
         message,
     })
 }
@@ -376,7 +376,7 @@ pub(crate) fn parse_rollback_draft_verify_args(
     }
     Ok(RollbackDraftVerifyArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
     })
 }
 
@@ -425,7 +425,7 @@ pub(crate) fn parse_worktree_status_args(
     }
     Ok(WorktreeStatusArgs {
         root: optional_path_or_current(path)?,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
         format_json,
     })
 }
@@ -503,7 +503,7 @@ pub(crate) fn parse_commit_args(args: Vec<String>) -> std::result::Result<Commit
     }
     Ok(CommitArgs {
         message,
-        ref_name: ref_name.unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string()),
+        ref_name,
         text_edits,
     })
 }

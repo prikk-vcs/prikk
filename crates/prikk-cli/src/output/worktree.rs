@@ -7,13 +7,27 @@ use prikk_store::{
 
 use super::verification::escape_json_string;
 
+/// The prose line naming the current branch (RFC 151 §2.4), shared by `worktree-status` and `log`
+/// so the two cannot word it differently. `None` is a pointer the default could not resolve.
+fn print_current_branch_line(current_branch: Option<&str>) {
+    match current_branch {
+        Some(branch) => println!("current branch: {branch}"),
+        None => println!("current branch: <unresolved; run `prikk doctor`>"),
+    }
+}
+
 /// Print a worktree status report.
-pub(crate) fn print_worktree_status(layout: &RepositoryLayout, report: &WorktreeStatusReport) {
+pub(crate) fn print_worktree_status(
+    layout: &RepositoryLayout,
+    report: &WorktreeStatusReport,
+    current_branch: Option<&str>,
+) {
     println!(
         "worktree-status repository: {}",
         layout.prikk_dir().display()
     );
     println!("ref: {}", report.ref_name);
+    print_current_branch_line(current_branch);
     println!("tracked files: {}", report.tracked_files);
     println!("unchanged files: {}", report.unchanged_files);
     println!(
@@ -90,7 +104,11 @@ pub(crate) fn print_worktree_status(layout: &RepositoryLayout, report: &Worktree
 /// machine-branchable field rather than prose lines -- the reason this format exists at all.
 /// Independent of `print_worktree_status`'s prose body above by design, the same way
 /// `status.rs::print_status_json` is independent of `run_status`'s own prose (RFC 140).
-pub(crate) fn print_worktree_status_json(layout: &RepositoryLayout, report: &WorktreeStatusReport) {
+pub(crate) fn print_worktree_status_json(
+    layout: &RepositoryLayout,
+    report: &WorktreeStatusReport,
+    current_branch: Option<&str>,
+) {
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"schema_version\": \"worktree-status-report-v1\",\n");
@@ -102,6 +120,7 @@ pub(crate) fn print_worktree_status_json(layout: &RepositoryLayout, report: &Wor
         "  \"ref\": {},\n",
         escape_json_string(&report.ref_name)
     ));
+    push_current_branch_field(&mut json, current_branch);
     json.push_str(&format!("  \"tracked_files\": {},\n", report.tracked_files));
     json.push_str(&format!(
         "  \"unchanged_files\": {},\n",
@@ -164,6 +183,18 @@ pub(crate) fn print_worktree_status_json(layout: &RepositoryLayout, report: &Wor
     println!("{json}");
 }
 
+/// RFC 151 §2.4: `"current_branch"` beside `"ref"`, additive within `worktree-status-report-v1` and
+/// `log-report-v1`. `null` is a pointer the default could not resolve, never an omitted field.
+fn push_current_branch_field(json: &mut String, current_branch: Option<&str>) {
+    match current_branch {
+        Some(branch) => json.push_str(&format!(
+            "  \"current_branch\": {},\n",
+            escape_json_string(branch)
+        )),
+        None => json.push_str("  \"current_branch\": null,\n"),
+    }
+}
+
 fn push_declaration(json: &mut String, declaration: &RenameDeclaration) {
     json.push_str("{\"old_path\": ");
     json.push_str(&escape_json_string(&declaration.old_path));
@@ -173,9 +204,14 @@ fn push_declaration(json: &mut String, declaration: &RenameDeclaration) {
 }
 
 /// Print ref history.
-pub(crate) fn print_history(layout: &RepositoryLayout, history: &RefHistory) {
+pub(crate) fn print_history(
+    layout: &RepositoryLayout,
+    history: &RefHistory,
+    current_branch: Option<&str>,
+) {
     println!("history repository: {}", layout.prikk_dir().display());
     println!("ref: {}", history.ref_name);
+    print_current_branch_line(current_branch);
     if history.is_empty() {
         println!("history: <empty>");
         return;
@@ -219,7 +255,11 @@ pub(crate) fn print_history(layout: &RepositoryLayout, history: &RefHistory) {
 /// block's own case) — `patch_messages` mirrors `HistoryEntry`'s own split from `patch_count`
 /// rather than inventing a `null`-padded entry per unmessaged patch, which would require
 /// enumerating every patch in the block (RFC 146 rule 2's "no new computation").
-pub(crate) fn print_history_json(layout: &RepositoryLayout, history: &RefHistory) {
+pub(crate) fn print_history_json(
+    layout: &RepositoryLayout,
+    history: &RefHistory,
+    current_branch: Option<&str>,
+) {
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"schema_version\": \"log-report-v1\",\n");
@@ -231,6 +271,7 @@ pub(crate) fn print_history_json(layout: &RepositoryLayout, history: &RefHistory
         "  \"ref\": {},\n",
         escape_json_string(&history.ref_name)
     ));
+    push_current_branch_field(&mut json, current_branch);
     json.push_str("  \"blocks\": [");
     for (index, entry) in history.entries.iter().enumerate() {
         if index > 0 {

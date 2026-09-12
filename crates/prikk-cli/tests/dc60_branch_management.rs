@@ -172,7 +172,9 @@ fn branch_list_is_sorted_and_reports_ref_state_ids() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3, "expected three branches; stdout: {stdout}");
     assert!(lines[0].starts_with("heads/aaa-topic "), "stdout: {stdout}");
-    assert!(lines[1].starts_with("heads/main "), "stdout: {stdout}");
+    // RFC 151 §2.4: `heads/main` is the current branch of a fresh repository, so its line carries
+    // the `* ` marker; the other two lines are unchanged.
+    assert!(lines[1].starts_with("* heads/main "), "stdout: {stdout}");
     assert!(lines[2].starts_with("heads/zzz-topic "), "stdout: {stdout}");
 
     let ref_store = RefStore::new(layout.clone());

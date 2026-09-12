@@ -42,6 +42,10 @@ echo "hello prikk" > ./my-repo/readme.txt
 (cd ./my-repo && prikk seal --allow-no-audit)
 ```
 
+Neither command names a branch. Every command that takes `--ref` defaults to the branch named in
+`.prikk/current-branch`, which `init` and `setup` set to `heads/main`; `--ref` given explicitly
+always wins.
+
 ## Where your keys live
 
 One directory, per platform, and prikk resolves it itself:

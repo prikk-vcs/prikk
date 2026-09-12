@@ -12,6 +12,9 @@ pub(crate) struct BranchListEntry {
     pub(crate) ref_name: String,
     pub(crate) ref_state_id: ObjectId,
     pub(crate) closed: bool,
+    /// RFC 151 §2.4: the branch the current-branch pointer names. Additive within `branch-list-v1`,
+    /// present on every entry so a consumer branches on a value, not on a field's absence.
+    pub(crate) current: bool,
 }
 
 /// One received (remote-tracking) ref entry. Carries no `closed` field: the prose form never
@@ -42,7 +45,10 @@ pub(crate) fn print_branch_list_json(branches: &[BranchListEntry], received: &[R
         json.push_str(&escape_json_string(&branch.ref_name));
         json.push_str(", \"ref_state_id\": ");
         json.push_str(&escape_json_string(&branch.ref_state_id.to_string()));
-        json.push_str(&format!(", \"closed\": {}}}", branch.closed));
+        json.push_str(&format!(
+            ", \"closed\": {}, \"current\": {}}}",
+            branch.closed, branch.current
+        ));
     }
     if !branches.is_empty() {
         json.push_str("\n  ");

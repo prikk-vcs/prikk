@@ -509,12 +509,28 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
     }
 }
 
+/// RFC 151 §2.1: a current-branch pointer no default can resolve -- malformed, or naming a branch
+/// that does not exist or is closed. A **warning**, not an error: the repository is intact and
+/// every command still works with `--ref` given explicitly; only the default is unusable.
+fn push_current_branch_issue(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue>) {
+    if let Err(err) = crate::refs::current_branch(layout) {
+        issues.push(DoctorIssue::warning(
+            "PRIKK-DOCTOR-CURRENT-BRANCH",
+            err.to_string(),
+            "run `prikk branch switch heads/<name>` to a branch that exists and is open, or \
+             `prikk branch create` the branch the pointer names; `--ref` given explicitly still \
+             works meanwhile",
+        ));
+    }
+}
+
 /// Run doctor diagnostics for a repository layout.
 #[must_use]
 pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     let mut issues = Vec::new();
     push_missing_required_directory_issues(layout, &mut issues);
     push_non_default_active_session_wal_issues(layout, &mut issues);
+    push_current_branch_issue(layout, &mut issues);
     match verify_repository(layout) {
         Ok(verification) => {
             issues.push(DoctorIssue::info(

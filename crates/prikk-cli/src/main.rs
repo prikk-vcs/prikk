@@ -26,6 +26,7 @@ mod branch;
 mod bundle;
 mod commands;
 mod compact;
+mod current_branch;
 mod durable_output;
 mod key;
 mod key_material;
@@ -162,9 +163,10 @@ fn run_commit(args: Vec<String>) -> std::result::Result<(), CliError> {
         WorktreePatchCommitOptions::file_level()
     }
     .with_active_patch_limit(thresholds.limit);
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     let signer = author_signer_from_env()?;
     let report =
-        commit_worktree_changes_signed(&layout, &args.ref_name, &args.message, options, &signer)
+        commit_worktree_changes_signed(&layout, &ref_name, &args.message, options, &signer)
             .map_err(|err| err.to_string())?;
     println!("recorded worktree patch in active WAL");
     println!("baseline ref: {}", report.ref_name);
@@ -636,20 +638,22 @@ fn parse_active_patch_threshold_env(
 fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_log_args(args)?;
     let layout = open_repository(args.root)?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     // Received refs (DC-78 ruling 4) live in their own container (RFC 102 Stage 5:
     // received_index.rs, formerly refs/received/), not the local-ref pointer index, and their
     // RefState objects carry the origin's own name rather than the local "remotes/"-prefixed one
     // — load_ref_history's pointer/name-match check can't resolve them, so route separately.
-    let history = if args.ref_name.starts_with("remotes/") {
-        load_received_ref_history(&layout, &args.ref_name, args.limit)
+    let history = if ref_name.starts_with("remotes/") {
+        load_received_ref_history(&layout, &ref_name, args.limit)
     } else {
-        load_ref_history(&layout, &args.ref_name, args.limit)
+        load_ref_history(&layout, &ref_name, args.limit)
     }
     .map_err(|err| err.to_string())?;
+    let current = current_branch::displayed_current_branch(&layout);
     if args.format_json {
-        print_history_json(&layout, &history);
+        print_history_json(&layout, &history, current.as_deref());
     } else {
-        print_history(&layout, &history);
+        print_history(&layout, &history, current.as_deref());
     }
     Ok(())
 }
@@ -657,42 +661,42 @@ fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_checkout_args(args)?;
     let layout = open_repository(args.root)?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     match args.mode {
         CheckoutMode::PlanOnly => {
-            let plan =
-                prepare_checkout_plan(&layout, &args.ref_name).map_err(|err| err.to_string())?;
+            let plan = prepare_checkout_plan(&layout, &ref_name).map_err(|err| err.to_string())?;
             print_checkout_plan(&layout, &plan);
         }
         CheckoutMode::SnapshotPlan => {
-            let plan = prepare_snapshot_checkout_plan(&layout, &args.ref_name)
+            let plan = prepare_snapshot_checkout_plan(&layout, &ref_name)
                 .map_err(|err| err.to_string())?;
             print_snapshot_checkout_plan(&layout, &plan);
         }
         CheckoutMode::SnapshotMaterialize => {
-            let report = materialize_snapshot_checkout(&layout, &args.ref_name)
-                .map_err(|err| err.to_string())?;
+            let report =
+                materialize_snapshot_checkout(&layout, &ref_name).map_err(|err| err.to_string())?;
             print_snapshot_materialization_report(&layout, &report);
         }
         CheckoutMode::PatchPlan => {
             if args.format_json {
                 let report =
-                    prepare_patch_plan_content_report(&layout, &args.ref_name, &args.content_paths)
+                    prepare_patch_plan_content_report(&layout, &ref_name, &args.content_paths)
                         .map_err(|err| err.to_string())?;
                 print_patch_plan_content_json(&report);
             } else {
-                let plan = prepare_patch_replay_plan(&layout, &args.ref_name)
-                    .map_err(|err| err.to_string())?;
+                let plan =
+                    prepare_patch_replay_plan(&layout, &ref_name).map_err(|err| err.to_string())?;
                 print_patch_replay_plan(&layout, &plan);
             }
         }
         CheckoutMode::PatchMaterialize => {
-            let report = materialize_patch_checkout(&layout, &args.ref_name)
-                .map_err(|err| err.to_string())?;
+            let report =
+                materialize_patch_checkout(&layout, &ref_name).map_err(|err| err.to_string())?;
             print_patch_materialization_report(&layout, &report);
         }
         CheckoutMode::PatchDeletePlan => {
-            let plan = plan_patch_checkout_deletions(&layout, &args.ref_name)
-                .map_err(|err| err.to_string())?;
+            let plan =
+                plan_patch_checkout_deletions(&layout, &ref_name).map_err(|err| err.to_string())?;
             print_patch_deletion_plan(&layout, &plan);
             if !plan.is_safe_to_apply() {
                 return Err("patch deletion plan has unsafe candidates"
@@ -701,7 +705,7 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
             }
         }
         CheckoutMode::PatchMaterializeDelete => {
-            let report = materialize_patch_checkout_with_deletions(&layout, &args.ref_name)
+            let report = materialize_patch_checkout_with_deletions(&layout, &ref_name)
                 .map_err(|err| err.to_string())?;
             print_patch_materialization_report(&layout, &report);
         }
@@ -768,8 +772,8 @@ fn merge_target_from_arg(target: MergeEvidenceTargetArg) -> MergeEvidenceTarget 
 fn run_inverse_plan(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_inverse_plan_args(args)?;
     let layout = open_repository(args.root)?;
-    let plan =
-        prepare_patch_inverse_plan(&layout, &args.ref_name).map_err(|err| err.to_string())?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    let plan = prepare_patch_inverse_plan(&layout, &ref_name).map_err(|err| err.to_string())?;
     print_patch_inverse_plan(&layout, &plan);
     Ok(())
 }
@@ -777,7 +781,8 @@ fn run_inverse_plan(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_rollback_preview(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_rollback_preview_args(args)?;
     let layout = open_repository(args.root)?;
-    let plan = prepare_rollback_preview(&layout, &args.ref_name).map_err(|err| err.to_string())?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    let plan = prepare_rollback_preview(&layout, &ref_name).map_err(|err| err.to_string())?;
     print_rollback_preview_plan(&layout, &plan);
     Ok(())
 }
@@ -788,8 +793,9 @@ fn run_rollback_draft(args: Vec<String>) -> std::result::Result<(), CliError> {
     layout
         .require_current_format()
         .map_err(|err| err.to_string())?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     let signer = author_signer_from_env()?;
-    let report = append_rollback_draft(&layout, &args.ref_name, &args.message, &signer)
+    let report = append_rollback_draft(&layout, &ref_name, &args.message, &signer)
         .map_err(|err| err.to_string())?;
     print_rollback_draft_report(&layout, &report);
     Ok(())
@@ -798,8 +804,8 @@ fn run_rollback_draft(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_rollback_draft_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_rollback_draft_verify_args(args)?;
     let layout = open_repository(args.root)?;
-    let report =
-        verify_active_rollback_draft(&layout, &args.ref_name).map_err(|err| err.to_string())?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    let report = verify_active_rollback_draft(&layout, &ref_name).map_err(|err| err.to_string())?;
     print_rollback_draft_verification(&layout, &report);
     Ok(())
 }
@@ -807,15 +813,17 @@ fn run_rollback_draft_verify(args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_worktree_status(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_worktree_status_args(args)?;
     let layout = open_repository(args.root)?;
-    let report = worktree_status(&layout, &args.ref_name).map_err(|err| err.to_string())?;
+    let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    let report = worktree_status(&layout, &ref_name).map_err(|err| err.to_string())?;
     // RFC 144 §4o.3: `--format json` is an alternate rendering of the same report, not a different
     // command -- the exit-code contract below (refuse when the worktree has changes) is unchanged
     // by format, matching `verify --format json`'s own precedent of leaving exit-code semantics
     // format-independent.
+    let current = current_branch::displayed_current_branch(&layout);
     if args.format_json {
-        print_worktree_status_json(&layout, &report);
+        print_worktree_status_json(&layout, &report, current.as_deref());
     } else {
-        print_worktree_status(&layout, &report);
+        print_worktree_status(&layout, &report, current.as_deref());
     }
     if report.is_clean() {
         Ok(())

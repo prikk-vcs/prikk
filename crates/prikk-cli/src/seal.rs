@@ -26,8 +26,6 @@ use support::{
     finish_current_publication, persist_wal_patches, signed_envelope,
 };
 
-const DEFAULT_BRANCH_REF: &str = "heads/main";
-
 /// Result of sealing the current active WAL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealCommandResult {
@@ -46,16 +44,17 @@ pub struct SealCommandResult {
 /// argument is refused before an unrelated missing-signer environment is ever consulted.
 pub fn run_seal(
     root: PathBuf,
-    ref_name: String,
+    ref_name: Option<String>,
     signer: &impl MaintainerSigner,
 ) -> std::result::Result<SealCommandResult, CliError> {
     let layout = RepositoryLayout::open(root).map_err(|err| err.to_string())?;
+    let ref_name = crate::current_branch::resolve_ref(&layout, ref_name)?;
     seal_active_no_audit(layout, &ref_name, signer).map_err(CliError::from)
 }
 
 /// Parse `prikk seal`'s own arguments. `pub(crate)` so `main.rs` can call it before building the
 /// maintainer signer -- see [`run_seal`]'s doc comment.
-pub(crate) fn parse_seal_args(args: Vec<String>) -> std::result::Result<String, CliError> {
+pub(crate) fn parse_seal_args(args: Vec<String>) -> std::result::Result<Option<String>, CliError> {
     let mut allow_no_audit = false;
     let mut ref_name = None;
     let mut iter = args.into_iter();
@@ -69,13 +68,18 @@ pub(crate) fn parse_seal_args(args: Vec<String>) -> std::result::Result<String, 
             other => return Err(unknown_argument("seal", other)),
         }
     }
-    let ref_name = ref_name.unwrap_or_else(|| DEFAULT_BRANCH_REF.to_string());
     if !allow_no_audit {
         return Err(CliError::Usage(
             "seal scaffold requires --allow-no-audit".to_string(),
         ));
     }
-    validate_local_branch_ref(&ref_name).map_err(|err| CliError::from(err.to_string()))
+    // RFC 151 §2.2: an explicit `--ref` is still validated here, before the signer is built; an
+    // absent one resolves to the current branch once the repository is open (`run_seal`).
+    ref_name
+        .map(|ref_name| {
+            validate_local_branch_ref(&ref_name).map_err(|err| CliError::from(err.to_string()))
+        })
+        .transpose()
 }
 
 fn seal_active_no_audit(

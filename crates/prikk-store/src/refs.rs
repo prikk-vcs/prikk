@@ -638,6 +638,75 @@ pub fn validate_local_branch_ref(ref_name: &str) -> Result<String> {
     Ok(ref_name.to_string())
 }
 
+/// The branch a repository with no current-branch pointer is on: every repository initialized before
+/// RFC 151, and the unborn default of a fresh one.
+const UNBORN_DEFAULT_BRANCH: &str = "heads/main";
+
+/// How the pointer file is named in a refusal -- repository-relative, the path a user edits.
+const CURRENT_BRANCH_DISPLAY: &str = ".prikk/current-branch";
+
+/// RFC 151 §2.1: the branch `--ref` defaults to, read from `.prikk/current-branch`.
+///
+/// **A default, never an authority.** Local, mutable and unsigned, so nothing that decides trust
+/// reads it: not `verify`, not trust or signing, not `bundle` or `sync`, not any object. Only the
+/// CLI's default resolution and `doctor` call this, and a test over both production trees holds
+/// that.
+///
+/// - no file: `heads/main` (a repository created before RFC 151);
+/// - not exactly one valid local branch ref name followed by a newline: `Precondition` naming the
+///   file;
+/// - a branch that does not exist or is closed: `Precondition` naming the branch and the two ways
+///   out. `heads/main` not existing yet is the unborn default of a fresh repository, not a refusal.
+///
+/// Reads only; it never writes the file, so a pre-RFC repository stays exactly as it was.
+pub fn current_branch(layout: &RepositoryLayout) -> Result<String> {
+    let relative = layout.repository_relative(&layout.current_branch_path())?;
+    let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    else {
+        return Ok(UNBORN_DEFAULT_BRANCH.to_string());
+    };
+    let malformed = |detail: String| {
+        PrikkError::Precondition(format!(
+            "{CURRENT_BRANCH_DISPLAY} is malformed ({detail}); it must hold one local branch ref \
+             name followed by a newline, such as heads/main"
+        ))
+    };
+    let text = std::str::from_utf8(&bytes).map_err(|err| malformed(format!("not UTF-8: {err}")))?;
+    let name = text
+        .strip_suffix('\n')
+        .ok_or_else(|| malformed("no trailing newline".to_string()))?;
+    let canonical = validate_local_branch_ref(name).map_err(|err| malformed(err.to_string()))?;
+    let routes = "run `prikk branch switch heads/<name>` to a branch that exists and is open, or \
+                  `prikk branch create` it";
+    let Some(ref_state_id) = RefStore::new(layout.clone()).read_current_ref_state_id(&canonical)?
+    else {
+        if canonical == UNBORN_DEFAULT_BRANCH {
+            return Ok(canonical);
+        }
+        return Err(PrikkError::Precondition(format!(
+            "{CURRENT_BRANCH_DISPLAY} names {canonical}, which does not exist; {routes}"
+        )));
+    };
+    let envelope = FileObjectStore::new(layout.clone())
+        .read_typed(ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "missing RefState object for {canonical}: {ref_state_id}"
+            ))
+        })?;
+    let state =
+        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
+    if state.closed {
+        return Err(PrikkError::Precondition(format!(
+            "{CURRENT_BRANCH_DISPLAY} names {canonical}, which is closed; {routes}"
+        )));
+    }
+    Ok(canonical)
+}
+
 /// Validate a local tag ref name and return its canonical identity string.
 ///
 /// Mirrors `validate_local_branch_ref` with the prefix requirement inverted: `tags/` required,

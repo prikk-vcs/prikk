@@ -446,7 +446,7 @@ fn branch_list_hides_closed_by_default_and_shows_with_all() {
     ok(&out, "branch list");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.lines().any(|line| line.starts_with("heads/main ")),
+        stdout.lines().any(|line| line.starts_with("* heads/main ")),
         "stdout: {stdout}"
     );
     assert!(
@@ -458,7 +458,7 @@ fn branch_list_hides_closed_by_default_and_shows_with_all() {
     ok(&out, "branch list --all");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.lines().any(|line| line.starts_with("heads/main ")),
+        stdout.lines().any(|line| line.starts_with("* heads/main ")),
         "stdout: {stdout}"
     );
     let topic_line = stdout

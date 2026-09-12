@@ -27,8 +27,9 @@
 //! the command surface DC-61 specifies is `close` and `list --all` only. The capability is
 //! exercised directly against `RefStore::publish` in the test suite.
 //!
-//! No current-branch pointer/`switch`: see the module-level non-goal in the accepted RFC (DC-60).
-//! Every command still resolves `--ref` exactly as before.
+//! **The current branch (RFC 151).** `branch list` marks the branch `.prikk/current-branch` names,
+//! and `branch create --from` defaults to it (`crate::current_branch`). There is no `switch` yet:
+//! that is RFC 151's increment 2, which DC-60 had deferred.
 
 use std::path::PathBuf;
 
@@ -41,10 +42,9 @@ use prikk_object::{
     RefUpdatePayload,
 };
 use prikk_store::{
-    ActiveRefOwnership, DEFAULT_ACTIVE_NAME, DEFAULT_CHECKOUT_REF, FileObjectStore, GatedOperation,
-    MaintainerSigner, ObjectReader, ObjectWriteSession, RefPublication, RefStore, Wal,
-    active_ref_ownership, maintainer_signature, resolve_ref_tip_block, validate_local_branch_ref,
-    verify_signer_trusted,
+    ActiveRefOwnership, DEFAULT_ACTIVE_NAME, FileObjectStore, GatedOperation, MaintainerSigner,
+    ObjectReader, ObjectWriteSession, RefPublication, RefStore, Wal, active_ref_ownership,
+    maintainer_signature, resolve_ref_tip_block, validate_local_branch_ref, verify_signer_trusted,
 };
 
 /// Envelope schema version for a `RefState` carrying no `closed` field (every ordinary
@@ -98,6 +98,9 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     let layout = crate::open_repository(root)?;
     let ref_store = RefStore::new(layout.clone());
     let object_store = FileObjectStore::new(layout.clone());
+    // RFC 151 §2.4: which listed branch is current. A pointer the default cannot resolve marks
+    // none rather than refusing the listing -- `branch list` is how a user sees what to switch to.
+    let current_branch = crate::current_branch::displayed_current_branch(&layout);
     let entries = ref_store
         .list_ref_pointers()
         .map_err(|err| err.to_string())?;
@@ -127,10 +130,12 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
         if payload.closed && !show_all {
             continue;
         }
+        let current = current_branch.as_deref() == Some(entry.ref_name.as_str());
         branches.push(crate::output::BranchListEntry {
             ref_name: entry.ref_name,
             ref_state_id: entry.ref_state_id,
             closed: payload.closed,
+            current,
         });
     }
     // Received refs (DC-78 ruling 4) live entirely outside refs/by-id/ and are never a local
@@ -150,10 +155,15 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     } else {
         let mut printed_any = false;
         for branch in &branches {
+            // RFC 151 §2.4: the current branch is prefixed `* `; every other line is unchanged.
+            let marker = if branch.current { "* " } else { "" };
             if branch.closed {
-                println!("{} {} (closed)", branch.ref_name, branch.ref_state_id);
+                println!(
+                    "{marker}{} {} (closed)",
+                    branch.ref_name, branch.ref_state_id
+                );
             } else {
-                println!("{} {}", branch.ref_name, branch.ref_state_id);
+                println!("{marker}{} {}", branch.ref_name, branch.ref_state_id);
             }
             printed_any = true;
         }
@@ -202,9 +212,8 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         .into());
     }
 
-    let from_ref = parsed
-        .from
-        .unwrap_or_else(|| DEFAULT_CHECKOUT_REF.to_string());
+    // RFC 151 §2.2: a new branch starts from the current branch unless `--from` says otherwise.
+    let from_ref = crate::current_branch::resolve_ref(&layout, parsed.from)?;
     let target_object_id = resolve_published_target(&ref_store, &object_store, &from_ref)?;
 
     let signer = crate::maintainer_signer_from_env()?;

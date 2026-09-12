@@ -8,7 +8,7 @@ use prikk_object::{ObjectId, ObjectType, is_windows_reserved_name};
 
 use crate::foundation::fsutil::{
     EntryKind, MutationRoot, create_new_file_required, ensure_directory_required, inspect_entry,
-    list_directory, read_file_if_exists, read_file_required,
+    list_directory, read_file_if_exists, read_file_required, write_file_atomically,
 };
 
 const REPO_DIR: &str = ".prikk";
@@ -236,6 +236,15 @@ impl RepositoryLayout {
         // missing file for a repository initialized before this line existed -- this is only the
         // fast path for every repository `init` creates from here on.
         create_empty_file_once(&layout, &layout.default_declarations_path())?;
+        // RFC 151 §2.1: the current-branch pointer, `heads/main` for every repository `init` (and so
+        // `setup`) creates, through the same atomic write as the repository's other mutable
+        // metadata. Only when absent, like every file above: a re-`init` never moves a branch
+        // someone switched to. A repository initialized before RFC 151 has no file and reads as
+        // `heads/main` (`refs::current_branch`), which never writes one.
+        let pointer = layout.repository_relative(&layout.current_branch_path())?;
+        if read_file_if_exists(layout.repository_mutation_root(), &pointer)?.is_none() {
+            write_file_atomically(layout.repository_mutation_root(), &pointer, b"heads/main\n")?;
+        }
         // RFC 102 Stage 3, design-v1.md §2: every container name, both slots, plus the index and the
         // (currently unused) compaction generation log -- all allocated here, at `init`, and nowhere
         // else, for the life of the repository. This is the acceptance test itself (handoff §5
@@ -572,6 +581,14 @@ impl RepositoryLayout {
     #[must_use]
     pub fn default_declarations_path(&self) -> PathBuf {
         self.active_declarations_path(DEFAULT_ACTIVE_NAME)
+    }
+
+    /// Return the current-branch pointer path (RFC 151 §2.1): `.prikk/current-branch`, one local
+    /// branch ref name and a newline. Read by `refs::current_branch`, never by anything that decides
+    /// trust.
+    #[must_use]
+    pub fn current_branch_path(&self) -> PathBuf {
+        self.prikk_dir.join("current-branch")
     }
 
     /// Return the ref root directory.
