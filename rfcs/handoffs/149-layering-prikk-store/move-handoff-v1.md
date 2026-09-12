@@ -59,3 +59,44 @@ family = one top-level module and its subtree (`rollback/`, `merge/` are one eac
 
 A core→surface edge appearing under the compiler; a test that cannot move with its module; a declared
 cycle changing; any item beyond the 41 needing `pub`. Stop and report; do not widen.
+
+---
+
+# v2 — 2026-09-13: increment 3 becomes 3a and 3b (RFC 149 §6b)
+
+Your stop was right; both blockers are ruled in `rfc149-increment-3-blockers-review-v1.md`.
+
+## Increment 3a — the test-support surface (one commit, its own report, before any move)
+
+1. **Five families stay in `prikk-store`**: `memory_store`, `worktree`, `state_root`, `block_state`,
+   `rfc111_seal_simulation`. Nothing to do for them except leave them out of every later step; their
+   root exports do not move. Movable families: 21.
+2. **The surface.** `#[cfg(any(test, feature = "test-support"))] pub mod test_gates;` is **not** the
+   shape — the gates themselves stay `cfg(test)`. Split: `test_gates::test_support` becomes reachable
+   under the feature (its 28 functions `pub`), the gate files stay test-only. The failpoints' `fail_once`
+   and `Point` move to `#[cfg(any(test, feature = "test-support"))]` with `pub` visibility on a path
+   `lib.rs` can re-export; `foundation::index::remove_index_entry_for_test` and
+   `foundation::container::encode_container_record_for_test` likewise. **Only what a movable test
+   reaches** — derive the list by grepping the 21 families' test files for `crate::` paths that resolve
+   to `cfg(test)` or `pub(crate)` items in the lower layer, and print it in the report.
+3. One block in `lib.rs`, `// Test-support surface (RFC 149 §6b)`, re-exporting exactly the list under
+   the feature, beside the operations-layer contract and with the same "adding is a decision" comment.
+4. **Measure**: `boundary-check --graph` before/after (nodes, edges, cycles, hubs — `test_support` now
+   appears; **no new cycle and no new hub**, or stop); `size-check` green; root exports under default
+   features unchanged at 318; under `--features test-support` the new count, listed; `cargo package
+   --list -p prikk-store` unchanged in file count. Full gate set; the addendum applies (`failpoints.rs`
+   is `cfg(target_os)`-gated).
+
+## Increment 3b — the moves, in the reference graph's order
+
+Recompute the order of your §1 for 21 families (the five that stay become plain `prikk_store::` paths
+for their users) and put it at the top of the first 3b report. `patch_exchange` + `tag_travel` are one
+commit. Per commit, as v1 §3 says, plus: the DECLARED cycle count pasted, `size-check` allowlist entries
+moved with their files, and `doctor`'s two RFC 102 controls moving with `doctor`. `bundle.rs`'s
+exhaustive match on `DecodedOperationKind` gains its wildcard arm in `bundle`'s own move commit.
+
+## Not changed
+
+Increment 4 as written; the hard stops as written. The CHANGELOG's final moved-name list is derived from
+the diff — it will be shorter than letter 008's appendix by the five families' exports, and the release
+note says so.

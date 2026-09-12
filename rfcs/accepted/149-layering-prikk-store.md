@@ -191,6 +191,26 @@ member list is five lists, of which only `size-check`'s is self-checking against
 document this workspace produces; nothing on the live release path consumes it. It stays RFC 141 §7a's
 task, now for nine crates. Not a 0.42.0 blocker.
 
+### 6b. Increment 3 stopped and re-planned (2026-09-13): 21 families move, five stay, and the tests need a named surface
+
+The first move could not be made: `memory_store`, `worktree`, `state_root`, `block_state` and
+`rfc111_seal_simulation` are referenced by `prikk-store`'s own tests (the core's, the infrastructure's,
+the shared fixture tree), and 21 of the surfaces' tests reach `test_gates::test_support`, the `cfg(test)`
+failpoints and foundation's `_for_test` helpers — none reachable from another crate. Production edges
+from the lower layer into the movable set remain zero; the coupling graph does not see tests.
+
+**RULED.** (1) The five stay in `prikk-store` **because of what they are** — a store, a materialization
+primitive, two state authorities, and a simulation for gates — not because the tests need them; the
+census's "not reached by the core in production" was true and answered a different question. Movable
+families: **26 → 21**. (2) **Increment 3a**: the `test-support` feature becomes the crate's named
+test-support surface — `test_gates::test_support` (28 functions), the failpoints, the `_for_test` helpers
+the movable tests reach — enumerated in one `lib.rs` block; measured against the coupling graph and
+`size-check` before any move; default builds unchanged. (3) A `prikk-operations` dev-dependency in the
+store is refused (the layer inverted in test builds); a third crate is refused (it cannot host the
+failpoints); duplicated fixtures are refused. (4) The move order is the reference graph's, tests
+included: `patch_exchange` + `tag_travel` are one commit. §5.3 reads: *a test moves with its module and
+reaches the store's fixtures through the test-support surface.*
+
 ## 7. Owner rulings
 
 1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**
