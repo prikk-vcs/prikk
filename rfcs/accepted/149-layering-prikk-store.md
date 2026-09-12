@@ -1,6 +1,6 @@
 # RFC 149 — Layering `prikk-store`: a core that stops growing, and a surfaces crate that may
 
-**Status.** **HELD 2026-09-13 at §6e — the compiler-derived contract shows the layer is a direction, not a narrow interface; the owner chooses between cutting anyway and enforcing the layer as a gate rule (architect recommends the gate rule).** Earlier: **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
+**Status.** **RULED 2026-09-13 by the owner: path B — one crate, the layer enforced as a coupling-gate rule.** The crate cut is not made; the layer invariant, the census and the reclassification are this RFC's product. Handoff: `149-…/path-b-layer-rule-handoff-v1.md`. Moves to `done/` when B lands. Earlier: **HELD at §6e**; Earlier: **ACCEPTED 2026-09-12** — the owner ruled §7.2 (`prikk-operations`) and §7.3 (gate before the cut) the same day; handoffs for §6 steps 1–2 and for RFC 130 §8's gate are live. Originally: **PROPOSED 2026-09-12**, on the project owner's instruction to reconsider the bloatedness
 direction *"not only now but also for the future."* Measured first; the design follows the measurement.
 
 **Direction APPROVED by the project owner 2026-09-12** — *"it is approved to split the crate into
@@ -273,7 +273,7 @@ the store's internals. **The layer is real as a direction and not narrow as an i
   revert the 46-item contract to `pub(crate)`; keep the test-support surface (feature-gated, inert, and
   used by `prikk-cli`). RFC 130 §6's no-split stands on a better measurement.
 
-**Architect's recommendation: B.** A direction is enforced by a rule; an interface is what a crate
+**RULED 2026-09-13 — the owner chose B** (*"finally clean, safe and secure, robust and sophisticated design"*). **Architect's recommendation was B.** A direction is enforced by a rule; an interface is what a crate
 boundary is for, and there is none here that is narrow. What RFC 149 produced stands either way: the
 layer invariant, the census, the five modules that were surfaces by census and store by nature.
 
@@ -281,6 +281,7 @@ layer invariant, the census, the five modules that were surfaces by census and s
 
 1. ~~Accept the direction: cut above the core.~~ **Approved 2026-09-12, as reference, not forced.**
 2. ~~The surfaces crate's name — architect recommends `prikk-operations`.~~ **RULED 2026-09-12: `prikk-operations`.**
+4. **§6e: path B — one crate, the layer as a gate rule. RULED 2026-09-13.**
 3. ~~Whether the file-size gate (RFC 130 §8 item 2) lands before or alongside.~~ **RULED 2026-09-12: before.** The gate gives a measured baseline the cut is then checked against. Read with RFC 130 §8: this adopts its controls 1 and 2 at the proposed 1,200-line threshold; control 3 is subsumed by this RFC.
 
 ## 8. Non-goals
