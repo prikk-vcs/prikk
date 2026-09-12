@@ -548,6 +548,36 @@ now so it is a recognised threshold rather than a later surprise.
 §6a and §6b followed on 2026-09-03. **`AUD-05` through `AUD-10` are all delivered** — the whole
 no-design-decision half of this program — leaving `AUD-01` through `AUD-04`, which are design work.
 
+### Release position — 0.39.0 tagged 2026-09-12, awaiting publication authorization
+
+**`0.39.0` was cut at `ba76611f`** (tag object `f78b93d4`, good signature), CI green on **all 15 jobs
+before the tag**, `Release` green (5 jobs) with **16 assets**, not a draft. **crates.io publication is not
+done and needs its own word**, per the standing rule.
+
+**Verified past the workflows' own reports, on the shipped Linux asset:** SHA-256 matched its declared
+checksum; `build-info.txt` names commit `ba76611f` and tag `0.39.0`; `prikk --version` is `0.39.0`. **Every
+feature new in this release exercised on that binary**, on a fresh fixture: `prikk tag --format json`
+answers `tag-list-v1`; `prikk branch --format json` no longer lists the tag; `checkout --plan-only --ref
+tags/v1` names the tagged block, not the tip; a symlink in the worktree reports `refused paths: 1`; and
+`seal` in a repository with nothing adopted refuses as `precondition not met`, not `integrity error`.
+
+**Ten changelog entries**, all from RFC 146 and RFC 147 plus the `first-run.md` gaps: machine-readable
+listings for the three commands the stikk project said were the entire remainder of its prose parsing;
+per-entry authoring refusals from one shared classifier; tag refs across every read surface (six
+resolution sites, five of them found by rounds confirming rather than trusting the architect's
+inventory); five refusals reclassified from `Integrity`/`InvalidSignature` to `Precondition`.
+
+**Library API, measured not asserted: root exports 264 → 265** (`resolve_ref_tip_block`, chosen over a
+seventh hand-written copy of the two-hop walk), **zero removed** — diffed as names across two worktrees
+under `LC_ALL=C`. **Breaking once, deliberately: `#[non_exhaustive]` on five report types**
+(`WorktreeChange`, `WorktreeStatusReport`, `QueuedOperationEntry`, `MergeEvidenceDisplayOperation`,
+`WorktreePatchCommitReport`), each judged by one rule and proven from a downstream crate — construction
+fails `E0639`, reads compile. Every later field on those five is now free. 1844 → 1863 tests.
+
+**Publishing as tagged is safe on the same evidence as 0.38.0:** `CHANGELOG.md` is not in the package
+(284 files, `README.md` only), and the release commit touched exactly `Cargo.toml`, `Cargo.lock`,
+`CHANGELOG.md`.
+
 ### Release position — 0.38.0 shipped 2026-09-10
 
 **`0.38.0` was cut at `695b7877`** (tag object `fa8c3832`), CI green on **all 15 jobs before the tag**,
