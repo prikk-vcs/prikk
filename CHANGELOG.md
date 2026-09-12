@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — `prikk setup` refuses an existing repository instead of half-running on it
+
+Pointed at a directory that already held a repository, `setup` printed `initialized Prikk repository
+at …`, minted two fresh keys, wrote any `--author-seed-out`/`--maintainer-seed-out` file, and only
+then failed on the already-adopted maintainer key id. The existing repository was never damaged, but
+the command claimed to have initialized something it had not, and **left two seed files on disk
+belonging to keys no repository adopted** — which a user has every reason to mistake for their own.
+
+It now checks for `.prikk` before anything else and refuses:
+
+```
+error: precondition not met: ./r already holds a repository; to use your existing keys here run `prikk trust maintainer add` (see `prikk key public`), or pick a different directory for a new project
+```
+
+Nothing runs: no `init`, no key generation, no seed file, no output line. Creating a fresh
+repository — including at a path whose parent directories do not exist yet — is unchanged.
+
 ## 0.39.0 — 2026-09-12
 
 ### Added — `--format json` for `prikk log`, `prikk branch` and `prikk tag`

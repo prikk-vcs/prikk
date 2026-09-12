@@ -65,6 +65,30 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
         None => crate::args::current_dir()?,
     };
 
+    // RFC 135 §(c) -- "a flow, not storage" -- never said what a *re-run* does, and the answer was
+    // the worst available one: `RepositoryLayout::init` is idempotent, so it succeeded, "initialized
+    // Prikk repository at ..." printed, two fresh keys were minted, any `--*-seed-out` file was
+    // written, and only then did the trust step collide with the key already adopted here. A command
+    // that prints "initialized" and then fails has started something it should not have. Worse, the
+    // seeds it left on disk belong to keys **no repository adopted** -- a user has every reason to
+    // think those are their keys.
+    //
+    // So the check is *before* `create_dir_all`, ahead of every write and every line of output: if
+    // this directory already holds a repository, nothing at all runs. A caller-fixable state, and
+    // the message names both ways out rather than only reporting the collision.
+    let existing = root.join(".prikk");
+    if existing.exists() {
+        return Err(CliError::Failure(
+            prikk_error::PrikkError::Precondition(format!(
+                "{} already holds a repository; to use your existing keys here run `prikk trust \
+                 maintainer add` (see `prikk key public`), or pick a different directory for a new \
+                 project",
+                root.display()
+            ))
+            .to_string(),
+        ));
+    }
+
     // Property 1: one command reaches a working repository, without the user running anything
     // else first -- `RepositoryLayout::init` itself does not create a missing leading directory
     // (the same is true of plain `prikk init`), so `setup` must, or naming a path that does not

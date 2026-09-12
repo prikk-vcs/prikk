@@ -81,6 +81,24 @@ means "at the block this ref names".
 Earlier releases reported this as `error: object type mismatch: expected block, got tag`, which read
 as repository damage rather than as a correctable argument.
 
+## `error: precondition not met: <path> already holds a repository`
+
+You ran `prikk setup` on a directory that already has a `.prikk` in it. `setup` is the first-run
+command: it initializes a repository *and* mints a fresh key pair, so there is nothing sensible for
+it to do on a repository that already has adopted keys. It refuses before doing anything — no
+`init`, no keys minted, no seed file written, even when you passed `--author-seed-out` or
+`--maintainer-seed-out`.
+
+Two ways on, both named in the message: to work in the existing repository with keys you already
+hold, run `prikk trust maintainer add --key-id ID --public-key HEX` (use `prikk key public
+--seed-env NAME` to derive the public half); to start a new project, point `setup` at a different
+directory.
+
+Earlier releases got further before failing: they printed `initialized Prikk repository at …`, minted
+two keys, wrote any `--*-seed-out` file, and only then reported `maintainer key id maintainer is
+already adopted with a different public key`. If you hit that version, the seed files it left behind
+belong to keys **no repository adopted** — they are not your keys, and can be deleted.
+
 ## `error: active WAL has no patch records to seal`
 
 You ran `seal` with nothing queued — every commit since the last seal has already been published.

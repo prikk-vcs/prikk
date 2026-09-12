@@ -197,10 +197,15 @@ Two routes, and which one is right depends on whether the projects share a trust
 prikk setup ./other-repo
 ```
 
-Everything above applies unchanged, including saving the printed seeds. Run it in a directory that
-does not already contain a repository: pointed at an existing one, `setup` re-runs `init`
-(harmless — it is idempotent) and then fails on the already-adopted key id, leaving the existing
-repository intact but giving you no next step.
+Everything above applies unchanged, including saving the printed seeds. Pointed at a directory that
+already holds a repository, `setup` refuses before doing anything at all — no `init`, no keys, no
+seed file — and tells you which route you probably wanted:
+
+```
+error: precondition not met: ./other-repo already holds a repository; to use your existing keys here
+run `prikk trust maintainer add` (see `prikk key public`), or pick a different directory for a new
+project
+```
 
 **Reuse the keys you already have.** Right when it is the same person and the same trust domain.
 Only one extra step over the first project — the maintainer key must be trusted here too:

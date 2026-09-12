@@ -248,3 +248,101 @@ fn setup_reaches_a_sealed_commit() {
     support::ok(&support::verify(&target), "verify");
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// RFC 135: `setup` on a directory that already holds a repository refuses **before touching
+/// anything**.
+///
+/// Before this, `RepositoryLayout::init`'s idempotence carried the re-run past the point of no
+/// return: "initialized Prikk repository at …" printed, two fresh keys were minted, any
+/// `--*-seed-out` file was written, and only then did the trust step collide. The assertions below
+/// are therefore about what did **not** happen, which is the whole point — a message alone would
+/// pass just as well with the writes still occurring behind it.
+#[test]
+fn setup_on_an_existing_repository_refuses_before_writing_anything() {
+    let root = support::unique_repo("rfc135-setup-rerun");
+    let repo = root.join("r");
+    support::ok(
+        &support::prikk(Path::new("."))
+            .args(["setup", repo.to_str().unwrap()])
+            .output()
+            .unwrap(),
+        "first setup",
+    );
+
+    let author_seed = root.join("author.seed");
+    let maintainer_seed = root.join("maintainer.seed");
+    let rerun = support::prikk(Path::new("."))
+        .args([
+            "setup",
+            repo.to_str().unwrap(),
+            "--author-seed-out",
+            author_seed.to_str().unwrap(),
+            "--maintainer-seed-out",
+            maintainer_seed.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(rerun.status.code(), Some(1), "a re-run must refuse");
+    let stderr = String::from_utf8_lossy(&rerun.stderr).into_owned();
+    assert!(
+        stderr.contains("already holds a repository"),
+        "and say why: {stderr}"
+    );
+    // The refusal names both ways out; a dead end would be a worse message, not a shorter one.
+    assert!(
+        stderr.contains("prikk trust maintainer add") && stderr.contains("different directory"),
+        "the refusal must name both routes: {stderr}"
+    );
+    assert!(
+        stderr.starts_with("error: precondition not met: "),
+        "a caller-fixable state is a precondition, not damage: {stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&rerun.stdout).into_owned();
+    assert!(
+        !stdout.contains("initialized"),
+        "nothing may claim to have initialized anything: {stdout}"
+    );
+    assert!(
+        !stdout
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(64)
+            .any(|window| { window.iter().all(|c| c.is_ascii_hexdigit()) }),
+        "no 64-hex run may reach stdout -- a minted seed must never be printed here: {stdout}"
+    );
+    assert!(
+        !author_seed.exists() && !maintainer_seed.exists(),
+        "no seed file may be written: a seed on disk that no repository adopted is worse than \
+         none, because the user has every reason to think it is theirs"
+    );
+
+    // And the repository that was already there is untouched.
+    support::ok(
+        &support::verify(&repo),
+        "verify the pre-existing repository",
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The other half: the `create_dir_all` property RFC 135 added must survive the new check — a
+/// fresh path, and a fresh path whose parents do not exist yet, both still work.
+#[test]
+fn setup_still_creates_a_fresh_and_a_nested_fresh_directory() {
+    let root = support::unique_repo("rfc135-setup-fresh");
+    for relative in ["fresh", "deep/nested/does/not/exist"] {
+        let target = root.join(relative);
+        let out = support::prikk(Path::new("."))
+            .args(["setup", target.to_str().unwrap()])
+            .output()
+            .unwrap();
+        support::ok(&out, &format!("setup {relative}"));
+        assert!(
+            target.join(".prikk").exists(),
+            "{relative}: setup must still create the repository"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
