@@ -119,7 +119,7 @@ the two performance walls tracked in `ROADMAP.md`'s corrective program.
 ## 5a. Amended 2026-09-03 — increment B is not a migration; §5's remaining question moved to RFC 133
 
 **SUPERSEDED in part, 2026-09-03.** On the owner's instruction the measurement concern was extracted
-into **`rfcs/proposed/133-performance-cost-and-its-evidence.md`**, which carries the peak-RSS ruling
+into **`rfcs/done/133-performance-cost-and-its-evidence.md`**, which carries the peak-RSS ruling
 unchanged (RFC 133 §6) and adds what this section could not: **measured numbers**. The analysis below
 stands as written and is left intact; only the open question moved. **RFC 126 no longer waits on it.**
 

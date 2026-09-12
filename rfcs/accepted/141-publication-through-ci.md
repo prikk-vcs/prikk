@@ -360,4 +360,4 @@ No CI workflow runs any `release-policy` command (§7a closure). **Recommendatio
 re-scoped to one job — CI runs `check`, `boundary-check`, `reference-check` and `size-check` on every
 push** — and nothing about publication moves, since publication is manual by the owner's word and has
 been safe under that. The four commands exit non-zero on findings, which is what a CI step wants;
-`command_scan`'s inventory gains the four invocations. Small; handed off when the owner says yes.
+`command_scan`'s inventory gains the four invocations. Small. **RULED yes 2026-09-13** (owner: *"Will be handed to dev team"*); handoff `141-publication-through-ci/policy-gates-in-ci-handoff-v1.md`.

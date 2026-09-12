@@ -1,6 +1,6 @@
 # RFC 133 — What performance costs this project has, and what evidence holds them
 
-**Status.** **ACCEPTED by the project owner 2026-09-03**, as the extraction they instructed: the
+**Status.** **CLOSED 2026-09-13** — §6 ruled yes (§6a's shape) on the owner's *"Will be handed to dev team"*: the requirement is stated and kept by evidence at release prep; nothing else open here. `NFR-PERF-01`'s "unmet" record stays the owner's separate question. Originally: **ACCEPTED by the project owner 2026-09-03**, as the extraction they instructed: the
 measurement concern is *"an independent subject or theme"*, not a verification-culture gate.
 
 **The §6 rewrite was accepted by the owner 2026-09-03. That accepted the question's shape, not an

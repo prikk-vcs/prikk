@@ -1,6 +1,6 @@
 # RFC 133 §6d.1 — the object index's resident cost
 
-**Ruled:** `rfcs/proposed/133-performance-cost-and-its-evidence.md` **§6d.1** (as corrected). Follows the
+**Ruled:** `rfcs/done/133-performance-cost-and-its-evidence.md` **§6d.1** (as corrected). Follows the
 attribution round (`2492e6c`), which is **accepted** — this does not reopen it.
 
 **This round measures one candidate. It optimises nothing and changes no production code.**

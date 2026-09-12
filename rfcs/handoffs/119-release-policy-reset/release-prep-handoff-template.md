@@ -31,7 +31,8 @@ handoff filled in, and the team delivers the prep commit for review like any oth
 4. **Root-export name diff** from the last tag (`LC_ALL=C sort` + `comm`), plus `git diff <tag>..HEAD |
    grep '^+ *pub [a-z_]*:'` for struct-shape changes, plus `#[non_exhaustive]` on any new report type.
 5. **`cargo package --list -p prikk`**: file count, and that no unintended file ships.
-6. **A smoke script** exercising every shipped feature on a fresh fixture with a clean environment,
+6. **Memory ratio (RFC 133 §6a).** Run the `#[ignore]`d instrument in `rfc133_node_count_memory.rs` at two repository sizes and put the incremental-commit peak-memory ratio in the report; a ratio that moved since the last release stops the cut until explained.
+7. **A smoke script** exercising every shipped feature on a fresh fixture with a clean environment,
    runnable against any `prikk` binary path — the architect runs it against the published asset.
 
 Report: `.git-exclude/review-request/release-<version>-prep-report-v1.md`, with anything found and fixed

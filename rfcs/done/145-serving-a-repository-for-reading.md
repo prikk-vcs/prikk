@@ -1,6 +1,6 @@
 # RFC 145 — Serving a repository for reading
 
-**Status.** **PROPOSED 2026-09-10; RULED by the architect 2026-09-12 (§9) on the owner's instruction — acceptance is the owner's.** **Re-reviewed 2026-09-13 on the owner's instruction: recommendation unchanged — accept §9 as ruled and close this RFC to `done/`; under D there is nothing to implement, and the read surface's gaps close as their own increments (RFC 146 and 147 did).** Opened by the architect on the project owner's direction of
+**Status.** **CLOSED 2026-09-13** — accepted as ruled (§9: shape D over the CLI, nothing scheduled, not `instaweb`) on the owner's *"Will be handed to dev team"* to the review recommending exactly that; nothing to implement, so `done/`. The read-only property remains a design task (§8e). Originally: **PROPOSED 2026-09-10; RULED by the architect 2026-09-12 (§9) on the owner's instruction — acceptance is the owner's.** **Re-reviewed 2026-09-13 on the owner's instruction: recommendation unchanged — accept §9 as ruled and close this RFC to `done/`; under D there is nothing to implement, and the read surface's gaps close as their own increments (RFC 146 and 147 did).** Opened by the architect on the project owner's direction of
 2026-09-06, scheduled in `ROADMAP.md` as *"Open the hosting-shape RFC — `prikk instaweb` vs. a separate
 small server"* and deliberately not ranked first (owner: *"No need to take it as the most
 prioritized."*).
@@ -415,3 +415,15 @@ question**, never as a proposed command name.
 - **The dependency posture changes.** If prikk ever takes a serialization or async dependency for an
   unrelated reason, §4's decisive axis loses its force and this RFC should be re-argued rather than
   cited.
+
+### 8e. The external architect's closing reply (letter 012, 2026-09-13)
+
+They accept §4a's correction — *"do not call it" and "do not compile it" are different guarantees, and
+only the second is construction-level* — and withdraw "provable by absence" as imprecise about mechanism.
+They then read RFC 149 §6e against the fix they were about to offer (a `write` feature with a browse
+build on `default-features = false`) and hand it back as this project's own rule: **derive the read/write
+contract with the compiler first; if narrow, the feature plus a CI symbol-absence check; if not, a second
+`LAYER` partition in `boundary-check` — "no production edge from a browse entry point into the write
+surface."** Either way it is definable only on a dedicated browse binary, which is a third independent
+argument for shape B over A. Recorded as the design task this RFC leaves open; nothing is scheduled.
+Their side is closed; ours is closed with this section.

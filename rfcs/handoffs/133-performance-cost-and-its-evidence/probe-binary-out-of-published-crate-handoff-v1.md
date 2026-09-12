@@ -1,6 +1,6 @@
 # RFC 133 §6d.5 — move the probe binary out of the published crate
 
-**Ruled:** `rfcs/proposed/133-performance-cost-and-its-evidence.md` **§6d.5**. Follows `e36fd8b8`, which
+**Ruled:** `rfcs/done/133-performance-cost-and-its-evidence.md` **§6d.5**. Follows `e36fd8b8`, which
 is **accepted** — its measurement is not reopened. **Required before the next release that publishes
 `prikk`.** Small round: a relocation, not a redesign.
 

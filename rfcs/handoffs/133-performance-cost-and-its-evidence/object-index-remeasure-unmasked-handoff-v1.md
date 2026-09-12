@@ -1,6 +1,6 @@
 # RFC 133 §6d.3 — re-measure the resident index with the masking defeated
 
-**Ruled:** `rfcs/proposed/133-performance-cost-and-its-evidence.md` **§6d.3**. Follows `6aa67c32`, which
+**Ruled:** `rfcs/done/133-performance-cost-and-its-evidence.md` **§6d.3**. Follows `6aa67c32`, which
 is **accepted as an instrument and an honest report** — this does not reopen it. **Small round.**
 
 ## 1. Why a re-measurement, in one paragraph
