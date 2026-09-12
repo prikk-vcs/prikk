@@ -29,7 +29,7 @@ const PRODUCTS: [(&str, &str); 9] = [
     ("prikk-operations", "crates/prikk-operations/Cargo.toml"),
     ("prikk", "crates/prikk-cli/Cargo.toml"),
 ];
-const CATEGORY_ORDER: [&str; 17] = [
+const CATEGORY_ORDER: [&str; 18] = [
     "workspace-members",
     "default-members",
     "tool-metadata",
@@ -41,6 +41,7 @@ const CATEGORY_ORDER: [&str; 17] = [
     "open-work-index",
     "changelog-history",
     "module-coupling",
+    "layer",
     "publication-allowlist",
     "package-contents",
     "package-description",

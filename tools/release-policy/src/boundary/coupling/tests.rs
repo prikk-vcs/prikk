@@ -3,8 +3,9 @@
 use std::collections::BTreeSet;
 
 use super::{
-    DECLARED_CYCLES, DECLARED_HUBS, check, check_allowlists_are_well_formed,
-    check_declared_entries_still_exist,
+    DECLARED_CYCLES, DECLARED_HUBS, LOWER_LAYER, UPPER_LAYER, check,
+    check_allowlists_are_well_formed, check_declared_entries_still_exist, check_layer,
+    check_with_layers, graph_report, layer_report, top_level,
 };
 use crate::boundary::BoundaryError;
 
@@ -218,4 +219,161 @@ fn the_graph_emission_and_the_gate_agree_on_the_hub_list() {
     assert!(!emitted.edges.is_empty());
     assert!(!emitted.hubs.is_empty());
     assert_eq!(emitted.hub_threshold, super::HUB_THRESHOLD);
+}
+
+// RFC 149 path B: the layer rule.
+
+fn real_graph() -> super::graph::ModuleGraph {
+    super::graph::build(&repo_root().join("crates/prikk-store/src")).expect("graph builds")
+}
+
+fn layer_errors(upper: &[&str], lower: &[&str]) -> Vec<BoundaryError> {
+    let mut errors = Vec::new();
+    check_layer(&real_graph(), upper, lower, &mut errors);
+    errors
+}
+
+/// The real tree: zero crossing edges, every top-level module on exactly one side.
+#[test]
+fn the_real_tree_has_no_layer_violation_and_every_module_is_classified() {
+    let report = layer_report(&real_graph(), &UPPER_LAYER, &LOWER_LAYER);
+    assert_eq!(report.violations.len(), 0, "{:?}", report.violations);
+    assert!(report.unclassified.is_empty(), "{:?}", report.unclassified);
+    assert!(report.stale.is_empty(), "{:?}", report.stale);
+    assert!(report.listed_twice.is_empty(), "{:?}", report.listed_twice);
+}
+
+/// Perturb: `checkout` moved up. `worktree.rs` names it in production, so the move crosses the layer
+/// and the gate must name that edge.
+#[test]
+fn moving_checkout_up_names_the_edges_that_cross() {
+    let upper: Vec<&str> = UPPER_LAYER.iter().copied().chain(["checkout"]).collect();
+    let lower: Vec<&str> = LOWER_LAYER
+        .iter()
+        .copied()
+        .filter(|module| *module != "checkout")
+        .collect();
+    let errors = layer_errors(&upper, &lower);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.category == "layer" && error.detail.contains("worktree -> checkout")),
+        "{errors:?}"
+    );
+}
+
+/// Perturb the other way: `merge` moved down. Its own edges into the upper layer now cross, and each
+/// is named -- computed from the graph rather than written down, and required to be non-empty so the
+/// control cannot pass on an empty set.
+#[test]
+fn moving_merge_down_names_the_edges_that_cross() {
+    let graph = real_graph();
+    let expected: Vec<String> = graph
+        .edges
+        .iter()
+        .filter(|(from, to)| {
+            top_level(from) == "merge"
+                && top_level(to) != "merge"
+                && UPPER_LAYER.contains(&top_level(to))
+        })
+        .map(|(from, to)| format!("{from} -> {to}"))
+        .collect();
+    assert!(
+        !expected.is_empty(),
+        "merge reaches nothing upper -- the control would be vacuous"
+    );
+    let upper: Vec<&str> = UPPER_LAYER
+        .iter()
+        .copied()
+        .filter(|module| *module != "merge")
+        .collect();
+    let lower: Vec<&str> = LOWER_LAYER.iter().copied().chain(["merge"]).collect();
+    let errors = layer_errors(&upper, &lower);
+    for edge in &expected {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.detail.contains(edge.as_str())),
+            "{edge} not named: {errors:?}"
+        );
+    }
+}
+
+/// Perturb: a fake name in a constant is listed but absent.
+#[test]
+fn a_fake_listed_module_is_reported_stale() {
+    let upper: Vec<&str> = UPPER_LAYER
+        .iter()
+        .copied()
+        .chain(["no_such_module"])
+        .collect();
+    let errors = layer_errors(&upper, &LOWER_LAYER);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.detail.contains("`no_such_module`")
+                && error.detail.contains("not a top-level module")),
+        "{errors:?}"
+    );
+}
+
+/// Perturb: a real module dropped from the lists is unclassified -- the growth-direction control.
+#[test]
+fn a_real_module_on_neither_list_is_unclassified() {
+    let lower: Vec<&str> = LOWER_LAYER
+        .iter()
+        .copied()
+        .filter(|module| *module != "wal")
+        .collect();
+    let errors = layer_errors(&UPPER_LAYER, &lower);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.detail.contains("unclassified top-level module `wal`")),
+        "{errors:?}"
+    );
+}
+
+/// A module on both lists is refused rather than resolved in favour of either side.
+#[test]
+fn a_module_on_both_lists_is_refused() {
+    let upper: Vec<&str> = UPPER_LAYER.iter().copied().chain(["wal"]).collect();
+    let errors = layer_errors(&upper, &LOWER_LAYER);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.detail.contains("`wal` is listed in both")),
+        "{errors:?}"
+    );
+}
+
+/// `--graph` emits the same layer view the gate enforces.
+#[test]
+fn the_graph_emission_and_the_gate_agree_on_the_layer() {
+    let emitted = graph_report(&repo_root()).expect("graph report").layer;
+    assert_eq!(
+        emitted,
+        layer_report(&real_graph(), &UPPER_LAYER, &LOWER_LAYER)
+    );
+}
+
+/// The whole gate, not only `check_layer`: with `checkout` moved up, `check` itself reports the
+/// crossing. This is what fails if the gate's call to `check_layer` is ever deleted -- every other
+/// layer control calls the checker directly and would stay green.
+#[test]
+fn the_gate_itself_applies_the_layer_rule() {
+    let upper: Vec<&str> = UPPER_LAYER.iter().copied().chain(["checkout"]).collect();
+    let lower: Vec<&str> = LOWER_LAYER
+        .iter()
+        .copied()
+        .filter(|module| *module != "checkout")
+        .collect();
+    let mut errors = Vec::new();
+    check_with_layers(&repo_root(), &upper, &lower, &mut errors);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.category == "layer" && error.detail.contains("worktree -> checkout")),
+        "{errors:?}"
+    );
 }

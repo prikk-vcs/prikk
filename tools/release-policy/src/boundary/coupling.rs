@@ -17,6 +17,10 @@
 //! 2. **A module newly crossing the hub threshold fails until declared** in [`DECLARED_HUBS`], with
 //!    a reason.
 //!
+//! **And a third, which is a classification rather than an allowlist** (RFC 149 path B, owner ruling
+//! 2026-09-13): no production edge from the store's lower layer into its upper layer, with every
+//! top-level module on exactly one side -- see [`UPPER_LAYER`] and [`LOWER_LAYER`].
+//!
 //! **What this gate does not do** (§5 / v2 handoff §6): it does not gate line count or module
 //! count, it does not repair the graph, and declaring an entry is not licence to act on it.
 //!
@@ -48,6 +52,83 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::{BoundaryError, push};
+
+/// RFC 149 path B: the store's **upper layer** -- the operations built on it.
+///
+/// The owner ruled (2026-09-13) against cutting these into their own crate: the census showed the
+/// layering is real as a *direction* -- nothing below reaches them -- but not narrow as an
+/// *interface*, since they need roughly half the store's internals. A direction is enforced by a
+/// rule, so this is one: **no production edge from a [`LOWER_LAYER`] module into one of these.**
+///
+/// These are the twenty families RFC 149's move order would have moved.
+const UPPER_LAYER: [&str; 20] = [
+    "bundle",
+    "compact",
+    "doctor",
+    "history",
+    "merge",
+    "patch_algebra",
+    "patch_checkout",
+    "patch_exchange",
+    "patch_inverse",
+    "patch_set_digest",
+    "received",
+    "recognition_claim",
+    "rollback",
+    "seal_from_accepted",
+    "show",
+    "sync_negotiation",
+    "tag_travel",
+    "unlock",
+    "verify",
+    "worktree_status",
+];
+
+/// RFC 149 path B: everything else at the top level, **listed rather than derived as "not upper"**.
+///
+/// A new top-level module appears on neither list and fails the gate until someone decides which
+/// side it belongs on. That decision is the growth-direction control: without it, a new module lands
+/// on whichever side a default puts it and the rule silently stops describing the store.
+const LOWER_LAYER: [&str; 30] = [
+    // The core: the five modules of the declared cycles.
+    "commit_boundary",
+    "lifecycle_cache",
+    "patch_replay",
+    "refs",
+    "trust",
+    // Infrastructure the core reaches.
+    "author",
+    "blob_access",
+    "commit_index",
+    "format",
+    "foundation",
+    "ignore",
+    "lock",
+    "maintainer_signing",
+    "node",
+    "object_store",
+    "path",
+    "rename_declaration",
+    "signature_diagnostics",
+    "snapshot",
+    "text_span",
+    "trust_index",
+    "wal",
+    "worktree_marker",
+    // Surfaces by census, store by nature (RFC 149 §6b, §6d). Each is reached from lower-layer code
+    // or lower-layer tests -- `worktree.rs` names `checkout` in production -- so putting any of them
+    // upper would create exactly the crossing this rule forbids.
+    "block_state",
+    "checkout",
+    "memory_store",
+    "rfc111_seal_simulation",
+    "state_root",
+    "worktree",
+    // Test fixtures. In the production graph only while `test_support` is reachable under the
+    // `test-support` feature (RFC 149 §6b); when that returns to `cfg(test)`, this entry must leave
+    // with it, or the gate reports it as listed but absent.
+    "test_gates",
+];
 
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
@@ -306,6 +387,106 @@ pub struct GraphNode {
 /// to be assembled by reading imports by hand — which is exactly how a census and the gate come to
 /// disagree. **This adds no check and changes no verdict**; it emits what `check` below already
 /// computes, from the same `graph::build` and the same `HUB_THRESHOLD`, so the two cannot diverge.
+/// The layer rule's view of one graph, shared by the gate and by `--graph` so the two cannot disagree.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LayerReport {
+    pub upper: Vec<String>,
+    pub lower: Vec<String>,
+    /// Production edges from a lower-layer module into an upper-layer one. Must be empty.
+    pub violations: Vec<[String; 2]>,
+    /// Top-level modules on neither list -- each one an undecided classification.
+    pub unclassified: Vec<String>,
+    /// Listed names that are not a top-level module of the graph.
+    pub stale: Vec<String>,
+    /// Names listed on both sides.
+    pub listed_twice: Vec<String>,
+}
+
+fn top_level(module: &str) -> &str {
+    module.split("::").next().unwrap_or(module)
+}
+
+fn layer_report(graph: &graph::ModuleGraph, upper: &[&str], lower: &[&str]) -> LayerReport {
+    let upper_set: BTreeSet<&str> = upper.iter().copied().collect();
+    let lower_set: BTreeSet<&str> = lower.iter().copied().collect();
+    let present: BTreeSet<&str> = graph.modules.iter().map(|m| top_level(m)).collect();
+    LayerReport {
+        upper: upper_set.iter().map(|m| (*m).to_owned()).collect(),
+        lower: lower_set.iter().map(|m| (*m).to_owned()).collect(),
+        violations: graph
+            .edges
+            .iter()
+            .filter(|(from, to)| {
+                lower_set.contains(top_level(from)) && upper_set.contains(top_level(to))
+            })
+            .map(|(from, to)| [from.clone(), to.clone()])
+            .collect(),
+        unclassified: present
+            .iter()
+            .filter(|m| !upper_set.contains(*m) && !lower_set.contains(*m))
+            .map(|m| (*m).to_owned())
+            .collect(),
+        stale: upper_set
+            .union(&lower_set)
+            .filter(|m| !present.contains(*m))
+            .map(|m| (*m).to_owned())
+            .collect(),
+        listed_twice: upper_set
+            .intersection(&lower_set)
+            .map(|m| (*m).to_owned())
+            .collect(),
+    }
+}
+
+/// RFC 149 path B's rule, as gate errors in their own `layer` category. A standalone function so the
+/// controls can move a module between the lists without editing the constants.
+fn check_layer(
+    graph: &graph::ModuleGraph,
+    upper: &[&str],
+    lower: &[&str],
+    errors: &mut Vec<BoundaryError>,
+) {
+    let report = layer_report(graph, upper, lower);
+    for [from, to] in &report.violations {
+        push(
+            errors,
+            "layer",
+            format!(
+                "layer violation: {from} -> {to} -- a lower-layer module reaches an upper-layer one \
+                 (RFC 149: no production edge from the store's core or infrastructure into its \
+                 operations); remove the edge, or move the code it needs down"
+            ),
+        );
+    }
+    for module in &report.unclassified {
+        push(
+            errors,
+            "layer",
+            format!(
+                "unclassified top-level module `{module}` -- add it to UPPER_LAYER or LOWER_LAYER; \
+                 which side it is on is a decision, not a default"
+            ),
+        );
+    }
+    for module in &report.stale {
+        push(
+            errors,
+            "layer",
+            format!(
+                "`{module}` is listed in a layer constant but is not a top-level module -- remove \
+                 the entry"
+            ),
+        );
+    }
+    for module in &report.listed_twice {
+        push(
+            errors,
+            "layer",
+            format!("`{module}` is listed in both UPPER_LAYER and LOWER_LAYER"),
+        );
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct GraphReport {
     pub schema_version: &'static str,
@@ -316,6 +497,8 @@ pub struct GraphReport {
     pub hubs: Vec<String>,
     /// Subtree-cycle edges, as `check` detects them.
     pub subtree_cycles: Vec<[String; 2]>,
+    /// RFC 149 path B's layer rule: both lists, and every crossing edge.
+    pub layer: LayerReport,
 }
 
 /// Build the emission. Same source root, same builder, same threshold as [`check`].
@@ -354,6 +537,7 @@ pub(super) fn graph_report(root: &Path) -> Result<GraphReport, String> {
             .map(|(from, to)| [from.clone(), to.clone()])
             .collect(),
         hubs,
+        layer: layer_report(&graph, &UPPER_LAYER, &LOWER_LAYER),
         subtree_cycles: graph
             .subtree_cycles()
             .into_iter()
@@ -363,6 +547,13 @@ pub(super) fn graph_report(root: &Path) -> Result<GraphReport, String> {
 }
 
 pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
+    check_with_layers(root, &UPPER_LAYER, &LOWER_LAYER, errors);
+}
+
+/// [`check`] with the layer lists supplied, so a control can run the **whole gate** with a module
+/// moved between sides -- proving `check` applies the layer rule, not only that [`check_layer`]
+/// would if something called it.
+fn check_with_layers(root: &Path, upper: &[&str], lower: &[&str], errors: &mut Vec<BoundaryError>) {
     check_allowlists_are_well_formed(errors);
     let src_root = root.join("crates/prikk-store/src");
     let graph = match graph::build(&src_root) {
@@ -423,6 +614,8 @@ pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {
             );
         }
     }
+
+    check_layer(&graph, upper, lower, errors);
 
     check_declared_entries_still_exist(&graph, &declared_edges, &subtree_cycle_edges, errors);
 }
