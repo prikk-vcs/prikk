@@ -118,8 +118,15 @@ fn walk_finds_the_confirmed_production_module_count() {
     // net +1, 127 -> 128. RFC 131 §6f (2026-09-12) grouped `rollback_{draft,preview,verify}` under a
     // new parent `rollback`: three file-backed modules become four, net +1, 128 -> 129. §6f
     // increment 2 (same day) grouped `merge_{evidence,execute}` under `merge`: two become three,
-    // net +1, 129 -> 130.
-    assert_eq!(modules.len(), 130, "modules: {modules:?}");
+    // net +1, 129 -> 130. RFC 149 §6b (2026-09-13) made `test_gates::test_support` reachable under
+    // the `test-support` feature so the operations layer's moved tests can still reach their
+    // fixtures -- which means the walk, whose definition of production is "not gated out of every
+    // production configuration", now sees four more modules: `test_gates` and `test_support` with
+    // its two children. The gates themselves are still `cfg(test)` and still invisible. 130 -> 134.
+    assert_eq!(modules.len(), 134, "modules: {modules:?}");
+    // The half of `test_gates` that became reachable, and the half that did not.
+    assert!(modules.contains("test_gates::test_support"));
+    assert!(!modules.contains("test_gates::signature_contract_tests"));
     // Each grouping's own shape, so the count above is not the only thing pinning them.
     assert!(modules.contains("rollback"));
     assert!(modules.contains("rollback::draft"));

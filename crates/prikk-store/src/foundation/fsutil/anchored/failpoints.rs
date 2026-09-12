@@ -1,11 +1,19 @@
 //! Test-only failure seams for required filesystem boundaries.
 
-#[cfg(test)]
+// RFC 149 §6b: the failpoint machinery compiles under `test-support` as well as `cfg(test)`,
+// because `patch_checkout`'s tests use it and they move to `prikk-operations`. Only `Point` and
+// `fail_once` become `pub`; everything else here stays crate-internal and merely exists in one
+// more configuration.
+// Under `cfg(test)` every hook here has a caller; in a feature-only build only the two the
+// operations layer drives do.
+#![cfg_attr(not(test), allow(dead_code))]
+
+#[cfg(any(test, feature = "test-support"))]
 use prikk_error::PrikkError;
 use prikk_error::Result;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::cell::RefCell;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::{Arc, Barrier};
 
 // DC-98 Stage 2, classification rows #10-#14: these five variants inject at directory-entry
@@ -14,30 +22,48 @@ use std::sync::{Arc, Barrier};
 // Linux/macOS specifically rather than left reachable-but-uncalled on Windows, so the absence is a
 // compile-time fact matching the classification, not a silent dead-code warning `-D warnings` would
 // otherwise catch on every Windows build once this module compiles there too.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+/// One required filesystem boundary a test can make fail exactly once.
+///
+/// Each variant names the syscall-level point the anchored writer must survive a failure at; the
+/// platform-gated ones exist only where that boundary exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Point {
+#[non_exhaustive]
+pub enum Point {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a newly created directory's parent.
     CreatedDirectoryParentSync,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of an existing directory's parent.
     ObservedDirectoryParentSync,
+    /// The directory creation.
     DirectoryCreate,
+    /// The fsync of a file opened for mutation.
     MutableFileSync,
+    /// The rename of a mutable file into place.
     MutableRename,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a renamed file's parent directory.
     MutableParentSync,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a directory a write requires.
     RequiredDirectorySync,
+    /// The fsync of a file a write requires.
     RequiredFileSync,
+    /// The open of a file a write requires.
     RequiredOpen,
+    /// The an append write.
     AppendWrite,
+    /// The a truncation.
     Truncate,
+    /// The an unlink.
     Unlink,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a directory during cleanup.
     CleanupDirectorySync,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static NEXT: RefCell<Option<(Point, usize)>> = const { RefCell::new(None) };
     static DIRECTORY_CREATE_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
@@ -45,17 +71,18 @@ std::thread_local! {
     static ANCHOR_VERIFICATION_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
 }
 
-#[cfg(test)]
-pub(crate) fn fail_once(point: Point) {
+#[cfg(any(test, feature = "test-support"))]
+/// Arm `point` to fail on its next occurrence, once, on this thread.
+pub fn fail_once(point: Point) {
     fail_after(point, 0);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn fail_after(point: Point, matching_calls_to_skip: usize) {
     NEXT.with(|next| *next.borrow_mut() = Some((point, matching_calls_to_skip)));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
     DIRECTORY_CREATE_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }
@@ -66,7 +93,7 @@ pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<B
 // directory-sync `Point` variants (this module's own comment on `Point`, above) -- the compiler is
 // the reason, not symmetry with `DIRECTORY_CREATE_BARRIER`'s cross-platform gating.
 #[cfg(target_os = "windows")]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::foundation::fsutil) fn set_anchor_verification_barrier(barrier: Arc<Barrier>) {
     ANCHOR_VERIFICATION_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }
@@ -140,22 +167,35 @@ pub(super) fn cleanup_directory_sync() -> Result<()> {
 #[derive(Clone, Copy)]
 enum TestPoint {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a newly created directory's parent.
     CreatedDirectoryParentSync,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of an existing directory's parent.
     ObservedDirectoryParentSync,
+    /// The directory creation.
     DirectoryCreate,
+    /// The fsync of a file opened for mutation.
     MutableFileSync,
+    /// The rename of a mutable file into place.
     MutableRename,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a renamed file's parent directory.
     MutableParentSync,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a directory a write requires.
     RequiredDirectorySync,
+    /// The fsync of a file a write requires.
     RequiredFileSync,
+    /// The open of a file a write requires.
     RequiredOpen,
+    /// The an append write.
     AppendWrite,
+    /// The a truncation.
     Truncate,
+    /// The an unlink.
     Unlink,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// The fsync of a directory during cleanup.
     CleanupDirectorySync,
 }
 
@@ -171,7 +211,7 @@ fn check_test_point(point: TestPoint) -> Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl From<TestPoint> for Point {
     fn from(value: TestPoint) -> Self {
         match value {
@@ -199,6 +239,7 @@ impl From<TestPoint> for Point {
 
 #[derive(Clone, Copy)]
 enum TestBarrier {
+    /// The directory creation.
     DirectoryCreate,
     #[cfg(target_os = "windows")]
     AnchorVerification,
@@ -245,7 +286,7 @@ fn wait_at_test_barrier(barrier: TestBarrier) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn check(point: Point) -> Result<()> {
     NEXT.with(|next| {
         let mut next = next.borrow_mut();

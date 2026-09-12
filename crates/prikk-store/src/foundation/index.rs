@@ -740,11 +740,10 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
 /// under containers. Every index entry frame is exactly `INDEX_HEADER_LEN + INDEX_BODY_LEN` bytes
 /// (fixed-width body, unlike `wal.rs`/`container.rs`'s variable-length envelope bodies), so removal
 /// is a direct byte-range splice, not a rewrite-and-reindex.
-#[cfg(test)]
-pub(crate) fn remove_index_entry_for_test(
-    layout: &RepositoryLayout,
-    object_id: ObjectId,
-) -> Result<()> {
+/// Splice one entry out of an index file in place, so a test can produce the index-missing-an-entry
+/// state a repair path exists to correct.
+#[cfg(any(test, feature = "test-support"))]
+pub fn remove_index_entry_for_test(layout: &RepositoryLayout, object_id: ObjectId) -> Result<()> {
     let path = layout.container_index_path();
     let bytes = std::fs::read(&path)?;
     let replay = decode_index_records(&bytes, 0)?;

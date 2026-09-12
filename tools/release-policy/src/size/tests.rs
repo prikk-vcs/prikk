@@ -174,10 +174,15 @@ fn an_inline_test_module_is_not_production() {
     );
 }
 
-/// Control 3b: the whole `#[cfg(test)]` subtree is invisible, not merely uncounted.
+/// Control 3b: a `#[cfg(test)]` subtree is invisible, not merely uncounted.
 ///
 /// `test_gates/signature_contract_tests/vectors.rs` is 1,085 lines and would be the fourth-largest
 /// "production" file under any directory-shaped scan. It is not in the report at all.
+///
+/// **`test_gates` itself is no longer wholly test-only** since RFC 149 §6b: `test_support` is
+/// reachable under the `test-support` feature, so the walk sees it and the file count grew by four.
+/// The gates -- `signature_contract_tests` among them -- are still `cfg(test)` and still absent,
+/// which is what this control is actually about.
 #[test]
 fn a_cfg_test_subtree_is_never_walked() {
     let report = run(&repo_root()).expect("size-check");
@@ -185,16 +190,16 @@ fn a_cfg_test_subtree_is_never_walked() {
         !report
             .over_limit
             .iter()
-            .any(|file| file.path.contains("test_gates")),
-        "test_gates must not appear"
+            .any(|file| file.path.contains("signature_contract_tests")),
+        "the gates must not appear"
     );
     let store = report
         .crates
         .iter()
         .find(|entry| entry.name == "prikk-store")
         .expect("prikk-store");
-    // 130 graph nodes plus `lib.rs`, which is a file the gate weighs and not a node the graph has.
-    assert_eq!(store.production_files, 131);
+    // 134 graph nodes plus `lib.rs`, which is a file the gate weighs and not a node the graph has.
+    assert_eq!(store.production_files, 135);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

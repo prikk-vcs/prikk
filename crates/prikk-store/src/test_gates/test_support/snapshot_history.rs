@@ -13,9 +13,8 @@ use crate::{
     SnapshotEntry, SnapshotManifest,
 };
 
-pub(crate) fn publish_snapshot_then_patch_block(
-    layout: &RepositoryLayout,
-) -> prikk_error::Result<()> {
+/// Publish a snapshot block and then a patch block on top of it, returning both ids.
+pub fn publish_snapshot_then_patch_block(layout: &RepositoryLayout) -> prikk_error::Result<()> {
     let mut object_store = FileObjectStore::new(layout.clone());
     let readme_blob = write_blob(&mut object_store, b"hello\n")?;
     let old_blob = write_blob(&mut object_store, b"old\n")?;

@@ -79,11 +79,12 @@ pub(crate) use anchored::remove_file_required;
 ))]
 pub(crate) use contract::DurabilityContract;
 
+// RFC 149 §6b: same widening as `anchored.rs`'s own, same reason.
 #[cfg(all(
-    test,
+    any(test, feature = "test-support"),
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-pub(crate) use anchored::{TestFailPoint, fail_once_for_test};
+pub use anchored::{TestFailPoint, fail_once_for_test};
 // DC-98: see `anchored.rs`'s own re-export of this for the established Windows ordinals it exists
 // to carry.
 #[cfg(all(

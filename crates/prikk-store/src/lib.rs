@@ -91,7 +91,11 @@ mod worktree_status;
 // gates, evidence harnesses and shared fixtures, not production code -- and are now one directory
 // (`test_gates/`) rather than eight top-level entries. `rfc111_seal_simulation` is production and
 // stays where it was.
-#[cfg(test)]
+// RFC 149 §6b: reachable under `test-support` as well as `cfg(test)`, because the operations
+// layer's tests move to another crate and their fixtures cannot follow them. **Only
+// `test_support` is exposed** -- every gate inside stays `cfg(test)`, since a gate is a test of
+// this crate and has no meaning to a consumer.
+#[cfg(any(test, feature = "test-support"))]
 mod test_gates;
 
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
@@ -313,3 +317,42 @@ pub use refs::{
     replay_pointer_index, verify_refs,
 };
 pub use text_span::TextSpanResolutionFailure;
+
+// ---------------------------------------------------------------------------------------------
+// Test-support surface (RFC 149 §6b)
+//
+// **The fixtures the operations layer's own tests reach, and nothing else.** When a module moves to
+// `prikk-operations`, its tests move with it (RFC 149 §5.3) -- but `test_gates::test_support` stays
+// here, and a `#[cfg(test)]` module is reachable from no other crate at any visibility. So the
+// fixtures those tests use are exposed under the existing `test-support` feature, the same
+// mechanism the ten `refs` helpers use.
+//
+// Derived by reading the twenty-one movable families' test files, not by exposing the module
+// wholesale: `test_support` has more fixtures than these, and the ones nobody moved a test against
+// are deliberately absent. **Adding a name here is a decision**, and the one that says whether it is
+// needed is a compile of `prikk-operations`' tests, not a convenience.
+//
+// Never in a shipped build: the feature is non-default and nothing in `src/` may reference it
+// (`prikk-store`'s own `[features]` comment states that rule).
+#[cfg(feature = "test-support")]
+pub use test_gates::test_support::{
+    dummy_signature, legacy_rollback_marker_signature,
+    maintainer_signature as fixture_maintainer_signature, publish_snapshot_then_patch_block,
+    publish_text_create_then_edit_block, publish_text_edit_then_rename_path_block,
+    rollback_author_signature, rollback_patch_blob_envelope, rollback_patch_envelope,
+    sample_object_id, signed_block, signed_block_with_state_root, signed_empty_block_envelope,
+    signed_patch_blob_envelope, signed_patch_envelope, signed_patch_envelope_with_message,
+    signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir, write_blob,
+};
+// The lower-layer helpers a moving test reaches, beyond the fixtures: the index and container
+// record editors a durability test needs, and the anchored-write failpoints `patch_checkout`'s
+// tests drive. The failpoints follow their own pre-existing platform gate rather than widening it.
+#[cfg(feature = "test-support")]
+pub use foundation::container::encode_container_record_for_test;
+#[cfg(all(
+    feature = "test-support",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub use foundation::fsutil::{TestFailPoint, fail_once_for_test};
+#[cfg(feature = "test-support")]
+pub use foundation::index::remove_index_entry_for_test;

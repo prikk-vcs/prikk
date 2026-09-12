@@ -57,11 +57,13 @@ pub(in crate::foundation::fsutil) use failpoints::set_anchor_verification_barrie
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub(in crate::foundation::fsutil) use failpoints::set_directory_create_barrier as set_directory_create_barrier_for_test;
+// RFC 149 §6b: reachable under the feature too; `pub`, because a `pub(crate)` waypoint cannot be
+// re-exported from `lib.rs` (E0364).
 #[cfg(all(
-    test,
+    any(test, feature = "test-support"),
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-pub(crate) use failpoints::{Point as TestFailPoint, fail_once as fail_once_for_test};
+pub use failpoints::{Point as TestFailPoint, fail_once as fail_once_for_test};
 // DC-98: `windows/tests.rs::object_write_sync_failure_retains_and_classifies_windows` needs a
 // specific skip-count -- `RequiredFileSync` at skip 0 (container append's own sync) and skip 1
 // (index append's own sync), the same two ordinals `caller_tests::sync_matrix`'s Unix original

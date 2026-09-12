@@ -16,7 +16,9 @@ pub(crate) mod rfc111_index_decode_cost_gate;
 pub(crate) mod rfc111_seal_decode_cost_gate;
 #[cfg(test)]
 pub(crate) mod signature_contract_tests;
-#[cfg(test)]
+// RFC 149 §6b: the shared fixtures, reachable under the feature; the gates above and below are
+// not, and must not be -- they test this crate, they are not a service to another one.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_support;
 #[cfg(test)]
 pub(crate) mod trust_gated_operations_binding_gate;
