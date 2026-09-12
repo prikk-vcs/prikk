@@ -116,12 +116,18 @@ fn walk_finds_the_confirmed_production_module_count() {
     // `worktree_patch` under a new parent `commit_boundary`: two file-backed modules become
     // three (`commit_boundary`, `commit_boundary::active`, `commit_boundary::worktree_patch`) --
     // net +1, 127 -> 128. RFC 131 §6f (2026-09-12) grouped `rollback_{draft,preview,verify}` under a
-    // new parent `rollback`: three file-backed modules become four, net +1, 128 -> 129.
-    assert_eq!(modules.len(), 129, "modules: {modules:?}");
-    // The grouping's own shape, so the count above is not the only thing pinning it.
+    // new parent `rollback`: three file-backed modules become four, net +1, 128 -> 129. §6f
+    // increment 2 (same day) grouped `merge_{evidence,execute}` under `merge`: two become three,
+    // net +1, 129 -> 130.
+    assert_eq!(modules.len(), 130, "modules: {modules:?}");
+    // Each grouping's own shape, so the count above is not the only thing pinning them.
     assert!(modules.contains("rollback"));
     assert!(modules.contains("rollback::draft"));
     assert!(!modules.contains("rollback_draft"));
+    assert!(modules.contains("merge"));
+    assert!(modules.contains("merge::evidence"));
+    assert!(modules.contains("merge::evidence::display"));
+    assert!(!modules.contains("merge_evidence"));
     assert!(modules.contains("foundation"));
     assert!(modules.contains("show"));
     // The bare, pre-amendment names no longer exist as keys at all -- only their qualified forms

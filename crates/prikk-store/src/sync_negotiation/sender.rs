@@ -50,7 +50,7 @@ use prikk_object::{
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
-use crate::merge_evidence::ancestors_inclusive;
+use crate::merge::evidence::ancestors_inclusive;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_exchange::{ExchangeExportReport, export_exchange_artifact};
 use crate::refs::{RefStore, validate_local_branch_ref};

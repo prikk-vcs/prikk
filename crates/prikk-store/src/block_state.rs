@@ -322,7 +322,7 @@ pub(crate) struct TopologicalVerification {
 /// into something that only ever holds what the *traversal in progress* still needs.
 ///
 /// Uses Kahn's algorithm — in-degree map, children map, FIFO queue — the same shape already
-/// established in this codebase by [`crate::merge_evidence::topological_order`] for a related but
+/// established in this codebase by [`crate::merge::evidence::topological_order`] for a related but
 /// distinct purpose (ordering candidate blocks for merge evidence, over full `parent_block_ids`
 /// rather than the single state-derivation parent used here).
 ///

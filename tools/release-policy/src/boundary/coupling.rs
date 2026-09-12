@@ -50,9 +50,9 @@ use super::{BoundaryError, push};
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
 /// `min(fan_in, fan_out)` under RFC 131 §6c's qualified-node graph, today's ranking is 7
-/// (`merge_evidence`), 6 (`patch_replay`, `active`, `wal`, `author::author_key_index`), then a
-/// clean drop to 5 (`trust`, `lifecycle_cache::replay`, `patch_set_digest`). The break sits
-/// between 6 and 5.
+/// (`merge::evidence`, named `merge_evidence` until RFC 131 §6f grouped it), 6 (`patch_replay`,
+/// `active`, `wal`, `author::author_key_index`), then a clean drop to 5 (`trust`,
+/// `lifecycle_cache::replay`, `patch_set_digest`). The break sits between 6 and 5.
 ///
 /// **History, resolved as of RFC 131 §6c.7: `active` and `wal` dropped out of the declared set at
 /// RFC 131 §2.2a's `foundation` grouping (2026-09-08)**, a real consolidation effect rather than a
@@ -233,13 +233,14 @@ struct DeclaredHub {
 /// all. `trust` briefly joined this list too, for exactly as long as RFC 138's own `trust ->
 /// recognition_claim` edge existed; carried-defects C removed that edge along with the cycle it
 /// caused, and `trust` dropped back below the threshold with it (see the module doc).
-/// `merge_evidence` crossed it at RFC 142 (2026-09-08): `show` reuses `merge_evidence::
-/// lifecycle_state_at` rather than duplicating its private `lineage_horizon`/`replay_derived_
-/// state` call sequence, the same "add one narrow function instead of widening internals" shape
-/// RFC 131 §3 argued for.
+/// `merge::evidence` crossed it at RFC 142 (2026-09-08, then named `merge_evidence`; RFC 131 §6f
+/// grouped it 2026-09-12 and the entry below follows the module): `show` reuses
+/// `merge::evidence::lifecycle_state_at` rather than duplicating its private `lineage_horizon`/
+/// `replay_derived_state` call sequence, the same "add one narrow function instead of widening
+/// internals" shape RFC 131 §3 argued for.
 const DECLARED_HUBS: &[DeclaredHub] = &[
     DeclaredHub {
-        module: "merge_evidence",
+        module: "merge::evidence",
         reason: "RFC 142's `show` reuses this module's own lineage-horizon-to-replay sequence \
                   through one new narrow function (`lifecycle_state_at`) rather than duplicating \
                   it or widening `lifecycle_cache`'s already-`pub(crate)` internals further -- a \

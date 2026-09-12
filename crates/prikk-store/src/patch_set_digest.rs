@@ -34,7 +34,7 @@ use prikk_hash::sha256;
 use prikk_object::{BlockPayload, ObjectId, ObjectType, RefStatePayload};
 
 use crate::foundation::layout::RepositoryLayout;
-use crate::merge_evidence::ancestors_inclusive;
+use crate::merge::evidence::ancestors_inclusive;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::refs::{RefStore, resolve_ref_tip_block};
 

@@ -14,7 +14,7 @@ use prikk_object::{
 
 use crate::RepositoryLayout;
 use crate::author::author_signing::require_author_key_id;
-use crate::merge_evidence::lifecycle_state_at;
+use crate::merge::evidence::lifecycle_state_at;
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{

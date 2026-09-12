@@ -20,7 +20,7 @@
 //! `--baseline-block` — there is no automatic common-ancestor search anywhere in this codebase
 //! (confirmed by reading `merge_evidence.rs`/`verify.rs`'s own `verify_merge_baseline`, which only
 //! ever *checks* a claimed baseline, never *finds* one). This module is therefore the first place
-//! that needs to. It reuses [`crate::merge_evidence::ancestors_inclusive`] (already `pub(crate)`,
+//! that needs to. It reuses [`crate::merge::evidence::ancestors_inclusive`] (already `pub(crate)`,
 //! already multi-parent-aware) for the underlying graph walk, and adds its own lowest-common-
 //! ancestor search on top -- see [`find_lowest_common_ancestors`] for why that search can return
 //! more than one candidate, and what this module does when it does.
@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockPayload, ObjectId};
 
-use crate::merge_evidence::{ancestors_inclusive, candidate_patch_ids};
+use crate::merge::evidence::{ancestors_inclusive, candidate_patch_ids};
 use crate::object_store::ObjectReader;
 use crate::patch_replay::apply::ReplayLiveNode;
 use crate::patch_replay::apply_operation_sequence;

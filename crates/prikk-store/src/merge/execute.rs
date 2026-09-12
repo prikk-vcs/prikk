@@ -20,7 +20,7 @@ use prikk_object::{
     RefStatePayload, RefUpdatePayload,
 };
 
-use crate::merge_evidence::{
+use crate::merge::evidence::{
     MergeEvidenceTarget, candidate_patch_ids, prepare_merge_evidence,
     verify_candidate_blocks_trusted,
 };

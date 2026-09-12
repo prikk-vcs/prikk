@@ -573,7 +573,7 @@ pub fn export_bundle(
         .iter()
         .copied()
         .collect();
-    let mut ancestors = crate::merge_evidence::ancestors_inclusive(&object_store, tip_block_id)?;
+    let mut ancestors = crate::merge::evidence::ancestors_inclusive(&object_store, tip_block_id)?;
     let mut previous = ref_state_payload.previous_ref_state_id;
     let mut seen_ref_states: BTreeSet<ObjectId> = BTreeSet::from([ref_state_id]);
     while let Some(previous_id) = previous {
@@ -590,7 +590,7 @@ pub fn export_bundle(
         required_attestation_ids.extend(payload.required_attestation_ids.iter().copied());
         let target_block_id =
             resolve_ref_target_block(&object_store, &payload, &mut tag_envelopes)?;
-        ancestors.extend(crate::merge_evidence::ancestors_inclusive(
+        ancestors.extend(crate::merge::evidence::ancestors_inclusive(
             &object_store,
             target_block_id,
         )?);

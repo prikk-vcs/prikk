@@ -37,8 +37,7 @@ mod lifecycle_cache;
 mod lock;
 mod maintainer_signing;
 mod memory_store;
-mod merge_evidence;
-mod merge_execute;
+mod merge;
 // Production node-id minting (DC-09 Phase 4.4a-1), consumed by node-addressed worktree authoring
 // (4.4a-2) for fresh-node creation. RFC 131 §2.2a ruling (b): the `node` name family (node_id_gen,
 // node_lifecycle).
@@ -141,12 +140,12 @@ pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
 pub use lock::{ActiveLock, ContainerLockGuard, RefLock, acquire_container_locks};
 pub use maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner, maintainer_signature};
 pub use memory_store::MemoryObjectStore;
-pub use merge_evidence::{
+pub use merge::evidence::{
     MergeEvidenceDisplay, MergeEvidenceDisplayItem, MergeEvidenceDisplayOperation,
     MergeEvidenceDisplayOperationContent, MergeEvidenceDisplaySelector, MergeEvidenceTarget,
     MergePlanDisplay, prepare_merge_evidence, prepare_merge_plan,
 };
-pub use merge_execute::{MergeExecutionReport, execute_merge};
+pub use merge::execute::{MergeExecutionReport, execute_merge};
 pub use object_store::{
     FileObjectStore, ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter,
 };

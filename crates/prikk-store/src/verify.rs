@@ -1610,9 +1610,9 @@ fn verify_merge_baseline(
         return Ok(None);
     };
     let mainline_ancestors =
-        crate::merge_evidence::ancestors_inclusive(object_store, mainline_parent_id)?;
+        crate::merge::evidence::ancestors_inclusive(object_store, mainline_parent_id)?;
     let secondary_ancestors =
-        crate::merge_evidence::ancestors_inclusive(object_store, secondary_parent_id)?;
+        crate::merge::evidence::ancestors_inclusive(object_store, secondary_parent_id)?;
     let is_common_ancestor = mainline_ancestors.contains_key(&recorded_baseline)
         && secondary_ancestors.contains_key(&recorded_baseline);
     if is_common_ancestor {
