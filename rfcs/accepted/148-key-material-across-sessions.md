@@ -154,6 +154,12 @@ route and stays documented as such.
 **Rule 1's window, restated with numbers:** 0.40.0 refuses a set `PRIKK_*_SEED`; 0.41.0 removes the
 detection. Carried in `ROADMAP.md`'s 0.41 theme.
 
+**Delivered 2026-09-12** at `ea0b16f2` + `a0f7b0a2` + `adde6e31`, reviewed
+(`rfc148-default-key-directory-review-v1.md`, `rfc148-second-project-review-v1.md`). Measured by the
+architect on the binary: bare `setup` to a sealed, verified commit with zero `PRIKK_*`; a second
+project reuses the keys with both seed files byte- and mtime-identical; one-seed and bad-mode states
+refuse with nothing created. Open from this RFC: the 0.41.0 removal of the retired-variable detection.
+
 ## 4. Why this shape and not the others
 
 - **Require the user to name the paths** (this RFC's own §2a) — correct on security, wrong on the
