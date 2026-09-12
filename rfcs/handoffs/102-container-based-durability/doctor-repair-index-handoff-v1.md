@@ -40,3 +40,53 @@ became readable. On a clean repository: `nothing to repair` with the counts, exi
 
 - The lock itself (its own handoff).
 - Any other `doctor` repair; `--repair-main-ref` stays refused as designed.
+
+---
+
+# v3 — 2026-09-12, one round: the repair holds the lock it exists to complement
+
+**`2ec9aa40` reviewed** (`.git-exclude/reviewed/rfc102-doctor-repair-index-review-v1.md`): the verb
+repaired the four repositories the pre-lock binary really damaged, and a fully garbage index besides.
+Not accepted for one reason.
+
+## 1. Required: `repair_object_index` runs under `LockableContainer::ObjectStore`
+
+The repair reads the index, scans the containers, and renames a rebuilt index over the old one — with
+no lock. Measured: forty rounds of `doctor --repair-index` launched beside `tag create` left `verify`
+failing (`ref tags/race40 names missing RefState …`); two writers' entries were discarded by installs of
+a stale scan. A repair is a writer to `index.container` and takes the same lock every other writer now
+takes.
+
+- Acquire in `doctor::repair_object_index` — the surface layer, exactly where `append_object_under_lock`
+  sits and for the same reason (`foundation` must not reach `crate::lock`). Hold it from before the
+  first read until `repair_index_from_containers` has returned. Acquire nothing else: it stays a leaf.
+- Consequences to state in the docstring and `integrity-recovery.md`: a writer arriving during a
+  repair is refused with `lock conflict`; a repair arriving during a write is refused the same way; a
+  stale `objects.lock` refuses the repair with the message that names `prikk unlock`.
+- Controls: (a) the forty-round race as an ordinary test or the instrument's shape — assert `verify`
+  clean and every concurrent `tag create` either succeeded or reported `container:object-store`;
+  (b) deterministic — hold `ObjectStore` from the test, call `repair_object_index`, assert
+  `LockConflict` and the index byte-identical. Perturb (b) by removing the acquisition.
+- The bypass guard's rule extends: `repair_index_from_containers` may be named in production only at
+  its definition, its import, and inside `repair_object_index` under the lock. Add it to
+  `every_object_append_goes_through_the_locked_wrapper` or a sibling of the same shape.
+
+## 2. Also in this round
+
+- `#[non_exhaustive]` on `IndexRepairReport` (RFC 147 ruling 2's reasoning; it is a report struct that
+  will gain fields).
+- Two stale doc lines from before the set comparison: `already_correct`'s field doc ("byte-identical")
+  and the function doc ("rebuilt bytes are compared") — say "equal as a set of entries".
+- CHANGELOG `### Added` gains one sentence: the repair takes the object-store lock, so it refuses
+  rather than racing a concurrent writer.
+
+## 3. Optional, while you are in `object_store/tests.rs`
+
+A deterministic companion to control 1: hold `ObjectStore` from the test thread, call `write_object`,
+assert `LockConflict`. The racing test passed 150 of 150 under 2× CPU oversubscription here, so this is
+insurance against a fast filesystem, not a fix.
+
+## 4. Gates
+
+The full set, verbatim; the cross-target addendum applies to this round's diff by inheritance (`index.rs`
+carries platform `cfg`); say so from the diff and run both targets.

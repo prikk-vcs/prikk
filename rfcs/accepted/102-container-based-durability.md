@@ -305,3 +305,24 @@ existing lock, so overlapping mutators now refuse visibly instead of corrupting 
 doctor --repair-index`**, wiring the rebuild that already exists, as its own increment. Both first in
 0.40.0. Handoffs: `object-container-write-locking-handoff-v1.md` (v2 ruling appended),
 `doctor-repair-index-handoff-v1.md`.
+
+### Delivered and ruled, 2026-09-12 (later the same day)
+
+**The lock landed at `e2c86373`.** The implementing team placed the acquisition in
+`object_store::append_object_under_lock` — the sole production caller of `append_object_to_container`
+— rather than inside the `foundation` function, because the coupling gate rejected `foundation -> lock`
+(the bottom layer may not depend on `crate::lock`). **RULED: that placement stands, and declaring a
+`foundation ↔ lock` cycle to obtain the literal placement is refused** — the ruling was about the
+exclusive span, which is byte-for-byte the one required, and the bottom layer staying the bottom is what
+RFC 149's cut rests on. The self-enforcement lost by moving one frame up is replaced by a call-graph
+test (`every_object_append_goes_through_the_locked_wrapper`) that reads the production tree and names
+any other caller by file and line. **Measured by the architect on the fixed binary: twelve concurrent
+`tag create`, four fresh runs, four repositories clean**, every refusal a lock conflict.
+
+**The repair verb (`2ec9aa40`) repaired all four repositories the pre-lock binary had damaged, and a
+fully garbage index; it was returned for one round because it held no lock** — forty rounds of
+`doctor --repair-index` beside `tag create` left `verify` failing, two writers' index entries discarded
+by installs of a stale scan. **RULED: the repair is a writer to `index.container` and acquires
+`LockableContainer::ObjectStore` from `doctor::repair_object_index` (surface layer, same reason as the
+wrapper) for its whole scan-and-install; still a leaf.** Generalised: *any new writer to a locked
+resource takes that resource's lock, and a repair verb is a writer.*
