@@ -13,7 +13,7 @@ prikk <command> --help
 ```text
 prikk init [path]
 prikk key generate [--out <path>]
-prikk key public --seed-env <NAME>
+prikk key public [--seed-file <path>] [--role author|maintainer]
 prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]
 prikk trust maintainer add --key-id ID --public-key HEX
 prikk trust maintainer remove --key-id ID

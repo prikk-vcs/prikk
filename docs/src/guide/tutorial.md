@@ -32,16 +32,15 @@ prikk commit -m "genesis"
 ```
 
 ```
-error: author signing is required: set PRIKK_AUTHOR_KEY_ID (no signing key configured)
+error: author signing is required: no seed at /home/you/.config/prikk/author.seed. Create one with `prikk key generate --out /home/you/.config/prikk/author.seed`, run `prikk setup` in a new project directory, or set PRIKK_AUTHOR_SEED_FILE to an existing seed file
 ```
 
 **This refusal is the point, not a mistake in this tutorial.** Every commit in Prikk produces a
-signed Patch — there is no unsigned-commit mode to fall back to. `commit` reads the signing key from
-two environment variables, so set them and try again:
+signed Patch — there is no unsigned-commit mode to fall back to. The refusal names the file prikk
+looked for; create it and try again:
 
 ```sh
-export PRIKK_AUTHOR_KEY_ID="dev-author"
-export PRIKK_AUTHOR_SEED="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+prikk key generate --out ~/.config/prikk/author.seed
 prikk commit -m "genesis"
 ```
 
@@ -72,7 +71,7 @@ prikk seal --allow-no-audit
 ```
 
 ```
-error: maintainer signing is required: set PRIKK_MAINTAINER_KEY_ID (no signing key configured)
+error: maintainer signing is required: no seed at /home/you/.config/prikk/maintainer.seed. Create one with `prikk key generate --out /home/you/.config/prikk/maintainer.seed`, run `prikk setup` in a new project directory, or set PRIKK_MAINTAINER_SEED_FILE to an existing seed file
 ```
 
 **A different role, a different key.** `commit` signs as the *author* of a change; `seal` signs as
@@ -82,8 +81,7 @@ roles, because the trust boundary they express is different (see
 again:
 
 ```sh
-export PRIKK_MAINTAINER_KEY_ID="dev-maintainer"
-export PRIKK_MAINTAINER_SEED="111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+prikk key generate --out ~/.config/prikk/maintainer.seed
 prikk seal --allow-no-audit
 ```
 

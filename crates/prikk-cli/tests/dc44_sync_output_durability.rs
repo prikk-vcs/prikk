@@ -149,8 +149,8 @@ fn sync_build_without_force_refuses_an_existing_destination_and_leaves_it_verifi
         support::prikk(repo)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args(args)
             .output()
@@ -227,8 +227,8 @@ fn sync_build_already_in_sync_does_not_refuse_on_an_existing_destination() {
     let build = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -289,8 +289,8 @@ fn sync_build_with_force_overwrites_and_the_result_is_the_new_artifact() {
         &support::prikk(&repo_a)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args([
                 "sync",
@@ -310,8 +310,8 @@ fn sync_build_with_force_overwrites_and_the_result_is_the_new_artifact() {
     let forced = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -382,8 +382,8 @@ fn sync_build_failed_write_leaves_the_previous_artifact_verifiable() {
         &support::prikk(&repo_a)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args([
                 "sync",
@@ -406,8 +406,8 @@ fn sync_build_failed_write_leaves_the_previous_artifact_verifiable() {
     let failed = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -478,8 +478,8 @@ fn sync_accept_claims_out_refuses_without_force_and_overwrites_with_it() {
         support::prikk(&repo_a)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args([
                 "sync",
@@ -618,8 +618,8 @@ fn sync_accept_refusal_happens_before_the_artifact_is_accepted() {
         &support::prikk(&repo_a)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args([
                 "sync",

@@ -103,8 +103,8 @@ pub(crate) fn commit_worktree(repo: &Path, message: &str) -> TestResult {
     let out = prikk(repo)
         .env("PRIKK_AUTHOR_KEY_ID", "merge-evidence-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "-m", message])
         .output()?;
@@ -114,7 +114,10 @@ pub(crate) fn commit_worktree(repo: &Path, message: &str) -> TestResult {
 pub(crate) fn seal_current(repo: &Path) -> TestResult<String> {
     let out = prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "merge-evidence-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()?;
     ok(&out, "seal")?;

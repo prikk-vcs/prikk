@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Changed — breaking once: your keys live in a directory, and a seed is never an environment variable
+
+`prikk setup` now writes `author.seed` and `maintainer.seed` into a key directory and prints
+
+```
+your keys are in /home/you/.config/prikk
+every new shell finds them -- nothing to export
+```
+
+There is nothing to export, nothing to paste, and nothing to redo after a reboot. The directory is
+`$XDG_CONFIG_HOME/prikk` (else `$HOME/.config/prikk`) on Linux, macOS and BSD, and `%APPDATA%\prikk`
+on Windows — one candidate per platform, resolved by prikk itself with no new dependency.
+
+Each role's seed is read from exactly two places, in order, and no third:
+
+1. `PRIKK_AUTHOR_SEED_FILE` / `PRIKK_MAINTAINER_SEED_FILE`, if set — a path;
+2. otherwise the key directory's `author.seed` / `maintainer.seed`.
+
+An override that is set but missing is a refusal, never a silent fall back to the default — a typo in
+the path must not sign with a different key than you named. `PRIKK_AUTHOR_KEY_ID` and
+`PRIKK_MAINTAINER_KEY_ID` are unchanged and now default to `author` / `maintainer`.
+
+**`PRIKK_AUTHOR_SEED` and `PRIKK_MAINTAINER_SEED` are no longer read, and setting either is a
+refusal:**
+
+```
+error: precondition not met: PRIKK_AUTHOR_SEED is no longer read; your keys are in /home/you/.config/prikk (or set PRIKK_AUTHOR_SEED_FILE)
+```
+
+**Refusing, not ignoring, is the point.** An environment variable is readable by every child process,
+lands in process listings, and survives in shell profiles long after the key it holds has changed —
+so a silent ignore would let automation keep running while signing with a key nobody meant. The
+detection is removed in **0.42.0**, one release from now; after that a stale variable is simply
+unused.
+
+On Unix the key directory is created `0700` and each seed `0600`, and **prikk refuses to read a seed
+file that group or others can read**, naming the mode and the `chmod` that fixes it. On Windows there
+are no mode bits: the directory relies on `%APPDATA%` being per-user by platform ACL, which is now
+stated in the documentation rather than assumed. `prikk key generate --out <arbitrary path>` still
+refuses on Windows for the same reason it always has.
+
+`prikk key public --seed-env <NAME>` is replaced by `prikk key public [--seed-file <path>]
+[--role author|maintainer]` — with no arguments it reads your key directory's `author.seed`. There is
+no longer an environment variable for it to name.
+
+**Migrating:** run `prikk setup` in a new project directory, or write your existing seed to
+`<key dir>/author.seed` at mode `0600` (`prikk key generate --out <that path>` creates the directory
+for you), then remove the old `export PRIKK_*_SEED` lines from your shell profile.
+
 ### Fixed — concurrent object writes no longer corrupt the object index
 
 Two commands that both wrote objects at the same moment could leave the repository failing `prikk

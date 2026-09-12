@@ -48,14 +48,20 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     std::fs::write(source_repo.join("readme.txt"), b"hello prikk\n").unwrap();
     let commit = support::prikk(&source_repo)
         .env("PRIKK_AUTHOR_KEY_ID", "dev-author")
-        .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(AUTHOR_SEED_HEX),
+        )
         .args(["commit", "-m", "genesis"])
         .output()
         .unwrap();
     support::ok(&commit, "commit genesis");
     let seal = support::prikk(&source_repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "dev-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED_HEX)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED_HEX),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();
@@ -129,7 +135,10 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     std::fs::write(source_repo.join("notes.txt"), b"not yet sealed\n").unwrap();
     let unsealed_commit = support::prikk(&source_repo)
         .env("PRIKK_AUTHOR_KEY_ID", "dev-author")
-        .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(AUTHOR_SEED_HEX),
+        )
         .args(["commit", "-m", "notes, not yet sealed"])
         .output()
         .unwrap();
@@ -177,7 +186,10 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     // Seal, then export with --force -- now both generations are included.
     let seal_second = support::prikk(&source_repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "dev-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED_HEX)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED_HEX),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();

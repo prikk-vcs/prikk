@@ -12,7 +12,7 @@
 //!    composition may remove the *typing*, never the *seeing*.
 //! 5. Seeds never on argv. Paths are fine.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use prikk_store::{
     RepositoryLayout, add_trusted_maintainer, load_maintainer_trust_policy_or_empty,
@@ -27,11 +27,23 @@ use prikk_crypto::Ed25519KeyPair;
 const AUTHOR_KEY_ID: &str = "author";
 const MAINTAINER_KEY_ID: &str = "maintainer";
 
-/// One generated seed's disposition: printed (with its hex, for the export block) or written to a
-/// user-named path (never printed).
+/// One generated seed's disposition. RFC 148 removed the third case that used to exist — printing
+/// the hex — because there is no longer an environment variable to paste it into. A seed is written
+/// to a file, always; the only question is which file.
 enum SeedOutput {
-    Printed(String),
-    WrittenTo(PathBuf),
+    /// The default key directory's own file. Nothing to export: every new shell finds it.
+    DefaultDirectory(PathBuf),
+    /// A path the user named with `--author-seed-out`/`--maintainer-seed-out`. The corresponding
+    /// `PRIKK_*_SEED_FILE` line is printed, because prikk will not look here on its own.
+    UserNamed(PathBuf),
+}
+
+impl SeedOutput {
+    fn path(&self) -> &Path {
+        match self {
+            SeedOutput::DefaultDirectory(path) | SeedOutput::UserNamed(path) => path,
+        }
+    }
 }
 
 pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
@@ -102,25 +114,31 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
         root.join(".prikk").display()
     );
 
-    let author_seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
-    let author_output = match author_seed_out {
-        Some(path) => {
-            write_seed_to_path(&author_seed, &path)?;
-            SeedOutput::WrittenTo(path)
-        }
-        None => SeedOutput::Printed(prikk_hash::to_hex(&author_seed)),
+    // RFC 148: with no flags, both seeds land in the default key directory and nothing is printed.
+    // The directory is created before either key is generated, so a failure to create it does not
+    // leave one seed written and one lost.
+    let key_dir = match (&author_seed_out, &maintainer_seed_out) {
+        (Some(_), Some(_)) => None,
+        _ => Some(crate::key_material::ensure_key_dir()?),
     };
+
+    let author_seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
+    let author_output = write_role_seed(
+        &author_seed,
+        author_seed_out,
+        key_dir.as_deref(),
+        crate::key_material::Role::Author,
+    )?;
 
     let maintainer_seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
     let maintainer_public_key = Ed25519KeyPair::from_seed(&maintainer_seed).public_key_bytes();
     let maintainer_public_key_hex = prikk_hash::to_hex(&maintainer_public_key);
-    let maintainer_output = match maintainer_seed_out {
-        Some(path) => {
-            write_seed_to_path(&maintainer_seed, &path)?;
-            SeedOutput::WrittenTo(path)
-        }
-        None => SeedOutput::Printed(prikk_hash::to_hex(&maintainer_seed)),
-    };
+    let maintainer_output = write_role_seed(
+        &maintainer_seed,
+        maintainer_seed_out,
+        key_dir.as_deref(),
+        crate::key_material::Role::Maintainer,
+    )?;
 
     // Property 4: the trust decision is shown, not performed invisibly -- this is the one step in
     // the composed sequence that is a trust act, and `setup` must print it exactly as `trust
@@ -135,33 +153,27 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     let policy = load_maintainer_trust_policy_or_empty(&layout).map_err(|err| err.to_string())?;
     println!("adopted maintainer keys: {}", policy.keys.len());
 
-    let any_printed = matches!(author_output, SeedOutput::Printed(_))
-        || matches!(maintainer_output, SeedOutput::Printed(_));
-
     println!();
-    println!("export these before committing:");
-    println!("  export PRIKK_AUTHOR_KEY_ID=\"{AUTHOR_KEY_ID}\"");
-    match &author_output {
-        SeedOutput::Printed(hex) => println!("  export PRIKK_AUTHOR_SEED=\"{hex}\""),
-        SeedOutput::WrittenTo(path) => {
-            println!("  export PRIKK_AUTHOR_SEED=\"$(cat {})\"", path.display());
+    match (&author_output, &maintainer_output) {
+        (SeedOutput::DefaultDirectory(author), SeedOutput::DefaultDirectory(_)) => {
+            // The whole point of RFC 148: no export block, because there is nothing to export.
+            let dir = author.parent().unwrap_or(author);
+            println!("your keys are in {}", dir.display());
+            println!("every new shell finds them -- nothing to export");
         }
-    }
-    println!("  export PRIKK_MAINTAINER_KEY_ID=\"{MAINTAINER_KEY_ID}\"");
-    match &maintainer_output {
-        SeedOutput::Printed(hex) => println!("  export PRIKK_MAINTAINER_SEED=\"{hex}\""),
-        SeedOutput::WrittenTo(path) => {
-            println!(
-                "  export PRIKK_MAINTAINER_SEED=\"$(cat {})\"",
-                path.display()
+        _ => {
+            println!("set these before committing:");
+            print_seed_file_line(
+                crate::key_material::Role::Author,
+                &author_output,
+                AUTHOR_KEY_ID,
+            );
+            print_seed_file_line(
+                crate::key_material::Role::Maintainer,
+                &maintainer_output,
+                MAINTAINER_KEY_ID,
             );
         }
-    }
-    if any_printed {
-        println!(
-            "note: at least one seed above is now in your terminal scrollback -- treat it as a \
-             secret"
-        );
     }
     println!();
     println!("next steps:");
@@ -171,4 +183,47 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
          `prikk seal --help`"
     );
     Ok(())
+}
+
+/// Write one role's seed to the path the user named, or to the default key directory.
+fn write_role_seed(
+    seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
+    user_named: Option<PathBuf>,
+    key_dir: Option<&Path>,
+    role: crate::key_material::Role,
+) -> std::result::Result<SeedOutput, CliError> {
+    match user_named {
+        Some(path) => {
+            write_seed_to_path(seed, &path)?;
+            Ok(SeedOutput::UserNamed(path))
+        }
+        None => {
+            let dir = key_dir.ok_or_else(|| {
+                CliError::Failure("internal: no key directory for a default seed".to_string())
+            })?;
+            let path = dir.join(role.seed_file_name());
+            crate::key::write_seed_to_key_dir(seed, &path)?;
+            Ok(SeedOutput::DefaultDirectory(path))
+        }
+    }
+}
+
+/// Print the `PRIKK_*_SEED_FILE` line for a seed prikk will not find on its own.
+fn print_seed_file_line(role: crate::key_material::Role, output: &SeedOutput, key_id: &str) {
+    println!("  export {}=\"{key_id}\"", role.key_id_var());
+    match output {
+        // A default-directory seed needs no variable at all; saying so beside a sibling that does
+        // is clearer than silence.
+        SeedOutput::DefaultDirectory(path) => {
+            println!(
+                "  # {} is found automatically at {}",
+                role.label(),
+                path.display()
+            );
+        }
+        SeedOutput::UserNamed(path) => {
+            println!("  export {}=\"{}\"", role.seed_file_var(), path.display());
+        }
+    }
+    let _ = output.path();
 }

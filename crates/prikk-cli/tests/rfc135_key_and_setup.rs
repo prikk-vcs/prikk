@@ -127,7 +127,7 @@ mod unix_only {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    /// Control 4: a generated seed round-trips through `key public --seed-env`.
+    /// Control 4: a generated seed round-trips through `key public --seed-file`.
     #[test]
     fn key_generate_out_then_key_public_round_trips() {
         let repo = support::unique_repo("rfc135-key-round-trip");
@@ -141,13 +141,13 @@ mod unix_only {
         let generated_public_key = extract_after(&generate_stdout, "public key:")
             .expect("key generate must print a public key line");
 
-        let seed_hex = std::fs::read_to_string(&seed_path).unwrap();
+        // RFC 148: `--seed-file <path>` replaces `--seed-env <NAME>` -- the seed is read from the
+        // file `key generate --out` just wrote, with no environment variable in between.
         let public = support::prikk(&repo)
-            .env("RFC135_ROUND_TRIP_SEED", seed_hex.trim())
-            .args(["key", "public", "--seed-env", "RFC135_ROUND_TRIP_SEED"])
+            .args(["key", "public", "--seed-file", seed_path.to_str().unwrap()])
             .output()
             .unwrap();
-        support::ok(&public, "key public --seed-env");
+        support::ok(&public, "key public --seed-file");
         let public_stdout = String::from_utf8_lossy(&public.stdout);
         let derived_public_key = extract_after(&public_stdout, "public key:")
             .expect("key public must print a public key line");
@@ -190,7 +190,7 @@ mod windows_only {
 #[test]
 fn setup_prints_the_trust_decision() {
     let repo = support::unique_repo("rfc135-setup-trust");
-    let out = support::prikk(Path::new("."))
+    let out = support::prikk(&repo)
         .args(["setup", repo.to_str().unwrap()])
         .output()
         .unwrap();
@@ -203,51 +203,99 @@ fn setup_prints_the_trust_decision() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Property 1/end-to-end: one command reaches a working repository, and its printed exports
-/// actually authorize a real commit and seal -- not asserted from reading the source.
+/// RFC 148 control 1, end to end: **bare `setup`, then a commit and a seal with no `PRIKK_*`
+/// variable set at all.**
+///
+/// This is the whole point of the change, so it is asserted the hard way: the commit and the seal
+/// below inherit nothing — no key id, no seed, no seed-file path — and must still work, purely
+/// because `setup` wrote two files into the key directory. The test also checks the directory is
+/// `0700` and each seed `0600`, because "it worked" would also be true of a world-readable key.
+///
+/// It used to parse two `export PRIKK_*_SEED=` lines out of `setup`'s output and feed them back in.
+/// There are no such lines any more, and that absence *is* the feature.
 #[test]
-fn setup_reaches_a_sealed_commit() {
+fn setup_reaches_a_sealed_commit_with_no_environment_at_all() {
     let repo = support::unique_repo("rfc135-setup-e2e");
     // `setup` must create a missing leading directory itself (property 1: no other step first).
     let target = repo.join("nested/does/not/exist/yet");
-    let out = support::prikk(Path::new("."))
+    let out = support::prikk(&repo)
         .args(["setup", target.to_str().unwrap()])
         .output()
         .unwrap();
     support::ok(&out, "setup");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-
-    let author_seed = extract_after(&stdout, "export PRIKK_AUTHOR_SEED=\"")
-        .map(|s| s.trim_end_matches('"').to_string())
-        .expect("setup must print an AUTHOR seed export line");
-    let maintainer_seed = extract_after(&stdout, "export PRIKK_MAINTAINER_SEED=\"")
-        .map(|s| s.trim_end_matches('"').to_string())
-        .expect("setup must print a MAINTAINER seed export line");
-    assert_eq!(author_seed.len(), 64);
-    assert_eq!(maintainer_seed.len(), 64);
-    assert_ne!(
-        author_seed, maintainer_seed,
-        "setup must generate two independent seeds, one per role"
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        stdout.contains("every new shell finds them -- nothing to export"),
+        "setup must say the keys need no export: {stdout}"
+    );
+    assert!(
+        !stdout.contains("export PRIKK_AUTHOR_SEED")
+            && !stdout.contains("export PRIKK_MAINTAINER_SEED"),
+        "no seed may be exported or printed: {stdout}"
+    );
+    assert!(
+        !stdout
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(64)
+            .any(|window| window.iter().all(char::is_ascii_hexdigit)),
+        "no 64-hex run may reach stdout: {stdout}"
     );
 
+    // The key directory `setup` wrote into, as this test isolated it.
+    let key_dir = support::isolated_key_dir(&repo);
+    assert_permissions(&key_dir, 0o700);
+    assert_permissions(&key_dir.join("author.seed"), 0o600);
+    assert_permissions(&key_dir.join("maintainer.seed"), 0o600);
+
+    // And now the assertion that matters: nothing in the environment, and it still signs.
     std::fs::write(target.join("f.txt"), b"hello").unwrap();
-    let commit = support::prikk(&target)
-        .env("PRIKK_AUTHOR_KEY_ID", "author")
-        .env("PRIKK_AUTHOR_SEED", &author_seed)
-        .args(["commit", "--from-worktree", "-m", "genesis"])
-        .output()
-        .unwrap();
-    support::ok(&commit, "commit");
-    let seal = support::prikk(&target)
-        .env("PRIKK_MAINTAINER_KEY_ID", "maintainer")
-        .env("PRIKK_MAINTAINER_SEED", &maintainer_seed)
-        .args(["seal", "--allow-no-audit"])
-        .output()
-        .unwrap();
-    support::ok(&seal, "seal");
-    support::ok(&support::verify(&target), "verify");
+    support::ok(
+        &support::prikk(&repo)
+            .current_dir(&target)
+            .args(["commit", "--from-worktree", "-m", "genesis"])
+            .output()
+            .unwrap(),
+        "commit with no PRIKK_* variable set",
+    );
+    support::ok(
+        &support::prikk(&repo)
+            .current_dir(&target)
+            .args(["seal", "--allow-no-audit"])
+            .output()
+            .unwrap(),
+        "seal with no PRIKK_* variable set",
+    );
+    support::ok(
+        &support::prikk(&repo)
+            .current_dir(&target)
+            .arg("verify")
+            .output()
+            .unwrap(),
+        "verify",
+    );
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[cfg(unix)]
+fn assert_permissions(path: &Path, expected: u32) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path)
+        .unwrap_or_else(|err| panic!("stat {}: {err}", path.display()))
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode,
+        expected,
+        "{} must be mode {expected:04o}, got {mode:04o}",
+        path.display()
+    );
+}
+
+#[cfg(not(unix))]
+fn assert_permissions(_path: &Path, _expected: u32) {}
 
 /// RFC 135: `setup` on a directory that already holds a repository refuses **before touching
 /// anything**.
@@ -333,8 +381,12 @@ fn setup_on_an_existing_repository_refuses_before_writing_anything() {
 fn setup_still_creates_a_fresh_and_a_nested_fresh_directory() {
     let root = support::unique_repo("rfc135-setup-fresh");
     for relative in ["fresh", "deep/nested/does/not/exist"] {
+        // A config home per target, not per test: `setup` refuses to overwrite an existing seed, so
+        // the second iteration would otherwise fail on the first's keys -- correct behaviour, wrong
+        // fixture.
         let target = root.join(relative);
-        let out = support::prikk(Path::new("."))
+        let out = support::prikk(target.parent().unwrap())
+            .current_dir(&root)
             .args(["setup", target.to_str().unwrap()])
             .output()
             .unwrap();

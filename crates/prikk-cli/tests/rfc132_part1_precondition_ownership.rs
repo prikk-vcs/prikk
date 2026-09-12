@@ -24,7 +24,10 @@ fn a_second_real_precondition_exists_and_shares_the_variant() {
     support::init(&repo);
     let out = support::prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
         .args(["commit", "--from-worktree", "-m", "nothing to commit"])
         .output()
         .unwrap();

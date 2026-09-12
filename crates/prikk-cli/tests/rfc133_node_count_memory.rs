@@ -448,7 +448,12 @@ fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
         &["commit", "--ref", ref_name, "-m", message],
         &[
             ("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID),
-            ("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX),
+            (
+                "PRIKK_AUTHOR_SEED_FILE",
+                &support::seed_file(support::AUTHOR_SEED_HEX)
+                    .display()
+                    .to_string(),
+            ),
         ],
     )
 }

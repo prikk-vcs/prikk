@@ -173,6 +173,9 @@ impl SplitMix64 {
 fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
     cmd.current_dir(repo);
+    // RFC 148: prikk now reads key material from the user's own config directory, so a test that
+    // does not neutralise it measures whoever is running it. See `support::isolate_key_environment`.
+    support::isolate_key_environment(&mut cmd);
     cmd
 }
 
@@ -286,7 +289,10 @@ fn setup_baseline_repository(root: &Path, file_count: usize, seed: u64) -> Vec<P
 
     let out = prikk(root)
         .env("PRIKK_AUTHOR_KEY_ID", FIXED_AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", hex(&FIXED_AUTHOR_SEED))
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(&hex(&FIXED_AUTHOR_SEED)),
+        )
         .args(["commit", "-m", "dc59-bench: baseline"])
         .output()
         .unwrap();
@@ -317,7 +323,10 @@ fn setup_baseline_repository(root: &Path, file_count: usize, seed: u64) -> Vec<P
 fn seal_active_wal(root: &Path) {
     let out = prikk(root)
         .env("PRIKK_MAINTAINER_KEY_ID", FIXED_MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&FIXED_MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&hex(&FIXED_MAINTAINER_SEED)),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();
@@ -345,7 +354,10 @@ fn time_commit(root: &Path) -> Duration {
     let start = Instant::now();
     let out = prikk(root)
         .env("PRIKK_AUTHOR_KEY_ID", FIXED_AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", hex(&FIXED_AUTHOR_SEED))
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(&hex(&FIXED_AUTHOR_SEED)),
+        )
         .args(["commit", "-m", "dc59-bench: measured"])
         .output()
         .unwrap();
@@ -502,7 +514,10 @@ fn measure_commit_memory(root: &Path, interval: Duration) -> MemoryTrial {
     let mut command = prikk(root);
     command
         .env("PRIKK_AUTHOR_KEY_ID", FIXED_AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", hex(&FIXED_AUTHOR_SEED))
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(&hex(&FIXED_AUTHOR_SEED)),
+        )
         .args(["commit", "-m", "dc59-bench: measured (memory pass)"]);
     measure_process_memory(command, interval, "measured commit (memory pass)")
 }
@@ -950,7 +965,10 @@ fn churn_generation(
     std::fs::write(root.join(&path), &content).unwrap();
     let out = prikk(root)
         .env("PRIKK_AUTHOR_KEY_ID", FIXED_AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", hex(&FIXED_AUTHOR_SEED))
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(&hex(&FIXED_AUTHOR_SEED)),
+        )
         .args(["commit", "-m", "dc69-bench: churn"])
         .output()
         .unwrap();

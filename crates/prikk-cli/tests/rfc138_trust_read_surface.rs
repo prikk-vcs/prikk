@@ -438,8 +438,8 @@ fn check_agrees_with_seal_before_and_after_revocation() {
     let seal_after_revocation = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["seal", "--allow-no-audit", "--ref", "heads/main"])
         .output()

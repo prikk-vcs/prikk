@@ -6,6 +6,9 @@
 //! is not a retrofit, only the point past which no one should copy-paste it again.
 
 #![allow(dead_code)]
+// The helpers below are fixture plumbing: a failure to create a scratch directory is a broken
+// machine, not a condition a test should carry a `Result` for.
+#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 /// RFC 147 §2e: the one JSON value parser for CLI end-to-end tests, so a test that reads
 /// `--format json` does not carry a third hand-written copy of one.
@@ -17,7 +20,72 @@ use std::process::{Command, Output};
 pub fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
     cmd.current_dir(repo);
+    isolate_key_environment_for(&mut cmd, Some(repo));
     cmd
+}
+
+/// Point every test invocation at an empty, per-process key directory, and strip any `PRIKK_*` the
+/// developer's own shell is carrying.
+///
+/// **RFC 148 made this necessary and its absence was not theoretical.** Once prikk looks in
+/// `$XDG_CONFIG_HOME/prikk` for a seed, a test that asserts "signing fails when no key is
+/// configured" passes or fails depending on whether the person running it happens to have keys — and
+/// a test that runs `prikk setup` writes into the real `~/.config/prikk`. Both happened here on the
+/// first full run after the change: `prikk setup` created keys in my own home directory, and every
+/// no-key-configured assertion then failed because the CLI correctly found them.
+///
+/// So the harness makes the ambient state explicit: `XDG_CONFIG_HOME` and `HOME` both point at a
+/// scratch directory unique to this test process, and the retired seed variables are removed rather
+/// than left to be refused. A test that *wants* key material sets `PRIKK_*_SEED_FILE` itself, after
+/// this call, and overrides it.
+pub fn isolate_key_environment(cmd: &mut Command) {
+    isolate_key_environment_for(cmd, None);
+}
+
+/// The same isolation, keyed to one repository.
+///
+/// **Per repository, not per process.** A single config home shared by a whole test binary looked
+/// right and was not: `prikk setup` refuses to overwrite an existing seed, so the second `setup` in
+/// one binary failed on the first one's keys. Keying the directory to the repository under test
+/// gives each test its own, while repeated calls within one test — `setup`, then `commit`, then
+/// `seal` — still share it, which is exactly the lifetime the real thing has.
+pub fn isolate_key_environment_for(cmd: &mut Command, repo: Option<&Path>) {
+    let home = isolated_config_home(repo);
+    cmd.env("XDG_CONFIG_HOME", &home)
+        .env("HOME", &home)
+        .env_remove("PRIKK_AUTHOR_SEED")
+        .env_remove("PRIKK_MAINTAINER_SEED")
+        .env_remove("PRIKK_AUTHOR_SEED_FILE")
+        .env_remove("PRIKK_MAINTAINER_SEED_FILE")
+        .env_remove("PRIKK_AUTHOR_KEY_ID")
+        .env_remove("PRIKK_MAINTAINER_KEY_ID");
+}
+
+/// The key directory a test's isolated config home resolves to — `<config home>/prikk`, the same
+/// path `key_material::default_key_dir` computes from `XDG_CONFIG_HOME`.
+pub fn isolated_key_dir(repo: &Path) -> PathBuf {
+    isolated_config_home(Some(repo)).join("prikk")
+}
+
+/// One empty config home per repository (or one per process for a command with no repository).
+/// Empty on purpose: the default state a test should see is "no keys anywhere", and anything else
+/// is set explicitly by the test that needs it.
+fn isolated_config_home(repo: Option<&Path>) -> PathBuf {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static HOMES: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    let key = repo.map_or_else(|| PathBuf::from("<no repository>"), Path::to_path_buf);
+    let homes = HOMES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut homes = homes.lock().expect("config-home cache");
+    if let Some(home) = homes.get(&key) {
+        return home.clone();
+    }
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("prikk-test-config-home-{}", unique_suffix()));
+    std::fs::create_dir_all(&dir).expect("create isolated config home");
+    homes.insert(key, dir.clone());
+    dir
 }
 
 pub fn ok(output: &Output, what: &str) {
@@ -80,6 +148,58 @@ pub fn maintainer_public_key_hex() -> String {
     hex(&signer.public_key_bytes())
 }
 
+/// RFC 148: a seed reaches prikk through a **file**, never the environment. This writes `seed_hex`
+/// to a mode-`0600` file and returns its path, for `PRIKK_<ROLE>_SEED_FILE`.
+///
+/// **One helper, not 118 edits.** Every test that signs used to set `PRIKK_*_SEED` with a hex
+/// string; each of those became `.env("PRIKK_*_SEED_FILE", support::seed_file(<same hex>))`, so the
+/// fixture keys are unchanged and only the channel moved. Writing the file here rather than in each
+/// test is what keeps the mode rule in one place too — a test that wrote `0644` by hand would now be
+/// refused by the reader, and every such test would have had to learn why.
+///
+/// Memoised per hex value: a binary that signs a hundred times writes one file per distinct key, not
+/// one per call. The files live in the process's temp directory and are left for the OS to reap,
+/// like every other fixture here.
+pub fn seed_file(seed_hex: &str) -> PathBuf {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static FILES: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    let files = FILES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut files = files.lock().expect("seed-file cache");
+    if let Some(path) = files.get(seed_hex) {
+        return path.clone();
+    }
+
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("prikk-test-seeds-{}", unique_suffix()));
+    std::fs::create_dir_all(&dir).expect("create seed directory");
+    let path = dir.join("seed");
+    write_private_file(&path, seed_hex);
+    files.insert(seed_hex.to_string(), path.clone());
+    path
+}
+
+#[cfg(unix)]
+fn write_private_file(path: &Path, contents: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .expect("create seed file");
+    file.write_all(contents.as_bytes())
+        .expect("write seed file");
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, contents: &str) {
+    std::fs::write(path, contents).expect("write seed file");
+}
+
 pub fn init(repo: &Path) {
     ok(&prikk(repo).arg("init").output().unwrap(), "init");
 }
@@ -88,7 +208,7 @@ pub fn init(repo: &Path) {
 pub fn commit(repo: &Path, ref_name: &str, message: &str) -> Output {
     prikk(repo)
         .env("PRIKK_AUTHOR_KEY_ID", AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED_HEX)
+        .env("PRIKK_AUTHOR_SEED_FILE", seed_file(AUTHOR_SEED_HEX))
         .args(["commit", "--ref", ref_name, "-m", message])
         .output()
         .unwrap()
@@ -116,7 +236,10 @@ pub fn seal(repo: &Path, ref_name: &str) -> Output {
     trust_maintainer(repo);
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args(["seal", "--allow-no-audit", "--ref", ref_name])
         .output()
         .unwrap()
@@ -137,7 +260,10 @@ pub fn branch_create(repo: &Path, name: &str, from: &str) -> Output {
     trust_maintainer(repo);
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args(["branch", "create", name, "--from", from])
         .output()
         .unwrap()
@@ -147,7 +273,10 @@ pub fn branch_close(repo: &Path, name: &str) -> Output {
     trust_maintainer(repo);
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args(["branch", "close", name])
         .output()
         .unwrap()
@@ -157,7 +286,10 @@ pub fn tag_create(repo: &Path, name: &str, target: &str) -> Output {
     trust_maintainer(repo);
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args(["tag", "create", name, "--target", target])
         .output()
         .unwrap()

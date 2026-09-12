@@ -57,7 +57,10 @@ fn commit_with_no_message_exits_two() {
     std::fs::write(repo.join("f.txt"), "hello").unwrap();
     let output = support::prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
         .arg("commit")
         .output()
         .unwrap();
@@ -247,8 +250,8 @@ fn seal_refuses_a_duplicate_allow_no_audit_flag() {
     let output = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["seal", "--allow-no-audit", "--allow-no-audit"])
         .output()

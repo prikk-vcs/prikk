@@ -16,6 +16,9 @@ use prikk_store::{Ed25519MaintainerSigner, MaintainerSigner, RefStore, Repositor
 fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
     cmd.current_dir(repo);
+    // RFC 148: prikk now reads key material from the user's own config directory, so a test that
+    // does not neutralise it measures whoever is running it. See `support::isolate_key_environment`.
+    support::isolate_key_environment(&mut cmd);
     cmd
 }
 
@@ -98,8 +101,8 @@ fn genesis_init_commit_seal_log_verify() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "-m", "genesis"])
         .output()
@@ -116,7 +119,10 @@ fn genesis_init_commit_seal_log_verify() {
     // seal publishes the first (Root) block and advances heads/main.
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();
@@ -152,8 +158,8 @@ fn non_default_ref_genesis_commit_seal_log_verify() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", "heads/topic", "-m", "topic genesis"])
         .output()
@@ -168,7 +174,10 @@ fn non_default_ref_genesis_commit_seal_log_verify() {
     add_trusted_maintainer(&repo);
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit", "--ref", "heads/topic"])
         .output()
         .unwrap();
@@ -214,8 +223,8 @@ fn seal_rejects_active_wal_owned_by_another_ref() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", "heads/topic", "-m", "topic genesis"])
         .output()
@@ -225,7 +234,10 @@ fn seal_rejects_active_wal_owned_by_another_ref() {
     add_trusted_maintainer(&repo);
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();
@@ -249,8 +261,8 @@ fn seal_rejects_missing_pointer_with_ref_log_history() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", "heads/topic", "-m", "topic genesis"])
         .output()
@@ -260,7 +272,10 @@ fn seal_rejects_missing_pointer_with_ref_log_history() {
     add_trusted_maintainer(&repo);
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit", "--ref", "heads/topic"])
         .output()
         .unwrap();
@@ -270,8 +285,8 @@ fn seal_rejects_missing_pointer_with_ref_log_history() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", "heads/topic", "-m", "topic update"])
         .output()
@@ -282,7 +297,10 @@ fn seal_rejects_missing_pointer_with_ref_log_history() {
     prikk_store::remove_ref_pointer_entry_for_test_support(&layout, "heads/topic").unwrap();
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit", "--ref", "heads/topic"])
         .output()
         .unwrap();
@@ -306,8 +324,8 @@ fn seal_rejects_missing_pointer_with_partial_ref_log() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", "heads/topic", "-m", "topic genesis"])
         .output()
@@ -317,7 +335,10 @@ fn seal_rejects_missing_pointer_with_partial_ref_log() {
     add_trusted_maintainer(&repo);
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit", "--ref", "heads/topic"])
         .output()
         .unwrap();
@@ -327,8 +348,8 @@ fn seal_rejects_missing_pointer_with_partial_ref_log() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", "heads/topic", "-m", "topic update"])
         .output()
@@ -343,7 +364,10 @@ fn seal_rejects_missing_pointer_with_partial_ref_log() {
 
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit", "--ref", "heads/topic"])
         .output()
         .unwrap();
@@ -367,8 +391,8 @@ fn seal_retry_drains_already_published_wal_without_duplicate_ref_update() {
     let out = prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "-m", "genesis"])
         .output()
@@ -381,7 +405,10 @@ fn seal_retry_drains_already_published_wal_without_duplicate_ref_update() {
     add_trusted_maintainer(&repo);
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();
@@ -394,7 +421,10 @@ fn seal_retry_drains_already_published_wal_without_duplicate_ref_update() {
     std::fs::write(layout.default_active_ref_name_path(), ref_metadata_bytes).unwrap();
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();

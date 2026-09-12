@@ -94,8 +94,8 @@ fn regenerate_cross_platform_artifact_fixture() {
     let build = support::prikk(&source)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -163,8 +163,8 @@ fn cross_platform_artifact_fixture_accepts_and_seals_on_this_platform() {
     let seal = support::prikk(&receiver)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["sync", "seal", "heads/main", "--claim", &claim_id])
         .output()

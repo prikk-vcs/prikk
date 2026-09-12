@@ -19,9 +19,9 @@ explained there, not repeated here.
 mkdir source-repo && cd source-repo
 prikk init
 export PRIKK_AUTHOR_KEY_ID="dev-author"
-export PRIKK_AUTHOR_SEED="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+export PRIKK_AUTHOR_SEED_FILE="$PWD/author.seed"
 export PRIKK_MAINTAINER_KEY_ID="dev-maintainer"
-export PRIKK_MAINTAINER_SEED="111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+export PRIKK_MAINTAINER_SEED_FILE="$PWD/maintainer.seed"
 prikk trust maintainer add \
   --key-id "dev-maintainer" \
   --public-key "a00899dfd3357aee69729405913f9324dfc033cec04a2215239eda64ae6d9d91"

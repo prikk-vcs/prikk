@@ -160,7 +160,8 @@ fn build_cost_curve() {
         #[cfg(target_os = "linux")]
         let (commit_elapsed, peak_kb) = if is_checkpoint {
             spawn_and_measure(
-                execute::commit_command(binary, &repo_root, &profile, execute::REF_NAME, &message),
+                execute::commit_command(binary, &repo_root, &profile, execute::REF_NAME, &message)
+                    .expect("commit command"),
                 "commit",
             )
         } else {

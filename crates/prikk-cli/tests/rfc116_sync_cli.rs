@@ -101,8 +101,8 @@ fn end_to_end_sync_via_the_cli_lands_the_delta_and_is_verified_by_reading_it_bac
     let build = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -170,8 +170,8 @@ fn end_to_end_sync_via_the_cli_lands_the_delta_and_is_verified_by_reading_it_bac
     let seal = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["sync", "seal", "heads/main", "--claim", claim_id])
         .output()
@@ -264,8 +264,8 @@ fn end_to_end_sync_via_the_cli_lands_the_delta_and_is_verified_by_reading_it_bac
     let build_again = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -365,8 +365,8 @@ fn row7_multi_block_sync_completes_through_the_cli_alone() {
     let build = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -440,8 +440,8 @@ fn row7_multi_block_sync_completes_through_the_cli_alone() {
     let seal = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -554,8 +554,8 @@ fn row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intac
             &support::prikk(sender)
                 .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
                 .env(
-                    "PRIKK_MAINTAINER_SEED",
-                    support::hex(&support::MAINTAINER_SEED),
+                    "PRIKK_MAINTAINER_SEED_FILE",
+                    support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
                 )
                 .args([
                     "sync",
@@ -595,8 +595,8 @@ fn row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intac
     let seal = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -710,7 +710,10 @@ fn sync_build_fails_closed_on_untrusted_signer() {
     let artifact_file = sync_file("artifact");
     let out = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", "untrusted-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", UNTRUSTED_MAINTAINER_SEED)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(UNTRUSTED_MAINTAINER_SEED),
+        )
         .args([
             "sync",
             "build",
@@ -778,8 +781,8 @@ fn sync_seal_fails_closed_on_untrusted_signer() {
         &support::prikk(&repo_a)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args([
                 "sync",
@@ -818,7 +821,10 @@ fn sync_seal_fails_closed_on_untrusted_signer() {
     support::trust_maintainer(&repo_b);
     let out = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", "untrusted-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", UNTRUSTED_MAINTAINER_SEED)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(UNTRUSTED_MAINTAINER_SEED),
+        )
         .args(["sync", "seal", "heads/main", "--claim", &claim_id])
         .output()
         .unwrap();

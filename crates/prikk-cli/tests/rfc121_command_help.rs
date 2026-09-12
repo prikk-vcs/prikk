@@ -140,7 +140,10 @@ fn documented_flags_match_real_behavior() {
     std::fs::write(repo.join("f.txt"), "hi").unwrap();
     let commit_long_message = support::prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
         .args([
             "commit",
             "--ref",

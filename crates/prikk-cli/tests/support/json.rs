@@ -7,6 +7,8 @@
 //! are left where they are, on `support/mod.rs`'s own precedent: this is the point past which no one
 //! should copy-paste it again, not a retrofit.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
+
 use std::collections::BTreeMap;
 use std::iter::Peekable;
 use std::str::Chars;

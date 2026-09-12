@@ -150,11 +150,12 @@ never creates one to begin with.
 ## Key Input and Local Trust Store
 
 Current key input is intentionally minimal. The CLI reads AUTHOR key material from
-`PRIKK_AUTHOR_KEY_ID` and `PRIKK_AUTHOR_SEED`, and MAINTAINER key material from
-`PRIKK_MAINTAINER_KEY_ID` and `PRIKK_MAINTAINER_SEED`. The seed values are caller-provided 32-byte
+`PRIKK_AUTHOR_KEY_ID` and a seed **file** (`PRIKK_AUTHOR_SEED_FILE`, else the key directory's
+`author.seed`), and MAINTAINER key material the same way. A seed never travels through the
+environment. The seed values are caller-provided 32-byte
 Ed25519 secret seeds encoded as 64 hex characters. **Prikk does not provide local secret storage**,
 but it does provide key generation and public-key derivation: `prikk key generate` draws a fresh
-seed from the OS CSPRNG, `prikk key public --seed-env <NAME>` derives a public key from a seed
+seed from the OS CSPRNG, `prikk key public [--seed-file <path>]` derives a public key from a seed
 already held, and `prikk setup` composes both with `init` and `trust maintainer add` into one
 command (RFC 135) — see [First Run](../guide/first-run.md). For the current setup workflow and
 seed-handling warnings, see the [security and signing setup](../guide/security-setup.md) guide.

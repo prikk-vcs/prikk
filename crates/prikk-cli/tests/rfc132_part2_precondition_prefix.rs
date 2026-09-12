@@ -31,7 +31,10 @@ fn rollback_draft_prefix_changes_to_precondition() {
 
     let out = support::prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
         .args(["rollback-draft", "--append-inverse", "-m", "undo"])
         .output()
         .unwrap();
@@ -58,7 +61,10 @@ fn rollback_draft_verify_prefix_changes_to_precondition() {
 
     let draft = support::prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
         .args(["rollback-draft", "--append-inverse", "-m", "undo"])
         .output()
         .unwrap();

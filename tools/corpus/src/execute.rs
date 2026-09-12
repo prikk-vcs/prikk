@@ -19,7 +19,7 @@
 //! (the correctness controls) that only care about the resulting repository, not the timing.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use prikk_store::MaintainerSigner;
@@ -201,14 +201,74 @@ pub fn commit_command(
     profile: &Profile,
     ref_name: &str,
     message: &str,
-) -> Command {
+) -> Result<Command, ExecuteError> {
+    // RFC 148: returns a `Result` now, because materialising the seed file can fail. The
+    // alternative -- panicking inside a command builder -- would turn a full disk into a corpus
+    // build that aborts with no context.
     let mut command = Command::new(binary_path);
     command
         .current_dir(repo_root)
         .env("PRIKK_AUTHOR_KEY_ID", &profile.builder_inputs.author_key_id)
-        .env("PRIKK_AUTHOR_SEED", &profile.builder_inputs.author_seed_hex)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            seed_file(&profile.builder_inputs.author_seed_hex)?,
+        )
         .args(["commit", "--ref", ref_name, "-m", message]);
-    command
+    Ok(command)
+}
+
+/// RFC 148: a seed reaches prikk through a file, never the environment. Writes `seed_hex` to a
+/// mode-`0600` file under `repo_root`'s parent and returns the path, memoised per hex value so a
+/// corpus build with hundreds of commits writes one file per key rather than one per invocation.
+///
+/// The corpus builder's own copy rather than the CLI tests' helper: this is a separate crate, and a
+/// shared test-support dependency between them would be a bigger coupling than fifteen lines.
+fn seed_file(seed_hex: &str) -> Result<PathBuf, ExecuteError> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static FILES: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    let files = FILES.get_or_init(|| Mutex::new(HashMap::new()));
+    // A poisoned cache means another thread panicked mid-write. Take the map anyway rather than
+    // propagate: the worst case is one redundant seed file, and a corpus build failing because an
+    // unrelated thread died would be the less useful outcome.
+    let mut files = files
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(path) = files.get(seed_hex) {
+        return Ok(path.clone());
+    }
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "prikk-corpus-seeds-{}-{}",
+        std::process::id(),
+        files.len()
+    ));
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("seed");
+    write_private_seed(&path, seed_hex)?;
+    files.insert(seed_hex.to_string(), path.clone());
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn write_private_seed(path: &Path, contents: &str) -> Result<(), ExecuteError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(contents.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private_seed(path: &Path, contents: &str) -> Result<(), ExecuteError> {
+    std::fs::write(path, contents)?;
+    Ok(())
 }
 
 /// Run `prikk commit --ref <ref_name> -m <message>`, authoring with the profile's fixed author key.
@@ -219,7 +279,7 @@ pub fn run_commit(
     ref_name: &str,
     message: &str,
 ) -> Result<Output, ExecuteError> {
-    let output = commit_command(binary_path, repo_root, profile, ref_name, message).output()?;
+    let output = commit_command(binary_path, repo_root, profile, ref_name, message)?.output()?;
     require_success(&output, "commit")?;
     Ok(output)
 }
@@ -271,8 +331,8 @@ pub fn run_seal(
             &profile.builder_inputs.maintainer_key_id,
         )
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            &profile.builder_inputs.maintainer_seed_hex,
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&profile.builder_inputs.maintainer_seed_hex)?,
         )
         .args(["seal", "--allow-no-audit", "--ref", ref_name])
         .output()?;
@@ -301,8 +361,8 @@ pub fn branch_create(
             &profile.builder_inputs.maintainer_key_id,
         )
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            &profile.builder_inputs.maintainer_seed_hex,
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&profile.builder_inputs.maintainer_seed_hex)?,
         )
         .args(["branch", "create", name, "--from", from_ref])
         .output()?;

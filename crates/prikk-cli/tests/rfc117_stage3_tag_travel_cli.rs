@@ -75,8 +75,8 @@ fn end_to_end_tag_travel_and_adoption_via_the_cli() {
     let build = support::prikk(&repo_a)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args([
             "sync",
@@ -163,8 +163,8 @@ fn end_to_end_tag_travel_and_adoption_via_the_cli() {
     let adopt_too_early = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["sync", "adopt-tag", "tags/v1"])
         .output()
@@ -187,8 +187,8 @@ fn end_to_end_tag_travel_and_adoption_via_the_cli() {
     let seal = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["sync", "seal", "heads/main", "--claim", claim_id])
         .output()
@@ -211,8 +211,8 @@ fn end_to_end_tag_travel_and_adoption_via_the_cli() {
     let adopt = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["sync", "adopt-tag", "tags/v1"])
         .output()
@@ -240,8 +240,8 @@ fn end_to_end_tag_travel_and_adoption_via_the_cli() {
     let adopt_again = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            support::hex(&support::MAINTAINER_SEED),
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
         )
         .args(["sync", "adopt-tag", "tags/v1"])
         .output()
@@ -300,8 +300,8 @@ fn sync_adopt_tag_fails_closed_on_untrusted_signer() {
         &support::prikk(&repo_a)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args([
                 "sync",
@@ -341,8 +341,8 @@ fn sync_adopt_tag_fails_closed_on_untrusted_signer() {
         &support::prikk(&repo_b)
             .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
             .env(
-                "PRIKK_MAINTAINER_SEED",
-                support::hex(&support::MAINTAINER_SEED),
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
             )
             .args(["sync", "seal", "heads/main", "--claim", claim_id])
             .output()
@@ -353,8 +353,8 @@ fn sync_adopt_tag_fails_closed_on_untrusted_signer() {
     let out = support::prikk(&repo_b)
         .env("PRIKK_MAINTAINER_KEY_ID", "untrusted-maintainer")
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            "222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111",
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file("222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111"),
         )
         .args(["sync", "adopt-tag", "tags/v1"])
         .output()

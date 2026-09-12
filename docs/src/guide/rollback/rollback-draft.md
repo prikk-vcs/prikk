@@ -11,7 +11,8 @@ prikk rollback-draft --append-inverse [path] [--ref REF] -m "rollback message"
 The command performs the same supported inverse validation used by `inverse-plan` and
 `rollback-preview`, marks the inverse Patch payload as `PatchPurpose::RollbackDraft`, signs it with a
 real role-bound Ed25519 AUTHOR signature, then appends the Patch envelope to the active WAL. Key material
-uses the same environment variables as `prikk commit`: `PRIKK_AUTHOR_KEY_ID` and `PRIKK_AUTHOR_SEED`.
+uses the same key material as `prikk commit`: the AUTHOR seed from your key directory (or
+`PRIKK_AUTHOR_SEED_FILE`), with `PRIKK_AUTHOR_KEY_ID` naming the key id.
 
 Safety rules:
 

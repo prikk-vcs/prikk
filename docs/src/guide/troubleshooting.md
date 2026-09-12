@@ -4,30 +4,43 @@ Refusals a newcomer actually hits, in the [Tutorial](tutorial.md)'s own sequence
 verbatim from the CLI. If a message here reads as confusing, that is worth reporting — this page
 explains what exists today; it does not change any wording.
 
-## `error: author signing is required: set PRIKK_AUTHOR_KEY_ID (no signing key configured)`
+## `error: author signing is required: no seed at <path>`
 
-You ran `commit` without `PRIKK_AUTHOR_KEY_ID`/`PRIKK_AUTHOR_SEED` set. Every commit produces a
-signed Patch; there is no unsigned path. Set both variables — see
-[Security and Signing Setup](security-setup.md) — and commit again.
+prikk looked for your AUTHOR seed and did not find it. Every commit produces a signed Patch; there is
+no unsigned path. The message names the exact file and three ways to get one — create it with
+`prikk key generate --out <that path>`, run `prikk setup` in a new project directory, or point
+`PRIKK_AUTHOR_SEED_FILE` at a seed file you already have. `seal` says the same for the MAINTAINER
+seed. See [First Run](first-run.md) for where the key directory is on each platform.
 
-## `error: PRIKK_AUTHOR_SEED must be 64 hex characters, got 8`
+## `error: precondition not met: PRIKK_AUTHOR_SEED is no longer read`
 
-`PRIKK_AUTHOR_SEED` must be exactly 64 lowercase hex characters (32 raw bytes) — the number after
-`got` reports how many characters your value actually had, so it will differ from the `8` shown
-here. A shorter, longer, or non-hex value is rejected before anything is signed — nothing is
-written to the repository when this fires. The same check applies to `PRIKK_MAINTAINER_SEED`.
+Your shell still exports a seed as an environment variable. prikk stopped reading that channel in
+0.40 and **refuses rather than ignoring it**, so a stale variable can never silently become the key
+you are not signing with. Remove it from your shell profile; your keys are in the key directory the
+message names, or wherever `PRIKK_AUTHOR_SEED_FILE` points. The refusal itself is removed in 0.42.0.
+
+## `error: <path> is readable by group or other (mode 0644); run `chmod 600 <path>``
+
+A seed file anyone but you can read is refused before signing. Run the `chmod` the message names.
+(Unix only — on Windows the key directory relies on `%APPDATA%`'s per-user ACL instead.)
+
+## `error: <path> must be 64 hex characters, got 8`
+
+A seed file must hold exactly 64 lowercase hex characters (32 raw bytes) — the number after `got`
+reports how many your file actually had, so it will differ from the `8` shown here. A shorter,
+longer, or non-hex value is rejected before anything is signed; nothing is written to the repository
+when this fires.
 
 ## `error: invalid name: worktree has no node-addressed changes to commit`
 
 You ran `commit` with nothing changed since the last commit or seal — no new, edited, or deleted
 files for Prikk to record. Change something first.
 
-## `error: maintainer signing is required: set PRIKK_MAINTAINER_KEY_ID (no signing key configured)`
+## `error: maintainer signing is required: no seed at <path>`
 
-You ran `seal` without `PRIKK_MAINTAINER_KEY_ID`/`PRIKK_MAINTAINER_SEED` set. `seal` needs a
-*maintainer* key, distinct from the *author* key `commit` used — see
-[why the tutorial needs a second key](tutorial.md#sealing--and-the-second-key). Set both variables
-and seal again.
+`seal` needs a *maintainer* key, distinct from the *author* key `commit` used — see
+[why the tutorial needs a second key](tutorial.md#sealing--and-the-second-key). Same three routes as
+the AUTHOR case above, with `maintainer.seed` in place of `author.seed`.
 
 ## `error: precondition not met: no maintainer key is adopted in this repository yet`
 
@@ -90,8 +103,8 @@ it to do on a repository that already has adopted keys. It refuses before doing 
 `--maintainer-seed-out`.
 
 Two ways on, both named in the message: to work in the existing repository with keys you already
-hold, run `prikk trust maintainer add --key-id ID --public-key HEX` (use `prikk key public
---seed-env NAME` to derive the public half); to start a new project, point `setup` at a different
+hold, run `prikk trust maintainer add --key-id ID --public-key HEX` (use `prikk key public --role
+maintainer` to derive the public half); to start a new project, point `setup` at a different
 directory.
 
 Earlier releases got further before failing: they printed `initialized Prikk repository at …`, minted

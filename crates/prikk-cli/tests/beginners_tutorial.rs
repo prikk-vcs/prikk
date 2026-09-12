@@ -48,18 +48,26 @@ fn tutorial_sequence_runs_exactly_as_the_page_shows_it() {
         .output()
         .unwrap();
     fail(&out, "commit with no author key");
+    // RFC 148: the refusal now names the *path* it looked for, which is machine-specific, so the
+    // page quotes it with a placeholder path and this test pins the parts that do not vary — the
+    // prefix a reader searches for, and each of the three routes out. Asserting the whole string
+    // would mean the page had to quote one developer's home directory.
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains(
-            "error: author signing is required: set PRIKK_AUTHOR_KEY_ID (no signing key configured)"
-        ),
-        "tutorial quotes this exact refusal: {}",
+        String::from_utf8_lossy(&out.stderr)
+            .contains("error: author signing is required: no seed at ")
+            && String::from_utf8_lossy(&out.stderr).contains("prikk key generate --out ")
+            && String::from_utf8_lossy(&out.stderr).contains("PRIKK_AUTHOR_SEED_FILE"),
+        "tutorial quotes this refusal: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     // 4-5. set the author key, then the same commit succeeds.
     let out = support::prikk(&repo)
         .env("PRIKK_AUTHOR_KEY_ID", "dev-author")
-        .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(AUTHOR_SEED_HEX),
+        )
         .args(["commit", "-m", "genesis"])
         .output()
         .unwrap();
@@ -76,18 +84,23 @@ fn tutorial_sequence_runs_exactly_as_the_page_shows_it() {
         .output()
         .unwrap();
     fail(&out, "seal with no maintainer key");
+    // Same shape as the AUTHOR refusal above: the path varies by machine, the prefix and the routes
+    // do not.
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains(
-            "error: maintainer signing is required: set PRIKK_MAINTAINER_KEY_ID (no signing key configured)"
-        ),
-        "tutorial quotes this exact refusal: {}",
+        String::from_utf8_lossy(&out.stderr)
+            .contains("error: maintainer signing is required: no seed at ")
+            && String::from_utf8_lossy(&out.stderr).contains("PRIKK_MAINTAINER_SEED_FILE"),
+        "tutorial quotes this refusal: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     // 7-8. the key is configured but not yet trusted -- a different, still-real refusal.
     let out = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "dev-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED_HEX)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED_HEX),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();
@@ -123,7 +136,10 @@ fn tutorial_sequence_runs_exactly_as_the_page_shows_it() {
     // 10. seal now succeeds.
     let out = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "dev-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED_HEX)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED_HEX),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();

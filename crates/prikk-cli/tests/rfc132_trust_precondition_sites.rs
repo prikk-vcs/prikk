@@ -39,7 +39,10 @@ fn repo_with_one_queued_patch(tag: &str) -> std::path::PathBuf {
 fn seal_with(repo: &Path, key_id: &str, seed: &[u8; 32]) -> std::process::Output {
     support::prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", key_id)
-        .env("PRIKK_MAINTAINER_SEED", support::hex(seed))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(seed)),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap()

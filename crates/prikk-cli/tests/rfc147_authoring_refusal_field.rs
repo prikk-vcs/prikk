@@ -51,7 +51,10 @@ fn worktree_status(repo: &Path, args: &[&str]) -> std::process::Output {
 fn commit_attempt(repo: &Path, message: &str) -> std::process::Output {
     support::prikk(repo)
         .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", support::AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
         .args(["commit", "-m", message])
         .output()
         .unwrap()

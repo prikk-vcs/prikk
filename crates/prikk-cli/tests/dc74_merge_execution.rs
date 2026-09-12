@@ -40,7 +40,10 @@ fn merge(
 ) -> std::process::Output {
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args([
             "merge",
             "--allow-no-audit",
@@ -439,8 +442,8 @@ fn merge_fails_closed_on_untrusted_signer() {
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "untrusted-maintainer")
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            "222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111",
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file("222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111"),
         )
         .args([
             "merge",

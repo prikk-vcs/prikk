@@ -76,7 +76,7 @@ fn seal_refuses_rather_than_wraps_when_update_seq_would_overflow() -> TestResult
     require_success(
         &prikk(&root)
             .env("PRIKK_AUTHOR_KEY_ID", "aud08-author")
-            .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED)
+            .env("PRIKK_AUTHOR_SEED_FILE", support::seed_file(AUTHOR_SEED))
             .args(["commit", "-m", "one"])
             .output()?,
         "genesis commit",
@@ -105,7 +105,10 @@ fn seal_refuses_rather_than_wraps_when_update_seq_would_overflow() -> TestResult
     require_success(
         &prikk(&root)
             .env("PRIKK_MAINTAINER_KEY_ID", "aud08-maintainer")
-            .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED)
+            .env(
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(MAINTAINER_SEED),
+            )
             .args(["seal", "--allow-no-audit"])
             .output()?,
         "genesis seal",
@@ -119,7 +122,7 @@ fn seal_refuses_rather_than_wraps_when_update_seq_would_overflow() -> TestResult
     require_success(
         &prikk(&root)
             .env("PRIKK_AUTHOR_KEY_ID", "aud08-author")
-            .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED)
+            .env("PRIKK_AUTHOR_SEED_FILE", support::seed_file(AUTHOR_SEED))
             .args(["commit", "-m", "two"])
             .output()?,
         "second commit",
@@ -167,7 +170,10 @@ fn seal_refuses_rather_than_wraps_when_update_seq_would_overflow() -> TestResult
 
     let output = prikk(&root)
         .env("PRIKK_MAINTAINER_KEY_ID", "aud08-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()?;
     assert!(

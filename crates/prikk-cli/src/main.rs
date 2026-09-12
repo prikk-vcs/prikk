@@ -28,6 +28,7 @@ mod commands;
 mod compact;
 mod durable_output;
 mod key;
+mod key_material;
 mod merge;
 mod mv;
 mod output;
@@ -951,52 +952,35 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     }
 }
 
-/// Build the AUTHOR signer from caller-supplied key material in the environment, failing closed if
-/// none is configured. This is deliberately minimal key *input* — no trust store, key file, rotation,
-/// or persistence (those are later phases). Real authoring requires:
-///   - `PRIKK_AUTHOR_KEY_ID`: non-empty key identifier recorded in the signature;
-///   - `PRIKK_AUTHOR_SEED`: 64 hex characters (a 32-byte Ed25519 secret seed).
-fn author_signer_from_env() -> Result<Ed25519AuthorSigner, String> {
-    let key_id = std::env::var("PRIKK_AUTHOR_KEY_ID").map_err(|_| {
-        "author signing is required: set PRIKK_AUTHOR_KEY_ID (no signing key configured)"
-            .to_string()
-    })?;
-    if key_id.trim().is_empty() {
-        return Err("PRIKK_AUTHOR_KEY_ID must not be empty".to_string());
-    }
-    let seed_hex = std::env::var("PRIKK_AUTHOR_SEED").map_err(|_| {
-        "author signing is required: set PRIKK_AUTHOR_SEED (64 hex chars; no signing key configured)"
-            .to_string()
-    })?;
-    let seed = decode_seed_hex(&seed_hex, "PRIKK_AUTHOR_SEED")?;
-    Ed25519AuthorSigner::from_seed(key_id, &seed).map_err(|err| err.to_string())
+/// Build the AUTHOR signer, failing closed if no key material is configured.
+///
+/// RFC 148: the seed comes from a **file** — `PRIKK_AUTHOR_SEED_FILE` if set, otherwise
+/// `<key dir>/author.seed` — never from the environment. `key_material` owns both the lookup and the
+/// refusal of the retired `PRIKK_AUTHOR_SEED`; this function only assembles the signer, so the two
+/// roles below cannot drift apart in where they look.
+fn author_signer_from_env() -> std::result::Result<Ed25519AuthorSigner, CliError> {
+    let key_id = key_material::key_id(key_material::Role::Author)?;
+    let seed = key_material::read_seed(key_material::Role::Author)?;
+    Ed25519AuthorSigner::from_seed(key_id, &seed).map_err(|err| CliError::Failure(err.to_string()))
 }
 
-/// Build the MAINTAINER signer from caller-supplied key material in the environment, failing closed
-/// if none is configured.
-pub(crate) fn maintainer_signer_from_env() -> Result<Ed25519MaintainerSigner, String> {
-    let key_id = std::env::var("PRIKK_MAINTAINER_KEY_ID").map_err(|_| {
-        "maintainer signing is required: set PRIKK_MAINTAINER_KEY_ID (no signing key configured)"
-            .to_string()
-    })?;
-    if key_id.trim().is_empty() {
-        return Err("PRIKK_MAINTAINER_KEY_ID must not be empty".to_string());
-    }
-    let seed_hex = std::env::var("PRIKK_MAINTAINER_SEED").map_err(|_| {
-        "maintainer signing is required: set PRIKK_MAINTAINER_SEED (64 hex chars; no signing key configured)"
-            .to_string()
-    })?;
-    let seed = decode_seed_hex(&seed_hex, "PRIKK_MAINTAINER_SEED")?;
-    Ed25519MaintainerSigner::from_seed(key_id, &seed).map_err(|err| err.to_string())
+/// Build the MAINTAINER signer, failing closed if no key material is configured. Same two places,
+/// same refusals; see [`author_signer_from_env`].
+pub(crate) fn maintainer_signer_from_env() -> std::result::Result<Ed25519MaintainerSigner, CliError>
+{
+    let key_id = key_material::key_id(key_material::Role::Maintainer)?;
+    let seed = key_material::read_seed(key_material::Role::Maintainer)?;
+    Ed25519MaintainerSigner::from_seed(key_id, &seed)
+        .map_err(|err| CliError::Failure(err.to_string()))
 }
 
-/// Read a 32-byte Ed25519 secret seed from the named environment variable (RFC 135 §9.3: the
-/// caller passes the variable's *name* on argv, never the seed itself). Shared by `prikk key
-/// public --seed-env` and any future command that must derive from a seed the user already holds.
-pub(crate) fn read_seed_env(var_name: &str) -> std::result::Result<[u8; 32], CliError> {
-    let value = std::env::var(var_name)
-        .map_err(|_| CliError::Usage(format!("environment variable {var_name} is not set")))?;
-    decode_seed_hex(&value, var_name).map_err(CliError::Usage)
+/// Read a 32-byte Ed25519 secret seed from a file (RFC 148: a seed never travels through the
+/// environment, so `key public` takes a path). Shared by `prikk key public --seed-file` and any
+/// command that must derive from a seed the user already holds.
+pub(crate) fn read_seed_file(path: &std::path::Path) -> std::result::Result<[u8; 32], CliError> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|err| CliError::Failure(format!("cannot read {}: {err}", path.display())))?;
+    decode_seed_hex(contents.trim(), &path.display().to_string()).map_err(CliError::Failure)
 }
 
 /// Decode exactly 64 hex characters into a 32-byte Ed25519 secret seed.

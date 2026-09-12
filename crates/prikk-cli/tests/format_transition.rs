@@ -8,6 +8,8 @@
 //! design-v1.md §5 acceptance criterion 2 requires the rejection proven against a real fixture, not a
 //! hand-built one, for every retired format.
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -57,11 +59,14 @@ fn run_owned(root: &Path, args: &[String]) -> TestResult<Output> {
     Ok(prikk(root)
         .env("PRIKK_AUTHOR_KEY_ID", "legacy-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "3636363636363636363636363636363636363636363636363636363636363636",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("3636363636363636363636363636363636363636363636363636363636363636"),
         )
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED_HEX)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED_HEX),
+        )
         .args(args)
         .output()?)
 }

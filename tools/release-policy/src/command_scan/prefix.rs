@@ -39,6 +39,11 @@ pub(super) fn inert_head(token: &str) -> bool {
             | "cd"
             | "mkdir"
             | "cp"
+            // RFC 148: CI writes its fixture signing seeds to `0600` files, because prikk no
+            // longer reads a seed from the environment and refuses a group-readable seed file.
+            // `chmod` belongs in this list by the same test as every entry above it -- it changes
+            // a mode and cannot execute another program under any arguments.
+            | "chmod"
             | "sha256sum"
             // RFC 107 Stage 2: macOS's checksum tool -- `sha256sum` is not confirmed present on
             // the runner image, `shasum` is base-OS regardless

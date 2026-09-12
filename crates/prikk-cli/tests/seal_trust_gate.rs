@@ -33,7 +33,10 @@ fn seal_fails_closed_on_untrusted_signer() {
     // `seal.rs:151`, the ordinary new-publication path.
     let out = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "untrusted-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", UNTRUSTED_MAINTAINER_SEED)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(UNTRUSTED_MAINTAINER_SEED),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();

@@ -21,6 +21,9 @@ const SECOND_SEED: [u8; 32] = [
 fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
     cmd.current_dir(repo);
+    // RFC 148: prikk now reads key material from the user's own config directory, so a test that
+    // does not neutralise it measures whoever is running it. See `support::isolate_key_environment`.
+    support::isolate_key_environment(&mut cmd);
     cmd
 }
 

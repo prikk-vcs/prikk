@@ -28,6 +28,9 @@ use prikk_store::{
 fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
     cmd.current_dir(repo);
+    // RFC 148: prikk now reads key material from the user's own config directory, so a test that
+    // does not neutralise it measures whoever is running it. See `support::isolate_key_environment`.
+    support::isolate_key_environment(&mut cmd);
     cmd
 }
 
@@ -98,8 +101,8 @@ fn commit(repo: &Path, ref_name: &str, message: &str) -> Output {
     prikk(repo)
         .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
         .env(
-            "PRIKK_AUTHOR_SEED",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
         )
         .args(["commit", "--ref", ref_name, "-m", message])
         .output()
@@ -109,7 +112,10 @@ fn commit(repo: &Path, ref_name: &str, message: &str) -> Output {
 fn seal(repo: &Path, ref_name: &str) -> Output {
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["seal", "--allow-no-audit", "--ref", ref_name])
         .output()
         .unwrap()
@@ -120,7 +126,10 @@ fn branch_create(repo: &Path, args: &[&str]) -> Output {
     full.extend_from_slice(args);
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(full)
         .output()
         .unwrap()
@@ -129,7 +138,10 @@ fn branch_create(repo: &Path, args: &[&str]) -> Output {
 fn branch_close(repo: &Path, name: &str) -> Output {
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", maintainer_seed())
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(maintainer_seed()),
+        )
         .args(["branch", "close", name])
         .output()
         .unwrap()
@@ -307,8 +319,8 @@ fn branch_close_fails_closed_on_untrusted_signer() {
     let out = prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", "untrusted-maintainer")
         .env(
-            "PRIKK_MAINTAINER_SEED",
-            "222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111",
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file("222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111"),
         )
         .args(["branch", "close", "heads/topic"])
         .output()

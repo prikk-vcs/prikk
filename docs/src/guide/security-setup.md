@@ -13,7 +13,7 @@ paths, see [repository layout and authority](../reference/repository-layout.md).
 - Seeds are secret key material. Prikk does not store, encrypt, rotate, revoke, expire, or back up
   private keys — `prikk key generate --out` writes one, once, to a path you name, and never reads it
   back or manages it afterward (see [First Run](first-run.md)).
-- `prikk key generate` draws a fresh seed from the OS CSPRNG; `prikk key public --seed-env` derives a
+- `prikk key generate` draws a fresh seed from the OS CSPRNG; `prikk key public` derives a
   public key from a seed you already hold; `prikk setup` composes both roles plus
   `trust maintainer add` into one command. External tooling is no longer required, though nothing
   stops you from bringing your own matched seed/public-key pair instead.
@@ -41,22 +41,27 @@ The signature preimage binds the signature algorithm, object type, object id, si
 
 ## Current Key Inputs
 
-The CLI reads AUTHOR key material from:
+The CLI reads each role's **seed from a file**, in exactly two places and no third:
 
-- `PRIKK_AUTHOR_KEY_ID`
-- `PRIKK_AUTHOR_SEED`
+1. `PRIKK_AUTHOR_SEED_FILE` / `PRIKK_MAINTAINER_SEED_FILE`, if set — a path;
+2. otherwise `<key directory>/author.seed` / `<key directory>/maintainer.seed`.
 
-The CLI reads MAINTAINER key material from:
+The key directory is `$XDG_CONFIG_HOME/prikk` (else `$HOME/.config/prikk`) on Unix and
+`%APPDATA%\prikk` on Windows. `PRIKK_AUTHOR_KEY_ID` / `PRIKK_MAINTAINER_KEY_ID` name the key id
+recorded in signatures and default to `author` / `maintainer`.
 
-- `PRIKK_MAINTAINER_KEY_ID`
-- `PRIKK_MAINTAINER_SEED`
+**A seed never travels through the environment.** `PRIKK_AUTHOR_SEED` and `PRIKK_MAINTAINER_SEED`
+carried one until prikk 0.40; they are now detected and **refused**, not ignored, for one release. An
+environment variable is readable by every child process, survives in shell profiles long after the
+key changed, and lands in process listings — none of which is true of a file the operator places.
 
-Each seed value is a caller-supplied 32-byte Ed25519 secret seed encoded as 64 hex characters. Missing
-variables, empty key ids, wrong-length seed hex, and non-hex seed bytes fail closed before signing.
+Each seed file holds a 32-byte Ed25519 secret seed as 64 hex characters. A missing file, a file
+readable by group or others (Unix), an empty key id, wrong-length seed hex, and non-hex bytes all fail
+closed before signing.
 
-`prikk key public --seed-env PRIKK_MAINTAINER_SEED` derives the matching public key directly — see
-[First Run](first-run.md). Nothing computes it automatically as part of reading the environment
-variable itself; deriving it is a separate, explicit step.
+`prikk key public --role maintainer` derives the matching public key directly — see
+[First Run](first-run.md). Nothing computes it automatically; deriving it is a separate, explicit
+step.
 
 ## Maintainer Trust Store Setup
 
@@ -68,7 +73,7 @@ prikk trust maintainer remove --key-id ID
 ```
 
 `ID` must match the MAINTAINER key id used by `PRIKK_MAINTAINER_KEY_ID`. `HEX` must be the lowercase
-64-hex-character Ed25519 public key that matches `PRIKK_MAINTAINER_SEED`.
+64-hex-character Ed25519 public key that matches the MAINTAINER seed file.
 
 `add` writes the trusted public key and adds it to the repository's adopted-key set, with `required = 1`
 continuing to mean any one adopted key's signature suffices. Adopting a key id already in the set with
@@ -95,9 +100,9 @@ composed by hand:
 prikk init ./sample-repo
 
 export PRIKK_AUTHOR_KEY_ID="author-key-id"
-export PRIKK_AUTHOR_SEED="$AUTHOR_SECRET_SEED_64_HEX"
+export PRIKK_AUTHOR_SEED_FILE="$AUTHOR_SEED_FILE"
 export PRIKK_MAINTAINER_KEY_ID="maintainer-key-id"
-export PRIKK_MAINTAINER_SEED="$MAINTAINER_SECRET_SEED_64_HEX"
+export PRIKK_MAINTAINER_SEED_FILE="$MAINTAINER_SEED_FILE"
 
 (cd ./sample-repo && prikk trust maintainer add \
   --key-id "$PRIKK_MAINTAINER_KEY_ID" \
@@ -109,9 +114,10 @@ echo "hello prikk" > ./sample-repo/readme.txt
 (cd ./sample-repo && prikk verify)
 ```
 
-`AUTHOR_SECRET_SEED_64_HEX`, `MAINTAINER_SECRET_SEED_64_HEX`, and `MAINTAINER_PUBLIC_KEY_64_HEX` are
-placeholders for values you supply — `prikk key generate` and `prikk key public --seed-env` produce
-them if you do not already have your own.
+`AUTHOR_SEED_FILE` and `MAINTAINER_SEED_FILE` are paths to mode-`0600` seed files you supply, and
+`MAINTAINER_PUBLIC_KEY_64_HEX` a value you supply — `prikk key generate --out <path>` and
+`prikk key public --seed-file <path>` produce them if you do not already have your own. Leave both
+`_FILE` variables unset to use the key directory, which is what `prikk setup` writes.
 
 The MAINTAINER seed and public key above must be matched private/public halves of one Ed25519 keypair.
 If they do not match, seal fails because the configured signer is not trusted by the repository-local
@@ -129,11 +135,13 @@ operator owns secret generation, storage, backup, rotation, and destruction outs
 
 ## Failure and Diagnostic Hints
 
-Missing `PRIKK_AUTHOR_KEY_ID` or `PRIKK_AUTHOR_SEED` prevents commands that need AUTHOR signing from
-creating signed Patch envelopes.
+A missing AUTHOR seed file prevents commands that need AUTHOR signing from creating signed Patch
+envelopes; the refusal names the path it looked for and the command that creates it.
 
-Missing `PRIKK_MAINTAINER_KEY_ID` or `PRIKK_MAINTAINER_SEED` prevents seal from creating signed
-publication objects.
+A missing MAINTAINER seed file prevents seal from creating signed publication objects, the same way.
+
+A seed file that group or others can read is refused before signing, naming the mode and the `chmod`
+that fixes it.
 
 Malformed seed hex is rejected before signing. Empty key ids and unsafe key ids are rejected by shared
 signature validation.

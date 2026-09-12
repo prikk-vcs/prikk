@@ -167,11 +167,20 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
-      PRIKK_AUTHOR_SEED: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      PRIKK_AUTHOR_SEED_FILE: ${{ github.workspace }}/.ci-keys/author.seed
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer
-      PRIKK_MAINTAINER_SEED: "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+      PRIKK_MAINTAINER_SEED_FILE: ${{ github.workspace }}/.ci-keys/maintainer.seed
     steps:
       - uses: actions/checkout@v7
+      # RFC 148: prikk reads a seed from a file, never the environment, and refuses one that
+      # group or others can read. The fixture's keys are public test values, unchanged -- only
+      # the channel moved.
+      - name: Write fixture signing seeds
+        run: |
+          mkdir -p .ci-keys
+          printf '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' > .ci-keys/author.seed
+          printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
+          chmod 600 .ci-keys/author.seed .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build -p prikk --locked
@@ -326,11 +335,20 @@ jobs:
     needs: fixture
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
-      PRIKK_AUTHOR_SEED: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      PRIKK_AUTHOR_SEED_FILE: ${{ github.workspace }}/.ci-keys/author.seed
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer
-      PRIKK_MAINTAINER_SEED: "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+      PRIKK_MAINTAINER_SEED_FILE: ${{ github.workspace }}/.ci-keys/maintainer.seed
     steps:
       - uses: actions/checkout@v7
+      # RFC 148: prikk reads a seed from a file, never the environment, and refuses one that
+      # group or others can read. The fixture's keys are public test values, unchanged -- only
+      # the channel moved.
+      - name: Write fixture signing seeds
+        run: |
+          mkdir -p .ci-keys
+          printf '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' > .ci-keys/author.seed
+          printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
+          chmod 600 .ci-keys/author.seed .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build -p prikk --locked
@@ -380,11 +398,20 @@ jobs:
     needs: fixture
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
-      PRIKK_AUTHOR_SEED: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      PRIKK_AUTHOR_SEED_FILE: ${{ github.workspace }}/.ci-keys/author.seed
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer
-      PRIKK_MAINTAINER_SEED: "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+      PRIKK_MAINTAINER_SEED_FILE: ${{ github.workspace }}/.ci-keys/maintainer.seed
     steps:
       - uses: actions/checkout@v7
+      # RFC 148: prikk reads a seed from a file, never the environment, and refuses one that
+      # group or others can read. The fixture's keys are public test values, unchanged -- only
+      # the channel moved.
+      - name: Write fixture signing seeds
+        run: |
+          mkdir -p .ci-keys
+          printf '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' > .ci-keys/author.seed
+          printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
+          chmod 600 .ci-keys/author.seed .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build -p prikk --locked
@@ -528,9 +555,15 @@ jobs:
     needs: [fixture, receiver-prepare]
     env:
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer
-      PRIKK_MAINTAINER_SEED: "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+      PRIKK_MAINTAINER_SEED_FILE: ${{ github.workspace }}/.ci-keys/maintainer.seed
     steps:
       - uses: actions/checkout@v7
+      # RFC 148: see the fixture job's own note.
+      - name: Write fixture signing seeds
+        run: |
+          mkdir -p .ci-keys
+          printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
+          chmod 600 .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build -p prikk --locked
@@ -564,9 +597,15 @@ jobs:
     needs: [receiver-prepare, sender-build]
     env:
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer
-      PRIKK_MAINTAINER_SEED: "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+      PRIKK_MAINTAINER_SEED_FILE: ${{ github.workspace }}/.ci-keys/maintainer.seed
     steps:
       - uses: actions/checkout@v7
+      # RFC 148: see the fixture job's own note.
+      - name: Write fixture signing seeds
+        run: |
+          mkdir -p .ci-keys
+          printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
+          chmod 600 .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build -p prikk --locked

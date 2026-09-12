@@ -44,7 +44,10 @@ fn require_success(output: &Output, action: &str) -> TestResult {
 fn run_seal(root: &Path) -> TestResult<Output> {
     Ok(prikk(root)
         .env("PRIKK_MAINTAINER_KEY_ID", "e2e-maintainer")
-        .env("PRIKK_MAINTAINER_SEED", MAINTAINER_SEED)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(MAINTAINER_SEED),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()?)
 }
@@ -56,7 +59,7 @@ fn setup_sealed(tag: &str) -> TestResult<SealedFixture> {
     require_success(
         &prikk(&root)
             .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
-            .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED)
+            .env("PRIKK_AUTHOR_SEED_FILE", support::seed_file(AUTHOR_SEED))
             .args(["commit", "-m", "state"])
             .output()?,
         "commit",
@@ -250,7 +253,7 @@ fn seal_rejects_format2_log_lead() -> TestResult {
     require_success(
         &prikk(&fixture.root)
             .env("PRIKK_AUTHOR_KEY_ID", "e2e-author")
-            .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED)
+            .env("PRIKK_AUTHOR_SEED_FILE", support::seed_file(AUTHOR_SEED))
             .args(["commit", "-m", "next state"])
             .output()?,
         "second commit",

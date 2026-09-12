@@ -16,6 +16,9 @@ mod support;
 fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
     cmd.current_dir(repo);
+    // RFC 148: prikk now reads key material from the user's own config directory, so a test that
+    // does not neutralise it measures whoever is running it. See `support::isolate_key_environment`.
+    support::isolate_key_environment(&mut cmd);
     cmd
 }
 
@@ -72,7 +75,10 @@ fn init(repo: &Path) {
 fn commit(repo: &Path, message: &str) -> Output {
     prikk(repo)
         .env("PRIKK_AUTHOR_KEY_ID", AUTHOR_KEY_ID)
-        .env("PRIKK_AUTHOR_SEED", AUTHOR_SEED_HEX)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(AUTHOR_SEED_HEX),
+        )
         .args(["commit", "-m", message])
         .output()
         .unwrap()
@@ -95,7 +101,10 @@ fn seal(repo: &Path) {
 
     let out = prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args(["seal", "--allow-no-audit"])
         .output()
         .unwrap();

@@ -41,7 +41,10 @@ fn adopt_second_key(repo: &Path) -> Output {
 fn seal_with_second_key(repo: &Path, ref_name: &str) -> Output {
     support::prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", SECOND_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", support::hex(&SECOND_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&SECOND_SEED)),
+        )
         .args(["seal", "--allow-no-audit", "--ref", ref_name])
         .output()
         .unwrap()

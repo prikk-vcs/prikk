@@ -43,7 +43,10 @@ fn merge(
 ) -> std::process::Output {
     prikk(repo)
         .env("PRIKK_MAINTAINER_KEY_ID", MAINTAINER_KEY_ID)
-        .env("PRIKK_MAINTAINER_SEED", hex(&MAINTAINER_SEED))
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&hex(&MAINTAINER_SEED)),
+        )
         .args([
             "merge",
             "--allow-no-audit",
