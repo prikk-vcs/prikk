@@ -312,3 +312,136 @@ fn inverse_planning_resolves_a_tag_ref_to_its_target_block() {
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// RFC 147 §3d item 1: `branch create --from tags/v1` publishes the new branch at the Block the tag
+/// names, rather than refusing with `object type mismatch: expected block, got tag`.
+///
+/// `--from <ref>` means "at the block this ref names", which is what every read surface now does.
+/// The tag is below the tip, so the new branch's own history is the assertion: if the resolution
+/// were dropped, the branch would either fail to publish or start at the wrong block.
+#[test]
+fn branch_create_from_a_tag_ref_starts_at_the_tagged_block() {
+    let (repo, tagged, tip) = repo_with_a_tag_below_the_tip("rfc147d-branch-from-tag");
+
+    let created = support::branch_create(&repo, "heads/fromtag", "tags/v1");
+    support::ok(&created, "branch create --from tags/v1");
+    assert!(
+        stdout_of(&created).contains(&format!("target block: {tagged}")),
+        "the branch must be published at the tagged block: {}",
+        stdout_of(&created)
+    );
+    assert!(
+        !stderr_of(&created).contains("object type mismatch"),
+        "the refusal this fixes must be gone: {}",
+        stderr_of(&created)
+    );
+
+    // Read it back through an independent surface: the branch's own history starts at the tagged
+    // block, not at the tip the tag sits below.
+    let log = run(&repo, &["log", "--ref", "heads/fromtag"]);
+    support::ok(&log, "log --ref heads/fromtag");
+    let stdout = stdout_of(&log);
+    assert!(
+        stdout.contains(&format!("block {tagged}")),
+        "the new branch's history starts at the tagged block: {stdout}"
+    );
+    assert!(!stdout.contains(&tip), "and not at the tip: {stdout}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// RFC 147 §3d item 2: `tag create --target tags/v1` is **refused, not dereferenced** — and the
+/// refusal is a precondition, not an integrity failure.
+///
+/// A tag of a tag is outside the model (ref → tag object → block, one hop). Resolving silently
+/// would make `--target tags/v1` and `--target <that block>` produce identical history, so a reader
+/// could no longer tell which was asked for. The two forms that *do* work are asserted in the same
+/// test, because a refusal is only as good as the alternative it names.
+#[test]
+fn tag_create_targeting_a_tag_ref_refuses_as_a_precondition() {
+    let (repo, tagged, _tip) = repo_with_a_tag_below_the_tip("rfc147d-tag-of-tag");
+
+    let refused = support::tag_create(&repo, "tags/v2", "tags/v1");
+    assert_eq!(refused.status.code(), Some(1), "must refuse");
+    let stderr = stderr_of(&refused);
+    assert_eq!(
+        stderr,
+        "error: precondition not met: --target names a tag (tags/v1); pass the block id it points \
+         at, or a branch ref\n",
+        "the refusal names both accepted forms"
+    );
+    // The class actually changed: the old wording must be gone, not merely accompanied.
+    assert!(
+        !stderr.contains("object type mismatch"),
+        "the ObjectTypeMismatch this replaces must be absent: {stderr}"
+    );
+
+    // Both named alternatives still work, so the message is not pointing at a closed door.
+    support::ok(
+        &support::tag_create(&repo, "tags/byblock", &tagged),
+        "tag create --target <block id>",
+    );
+    support::ok(
+        &support::tag_create(&repo, "tags/bybranch", "heads/main"),
+        "tag create --target heads/main",
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// RFC 147 §3d item 3: after consolidating the two `current_target_block` duplicates into one
+/// `refs::read_current_ref_tip_block`, every surface that reached either of them still resolves the
+/// same non-tip tag to the same block.
+///
+/// This is the regression the consolidation could plausibly cause — one module silently losing its
+/// resolution — and it is asserted across both former callers in one place rather than trusted.
+#[test]
+fn every_surface_of_the_consolidated_resolver_agrees_on_one_tag() {
+    let (repo, tagged, tip) = repo_with_a_tag_below_the_tip("rfc147d-consolidated");
+
+    for args in [
+        &["inverse-plan", "--ref", "tags/v1"][..],
+        &["rollback-preview", "--ref", "tags/v1"][..],
+        &["checkout", "--patch-plan", "--ref", "tags/v1"][..],
+    ] {
+        let out = run(&repo, args);
+        support::ok(&out, &format!("{args:?}"));
+        let stdout = stdout_of(&out);
+        assert!(
+            stdout.contains(&format!("target block: {tagged}")),
+            "{args:?} must resolve to the tagged block: {stdout}"
+        );
+        assert!(
+            !stdout.contains(&tip),
+            "{args:?} must not reach the tip: {stdout}"
+        );
+    }
+
+    // `--content-path` reaches the same resolution through the JSON surface, and its content is the
+    // assertion a target-block line alone cannot make.
+    let content = run(
+        &repo,
+        &[
+            "checkout",
+            "--patch-plan",
+            "--format",
+            "json",
+            "--content-path",
+            "a.txt",
+            "--ref",
+            "tags/v1",
+        ],
+    );
+    support::ok(&content, "checkout --patch-plan --content-path");
+    let stdout = stdout_of(&content);
+    assert!(
+        stdout.contains(&format!("\"target_block_id\": \"{tagged}\"")),
+        "content must come from the tagged block: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"text\": \"first\\n\""),
+        "and its bytes must be the tagged block's, not the tip's: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}

@@ -3,49 +3,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{
-    BlockKind, BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload,
-};
+use prikk_object::{BlockKind, BlockPayload, ObjectEnvelope, ObjectId, ObjectType};
 
-use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReader;
-use crate::refs::RefStore;
 use crate::snapshot::SnapshotManifest;
-
-/// Read the current target Block ID for a ref.
-pub(super) fn current_target_block(
-    layout: &RepositoryLayout,
-    object_store: &impl ObjectReader,
-    ref_name: &str,
-) -> Result<ObjectId> {
-    let ref_store = RefStore::new(layout.clone());
-    let ref_state_id = ref_store
-        .read_current_ref_state_id(ref_name)?
-        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
-    let envelope = object_store
-        .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {ref_name} points to missing RefState {ref_state_id}"
-            ))
-        })?;
-    let ref_state =
-        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
-    if ref_state.ref_name != ref_name {
-        return Err(PrikkError::Integrity(format!(
-            "RefState name mismatch: expected {ref_name}, got {}",
-            ref_state.ref_name
-        )));
-    }
-    // RFC 147 §3c: the fifth resolution site, and the one §3b missed -- this is a *separate*
-    // function from `patch_replay/read.rs::current_target_block` despite the identical name and
-    // nearly identical body, so fixing that one left `inverse-plan`, `rollback-preview` and
-    // `rollback-draft-verify` reporting `object type mismatch: expected block, got tag` for a
-    // perfectly valid tag ref. Same shared resolver as the other four; it resolves and never
-    // validates, and `single_parent_chain` below is unchanged and still walks what it is given.
-    let (block_id, _tag_envelope) = crate::refs::resolve_ref_tip_block(object_store, &ref_state)?;
-    Ok(block_id)
-}
 
 /// Return the single-parent chain from oldest to newest.
 pub(super) fn single_parent_chain(

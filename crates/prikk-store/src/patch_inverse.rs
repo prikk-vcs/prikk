@@ -24,8 +24,7 @@ use crate::text_span;
 mod read;
 
 use read::{
-    current_target_block, load_snapshot_files, read_blob_bytes_with_kind, read_block, read_patch,
-    single_parent_chain,
+    load_snapshot_files, read_blob_bytes_with_kind, read_block, read_patch, single_parent_chain,
 };
 
 /// Read-only inverse plan for the supported patch-operation subset.
@@ -100,7 +99,7 @@ pub fn prepare_patch_inverse_plan(
     ref_name: &str,
 ) -> Result<PatchInversePlan> {
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let target_block_id = current_target_block(layout, &object_store, ref_name)?;
+    let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
     let block_ids = single_parent_chain(&object_store, target_block_id)?;
     let mut files = BTreeMap::new();
     let mut live_nodes = BTreeMap::new();

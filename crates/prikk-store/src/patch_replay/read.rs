@@ -6,53 +6,15 @@ use std::collections::{BTreeMap, HashSet};
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
     BlobKind, BlobPayload, BlockKind, BlockPayload, NodeId, NodeKind, ObjectEnvelope, ObjectId,
-    ObjectType, RefStatePayload,
+    ObjectType,
 };
 
-use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReader;
 use crate::path::RepoPath;
-use crate::refs::RefStore;
 use crate::snapshot::{SnapshotEntry, SnapshotManifest};
 
 use super::apply::ReplayLiveNode;
 use super::{ReplayManifest, ReplayManifestEntry};
-
-pub(super) fn current_target_block(
-    layout: &RepositoryLayout,
-    object_store: &impl ObjectReader,
-    ref_name: &str,
-) -> Result<ObjectId> {
-    let ref_store = RefStore::new(layout.clone());
-    let ref_state_id = ref_store
-        .read_current_ref_state_id(ref_name)?
-        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
-    let envelope = object_store
-        .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {ref_name} points to missing RefState {ref_state_id}"
-            ))
-        })?;
-    let ref_state =
-        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
-    if ref_state.ref_name != ref_name {
-        return Err(PrikkError::Integrity(format!(
-            "RefState name mismatch: expected {ref_name}, got {}",
-            ref_state.ref_name
-        )));
-    }
-    // RFC 147 §3b: the third un-resolved site, and the one `checkout --patch-plan`/`--content-path`
-    // actually reaches -- `checkout.rs`'s own planner does not serve those modes (`patch_replay.rs`
-    // does, through here), so resolving only there would have left §3b's own control-1 case failing.
-    //
-    // RFC 147 §3c: `patch_inverse/read.rs` has a **separate function of the same name and nearly the
-    // same body** -- this one does not serve it, and an earlier note here claiming they were shared
-    // was wrong. Fixing one left `inverse-plan`/`rollback-preview`/`rollback-draft-verify` failing.
-    // Both now call the same resolver; neither calls the other. If one is ever changed, change both.
-    let (block_id, _tag_envelope) = crate::refs::resolve_ref_tip_block(object_store, &ref_state)?;
-    Ok(block_id)
-}
 
 pub(crate) fn single_parent_chain(
     object_store: &impl ObjectReader,

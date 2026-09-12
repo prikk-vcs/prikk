@@ -43,7 +43,8 @@ use prikk_object::{
 use prikk_store::{
     ActiveRefOwnership, DEFAULT_ACTIVE_NAME, DEFAULT_CHECKOUT_REF, FileObjectStore, GatedOperation,
     MaintainerSigner, ObjectReader, ObjectWriteSession, RefPublication, RefStore, Wal,
-    active_ref_ownership, maintainer_signature, validate_local_branch_ref, verify_signer_trusted,
+    active_ref_ownership, maintainer_signature, resolve_ref_tip_block, validate_local_branch_ref,
+    verify_signer_trusted,
 };
 
 /// Envelope schema version for a `RefState` carrying no `closed` field (every ordinary
@@ -426,17 +427,24 @@ fn resolve_published_target(
             from_payload.ref_name
         ));
     }
+    // RFC 147 §3d: `--from <ref>` means "at the Block this ref names", so a tag ref dereferences
+    // through its Tag object exactly as every read surface now does. Before this, a tag `--from`
+    // reported `object type mismatch: expected block, got tag` from the existence check below --
+    // the tag was being read *as* a Block. This is the shared resolver, not a seventh copy of the
+    // two hops; it resolves and never validates, which is why the existence check stays, now
+    // applied to the **resolved** Block rather than to whatever the RefState pointed at.
+    let (target_block_id, _tag_envelope) =
+        resolve_ref_tip_block(object_store, &from_payload).map_err(|err| err.to_string())?;
     if object_store
-        .read_typed(from_payload.target_object_id, ObjectType::Block)
+        .read_typed(target_block_id, ObjectType::Block)
         .map_err(|err| err.to_string())?
         .is_none()
     {
         return Err(format!(
-            "--from ref {from_ref} targets missing block {}",
-            from_payload.target_object_id
+            "--from ref {from_ref} targets missing block {target_block_id}"
         ));
     }
-    Ok(from_payload.target_object_id)
+    Ok(target_block_id)
 }
 
 fn signed_envelope(

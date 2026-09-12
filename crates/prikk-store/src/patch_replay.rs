@@ -41,8 +41,8 @@ use crate::wal::WalReplay;
 use apply::{apply_decoded_operation, apply_rename_batch};
 use decode::{DecodedOperationKind, decode_patch_operations};
 use read::{
-    current_target_block, files_to_manifest, files_to_replay_manifest, load_snapshot_files,
-    read_block, read_patch, single_parent_chain,
+    files_to_manifest, files_to_replay_manifest, load_snapshot_files, read_block, read_patch,
+    single_parent_chain,
 };
 
 /// Read-only result of replaying supported patch operations to an in-memory snapshot.
@@ -366,7 +366,7 @@ pub(crate) fn replay_supported_patch_chain(
     // If a future caller reaches this from a writing operation, confirm its own write happens
     // after this function returns (Stage 1 review v1 §4) before assuming this stays safe.
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let target_block_id = current_target_block(layout, &object_store, ref_name)?;
+    let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
     let block_ids = single_parent_chain(&object_store, target_block_id)?;
     let mut files = BTreeMap::new();
     let mut live_nodes = BTreeMap::new();
@@ -433,7 +433,7 @@ pub(crate) fn resolve_node_lineage_bounds(
     // this, that guarantee breaks silently -- check this comment still describes reality before
     // assuming it's still safe.
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let baseline = current_target_block(layout, &object_store, ref_name)?;
+    let baseline = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
     let chain = single_parent_chain(&object_store, baseline)?;
     let horizon = *chain
         .first()

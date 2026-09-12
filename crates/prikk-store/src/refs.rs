@@ -103,7 +103,11 @@ pub(crate) use verify::{ensure_ref_target_valid, verify_refs};
 /// **Exhaustive match, no wildcard**: a future `RefKind` variant must fail to compile here rather
 /// than silently resolve to nothing and surface as a misleading "missing Block" error the way
 /// `export_bundle`'s own pre-consolidation defect did (`bundle-export-tag-ref-gap-v1.md`).
-pub(crate) fn resolve_ref_tip_block(
+/// **`pub` since RFC 147 §3d**, so `prikk branch create --from tags/<t>` can dereference a tag ref
+/// through this function rather than becoming a seventh hand-rolled copy of the same two hops in
+/// `prikk-cli`. That is the whole reason the visibility widened: the alternative was another copy,
+/// and copies of this exact walk are what §3b and §3c spent two rounds repairing.
+pub fn resolve_ref_tip_block(
     object_store: &impl ObjectReader,
     ref_state_payload: &RefStatePayload,
 ) -> Result<(ObjectId, Option<ObjectEnvelope>)> {
@@ -118,6 +122,48 @@ pub(crate) fn resolve_ref_tip_block(
             Ok((tag_payload.target_block_id, Some(tag_envelope)))
         }
     }
+}
+
+/// Read a published ref by name and resolve it to the Block its tip names.
+///
+/// RFC 147 §3d: `patch_replay/read.rs` and `patch_inverse/read.rs` each carried a `pub(super) fn
+/// current_target_block` with the same signature and a byte-identical body. That duplication is
+/// exactly how §3b's fix reached one and not the other, leaving `inverse-plan`, `rollback-preview`
+/// and `rollback-draft-verify` refusing a valid tag ref while `log` and `checkout` accepted it --
+/// and a comment in one of them asserted, wrongly, that they were shared. One function now, here,
+/// because both callers already depend on this module and neither depends on the other: putting it
+/// in either of them would invent a lateral `patch_replay <-> patch_inverse` edge for nothing.
+///
+/// This is [`resolve_ref_tip_block`] plus the read that gets you a [`RefStatePayload`] in the first
+/// place; that function stays separate because several callers already hold a decoded payload and
+/// must not re-read it. Like it, this **resolves and never validates** -- the returned Block id is
+/// not checked to exist, which is each caller's own job (see `ensure_ref_target_valid`).
+pub(crate) fn read_current_ref_tip_block(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+) -> Result<ObjectId> {
+    let ref_store = RefStore::new(layout.clone());
+    let ref_state_id = ref_store
+        .read_current_ref_state_id(ref_name)?
+        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
+    let envelope = object_store
+        .read_typed(ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "ref {ref_name} points to missing RefState {ref_state_id}"
+            ))
+        })?;
+    let ref_state =
+        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
+    if ref_state.ref_name != ref_name {
+        return Err(PrikkError::Integrity(format!(
+            "RefState name mismatch: expected {ref_name}, got {}",
+            ref_state.ref_name
+        )));
+    }
+    let (block_id, _tag_envelope) = resolve_ref_tip_block(object_store, &ref_state)?;
+    Ok(block_id)
 }
 
 pub(crate) fn ensure_no_incomplete_publication(layout: &RepositoryLayout) -> Result<()> {

@@ -68,6 +68,19 @@ node, then commit again.
 Earlier releases reported this as `error: integrity error: worktree authoring: unsupported kind
 transition: ...`. Same refusal, correct class: it is a state you fix, not damage.
 
+## `error: precondition not met: --target names a tag (tags/<t>); pass the block id it points at, or a branch ref`
+
+You ran `prikk tag create --target` against another tag. A tag ref is one hop from its Block — ref →
+tag object → block — and a tag of a tag is outside that model, so Prikk refuses rather than quietly
+tagging the Block instead: that would make "tag this tag" and "tag this block" produce identical
+history. Pass the block id (`prikk tag list` shows each tag's target block) or a branch ref.
+
+`prikk branch create --from` is the other way round: it *does* dereference a tag, because `--from`
+means "at the block this ref names".
+
+Earlier releases reported this as `error: object type mismatch: expected block, got tag`, which read
+as repository damage rather than as a correctable argument.
+
 ## `error: active WAL has no patch records to seal`
 
 You ran `seal` with nothing queued — every commit since the last seal has already been published.

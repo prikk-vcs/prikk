@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 use crate::stdout::println;
+use prikk_error::PrikkError;
 use prikk_object::{ObjectId, ObjectType, RefKind, RefStatePayload, TagPayload};
 use prikk_store::{
     FileObjectStore, GatedOperation, ObjectReader, ObjectWriteSession, RefStore,
@@ -198,6 +199,19 @@ fn resolve_target_block(
             "--target RefState name mismatch: expected {target}, got {}",
             target_payload.ref_name
         ));
+    }
+    // RFC 147 §3d: a tag ref is **refused here, not dereferenced.** The model is one hop -- ref ->
+    // tag object -> block (this module's own doc) -- and a tag of a tag is outside it. Silently
+    // resolving to the Block would make `--target tags/v1` and `--target <that block>` produce
+    // identical history, so the caller could no longer tell which they had asked for. A caller-
+    // fixable input is a precondition, not the `object type mismatch` this used to report from
+    // reading the Tag object as a Block; the message names both accepted forms, because a refusal
+    // that does not say what would work is a dead end.
+    if target_payload.kind == RefKind::Tag {
+        return Err(PrikkError::Precondition(format!(
+            "--target names a tag ({target}); pass the block id it points at, or a branch ref"
+        ))
+        .to_string());
     }
     if object_store
         .read_typed(target_payload.target_object_id, ObjectType::Block)

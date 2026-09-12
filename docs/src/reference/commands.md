@@ -68,6 +68,13 @@ prikk unlock --lock <path> [--yes|--force]
 prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]
 ```
 
+**What `--from` and `--target` accept.** `branch create --from REF` takes any published ref: a
+branch ref names its Block directly, and a tag ref is dereferenced through its tag object, so
+`--from tags/v1` publishes the new branch at the Block that tag names. `tag create --target` takes a
+block id or a **branch** ref, and **refuses a tag ref** — a tag of a tag is outside the model (ref →
+tag object → block, one hop), and resolving it silently would make `--target tags/v1` and `--target`
+that tag's own block indistinguishable in history. The refusal names both accepted forms.
+
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an
 unknown argument, a missing required flag, a duplicate flag. Graded verification results are in

@@ -121,6 +121,43 @@ practice as the trust sites above — no error variant was added or removed.
 The reclassification is what made the new `worktree-status` field possible to state honestly: a
 command that tells you in advance that the commit will refuse cannot then call that refusal damage.
 
+### Fixed — `prikk branch create --from` accepts a tag ref
+
+`--from tags/v1` reported `error: object type mismatch: expected block, got tag`: the tag object was
+being read *as* a Block. `--from <ref>` means "at the Block this ref names", which is what every read
+surface already did, so a tag ref now dereferences through its tag object and the new branch is
+published at the Block the tag names. The existing check that the target Block exists is unchanged —
+it now runs against the resolved Block rather than against whatever the RefState pointed at.
+
+### Changed — `prikk tag create --target` refuses a tag ref, and says what to pass instead
+
+`--target tags/v1` used to report `error: object type mismatch: expected block, got tag`, the class
+that means the repository is damaged. Nothing is damaged: a tag ref is simply not something
+`--target` accepts. It now reports
+
+```
+error: precondition not met: --target names a tag (tags/v1); pass the block id it points at, or a branch ref
+```
+
+**Deliberately a refusal rather than a dereference.** A tag is one hop from its Block — ref → tag
+object → block — and a tag of a tag is outside that model. Resolving silently would make
+`--target tags/v1` and `--target <that tag's block>` produce identical history, so a reader could no
+longer tell which had been asked for. `--target <block id>` and `--target heads/<branch>` are
+unchanged, and both are named in the message.
+
+### Changed — one ref-tip resolver instead of two identical copies
+
+`patch_replay` and `patch_inverse` each carried a private `current_target_block` with the same
+signature and a byte-identical body. That duplication is why the tag-ref fix reached `checkout` and
+not `inverse-plan`: one copy was changed and the other was not, and a comment in the changed one
+asserted, wrongly, that they were shared. There is now one `refs::read_current_ref_tip_block`, in
+the module that already owns ref reading and the two-hop resolver it wraps; both callers lost their
+direct `RefStore`, `RefStatePayload` and `RepositoryLayout` imports as a result. No behaviour change.
+
+**Library note.** `resolve_ref_tip_block` is now `pub` (one new export), so `prikk branch create`
+can dereference a tag through the shared resolver instead of becoming a seventh hand-written copy of
+the same two hops.
+
 ### Fixed — `prikk inverse-plan`, `rollback-preview` and `rollback-draft-verify` accept a tag ref
 
 All three answered `error: object type mismatch: expected block, got tag` for a perfectly valid tag
