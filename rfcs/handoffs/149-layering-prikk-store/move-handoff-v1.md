@@ -100,3 +100,22 @@ exhaustive match on `DecodedOperationKind` gains its wildcard arm in `bundle`'s 
 Increment 4 as written; the hard stops as written. The CHANGELOG's final moved-name list is derived from
 the diff — it will be shorter than letter 008's appendix by the five families' exports, and the release
 note says so.
+
+---
+
+# v3 — 2026-09-13: increment 3a.2 before 3b (RFC 149 §6c)
+
+One commit, one report, then 3b.
+
+1. **The 17 of your §6** — the 15 production `pub(crate)` items and the two `_for_test` helpers — become
+   `pub` at their declarations (private modules keep them unreachable) and are re-exported **only under
+   `test-support`**, in the test-support block. Not the contract block. Doc comments as `missing_docs`
+   demands; one sentence each saying which moving test needs it.
+2. **The v1 fixture**: `plan_authored_text_span_v1` and `AuthoredTextSpanV1` move from `#[cfg(test)]` to
+   `#[cfg(any(test, feature = "test-support"))]`; `publish_text_create_then_edit_block_v1` joins the
+   surface. `left_anchor`/`right_anchor` untouched.
+3. Same measurements as 3a: graph before/after (no new cycle, no new hub), `size-check`, package list,
+   default `pub use` names unchanged, feature-gated names listed. Full gate set; the addendum applies
+   if `text_span` carries `cfg` gating — say so from the diff.
+
+Then **3b** as v2 says, with the order for 21 families at the top of its first report.

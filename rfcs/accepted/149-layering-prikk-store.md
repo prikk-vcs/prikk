@@ -113,6 +113,8 @@ load-bearing. That is the trade, named.
 
 ### 4b. Consumer impact — must be decided before any move
 
+**CORRECTED 2026-09-13 by stikk's letter 009: stikk depends on no prikk crate** — it drives the CLI and parses its output (`CON-1`), so the rename below is invisible to it. The paragraph that follows assumed a library consumer that does not exist; the architect's assumption, not a measurement. **No external consumer of `prikk-store`'s library API is known.** The notice (letter 008) was sent and cost nothing; the `### Changed — breaking once` CHANGELOG entry still ships for any consumer not known.
+
 The 26 surfaces are the modules external consumers use: `show`, `history`, `verify`, `worktree_status`,
 `bundle`, `merge`, `checkout`, `patch_*`. After the cut their root exports live in **`prikk-operations`**;
 a consumer adds that dependency and renames `prikk_store::` to `prikk_operations::` for those names.
@@ -210,6 +212,17 @@ store is refused (the layer inverted in test builds); a third crate is refused (
 failpoints); duplicated fixtures are refused. (4) The move order is the reference graph's, tests
 included: `patch_exchange` + `tag_travel` are one commit. §5.3 reads: *a test moves with its module and
 reaches the store's fixtures through the test-support surface.*
+
+### 6c. Increment 3a delivered; the v1 fixture and the 17 items ruled into the surface (2026-09-13)
+
+`d3340a3f`: the module chain is `cfg(any(test, feature = "test-support"))`, the gates stay `cfg(test)`,
+24 names under feature-gated re-exports only; graph 130 → 134 nodes (the four fixture modules), 483 → 502
+edges all from them, cycles and hubs identical; package unchanged at 286. **Standing rule:** a fixture
+module approaching the hub threshold is the signal to revisit a third crate, not to declare it.
+**Ruled (3a.2, one commit before 3b):** the v1 fixture's cascade is two `cfg(test)` items widened to the
+feature — taken; the 15 production `pub(crate)` items and two `_for_test` helpers that moving tests reach
+become `pub` in their private modules and are re-exported **only under the feature**, in the test-support
+block — never the operations-layer contract.
 
 ## 7. Owner rulings
 
