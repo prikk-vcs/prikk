@@ -113,7 +113,7 @@ impl ActiveSession {
 /// every one of `read_active_ref_metadata`'s own callers needs no edit. `pub(crate)` for now: the
 /// only caller that needs a non-default name is `doctor.rs`'s own per-active-session reporting,
 /// inside this crate; nothing outside it constructs a second active session yet either.
-pub(crate) fn read_active_ref_metadata_for(
+pub fn read_active_ref_metadata_for(
     layout: &RepositoryLayout,
     name: impl AsRef<std::path::Path>,
 ) -> Result<ActiveRefMetadata> {
@@ -215,7 +215,7 @@ pub fn finish_active_publication_cleanup(
 /// over from a fully-drained-but-uncleared session is replaced unconditionally, the same as the
 /// `Missing` case. The pre-clear-then-write two-step this function used to perform is now internal to
 /// `write_active_ref_metadata` itself; the crash window between clear and write moved, it did not grow.
-pub(crate) fn prepare_empty_active_ref_for_append(
+pub fn prepare_empty_active_ref_for_append(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<String> {

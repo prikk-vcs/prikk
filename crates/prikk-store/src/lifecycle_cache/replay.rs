@@ -30,7 +30,7 @@ use crate::text_span::{self, TextSpanResolutionFailure};
 
 /// Replay-local materialized text for edited text nodes, keyed by `node_id`. Transient to a replay
 /// pass; never part of the persisted lifecycle index (which stores only `blob_id` + `mode`).
-pub(crate) type TextCache = BTreeMap<NodeId, Vec<u8>>;
+pub type TextCache = BTreeMap<NodeId, Vec<u8>>;
 
 /// Structured lifecycle-replay error taxonomy (carry-forward P2-3).
 ///

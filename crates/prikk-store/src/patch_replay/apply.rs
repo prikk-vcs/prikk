@@ -17,8 +17,11 @@ use super::decode::{
 };
 use super::read::read_blob_bytes_with_kind;
 
+/// One node as replay currently sees it: where it lives, what kind it is, and the blob and mode the
+/// most recent operation left it with. The unit a materializing caller writes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReplayLiveNode {
+#[non_exhaustive]
+pub struct ReplayLiveNode {
     pub(crate) path: String,
     pub(crate) kind: NodeKind,
     /// Current mode bits, as recorded by the operation that most recently set them

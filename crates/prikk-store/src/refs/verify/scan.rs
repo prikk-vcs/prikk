@@ -413,7 +413,7 @@ fn verified_ref_state_payload(
 /// bundle must ship the Tag object, or `verify` produces this). Folding this into the resolver would
 /// either drop that context or thread a message-customisation parameter through code three other
 /// callers don't need it in.
-pub(crate) fn ensure_ref_target_valid(
+pub fn ensure_ref_target_valid(
     objects: &impl ObjectReader,
     kind: RefKind,
     target_object_id: ObjectId,

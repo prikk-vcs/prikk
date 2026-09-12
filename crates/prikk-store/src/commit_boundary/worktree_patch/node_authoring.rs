@@ -141,10 +141,11 @@ impl From<AuthorError> for PrikkError {
 
 /// What a worktree entry looks like to an authoring decision -- the only shape facts the rule below
 /// depends on. Two constructors, because the two callers legitimately hold different things: the
-/// authoring walk sees `fsutil`'s root-scoped [`EntryKind`] (it must never touch `std::fs` directly),
+/// authoring walk sees `fsutil`'s root-scoped `EntryKind` (it must never touch `std::fs` directly),
 /// and `worktree_status` holds a `symlink_metadata` it already read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorktreeEntryShape {
+#[non_exhaustive]
+pub enum WorktreeEntryShape {
     /// An ordinary regular file: authorable.
     Regular,
     /// A symlink, by `symlink_metadata` -- never followed.
@@ -206,10 +207,10 @@ pub(in crate::commit_boundary) fn authoring_refusal(
     }
 }
 
-/// [`authoring_refusal`] rendered exactly as `commit` will render it, for readers outside
+/// `authoring_refusal` rendered exactly as `commit` will render it, for readers outside
 /// `commit_boundary`.
 ///
-/// `worktree_status` cannot name [`AuthorError`] -- it is `pub(in crate::commit_boundary)` (RFC 131
+/// `worktree_status` cannot name `AuthorError` -- it is `pub(in crate::commit_boundary)` (RFC 131
 /// §6d.3) and stays that way. It gets the same decision through the same function.
 ///
 /// **Rendered through `PrikkError`, not through `AuthorError`'s own `Display`.** §2e(c) reclassifies
@@ -218,7 +219,7 @@ pub(in crate::commit_boundary) fn authoring_refusal(
 /// different text the moment the class changed. Converting here is what makes the agreement
 /// mechanical instead of coincidental: `commit`'s stderr is `"error: "` followed by exactly this
 /// string, which is what the status-and-commit-agree test asserts.
-pub(crate) fn authoring_refusal_reason(
+pub fn authoring_refusal_reason(
     path: &str,
     baseline_kind: Option<NodeKind>,
     shape: WorktreeEntryShape,

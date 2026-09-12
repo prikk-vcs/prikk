@@ -14,7 +14,14 @@ pub(crate) fn encode_envelope_file(envelope: &ObjectEnvelope) -> Result<Vec<u8>>
     encode_envelope_fields(envelope)
 }
 
-#[cfg(test)]
+/// Encode an envelope that is structurally valid but may not be strictly so -- the form a fixture
+/// needs to plant a record the strict encoder would refuse.
+///
+/// RFC 149 increment 1: reachable under `test-support` as well as `cfg(test)`, because
+/// `refs::encode_ref_container_record_for_test` is, and a helper that a feature-gated helper calls
+/// has to exist in the same builds. Visibility is unchanged -- it is `pub(crate)` and stays there;
+/// only the configurations it compiles in widened.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn encode_envelope_file_structural(envelope: &ObjectEnvelope) -> Result<Vec<u8>> {
     envelope.validate()?;
     encode_envelope_fields(envelope)

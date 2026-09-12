@@ -229,7 +229,8 @@ pub fn prepare_patch_plan_content_report(
 /// a value the stored bytes never contained. This type exists only in memory, built by replaying
 /// operations, and never crosses the object-format boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReplayManifestEntry {
+#[non_exhaustive]
+pub struct ReplayManifestEntry {
     /// Validated repository-relative path.
     pub(crate) path: RepoPath,
     /// File content bytes.
@@ -254,7 +255,8 @@ pub(crate) struct ReplayManifestEntry {
 /// Replay-derived manifest, sorted by path. See [`ReplayManifestEntry`] for why this is not
 /// `crate::snapshot::SnapshotManifest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReplayManifest {
+#[non_exhaustive]
+pub struct ReplayManifest {
     /// File entries, sorted by path.
     pub(crate) files: Vec<ReplayManifestEntry>,
 }
@@ -297,7 +299,8 @@ pub(crate) struct PatchReplaySnapshot {
 
 /// A file explicitly deleted while replaying the supported patch subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PatchReplayDeletedFile {
+#[non_exhaustive]
+pub struct PatchReplayDeletedFile {
     /// Validated repository-relative path that was removed.
     pub(crate) path: RepoPath,
     /// Blob ID recorded as the delete precondition.
@@ -308,7 +311,7 @@ pub(crate) struct PatchReplayDeletedFile {
 
 /// Apply a decoded operation sequence -- already concatenated across whatever patch(es) produced
 /// it -- onto existing `files`/`live_nodes`/`deleted_files` state, using the exact per-operation
-/// dispatch [`replay_supported_patch_chain`]'s own loop uses: consecutive `RenamePath` operations
+/// dispatch `replay_supported_patch_chain`'s own loop uses: consecutive `RenamePath` operations
 /// batched into one run (RFC 144 §4h.7/§4j; see `apply::apply_rename_batch`'s own doc comment),
 /// everything else applied one at a time via `apply_decoded_operation`. Returns the count and the
 /// distinct applied-kind labels, matching the bookkeeping the chain-walking loop keeps.
@@ -318,7 +321,7 @@ pub(crate) struct PatchReplayDeletedFile {
 /// bundle's own candidate operations, applied onto a copy of the local ref's current replayed
 /// state rather than operations read patch-by-patch while walking a block chain -- "one replay of
 /// current state, plus the bundle's own patches applied in memory," in the design's own words.
-pub(crate) fn apply_operation_sequence(
+pub fn apply_operation_sequence(
     object_store: &impl ObjectReader,
     files: &mut BTreeMap<String, Vec<u8>>,
     live_nodes: &mut BTreeMap<NodeId, apply::ReplayLiveNode>,

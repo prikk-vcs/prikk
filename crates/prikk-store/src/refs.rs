@@ -20,28 +20,33 @@ mod verify;
 // inside `refs` itself, and the function's own declaration is `pub(in crate::refs)` now too.
 #[cfg(all(test, target_os = "linux"))]
 pub(in crate::refs) use container::append_ref_container_record;
-#[cfg(test)]
-pub(crate) use container::{
-    append_torn_ref_log_tail_for_test, encode_ref_container_record_for_test,
-};
+// RFC 149 increment 1: behind `test-support` as well as `cfg(test)`, so the operations layer's own
+// tests can reach them once those tests live in another crate. `pub`, not `pub(crate)`: a
+// `pub(crate)` waypoint cannot be re-exported from `lib.rs` (E0364).
+#[cfg(any(test, feature = "test-support"))]
+pub use container::{append_torn_ref_log_tail_for_test, encode_ref_container_record_for_test};
 #[cfg(feature = "test-support")]
 pub use pointer_index::{
     force_ref_pointer_to_arbitrary_state_for_test_support,
     remove_ref_pointer_entry_for_test_support,
 };
-#[cfg(test)]
-pub(crate) use pointer_index::{
-    remove_pointer_entries_for_test,
-    write_ref_pointer_candidate_for_test as write_ref_pointer_candidate,
+// RFC 149 increment 1: same widening. **The `as write_ref_pointer_candidate` alias is gone** -- an
+// alias is not a contract, and a name that says "candidate" while the function says "for_test" told
+// eleven call sites the wrong thing about what they were reaching for.
+#[cfg(any(test, feature = "test-support"))]
+pub use pointer_index::{
+    remove_pointer_entries_for_test, write_ref_pointer_candidate_for_test,
     write_ref_pointer_entry_with_explicit_key_for_test,
 };
 // RFC 102 Stage 6 Step 2, design-v1.md §15.6-§15.9: `compact.rs`'s ref-pointer-index compactor is
 // outside `refs`, so these need re-exporting here the same way `verify_refs` already is below --
 // `pointer_index` itself stays a private submodule; only the specific items a caller outside `refs`
 // needs are widened.
-pub(crate) use pointer_index::{
-    PointerIndexEntry, encode_pointer_index_record, replay_pointer_index,
-};
+// RFC 149 §5.2b: widened from `pub(crate)` with the items themselves -- the operations-layer
+// contract re-exports these three from `lib.rs`, and a `pub(crate)` waypoint on the path would
+// block that (E0364). The set is unchanged; only the road to it is.
+pub(crate) use pointer_index::replay_pointer_index;
+pub use pointer_index::{PointerIndexEntry, encode_pointer_index_record};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -55,8 +60,8 @@ use crate::object_store::{FileObjectStore, ObjectReader, ObjectWriter};
 /// Test-only convenience matching the retired `refs/log.rs::append_log_record`'s own 3-argument
 /// call shape exactly, for fixtures that need to plant a specific log record directly without going
 /// through a real publish. Computes `ref_name_key` itself.
-#[cfg(test)]
-pub(crate) fn append_log_record_for_signature_test(
+#[cfg(any(test, feature = "test-support"))]
+pub fn append_log_record_for_signature_test(
     layout: &RepositoryLayout,
     ref_name: &str,
     envelope: &ObjectEnvelope,
@@ -72,8 +77,8 @@ pub(crate) fn append_log_record_for_signature_test(
 /// single-argument call shape: derives `ref_name_key` from the envelope's own decoded
 /// `RefUpdatePayload.ref_name` rather than taking it as a separate parameter, since every caller
 /// already has an envelope whose payload names its own ref.
-#[cfg(test)]
-pub(crate) fn encode_log_record_for_test(envelope: &ObjectEnvelope) -> Result<Vec<u8>> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn encode_log_record_for_test(envelope: &ObjectEnvelope) -> Result<Vec<u8>> {
     let update = RefUpdatePayload::decode_canonical(&envelope.canonical_payload)?;
     container::encode_ref_container_record_for_test(
         crate::foundation::layout::ref_name_key_bytes(&update.ref_name),
@@ -85,7 +90,10 @@ pub use container::{RefLogRecord, RefLogReplay};
 pub use verify::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefPublicationIssue,
 };
-pub(crate) use verify::{ensure_ref_target_valid, verify_refs};
+// RFC 149 §5.2b: same widening, same reason as `pointer_index`'s above. `verify_refs` is held at
+// `pub(crate)` -- see the contract block in `lib.rs` for why.
+pub use verify::ensure_ref_target_valid;
+pub(crate) use verify::verify_refs;
 
 /// The two-hop ref-tip resolution `bundle.rs`, `patch_set_digest.rs`, and `patch_exchange.rs` each
 /// need: `Branch` names a Block directly; `Tag` names a Tag object one hop away, whose own
@@ -138,7 +146,7 @@ pub fn resolve_ref_tip_block(
 /// place; that function stays separate because several callers already hold a decoded payload and
 /// must not re-read it. Like it, this **resolves and never validates** -- the returned Block id is
 /// not checked to exist, which is each caller's own job (see `ensure_ref_target_valid`).
-pub(crate) fn read_current_ref_tip_block(
+pub fn read_current_ref_tip_block(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     ref_name: &str,
@@ -166,7 +174,12 @@ pub(crate) fn read_current_ref_tip_block(
     Ok(block_id)
 }
 
-pub(crate) fn ensure_no_incomplete_publication(layout: &RepositoryLayout) -> Result<()> {
+/// Refuse to proceed while any ref is mid-publication or fails its own verification.
+///
+/// The precondition every write path checks before touching refs: a publication interrupted between
+/// its pointer write and its ref-state write leaves a ref that reads as neither old nor new, and a
+/// second writer stepping onto it would make the damage permanent rather than resumable.
+pub fn ensure_no_incomplete_publication(layout: &RepositoryLayout) -> Result<()> {
     let verification = verify_refs(layout)?;
     // DC-95 Stage 2 Level 2: item containment means `verify_refs` now returns `Ok` for a single
     // ref's own read/classification failure instead of aborting -- this gate must check for that

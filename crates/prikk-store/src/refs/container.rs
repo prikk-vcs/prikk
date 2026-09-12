@@ -187,8 +187,12 @@ pub(in crate::refs) fn encode_ref_container_record(
     frame_record(ref_name_key, &body)
 }
 
-#[cfg(test)]
-pub(crate) fn encode_ref_container_record_for_test(
+/// Frame one ref-container record from an envelope that is structurally, but not strictly, valid.
+///
+/// Test fixtures only: it is how a test plants a record the real writer would refuse to produce, so
+/// that a reader's handling of such a record can be exercised at all.
+#[cfg(any(test, feature = "test-support"))]
+pub fn encode_ref_container_record_for_test(
     ref_name_key: [u8; 32],
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
@@ -578,8 +582,8 @@ pub(in crate::refs) fn truncate_incomplete_tail(layout: &RepositoryLayout) -> Re
 /// real record already sits last in the container, since CLI tests have no in-crate encoder) for why
 /// bare garbage bytes no longer simulate "this ref's own torn write" under the shared container: a
 /// tail shorter than `REF_CONTAINER_HEADER_LEN` cannot be attributed to any ref at all.
-#[cfg(test)]
-pub(crate) fn append_torn_ref_log_tail_for_test(
+#[cfg(any(test, feature = "test-support"))]
+pub fn append_torn_ref_log_tail_for_test(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
     envelope: &ObjectEnvelope,

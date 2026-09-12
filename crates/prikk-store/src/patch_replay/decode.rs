@@ -29,7 +29,8 @@ use tlv::TlvCursor;
 /// planning, and validator messages, so promoting the body into typed variants does
 /// not discard the operation envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DecodedPatchOperation {
+#[non_exhaustive]
+pub struct DecodedPatchOperation {
     pub(crate) op_seq: u32,
     pub(crate) kind: DecodedOperationKind,
 }
@@ -43,7 +44,8 @@ pub(crate) struct DecodedPatchOperation {
 /// for the node-model application increment (4.4) and are `dead_code`-allowed until
 /// then.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DecodedOperationKind {
+#[non_exhaustive]
+pub enum DecodedOperationKind {
     /// Create a file from a persisted Blob.
     CreateFile {
         /// Repository-relative path.
@@ -66,56 +68,83 @@ pub(crate) enum DecodedOperationKind {
     },
     /// Span-anchored text edit (node-addressed; apply/inverse is FDD-01 §7.2.1, 4.4).
     EditText {
+        /// Node identity.
         node_id: NodeId,
+        /// Span identity: v2's content-anchored hash, or v1's positional one.
         span_id: [u8; TEXT_SPAN_HASH_BYTES],
+        /// Hash of the span's text before the edit, checked on apply.
         old_span_hash: [u8; TEXT_SPAN_HASH_BYTES],
+        /// Hash of the anchor text immediately left of the span.
         left_anchor_hash: [u8; TEXT_SPAN_HASH_BYTES],
+        /// Hash of the anchor text immediately right of the span.
         right_anchor_hash: [u8; TEXT_SPAN_HASH_BYTES],
+        /// The bytes the span becomes.
         replacement_text: Vec<u8>,
+        /// The bytes the span was, carried so the inverse needs no re-read.
         old_span_text: Vec<u8>,
         /// RFC 134 §8: present (with `right_anchor_len`) only at
         /// `PATCH_TEXT_SPAN_V2_SCHEMA` and above; `None` means `span_id` is v1's
         /// positional identity.
         left_anchor_len: Option<u32>,
+        /// Length of the right anchor, paired with `left_anchor_len` under the same schema rule.
         right_anchor_len: Option<u32>,
     },
     /// Replace a binary node's blob (node-addressed; apply is 4.4).
     ReplaceBinary {
+        /// Node identity.
         node_id: NodeId,
+        /// Blob the node pointed at before.
         old_blob_id: ObjectId,
+        /// Blob it points at after.
         new_blob_id: ObjectId,
     },
     /// Rename a node (node-addressed; apply is 4.4).
     RenamePath {
+        /// Node identity, unchanged by the rename -- that is what makes it a rename.
         node_id: NodeId,
+        /// Repository-relative path before.
         old_path: String,
+        /// Repository-relative path after.
         new_path: String,
     },
     /// Change a node's mode (node-addressed; apply is 4.4).
     ChangePerm {
+        /// Node identity.
         node_id: NodeId,
+        /// Mode bits before.
         old_mode: u32,
+        /// Mode bits after.
         new_mode: u32,
     },
     /// Create a symlink node (apply is 4.4; static target validation FDD-04 §5.4a).
     CreateSymlink {
+        /// Repository-relative path.
         path: String,
+        /// Node identity.
         node_id: NodeId,
+        /// Link target, validated statically at authoring time.
         target: String,
     },
 }
 
 /// Discriminated `DeleteNode` deletion preimage (§9.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DecodedDeletePreimage {
+#[non_exhaustive]
+pub enum DecodedDeletePreimage {
     /// Text/binary file: old blob + old mode.
     File {
+        /// Whether the deleted node was text or binary.
         old_node_kind: NodeKind,
+        /// Blob the node pointed at when it was deleted.
         old_blob_id: ObjectId,
+        /// Mode bits it carried when it was deleted.
         old_mode: u32,
     },
     /// Symlink: old target (apply/inverse is 4.4).
-    Symlink { old_target: String },
+    Symlink {
+        /// Link target at the moment of deletion.
+        old_target: String,
+    },
 }
 
 /// Apply-time support gate (review erratum P1). Decoding a kind says nothing about
@@ -127,12 +156,12 @@ pub(crate) enum DecodedDeletePreimage {
 /// implementation-reconciled while any kind still returns unsupported here.
 ///
 /// `RenamePath` admission here is the gate only — a decoded `RenamePath` is never applied by
-/// [`super::apply::apply_decoded_operation`] (which still refuses it, defensively: routing is the
+/// `super::apply::apply_decoded_operation` (which still refuses it, defensively: routing is the
 /// caller's job). The caller (`patch_replay.rs`'s own replay loop) is responsible for collecting
 /// consecutive `RenamePath` runs and resolving each through
-/// [`super::apply::apply_rename_batch`] instead, per RFC 144 §4h.7 — this function only says the
+/// `super::apply::apply_rename_batch` instead, per RFC 144 §4h.7 — this function only says the
 /// kind is *admitted*, not which code path admits it.
-pub(crate) fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Result<()> {
+pub fn ensure_apply_supported(operation: &DecodedPatchOperation) -> Result<()> {
     match &operation.kind {
         DecodedOperationKind::CreateFile { .. }
         | DecodedOperationKind::DeleteNode {
@@ -183,7 +212,7 @@ pub(crate) fn applied_operation_kind_label(kind: &DecodedOperationKind) -> &'sta
 /// `RefStatePayload::decode_canonical`'s own shape (Patch schema 2 handoff): a present tag 2
 /// (`parent_patch_ids`) is legal-but-ignored at schema 1 (every patch already written keeps
 /// decoding unchanged) and refused outright at `PATCH_PARENT_IDS_RETIRED_SCHEMA` and above.
-pub(crate) fn decode_patch_operations(
+pub fn decode_patch_operations(
     bytes: &[u8],
     schema_version: u32,
 ) -> Result<Vec<DecodedPatchOperation>> {
@@ -266,7 +295,7 @@ pub(crate) fn decode_patch_operations(
 /// the field is legal-but-must-be-empty) or schema 2 (where the field is not legal at all). Do not
 /// reorder `accept.rs`, and do not read this function's continued existence as redundant with
 /// `decode_patch_operations`'s own schema-2 refusal -- it is broader, not duplicate.
-pub(crate) fn decode_patch_parent_ids(bytes: &[u8]) -> Result<Vec<ObjectId>> {
+pub fn decode_patch_parent_ids(bytes: &[u8]) -> Result<Vec<ObjectId>> {
     let mut cursor = TlvCursor::new(bytes);
     let mut parent_patch_ids = Vec::new();
     while let Some(field) = cursor.next_field()? {
@@ -287,7 +316,7 @@ pub(crate) fn decode_patch_parent_ids(bytes: &[u8]) -> Result<Vec<ObjectId>> {
 ///
 /// Refuses `Some("")` (§8.4: "absent" and "empty" must never both mean "no message") and a duplicate
 /// tag 6, exactly as `PatchPayload::validate` does on the write side.
-pub(crate) fn decode_patch_message(bytes: &[u8], schema_version: u32) -> Result<Option<String>> {
+pub fn decode_patch_message(bytes: &[u8], schema_version: u32) -> Result<Option<String>> {
     let mut cursor = TlvCursor::new(bytes);
     let mut message = None;
     while let Some(field) = cursor.next_field()? {

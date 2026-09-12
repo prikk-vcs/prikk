@@ -16,7 +16,11 @@ use crate::snapshot::{SnapshotEntry, SnapshotManifest};
 use super::apply::ReplayLiveNode;
 use super::{ReplayManifest, ReplayManifestEntry};
 
-pub(crate) fn single_parent_chain(
+/// The single-parent ancestry of `target`, oldest first.
+///
+/// `None` where the chain forks: a block with more than one parent has no single-parent chain, and
+/// guessing one would silently pick a side of a merge.
+pub fn single_parent_chain(
     object_store: &impl ObjectReader,
     target: ObjectId,
 ) -> Result<Vec<ObjectId>> {
@@ -63,26 +67,26 @@ fn mainline_or_sole_parent(block: &BlockPayload) -> Option<Option<ObjectId>> {
     }
 }
 
-pub(crate) fn read_block(
-    object_store: &impl ObjectReader,
-    block_id: ObjectId,
-) -> Result<BlockPayload> {
+/// Read and decode one Block, or fail with an integrity error naming the missing id.
+pub fn read_block(object_store: &impl ObjectReader, block_id: ObjectId) -> Result<BlockPayload> {
     let envelope = object_store
         .read_typed(block_id, ObjectType::Block)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing Block {block_id}")))?;
     BlockPayload::decode_canonical(&envelope.canonical_payload)
 }
 
-pub(crate) fn read_patch(
-    object_store: &impl ObjectReader,
-    patch_id: ObjectId,
-) -> Result<ObjectEnvelope> {
+/// Read one Patch envelope, or fail with an integrity error naming the missing id.
+///
+/// Returns the envelope rather than a decoded payload: the signature is checked against the
+/// envelope's own bytes, so a caller that needs to verify must not be handed a decoded copy.
+pub fn read_patch(object_store: &impl ObjectReader, patch_id: ObjectId) -> Result<ObjectEnvelope> {
     object_store
         .read_typed(patch_id, ObjectType::Patch)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing Patch {patch_id}")))
 }
 
-pub(crate) fn load_snapshot_files(
+/// Load a snapshot's manifest and every file it names, keyed by repository-relative path.
+pub fn load_snapshot_files(
     object_store: &impl ObjectReader,
     snapshot_blob_ref: ObjectId,
 ) -> Result<BTreeMap<String, Vec<u8>>> {

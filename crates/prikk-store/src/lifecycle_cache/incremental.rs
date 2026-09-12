@@ -59,7 +59,7 @@ pub struct LifecycleCacheDivergence {
 /// propagated, so `verify` always completes with a full picture rather than aborting on this check.
 /// This answers a narrower question than "is the cache eligible for the next commit" — it verifies
 /// only what the cache is *currently* offering, on the DC-56 `verify_divergence` pattern.
-pub(crate) fn verify_divergence(
+pub fn verify_divergence(
     reader: &impl ObjectReader,
     layout: &RepositoryLayout,
 ) -> Vec<LifecycleCacheDivergence> {

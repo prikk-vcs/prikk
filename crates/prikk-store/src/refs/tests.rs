@@ -179,7 +179,7 @@ fn reordered_but_individually_valid_log_records_are_rejected() -> prikk_error::R
     // only their physical order is wrong.
     super::append_log_record_for_signature_test(&layout, "heads/main", &update2)?;
     super::append_log_record_for_signature_test(&layout, "heads/main", &update1)?;
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", state2_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", state2_id)?;
 
     // `RefStore::replay_log` performs no sequence validation -- confirmed, not assumed: it returns
     // both records with no item failure, in their physical (reversed) order.

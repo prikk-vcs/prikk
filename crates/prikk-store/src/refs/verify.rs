@@ -13,7 +13,8 @@ use crate::signature_diagnostics::{
 
 mod scan;
 
-pub(crate) use scan::ensure_ref_target_valid;
+// RFC 149 §5.2b: a waypoint on the operations-layer contract's path to `scan`.
+pub use scan::ensure_ref_target_valid;
 pub use scan::{RefFileOutcome, RefFileStatus};
 
 use scan::{LogState, PointerState, read_logs, read_pointers};

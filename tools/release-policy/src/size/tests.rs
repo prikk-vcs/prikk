@@ -143,8 +143,8 @@ fn a_placeholder_reason_is_not_a_recorded_decision() {
 /// Control 3: **a `#[cfg(test)]` module inside a production file is not counted.**
 ///
 /// Asserted against the real file rather than a fixture, because the fixture that matters is the
-/// one that exists: `node_authoring.rs` is 1,415 physical lines with a 49-line `mode_change_tests`
-/// module at the end, and the gate must see 1,366. Counting the test module would not change this
+/// one that exists: `node_authoring.rs` is 1,416 physical lines with a 49-line `mode_change_tests`
+/// module at the end, and the gate must see 1,367. Counting the test module would not change this
 /// file's verdict — it is declared either way — but it would change `layout.rs`'s the moment
 /// someone put tests beside it, which is the shape of the mistake.
 #[test]
@@ -156,7 +156,7 @@ fn an_inline_test_module_is_not_production() {
         .lines()
         .count();
     assert_eq!(
-        physical, 1415,
+        physical, 1416,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -166,7 +166,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1366);
+    assert_eq!(counted.production_lines, 1367);
     assert_eq!(
         physical - counted.production_lines,
         49,

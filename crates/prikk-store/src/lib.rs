@@ -192,6 +192,16 @@ pub use refs::{
     force_ref_pointer_to_arbitrary_state_for_test_support,
     remove_ref_pointer_entry_for_test_support,
 };
+// RFC 149 increment 1: the seven `refs` helpers the operations layer's own tests reach. They are
+// test-support by every measure -- no surface's production path touches one -- so they go behind the
+// feature rather than into the operations-layer contract below, and never become public API.
+#[cfg(feature = "test-support")]
+pub use refs::{
+    append_log_record_for_signature_test, append_torn_ref_log_tail_for_test,
+    encode_log_record_for_test, encode_ref_container_record_for_test,
+    remove_pointer_entries_for_test, write_ref_pointer_candidate_for_test,
+    write_ref_pointer_entry_with_explicit_key_for_test,
+};
 pub use rename_declaration::{
     DeclarationRecordOutcome, RenameDeclaration, clear_rename_declarations,
     read_rename_declarations, record_rename_declaration,
@@ -242,4 +252,52 @@ pub use worktree_status::{
     QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,
     WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,
     worktree_status,
+};
+
+// ---------------------------------------------------------------------------------------------
+// Operations-layer contract (RFC 149 §5.2b)
+//
+// **One named set, not a drift.** These are the items the operations layer -- the 26 modules RFC 149
+// moves to `prikk-operations` -- reaches inside this crate's core (`commit_boundary`,
+// `lifecycle_cache`, `patch_replay`, `refs`, `trust`). They are `pub` because that layer will live in
+// another crate, and they are listed here, together, so that the cost of the cut is one reviewable
+// block rather than a `pub` scattered across thirteen files.
+//
+// Derived from the step-2b census, not from what happened to compile: every entry is an item a
+// surface module actually references today, resolved to its declaration. `trust` appears nowhere
+// below because everything the surfaces reach in it was already public.
+//
+// **Adding to this block is a decision, not a fix.** An item that needs `pub` and is not here means
+// the census missed a dependency; say so and measure it rather than appending quietly.
+//
+// **`#[non_exhaustive]` on every enum and struct among them** (RFC 147 ruling 2), applied at the
+// declaration: a consumer in another crate reads these, it does not construct or exhaustively match
+// them, and the first time it wants to is a conversation rather than a silent break.
+//
+// One item the census named is **not** here: `lifecycle_cache::replay::LifecycleReplayError`. Its
+// `TextSpanResolutionFailed` variant carries a `text_span::TextSpanResolutionFailure`, which is
+// infrastructure that stays in `prikk-store`; exposing the error would expose that type too --
+// a 42nd item, beyond the 41 the owner ruled on. RFC 149 §5's hard stop, reported rather than
+// widened.
+pub use commit_boundary::active::{
+    prepare_empty_active_ref_for_append, read_active_ref_metadata_for,
+};
+pub use commit_boundary::worktree_patch::{WorktreeEntryShape, authoring_refusal_reason};
+pub use lifecycle_cache::incremental::verify_divergence;
+pub use lifecycle_cache::replay::TextCache;
+pub use lifecycle_cache::{
+    ReplayDerivedLifecycleState, materialize_edited_text, replay_derived_state,
+};
+pub use patch_replay::apply::ReplayLiveNode;
+pub use patch_replay::decode::{
+    DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_message,
+    decode_patch_operations, decode_patch_parent_ids, ensure_apply_supported,
+};
+pub use patch_replay::read::{load_snapshot_files, read_block, read_patch, single_parent_chain};
+pub use patch_replay::{
+    PatchReplayDeletedFile, ReplayManifest, ReplayManifestEntry, apply_operation_sequence,
+};
+pub use refs::{
+    PointerIndexEntry, encode_pointer_index_record, ensure_no_incomplete_publication,
+    ensure_ref_target_valid, read_current_ref_tip_block,
 };

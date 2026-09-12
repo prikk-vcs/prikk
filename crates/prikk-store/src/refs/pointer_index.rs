@@ -39,7 +39,8 @@ const POINTER_INDEX_HEADER_LEN: usize = 8 + 2 + 8 + 32;
 
 /// One ref-pointer-index entry: the published RefState id for one `ref_name_key`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PointerIndexEntry {
+#[non_exhaustive]
+pub struct PointerIndexEntry {
     pub(crate) ref_name_key: [u8; 32],
     pub(crate) ref_name: String,
     pub(crate) ref_state_id: ObjectId,
@@ -113,7 +114,9 @@ fn decode_entry_body(body: &[u8]) -> Result<PointerIndexEntry> {
     })
 }
 
-pub(crate) fn encode_pointer_index_record(entry: &PointerIndexEntry) -> Result<Vec<u8>> {
+/// Encode one pointer-index record: length-prefixed body plus checksum, the exact bytes the shared
+/// index container appends.
+pub fn encode_pointer_index_record(entry: &PointerIndexEntry) -> Result<Vec<u8>> {
     let body = encode_entry_body(entry)?;
     let body_len = len_to_u64(body.len())?;
     let checksum = record_checksum(body_len, &body);
@@ -311,7 +314,7 @@ pub(in crate::refs) fn lookup_ref_pointer(
 /// solely so `force_ref_pointer_to_arbitrary_state_for_test_support` below (design-v1.md §13.10) has
 /// something to call -- same reasoning as `remove_pointer_entries_for_test`'s own doc.
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn write_ref_pointer_candidate_for_test(
+pub fn write_ref_pointer_candidate_for_test(
     layout: &RepositoryLayout,
     ref_name: &str,
     ref_state_id: ObjectId,
@@ -329,8 +332,8 @@ pub(crate) fn write_ref_pointer_candidate_for_test(
 /// Test-only: like `write_ref_pointer_candidate_for_test`, but takes `ref_name_key` explicitly
 /// instead of deriving it from `ref_name` -- for fixtures that need the two to disagree
 /// (`read_one_pointer_entry`'s own coherence check, design-v1.md §13.12).
-#[cfg(test)]
-pub(crate) fn write_ref_pointer_entry_with_explicit_key_for_test(
+#[cfg(any(test, feature = "test-support"))]
+pub fn write_ref_pointer_entry_with_explicit_key_for_test(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
     ref_name: &str,
@@ -383,7 +386,7 @@ pub(in crate::refs) fn append_ref_pointer_entry(
 /// never be active when this crate is compiled as a normal dependency of another crate's integration
 /// tests -- see that function's own doc for why a `pub` method was rejected in favor of this feature.
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn remove_pointer_entries_for_test(
+pub fn remove_pointer_entries_for_test(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<()> {

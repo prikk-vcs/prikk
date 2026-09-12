@@ -338,9 +338,9 @@ fn verify_repository_detects_ref_container_record_key_mismatch() -> Result<()> {
 /// `RefState` object it points to. `RefStore::publish`'s own `validate_coherent_publication`
 /// (`refs/publication.rs:164`) rejects exactly this disagreement between `publication.ref_name`
 /// and the `RefState`'s internal name before anything is ever written, so this fixture cannot be
-/// built through the public API at all -- it needs `refs::write_ref_pointer_candidate` directly
-/// (a `#[cfg(test)]`-only re-export added alongside this test, mirroring the existing `#[cfg(test)]
-/// pub(crate) use log::{...}` re-export a few lines above it in `refs.rs`, for the same reason:
+/// built through the public API at all -- it needs `refs::write_ref_pointer_candidate_for_test`
+/// directly (a re-export behind `cfg(test)` or the `test-support` feature, alongside the other
+/// container and pointer-index test helpers in `refs.rs`, for the same reason:
 /// the production write path enforces the very invariant this check exists to catch when it's
 /// violated some other way). The candidate is written for `heads/other`, pointing at `heads/
 /// main`'s real, unrelated `RefState` -- then promoted from its temp path to its own canonical
@@ -369,10 +369,10 @@ fn verify_repository_detects_ref_state_name_pointer_mismatch() -> Result<()> {
 
     let (main_ref_state_id, _) =
         publish_ref_to_new_block_fake_signed_confounds_probes(&layout, &mut objects, "heads/main")?;
-    // RFC 102 Stage 4: `write_ref_pointer_candidate` durably appends straight to the shared
+    // RFC 102 Stage 4: `write_ref_pointer_candidate_for_test` durably appends straight to the shared
     // pointer index now -- an append-only record has no candidate value to stage, so there is no
     // longer a separate temp-then-rename promotion step to perform here at all.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/other", main_ref_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/other", main_ref_state_id)?;
 
     let report = verify_repository(&layout)?;
     assert_ref_failed(&report, "name differs from pointer ref");
@@ -422,7 +422,7 @@ fn verify_repository_fails_closed_on_a_damaged_pointer_index_entry() -> Result<(
         &signer,
         true,
     )?;
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", ref_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_id)?;
     // Corrupt the just-written entry's own last byte (inside its checksum-covered region) --
     // shape otherwise valid, only the content is damaged.
     let path = layout.ref_pointer_index_slot_path(crate::foundation::layout::ContainerSlot::A);
@@ -515,7 +515,7 @@ fn verify_repository_detects_ref_update_ref_state_mismatch() -> Result<()> {
     // pointer at all, classify_ref_state's own "pointer missing while log exists" arm fires
     // regardless of verify_update's state, confounding the probe below (found by running it).
     // RFC 102 Stage 4: no candidate-then-rename step -- see the name-mismatch test above.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", ref_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_id)?;
 
     let report = verify_repository(&layout)?;
     assert_ref_failed(&report, "RefState disagrees with RefUpdate");
@@ -587,7 +587,7 @@ fn verify_repository_detects_unsigned_ref_state() -> Result<()> {
     // one: without it, disabling the check under test would still hit classify_ref_state's own
     // "pointer missing while log exists" arm, confounding the probe. RFC 102 Stage 4: no
     // candidate-then-rename step -- see the name-mismatch test's own doc.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", ref_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_id)?;
 
     let report = verify_repository(&layout)?;
     assert_ref_failed(&report, "is unsigned");
@@ -635,7 +635,7 @@ fn verify_repository_detects_incomplete_log_tail_without_pointer_lead() -> Resul
     let update = build_signed_ref_update("heads/main", None, state_id, target_block, 1, &signer)?;
     crate::refs::append_log_record_for_signature_test(&layout, "heads/main", &update)?;
     // RFC 102 Stage 4: no candidate-then-rename step -- see the name-mismatch test's own doc.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", state_id)?;
 
     // RFC 102 Stage 4: a torn tail shorter than the shared container's own frame header (82
     // bytes) is unattributable to any ref (`container.rs`'s own `trailing_tail_ref_name_key`), so
@@ -686,7 +686,7 @@ fn verify_repository_detects_nonzero_created_at_under_format2() -> Result<()> {
         true,
     )?;
     // RFC 102 Stage 4: no candidate-then-rename step -- see the name-mismatch test's own doc.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", ref_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_id)?;
 
     let update_payload = RefUpdatePayload {
         ref_name: "heads/main".to_string(),
@@ -769,7 +769,7 @@ fn verify_repository_detects_ref_log_sequence_gap() -> Result<()> {
         build_signed_ref_update("heads/main", None, first_state_id, target_block, 1, &signer)?;
     crate::refs::append_log_record_for_signature_test(&layout, "heads/main", &first_update)?;
     // RFC 102 Stage 4: no candidate-then-rename step -- see the name-mismatch test's own doc.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", first_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", first_state_id)?;
 
     // Second RefState/RefUpdate pair, self-consistent with each other, but the update_seq jumps
     // from 1 to 3 -- a gap validate_log's own chain check exists to catch.
@@ -797,7 +797,7 @@ fn verify_repository_detects_ref_log_sequence_gap() -> Result<()> {
     // *different* defect (pointer left behind), not evidence about this check. With the pointer
     // kept in step, the only thing left to notice the broken sequence is the chain check itself.
     // RFC 102 Stage 4: no candidate-then-rename step -- see the name-mismatch test's own doc.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", gap_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", gap_state_id)?;
 
     let report = verify_repository(&layout)?;
     assert_ref_failed(&report, "ref-log chain or sequence diverges");
@@ -855,7 +855,7 @@ fn verify_repository_detects_unexplained_pointer_log_divergence() -> Result<()> 
         true,
     )?;
     // RFC 102 Stage 4: no candidate-then-rename step -- see the name-mismatch test's own doc.
-    crate::refs::write_ref_pointer_candidate(&layout, "heads/main", x_state_id)?;
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", x_state_id)?;
 
     let report = verify_repository(&layout)?;
     assert_ref_failed(&report, "unexplained pointer/log divergence");
