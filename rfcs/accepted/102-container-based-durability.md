@@ -282,3 +282,26 @@ item here.
 **What it changes immediately, before any of it is built:** Windows read-only stops being a verdict and
 becomes a staging decision — *not yet*, rather than *never*. That is a different thing to ship and a
 different thing to document, and it is the honest position while this RFC runs.
+
+## MEASURED and RULED 2026-09-12 — concurrent object appends corrupt the index, and no command repairs it
+
+**Every object append passes through one funnel** — `ObjectWriteSession::write_object` →
+`foundation/index.rs::append_object_to_container` — which reads the container length, appends under
+`O_APPEND`, and records the pre-read length as the index offset. **No object container is lockable**
+(`LockableContainer` has four variants, none of them the object store), and of the eleven production
+callers only some hold `ActiveLock`; `tag create`, `merge`, `sync build` and ref publication hold no lock
+that any other respects. The implementing team mapped this at the checkpoint their handoff required.
+
+**Measured by the architect: twelve concurrent `prikk tag create` in one repository, four fresh runs,
+four repositories left failing `verify`** — `index entry for … resolves to an envelope with computed id
+…` — with `prikk tag` itself erroring. `O_APPEND` keeps the container bytes intact; the **index offsets
+collide**. And **`rebuild_index_from_containers` (`index.rs:559`) has no caller outside tests**; its doc
+records that a `doctor` repair was "not assumed into scope." A user hit by this has no way out.
+
+**RULED:** a fifth `LockableContainer` for the object store, **acquired and released inside
+`append_object_to_container`** across the length read through the index append — a **leaf** lock,
+never held while acquiring another, closing all eleven callers at the funnel; fail-fast like every
+existing lock, so overlapping mutators now refuse visibly instead of corrupting silently. **And `prikk
+doctor --repair-index`**, wiring the rebuild that already exists, as its own increment. Both first in
+0.40.0. Handoffs: `object-container-write-locking-handoff-v1.md` (v2 ruling appended),
+`doctor-repair-index-handoff-v1.md`.

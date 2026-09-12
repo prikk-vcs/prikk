@@ -55,3 +55,78 @@ architect will rule within the round. Whichever mechanism:
 
 - No change to what any command does; only what it holds while doing it.
 - No garbage collection, no compaction change.
+
+---
+
+# v2 — RULED 2026-09-12, at the checkpoint: mechanism A, at the funnel, first in 0.40
+
+**Your map is accepted whole.** Eleven rows, one funnel (`ObjectWriteSession::write_object` →
+`append_object_to_container`, zero other callers), `O_APPEND` at `regular.rs:81`, four
+`LockableContainer` variants with no object store among them, zero lock references in
+`merge_execute.rs` / `tag_travel.rs` / `sync_negotiation/sender.rs`, one shared `index.container`.
+Every claim opened at source. **The pairwise answer decides it: `commit` under `ActiveLock` and `tag
+create` under nothing can both append. Extending `ActiveLock` across `import_bundle` would close one
+row of eleven.**
+
+## The measurement I ran that changes the priority
+
+Your §5 said separate processes *"will not do it reliably"* — one run, twenty entries, zero collisions.
+**I ran twelve concurrent `prikk tag create` in one repository four times on four fresh fixtures. All
+four left the repository failing `verify`:**
+
+```
+error: integrity error: index entry for 51ad40b6… resolves to an envelope with computed id 95b7a194…
+prikk tag        → rc 1, the same error   (the listing itself is broken)
+prikk verify     → rc 1, four runs of four
+succeeded per run: 3, 3, 4, 3   (the rest: lock conflict on the pointer-index lock — after their append)
+```
+
+Exactly the damage mode your §3 predicted — a wrong index offset, container bytes intact under
+`O_APPEND` — but repository-wide, on the first attempt, every attempt. **And no shipped command can
+repair it**: `rebuild_index_from_containers` (`index.rs:559`) has zero non-test callers and its own doc
+says *"No `doctor` repair caller yet."* Two ordinary commands run concurrently leave a repository
+unverifiable with no user-reachable recovery, on a path unchanged since format 3. **This is 0.40's first
+item.** RFC 148 and the rest follow it.
+
+## Ruling: (A), and where and how
+
+1. **A fifth `LockableContainer` for the object store, acquired and released inside
+   `append_object_to_container`, spanning the length read through the index append.** At the funnel, so
+   all eleven rows close in one place — including rows 5, 8, 9, 10 and 11, which no caller-side change
+   would reach.
+2. **It is a leaf.** Nothing is acquired while it is held. The documented order gains one line — *the
+   object-store lock is never held while acquiring any other* — and row 11 (RefState written under
+   `RefLock` + `{RefPointerIndex, RefLog}`) nests it with no inversion possible. **Not session-scoped**:
+   a lock held across an `ObjectWriteSession` would sit across `publish_ref`'s own acquisitions and need
+   a real ordering rule; that is the "wrong scope in a durability path" the handoff warned about.
+3. **Fail-fast, like every other lock.** The consequence you named is accepted and is the point: an
+   overlapping `commit` and `tag create` now produce one visible `lock conflict` instead of a silently
+   wrong index. Today they "usually both succeed" — I measured what usually means. **CHANGELOG:
+   `### Changed`, stated plainly**, alongside the `### Fixed` for the defect.
+4. **Cost accepted**: one lock-file create + unlink per object. A commit with N blobs pays N+1 pairs of
+   syscalls against N durable writes with fsync; it is noise. If a measurement ever says otherwise, widen
+   deliberately with the ordering rule written — not now.
+5. **(B) and (C) refused.** (B) introduces a second lock semantics into a codebase that has exactly one.
+   (C) puts a verify-and-repair loop in the hot write path and leaves the index briefly wrong by design;
+   RFC 102's posture is fail-closed with explicit locks, and this is where it matters most.
+
+## Control 1, corrected for the fix
+
+Your in-process two-thread test at the `AppendWrite` failpoint is right for the **pre-fix** collision:
+both read `L`, both block, both proceed, both record `offset = L` — deterministic. **Post-fix that
+barrier cannot sit where it sits**: the second thread can no longer enter the exclusive region, and a
+barrier inside it deadlocks. **Move the rendezvous before the lock acquisition**, and make the post-fix
+assertion: *no two index entries share `(type, offset)`, and exactly one of the two racing appends
+returns a lock-conflict error.* That is the control that can fail in both states for the right reason.
+
+**Add the twelve-process run as an `#[ignore]`d instrument**, in the project's established shape for
+measurement tests — it hit 4/4 here, and a future reader should be able to run it rather than take
+either of our words.
+
+## Also required in this round
+
+- `concurrency-locking.md:192-205`: the "known and accepted, not fixed" paragraph becomes what now
+  protects the append, and drops the wording that invites reading the risk as byte corruption.
+- The **repair verb is a separate handoff** (`doctor-repair-index-handoff-v1.md`) — sequence it
+  immediately after, or in parallel by another hand; repositories damaged before this lock exists need
+  it regardless of this round.
