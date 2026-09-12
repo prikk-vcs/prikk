@@ -205,6 +205,19 @@ carried … fixed in the next increment"* became false in the same unreleased wi
 have advertised a fixed defect as carried. Replaced with `### Fixed` and one paragraph on the received
 tag, flagged in the report's own section. Accepted as written.
 
+### 8e. FOUND 2026-09-12 on the published 0.39.0 binary — the synopsis does not advertise the flag
+
+**`prikk --help` says nothing about `--format json` on `log`, `branch` or `tag`** (`commands.rs:173`,
+`:183`, `:201`), while the nine other JSON-bearing synopses carry `[--format json]`. The behaviour
+shipped and is verified on the crates.io build; the help line did not follow.
+
+**The cause is this RFC's own handoff, not the round.** It said *"no prose change; the human output is
+not touched."* The synopsis is prose, and the rule did not exempt it — so a round following the rule
+exactly shipped a help line that under-describes the command. **A "no prose change" rule must name the
+help synopsis as an exception or say explicitly that it moves.** Handoff:
+`rfcs/handoffs/146-machine-readable-listings/help-synopsis-handoff-v1.md`, with a control that derives
+the check from the parser's own table so the next command to gain the flag cannot repeat this.
+
 ## 7. What would make this not worth doing
 
 If the answer to RFC 145 is **shape D** and the ecosystem is expected to build on `prikk-store`
