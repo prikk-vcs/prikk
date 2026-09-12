@@ -189,6 +189,18 @@ verification caught it; the fix renders the refusal *through* `PrikkError::from(
   — so **the classifier is never consulted** while `commit` refuses. A non-dangling link reproduces the
   round's result exactly. Residue handoff.
 
+**G3 CLOSED 2026-09-12 (`979297e9`).** Presence is now non-following — `let Ok(metadata) =
+fs::symlink_metadata(&target) else { /* Missing */ }` replaces `exists()` — and **nothing else moved**:
+any other metadata failure still reads as absent, exactly as before. A dangling symlink is `modified` and
+`refused`, with `missing files: 0` asserted beside `refused paths: 1`; a genuinely absent path is still
+`missing`. Commit's stderr equals `error: ` + the JSON `refusal` on the dangling fixture too.
+
+**Ruling 2 DELIVERED — `#[non_exhaustive]` on all five.** The round applied one rule to each — input to
+any `pub fn`? constructed outside the crate? — and all five answered *no / none*, verified independently.
+**Proven from outside the workspace**: a downstream struct literal of `WorktreeChange` fails
+`error[E0639]`; a downstream function reading its fields and `refused_count()` compiles. Breaking once,
+on construction only.
+
 **Windows: the field has no test coverage**, stated by the round rather than hidden behind the file's
 `#![cfg(target_family = "unix")]` — every refusal needs a non-regular entry no test can create portably.
 
@@ -296,6 +308,34 @@ measured across every `--ref`-taking read command: **`inverse-plan` and `rollbac
 mismatch** (the unfixed duplicate); **`merge-evidence` and `merge-plan` refuse tags deliberately**, by
 `validate_local_branch_ref`, the same branch-only rule as `worktree-status`, class `InvalidName` —
 correct and untouched. The duplicate goes to the residue handoff.
+
+### 3d. RESIDUE DELIVERED 2026-09-12 (`979297e9`, `d1b6be83`) — fifth site fixed, census done, two semantics ruled
+
+**`patch_inverse/read.rs` now calls the resolver**; `inverse-plan`, `rollback-preview` and
+**`rollback-draft-verify`** (a third command, hidden behind an empty-WAL refusal until a draft exists)
+resolve a tag to its target block. Review: `.git-exclude/reviewed/rfc147-residue-review-v1.md`.
+
+**The census, done by driving 19 `--ref` invocations rather than by reading the call graph:** four
+resolve (§3b), three fixed here, `snapshot-plan` resolves then fails on a real fact, eight refuse by the
+branch-only validator **on purpose**, and two still mismatch. **§3b/§3c's inventory is now closed at the
+command level**, which is the level a consumer meets.
+
+**RULED — the two that still mismatch:**
+
+- **`branch create heads/<n> --from tags/<t>`: resolve.** `--from <ref>` ordinarily means "at the block
+  this ref names"; every read surface now dereferences; the operation reads the tag and writes a new
+  branch. Same resolver.
+- **`tag create <n> --target tags/<t>`: refuse explicitly, as `Precondition`, naming the accepted forms
+  (a block id, or a branch ref). Do not dereference.** The model is ref → tag object → block, one hop; a
+  tag-of-a-tag is outside it; collapsing silently to the block would make two different requests
+  indistinguishable in history. The round declined to act without a ruling, and was right to.
+- **Consolidate the two `current_target_block`s into one.** An imperative comment binding two
+  near-identical bodies is a comment doing a compiler's job.
+
+Handoff: `rfcs/handoffs/147-refusal-visibility/tag-target-semantics-handoff-v1.md`.
+
+**Carried, not acted on:** `snapshot-plan`'s *does not contain a snapshot blob* renders as `Integrity`
+for a by-design absence (RFC 136 §7) — same class as the sites already moved; a later per-site pass.
 
 **A byproduct worth naming:** this gives the stikk project **block-addressable content for any tagged
 block** — the `--ref tags/<name>` row of their RFC 144 §4t table stops failing. It does not answer bare
