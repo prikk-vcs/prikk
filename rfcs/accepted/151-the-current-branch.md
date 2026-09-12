@@ -1,6 +1,6 @@
 # RFC 151 — The current branch, and `branch switch`
 
-**Status.** **ACCEPTED 2026-09-13.** The owner's word on the review that carried this RFC's three questions was *"Will be handed to dev team"*; **the architect reads that as the three recommendations of §3 taken as ruled (yes, yes, yes)** and records the reading here so it can be corrected before increment 2 makes it irreversible. Handoff: `151-the-current-branch/current-branch-handoff-v1.md`. Originally: **PROPOSED 2026-09-13 by the architect**, on the owner's instruction to review the open
+**Status.** **ACCEPTED 2026-09-13.** The owner's word on the review that carried this RFC's three questions was *"Will be handed to dev team"*; **the architect read that as the three recommendations of §3 taken as ruled (yes, yes, yes)**; **the owner confirmed the reading 2026-09-13** (*"Yes. You were right."*). Handoff: `151-the-current-branch/current-branch-handoff-v1.md`. Originally: **PROPOSED 2026-09-13 by the architect**, on the owner's instruction to review the open
 directions. The gap it closes is recorded in three places as *"the largest usability gap in the
 product"* (`ROADMAP.md`), deferred by DC-61 *"until after the queuing decision"* (DC-66, landed), and
 named in `prikk --help` as *"a separate, not-yet-designed increment."* This is that design. **It changes
