@@ -1049,6 +1049,6 @@ pub(crate) fn ref_name_storage_key(ref_name: &str) -> String {
 /// as the ref-pointer-index's own key rather than inventing a second one -- the "new key shape"
 /// objection Step 0 raised dissolved specifically because this already existed.
 #[must_use]
-pub(crate) fn ref_name_key_bytes(ref_name: &str) -> [u8; 32] {
+pub fn ref_name_key_bytes(ref_name: &str) -> [u8; 32] {
     sha256(ref_name.as_bytes())
 }

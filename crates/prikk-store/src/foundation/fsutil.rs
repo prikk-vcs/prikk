@@ -39,14 +39,17 @@ mod caller_tests;
 ))]
 mod tests;
 
+// RFC 149 §6c: `read_file_if_exists` leaves the group so it alone can be `pub` -- a `pub(crate)`
+// waypoint blocks `lib.rs` from re-exporting it (E0364), and widening the whole group would widen
+// eighteen items to expose one.
 pub(crate) use anchored::{
-    EntryKind, MutationRoot, RootDirEntry, RootFileStat, append_file_required,
-    create_new_file_required, ensure_directory_required, inspect_entry, list_directory,
-    read_file_if_exists, read_file_required, remove_file_cleanup_best_effort,
-    remove_worktree_file_required, set_regular_file_mode_required, stat_file_state_if_exists,
-    sync_directory_required, truncate_existing_file_required, truncate_file_empty_required,
-    write_file_atomically, write_worktree_file_atomically,
+    EntryKind, RootDirEntry, RootFileStat, append_file_required, create_new_file_required,
+    ensure_directory_required, inspect_entry, list_directory, read_file_required,
+    remove_file_cleanup_best_effort, remove_worktree_file_required, set_regular_file_mode_required,
+    stat_file_state_if_exists, sync_directory_required, truncate_existing_file_required,
+    truncate_file_empty_required, write_file_atomically, write_worktree_file_atomically,
 };
+pub use anchored::{MutationRoot, read_file_if_exists};
 
 #[cfg(all(test, target_os = "linux"))]
 pub(in crate::foundation::fsutil) use anchored::LinuxDurability;
@@ -136,7 +139,7 @@ pub(crate) fn len_to_u32(len: usize) -> Result<u32> {
 }
 
 /// Convert a usize length to u64.
-pub(crate) fn len_to_u64(len: usize) -> Result<u64> {
+pub fn len_to_u64(len: usize) -> Result<u64> {
     u64::try_from(len).map_err(|_| PrikkError::MalformedData("length exceeds u64".to_string()))
 }
 

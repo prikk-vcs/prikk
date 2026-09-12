@@ -41,10 +41,19 @@ use prikk_object::{BlobKind, BlobPayload, CanonicalEncode, NodeId, ObjectId, Obj
 mod authoring;
 mod inverse;
 
-pub(crate) use authoring::plan_authored_text_span;
+// RFC 149 §6c: waypoint widened with its item; a `pub(crate)` re-export blocks `lib.rs` (E0364).
+pub use authoring::plan_authored_text_span;
+// Only `lib.rs`'s test-support block needs these two by this path; production code reaches
+// `AuthoredTextSpan` through `authoring` directly.
 #[cfg(test)]
-pub(crate) use authoring::{choose_anchor_lengths_v2, plan_authored_text_span_v1};
-pub(crate) use inverse::derive_inverse_edit_text;
+pub(crate) use authoring::choose_anchor_lengths_v2;
+#[cfg(any(test, feature = "test-support"))]
+pub use authoring::{AuthoredTextSpan, TextSpanSelectionError};
+// RFC 149 §6c: the v1 planner and its result type travel with `bundle`'s fixture.
+#[cfg(any(test, feature = "test-support"))]
+pub use authoring::{AuthoredTextSpanV1, plan_authored_text_span_v1};
+// RFC 149 §6c: waypoint widened with its item; a `pub(crate)` re-export blocks `lib.rs` (E0364).
+pub use inverse::derive_inverse_edit_text;
 
 /// Canonical anchor context window (FDD-01 §5.1 anchor-window clarification): up to 64 bytes of raw
 /// text on each side of the span, byte-exact, no normalization.
@@ -83,7 +92,11 @@ impl fmt::Display for TextSpanResolutionFailure {
 /// Invalid byte range handed to [`splice_text`]. `locate_text_span` never produces one; the guard
 /// exists for the later authoring caller (E1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TextSpanSpliceError {
+// RFC 149 §6c closure: a type in the signature of an item the test-support surface exposes.
+// Same rule as contract entries 42-46 -- a `pub` item returning or taking a private type is not
+// reachable in any useful sense.
+#[non_exhaustive]
+pub struct TextSpanSpliceError {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) text_len: usize,
@@ -321,7 +334,7 @@ pub(crate) fn locate_text_span_v2(
 /// and the algebra oracle `patch_algebra/replay_oracle.rs` chief among them) -- if they diverge on
 /// this decision, the algebra predicts something materialization does not do.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_text_span(
+pub fn resolve_text_span(
     text: &[u8],
     old_span_text: &[u8],
     record_left: &[u8; 32],
@@ -361,7 +374,7 @@ pub(crate) fn resolve_text_span(
 /// `new_text = text[..start] ‖ replacement ‖ text[end..]`. Rejects an invalid range (E1) rather
 /// than clamping or panicking. The output bytes are the input to [`text_blob_id`], so this is the
 /// single shared splice both replay and authoring must use.
-pub(crate) fn splice_text(
+pub fn splice_text(
     text: &[u8],
     start: usize,
     end: usize,

@@ -31,10 +31,13 @@ mod windows;
 #[cfg(target_os = "windows")]
 mod windows_authority;
 
-pub(crate) use directory::MutationRoot;
+// RFC 149 §6c closure: waypoint widened with its type.
+pub use directory::MutationRoot;
+// RFC 149 §6c: same split as `fsutil.rs`'s, one level down.
+pub use read::read_file_if_exists;
 pub(crate) use read::{
-    EntryKind, RootDirEntry, RootFileStat, inspect_entry, list_directory, read_file_if_exists,
-    read_file_required, stat_file_state_if_exists,
+    EntryKind, RootDirEntry, RootFileStat, inspect_entry, list_directory, read_file_required,
+    stat_file_state_if_exists,
 };
 
 use crate::foundation::fsutil::contract::DurabilityContract;

@@ -42,7 +42,7 @@ const INDEX_BODY_LEN: usize = 32 + 2 + 1 + 8 + 8 + 32;
 
 /// One index entry: where one object's container record lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IndexEntry {
+pub struct IndexEntry {
     pub(crate) object_id: ObjectId,
     pub(crate) object_type: ObjectType,
     pub(crate) slot: ContainerSlot,
@@ -131,7 +131,8 @@ fn decode_entry_body(body: &[u8]) -> Result<IndexEntry> {
     })
 }
 
-pub(crate) fn encode_index_record(entry: &IndexEntry) -> Result<Vec<u8>> {
+/// Encode one index entry as the bytes the index container stores.
+pub fn encode_index_record(entry: &IndexEntry) -> Result<Vec<u8>> {
     let body = encode_entry_body(entry);
     let body_len = len_to_u64(body.len())?;
     let checksum = index_record_checksum(body_len, &body);

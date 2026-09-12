@@ -74,7 +74,7 @@ const AUTHOR_KEY_HEADER_LEN: usize = 8 + 2 + 8 + 32;
 
 /// One recorded AUTHOR key's material.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AuthorKeyEntry {
+pub struct AuthorKeyEntry {
     pub(crate) key_id: String,
     pub(crate) public_key: [u8; ED25519_KEY_LEN],
 }
@@ -388,7 +388,7 @@ pub(crate) fn check_author_key_conflict(
 /// construct rather than something to police by review -- the lock parameter is otherwise unused by
 /// this function's own body; its only job is to exist. `worktree_patch/node_authoring.rs`,
 /// `rollback_draft.rs`, and `bundle.rs`'s `import_bundle` all pass their own held `ActiveLock`.
-pub(crate) fn record_author_key_material(
+pub fn record_author_key_material(
     layout: &RepositoryLayout,
     key_id: &str,
     public_key: [u8; ED25519_KEY_LEN],
@@ -430,8 +430,9 @@ fn ensure_author_key_container_exists(layout: &RepositoryLayout, relative: &Path
 /// Stage 2's own rule is meant to make unreachable through normal operation (a legacy Stage-1-era
 /// repository, or a race this repository's own write path no longer permits). Production code has no
 /// equivalent: creating this state is exactly what Stage 2 exists to prevent.
-#[cfg(test)]
-pub(crate) fn force_conflicting_author_key_entry_for_test(
+// RFC 149 §6c: a test helper by name and by purpose; it travels with the tests that use it.
+#[cfg(any(test, feature = "test-support"))]
+pub fn force_conflicting_author_key_entry_for_test(
     layout: &RepositoryLayout,
     key_id: &str,
     public_key: [u8; ED25519_KEY_LEN],

@@ -22,7 +22,7 @@ use super::{
 /// text, then localized back against that same post-forward text and applied, requiring exact byte
 /// recovery of the pre-forward text.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn derive_inverse_edit_text(
+pub fn derive_inverse_edit_text(
     pre_text: &[u8],
     node_id: NodeId,
     span_id: &[u8; 32],

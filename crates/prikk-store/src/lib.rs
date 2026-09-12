@@ -354,5 +354,44 @@ pub use foundation::container::encode_container_record_for_test;
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub use foundation::fsutil::{TestFailPoint, fail_once_for_test};
+
+// RFC 149 §6c: the production items a moving test calls directly. **Under the feature, not in the
+// operations-layer contract** -- a test reaching an internal function is not the operations layer
+// depending on it, and the two sets must not blur: the contract is what `prikk-operations` compiles
+// against, this is what its tests do.
+#[cfg(feature = "test-support")]
+pub use author::author_key_index::{
+    AuthorKeyEntry, force_conflicting_author_key_entry_for_test, record_author_key_material,
+};
+#[cfg(feature = "test-support")]
+pub use foundation::container::encode_container_record;
+#[cfg(feature = "test-support")]
+pub use foundation::fsutil::{len_to_u64, read_file_if_exists};
+#[cfg(feature = "test-support")]
+pub use foundation::generation::resolve_live_slot;
+#[cfg(feature = "test-support")]
+pub use foundation::index::{IndexEntry, encode_index_record};
+#[cfg(feature = "test-support")]
+pub use foundation::layout::{persisted_object_types, ref_name_key_bytes};
+#[cfg(feature = "test-support")]
+pub use node::node_lifecycle::NodeLifecycleState;
+#[cfg(feature = "test-support")]
+pub use text_span::{
+    derive_inverse_edit_text, plan_authored_text_span, resolve_text_span, splice_text,
+};
+#[cfg(feature = "test-support")]
+pub use wal::{WalRecordStatus, encode_record_for_test};
+// The v1 fixture and the planner behind it, Linux-only as the fixture's only caller is.
+#[cfg(all(feature = "test-support", target_os = "linux"))]
+pub use test_gates::test_support::publish_text_create_then_edit_block_v1;
+#[cfg(feature = "test-support")]
+pub use text_span::{AuthoredTextSpanV1, plan_authored_text_span_v1};
+// The closure of the two blocks above: types a feature-gated signature names. Same rule as contract
+// entries 42-46, and found the same way -- `cargo build --features test-support` reports each one as
+// "more private than" the item that exposes it.
+#[cfg(feature = "test-support")]
+pub use foundation::fsutil::MutationRoot;
 #[cfg(feature = "test-support")]
 pub use foundation::index::remove_index_entry_for_test;
+#[cfg(feature = "test-support")]
+pub use text_span::{AuthoredTextSpan, TextSpanSelectionError, TextSpanSpliceError};

@@ -529,11 +529,10 @@ pub(crate) fn publish_binary_create_then_replace(
 // increment that added this carried no `#[cfg(target_os)]` of its own and still broke both
 // non-Linux jobs.
 //
-// **Not in RFC 149 §6b's test-support surface, deliberately.** Exposing it under the feature means
-// compiling `text_span::plan_authored_text_span_v1` there too, and that pulls `AuthoredTextSpanV1`,
-// `left_anchor` and `right_anchor` behind it -- `text_span`'s v1 authoring internals, widened for one
-// Linux-only test of `bundle`. That trade is `bundle`'s move commit's to make, not this one's.
-#[cfg(all(test, target_os = "linux"))]
+// RFC 149 §6c took that trade: `plan_authored_text_span_v1` and `AuthoredTextSpanV1` are reachable
+// under the feature, `left_anchor`/`right_anchor` are untouched (they were already production), and
+// the platform half of this gate is unchanged.
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
 pub fn publish_text_create_then_edit_block_v1(
     layout: &RepositoryLayout,
     old: &[u8],

@@ -115,7 +115,7 @@ impl ContainerReplay {
 }
 
 /// Encode one object envelope as a durable container record for `object_type`'s container.
-pub(crate) fn encode_container_record(
+pub fn encode_container_record(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {

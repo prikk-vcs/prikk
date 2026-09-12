@@ -13,33 +13,60 @@ use super::{
 };
 use prikk_object::text_span_hash;
 
+// RFC 149 §6c: the *import* widens with `plan_authored_text_span_v1`, which is its only user
+// here. The four helpers themselves are untouched production `pub(crate)` items.
 #[cfg(test)]
-use super::{compute_span_id, left_anchor, locate_text_span, right_anchor, splice_text};
+use super::splice_text;
+#[cfg(any(test, feature = "test-support"))]
+use super::{compute_span_id, left_anchor, locate_text_span, right_anchor};
 
 /// A deterministic authoring plan for one span-anchored text edit. Always RFC 134 §8 v2 identity
 /// -- new authoring never mints v1 (`dup_index`-positional) identity; v1 stays a replay-only,
 /// frozen-forever concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AuthoredTextSpan {
-    pub(crate) old_start: usize,
-    pub(crate) old_end: usize,
-    pub(crate) new_start: usize,
-    pub(crate) new_end: usize,
-    pub(crate) old_span_text: Vec<u8>,
-    pub(crate) replacement_text: Vec<u8>,
-    pub(crate) old_span_hash: [u8; 32],
-    pub(crate) left_anchor_hash: [u8; 32],
-    pub(crate) right_anchor_hash: [u8; 32],
-    pub(crate) left_anchor_len: u32,
-    pub(crate) right_anchor_len: u32,
-    pub(crate) span_id: [u8; 32],
+// RFC 149 §6c closure: a type in the signature of an item the test-support surface exposes.
+// Same rule as contract entries 42-46 -- a `pub` item returning or taking a private type is not
+// reachable in any useful sense.
+#[non_exhaustive]
+pub struct AuthoredTextSpan {
+    /// Byte offset where the replaced span begins in the old text.
+    pub old_start: usize,
+    /// Byte offset where the replaced span ends in the old text.
+    pub old_end: usize,
+    /// Byte offset where the replacement begins in the new text.
+    pub new_start: usize,
+    /// Byte offset where the replacement ends in the new text.
+    pub new_end: usize,
+    /// The span's bytes before the edit.
+    pub old_span_text: Vec<u8>,
+    /// The bytes the span becomes.
+    pub replacement_text: Vec<u8>,
+    /// Hash of the span's text before the edit.
+    pub old_span_hash: [u8; 32],
+    /// Hash of the bounded context immediately left of the span.
+    pub left_anchor_hash: [u8; 32],
+    /// Hash of the bounded context immediately right of the span.
+    pub right_anchor_hash: [u8; 32],
+    /// Length of the left anchor this plan chose (RFC 134 §8 v2 identity).
+    pub left_anchor_len: u32,
+    /// Length of the right anchor this plan chose.
+    pub right_anchor_len: u32,
+    /// The v2 content-anchored span identity this plan mints.
+    pub span_id: [u8; 32],
 }
 
 /// Why deterministic text-span authoring failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TextSpanSelectionError {
+// RFC 149 §6c closure: a type in the signature of an item the test-support surface exposes.
+// Same rule as contract entries 42-46 -- a `pub` item returning or taking a private type is not
+// reachable in any useful sense.
+#[non_exhaustive]
+pub enum TextSpanSelectionError {
+    /// The old text is not valid UTF-8, so no text span can be selected in it.
     OldTextNotUtf8,
+    /// The new text is not valid UTF-8.
     NewTextNotUtf8,
+    /// The widened range does not lie on character boundaries of the old text.
     InvalidWidenedRange,
     /// RFC 134 §8.3 claims a unique anchor length always exists for a finite file. This variant
     /// exists only so a counterexample is reported, per the handoff's own instruction, rather than
@@ -142,7 +169,7 @@ fn select_span(old: &[u8], new: &[u8]) -> Result<Option<SelectedSpan>, TextSpanS
 /// Select and identify one deterministic arbitrary text span for authoring (RFC 134 §8, v2 --
 /// content-unique identity). All new authoring goes through this; v1 (`dup_index`-positional)
 /// identity is never minted going forward, only ever resolved (frozen, `locate_text_span`).
-pub(crate) fn plan_authored_text_span(
+pub fn plan_authored_text_span(
     old: &[u8],
     new: &[u8],
     node_id: NodeId,
@@ -208,24 +235,37 @@ pub(crate) fn plan_authored_text_span(
 /// so the Property B generator (`patch_algebra/tests/fixtures.rs::edit_text`) keeps building
 /// v1-shaped operations unchanged -- the generator moving to v2 is a separate, deliberate future
 /// step, not a side effect of this increment. No production code path uses this.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AuthoredTextSpanV1 {
-    pub(crate) old_start: usize,
-    pub(crate) old_end: usize,
-    pub(crate) new_start: usize,
-    pub(crate) new_end: usize,
-    pub(crate) old_span_text: Vec<u8>,
-    pub(crate) replacement_text: Vec<u8>,
-    pub(crate) old_span_hash: [u8; 32],
-    pub(crate) left_anchor_hash: [u8; 32],
-    pub(crate) right_anchor_hash: [u8; 32],
-    pub(crate) span_id: [u8; 32],
+#[non_exhaustive]
+pub struct AuthoredTextSpanV1 {
+    /// Byte offset where the replaced span begins in the old text.
+    pub old_start: usize,
+    /// Byte offset where the replaced span ends in the old text.
+    pub old_end: usize,
+    /// Byte offset where the replacement begins in the new text.
+    pub new_start: usize,
+    /// Byte offset where the replacement ends in the new text.
+    pub new_end: usize,
+    /// The span's bytes before the edit.
+    pub old_span_text: Vec<u8>,
+    /// The bytes the span becomes.
+    pub replacement_text: Vec<u8>,
+    /// Hash of the span's text before the edit.
+    pub old_span_hash: [u8; 32],
+    /// Hash of the bounded context immediately left of the span.
+    pub left_anchor_hash: [u8; 32],
+    /// Hash of the bounded context immediately right of the span.
+    pub right_anchor_hash: [u8; 32],
+    /// The v1 positional span identity this plan mints.
+    pub span_id: [u8; 32],
 }
 
 /// v1 counterpart of [`plan_authored_text_span`]. See [`AuthoredTextSpanV1`].
-#[cfg(test)]
-pub(crate) fn plan_authored_text_span_v1(
+///
+/// RFC 149 §6c: reachable under the feature so `bundle`'s v1 fixture can move with its test.
+#[cfg(any(test, feature = "test-support"))]
+pub fn plan_authored_text_span_v1(
     old: &[u8],
     new: &[u8],
     node_id: NodeId,
@@ -291,7 +331,8 @@ pub(crate) fn plan_authored_text_span_v1(
 /// v1's zero-based index of `(selected_start, selected_end)` within `text`'s anchor-matching
 /// occurrences of `old_span_text` (test-only; see [`plan_authored_text_span_v1`]). Never returns an
 /// error: the selected range is always itself anchor-matching, by construction.
-#[cfg(test)]
+// RFC 149 §6c: private, and compiled wherever its only caller `plan_authored_text_span_v1` is.
+#[cfg(any(test, feature = "test-support"))]
 fn anchor_filtered_dup_index_v1(
     text: &[u8],
     old_span_text: &[u8],

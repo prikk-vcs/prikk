@@ -84,7 +84,7 @@ const ACTIVE_READER: WindowsReader = WindowsReader;
 const ACTIVE_READER: PathOnlyReader = PathOnlyReader;
 
 /// Read a regular file's bytes, returning `None` only when a path component is absent.
-pub(crate) fn read_file_if_exists(root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>> {
+pub fn read_file_if_exists(root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>> {
     ACTIVE_READER.read_file_if_exists(root, relative)
 }
 

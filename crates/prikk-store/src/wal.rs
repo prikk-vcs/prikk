@@ -357,8 +357,11 @@ fn encode_record(record: &WalRecord) -> Result<Vec<u8>> {
     frame_record(record.seq, &body)
 }
 
-#[cfg(test)]
-pub(crate) fn encode_record_for_test(record: &WalRecord) -> Result<Vec<u8>> {
+// RFC 149 §6c: a test helper by name and by purpose; it travels with the tests that use it.
+#[cfg(any(test, feature = "test-support"))]
+/// Encode one WAL record exactly as the writer would, for a test that needs the bytes without the
+/// write.
+pub fn encode_record_for_test(record: &WalRecord) -> Result<Vec<u8>> {
     let body = crate::foundation::file_codec::encode_envelope_file_structural(&record.envelope)?;
     frame_record(record.seq, &body)
 }

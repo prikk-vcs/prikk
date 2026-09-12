@@ -285,7 +285,7 @@ fn replay_generation_log(
 /// generation record has ever been written -- Step 1's only reachable outcome, since nothing appends
 /// one yet. Fails closed on a damaged record rather than silently resolving to an older, stale
 /// generation (see module doc).
-pub(crate) fn resolve_live_slot(
+pub fn resolve_live_slot(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
 ) -> Result<ContainerSlot> {
