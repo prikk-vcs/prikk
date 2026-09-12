@@ -134,6 +134,26 @@ repository's trust store adopts the maintainer key as it does today (per reposit
 second project on the same machine needs `init` + `trust maintainer add`, and the keys are already
 where prikk looks.
 
+### 2c. `setup` on a second project reuses the keys — RULED 2026-09-12 at implementation review
+
+The first implementation (`ea0b16f2`) minted on every `setup` and refused to overwrite an existing seed
+— **after `init`**, leaving a half-made repository, exactly the shape RFC 135's `d871f1e1` closed for
+the other precondition. And §3's own sentence above — *a second project needs `init` + `trust
+maintainer add`* — described the manual route, not the default the owner asked for.
+
+**Rule 4. `prikk setup` reuses the keys already in the key directory.** Before `init`, before any
+write or line of output, and after the already-holds-a-repository check: both `author.seed` and
+`maintainer.seed` present → initialise, derive the maintainer public key from the seed (mode-checked
+like any read), adopt it, print `using your keys in <dir>` and the trust line. Neither present → mint,
+as before. **Exactly one present → refuse before anything**, naming the missing file and `prikk key
+generate --out <that path>`. A user-named `--*-seed-out` path keeps its own behaviour; a role left to
+the default follows this rule. `setup` is therefore the one command for the first project and every
+project after it on the same machine; `init` + `key public` + `trust maintainer add` remains the manual
+route and stays documented as such.
+
+**Rule 1's window, restated with numbers:** 0.40.0 refuses a set `PRIKK_*_SEED`; 0.41.0 removes the
+detection. Carried in `ROADMAP.md`'s 0.41 theme.
+
 ## 4. Why this shape and not the others
 
 - **Require the user to name the paths** (this RFC's own §2a) — correct on security, wrong on the

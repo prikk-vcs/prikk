@@ -331,3 +331,10 @@ resource takes that resource's lock, and a repair verb is a writer.*
 the bypass guard became a table of guarded writers, each with its one legal caller. Architect's
 measurement on the fixed binary: forty repairs beside forty `tag create`, every writer refused with a
 lock conflict, `verify` clean, nothing to repair afterwards. Both RFC 102 items of 0.40.0 are delivered.
+
+**Note 2026-09-12, later:** the race control `two_racing_object_appends_serialise_and_never_share_an_offset`
+failed once in the architect's full-suite gate run on a loaded machine (`exactly one racer must be
+refused`, both writers `Ok` — serialised, not overlapping). The "exactly one" assertion is
+timing-dependent by construction; it is to become `conflicts <= 1 && succeeded >= 1` plus the offset
+property, with the deterministic held-lock test carrying the refusal half. Handed with the RFC 148
+round.

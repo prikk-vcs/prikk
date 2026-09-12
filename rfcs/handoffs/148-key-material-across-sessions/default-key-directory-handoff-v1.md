@@ -74,3 +74,64 @@ default-directory file for the role given.
   there).
 - No key lifecycle. No credential helper. No dependency.
 - No change to `key generate --out`'s Windows refusal for arbitrary paths.
+
+---
+
+# v2 — 2026-09-12, one round: the second project, a flaky gate, and one number
+
+**`ea0b16f2` + `a0f7b0a2` reviewed** (`.git-exclude/reviewed/rfc148-default-key-directory-review-v1.md`).
+The core is accepted as measured. Three required items, one optional.
+
+## 1. `setup` on a second project — RFC 148 §2c, ruled
+
+Measured: in a fresh directory with both seeds already in the key directory, `setup` printed
+`initialized Prikk repository at …` and then `error: refusing to overwrite an existing file:
+…/author.seed`; the repository was left with no maintainer adopted; a second `setup` refused for the
+other reason. Same shape as the half-run `d871f1e1` closed.
+
+- **Order**: already-holds-a-repository check (existing) → **key-directory check (new)** → only then
+  `create_dir_all` and `RepositoryLayout::init`. Nothing is written and nothing is printed before both
+  checks pass.
+- **Both seeds present → reuse.** Init; derive the maintainer public key from `maintainer.seed`
+  through `key_material::read_seed` (so the mode check and the retired-variable refusal apply); adopt
+  it; print `using your keys in <dir>` in place of `your keys are in <dir>`, then the trust line and
+  `every new shell finds them -- nothing to export` as today. No seed is written.
+- **Neither present → mint**, unchanged.
+- **Exactly one present → refuse before anything**, `Precondition`, naming the missing file and
+  `prikk key generate --out <that exact path>`.
+- **User-named paths**: a role given `--*-seed-out` mints to that path as today; a role left to the
+  default follows the rule above.
+- **Controls**: (a) two `setup`s in two directories under one isolated key environment with no
+  `PRIKK_*` — both reach `seal` + `verify` rc 0; the second wrote no seed (bytes and mtime of both files
+  unchanged) and printed no 64-hex run; (b) exactly one seed → refusal, **no `.prikk` created**, no
+  file written, nothing on stdout; (c) reuse with a `0644` maintainer seed → the mode refusal, before
+  `init`. Perturb (a) by moving the key check after `init` — (b) must fail.
+- **Docs**: `first-run.md` "A second project" becomes one route (`prikk setup ./second-project`,
+  reuses your keys) with the manual `init` + `key public` + `trust maintainer add` route kept beneath
+  it; drop *"export the same PRIKK_* values"* and *"saving the printed seeds"*, both pre-RFC 148.
+  `troubleshooting.md`: the `refusing to overwrite an existing file` message from `setup` is no longer
+  reachable; if an entry quotes it, retire it the established way. CHANGELOG: one sentence under the
+  RFC 148 entry.
+
+## 2. The RFC 102 race control flaked in the architect's gate run
+
+`two_racing_object_appends_serialise_and_never_share_an_offset`: `exactly one racer must be refused`,
+`left: 0, right: 1`, both `Ok` — the loser reached the lock after the winner released it. Change the
+assertion to `conflicts <= 1 && succeeded >= 1` and keep the shared-offset check; the deterministic
+`an_append_meeting_a_held_object_store_lock_is_refused` already proves the refusal. Update the doc
+comment that promises "exactly one".
+
+## 3. The window
+
+`key_material.rs`: `REMOVE THIS DETECTION IN 0.42.0` → **0.41.0** (0.40.0 refuses; the release after
+removes). `ROADMAP.md`'s 0.41 theme now carries the line.
+
+## 4. Optional
+
+`key generate --out <keydir>/author.seed` prints the maintainer next step and then suggests renaming
+the file to `author.seed`. Inside the key directory, read the role from the file name.
+
+## 5. Gates
+
+The full set, verbatim, against the final commit; the addendum applies (this round's diff is
+platform-conditional by design). The first full `cargo test` must be green — that is what §2 is for.
