@@ -220,9 +220,11 @@ reaches the store's fixtures through the test-support surface.*
 edges all from them, cycles and hubs identical; package unchanged at 286. **Standing rule:** a fixture
 module approaching the hub threshold is the signal to revisit a third crate, not to declare it.
 **Ruled (3a.2, one commit before 3b):** the v1 fixture's cascade is two `cfg(test)` items widened to the
-feature — taken; the 15 production `pub(crate)` items and two `_for_test` helpers that moving tests reach
+feature — taken; the 16 production `pub(crate)` items and two `_for_test` helpers (18, not the 17 first reported) that moving tests reach
 become `pub` in their private modules and are re-exported **only under the feature**, in the test-support
 block — never the operations-layer contract.
+
+**3a.2 delivered 2026-09-13 (`bb43c86d`)**: the 18, plus four closure types the compiler named (`MutationRoot`, `AuthoredTextSpan`, `TextSpanSelectionError`, `TextSpanSpliceError`) and the v1 fixture chain — 25 names, all feature-gated, default exports unchanged, graph and package unchanged. `NodeLifecycleState` is `prikk_replay`'s type behind a waypoint; the entry can go when `prikk-operations` depends on `prikk-replay` directly. `prikk-operations` consumes the surface as a **dev-dependency** with the feature on.
 
 ## 7. Owner rulings
 
