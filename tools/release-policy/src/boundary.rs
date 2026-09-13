@@ -4,6 +4,7 @@ mod open_work_index;
 mod package;
 mod placement;
 mod publication;
+mod rfc_lifecycle;
 mod rfc_naming;
 mod unsafe_boundary;
 
@@ -27,7 +28,7 @@ const PRODUCTS: [(&str, &str); 8] = [
     ("prikk-store", "crates/prikk-store/Cargo.toml"),
     ("prikk", "crates/prikk-cli/Cargo.toml"),
 ];
-const CATEGORY_ORDER: [&str; 18] = [
+const CATEGORY_ORDER: [&str; 19] = [
     "workspace-members",
     "default-members",
     "tool-metadata",
@@ -36,6 +37,7 @@ const CATEGORY_ORDER: [&str; 18] = [
     "dependency-placement",
     "unsafe-boundary",
     "rfc-naming",
+    "rfc-lifecycle",
     "open-work-index",
     "changelog-history",
     "module-coupling",
@@ -84,6 +86,7 @@ pub(crate) fn run(root: &Path) -> Result<BoundaryReport> {
     placement::check(root, &mut errors);
     unsafe_boundary::check(root, &mut errors);
     rfc_naming::check(root, &mut errors);
+    rfc_lifecycle::check(root, &mut errors);
     open_work_index::check(root, &mut errors);
     changelog_history::check(root, &mut errors)?;
     coupling::check(root, &mut errors);
