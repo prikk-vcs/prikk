@@ -238,7 +238,6 @@ item is open.
 <!-- open-work-index:start -->
 - [`109-agent-native-interface.md`](rfcs/proposed/109-agent-native-interface.md) — RFC 109, Agent-native interface
 - [`110-agent-safety-and-provenance.md`](rfcs/proposed/110-agent-safety-and-provenance.md) — RFC 110, Agent safety and code provenance
-- [`113-history-import-foundations.md`](rfcs/proposed/113-history-import-foundations.md) — RFC 113, History import foundations (Git, Subversion, CVS)
 - [`DC-43-RELEASE-SECURITY-CONTROLS.md`](rfcs/proposed/DC-43-RELEASE-SECURITY-CONTROLS.md) — DC-43, Release Security and Distribution Controls (schedule position stale — cited predecessor superseded and implemented; see the RFC's own status update)
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
@@ -360,7 +359,7 @@ DC-44's closure established. The real queue is **twelve**, not sixteen.
 |---|---|
 | **Entrance** — what a person meets before and just after `install` | **RFC 137** (landing page, 5 increments), then **RFC 135** (first run, undesigned) |
 | **Product** — correctness, format, structure, cost | ~~RFC 123~~, ~~RFC 130~~ (both shipped), RFC 131, RFC 136, RFC 133 |
-| **Owner-blocked** | DC-43's authority half (signer bootstrap); RFC 113 §4.3–§4.5 (three recommendations written 2026-09-13; license/copyright answered in the RFC); RFCs 109/110 — **design ownership: none assigned.** The architect designs once the owner rules a direction (which tier of 109, which pillar of 110); no direction has been ruled, so no one holds a design task; the consumer-driven JSON work continues without them |
+| **Owner-blocked** | DC-43's authority half (signer bootstrap); ~~RFC 113 §4.3–§4.5~~ (**ruled 2026-09-13**, RFC accepted; the foundations design is the architect's next design after RFC 136, when scheduled); RFCs 109/110 — **design ownership: none assigned.** The architect designs once the owner rules a direction (which tier of 109, which pillar of 110); no direction has been ruled, so no one holds a design task; the consumer-driven JSON work continues without them |
 | ~~**Externally blocked**~~ | RFC 136 — **not blocked since 2026-09-06**; design is the architect's; proposed as 0.43 "sealed snapshots" |
 
 **The rule that makes this stick, because a lane without one is a preference:**
@@ -466,6 +465,7 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**12**~~ | ~~RFC 147 §3f — `unsupported-path` verdict and absolute path~~ | Product | **DONE 2026-09-13** (`bf36b2ee`, `804b3b51`); refusal byte-equal to `commit`'s, path root-relative |
 | ~~**14**~~ | ~~The RFC 133 memory instrument rewrites a tracked `rfcs/` report~~ | Tooling | **DONE 2026-09-13** (`37c7f9be`): three writers, all under `.git-exclude/measurements/rfc133/`, stamped HEAD-at-start and refusing if HEAD moved; a real run left `rfcs/` clean |
 | **15 — 0.43.0 THEME "sealed snapshots"** | **RFC 136 §10** (design written 2026-09-13): v2 manifest = the state root's leaf set; checkpoint every 64 blocks and at genesis, deterministic; readers anchor at the nearest snapshot; provisional materialization behind a derivation gate; `verify` unchanged | Product | **APPROVED 2026-09-13**; increment 1 handoff live — `136-…/sealed-snapshots-increment-1-handoff-v1.md` |
+| **17 (candidate theme, after 0.43)** | **RFC 113 — history import foundations**: the import contract on prikk's side, ruled 2026-09-13 (importer signs the import; only an adopted maintainer seals; refuse-not-approximate Git floor); then Git, then Subversion, then CVS; brygge decodes | Product | **Awaits the owner's scheduling** |
 | **16 (0.43 tooling, proposed)** | **DC-43's no-authority half**: SHA-pinned actions, SBOM per release asset, a written dependency/advisory policy | Tooling / CI | **Awaits the owner's yes**; the authority half stays behind the signer bootstrap |
 | ~~**11**~~ | ~~CI runs none of the policy gates~~ | CI | **DONE 2026-09-13 (`70e2f98e`)**: the `policy` job runs all four; the `check` step is a required reference; the other three become required in the follow-up |
 | ~~**10**~~ | ~~Help-versus-inventory check~~ | Tooling | **DONE 2026-09-13** (`13b23da3`); perturbation reproduced by the architect on the real file |
