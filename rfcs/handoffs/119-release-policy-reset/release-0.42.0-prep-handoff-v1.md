@@ -1,13 +1,12 @@
 # Release 0.42.0 preparation — the dev team's part
 
-**HELD until the owner authorizes the cut.** Follow `release-prep-handoff-template.md`; this file fills
-in the blanks. The date line is set when the authorization arrives.
+**Authorized by the owner 2026-09-13; LIVE.** Follow `release-prep-handoff-template.md`; this file fills in the blanks.
 
 | | |
 |---|---|
 | version | **0.42.0** |
 | theme | **"the current branch"** — `.prikk/current-branch` as every `--ref` default and `prikk branch switch` (RFC 151); a queued patch's message in `status` JSON and `show` on a queued patch (RFC 142 §7a / RFC 140); `unsupported-path` entries refused with `commit`'s reason under a root-relative path (RFC 147 §3f); `doctor` reports an unresolvable pointer; `status` names the current branch. Tooling shipped alongside: `size-check`, the layer rule, the lifecycle gate, the CI policy job with required steps, the derived crate order. |
-| CHANGELOG date | **set on authorization** — the day the release commit is prepared; if it slips past midnight JST, stop and ask |
+| CHANGELOG date | **2026-09-13** — the day the release commit is prepared; if it slips past midnight JST, stop and ask the architect for the new date |
 | last tag | `0.41.0` at `32bf0006` |
 | memory ratio (template §1.6) | first release with the step — record the two-size ratio; there is no prior figure, so this one is the baseline |
 
