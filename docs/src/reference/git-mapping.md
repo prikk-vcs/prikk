@@ -25,7 +25,7 @@ which is a design for the import *contract*, and nothing implements it yet.
 | `git show` / `git diff` | — | **Missing.** The closest things today are [`worktree-status`](../guide/worktree-status.md) (worktree vs. baseline) and [`merge-evidence`](../guide/merge-evidence.md)'s operation listings — neither renders a content diff. |
 | `git branch` | [`prikk branch list`](../guide/faq.md) / `branch create <name>` | List and create work the same way in spirit. |
 | `git branch -d` | `prikk branch close <name>` | **Diverged.** Closing marks the branch (a schema-2 `closed` RefState); nothing is deleted or reclaimed, and there is no reopen verb. |
-| `git checkout <branch>` / `git switch` | — | **Missing, deliberately — see [No `HEAD`, no switching](#no-head-no-branch-switching) below.** `prikk branch`'s own `--help` text says so directly: *"there is no `branch switch` yet, and no current-branch pointer; switching needs a separate, not-yet-designed increment; every command resolves `--ref` explicitly in the meantime."* |
+| `git checkout <branch>` / `git switch` | — | **Missing today — see [No `HEAD`, no branch switching](#no-head-no-branch-switching) below.** There is a current branch that `--ref` defaults to, but no command that changes it. `prikk branch`'s own `--help` text says so directly: *"no `branch switch` yet; `--ref` defaults to `.prikk/current-branch`."* |
 | `git checkout -- <path>` / `git restore` | [`prikk checkout --patch-materialize`](../guide/checkout/checkout.md) (and the sibling `--snapshot-*`/`--patch-*` flags) | Materializes files for one `--ref`, plan-first (`--plan-only`, `--snapshot-plan`, `--patch-plan`). No pathspec — it is whole-ref, not a partial restore. |
 | `git tag` | [`prikk tag create <name> --target <ref\|block> [-m <message>]`](../guide/history.md) | **The tag message *is* persisted** — unlike a commit message, `TagPayload` already carries one. |
 | `git merge` | [`prikk merge-evidence`](../guide/merge-evidence.md) → [`merge-plan`](../guide/merge-plan.md) → [`prikk merge --allow-no-audit`](../guide/merge.md) | Three explicit steps, not one. `merge` executes only a merge already proven confluent by evidence; a merge that is not refuses with a witness rather than producing a conflicted worktree. |
@@ -63,12 +63,11 @@ actually behaves like `git commit`'s publishing half.
 
 ## No `HEAD`, no branch switching
 
-There is no current-branch pointer and no working-directory state that says "you are on `main`."
-Every command that needs a target names it explicitly with `--ref`. This is not a missing feature
-with a planned fix on this page's own authority — `branch`'s own `--help` text states it as a
-present-tense limitation: switching "needs a separate, not-yet-designed increment." If you are used
-to `git switch` or `git checkout <branch>` changing what subsequent commands operate on implicitly,
-expect to write `--ref` every time instead.
+There is no `HEAD`, but there is a current branch: `.prikk/current-branch` names one local branch
+(`heads/main` in a new repository), and every command that takes `--ref` defaults to it. `--ref`
+given explicitly always wins. What does not exist yet is a command that changes the current branch —
+`branch`'s own `--help` text says "no `branch switch` yet". If you are used to `git switch` or
+`git checkout <branch>`, name the other branch with `--ref` on each command instead.
 
 ## Messages are stored; authors and dates are not
 
@@ -108,7 +107,7 @@ branch is once fetched.
 | Claim | Source anchors |
 |---|---|
 | `commit` only queues a signed Patch to the local WAL; `seal` publishes it as a Block and moves the branch ref. | [`node_authoring.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_patch/node_authoring.rs), [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs) |
-| There is no current-branch pointer or `HEAD`; every command resolves `--ref` explicitly. | [`branch.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/branch.rs), [`commands.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/commands.rs) |
+| There is no `HEAD` and no `branch switch` yet; `--ref` defaults to the branch `.prikk/current-branch` names. | [`current_branch.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/current_branch.rs), [`branch.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/branch.rs), [`commands.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/commands.rs) |
 | `commit -m`'s message is stored as an identity-bearing `Patch` field since `0.32.0`; `tag create -m`'s message is persisted too. | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`payload/tag.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-object/src/payload/tag.rs), [RFC 123](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/123-commit-message-and-authorship-metadata.md) |
 | There is no staging area; `commit --from-worktree` always considers the whole worktree, filtered only by `.prikkignore`. | [`worktree_files.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_patch/node_authoring/worktree_files.rs), [`ignore.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/ignore.rs) |
 | No remote registry or network transport exists; distribution is `bundle export`/`import`/`verify` or `sync`, both file-based, landing as an untrusted `remotes/<name>` pointer. | [`bundle.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/bundle.rs), [`sync.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/sync.rs), [`received.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received.rs) |

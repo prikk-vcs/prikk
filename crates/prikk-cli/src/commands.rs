@@ -174,7 +174,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk branch [list] [--all] [--format json]  List branches deterministically (name, RefState id); --all also shows closed branches, marked",
             "  prikk branch create heads/<name> [--from REF]  Publish a branch at an existing target",
             "  prikk branch close heads/<name>           Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
-            "  note: there is no `branch switch` yet, and no current-branch pointer; switching needs a separate, not-yet-designed increment; every command resolves --ref explicitly in the meantime",
+            "  note: no `branch switch` yet; `--ref` defaults to `.prikk/current-branch`",
         ],
     },
     Command {

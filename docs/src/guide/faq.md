@@ -63,17 +63,17 @@ form.
 
 ## How do I switch branches?
 
-**There is no `branch switch` yet**, and no current-branch pointer. This is the CLI's own answer,
-shown whenever you run `prikk` with no arguments:
+**There is no `branch switch` yet.** There is a current branch: `.prikk/current-branch` names one
+local branch, `init` and `setup` set it to `heads/main`, and every command that takes `--ref`
+defaults to it. This is the CLI's own answer, shown whenever you run `prikk` with no arguments:
 
 ```
-note: there is no `branch switch` yet, and no current-branch pointer; switching needs a separate,
-not-yet-designed increment; every command resolves --ref explicitly in the meantime
+note: no `branch switch` yet; `--ref` defaults to `.prikk/current-branch`
 ```
 
-In practice: every command that operates on history takes `--ref heads/<name>` explicitly, so you
-name the branch you mean each time rather than switching into it first. `prikk branch list` shows
-what exists.
+In practice: to work on another branch, name it with `--ref heads/<name>` on each command — an
+explicit `--ref` always wins over the default. `prikk branch list` shows what exists and marks the
+current branch with `*`.
 
 ## Is my data safe in a Prikk repository right now?
 
