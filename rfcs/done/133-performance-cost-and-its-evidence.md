@@ -751,3 +751,5 @@ cost of "no". The `NFR-PERF-01` "unmet" record is a separate measurement the sam
 
 **Filing corrected 2026-09-13:** this RFC's own status says accepted by the owner on 2026-09-03; it sat in
 `proposed/` with a handoff directory — the lifecycle miss RFC 120 §9.4a names. Moved to `accepted/`.
+
+**2026-09-13, at the 0.42.0 prep:** the instrument ran as §6a's release step (ratio 6.24× vs 6.26× before 0.41.0; nothing moved). **Defect found:** `rfc133_node_count_memory` rewrites the tracked `rfcs/handoffs/133-…/node-count-memory-measurement-report-v1.md` on every run, stamped with HEAD at finish rather than the built revision. Ruled: the instrument writes under `.git-exclude/` (or stdout) and stamps the built revision; the tracked file is the historical record. 0.43 tooling.
