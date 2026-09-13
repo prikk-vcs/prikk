@@ -3,13 +3,16 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlockKind, BlockPayload, MerkleRoot, ObjectId, ObjectType};
+use prikk_object::{
+    BlockKind, BlockPayload, CanonicalEncode, MerkleRoot, ObjectEnvelope, ObjectId, ObjectType,
+};
 
 use crate::lifecycle_cache::replay::{
     LifecycleReplayError, TextCache, apply_candidate_patches, apply_one_block_with_text_cache,
 };
+use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::node::node_lifecycle::NodeLifecycleState;
-use crate::object_store::ObjectReader;
+use crate::object_store::{ObjectReader, ObjectWriter};
 use crate::state_root::{compute_state_root, entries_from_state};
 
 /// Validate the format-2 Block kind and parent cardinality contract.
@@ -200,6 +203,95 @@ pub(crate) fn derive_next_state_root_for_candidate(
         .map_err(CandidateStateDerivationError::Patch)?;
     compute_state_root(&entries_from_state(&state).map_err(CandidateStateDerivationError::Lineage)?)
         .map_err(CandidateStateDerivationError::Lineage)
+}
+
+/// Where a new Block sits in its history -- the one thing that differs between the paths that seal a
+/// Block. The Block's kind follows from it, so a kind can never disagree with its parents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockLineage {
+    /// A `Root` Block (`parent: None`, a ref's first Block) or a `Normal` Block on `parent`.
+    Linear {
+        /// The ref's current tip, if it has one.
+        parent: Option<ObjectId>,
+    },
+    /// A DC-75 two-parent `Merge` Block. Its state derives from `mainline_parent` only.
+    Merge {
+        /// The advanced ref's prior tip, recorded as `mainline_parent_id`.
+        mainline_parent: ObjectId,
+        /// The other side's tip whose patches are adopted.
+        adopted_parent: ObjectId,
+        /// The baseline confluence was proven against, recorded as `merge_baseline_block_id`.
+        baseline: ObjectId,
+    },
+}
+
+/// Seal one Block (RFC 136 §10.1a): derive its state root from its (mainline) parent and
+/// `patch_ids`, build its `BlockPayload`, sign it with `signer`, write it through `object_store`, and
+/// return its id. This is the only place a new Block's payload is built -- `seal`, `merge`,
+/// `sync seal --claim` and the RFC 111 simulation all call it -- so what a sealed Block carries is
+/// decided once. A derivation failure is flattened exactly as [`derive_next_state_root`] flattens it.
+pub fn seal_block(
+    object_store: &mut (impl ObjectReader + ObjectWriter),
+    lineage: BlockLineage,
+    patch_ids: &[ObjectId],
+    signer: &impl MaintainerSigner,
+) -> Result<ObjectId> {
+    seal_block_classified(object_store, lineage, patch_ids, signer, |err| match err {
+        CandidateStateDerivationError::Lineage(err) => err,
+        CandidateStateDerivationError::Patch(err) => err.into(),
+    })
+}
+
+/// [`seal_block`] for the one caller that classifies a derivation failure itself (the
+/// seal-from-accepted path, RFC 115 Stage 4 §4) rather than receiving it flattened.
+pub(crate) fn seal_block_classified(
+    object_store: &mut (impl ObjectReader + ObjectWriter),
+    lineage: BlockLineage,
+    patch_ids: &[ObjectId],
+    signer: &impl MaintainerSigner,
+    classify: impl FnOnce(CandidateStateDerivationError) -> PrikkError,
+) -> Result<ObjectId> {
+    let (parent_block_ids, kind, state_parent, mainline_parent_id, merge_baseline_block_id) =
+        match lineage {
+            BlockLineage::Linear { parent: None } => {
+                (Vec::new(), BlockKind::Root, None, None, None)
+            }
+            BlockLineage::Linear {
+                parent: Some(parent),
+            } => (vec![parent], BlockKind::Normal, Some(parent), None, None),
+            BlockLineage::Merge {
+                mainline_parent,
+                adopted_parent,
+                baseline,
+            } => {
+                let mut parent_block_ids = vec![mainline_parent, adopted_parent];
+                parent_block_ids.sort();
+                (
+                    parent_block_ids,
+                    BlockKind::Merge,
+                    Some(mainline_parent),
+                    Some(mainline_parent),
+                    Some(baseline),
+                )
+            }
+        };
+    let state_merkle_root =
+        derive_next_state_root_for_candidate(&*object_store, state_parent, patch_ids)
+            .map_err(classify)?;
+    let block_payload = BlockPayload {
+        parent_block_ids,
+        kind,
+        patch_ids: patch_ids.to_vec(),
+        state_merkle_root,
+        snapshot_blob_ref: None,
+        mainline_parent_id,
+        merge_baseline_block_id,
+    };
+    let mut block_envelope =
+        ObjectEnvelope::unsigned(ObjectType::Block, 2, block_payload.to_canonical_bytes()?);
+    let block_id = block_envelope.object_id();
+    block_envelope.add_signature(maintainer_signature(signer, ObjectType::Block, block_id)?)?;
+    object_store.write_object(&block_envelope)
 }
 
 /// Shared by [`derive_next_state_root_with_memo`] and [`verify_block_v2_state`]: resolve `parent`'s

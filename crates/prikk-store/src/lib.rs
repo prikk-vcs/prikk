@@ -99,7 +99,8 @@ mod test_gates;
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 pub use block_state::{
-    BlockStateOutcome, BlockStateStatus, derive_next_state_root, validate_block_v2_shape,
+    BlockLineage, BlockStateOutcome, BlockStateStatus, derive_next_state_root, seal_block,
+    validate_block_v2_shape,
 };
 pub use branch_switch::{BranchSwitchReport, switch_branch};
 pub use bundle::{

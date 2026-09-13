@@ -18,14 +18,13 @@
 
 use prikk_error::Result;
 use prikk_object::{
-    BlockKind, BlockPayload, CanonicalEncode, ObjectId, ObjectType, RefKind, RefStatePayload,
-    RefUpdatePayload,
+    CanonicalEncode, ObjectId, ObjectType, RefKind, RefStatePayload, RefUpdatePayload,
 };
 
 use crate::{
-    ActiveLock, DEFAULT_ACTIVE_NAME, Ed25519MaintainerSigner, MaintainerSigner, ObjectReader,
-    ObjectWriteSession, ObjectWriter, RefPublication, RefStore, RepositoryLayout, Wal,
-    derive_next_state_root, finish_active_publication_cleanup, maintainer_signature,
+    ActiveLock, BlockLineage, DEFAULT_ACTIVE_NAME, Ed25519MaintainerSigner, MaintainerSigner,
+    ObjectReader, ObjectWriteSession, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
+    Wal, finish_active_publication_cleanup, maintainer_signature, seal_block,
 };
 
 fn signed_envelope(
@@ -79,27 +78,12 @@ pub(crate) fn simulate_one_seal(
     let parent = current
         .as_ref()
         .map(|(_, payload)| payload.target_object_id);
-    let state_merkle_root = derive_next_state_root(&object_store, parent, &patch_ids)?;
-    let block_payload = BlockPayload {
-        parent_block_ids: parent.into_iter().collect(),
-        kind: if current.is_some() {
-            BlockKind::Normal
-        } else {
-            BlockKind::Root
-        },
-        patch_ids: patch_ids.clone(),
-        state_merkle_root,
-        snapshot_blob_ref: None,
-        mainline_parent_id: None,
-        merge_baseline_block_id: None,
-    };
-    let block_envelope = signed_envelope(
-        ObjectType::Block,
-        2,
-        block_payload.to_canonical_bytes()?,
+    let block_id = seal_block(
+        &mut object_store,
+        BlockLineage::Linear { parent },
+        &patch_ids,
         signer,
     )?;
-    let block_id = object_store.write_object(&block_envelope)?;
 
     let update_seq = current
         .as_ref()

@@ -8,15 +8,12 @@ use std::path::PathBuf;
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
-use prikk_object::{
-    BlockKind, BlockPayload, CanonicalEncode, ObjectType, RefKind, RefStatePayload,
-    RefUpdatePayload,
-};
+use prikk_object::{CanonicalEncode, ObjectType, RefKind, RefStatePayload, RefUpdatePayload};
 use prikk_store::{
-    ActiveLock, ActiveRefMetadata, DEFAULT_ACTIVE_NAME, GatedOperation, MaintainerSigner,
-    ObjectWriteSession, ObjectWriter, RefPublication, RefStore, RepositoryLayout, Wal,
-    derive_next_state_root, finish_active_publication_cleanup, read_active_ref_metadata,
-    remove_active_ref_metadata, validate_local_branch_ref, verify_signer_trusted,
+    ActiveLock, ActiveRefMetadata, BlockLineage, DEFAULT_ACTIVE_NAME, GatedOperation,
+    MaintainerSigner, ObjectWriteSession, RefPublication, RefStore, RepositoryLayout, Wal,
+    finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
+    seal_block, validate_local_branch_ref, verify_signer_trusted,
 };
 
 mod support;
@@ -163,33 +160,13 @@ fn seal_active_no_audit(
     verify_signer_trusted(&layout, signer, GatedOperation::Seal).map_err(|err| err.to_string())?;
     let patch_ids = persist_wal_patches(&mut object_store, &replay.records)?;
     let parent = current.as_ref().map(|state| state.target_block_id);
-    let state_merkle_root =
-        derive_next_state_root(&object_store, parent, &patch_ids).map_err(|err| err.to_string())?;
-    let parent_block_ids = parent.into_iter().collect();
-    let block_payload = BlockPayload {
-        parent_block_ids,
-        kind: if current.is_some() {
-            BlockKind::Normal
-        } else {
-            BlockKind::Root
-        },
-        patch_ids: patch_ids.clone(),
-        state_merkle_root,
-        snapshot_blob_ref: None,
-        mainline_parent_id: None,
-        merge_baseline_block_id: None,
-    };
-    let block_envelope = signed_envelope(
-        ObjectType::Block,
-        2,
-        block_payload
-            .to_canonical_bytes()
-            .map_err(|err| err.to_string())?,
+    let block_id = seal_block(
+        &mut object_store,
+        BlockLineage::Linear { parent },
+        &patch_ids,
         signer,
-    )?;
-    let block_id = object_store
-        .write_object(&block_envelope)
-        .map_err(|err| err.to_string())?;
+    )
+    .map_err(|err| err.to_string())?;
     let update_seq = match current.as_ref() {
         Some(state) => state
             .update_seq

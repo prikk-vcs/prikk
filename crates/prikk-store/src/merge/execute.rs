@@ -16,8 +16,8 @@
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    BlockKind, BlockPayload, CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType, RefKind,
-    RefStatePayload, RefUpdatePayload,
+    CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType, RefKind, RefStatePayload,
+    RefUpdatePayload,
 };
 
 use crate::merge::evidence::{
@@ -26,8 +26,8 @@ use crate::merge::evidence::{
 };
 use crate::received::validate_received_ref;
 use crate::{
-    GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession, ObjectWriter,
-    RefPublication, RefStore, RepositoryLayout, derive_next_state_root, maintainer_signature,
+    BlockLineage, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
+    RefPublication, RefStore, RepositoryLayout, maintainer_signature, seal_block,
     validate_local_branch_ref, verify_signer_trusted,
 };
 
@@ -162,27 +162,17 @@ pub fn execute_merge(
         )));
     }
 
-    let state_merkle_root =
-        derive_next_state_root(&object_store, Some(parent_block_id), &adopted_patch_ids)?;
     let adopted_target_block_id = evidence.right_selector.target_block_id;
-    let mut parent_block_ids = vec![parent_block_id, adopted_target_block_id];
-    parent_block_ids.sort();
-    let block_payload = BlockPayload {
-        parent_block_ids,
-        kind: BlockKind::Merge,
-        patch_ids: adopted_patch_ids.clone(),
-        state_merkle_root,
-        snapshot_blob_ref: None,
-        mainline_parent_id: Some(parent_block_id),
-        merge_baseline_block_id: Some(baseline_block_id),
-    };
-    let block_envelope = signed_envelope(
-        ObjectType::Block,
-        2,
-        block_payload.to_canonical_bytes()?,
+    let block_id = seal_block(
+        &mut object_store,
+        BlockLineage::Merge {
+            mainline_parent: parent_block_id,
+            adopted_parent: adopted_target_block_id,
+            baseline: baseline_block_id,
+        },
+        &adopted_patch_ids,
         signer,
     )?;
-    let block_id = object_store.write_object(&block_envelope)?;
 
     let update_seq = into_ref_state.update_seq.checked_add(1).ok_or_else(|| {
         PrikkError::Integrity(format!(

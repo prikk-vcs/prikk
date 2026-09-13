@@ -46,11 +46,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    BlockKind, BlockPayload, CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType,
-    RecognitionClaimPayload, RefKind, RefStatePayload, RefUpdatePayload,
+    CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType, RecognitionClaimPayload, RefKind,
+    RefStatePayload, RefUpdatePayload,
 };
 
-use crate::block_state::{CandidateStateDerivationError, derive_next_state_root_for_candidate};
+use crate::block_state::{BlockLineage, CandidateStateDerivationError, seal_block_classified};
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{
@@ -59,7 +59,7 @@ use crate::foundation::layout::{
 use crate::lifecycle_cache::replay::LifecycleReplayError;
 use crate::lock::ActiveLock;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
-use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter};
+use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
 use crate::patch_exchange::accepted_but_unsealed_patch_ids;
 use crate::recognition_claim::{ClaimSignatureVerification, verify_claim_signature};
 use crate::refs::{RefPublication, RefStore, validate_local_branch_ref};
@@ -201,44 +201,22 @@ pub fn seal_from_accepted_claim(
     let current = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?;
     let parent = current.as_ref().map(|tip| tip.target_block_id);
 
-    // §4: derive the new state, keeping `LifecycleReplayError`'s own variant alive to the
-    // classification point rather than letting `?` flatten it into an undifferentiated
-    // `PrikkError::Integrity` the way ordinary `derive_next_state_root` does.
-    let state_merkle_root =
-        match derive_next_state_root_for_candidate(&read_snapshot, parent, &selected_patch_ids) {
-            Ok(root) => root,
-            Err(CandidateStateDerivationError::Lineage(err)) => return Err(err),
-            Err(CandidateStateDerivationError::Patch(err)) => {
-                return Err(classify_patch_application_failure(err));
-            }
-        };
-
-    // Phase D: write nothing until every check above has passed. Build and sign the new Block,
-    // sealed under the receiver's own key, carrying the claim's own order restricted to the
-    // unsealed subset, verbatim (D7, §6 row 11).
-    let block_payload = BlockPayload {
-        parent_block_ids: parent.into_iter().collect(),
-        kind: if current.is_some() {
-            BlockKind::Normal
-        } else {
-            BlockKind::Root
-        },
-        patch_ids: selected_patch_ids.clone(),
-        state_merkle_root,
-        snapshot_blob_ref: None,
-        mainline_parent_id: None,
-        merge_baseline_block_id: None,
-    };
-    let block_envelope = signed_envelope(
-        ObjectType::Block,
-        2,
-        block_payload.to_canonical_bytes()?,
-        signer,
-    )?;
-    let block_id = block_envelope.object_id();
-
+    // §4 and Phase D: seal the new Block under the receiver's own key, carrying the claim's own
+    // order restricted to the unsealed subset, verbatim (D7, §6 row 11). The derivation is the last
+    // check and nothing is written unless it passes; its failure keeps `LifecycleReplayError`'s own
+    // variant alive to the classification point rather than flattening it into an undifferentiated
+    // `PrikkError::Integrity` the way ordinary `seal_block` does.
     let mut object_store = ObjectWriteSession::open(layout)?;
-    object_store.write_object(&block_envelope)?;
+    let block_id = seal_block_classified(
+        &mut object_store,
+        BlockLineage::Linear { parent },
+        &selected_patch_ids,
+        signer,
+        |err| match err {
+            CandidateStateDerivationError::Lineage(err) => err,
+            CandidateStateDerivationError::Patch(err) => classify_patch_application_failure(err),
+        },
+    )?;
 
     // AUD-08: untested here, deliberately -- unlike `seal`/`execute_merge`, this function's own
     // `ensure_no_incomplete_publication(layout)` call above (line 108) already refuses the only way
