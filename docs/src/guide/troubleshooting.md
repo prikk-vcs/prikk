@@ -201,6 +201,13 @@ listed paths aside and switch again.
 the old one; `commit` then refuses with `worktree materialization was interrupted`. Run the same
 `prikk branch switch heads/<name>` again: it recognises the half-switched files and completes.
 
+## `error: precondition not met: no object <id> in the object store or the active WAL; …`
+
+`prikk show` was given an id that names nothing here — usually a typo, or an id from another
+repository. Sealed patch and block ids are listed by `prikk log`; queued (committed, not yet sealed)
+patch ids by `prikk status --format json`, and `show` accepts both. Earlier releases reported this as
+`error: integrity error: no object <id>`, which read as repository damage; nothing is damaged.
+
 ## Something not listed here
 
 Run [`prikk doctor`](tutorial.md#doctor) — it is the diagnostic-first command, and its recommendation

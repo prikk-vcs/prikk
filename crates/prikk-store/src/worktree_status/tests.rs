@@ -396,3 +396,32 @@ fn enumerate_queued_patches_degrades_gracefully_when_active_ref_metadata_is_miss
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// RFC 142 §7a / RFC 140 (stikk's letter 011): each queued entry carries the patch's own message,
+/// decoded as `log` decodes it -- `None` for a patch with none, which the CLI cannot produce (`commit`
+/// requires `-m`), so it is asserted here.
+#[test]
+fn a_queued_entry_carries_the_patch_message_or_none() {
+    let root = unique_temp_dir("queued-message");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    // No active-ref metadata: enumeration then reports node-addressed operations unresolved instead
+    // of folding the queue into a baseline (which would need the fixture patches' blobs in the store).
+    // The message is decoded from each record either way, and that decode is what this test is for.
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    wal.append_patch(&crate::test_gates::test_support::signed_patch_envelope())
+        .expect("append without message");
+    wal.append_patch(
+        &crate::test_gates::test_support::signed_patch_envelope_with_message(
+            "queued with a message",
+        ),
+    )
+    .expect("append with message");
+
+    let entries = enumerate_queued_patches(&layout).expect("enumerate");
+    let messages: Vec<Option<&str>> = entries
+        .iter()
+        .map(|entry| entry.message.as_deref())
+        .collect();
+    assert_eq!(messages, [None, Some("queued with a message")]);
+    let _ = std::fs::remove_dir_all(root);
+}

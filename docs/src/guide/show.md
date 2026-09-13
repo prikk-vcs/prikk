@@ -64,6 +64,13 @@ block or patch is a failure (exit `1`), and so is a referenced object the store 
 rather than merely absent — an unavailable *content reference* never softens any of those, which
 stay what they were.
 
+**A queued patch can be shown before it is sealed.** An id `prikk status --format json` lists under
+the queue — committed, not yet sealed — is looked up in the active WAL when the object store does not
+hold it, and renders exactly as it will once sealed (as a bare patch), plus a `queued: yes` line in
+prose and `"queued": true` on the patch in JSON (`false` for everything read from the object store).
+An id found in neither place is a precondition (exit `1`) that names both places and where each kind
+of id is listed; it is not reported as damage.
+
 `--format json` carries the same content as the prose form, as `show-report-v1`. It settles the
 format for `show` and nothing else.
 

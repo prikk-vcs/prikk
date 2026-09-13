@@ -14,12 +14,14 @@ use prikk_object::{
 
 use crate::RepositoryLayout;
 use crate::author::author_signing::require_author_key_id;
+use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::merge::evidence::lifecycle_state_at;
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
+use crate::wal::Wal;
 
 /// What `show` resolved a node-addressed operation's path to. RFC 140's "never fatal" rule
 /// applies unchanged (RFC 142 §3, control 3): an unresolved node id is reported, not an error.
@@ -159,12 +161,16 @@ pub struct ShowOperation {
 }
 
 /// One patch's own operations, in canonical (`op_seq`) order.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShowPatch {
     /// This patch's own signed object id.
     pub patch_id: ObjectId,
     /// This patch's operations.
     pub operations: Vec<ShowOperation>,
+    /// `true` when the patch was found in the active WAL -- committed but not yet sealed -- rather
+    /// than in the object store (RFC 142 §7a).
+    pub queued: bool,
 }
 
 /// `prikk show <block-id|patch-id>` (RFC 142): read the target, decode its patch(es), resolve
@@ -176,9 +182,9 @@ pub struct ShowPatch {
 /// all, not a node missing from one).
 pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let envelope = object_store
-        .read_object(id)?
-        .ok_or_else(|| PrikkError::Integrity(format!("no object {id}")))?;
+    let Some(envelope) = object_store.read_object(id)? else {
+        return show_queued_patch(layout, &object_store, id);
+    };
     match envelope.object_type {
         ObjectType::Block => {
             let block = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
@@ -204,14 +210,57 @@ fn show_patch(
     let envelope = object_store
         .read_typed(patch_id, ObjectType::Patch)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing Patch {patch_id}")))?;
+    patch_from_envelope(object_store, &envelope, patch_id, lifecycle, false)
+}
+
+/// RFC 142 §7a, on stikk's letter 011: an id the object store does not hold may be a patch that is
+/// committed but not yet sealed -- `status --format json` prints exactly those ids. Looked up in the
+/// same active-WAL records the queue enumeration reads, and rendered as it will render once sealed,
+/// bare-patch rules included (no block context, so node-addressed operations report unresolved).
+///
+/// **An id found in neither place is `Precondition`**: a user-supplied id that resolves nowhere is
+/// caller-fixable, not damage (RFC 132; RFC 147 §2d). An object a *ref* names and the store lacks is a
+/// different path, `verify`'s, and stays `Integrity` there.
+fn show_queued_patch(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    id: ObjectId,
+) -> Result<Vec<ShowPatch>> {
+    let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+    let Some(record) = replay.records.iter().find(|record| {
+        record.envelope.object_type == ObjectType::Patch && record.envelope.object_id() == id
+    }) else {
+        return Err(PrikkError::Precondition(format!(
+            "no object {id} in the object store or the active WAL; `prikk status --format json` \
+             lists queued patch ids, `prikk log` sealed ones"
+        )));
+    };
+    Ok(vec![patch_from_envelope(
+        object_store,
+        &record.envelope,
+        id,
+        None,
+        true,
+    )?])
+}
+
+/// One patch's operations from its envelope, wherever the envelope was read from.
+fn patch_from_envelope(
+    object_store: &impl ObjectReader,
+    envelope: &ObjectEnvelope,
+    patch_id: ObjectId,
+    lifecycle: Option<&NodeLifecycleState>,
+    queued: bool,
+) -> Result<ShowPatch> {
     let operations = decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?;
     let operations = operations
         .iter()
-        .map(|operation| show_operation(object_store, &envelope, operation, lifecycle))
+        .map(|operation| show_operation(object_store, envelope, operation, lifecycle))
         .collect::<Result<Vec<_>>>()?;
     Ok(ShowPatch {
         patch_id,
         operations,
+        queued,
     })
 }
 

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — a queued patch's message, and `show` on a queued patch
+
+`status --format json` now carries each queued patch's `"message"` (after `"patch_id"`; `null` when
+the patch has none), decoded exactly as `log` prints it. `prikk show <patch-id>` accepts the id of a
+committed but unsealed patch: it renders as that patch will once sealed, with `"queued": true` in
+`show-report-v1` and a `queued: yes` line in prose. Both asked for by
+[stikk](https://github.com/prikk-vcs/stikk) in its letter 011, so a front-end can show the queue's
+content, not only its paths.
+
+### Changed — `show` on an id found nowhere is a precondition, not an integrity error
+
+`prikk show <id>` for an id in neither the object store nor the active WAL now fails with
+`precondition not met: no object <id> in the object store or the active WAL; …`, naming where each
+kind of id is listed, instead of `integrity error: no object <id>`. The exit code is unchanged (`1`).
+
 ### Fixed — an unrepresentable file name now reports the refusal `commit` gives it
 
 A worktree file whose name no repository path can hold (a backslash, or a non-UTF-8 name) was listed

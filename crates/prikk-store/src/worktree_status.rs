@@ -25,7 +25,7 @@ use crate::lifecycle_cache::replay::TextCache;
 use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::object_store::ObjectReadSnapshot;
 use crate::patch_replay::decode::{
-    DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
+    DecodedOperationKind, DecodedPatchOperation, decode_patch_message, decode_patch_operations,
 };
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::{RepoPath, join_repo_path_to_root};
@@ -449,10 +449,14 @@ pub enum QueuedOperationContent {
 }
 
 /// One queued patch, in queue order (RFC 140).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedPatchEntry {
     /// Signed Patch object id.
     pub patch_id: ObjectId,
+    /// The patch's own message, decoded exactly as `prikk log` decodes it (RFC 123): `None` when the
+    /// patch carries none. RFC 142 §7a / RFC 140, on stikk's letter 011.
+    pub message: Option<String>,
     /// This patch's own operations, in their own canonical (`op_seq`) order.
     pub operations: Vec<QueuedOperationEntry>,
 }
@@ -502,6 +506,10 @@ pub fn enumerate_queued_patches(layout: &RepositoryLayout) -> Result<Vec<QueuedP
         )?;
         entries.push(QueuedPatchEntry {
             patch_id: record.envelope.object_id(),
+            message: decode_patch_message(
+                &record.envelope.canonical_payload,
+                record.envelope.schema_version,
+            )?,
             operations: operations
                 .iter()
                 .map(|operation| {

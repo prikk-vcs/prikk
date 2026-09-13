@@ -120,6 +120,9 @@ pub(crate) fn print_show(patches: &[ShowPatch]) {
     for patch in patches {
         println!();
         println!("patch {}", patch.patch_id);
+        if patch.queued {
+            println!("queued: yes");
+        }
         for (index, operation) in patch.operations.iter().enumerate() {
             print_operation(index, operation);
         }
@@ -245,6 +248,8 @@ pub(crate) fn print_show_json(patches: &[ShowPatch]) {
         }
         json.push_str("\n    {\"patch_id\": ");
         json.push_str(&escape_json_string(&patch.patch_id.to_string()));
+        // RFC 142 §7a: additive within `show-report-v1` -- `true` for a committed, unsealed patch.
+        json.push_str(&format!(", \"queued\": {}", patch.queued));
         json.push_str(", \"operations\": [");
         for (op_index, operation) in patch.operations.iter().enumerate() {
             if op_index > 0 {

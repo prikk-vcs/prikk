@@ -140,6 +140,13 @@ pub(crate) fn print_status_json(
         }
         json.push_str("\n      {\"patch_id\": ");
         json.push_str(&escape_json_string(&patch.patch_id.to_string()));
+        // RFC 142 §7a / RFC 140: additive within `status-report-v1`; `null` when the patch carries
+        // no message, exactly as `log` distinguishes.
+        json.push_str(", \"message\": ");
+        match &patch.message {
+            Some(message) => json.push_str(&escape_json_string(message)),
+            None => json.push_str("null"),
+        }
         json.push_str(", \"operations\": [");
         for (op_index, operation) in patch.operations.iter().enumerate() {
             if op_index > 0 {
