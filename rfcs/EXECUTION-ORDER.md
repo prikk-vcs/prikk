@@ -105,8 +105,8 @@ sequence within them is a judgement.
 
 **Criterion 4 — the signer bootstrap — is retired for v0 by RFC 152.** What replaces it is §5 of that
 RFC: the day a second maintainer holds a release key, the signer file stops being empty by the owner's
-word and release tags must be signed by a key in it. Until then the criterion is not a v0 gate, and it
-unblocks DC-43 and DC-49.
+word and release tags must be signed by a key in it. Until then the criterion is not a v0 gate. DC-43 is archived
+with it; DC-49 is ordinary tooling work awaiting scheduling.
 
 ## 1. Development lane — available now
 
@@ -192,7 +192,7 @@ DC-61 needed with DC-63's kind branch was carried out as part of its 18-call-sit
 outstanding since before 0.17.7 — actually gets closed or is reported as inherent. **Accepted 2026-07-31
 and cleared to start.** Design review measured its target to the operation (~40 µs each, 97.6% of the phase
 in `replay_lineage`) and eliminated a keyed-cache route that could never have hit, given the one-record WAL
-cap. Reporting the cost as inherent is a permitted outcome. DC-52 and DC-43 are **not** in this lane — both are release-blocked, see §2.
+cap. Reporting the cost as inherent is a permitted outcome. DC-52 left §2 on 2026-08-08 and DC-43 was archived under RFC 152 on 2026-09-13; neither is in this lane.
 
 **DC-56's owner decision is settled.** Ruled 2026-07-30: NFR-PERF-01 bounds **steady-state** commit cost,
 not every commit. That resolves its conflict with NFR-PERF-04 — which blesses rebuildable indexes while a
@@ -283,14 +283,9 @@ accepted stability rerun. It is available now; deletion is still a separate arch
 and mergeable now, not releasable until a named condition holds. That is the inverse of this section,
 which lists increments blocked *from being built*. See `MILESTONES.md`, "Attached release conditions".
 
-Release stabilization is deferred by owner direction 2026-07-30, so everything in this section is
-dormant. Note that **three** increments sit here, not one — DC-52 and DC-43 were previously listed in §1 as
-available now, which understated how much of the backlog is release-gated.
-
-This was the one place where a development increment depends on a release-lane event. It was descoped from
-DC-41 for exactly that reason. If the owner would rather unblock it sooner, the alternative is a reviewed
-decision to move the documentation correction into the development lane — that is an owner decision, not
-an implementation one.
+Since RFC 152 (2026-09-13) there is no release-lane event left to block on: DC-52 left this section
+2026-08-08, DC-43 is archived, and DC-49 waits only for scheduling. The section is kept for the DC-74
+distinction above and for the record of what used to sit here.
 
 ## 3. Release lane — RFC 152
 
