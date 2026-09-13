@@ -294,3 +294,13 @@ the expensive ones be asked for**, not to widen `show` until it becomes `diff` b
 the precedent for how it was answered), RFC 136 §9.3 (the measured replay cost `diff` would inherit),
 RFC 138 §7.2 (the surface-scoping precedent), RFC 134 (why the span is the unit, not the line),
 RFC 121 (the exit-code vocabulary).
+
+## 7a. Queued patches (2026-09-13, from stikk's letter 011)
+
+Measured on 0.41.0 by stikk and on the tree by the architect: `show <id>` for an id `status` just listed
+as queued answers `integrity error: no object <id>` — and so does a typed-wrong id. The patch is in the
+active WAL, not the object store; `show.rs:181` names every miss as corruption. **RULED:** `show` looks in
+the active WAL when the store misses and renders a queued patch as the same `show-report-v1` with
+`"queued": true`; a miss in both is `Precondition` naming both places and the two routes (`status`,
+`log`). An object a ref names and the store lacks stays `Integrity` — `verify`'s path, not this one.
+Handoff: `142-content-surface/queued-patches-handoff-v1.md`.

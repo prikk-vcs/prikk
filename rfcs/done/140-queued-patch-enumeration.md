@@ -256,3 +256,7 @@ and report — including whether it moves an edge or a hub in RFC 130's coupling
 exit-code vocabulary, and the ruling that `status` refuses unknown arguments), RFC 133 (where the cost
 figure goes), RFC 139 (the corpus that will let it be measured properly), RFC 134 (why `EditText` is
 node-addressed), DC-66 and DC-57 (the existing queue report this extends).
+
+**Amended 2026-09-13 (stikk letter 011):** `QueuedPatchEntry` gains `message: Option<String>` — the
+envelope the enumeration already decodes carries it (RFC 123); `null` where the patch has none, as `log`
+distinguishes. Additive within `status-report-v1`. Same handoff as RFC 142 §7a.
