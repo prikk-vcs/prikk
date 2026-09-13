@@ -246,6 +246,18 @@ fn assemble_joins_the_changelog_section_platforms_and_release_authority() {
         notes.contains("## Release authority — read before relying on this release"),
         "{notes}"
     );
+    // RFC 152 §4: the paragraph states how prikk releases -- one maintainer key, transport integrity,
+    // no second signer or support window -- and no longer the retired DC-35 audit.
+    assert!(
+        notes.contains("signed by the project's one maintainer key"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("no second signer, no\nsupport window"),
+        "{notes}"
+    );
+    assert!(!notes.contains("DC-35"), "{notes}");
+    assert!(!notes.contains("fail-closed"), "{notes}");
 }
 
 /// Runs the real assembly against the live repository's own `CHANGELOG.md` for the most recent
