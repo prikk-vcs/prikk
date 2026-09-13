@@ -129,6 +129,7 @@ Current doctor severities are `info`, `warning`, and `error`.
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED` | `error` | Active WAL has records but active ref metadata is malformed. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS` | `warning` | Active WAL is empty but stale valid ref metadata remains. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS` | `warning` | Active WAL is empty but malformed ref metadata remains. |
+| `PRIKK-DOCTOR-CURRENT-BRANCH` | `warning` | `.prikk/current-branch` is malformed or names a branch that does not exist or is closed; every `--ref` default refuses until it is fixed, while an explicit `--ref` still works. |
 | `PRIKK-DOCTOR-VERIFY-ERROR` | `error` | Repository verification failed before doctor could produce a healthy report. |
 
 Publication-trust issues can also appear in doctor output as error-severity diagnostics using the

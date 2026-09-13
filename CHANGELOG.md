@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed — breaking once for Rust callers: two report types are `#[non_exhaustive]`
+
+`prikk_store::ShowPatch` (which gained `queued`) and `prikk_store::QueuedPatchEntry` (which gained
+`message`) are now `#[non_exhaustive]`, like the report types before them: code outside the crate reads
+their fields but can no longer build them with a struct literal. `prikk-store` also gains
+`current_branch`, `switch_branch` and `BranchSwitchReport` (itself `#[non_exhaustive]`). The command
+line is unaffected.
+
 ### Added — a queued patch's message, and `show` on a queued patch
 
 `status --format json` now carries each queued patch's `"message"` (after `"patch_id"`; `null` when

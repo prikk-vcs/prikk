@@ -208,6 +208,24 @@ repository. Sealed patch and block ids are listed by `prikk log`; queued (commit
 patch ids by `prikk status --format json`, and `show` accepts both. Earlier releases reported this as
 `error: integrity error: no object <id>`, which read as repository damage; nothing is damaged.
 
+## `error: precondition not met: .prikk/current-branch names heads/<name>, which does not exist; …`
+
+A command whose `--ref` you did not give defaults to the current branch, and `.prikk/current-branch`
+names a branch that is not there. The same message says `which is closed` for a closed branch, and
+`.prikk/current-branch is malformed (…)` when the file does not hold exactly one `heads/<name>` line.
+Nothing is damaged, and `prikk doctor` reports it as the warning `PRIKK-DOCTOR-CURRENT-BRANCH`. Either
+run `prikk branch switch heads/<name>` to an existing, open branch — with an unusable pointer the switch
+writes only what is absent and deletes nothing — or `prikk branch create` the branch the file names.
+Any command still works with `--ref` given explicitly meanwhile.
+
+## `error: invalid name: backslashes are not allowed in repository paths`
+
+A file in the worktree has a name no repository path can hold — here a backslash; a name that is not
+UTF-8 says `worktree path is not valid UTF-8: <name>` instead. `prikk commit` refuses the whole commit
+rather than skip the file silently. `prikk worktree-status` lists it as an `unsupported-path` entry with
+this same reason. Rename the file, or exclude it with a `.prikkignore` rule
+([Ignoring Worktree Paths](ignore.md)).
+
 ## Something not listed here
 
 Run [`prikk doctor`](tutorial.md#doctor) — it is the diagnostic-first command, and its recommendation
