@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed — an unrepresentable file name now reports the refusal `commit` gives it
+
+A worktree file whose name no repository path can hold (a backslash, or a non-UTF-8 name) was listed
+by `worktree-status` as an `unsupported-path` entry with `"authoring": "authored"` and no refusal,
+while `prikk commit` refused the very same name. The entry now carries `"authoring": "refused"` and
+the exact text `commit` prints, and counts in `refused_count` and `refused paths:`; its `kind` and
+`detail` are unchanged. Reported by [stikk](https://github.com/prikk-vcs/stikk) in its letter 010.
+
+### Changed — that entry's `path` is relative to the worktree root
+
+For `unsupported-path` entries only, `path` is now the file's OS name relative to the worktree root,
+rendered lossily, instead of the absolute filesystem path. No consumer displayed these entries
+(stikk never rendered them); every other kind's `path` was and stays repo-relative.
+
 ### Added — `prikk branch switch`
 
 ```text

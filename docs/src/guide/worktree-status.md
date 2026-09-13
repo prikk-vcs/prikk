@@ -47,6 +47,13 @@ without following the link, so the path reports as `modified` and refused rather
 which is what `prikk commit` has always seen. A path that is genuinely absent is still `missing`,
 with no refusal.
 
+**An unrepresentable name is refused too.** A file whose name no repository path can hold — a
+backslash in it, or bytes that are not UTF-8 — stays an `unsupported-path` entry, and carries the
+refusal `prikk commit` gives that name. In `--format json`, **`path` is repo-relative for every kind
+except `unsupported-path`, where it is the file's OS name relative to the worktree root, rendered
+lossily** (an invalid byte becomes `U+FFFD`): no repository path exists for it, and the absolute path
+on this machine does not belong in a repository-scoped report.
+
 **One refusal is not yet reported here.** A worktree that contradicts a live `prikk mv` declaration
 — the declared source back on disk, or the destination already occupied — is refused by
 `prikk commit` but is not a property of any single path's entry, so it does not appear as a refused

@@ -2,9 +2,11 @@
 //! refuse it — and with what reason.
 //!
 //! The field is **orthogonal to `kind`**: a path can be `modified` *and* refused, `untracked` *and*
-//! refused. `unsupported-path` keeps its old meaning (an unrepresentable *name*) and is not where
-//! refusals go; every test below asserts `unsupported paths: 0` alongside a non-zero refusal count
-//! precisely so a later change that folds one into the other fails here.
+//! refused. `unsupported-path` keeps its old meaning (an unrepresentable *name*) and refused entries
+//! do not become it; the symlink tests below assert `unsupported paths: 0` alongside a non-zero
+//! refusal count precisely so a later change that folds one into the other fails here. **RFC 147 §3f
+//! (Case C)** is the converse: an unrepresentable name *is* refused by `commit`, so its
+//! `unsupported-path` entry carries that refusal too -- kind unchanged, verdict corrected.
 //!
 //! The agreement between the two commands is not asserted twice with two hand-written
 //! expectations. `status_and_commit_agree_on_the_same_tree` runs **both commands against one
@@ -99,6 +101,32 @@ fn repo_with_an_untracked_symlink(tag: &str) -> PathBuf {
     std::os::unix::fs::symlink("/etc/hostname", repo.join("link.txt")).unwrap();
     repo
 }
+
+/// RFC 147 §3f (Case C): an untracked file whose *name* has a backslash, which no repository path
+/// may contain -- `commit` refuses it with `RepoPath::parse`'s own error.
+fn repo_with_a_backslash_name(tag: &str) -> PathBuf {
+    let repo = repo_with_one_tracked_file(tag);
+    std::fs::write(repo.join("back\\slash.txt"), "b\n").unwrap();
+    repo
+}
+
+/// RFC 147 §3f (Case C): an untracked file whose name is not UTF-8. **Linux only**: macOS's APFS
+/// refuses to create a non-UTF-8 name at all, so the case cannot arise there.
+#[cfg(target_os = "linux")]
+fn repo_with_a_non_utf8_name(tag: &str) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let repo = repo_with_one_tracked_file(tag);
+    std::fs::write(
+        repo.join(std::ffi::OsStr::from_bytes(b"bad\xff.txt")),
+        "n\n",
+    )
+    .unwrap();
+    repo
+}
+
+/// The root-relative, lossy rendering of the non-UTF-8 fixture's name.
+#[cfg(target_os = "linux")]
+const NON_UTF8_NAME: &str = "bad\u{FFFD}.txt";
 
 fn change_for<'a>(report: &'a json::Value, path: &str) -> &'a json::Value {
     report
@@ -252,7 +280,7 @@ fn a_genuinely_absent_tracked_path_is_still_missing() {
 /// wording, so the test cannot pass by two expectations drifting together.
 #[test]
 fn status_and_commit_agree_on_the_same_tree() {
-    let cases: [Case; 3] = [
+    let mut cases: Vec<Case> = vec![
         (
             "rfc147a-agree-modified",
             "a.txt",
@@ -270,7 +298,20 @@ fn status_and_commit_agree_on_the_same_tree() {
             "a.txt",
             repo_with_a_tracked_file_now_a_dangling_symlink,
         ),
+        // RFC 147 §3f (Case C): an unrepresentable name -- the second place `worktree-status` said
+        // `authored` while `commit` refused.
+        (
+            "rfc147c-agree-backslash",
+            "back\\slash.txt",
+            repo_with_a_backslash_name,
+        ),
     ];
+    #[cfg(target_os = "linux")]
+    cases.push((
+        "rfc147c-agree-non-utf8",
+        NON_UTF8_NAME,
+        repo_with_a_non_utf8_name,
+    ));
     for (tag, path, build) in cases {
         let repo = build(tag);
 
@@ -291,6 +332,54 @@ fn status_and_commit_agree_on_the_same_tree() {
             format!("error: {reported}\n"),
             "{tag}: commit's message must be the reason status reported"
         );
+    }
+}
+
+/// RFC 147 §3f (Case C): the entry for an unrepresentable name keeps `kind: unsupported-path` and its
+/// `detail`, is `refused` with a reason, is counted in `refused_count`, and names the file by its
+/// OS name relative to the worktree root -- never the machine's absolute path.
+#[test]
+fn an_unrepresentable_name_is_refused_under_a_root_relative_path() {
+    let mut cases: Vec<Case> = vec![(
+        "rfc147c-entry-backslash",
+        "back\\slash.txt",
+        repo_with_a_backslash_name,
+    )];
+    #[cfg(target_os = "linux")]
+    cases.push((
+        "rfc147c-entry-non-utf8",
+        NON_UTF8_NAME,
+        repo_with_a_non_utf8_name,
+    ));
+    for (tag, path, build) in cases {
+        let repo = build(tag);
+        let report = json::parse(&stdout_of(&worktree_status(&repo, &["--format", "json"])));
+        let change = change_for(&report, path);
+        assert_eq!(change.get("kind").as_str(), "unsupported-path", "{tag}");
+        assert_eq!(change.get("authoring").as_str(), "refused", "{tag}");
+        assert!(!change.get("refusal").is_null(), "{tag}: {change:?}");
+        assert!(
+            change
+                .get("detail")
+                .as_str()
+                .starts_with("worktree path is not representable as a safe Prikk path"),
+            "{tag}: detail unchanged"
+        );
+        assert_eq!(
+            report.get("refused_count").clone(),
+            json::Value::Number("1".to_string()),
+            "{tag}"
+        );
+        assert!(!change.get("path").as_str().starts_with('/'), "{tag}");
+        assert!(
+            !change.get("path").as_str().contains(repo.to_str().unwrap()),
+            "{tag}: the path must not carry the worktree's absolute location"
+        );
+
+        let prose = stdout_of(&worktree_status(&repo, &[]));
+        assert_eq!(counter(&prose, "unsupported paths"), "1", "{tag}");
+        assert_eq!(counter(&prose, "refused paths"), "1", "{tag}");
+        assert!(prose_line_for(&prose, path).contains("[refused: "), "{tag}");
     }
 }
 

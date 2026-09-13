@@ -338,13 +338,20 @@ fn scan_untracked(
             Err(err) => {
                 // `unsupported-path` keeps its own meaning: an unrepresentable *name*, which is a
                 // different fact from an unauthorable *entry* (RFC 147 §2e(b)). Not conflated.
+                //
+                // RFC 147 §3f (Case C, stikk's letter 010): but `commit` refuses this name with this
+                // very `err`, so the entry's verdict is `refused` with that error's own text -- the
+                // string `commit` prints. And the path is the OS name relative to the worktree root,
+                // rendered lossily: no repo-relative form exists, and an absolute path would leak the
+                // machine's layout into a repository-scoped report.
+                let relative = path.strip_prefix(root).unwrap_or(&path);
                 changes.push(WorktreeChange {
-                    path: path.display().to_string(),
+                    path: relative.to_string_lossy().into_owned(),
                     kind: WorktreeChangeKind::UnsupportedPath,
                     detail: format!(
                         "worktree path is not representable as a safe Prikk path: {err}"
                     ),
-                    refusal: None,
+                    refusal: Some(err.to_string()),
                 });
             }
         }
