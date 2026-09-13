@@ -1,6 +1,6 @@
 # RFC 151 — The current branch, and `branch switch`
 
-**Status.** **ACCEPTED 2026-09-13.** The owner's word on the review that carried this RFC's three questions was *"Will be handed to dev team"*; **the architect read that as the three recommendations of §3 taken as ruled (yes, yes, yes)**; **the owner confirmed the reading 2026-09-13** (*"Yes. You were right."*). Handoff: `151-the-current-branch/current-branch-handoff-v1.md`. Originally: **PROPOSED 2026-09-13 by the architect**, on the owner's instruction to review the open
+**Status.** **DONE 2026-09-13** — increment 1 `c1222a8f`, increment 2 `926fbd5c`; the pointer is every `--ref` default and `prikk branch switch` moves the worktree and the branch under the refusals of §2.3, measured by the architect on the binary. Earlier: **ACCEPTED 2026-09-13.** The owner's word on the review that carried this RFC's three questions was *"Will be handed to dev team"*; **the architect read that as the three recommendations of §3 taken as ruled (yes, yes, yes)**; **the owner confirmed the reading 2026-09-13** (*"Yes. You were right."*). Handoff: `151-the-current-branch/current-branch-handoff-v1.md`. Originally: **PROPOSED 2026-09-13 by the architect**, on the owner's instruction to review the open
 directions. The gap it closes is recorded in three places as *"the largest usability gap in the
 product"* (`ROADMAP.md`), deferred by DC-61 *"until after the queuing decision"* (DC-66, landed), and
 named in `prikk --help` as *"a separate, not-yet-designed increment."* This is that design. **It changes
@@ -83,3 +83,13 @@ three `rollback-*`, `bundle preview`, `branch create --from`); two production re
 Measured by the architect on the binary. **Rulings at review:** the `--help`/faq/git-mapping texts are
 made true before increment 2 (my "unchanged until increment 2" was wrong once the pointer landed);
 `status` follows the pointer in increment 2.
+
+## 6. Increment 2 delivered (2026-09-13, `926fbd5c`) — and five readings ruled
+
+`prikk_store::switch_branch` in a new upper-layer module; refusals in the ruled order plus a fourth,
+*in the way*, for an untracked file at a target path; the transition creates, replaces, deletes only
+bytes identical to the old baseline, writes the pointer, then clears the dirty marker; crash posture
+proven at four measured failpoints. **Ruled at review:** untracked files do not dirty a switch (the
+in-the-way refusal keeps them safe); a switch interrupted mid-way is resumed by running it again while
+the dirty marker is set; the marker clears after the pointer; an unresolvable pointer switches without
+replacing or deleting; empty directories stay. `status` follows the pointer. **RFC 151 is closed.**

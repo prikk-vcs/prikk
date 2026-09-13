@@ -366,3 +366,5 @@ been safe under that. The four commands exit non-zero on findings, which is what
 required live reference (deleting the `check` step fails `reference-check`); the other three are exact
 procedure entries. **One gap ruled closed in the follow-up**: the three non-`check` steps are accepted
 but not yet required — a required-procedure list makes them so. Publication stays manual.
+
+**§2.4 CLOSED 2026-09-13 (`14f742d8`)**: the four policy `run:` lines are required in `ci.yml`; deleting any one fails `boundary-check` naming it (architect-perturbed in place).
