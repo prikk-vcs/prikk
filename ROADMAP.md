@@ -470,7 +470,7 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | **Direction needed — no RFC yet** | | | |
 | **—** | ~~`branch switch` and a current-branch pointer~~ **RFC 151 DONE (`c1222a8f`, `926fbd5c`)** — `rfcs/done/`; the largest usability gap is closed | Product | DC-61 deferred it *"until after the queuing decision"* — DC-66 landed; the precondition is discharged. `--help` still says *"switching needs a separate, not-yet-designed increment."* **The largest usability gap in the product.** A current-branch pointer changes a deliberate stance (every command resolves `--ref` explicitly), so this is the owner's direction first, an RFC second |
 | — | RFC 120 §9.4, §9.4a; RFC 133 §6; RFC 141 inc. 4 | **owner rulings** | **Reviewed 2026-09-13, recommendations written in each RFC:** §9.4 drain gradually (23 finished RFCs sit in `accepted/`); **§9.4a yes** — it would have fired today on RFCs 133 and 136, both accepted by the owner and still filed as proposed (fixed in this commit); §6 yes, evidence from the existing ignored instrument at release prep; RFC 141 inc. 4 scoped to "CI runs the four policy gates" |
-| — | ~~RFC 137~~ (**closed 2026-09-13**, `rfcs/done/`); ~~RFC 136~~ (unblocked, design next); DC-43 (split 2026-09-13); RFCs 109/110/113 | re-reviewed 2026-09-13 | See `.git-exclude/reviewed/owner-blocked-items-review-2026-09-13.md`. Earlier text: each waits on a named external answer — `prikk.org` DNS, the corpus, the signer bootstrap, a direction. **RFC 137 is accepted-but-unshipped and still not rankable here**: its increment 5 is a DNS action, not dev capacity, and it re-enters the queue the day the domain resolves |
+| — | ~~RFC 137~~ (**closed 2026-09-13**, `rfcs/done/`); ~~RFC 136~~ (unblocked, design next); ~~DC-43~~ (archived 2026-09-13 under RFC 152); RFCs 109/110/113 | re-reviewed 2026-09-13 | See `.git-exclude/reviewed/owner-blocked-items-review-2026-09-13.md`. Earlier text: each waits on a named external answer — `prikk.org` DNS, the corpus, the signer bootstrap, a direction. **RFC 137 is accepted-but-unshipped and still not rankable here**: its increment 5 is a DNS action, not dev capacity, and it re-enters the queue the day the domain resolves |
 
 **Owner direction recorded 2026-09-06 — hosting, and it is not scheduled.** Asked whether prikk is
 ready to support a hosting service (GitLab/Forgejo-shaped), the architect's assessment was **no**, on
@@ -634,8 +634,8 @@ this file's prose. **A row exists only for what is handed off; everything else l
 ### E. Blocked on a named external answer
 
 RFC 137 increment 5 (`prikk.org` DNS — plus the missing site-root `404.html` and absent TLS on `www.`
-found at review); RFC 136 (snapshot format, when-to-snapshot policy, §9 items); DC-43 (signer
-bootstrap); RFCs 109/110/113 (a direction).
+found at review); RFC 136 (snapshot format, when-to-snapshot policy, §9 items); RFCs 109/110/113 (a direction).
+DC-43's entry (the signer bootstrap) closed 2026-09-13: RFC 152 retired the bootstrap for v0.
 
 ### F. Declared debt — the coupling gate's own list
 
