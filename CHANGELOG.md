@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.42.0 — 2026-09-13
 
 ### Changed — breaking once for Rust callers: two report types are `#[non_exhaustive]`
 
