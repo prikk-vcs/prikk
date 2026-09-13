@@ -30,8 +30,10 @@ stating a timeline nobody has agreed to meet would be worse than stating none.
 
 ## Verifying a release
 
-Every release tag is signed by the project's one maintainer key and verified before it is pushed; the
-checksum and build-info beside each downloaded asset prove it is the file built from that tag. There is
+Every release tag is signed by the project's one maintainer key and verified before it is pushed. The
+checksum beside each downloaded asset proves the file matches what the release page published, and its
+build-info names the commit and tag it was built from; neither proves *who* published it — the signed
+tag does. There is
 **no second signer**, **no support window** (only the latest release gets fixes) and **no stability
 promise** for the object format, the CLI's JSON schemas or the library API before 1.0. The
 release-signer allowlist (`release-signers.toml`) is empty because no multi-signer policy exists yet.

@@ -1,6 +1,6 @@
 # RFC 136 §10 — sealed snapshots, increment 1: the format and the writer
 
-**Live 2026-09-13** (0.43.0's theme, approved by the owner). After the RFC 133 instrument item, which is
+**SUPERSEDED 2026-09-13 by `sealed-snapshots-handoff-v2.md`** after the dev team's hold (RFC 136 §10.1a): the readers give the field the opposite meaning, and sealing is four places, not one. Kept for its §2 controls, which v2 reuses. Originally: **Live 2026-09-13** (0.43.0's theme, approved by the owner). After the RFC 133 instrument item, which is
 smaller. Read RFC 136 §6, §8, §9.2.4, §9.2.5 and §10 before starting; §6 is the rule everything here obeys.
 
 ## 1. The change

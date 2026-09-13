@@ -46,7 +46,8 @@ const RELEASE_AUTHORITY: &str = "## Release authority — read before relying on
 \n\
 This release's tag is signed by the project's one maintainer key and was verified before it was\n\
 pushed. The checksum and build-info published beside each asset on this page prove integrity of\n\
-transport: the file you download is the one built from that tag. There is no second signer, no\n\
+transport — the file you download is the one this page published — not who published it; the\n\
+signed tag does that. There is no second signer, no\n\
 support window and no stability promise before 1.0. Verify what you obtain by content — see\n\
 `prikk verify` and this project's\n\
 [release-compatibility reference](https://prikk.org/docs/reference/release-compatibility.html).";

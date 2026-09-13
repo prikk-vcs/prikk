@@ -530,6 +530,41 @@ for fixtures and the reader dispatches on the magic.
 manifest must equal the block's `state_merkle_root`, O(entries), checked at every read. A manifest that
 does not recompute is `Integrity` — a snapshot that lies about its own block is damage.
 
+#### 10.1a What a snapshot means — ruled 2026-09-13, on the dev team's hold
+
+The dev team held increment 1 before writing code: every reader that meets `snapshot_blob_ref` today
+(`patch_replay.rs:385`, `patch_inverse.rs:112`, `bundle/preview.rs:136`, `checkout.rs`'s snapshot plan)
+seeds its state from the manifest **and then applies that block's own patches** — so the v1 field meant
+*the state before the block*, its parent's state. §10.1 defines the manifest as the leaf set of the
+block's `state_merkle_root`, which is the state **after** the block. Measured by the team: a post-state
+snapshot on a block whose patch creates `a.txt` makes every replay reader refuse with `integrity error:
+CreateFile would overwrite existing path a.txt` while `verify` reports the repository clean. The
+architect's "which every reader already handles" (§10.1) was true of the field and false of its
+meaning; the only fixture with a snapshot on a block that has patches encodes the pre-state, and the
+snapshot-checkout fixture's block has no patches at all, so neither meaning was ever tested against
+the other.
+
+**Ruling: a snapshot on block B is B's own state** — exactly the leaf set of B's `state_merkle_root`, as
+§10.1 says. A reader that seeds from B's snapshot **does not apply B's patches**. Reasons, in order:
+self-consistency is then checked against the block that carries the manifest, with no parent read;
+`checkout --snapshot-materialize` of a ref yields the ref's state, not its parent's; and the anchor rule
+of §10.3 ("start at the nearest snapshotted ancestor") means exactly this. The pre-state alternative
+(option 1 of the team's report) would lock in a manifest that describes a block it is not attached to,
+an always-empty genesis snapshot, and a materialization one block behind the ref; refused. Two meanings
+distinguished by magic (option 2's fallback) is refused too: one field, one meaning.
+
+**v1 is retired.** No block-creating path ever wrote it (§10.1); it exists in three test-fixture copies.
+Its decoder is removed, the fixtures become one shared v2 fixture whose snapshot block **has patches**,
+and a manifest with any magic other than v2 is `Integrity`, naming the magic found. Nothing shipped is
+owed to it: the format-stability contract covers what a release wrote, and no release wrote a v1
+manifest.
+
+**Consequence for the increments (§10.5, revised):** the readers change *before* the writer exists, and
+no commit may write a snapshot that a reader in the same tree misreads. Sealing is also not one function
+today — `prikk-cli/src/seal.rs:167`, `merge/execute.rs:166`, `seal_from_accepted.rs:228` and
+`rfc111_seal_simulation.rs:82` each build a Block and set the field to `None` themselves — so one seal
+function in the store is the first increment, on its own.
+
 ### 10.2 The cadence: a repository-wide checkpoint every 64 blocks, and at genesis
 
 `seal` writes a v2 snapshot when the new block's depth from the nearest snapshotted ancestor on its ref
@@ -566,18 +601,22 @@ merge-evidence at the five depths of §9.3 before and after (expected: flat past
 exercised: materialize from a snapshot, `commit` refuses, `verify`, `commit` proceeds. The instrument
 writes under `.git-exclude/measurements/` (RFC 133's rule).
 
-### 10.5 Increments
+### 10.5 Increments — revised 2026-09-13 (§10.1a); the original three-step plan is superseded
 
-1. **Format and writer**: `SnapshotManifest` v2 encode/decode with the self-consistency check; the
-   cadence constant; `seal` (and the merge/accept seal paths) writing at cadence; `verify` checking
-   consistency. No read-side acceleration yet. Controls: recompute-equals-root on every seal; a tampered
-   manifest is `Integrity`; cadence decision is deterministic (two repositories, same history, same block
-   ids); bundles round-trip the blob.
-2. **Readers and the gate**: checkout and baseline reconstruction anchored at the nearest snapshot; the
-   provisional marker and the derivation gate. Controls: identical output with and without a snapshot
-   (byte-equal materialization, byte-equal merge evidence); the gate's refusal and its clearing; a
-   corrupted snapshot falls back to replay with the `Integrity` finding surfaced, never silently.
+0. **One seal function.** A store function builds, signs and publishes every Block: the CLI's `seal`, the
+   merge path, `sync accept`'s `seal_from_accepted` and the RFC 111 simulation all call it. No behaviour
+   change; block ids byte-identical before and after on a history that exercises all four callers.
+1a. **Readers on v2.** `SnapshotManifest` v2 encode/decode, v1 removed; `recomputed_state_root()`;
+   loading by Blob id (files, node ids, kinds, modes — the readers' "mode-unaware" caveats shrink and
+   say so); every reader seeds from a snapshot and skips that block's patches; `checkout --snapshot-*`
+   materializes by Blob id. One shared fixture whose snapshot block has patches. No writer.
+1b. **The writer.** `CHECKPOINT_CADENCE`, the decision inside the one seal function, `verify`'s
+   self-consistency check, the determinism, bundle, digest and storage controls of the first handoff.
+2. **The anchor and the gate**: checkout and baseline reconstruction start at the nearest snapshot; the
+   provisional marker and the derivation gate. Controls as before: byte-equal output with and without a
+   snapshot; the gate's refusal and clearing; a corrupted snapshot surfaces its `Integrity` finding.
 3. **Measurement, docs, CHANGELOG** (`### Added — sealed snapshots`; `### Changed` for the gate's new
    refusal), and RFC 136 moves to `done/`.
 
-Handoff for increment 1: `136-block-aggregation-payoff/sealed-snapshots-increment-1-handoff-v1.md`.
+Handoff: `136-block-aggregation-payoff/sealed-snapshots-handoff-v2.md` (increments 0, 1a, 1b; v1 of the
+handoff is superseded and kept for its controls).
