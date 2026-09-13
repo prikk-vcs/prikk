@@ -304,3 +304,5 @@ the active WAL when the store misses and renders a queued patch as the same `sho
 `"queued": true`; a miss in both is `Precondition` naming both places and the two routes (`status`,
 `log`). An object a ref names and the store lacks stays `Integrity` — `verify`'s path, not this one.
 Handoff: `142-content-surface/queued-patches-handoff-v1.md`.
+
+**§7a DELIVERED 2026-09-13 (`ee096fd3`)**: `show` renders a queued patch from the active WAL with `"queued": true` — byte-equal to its sealed rendering apart from the flag, measured; a miss in both places is `Precondition` naming both and the routes (`status --format json`, `log`); `QueuedPatchEntry.message` in `status-report-v1`. `#[non_exhaustive]` added to `QueuedPatchEntry` and `ShowPatch` (the handoff's "already applies" was wrong).

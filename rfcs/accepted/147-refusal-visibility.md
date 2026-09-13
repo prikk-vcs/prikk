@@ -408,3 +408,5 @@ path (`back\slash.txt`, a non-UTF-8 name) is `kind: unsupported-path` with `auth
 `refused`; and its `path`, absolute today, becomes the OS name relative to the worktree root, rendered
 lossily, with `worktree-status-report-v1`'s description saying so for this one kind (stikk's second
 question). Handoff: `147-refusal-visibility/unrepresentable-names-handoff-v1.md`.
+
+**§3f DELIVERED 2026-09-13 (`bf36b2ee`, `804b3b51`)**: the entry carries `commit`'s own `invalid name` refusal (same two functions, root-relative path), is `refused`, and its `path` is root-relative; `worktree-status.md` states the one-kind exception. Measured by the architect on the binary.
