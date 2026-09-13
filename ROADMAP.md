@@ -236,8 +236,6 @@ review records** — `.git-exclude/reviewed/` stays where reasoning lives; this 
 item is open.
 
 <!-- open-work-index:start -->
-- [`DC-43-RELEASE-SECURITY-CONTROLS.md`](rfcs/proposed/DC-43-RELEASE-SECURITY-CONTROLS.md) — DC-43, Release Security and Distribution Controls (schedule position stale — cited predecessor superseded and implemented; see the RFC's own status update)
-- [`152-how-prikk-releases.md`](rfcs/proposed/152-how-prikk-releases.md) — RFC 152, How prikk releases (second draft 2026-09-13; the first, written as an amendment to old governance texts, was rejected by the owner). Who the project is, what a release is, the procedure done twenty-odd times, what protects it, what grows with the project. **Awaits acceptance.**
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here
@@ -358,7 +356,7 @@ DC-44's closure established. The real queue is **twelve**, not sixteen.
 |---|---|
 | **Entrance** — what a person meets before and just after `install` | **RFC 137** (landing page, 5 increments), then **RFC 135** (first run, undesigned) |
 | **Product** — correctness, format, structure, cost | ~~RFC 123~~, ~~RFC 130~~ (both shipped), RFC 131, RFC 136, RFC 133 |
-| **Owner-blocked** | ~~DC-43's authority half~~ (DC-35 to be revised — RFC 152 awaits acceptance); ~~RFC 113 §4.3–§4.5~~ (**ruled 2026-09-13**, RFC accepted; the foundations design is the architect's next design after RFC 136, when scheduled); ~~RFCs 109/110~~ — **archived 2026-09-13** on the owner's authorization: no requirement behind either |
+| **Owner-blocked** | ~~DC-43~~ (archived under RFC 152, accepted 2026-09-13); ~~RFC 113 §4.3–§4.5~~ (**ruled 2026-09-13**, RFC accepted; the foundations design is the architect's next design after RFC 136, when scheduled); ~~RFCs 109/110~~ — **archived 2026-09-13** on the owner's authorization: no requirement behind either |
 | ~~**Externally blocked**~~ | RFC 136 — **not blocked since 2026-09-06**; design is the architect's; proposed as 0.43 "sealed snapshots" |
 
 **The rule that makes this stick, because a lane without one is a preference:**
@@ -465,7 +463,7 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**14**~~ | ~~The RFC 133 memory instrument rewrites a tracked `rfcs/` report~~ | Tooling | **DONE 2026-09-13** (`37c7f9be`): three writers, all under `.git-exclude/measurements/rfc133/`, stamped HEAD-at-start and refusing if HEAD moved; a real run left `rfcs/` clean |
 | **15 — 0.43.0 THEME "sealed snapshots"** | **RFC 136 §10** (design written 2026-09-13): v2 manifest = the state root's leaf set; checkpoint every 64 blocks and at genesis, deterministic; readers anchor at the nearest snapshot; provisional materialization behind a derivation gate; `verify` unchanged | Product | **APPROVED 2026-09-13**; increment 1 handoff live — `136-…/sealed-snapshots-increment-1-handoff-v1.md` |
 | **17 (candidate theme, after 0.43)** | **RFC 113 — history import foundations**: the import contract on prikk's side, ruled 2026-09-13 (importer signs the import; only an adopted maintainer seals; refuse-not-approximate Git floor); then Git, then Subversion, then CVS; brygge decodes | Product | **Awaits the owner's scheduling** |
-| ~~**16**~~ | ~~DC-43's no-authority half~~ | Tooling / CI | **Refused by the owner 2026-09-13.** DC-35's rules ruled useless for v0 → **RFC 152 "How prikk releases"** (second draft, from the project's reality); DC-43 held until then, then archived |
+| ~~**16**~~ | ~~DC-43's no-authority half~~ | Tooling / CI | **Refused by the owner 2026-09-13.** DC-35's rules ruled useless for v0 → **RFC 152 "How prikk releases" ACCEPTED 2026-09-13**; DC-35 and DC-43 archived; docs + release-notes paragraph handed off |
 | ~~**11**~~ | ~~CI runs none of the policy gates~~ | CI | **DONE 2026-09-13 (`70e2f98e`)**: the `policy` job runs all four; the `check` step is a required reference; the other three become required in the follow-up |
 | ~~**10**~~ | ~~Help-versus-inventory check~~ | Tooling | **DONE 2026-09-13** (`13b23da3`); perturbation reproduced by the architect on the real file |
 | **0.42.0 release position (2026-09-13)** | | | **No cut proposed yet.** Everything landed since 0.41.0 is tooling and gate work — `size-check`, the help-inventory check, the layer rule, the derived crate order — and `CHANGELOG.md` has no `## Unreleased` section: nothing user-visible has shipped. A release is cut when the next user-facing theme lands; the candidates are the owner's direction items below and RFC 145's acceptance. |

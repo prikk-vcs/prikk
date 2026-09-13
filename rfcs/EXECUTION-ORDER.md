@@ -28,11 +28,12 @@ point sits after the performance work per the owner's 2026-07-29 direction.
 
 ## The two lanes
 
-Development priority and release readiness are separate. **The release lane is `parked`** — no signer
-bootstrap, hold, or release candidate exists, and `release-signers.toml` is empty and fail-closed.
-Everything in §1 proceeds regardless. Nothing in §1 activates the release lane; activation requires the
-three-authority commit described in `MILESTONES.md`, and neither implementation completion nor an
-architect recommendation is authoritative for it.
+Development priority and release readiness are separate. **Releases are governed by RFC 152 ("How prikk
+releases", accepted 2026-09-13):** a release is a theme delivered; the owner authorizes the cut and,
+separately, the publication; the dev team prepares, the architect reviews, gates, tags with the
+repository's signing key, verifies the shipped artifact and publishes. Twenty-odd releases have gone out
+that way. The earlier "release lane parked / signer bootstrap" text described a maintainer quorum this
+project does not have and is retired with DC-35 (archived).
 
 ## The current picture — themes and recommended order (2026-08-18)
 
@@ -64,10 +65,9 @@ for a verification claim made today to hold in ten years.* 0.20.0 moved the form
 migration path. Until this is settled, the badge's *"future releases may require migration"* is
 load-bearing.
 
-**Theme C — release authority.** Criterion 4: the signer bootstrap has never happened.
-`release-signers.toml` is empty and fail-closed, and every release to date — including 0.22.0 and 0.22.1 —
-went out on one person's key without DC-35's two-person authority transaction. It also blocks **DC-43** and
-**DC-49** in §2.
+**Theme C — release authority.** Settled by RFC 152 (2026-09-13): the owner is the release authority
+and the repository's signing key is the signer set in v0; the "signer bootstrap" was a rule for a quorum
+the project does not have. DC-43 is archived with DC-35; DC-49's dependency on it is void.
 
 **Outside the themes**, two capability gaps DC-67's conformance suite found and left unowned:
 `checkout --patch-materialize` cannot replay `ReplaceBinary`/`ChangePerm`, and there is **no
@@ -103,9 +103,9 @@ sequence within them is a judgement.
 
 ### The one item that is not engineering work
 
-**Criterion 4 — the signer bootstrap — requires two distinct natural persons** under DC-35's authority
-transaction. Neither the architect nor the developer can perform it, and no increment unblocks it. **Only
-the project owner can start it**, it can run in parallel with everything above, and it independently
+**Criterion 4 — the signer bootstrap — is retired for v0 by RFC 152.** What replaces it is §5 of that
+RFC: the day a second maintainer holds a release key, the signer file stops being empty by the owner's
+word and release tags must be signed by a key in it. Until then the criterion is not a v0 gate, and it
 unblocks DC-43 and DC-49.
 
 ## 1. Development lane — available now
@@ -293,17 +293,12 @@ DC-41 for exactly that reason. If the owner would rather unblock it sooner, the 
 decision to move the documentation correction into the development lane — that is an owner decision, not
 an implementation one.
 
-## 3. Release lane — only on explicit owner activation
+## 3. Release lane — RFC 152
 
-Not startable by a developer. Recorded so the sequence is visible.
-
-1. Activation commit — lane `active` plus exact target version, in all three authorities, atomically.
-2. DC-35 signer bootstrap as an isolated public governance transaction.
-3. Mandatory public 72-hour hold.
-4. During the hold: literal DC-38 stale-pointer/ahead-log reproduction; DC-37-aligned portability/
-   requirements correction (this is what unblocks DC-49).
-5. Explicit architect/security hold-lift ruling.
-6. Combined release candidate: full gates, corrective failpoint matrix, adversarial RC review.
+The release procedure is RFC 152 §3, executed by the architect on the owner's word with the dev team's
+release-prep sweep (`119-…/release-prep-handoff-template.md`). The six-step DC-35 sequence that stood
+here (activation commit, signer bootstrap, 72-hour hold, hold-lift ruling, RC review) is retired with
+DC-35; see the archive for its text.
 
 **Gate inheritance:** release conditions attach to accepted-but-unshipped *increments*, not to version
 labels. DC-39, DC-40, and DC-41 are on `main` and unshipped, so whichever release ships first inherits the

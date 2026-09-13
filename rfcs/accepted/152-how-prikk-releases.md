@@ -1,6 +1,6 @@
 # RFC 152 — How prikk releases: authority, procedure, and what grows with the project
 
-**Status.** **PROPOSED 2026-09-13 by the architect** — the second draft. The first was written as an
+**Status.** **ACCEPTED by the owner 2026-09-13** ("It is now accepted."). §6 applied the same day: DC-35 and DC-43 archived, `EXECUTION-ORDER.md`'s release text points here, the docs and the release-notes paragraph are handed off (`152-how-prikk-releases/docs-and-release-notes-handoff-v1.md`), `MILESTONES.md`'s row is the owner's. Written as the second draft. The first was written as an
 amendment to earlier governance texts and was rejected by the owner for exactly that: it argued with
 documents nobody uses instead of describing the project. This draft starts from the project as it is and
 where it is going. Awaits the owner's acceptance. `release-signers.toml` is not touched by anything here.

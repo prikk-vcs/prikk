@@ -1,6 +1,6 @@
 # RFC (accepted) - DC-35 Release Compatibility and Status Correction
 
-**Status.** Governance amendment accepted after architect design re-review v3 on 2026-07-15;
+**Status.** **ARCHIVED 2026-09-13 — superseded by RFC 152 ("How prikk releases") on the owner's ruling that its two-person signer rules do not fit a one-owner project in v0.** Its transaction design is kept here for the day a second maintainer holds a release key (RFC 152 §5). `release-signers.toml` is unchanged. Earlier: Governance amendment accepted after architect design re-review v3 on 2026-07-15;
 implementation accepted after architect repair re-review v3 on 2026-07-16 with no signer admitted.
 **Owner ruling.** Repository-governed signer changes, non-mandatory existing-key approval, and the
 72-hour break-glass hold were approved on 2026-07-15.
