@@ -2,7 +2,82 @@
 
 use std::fs;
 
-use super::{Inventory, Procedure, scan_procedure_files, verify};
+use super::{
+    CI_WORKFLOW, Inventory, Procedure, REQUIRED_CI_POLICY_STEPS, required_ci_policy_steps,
+    scan_procedure_files, verify,
+};
+
+fn workflow_with_steps(steps: &[&str]) -> tempfile::TempDir {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temporary.path().join(".github/workflows")).unwrap();
+    let mut text = String::from("jobs:\n  policy:\n    steps:\n");
+    for step in steps {
+        text.push_str(&format!("      - run: {step}\n"));
+    }
+    fs::write(temporary.path().join(CI_WORKFLOW), text).unwrap();
+    temporary
+}
+
+#[test]
+fn the_real_workflow_runs_every_required_policy_step() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    assert_eq!(required_ci_policy_steps(root), Vec::<String>::new());
+}
+
+/// RFC 141 §2.4: each of the four steps is required on its own -- deleting any one fails, naming
+/// exactly that one.
+#[test]
+fn deleting_any_one_policy_step_fails_naming_it() {
+    let complete = workflow_with_steps(&REQUIRED_CI_POLICY_STEPS);
+    assert_eq!(
+        required_ci_policy_steps(complete.path()),
+        Vec::<String>::new()
+    );
+    for missing in REQUIRED_CI_POLICY_STEPS {
+        let remaining: Vec<&str> = REQUIRED_CI_POLICY_STEPS
+            .into_iter()
+            .filter(|step| *step != missing)
+            .collect();
+        let workflow = workflow_with_steps(&remaining);
+        assert_eq!(
+            required_ci_policy_steps(workflow.path()),
+            [format!(
+                "required-procedure-missing:{CI_WORKFLOW}:{missing}"
+            )]
+        );
+    }
+}
+
+/// A step only counts as a whole `run:` script: commented out, or carrying an extra argument, it is
+/// missing.
+#[test]
+fn a_commented_or_altered_policy_step_does_not_count() {
+    let temporary = workflow_with_steps(&REQUIRED_CI_POLICY_STEPS[..3]);
+    let path = temporary.path().join(CI_WORKFLOW);
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str("      # - run: cargo run --locked -p prikk-release-policy -- size-check\n");
+    text.push_str("      - run: cargo run --locked -p prikk-release-policy -- size-check --json\n");
+    fs::write(&path, text).unwrap();
+    assert_eq!(
+        required_ci_policy_steps(temporary.path()),
+        [format!(
+            "required-procedure-missing:{CI_WORKFLOW}:{}",
+            REQUIRED_CI_POLICY_STEPS[3]
+        )]
+    );
+}
+
+#[test]
+fn a_missing_workflow_is_reported() {
+    let temporary = tempfile::tempdir().unwrap();
+    assert_eq!(
+        required_ci_policy_steps(temporary.path()),
+        [format!("required-procedure-unreadable:{CI_WORKFLOW}")]
+    );
+}
 
 fn valid() -> Inventory {
     let packages = [

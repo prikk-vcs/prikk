@@ -4,11 +4,14 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use super::{BoundaryError, PRODUCTS, push};
-use crate::command_scan::{Invocation, scan, scan_shell, scan_yaml};
+use crate::command_scan::{
+    Invocation, REQUIRED_CI_POLICY_STEPS, scan, scan_shell, scan_yaml, yaml_run_scripts,
+};
 use crate::error::{Error, Result};
 use crate::json;
 
 const INVENTORY: &str = "release/publication-command-inventory-v1.json";
+const CI_WORKFLOW: &str = ".github/workflows/ci.yml";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +38,28 @@ pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) -> Result<()> 
     for detail in scan_procedure_files(root, &inventory)? {
         push(errors, "publication-allowlist", detail);
     }
+    for detail in required_ci_policy_steps(root) {
+        push(errors, "publication-allowlist", detail);
+    }
     Ok(())
+}
+
+/// RFC 141 §2.4: every step in `REQUIRED_CI_POLICY_STEPS` must be a whole `run:` script in
+/// `ci.yml`. The allowlist above accepts what a workflow runs; this is the other direction -- what
+/// CI must run -- so removing a policy gate from the job is a finding naming that gate, not silence.
+fn required_ci_policy_steps(root: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(root.join(CI_WORKFLOW)) else {
+        return vec![format!("required-procedure-unreadable:{CI_WORKFLOW}")];
+    };
+    let scripts = match yaml_run_scripts(&text) {
+        Ok(scripts) => scripts,
+        Err(error) => return vec![format!("unparseable-procedure:{CI_WORKFLOW}:{error}")],
+    };
+    REQUIRED_CI_POLICY_STEPS
+        .iter()
+        .filter(|step| !scripts.iter().any(|script| script == *step))
+        .map(|step| format!("required-procedure-missing:{CI_WORKFLOW}:{step}"))
+        .collect()
 }
 
 fn scan_procedure_files(root: &Path, inventory: &Inventory) -> Result<Vec<String>> {

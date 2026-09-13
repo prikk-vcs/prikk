@@ -265,6 +265,23 @@ fn generate_installer_procedure(tail: &[String]) -> bool {
     ]
 }
 
+/// RFC 141 §2.4, closed: the four steps CI's `policy` job must run, each as one whole `run:` script
+/// in `.github/workflows/ci.yml`. `policy_gate_procedure` below only *permits* them, so without this
+/// list any one could be deleted from the job and no gate would notice; `boundary-check` now
+/// requires every one and names the one missing.
+pub(crate) const REQUIRED_CI_POLICY_STEPS: [&str; 4] = [
+    "cargo run --locked -p prikk-release-policy -- check",
+    "cargo run --locked -p prikk-release-policy -- boundary-check",
+    "cargo run --locked -p prikk-release-policy -- reference-check",
+    "cargo run --locked -p prikk-release-policy -- size-check",
+];
+
+/// Every `run:` script in a workflow, as the scanner extracts it -- the same parse the procedure
+/// allowlist reads, so a step the required list finds is a step the allowlist has classified.
+pub(crate) fn yaml_run_scripts(text: &str) -> Result<Vec<String>, &'static str> {
+    yaml_scripts(text)
+}
+
 /// RFC 141 increment 4: CI's `policy` job runs the three gates besides `check` (which `rust_policy`
 /// already accepts) in the invocation form EXECUTION-ORDER §6 rule 9 names. Exact match, no flag
 /// and no other subcommand -- `boundary-check --graph` is a read-only report, not a gate step, and

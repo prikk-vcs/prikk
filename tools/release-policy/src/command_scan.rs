@@ -7,7 +7,9 @@ mod procedure;
 use lexer::{commands, logical_lines};
 use prefix::{command_head, dynamic, dynamic_cargo, inert_head, opaque_execution};
 use procedure::allowed as procedure_command;
-pub(crate) use procedure::{shell as scan_shell, yaml as scan_yaml};
+pub(crate) use procedure::{
+    REQUIRED_CI_POLICY_STEPS, shell as scan_shell, yaml as scan_yaml, yaml_run_scripts,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Invocation {
