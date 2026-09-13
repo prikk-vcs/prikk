@@ -6,7 +6,7 @@ version control is forced into heavy calculation, and the intent was *"to make i
 by aggregating multiple patches into a single patch as block when a cycle of development on some theme
 is finished."*
 
-**Re-reviewed 2026-09-13: nothing external blocks this RFC.** The reviewer answered (§9.2), the owner ruled Option A (§7), §9 items 1–2 are measured (§9.3: cost grows as depth^1.45, not with tree size). What remains is *design* — the path-to-Blob snapshot format (§5), the checkpoint cadence (§9.2's `REANCHOR_BOUND` question), and §9 item 4 measured under a candidate policy — and it is the architect's to write. **Proposed as 0.43's theme, "sealed snapshots"; the owner schedules.**
+**Re-reviewed 2026-09-13: nothing external blocks this RFC.** The reviewer answered (§9.2), the owner ruled Option A (§7), §9 items 1–2 are measured (§9.3: cost grows as depth^1.45, not with tree size). What remains is *design* — the path-to-Blob snapshot format (§5), the checkpoint cadence (§9.2's `REANCHOR_BOUND` question), and §9 item 4 measured under a candidate policy — and it is the architect's to write. **SCHEDULED as 0.43's theme, "sealed snapshots" — owner approved 2026-09-13.** The design is §10.
 
 **What the acceptance covers, stated because a bare acceptance is scope-ambiguous.** It accepts the
 problem record, the evidence, and the shape of the question — the same reading RFC 133's acceptance
@@ -510,3 +510,74 @@ and are out of scope; `verify` acceleration is excluded by §6 and is not a goal
 RFC 134 (text span identity under composition — the prior art for Option B's hard case), DC-64
 (incremental baseline cache — Option C's existing mould), DC-92 (lineage replay memoization),
 DC-75 (merge block shape).
+
+## 10. Sealed snapshots — the design (0.43 theme, approved 2026-09-13)
+
+Option A, shaped by §6 (a snapshot never accelerates `verify`), §8 (block identity is already local),
+§9.2.4 (materialization is not certification) and §9.2.5 (snapshot cadence is reanchor cadence).
+
+### 10.1 The format: the state root's own leaf set, in a Blob
+
+`PRIKK-SNAPSHOT-MANIFEST-v2\n`, then the block's state entries in canonical path order — for each:
+path, NodeId, node kind, normalized mode, and the file Blob id or the symlink target — **exactly the
+leaf set `state_leaf_preimage` hashes** (`state_root.rs`). No file bytes: the blobs are already stored
+once. Size is ~80 bytes per tracked path (`prikk` itself: ~170 files → ~14 KiB per snapshot). Stored in a
+Blob; referenced by the existing `snapshot_blob_ref` field of the Block payload, which every reader
+already handles. The v1 inline format was never written by any block-creating path; its decoder stays
+for fixtures and the reader dispatches on the magic.
+
+**Self-consistency (§9.2.4 (a)) is a property of the format:** recomputing the state root from the
+manifest must equal the block's `state_merkle_root`, O(entries), checked at every read. A manifest that
+does not recompute is `Integrity` — a snapshot that lies about its own block is damage.
+
+### 10.2 The cadence: a repository-wide checkpoint every 64 blocks, and at genesis
+
+`seal` writes a v2 snapshot when the new block's depth from the nearest snapshotted ancestor on its ref
+reaches `CHECKPOINT_CADENCE = 64` — `REANCHOR_BOUND` promoted from a commit-path constant
+(`lifecycle_cache/incremental.rs:36`) to one named repository-wide constant that both the reanchor and
+the snapshot read — and at the first seal of a ref with no snapshotted ancestor. Not configurable: there
+is no configuration surface (RFC 135 §9.1a), and a deterministic cadence has a property worth more than
+a knob: **two repositories that seal the same history with the same prikk produce the same block ids**,
+because the snapshot decision is a function of history, not of local choice. That answers §8's residual
+question as narrowly as it can be answered: block ids remain local by design, and this feature adds no
+*new* locality. `merge` and `sync accept` seal through the same path and follow the same rule.
+
+### 10.3 What reads it, and what may not
+
+- **Checkout** (`--patch-plan`, `--patch-materialize`) and **baseline reconstruction** (`commit`'s and
+  `merge-evidence`'s `resolve_folded_worktree_baseline`) start replay at the nearest snapshotted ancestor
+  instead of genesis: cost becomes O(tree + ≤64 patches) in place of depth^1.45 (§9.3). The replay from
+  the snapshot is ordinary replay; nothing is skipped after the anchor.
+- **`checkout --snapshot-materialize`** materializes from the manifest alone (O(tree), no replay) and
+  is **provisional**: it writes a worktree marker *materialized from a snapshot; not replay-verified*.
+  **The derivation gate** (§9.2.4, the reviewer's precondition): `commit`, `seal`, `merge` and `sync
+  accept` refuse (`Precondition`, naming `prikk verify --ref <ref>` as the route) while that marker is
+  set; a successful replay verification of the ref clears it. An unverified state cannot launder into
+  signed history through a performance feature.
+- **`verify` is unchanged** and must replay every block in full (§6); it additionally checks each
+  snapshot's self-consistency and that its Blob exists (`verify.rs:1565` already does the latter).
+- **Bundles and sync** carry snapshot blobs as reachable blobs (already, `bundle.rs:801`); a receiver
+  that lacks one falls back to replay. Nothing in the exchange format changes.
+
+### 10.4 Measurements that close §9 item 4, taken on RFC 139's corpus
+
+Storage per snapshot and per repository at cadence 64 on `profiles/prikk-self.toml`; checkout and
+merge-evidence at the five depths of §9.3 before and after (expected: flat past 64); the derivation gate
+exercised: materialize from a snapshot, `commit` refuses, `verify`, `commit` proceeds. The instrument
+writes under `.git-exclude/measurements/` (RFC 133's rule).
+
+### 10.5 Increments
+
+1. **Format and writer**: `SnapshotManifest` v2 encode/decode with the self-consistency check; the
+   cadence constant; `seal` (and the merge/accept seal paths) writing at cadence; `verify` checking
+   consistency. No read-side acceleration yet. Controls: recompute-equals-root on every seal; a tampered
+   manifest is `Integrity`; cadence decision is deterministic (two repositories, same history, same block
+   ids); bundles round-trip the blob.
+2. **Readers and the gate**: checkout and baseline reconstruction anchored at the nearest snapshot; the
+   provisional marker and the derivation gate. Controls: identical output with and without a snapshot
+   (byte-equal materialization, byte-equal merge evidence); the gate's refusal and its clearing; a
+   corrupted snapshot falls back to replay with the `Integrity` finding surfaced, never silently.
+3. **Measurement, docs, CHANGELOG** (`### Added — sealed snapshots`; `### Changed` for the gate's new
+   refusal), and RFC 136 moves to `done/`.
+
+Handoff for increment 1: `136-block-aggregation-payoff/sealed-snapshots-increment-1-handoff-v1.md`.

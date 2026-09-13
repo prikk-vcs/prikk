@@ -360,7 +360,7 @@ DC-44's closure established. The real queue is **twelve**, not sixteen.
 |---|---|
 | **Entrance** — what a person meets before and just after `install` | **RFC 137** (landing page, 5 increments), then **RFC 135** (first run, undesigned) |
 | **Product** — correctness, format, structure, cost | ~~RFC 123~~, ~~RFC 130~~ (both shipped), RFC 131, RFC 136, RFC 133 |
-| **Owner-blocked** | DC-43's authority half (signer bootstrap); RFC 113 §4.3–§4.5 (three recommendations written 2026-09-13); RFCs 109/110 (concepts, no work) |
+| **Owner-blocked** | DC-43's authority half (signer bootstrap); RFC 113 §4.3–§4.5 (three recommendations written 2026-09-13; license/copyright answered in the RFC); RFCs 109/110 — **design ownership: none assigned.** The architect designs once the owner rules a direction (which tier of 109, which pillar of 110); no direction has been ruled, so no one holds a design task; the consumer-driven JSON work continues without them |
 | ~~**Externally blocked**~~ | RFC 136 — **not blocked since 2026-09-06**; design is the architect's; proposed as 0.43 "sealed snapshots" |
 
 **The rule that makes this stick, because a lane without one is a preference:**
@@ -465,7 +465,7 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**13**~~ | ~~RFC 142 §7a / RFC 140 — queued patch message; `show` on a queued patch; unknown id a precondition~~ | Product | **DONE 2026-09-13** (`ee096fd3`); measured: queued and sealed renderings byte-equal apart from the flag |
 | ~~**12**~~ | ~~RFC 147 §3f — `unsupported-path` verdict and absolute path~~ | Product | **DONE 2026-09-13** (`bf36b2ee`, `804b3b51`); refusal byte-equal to `commit`'s, path root-relative |
 | **14 (0.43 tooling)** | The RFC 133 memory instrument rewrites a tracked `rfcs/` report on every run — write under `.git-exclude/`, stamp the built revision | Tooling | **Handed off 2026-09-13** — `133-…/instrument-output-path-handoff-v1.md` (owner: proceed if cheap) |
-| **15 (proposed 0.43 theme)** | **RFC 136 Option A — sealed snapshots**: the path-to-Blob snapshot format, the checkpoint cadence, §9 item 4 measured; then handoff | Product | **Unblocked; awaits the owner's scheduling.** Checkout and merge cost grow as depth^1.45 today |
+| **15 — 0.43.0 THEME "sealed snapshots"** | **RFC 136 §10** (design written 2026-09-13): v2 manifest = the state root's leaf set; checkpoint every 64 blocks and at genesis, deterministic; readers anchor at the nearest snapshot; provisional materialization behind a derivation gate; `verify` unchanged | Product | **APPROVED 2026-09-13**; increment 1 handoff live — `136-…/sealed-snapshots-increment-1-handoff-v1.md` |
 | **16 (0.43 tooling, proposed)** | **DC-43's no-authority half**: SHA-pinned actions, SBOM per release asset, a written dependency/advisory policy | Tooling / CI | **Awaits the owner's yes**; the authority half stays behind the signer bootstrap |
 | ~~**11**~~ | ~~CI runs none of the policy gates~~ | CI | **DONE 2026-09-13 (`70e2f98e`)**: the `policy` job runs all four; the `check` step is a required reference; the other three become required in the follow-up |
 | ~~**10**~~ | ~~Help-versus-inventory check~~ | Tooling | **DONE 2026-09-13** (`13b23da3`); perturbation reproduced by the architect on the real file |
