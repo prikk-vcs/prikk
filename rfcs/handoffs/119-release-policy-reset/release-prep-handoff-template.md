@@ -34,6 +34,10 @@ handoff filled in, and the team delivers the prep commit for review like any oth
 6. **Memory ratio (RFC 133 §6a).** Run the `#[ignore]`d instrument in `rfc133_node_count_memory.rs` at two repository sizes and put the incremental-commit peak-memory ratio in the report; a ratio that moved since the last release stops the cut until explained. The run writes its report to `.git-exclude/measurements/rfc133/node-count-memory-measurement-<revision>.md` and prints the path; it writes nothing under `rfcs/`, and the previous release's figure is the latest such file (or, before 0.43, the tracked `rfcs/handoffs/133-…/node-count-memory-measurement-report-v1.md`).
 7. **A smoke script** exercising every shipped feature on a fresh fixture with a clean environment,
    runnable against any `prikk` binary path — the architect runs it against the published asset.
+8. **Absence claims** (owner's rule 2026-09-13, after `git-mapping.md` called four shipped features
+   missing): for every `### Added` entry since the last tag, grep `docs/src`, `README.md` and
+   `SECURITY.md` for a sentence that says that feature is missing, not yet available or not implemented,
+   and fix it. Minutes, not hours; the pages' mechanical checks cover the rest.
 
 Report: `.git-exclude/review-request/release-<version>-prep-report-v1.md`, with anything found and fixed
 (as its own commit, reviewed normally) separated from what remains.

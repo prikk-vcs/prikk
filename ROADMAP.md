@@ -237,6 +237,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- [`153-content-diff.md`](rfcs/proposed/153-content-diff.md) — `prikk diff`: two points of history or the worktree against its baseline; owner approved the direction 2026-09-13; proposed as the theme after 0.43
+
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here
 would fail `boundary-check`. **Open work also lives in `rfcs/accepted/`** — as of 2026-09-06 that is
@@ -462,6 +464,7 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**12**~~ | ~~RFC 147 §3f — `unsupported-path` verdict and absolute path~~ | Product | **DONE 2026-09-13** (`bf36b2ee`, `804b3b51`); refusal byte-equal to `commit`'s, path root-relative |
 | ~~**14**~~ | ~~The RFC 133 memory instrument rewrites a tracked `rfcs/` report~~ | Tooling | **DONE 2026-09-13** (`37c7f9be`): three writers, all under `.git-exclude/measurements/rfc133/`, stamped HEAD-at-start and refusing if HEAD moved; a real run left `rfcs/` clean |
 | **15 — 0.43.0 THEME "sealed snapshots"** | **RFC 136 §10** (design written 2026-09-13): v2 manifest = the state root's leaf set; checkpoint every 64 blocks and at genesis, deterministic; readers anchor at the nearest snapshot; provisional materialization behind a derivation gate; `verify` unchanged | Product | **APPROVED 2026-09-13**; increment 1 handoff live — `136-…/sealed-snapshots-increment-1-handoff-v1.md` **Held by the dev team before code 2026-09-13**: the readers treat a snapshot as the block's *pre*-state, §10.1 defines its *post*-state; ruled §10.1a (post-state; v1 retired; one seal function first); increments re-sliced 0 / 1a / 1b / 2 / 3, handoff v2 live |
+| **16b (candidate theme, after 0.43)** | **RFC 153 — `prikk diff`** (two points, or worktree vs baseline; declared renames only; line-oriented rendering over reconstructed contents; also closes RFC 144 §4t's bare block-id `--ref`). Owner approved the direction 2026-09-13; scheduling is the owner's. **`stash`** is the approved later candidate after RFC 136 (complement of `branch switch`'s dirty-worktree refusal; needs its own design — the WAL is not a stash). **`git-mapping.md` currency** handed off 2026-09-13 (`128-outward-facing-project-surface/git-mapping-currency-handoff-v1.md`): five stale claims, fetch/pull/push rows, rule (C) test; release-prep template gains step 8 (absence claims) | owner's scheduling | `rfcs/proposed/153-content-diff.md` |
 | **17 (candidate theme, after 0.43)** | **RFC 113 — history import foundations**: the import contract on prikk's side, ruled 2026-09-13 (importer signs the import; only an adopted maintainer seals; refuse-not-approximate Git floor); then Git, then Subversion, then CVS; brygge decodes | Product | **Awaits the owner's scheduling** |
 | ~~**16**~~ | ~~DC-43's no-authority half~~ | Tooling / CI | **Refused by the owner 2026-09-13.** DC-35's rules ruled useless for v0 → **RFC 152 "How prikk releases" ACCEPTED 2026-09-13**; DC-35 and DC-43 archived; docs + release-notes paragraph handed off |
 | ~~**11**~~ | ~~CI runs none of the policy gates~~ | CI | **DONE 2026-09-13 (`70e2f98e`)**: the `policy` job runs all four; the `check` step is a required reference; the other three become required in the follow-up |
@@ -623,7 +626,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 
 | gap | since | note |
 |---|---|---|
-| **No `branch switch`, no current-branch pointer** — every command takes `--ref` | DC-61; DC-67's sequence_06 works around it | the `--help` note itself: *"switching needs a separate, not-yet-designed increment"*. **The largest usability gap in the product and it has no RFC.** |
+| ~~**No `branch switch`, no current-branch pointer**~~ — **shipped 0.42.0 (RFC 151)**; row kept for the record | DC-61; DC-67's sequence_06 works around it | the `--help` note itself: *"switching needs a separate, not-yet-designed increment"*. **The largest usability gap in the product and it has no RFC.** |
 | No path-aware history (`log` filters no file) | `history.md:28` | documented limit |
 | Symlink authoring out of scope | DC-32 onward | the source of G2, the refusal field's whole reason to exist |
 | Key lifecycle — rotation, revocation beyond the trust store | RFC-025 (deferred) | RFC 148 makes long-lived keys easier to keep; RFC 135 named this as the cost |
