@@ -360,8 +360,8 @@ DC-44's closure established. The real queue is **twelve**, not sixteen.
 |---|---|
 | **Entrance** — what a person meets before and just after `install` | **RFC 137** (landing page, 5 increments), then **RFC 135** (first run, undesigned) |
 | **Product** — correctness, format, structure, cost | ~~RFC 123~~, ~~RFC 130~~ (both shipped), RFC 131, RFC 136, RFC 133 |
-| **Owner-blocked** | DC-43 (signer bootstrap), RFC 133 §6 (peak-RSS ruling), RFCs 109/110/113 (direction) |
-| **Externally blocked** | RFC 136 (external architect review request issued 2026-09-04) |
+| **Owner-blocked** | DC-43's authority half (signer bootstrap); RFC 113 §4.3–§4.5 (three recommendations written 2026-09-13); RFCs 109/110 (concepts, no work) |
+| ~~**Externally blocked**~~ | RFC 136 — **not blocked since 2026-09-06**; design is the architect's; proposed as 0.43 "sealed snapshots" |
 
 **The rule that makes this stick, because a lane without one is a preference:**
 
@@ -464,14 +464,16 @@ shipped; RFC 137's increment 5 is DNS-blocked), so nothing is being displaced by
 | ~~**9**~~ | ~~RFC 130 §8 — `size-check`~~: production file over 1,200 lines fails unless allowlisted with a reason and `what_would_split_it`; production-line delta reported; RFC 141 evidence gains the size line | Tooling | **DONE 2026-09-13** (`6ab66fbd`): one production-file walk shared with the coupling gate; three files declared; the size line is its own artifact (ruled); **in the gate set** |
 | ~~**13**~~ | ~~RFC 142 §7a / RFC 140 — queued patch message; `show` on a queued patch; unknown id a precondition~~ | Product | **DONE 2026-09-13** (`ee096fd3`); measured: queued and sealed renderings byte-equal apart from the flag |
 | ~~**12**~~ | ~~RFC 147 §3f — `unsupported-path` verdict and absolute path~~ | Product | **DONE 2026-09-13** (`bf36b2ee`, `804b3b51`); refusal byte-equal to `commit`'s, path root-relative |
-| **14 (0.43 tooling)** | The RFC 133 memory instrument rewrites a tracked `rfcs/` report on every run — write under `.git-exclude/`, stamp the built revision | Tooling | Found at the 0.42.0 prep; ruled in the prep review; small |
+| **14 (0.43 tooling)** | The RFC 133 memory instrument rewrites a tracked `rfcs/` report on every run — write under `.git-exclude/`, stamp the built revision | Tooling | **Handed off 2026-09-13** — `133-…/instrument-output-path-handoff-v1.md` (owner: proceed if cheap) |
+| **15 (proposed 0.43 theme)** | **RFC 136 Option A — sealed snapshots**: the path-to-Blob snapshot format, the checkpoint cadence, §9 item 4 measured; then handoff | Product | **Unblocked; awaits the owner's scheduling.** Checkout and merge cost grow as depth^1.45 today |
+| **16 (0.43 tooling, proposed)** | **DC-43's no-authority half**: SHA-pinned actions, SBOM per release asset, a written dependency/advisory policy | Tooling / CI | **Awaits the owner's yes**; the authority half stays behind the signer bootstrap |
 | ~~**11**~~ | ~~CI runs none of the policy gates~~ | CI | **DONE 2026-09-13 (`70e2f98e`)**: the `policy` job runs all four; the `check` step is a required reference; the other three become required in the follow-up |
 | ~~**10**~~ | ~~Help-versus-inventory check~~ | Tooling | **DONE 2026-09-13** (`13b23da3`); perturbation reproduced by the architect on the real file |
 | **0.42.0 release position (2026-09-13)** | | | **No cut proposed yet.** Everything landed since 0.41.0 is tooling and gate work — `size-check`, the help-inventory check, the layer rule, the derived crate order — and `CHANGELOG.md` has no `## Unreleased` section: nothing user-visible has shipped. A release is cut when the next user-facing theme lands; the candidates are the owner's direction items below and RFC 145's acceptance. |
 | **Direction needed — no RFC yet** | | | |
 | **—** | ~~`branch switch` and a current-branch pointer~~ **RFC 151 DONE (`c1222a8f`, `926fbd5c`)** — `rfcs/done/`; the largest usability gap is closed | Product | DC-61 deferred it *"until after the queuing decision"* — DC-66 landed; the precondition is discharged. `--help` still says *"switching needs a separate, not-yet-designed increment."* **The largest usability gap in the product.** A current-branch pointer changes a deliberate stance (every command resolves `--ref` explicitly), so this is the owner's direction first, an RFC second |
 | — | RFC 120 §9.4, §9.4a; RFC 133 §6; RFC 141 inc. 4 | **owner rulings** | **Reviewed 2026-09-13, recommendations written in each RFC:** §9.4 drain gradually (23 finished RFCs sit in `accepted/`); **§9.4a yes** — it would have fired today on RFCs 133 and 136, both accepted by the owner and still filed as proposed (fixed in this commit); §6 yes, evidence from the existing ignored instrument at release prep; RFC 141 inc. 4 scoped to "CI runs the four policy gates" |
-| — | RFC 137 increment 5; RFC 136; DC-43; RFCs 109/110/113 | blocked | Each waits on a named external answer — `prikk.org` DNS, the corpus, the signer bootstrap, a direction. **RFC 137 is accepted-but-unshipped and still not rankable here**: its increment 5 is a DNS action, not dev capacity, and it re-enters the queue the day the domain resolves |
+| — | ~~RFC 137 increment 5~~ (shipped 2026-09-08 — row was stale); ~~RFC 136~~ (unblocked, design next); DC-43 (split 2026-09-13); RFCs 109/110/113 | re-reviewed 2026-09-13 | See `.git-exclude/reviewed/owner-blocked-items-review-2026-09-13.md`. Earlier text: each waits on a named external answer — `prikk.org` DNS, the corpus, the signer bootstrap, a direction. **RFC 137 is accepted-but-unshipped and still not rankable here**: its increment 5 is a DNS action, not dev capacity, and it re-enters the queue the day the domain resolves |
 
 **Owner direction recorded 2026-09-06 — hosting, and it is not scheduled.** Asked whether prikk is
 ready to support a hosting service (GitLab/Forgejo-shaped), the architect's assessment was **no**, on

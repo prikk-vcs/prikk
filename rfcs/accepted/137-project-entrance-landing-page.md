@@ -7,8 +7,7 @@ not settle: **how a landing page stays true** (§4) and **what it may say that t
 surfaces do not** (§5).
 
 **Folder corrected 2026-09-05: `proposed/` → `accepted/`.** Increments 1-4 are implemented and
-shipped in 0.31.1; only increment 5 remains, blocked on DNS. **It is not `done/` yet** — RFC-000
-reserves that for shipped-in-full. Caught by the project owner.
+shipped in 0.31.1; **increment 5 shipped 2026-09-08 (§7.2d) once `prikk.org` went live** — re-verified 2026-09-13: `prikk.org` and `/docs/` answer 200, a 404 is served, `www` redirects over TLS. **Architect's recommendation 2026-09-13: close to `done/`**; the story-section artwork (§10.1b) is an optional owner asset, not an increment. (Earlier: "only increment 5 remains, blocked on DNS." Caught by the project owner.)
 
 **What the acceptance covers, stated because a bare acceptance is scope-ambiguous.** Unlike RFC 136,
 this RFC carries no open question, so acceptance **clears §7's increments 1-4 to be handed over**;

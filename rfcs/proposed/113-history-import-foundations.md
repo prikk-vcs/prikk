@@ -221,6 +221,8 @@ and omission is permitted only where the omission is itself stated.
 - **§4.5 — the source-side floor.** Which Git features are refused rather than approximated is product
   scope: it decides who can migrate and who is told no.
 
+**Architect's recommendations 2026-09-13, for the owner to rule** (`.git-exclude/reviewed/owner-blocked-items-review-2026-09-13.md`): §4.3 — the importer signs the *import declaration* under its own key, source authorship carried as recorded text, never asserted; §4.4 — only an adopted maintainer seals imported history, and the importer's key must be one; §4.5 — refuse, never approximate: submodules, symlinks, non-UTF-8/backslash paths, replace refs and grafts, octopus merges in the first cut; commit signatures carried as text; every refusal reported before any object is written.
+
 **§4.3–§4.5 are the gate on any per-source RFC.** §5's sequencing (foundations, then Git, then SVN,
 then CVS) cannot start until they are ruled.
 

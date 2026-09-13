@@ -6,6 +6,8 @@ version control is forced into heavy calculation, and the intent was *"to make i
 by aggregating multiple patches into a single patch as block when a cycle of development on some theme
 is finished."*
 
+**Re-reviewed 2026-09-13: nothing external blocks this RFC.** The reviewer answered (§9.2), the owner ruled Option A (§7), §9 items 1–2 are measured (§9.3: cost grows as depth^1.45, not with tree size). What remains is *design* — the path-to-Blob snapshot format (§5), the checkpoint cadence (§9.2's `REANCHOR_BOUND` question), and §9 item 4 measured under a candidate policy — and it is the architect's to write. **Proposed as 0.43's theme, "sealed snapshots"; the owner schedules.**
+
 **What the acceptance covers, stated because a bare acceptance is scope-ambiguous.** It accepts the
 problem record, the evidence, and the shape of the question — the same reading RFC 133's acceptance
 carried. **It does not answer §7**, and §7 remains the one thing outstanding. Following RFC 101/102's
