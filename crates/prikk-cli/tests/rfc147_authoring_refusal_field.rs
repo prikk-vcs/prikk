@@ -124,6 +124,21 @@ fn repo_with_a_non_utf8_name(tag: &str) -> PathBuf {
     repo
 }
 
+/// The non-UTF-8 row where the platform can create one: `Some` on Linux, `None` elsewhere. A function
+/// rather than a `#[cfg]`'d `push` onto a `mut` list, which left the `mut` unused -- an error under
+/// `-D warnings` -- on every other Unix (caught by the darwin cross-target run).
+fn non_utf8_case(tag: &'static str) -> Option<Case> {
+    #[cfg(target_os = "linux")]
+    {
+        Some((tag, NON_UTF8_NAME, repo_with_a_non_utf8_name))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = tag;
+        None
+    }
+}
+
 /// The root-relative, lossy rendering of the non-UTF-8 fixture's name.
 #[cfg(target_os = "linux")]
 const NON_UTF8_NAME: &str = "bad\u{FFFD}.txt";
@@ -280,7 +295,7 @@ fn a_genuinely_absent_tracked_path_is_still_missing() {
 /// wording, so the test cannot pass by two expectations drifting together.
 #[test]
 fn status_and_commit_agree_on_the_same_tree() {
-    let mut cases: Vec<Case> = vec![
+    let rows: [Case; 4] = [
         (
             "rfc147a-agree-modified",
             "a.txt",
@@ -306,12 +321,10 @@ fn status_and_commit_agree_on_the_same_tree() {
             repo_with_a_backslash_name,
         ),
     ];
-    #[cfg(target_os = "linux")]
-    cases.push((
-        "rfc147c-agree-non-utf8",
-        NON_UTF8_NAME,
-        repo_with_a_non_utf8_name,
-    ));
+    let cases: Vec<Case> = rows
+        .into_iter()
+        .chain(non_utf8_case("rfc147c-agree-non-utf8"))
+        .collect();
     for (tag, path, build) in cases {
         let repo = build(tag);
 
@@ -340,17 +353,15 @@ fn status_and_commit_agree_on_the_same_tree() {
 /// OS name relative to the worktree root -- never the machine's absolute path.
 #[test]
 fn an_unrepresentable_name_is_refused_under_a_root_relative_path() {
-    let mut cases: Vec<Case> = vec![(
+    let rows: [Case; 1] = [(
         "rfc147c-entry-backslash",
         "back\\slash.txt",
         repo_with_a_backslash_name,
     )];
-    #[cfg(target_os = "linux")]
-    cases.push((
-        "rfc147c-entry-non-utf8",
-        NON_UTF8_NAME,
-        repo_with_a_non_utf8_name,
-    ));
+    let cases: Vec<Case> = rows
+        .into_iter()
+        .chain(non_utf8_case("rfc147c-entry-non-utf8"))
+        .collect();
     for (tag, path, build) in cases {
         let repo = build(tag);
         let report = json::parse(&stdout_of(&worktree_status(&repo, &["--format", "json"])));
