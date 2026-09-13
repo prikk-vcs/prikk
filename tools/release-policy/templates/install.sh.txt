@@ -5,9 +5,9 @@
 # release asset (never committed as a tracked .sh file) -- see docs/src/guide/install.md.
 #
 # A passing checksum here proves this download matches what the release page published; it does
-# not prove *who* published it. release-signers.toml is still empty, so no Prikk release currently
-# satisfies the DC-35 signer-authority audit -- see the release, versioning, and compatibility
-# reference for the full caveat. This script never claims otherwise.
+# not prove *who* published it. In v0 one maintainer key signs every release tag; release-signers.toml
+# is empty because no multi-signer policy exists yet -- see the release, versioning, and compatibility
+# reference for the full statement. This script never claims more than that.
 #
 # Usage:
 #   curl -fsSL https://github.com/REPO_SLUG/releases/latest/download/install.sh | sh
@@ -179,5 +179,5 @@ fi
 
 echo "prikk-install: done. Run 'prikk --version' (after opening a new shell, if PATH was just updated)."
 echo "prikk-install: this checksum proves the download matches what the release page published;"
-echo "prikk-install: it does not prove who published it. release-signers.toml is still empty, so no"
-echo "prikk-install: Prikk release currently satisfies the DC-35 signer-authority audit."
+echo "prikk-install: it does not prove who published it. In v0 one maintainer key signs every release"
+echo "prikk-install: tag; release-signers.toml is empty because no multi-signer policy exists yet."

@@ -44,11 +44,11 @@ use crate::error::{Error, Result};
 
 const RELEASE_AUTHORITY: &str = "## Release authority — read before relying on this release\n\
 \n\
-**This release does not pass the DC-35 signer-authority audit, and does not claim to.** The\n\
-committed release-signer set (`release-signers.toml`) is empty and fail-closed, so no release\n\
-currently satisfies that gate. A checksum published beside a binary on this page proves integrity of\n\
-transport, not authority of origin. Verify what you obtain by content, not by release authority —\n\
-see `prikk verify` and this project's\n\
+This release's tag is signed by the project's one maintainer key and was verified before it was\n\
+pushed. The checksum and build-info published beside each asset on this page prove integrity of\n\
+transport: the file you download is the one built from that tag. There is no second signer, no\n\
+support window and no stability promise before 1.0. Verify what you obtain by content — see\n\
+`prikk verify` and this project's\n\
 [release-compatibility reference](https://prikk.org/docs/reference/release-compatibility.html).";
 
 /// Assemble the full notes body for `tag`, reading `CHANGELOG.md` under `root` and scanning

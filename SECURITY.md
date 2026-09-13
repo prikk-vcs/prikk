@@ -28,10 +28,13 @@ An accepted report will be acknowledged, and the fix will be made. **There is no
 process and no committed response time** — this is pre-1.0 software with one maintainer, and
 stating a timeline nobody has agreed to meet would be worse than stating none.
 
-## Release-artifact verification is not yet available
+## Verifying a release
 
-If you came here to check this: **release-signer verification of a `prikk` binary is not yet
-available.** The release-signer allowlist is empty and fail-closed, so no release currently carries
-that authority — see [Release, Versioning, and Compatibility § Core
-Caveats](./docs/src/reference/release-compatibility.md#core-caveats) for the current state. A
-checksum on a downloaded binary proves transport integrity, not authorial origin.
+Every release tag is signed by the project's one maintainer key and verified before it is pushed; the
+checksum and build-info beside each downloaded asset prove it is the file built from that tag. There is
+**no second signer**, **no support window** (only the latest release gets fixes) and **no stability
+promise** for the object format, the CLI's JSON schemas or the library API before 1.0. The
+release-signer allowlist (`release-signers.toml`) is empty because no multi-signer policy exists yet.
+See [Release, Versioning, and Compatibility § How prikk
+releases](./docs/src/reference/release-compatibility.md#how-prikk-releases). Whatever you obtain,
+verify its content with `prikk verify`.

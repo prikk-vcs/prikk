@@ -27,9 +27,10 @@ this project.
 
 **What it claims, and what it does not.** A passing checksum proves the file you received matches
 what the release page published; it does not prove *who* published it.
-`release-signers.toml` is still empty and fail-closed, so no Prikk release — including its
-prebuilt binaries and this script itself — currently satisfies the DC-35 signer-authority audit. The
-script prints this same caveat when it finishes, rather than only stating it here.
+In v0 one maintainer key signs every release tag; `release-signers.toml` is empty because no
+multi-signer policy exists yet — see
+[how prikk releases](../reference/release-compatibility.md#how-prikk-releases). The script prints this
+same statement when it finishes, rather than only stating it here.
 
 **Supported today**: Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon only — there is no
 prebuilt binary for Intel Macs). **Not yet supported**: Windows — the script detects it and refuses

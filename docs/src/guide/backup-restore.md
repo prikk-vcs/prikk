@@ -266,10 +266,11 @@ outside this page's own scope, since bundle export/import add no "pull" concept 
 - **A restored repository has no maintainer trust policy until you give it one.** `bundle import`
   adopts no key; `prikk verify` reports publication-trust issues until `trust maintainer add` is
   run for the key that sealed the history you received.
-- **This is not release-signer authority.** `release-signers.toml` is a separate, still-empty
-  mechanism ([Release, Versioning, and Compatibility § Core Caveats](../reference/release-compatibility.md#core-caveats))
-  governing official prikk releases, not repository-local maintainer trust — trusting a maintainer
-  key here says nothing about who built the `prikk` binary you are running.
+- **This is not release authority.** Releases of `prikk` itself are signed by the project's one
+  maintainer key, and `release-signers.toml` is empty because no multi-signer policy exists yet
+  ([Release, Versioning, and Compatibility § How prikk releases](../reference/release-compatibility.md#how-prikk-releases)).
+  That is separate from repository-local maintainer trust — trusting a maintainer key here says
+  nothing about who built the `prikk` binary you are running.
 
 ## Limits
 

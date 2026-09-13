@@ -19,35 +19,15 @@ identity-bearing objects, see the [data model](./data-model.md). For persistence
   and as a scheduled CI job every Monday against a **freshly fetched** advisory database
   (`.github/workflows/security-audit.yml`), so an advisory that arrives without any code change is
   still caught.
-- The committed release-signer set is empty, so no release currently satisfies the DC-35 signer gate.
-- Tags through 0.17.7 predate this policy and must not be reported as passing its signer-authority
-  audit.
-- 0.18.0 does **not** predate the policy. Its tag carries the maintainer's ordinary OpenPGP signature
-  but no allowlisted release-signer authority, and no authority transaction was performed; its changelog
-  states so explicitly. It must not be reported as passing the
-  signer-authority audit either. Releases made while the signer set is empty state this in their own
-  release notes rather than relying on the pre-policy exemption above.
-- DC-35 does not provide SBOMs, provenance attestations, mature key custody/rotation/revocation, or
-  production-readiness evidence. Those remain later DC-43 work.
-- **The DC-35 signer-authority gate and the official-release boundary this page describes are parked**
-  (RFC 119 track A, 2026-08-25): the 43 signer oracle cases that enforce them do not currently run
-  (parked, not deleted -- `release/oracle/parked-cases-v1.json`). This matches the empty
-  `release-signers.toml` above: prikk has one maintainer publishing under their own key, an empty
-  allowlist, and no release that has ever passed the signer audit, so nothing today depends on this
-  gate running. The mechanism, rules, and workflow below remain the documented design -- not
-  rewritten, not removed -- and revive together with the oracle cases the day prikk enters the
-  official-release regime, which requires DC-35 criterion 4's signer bootstrap.
-- **RFC 119 track B (2026-08-25) removed and parked more of the same apparatus.** The release-state
-  suite (23 cases, the three-authority release-lane state machine superseded 2026-08-24) was removed
-  outright -- `NEVER`, not parked, no revival condition, git history is the record. The `json-parser`
-  and `schema-evaluator` suites (15 cases) were removed as release policy for the same reason; the
-  code they tested (`json.rs`, `schema.rs`) stays, since release-evidence's own schema check still
-  uses it. 16 of `release-evidence`'s 73 cases -- the ones exercising its embedded DC-35
-  signer-governance sub-object -- were parked under the same revival condition as above (second batch
-  in `release/oracle/parked-cases-v1.json`); the other 57 are unaffected. `differential-check` and the
-  Python it invoked (`release/observe-policy.py`, `release/check-policy.py`,
-  `release/policy_check/`) were removed outright, closing the DC-93/DC-94 Python-retirement arc RFC
-  119 §3 traces to this same "system reasoning about itself" pattern.
+- **Releases are made by one maintainer under their own signing key**, by the procedure in
+  [RFC 152](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/152-how-prikk-releases.md) — see [How prikk releases](#how-prikk-releases) below. In v0 there is
+  **no second signer, no support window** (only the latest release gets fixes) **and no stability
+  promise** for the object format, the CLI's JSON schemas or the library API. Each is absent on
+  purpose and named here so nobody discovers it after depending on it.
+- `release-signers.toml` is **empty because no multi-signer policy exists yet**, not because releases
+  are unsigned: every release tag is signed by the maintainer key and verified before it is pushed.
+  The file gains entries the day a second maintainer with a release key exists
+  ([§ What changes as the project grows](#what-changes-as-the-project-grows)).
 
 ## Compatibility Surfaces
 
@@ -188,253 +168,109 @@ A patch release must not intentionally break a documented surface. An unavoidabl
 security break uses a minor release unless a committed emergency exception is accepted by maintainer
 and architect before tagging. The exception cannot waive identity versioning.
 
-## Source Version and Release Identity
+## Version Numbers and Release Identity
 
-All workspace crates use one selected version. At release-candidate preparation, every internal
-registry dependency must use exact `=X.Y.Z` resolution for that release. Current development manifests
-still use broad `version = "0"` requirements, so that future RC gate is not yet satisfied.
+One version covers the whole workspace: the workspace `version` and the seven internal crate pins
+carry it together. **In v0 a release with any runtime change is a minor bump** (0.41.0 → 0.42.0); **a
+release that changes no runtime source** (installer, metadata, docs) **is a patch** (0.27.1, 0.31.1).
+Breaking changes happen before 1.0; each is stated in the CHANGELOG as *breaking once*, with the
+migration in one line, and is why the crates say *"API may change without notice before 1.0"*.
 
-Outside an exact release tag, the Cargo version is a source compatibility line, not release identity.
-An untagged build is a development build even if `prikk --version` equals the latest release. It must
-not be represented as a release; a shared development artifact needs its exact commit and explicit
-non-release build/source metadata.
-
-Official Git tags are unprefixed versions such as `0.18.0`, not `v0.18.0`. List them in version order:
+A release is its **signed, annotated tag**. Tags are unprefixed versions such as `0.42.0`, not
+`v0.42.0`. List them in version order:
 
 ```sh
 git tag --sort=-v:refname
 ```
 
-Plain lexical sorting can incorrectly make older `0.9.x` tags appear newer than `0.17.x` tags.
+Plain lexical sorting can incorrectly make older `0.9.x` tags appear newer than `0.17.x` tags. An
+untagged build is a development build even when `prikk --version` equals the latest release.
 
-An official release identity consists of an authorized signed annotated tag object, its peeled commit,
-and the digest of every distributed payload artifact. A valid signature from an unlisted key is not an
-authorized Prikk release signature.
+## How prikk releases
 
-## Release States
+A release is **a theme delivered**, not a date reached: the owner authorizes a cut and names its theme,
+and `main` is the next release in progress — every commit on it has passed the fourteen local gates and
+CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/152-how-prikk-releases.md)):
 
-| State | Workspace source line | Latest released | Candidate | Changelog | RFC location | Git identity |
-|---|---|---|---|---|---|---|
-| Development | last release | last release | none | no target release claim | proposed/accepted | HEAD commit metadata; no release tag at HEAD |
-| Release candidate | target | last release | target | candidate entry | accepted | reviewed RC commit; target tag absent |
-| Released | target | target | none | final entry | shipped RFCs in done | authorized signed target tag peels to finalization commit |
+1. **Readiness.** The dev team checks every `--help` synopsis and description against the binary, the
+   CHANGELOG against the commits since the last tag, docs messages against the binary, the root-export
+   diff, the package footprint and the memory ratio, and writes a smoke script covering every shipped
+   feature that runs against any `prikk` binary. Findings are fixed as their own commits. The release
+   commit is exactly three files: the version and its pins, the lockfile's member versions, and the
+   CHANGELOG heading dated the day it is prepared.
+2. **Review.** The architect reviews the sweep and the commit, runs the fourteen gates on that exact
+   commit, and runs the smoke script against a release build of it.
+3. **Push, then CI green** on every job, including the Windows and macOS suites — the only place
+   platform code runs.
+4. **Tag.** Annotated, GPG-signed with the repository's configured key, verified with `git tag -v`,
+   then pushed. The Release workflow builds four targets and publishes the assets. **A tag is never
+   moved or re-signed**; a mistake ships as the next patch release.
+5. **Verify the artifact.** Download the Linux asset, check its sha256 against the published file, read
+   its build-info (commit and tag), run its `--version`, and run the smoke script against it: what is
+   checked is the bytes users get, not the tree they came from.
+6. **Publish on the owner's word, per release.** The eight crates in dependency order from a detached
+   worktree at the tag, each confirmed on the registry index; then `cargo install prikk --version X`
+   and the smoke script once more against what crates.io serves.
+7. **Tell the consumers.** The CHANGELOG is the record; a project building on something a release
+   changed hears about it directly.
 
-Accepted RFCs remain in `accepted/` through implementation and RC review. They move to `done/` only in
-the private finalization commit selected as the tag target. That finalization state must not be pushed
-without its tag. An abandoned candidate returns every candidate field to development state and creates
-no target tag or asset.
+**What blocks a cut, without exception:** any red gate; any commit on `main` the architect has not
+reviewed; CI not green on the release tree; a `--help` text that is false on the shipped binary.
 
-The authoritative field inventory is:
+## What protects a release, and what deliberately does not exist
 
-| Field | Tracked authority |
-|---|---|
-| Workspace source line | root Cargo metadata, `Cargo.lock`, normalized packages, `prikk --version` |
-| Latest release | README and implementation status |
-| Current candidate | ROADMAP and implementation status |
-| Change state | CHANGELOG |
-| RFC lifecycle | RFC status/location, inbound links, `rfcs/README.md` |
-| Release identity/status | Git tag and append-only release evidence snapshots |
+**Protects:** signed tags on a key one known person holds; checksums and build-info published beside
+every asset; `cargo audit` and the release-policy gates on every push in CI; the smoke script run
+against the artifact, not the tree; publication by a person after the artifact is verified; and never
+unpublishing — a bad version is superseded by a patch release, and yanked only on the owner's word
+with a CHANGELOG line saying why.
 
-Unregistered duplicate release claims are audit failures.
+**Does not exist, on purpose, in v0:** a second signer; a support window; a stability promise for the
+object format, the CLI's JSON schemas or the library API. A checksum on a downloaded binary proves
+integrity of transport. Whatever you obtain, verify its content with `prikk verify`.
+
+## What changes as the project grows
+
+- **A second maintainer with a release key.** On the owner's explicit word, in a commit naming the
+  person and the fingerprint, `release-signers.toml` gains its first entries; from then on a release
+  tag must be signed by a key in that set, and the release-policy tool gains that one check.
+- **A first production user.** A support window is stated, `SECURITY.md`'s advisory path is exercised
+  once as a drill, and the memory and cost measurements release prep already takes become numbers a
+  user can rely on.
+- **1.0.** The stability promise arrives in three named layers, each on its own RFC: the object format
+  and exchange artifacts first (already versioned by schema), the CLI's JSON schemas second (already
+  `-v1` everywhere), the library API last if ever.
+- **Publication from CI.** Possible at any time and deliberately not done while one person's word is
+  the control that matters most; revisited when a second maintainer exists.
+
+## Release-Policy Checks
 
 Run `cargo run --locked -p prikk-release-policy -- check` from the repository root to execute the
-release-evidence schema/sequence fixture tables (RFC 119 track A parked the signer/challenge suites
-and track B removed the release-state suite outright, superseded by the workflow below; see Core
-Caveats). The Rust gate asserts date-time formats, rejects unknown schema assertions, and fails when
-computed validity differs from a fixture's expected outcome. It leaves the worktree unchanged.
+release-evidence schema and sequence fixture tables. It asserts date-time formats, rejects unknown
+schema assertions, fails when computed validity differs from a fixture's expected outcome, and leaves
+the worktree unchanged. It is one of the fourteen gates every candidate runs locally
+(`rfcs/EXECUTION-ORDER.md` §6 rule 9), and CI's `policy` job runs it with the other three
+release-policy gates on every push.
 
-## Required Release Workflow
-
-This workflow is dormant until the project owner explicitly activates preparation for a named release.
-Activation requires a reviewed tracked commit that atomically changes the release lane from `parked` to
-`active` and records the same exact target version in `ROADMAP.md`, `MILESTONES.md`, and
-`rfcs/IMPLEMENTATION-STATUS.md`. That commit must land before requesting a fingerprint or preparing a
-bootstrap candidate. Discussion, implementation completion, roadmap targets, review recommendations,
-and untracked messages do not activate release work. Before bootstrap begins, parking or retargeting
-uses the same reviewed three-file transition; after bootstrap begins, the governance and hold rules
-below control closure.
-
-Release conditions attach to unshipped accepted increments. If a later version first ships an increment,
-it inherits all release gates and lifecycle/status corrections assigned to that increment. Retargeting
-must update the three schedule/status authorities and affected RFC target/status text together. Ordinary
-design-first development may continue while the release lane is parked; once activated, every applicable
-step below remains binding. If the three authorities disagree, the release lane is parked; see
-`MILESTONES.md` under Baseline and release posture.
-
-1. Obtain design and implementation acceptance in isolated commits.
-2. Complete any signer bootstrap/change/recovery as an earlier isolated reviewed transaction. Confirm
-   that no release hold remains active.
-3. Prepare one RC commit: select the target version; set exact internal requirements; update lockfile,
-   candidate changelog, README, ROADMAP, MILESTONES, RFC indexes/status, mdBook, and implementation
-   status without claiming release.
-4. Run and record the full applicable RC gates, package inspection, and adversarial RC review.
-5. After RC acceptance, create one private finalization commit: remove candidate wording, set latest
-   released, clear the candidate, move shipped RFCs to `done/`, and repair every link/status field.
-6. On the clean finalization commit, rerun the complete deterministic gate suite. RC results do not
-   substitute for this run.
-7. Create an unprefixed signed annotated tag at that commit. Verify the authorized primary signer,
-   signature, tag object, and peeled commit. Generate and inspect staged archive assets once.
-8. Require a successful atomic-push capability check. Publish branch and tag only with
-   `git push --atomic <remote> <branch> <tag>`. Unsupported atomic push aborts; there is no non-atomic
-   fallback. Atomic publication of commit and tag is the release event.
-9. Publish staged immutable assets and crates from the exact clean tagged tree, then record external
-   status. GitHub Release, crates.io, and Pages are asynchronous distribution, not Git release identity.
-
-The finalization and external steps form one controlled transaction. A local failure before atomic
-push may be corrected or abandoned without publishing false state. After atomic push, the release
-exists even if distribution is pending or partial. Published identities are preserved; retry only
-missing outputs or supersede with a new version.
-
-## Release Signer Governance
-
-[`release-signers.toml`](https://github.com/prikk-vcs/prikk/blob/main/release-signers.toml) is the strict
-commit-local allowlist. The current empty array authorizes nobody and blocks official release. The file
-supports multiple full uppercase OpenPGP primary fingerprints; two active operators are encouraged
-when available but are not required at the current project scale.
-
-The signer file is not the ultimate trust root. Reviewed protected-branch governance authorizes signer
-policy changes, an allowlisted private key authenticates a tag, hosting and registry administrators
-control publication, and evidence binds those independently administered outputs. Administrator
-override is an incident, not ordinary authority.
-
-Every bootstrap, addition, replacement, or removal is isolated before RC finalization and approved by
-two distinct natural persons: one repository maintainer/administrator and one independent architect or
-security reviewer. A maintainer may approve admission of their own key in the maintainer role but
-cannot supply the independent approval. Automation supplies neither identity. Existing-signer approval
-is useful continuity evidence, never a recovery veto.
-
-The release-state audit uses one canonical governance record for the transaction, signer-set effect,
-proofs, approvals, authority blobs, public record, and hold. Independent records from different
-transactions cannot be combined to authorize a development-stage authority change.
-
-A new fingerprint requires a fresh, versioned, transaction-bound, expiry-bounded non-secret signed
-challenge. Proof applicability is derived from normalized old/new fingerprint sets:
-
-| Transaction effect | Required authority proof |
-|---|---|
-| Bootstrap, addition, replacement | `verified` for every introduced fingerprint |
-| Removal-only | `not-applicable` with reason |
-| Classification-only, unchanged authority | `not-applicable` with reason |
-
-Authority proof and later release-tag verification are distinct evidence. Strict signer grammar and
-positive/forbidden cases are defined in the [release policy data](https://github.com/prikk-vcs/prikk/tree/main/release).
-
-## Loss, Compromise, and Disputes
-
-- All-key unavailability/unusability triggers loss recovery.
-- Any suspected compromised authorized key triggers compromise containment.
-- Any material signer, authority transaction, tag, or release dispute triggers dispute containment.
-
-Each trigger immediately holds new official tags and incomplete/future distribution. Initial bootstrap
-uses the same controls. The incident opens a durable public record, obtains the two accountable
-approvals, records transaction-appropriate proof, makes an isolated governance change/record, and keeps
-publication blocked for at least 72 hours after evidence becomes public. Architect/security re-review
-must accept containment/classification and explicitly lift the hold.
-
-An active incident snapshot records a null hold end and lift. A later append-only snapshot may fill its
-classification, end, and explicit lift after the minimum interval. Filled governance fields cannot be
-rewritten, and an active hold cannot coexist with distribution `complete`.
-
-A disputed published tag is classified by the same two-person process as `valid-at-publication`,
-`never-authorized/hostile`, or still `disputed`. Only the first two can receive an explicit hold lift;
-`disputed` remains held. Emergency administrator quarantine is containment, not normative status.
-Valid releases are never retagged or replaced. A hostile identity is quarantined with forensic/public
-incident evidence, its version/name is burned, and it is never reused.
-
-This governance controls only official upstream Prikk tags, assets, and package namespaces. It does not
-restrict contributions, reviews, Apache-2.0 forks, downstream builds, or downstream releases under
-distinct identities.
-
-## Archives, Crates, and Completion
-
-The source archive is `prikk-vX.Y.Z.tar.gz`, including the `v` that Git tags omit. Tracked files appear
-at archive root. Generation uses deterministic gzip metadata and a new no-clobber staging directory.
-The checksum asset is `prikk-vX.Y.Z.tar.gz.sha256`; it contains lowercase SHA-256, two ASCII spaces, the
-archive basename, and LF. The digest covers compressed bytes. Published names and bytes are immutable.
-
-The package graph is derived from normalized manifests. Its current publication levels are:
-
-1. `prikk-error`, `prikk-hash`
-2. `prikk-crypto`, `prikk-object`
-3. `prikk-replay`
-4. `prikk-store`
-5. `prikk`
-
-Before tagging, staged packages must build against an isolated local registry without path overrides.
-External publication waits for each predecessor to become registry-visible. For every crate, staged
-`.crate` SHA-256, registry-index checksum, and fetched-byte SHA-256 must match. A mismatch is partial,
-blocks dependents, preserves the published version, and requires a superseding version.
-
-Distribution is `pending`, `partial`, `complete`, or `superseded`. `complete` requires:
-
-- archive and checksum attached under fixed names with matching recorded bytes;
-- every expected crate visible with equal staged, index, and fetched checksums;
-- the release page published rather than draft; and
-- Pages deployed at the peeled commit, or a reasoned pre-publication review ruling it inapplicable.
-
-Configured Pages failure or delay remains pending/partial and cannot be waived afterward.
-
-## Evidence Snapshots
-
-Release evidence snapshots are immutable assets named
-`prikk-X.Y.Z-release-evidence-NNN.json`. Sequence starts at `001`, remains contiguous, and links each
-predecessor by name and the SHA-256 of its exact observed published bytes. Whitespace, key order, and
-final newline are part of that immutable asset identity; re-serialized JSON is not substituted. The
-highest valid snapshot is authoritative; absence means pending. Snapshots preserve cumulative attempts,
-including failed evidence attachments, and every successor adds at least one newly sequenced attempt.
-They never change prior identities or observed tag verification. Each parsed snapshot is validated
-against the JSON value decoded from the same exact bytes whose digest participates in the chain.
-
-Tag verification is coherent in every distribution state: `not-observed` has no detail, `verified` has
-all signer/authority/verifier detail, and `failed` has authority and verifier detail with an optional
-fingerprint when extraction was ambiguous.
-
-The strict structural schema is
-[`release-evidence-v1.schema.json`](https://github.com/prikk-vcs/prikk/blob/main/release/schemas/release-evidence-v1.schema.json).
-Semantic checks additionally enforce predecessor continuity, immutable identity, normalized signer-set
-effects, two-person approvals, proof applicability, cumulative attempt history, crate checksum equality,
-and exact completion outputs.
-
-Source archives and `.crate` files are payload artifacts whose digests bind release identity. Checksum
-files and evidence snapshots are integrity/status metadata, avoiding a self-referential digest rule
-while keeping published names and bytes immutable.
-
-## Gates and Evidence Honesty
-
-Applicable deterministic release gates include:
-
-```sh
-cargo fmt --all -- --check
-cargo check --workspace --all-targets --locked
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
-cargo build --workspace --locked
-mdbook build docs
-git diff --check
-```
-
-Release review also checks clean commit/tag identity, exact internal requirements, normalized packages,
-isolated-registry builds, RFC/status/link consistency, signer governance, archive/checksum grammar,
-release-state fixtures, and evidence sequence/completion rules.
-
-A policy list is not passing evidence. Every review/release record must state commands actually
-observed, unavailable or inapplicable checks, and environment limits. Never report `cargo audit`,
-`cargo deny`, crash/reboot testing, registry publication, GitHub Release publication, or Pages
-deployment as passed unless observed for that exact release.
+Every review and release record states the commands actually observed, and what was unavailable or
+inapplicable. Nothing — `cargo audit`, registry publication, a GitHub Release, Pages — is reported as
+passed unless it was observed for that exact release.
 
 ## Claim-to-Source Anchors
 
 | Claim | Source anchor |
 |---|---|
-| Compatibility, state, signer-governance, and distribution rules | [DC-35](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-35-RELEASE-COMPATIBILITY-STATUS-CORRECTION.md) |
+| Who releases, the procedure, what protects a release, and what grows with the project | [RFC 152](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/152-how-prikk-releases.md) |
+| The earlier signer-transaction design and release controls, archived as not applicable to v0 | [DC-35](https://github.com/prikk-vcs/prikk/blob/main/rfcs/archive/DC-35-RELEASE-COMPATIBILITY-STATUS-CORRECTION.md), [DC-43](https://github.com/prikk-vcs/prikk/blob/main/rfcs/archive/DC-43-RELEASE-SECURITY-CONTROLS.md) |
 | Identity changes require new explicit version/domain authority | [DC-34](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-34-PUBLICATION-IDENTITY-AUTHORITY.md) |
 | Format-1/format-2 compatibility and refusal boundary | [DC-40](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-40-STATE-MERKLE-FORMAT-TRANSITION.md) |
 | RFC lifecycle and same-release transition | [RFC-000](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/000-rfc-lifecycle-policy.md) |
-| Strict signer/evidence policy data and fixtures | [release policy data](https://github.com/prikk-vcs/prikk/tree/main/release) |
 | Released change history | [CHANGELOG](https://github.com/prikk-vcs/prikk/blob/main/CHANGELOG.md) |
 
 ## Provenance
 
-This reference implements DC-35's policy/documentation surface. It does not authorize a signer, change
-Cargo requirements, create a release candidate, or claim that any release transaction or external
-distribution gate has passed.
+The compatibility, format and bundle sections implement RFC 114 and the DC-series format decisions.
+The release sections describe RFC 152: they replaced, on 2026-09-13, the DC-35 signer-governance,
+release-state, disputed-tag and evidence-snapshot sections written for a maintainer quorum the
+project does not have. Nothing here authorizes a signer or claims that any release passed a check it
+was not observed passing.

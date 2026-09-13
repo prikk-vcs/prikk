@@ -64,8 +64,10 @@ Downloads the prebuilt archive for your platform, verifies its checksum, and ins
 from the [release page](https://github.com/prikk-vcs/prikk/releases).
 
 **Repository mutation runs on Linux, macOS, and Windows; read-only commands build and run on every
-platform Rust targets.** A checksum proves integrity of transport, not authority of origin — no
-release passes the signer-authority audit yet.
+platform Rust targets.** Every release tag is signed by the project's one maintainer key, and the
+checksum beside each download proves integrity of transport; there is no support window or stability
+promise before 1.0 — see
+[how prikk releases](./docs/src/reference/release-compatibility.md#how-prikk-releases).
 
 The [install guide](./docs/src/guide/install.md) covers pinning a version, verifying checksums by
 hand, building from source, uninstalling, and the per-platform detail; the [platform support
