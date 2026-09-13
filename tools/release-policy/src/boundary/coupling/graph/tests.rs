@@ -120,8 +120,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // increment 2 (same day) grouped `merge_{evidence,execute}` under `merge`: two become three,
     // net +1, 129 -> 130. RFC 149 §6b (2026-09-13) briefly made `test_gates::test_support`
     // feature-reachable, which put four fixture modules into the walk (130 -> 134); path B3 returned
-    // it to `cfg(test)` once the crate cut was not made, and the count with it: 134 -> 130.
-    assert_eq!(modules.len(), 130, "modules: {modules:?}");
+    // it to `cfg(test)` once the crate cut was not made, and the count with it: 134 -> 130. RFC 151
+    // increment 2 added `branch_switch`, the switch's own upper-layer module: 130 -> 131.
+    assert_eq!(modules.len(), 131, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

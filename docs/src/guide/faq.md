@@ -63,17 +63,19 @@ form.
 
 ## How do I switch branches?
 
-**There is no `branch switch` yet.** There is a current branch: `.prikk/current-branch` names one
-local branch, `init` and `setup` set it to `heads/main`, and every command that takes `--ref`
-defaults to it. This is the CLI's own answer, shown whenever you run `prikk` with no arguments:
-
-```
-note: no `branch switch` yet; `--ref` defaults to `.prikk/current-branch`
+```sh
+prikk branch switch heads/<name>
 ```
 
-In practice: to work on another branch, name it with `--ref heads/<name>` on each command — an
-explicit `--ref` always wins over the default. `prikk branch list` shows what exists and marks the
-current branch with `*`.
+`.prikk/current-branch` names the current branch (`heads/main` in a new repository), and every
+command that takes `--ref` defaults to it. `branch switch` changes the worktree to the other branch's
+files and then moves the pointer. It refuses, and writes nothing, when the branch does not exist or is
+closed, when unsealed work belongs to another branch (`seal` first), or when the worktree has changes
+against the branch you are on (`prikk worktree-status` lists them). Untracked files are never
+touched; a file of the old branch is deleted only when it is unchanged.
+
+An explicit `--ref` still works on every command without switching. `prikk branch list` shows what
+exists and marks the current branch with `*`.
 
 ## Is my data safe in a Prikk repository right now?
 

@@ -60,8 +60,11 @@ use super::{BoundaryError, push};
 /// *interface*, since they need roughly half the store's internals. A direction is enforced by a
 /// rule, so this is one: **no production edge from a [`LOWER_LAYER`] module into one of these.**
 ///
-/// These are the twenty families RFC 149's move order would have moved.
-const UPPER_LAYER: [&str; 20] = [
+/// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
+/// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
+/// below them.
+const UPPER_LAYER: [&str; 21] = [
+    "branch_switch",
     "bundle",
     "compact",
     "doctor",

@@ -44,6 +44,7 @@ prikk rollback-draft-verify [path] [--ref REF]
 prikk branch [list] [--all] [--format json]
 prikk branch create heads/<name> [--from REF]
 prikk branch close heads/<name>
+prikk branch switch heads/<name>
 prikk tag [list] [--format json]
 prikk tag create tags/<name> --target <ref|block> [-m <message>]
 prikk bundle export --ref REF --output <file> [--force]

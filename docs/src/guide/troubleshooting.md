@@ -171,6 +171,36 @@ You are running `init`, `commit`, or `seal` on a platform other than Linux, macO
 Reading commands (`verify`, `log`, `status`, `doctor`) work anywhere Prikk builds; mutation does
 not, by design — see [Platform Support](../reference/platform-support.md).
 
+## `error: precondition not met: heads/<name> does not exist; run `prikk branch create heads/<name>` first`
+
+`prikk branch switch` only moves to a branch that already exists. Create it from the branch you are
+on with `prikk branch create heads/<name>`, then switch. The same command says `heads/<name> is
+closed` for a closed branch: `prikk branch list` shows the open ones.
+
+## `error: precondition not met: the active WAL holds unsealed work for heads/<name>; seal it …`
+
+You committed on one branch and have not sealed, and are switching to another. Unsealed work belongs
+to the branch it was committed on, so the switch refuses rather than leave it stranded. Seal it
+(`prikk seal --allow-no-audit --ref heads/<name>`, exactly as the message prints), then switch.
+
+## `error: precondition not met: the worktree is not clean against heads/<name>: <path> (modified), …`
+
+The switch replaces the worktree's tracked files with the other branch's, so it refuses while any of
+them differs from the branch you are on — it would otherwise overwrite or delete your edits. The
+message lists each path and whether it is `modified`, `missing` or an `unsupported-path`;
+`prikk worktree-status` shows the same list. Commit the changes, or restore the files, and switch
+again. Untracked files do not count and are never touched.
+
+## `error: precondition not met: refusing to switch to heads/<name>: <n> in the way of its files: …`
+
+A file the other branch has would land on a path that already holds something that is not part of
+the branch you are on — usually an untracked file with the same name. Nothing was written. Move the
+listed paths aside and switch again.
+
+**If a switch was interrupted** (a crash, a full disk), no file is torn and the current branch is still
+the old one; `commit` then refuses with `worktree materialization was interrupted`. Run the same
+`prikk branch switch heads/<name>` again: it recognises the half-switched files and completes.
+
 ## Something not listed here
 
 Run [`prikk doctor`](tutorial.md#doctor) — it is the diagnostic-first command, and its recommendation

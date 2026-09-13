@@ -53,11 +53,15 @@ pub(crate) enum QueueTarget {
 /// Print `prikk status --format json`. `queue_target`/`threshold` are `None` only when the queue
 /// is empty (RFC 140 §2: an empty queue is a valid, complete answer, not an absent field -- the
 /// document still carries `"queue": {"count": 0, ..., "patches": []}`).
+// One parameter per field group of `status-report-v1`, rendered in document order; RFC 151's
+// `current_branch` made it eight. A struct here would only restate the document's own field list.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn print_status_json(
     layout: &RepositoryLayout,
     active_wal_records: usize,
     trailing_partial_wal_bytes: usize,
     heads_main_ref_state: Option<ObjectId>,
+    current_branch: Option<&str>,
     queue_target: Option<&QueueTarget>,
     threshold: Option<(&QueueThresholdStatus, usize, usize)>,
     patches: &[QueuedPatchEntry],
@@ -81,6 +85,15 @@ pub(crate) fn print_status_json(
             escape_json_string(&id.to_string())
         )),
         None => json.push_str("  \"heads_main_ref_state\": null,\n"),
+    }
+    // RFC 151 increment 2: additive within `status-report-v1`; `null` is a pointer the default
+    // cannot resolve, never an omitted field.
+    match current_branch {
+        Some(branch) => json.push_str(&format!(
+            "  \"current_branch\": {},\n",
+            escape_json_string(branch)
+        )),
+        None => json.push_str("  \"current_branch\": null,\n"),
     }
     json.push_str("  \"queue\": {\n");
     json.push_str(&format!("    \"count\": {},\n", patches.len()));

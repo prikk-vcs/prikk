@@ -19,6 +19,8 @@
 mod author;
 mod blob_access;
 mod block_state;
+// RFC 151 increment 2: `prikk branch switch`.
+mod branch_switch;
 mod bundle;
 mod checkout;
 // RFC 131 §6d.2's first grouping under the lifted §6a prohibition: `active` and `worktree_patch`,
@@ -99,6 +101,7 @@ pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signa
 pub use block_state::{
     BlockStateOutcome, BlockStateStatus, derive_next_state_root, validate_block_v2_shape,
 };
+pub use branch_switch::{BranchSwitchReport, switch_branch};
 pub use bundle::{
     BundleExportReport, BundleImportOptions, BundleImportReport, BundleManifest,
     BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffect, BundlePreviewEffectKind,

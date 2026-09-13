@@ -28,8 +28,9 @@
 //! exercised directly against `RefStore::publish` in the test suite.
 //!
 //! **The current branch (RFC 151).** `branch list` marks the branch `.prikk/current-branch` names,
-//! and `branch create --from` defaults to it (`crate::current_branch`). There is no `switch` yet:
-//! that is RFC 151's increment 2, which DC-60 had deferred.
+//! `branch create --from` defaults to it (`crate::current_branch`), and `branch switch` moves both the
+//! worktree and the pointer to another branch (`prikk_store::switch_branch`, which DC-60 had
+//! deferred until queuing existed).
 
 use std::path::PathBuf;
 
@@ -53,7 +54,7 @@ const REF_STATE_SCHEMA_OPEN: u32 = 1;
 /// Envelope schema version for a `RefState` whose `closed` field is present (DC-61).
 const REF_STATE_SCHEMA_CLOSED: u32 = 2;
 
-/// Dispatch `prikk branch [list|create|close]`.
+/// Dispatch `prikk branch [list|create|close|switch]`.
 pub fn run_branch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut iter = args.into_iter();
     let first = iter.next();
@@ -61,6 +62,7 @@ pub fn run_branch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), C
         None | Some("list") => run_list(root, iter.collect()),
         Some("create") => run_create(root, iter.collect()),
         Some("close") => run_close(root, iter.collect()),
+        Some("switch") => run_switch(root, iter.collect()),
         // No explicit subcommand keyword: a leading flag (e.g. bare `prikk branch --all`) is an
         // argument to the implicit default, `list` — the same default `None` above already takes.
         Some(flag) if flag.starts_with('-') => {
@@ -69,7 +71,7 @@ pub fn run_branch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), C
             run_list(root, rest)
         }
         Some(other) => Err(CliError::Usage(format!(
-            "unknown branch subcommand: {other} (expected list, create, or close)"
+            "unknown branch subcommand: {other} (expected list, create, close, or switch)"
         ))),
     }
 }
@@ -270,6 +272,49 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     println!("target block: {target_object_id}");
     println!("RefState: {published_ref_state_id}");
     println!("update_seq: 1");
+    Ok(())
+}
+
+/// RFC 151 §2.3: `prikk branch switch heads/<name>`. The branch being left is the current branch as
+/// the pointer resolves it; an unresolvable pointer passes `None`, which the store answers by writing
+/// only what replaces and deletes nothing.
+fn run_switch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
+    let mut name = None;
+    for arg in args {
+        if arg.starts_with('-') {
+            return Err(unknown_argument("branch switch", &arg));
+        }
+        if name.is_some() {
+            return Err(CliError::Usage(format!(
+                "branch switch accepts exactly one branch, got extra: {arg}"
+            )));
+        }
+        name = Some(arg);
+    }
+    let Some(name) = name else {
+        return Err(CliError::Usage(
+            "branch switch requires heads/<name>".to_string(),
+        ));
+    };
+    let layout = crate::open_repository(root)?;
+    let from = crate::current_branch::displayed_current_branch(&layout);
+    let report = prikk_store::switch_branch(&layout, from.as_deref(), &name)
+        .map_err(|err| err.to_string())?;
+    if report.already_current {
+        println!("already on {}", report.to);
+        return Ok(());
+    }
+    match &report.from {
+        Some(from) => println!("switched from {from} to {}", report.to),
+        None => println!(
+            "switched to {} (the previous current branch could not be resolved, so nothing was \
+             replaced or deleted)",
+            report.to
+        ),
+    }
+    println!("files written: {}", report.written_files);
+    println!("files unchanged: {}", report.unchanged_files);
+    println!("files deleted: {}", report.deleted_files);
     Ok(())
 }
 

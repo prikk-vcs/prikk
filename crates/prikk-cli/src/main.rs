@@ -483,6 +483,12 @@ fn run_status(format_json: bool) -> std::result::Result<(), CliError> {
         Some(id) => println!("heads/main RefState: {id}"),
         None => println!("heads/main RefState: <not published>"),
     }
+    // RFC 151 increment 2: the branch every `--ref` default resolves to, beside the `heads/main`
+    // line above (which reports that one branch by name, and stays).
+    match current_branch::displayed_current_branch(&layout) {
+        Some(branch) => println!("current branch: {branch}"),
+        None => println!("current branch: <unresolved; run `prikk doctor`>"),
+    }
     // DC-66 criterion 7: report the queued patch count and the ref the queue targets, distinct from
     // `replay.records.len()` (a raw count with no ownership) and `heads/main RefState` (the last
     // *sealed* state, not what an active queue is targeting).
@@ -543,6 +549,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
             replay.records.len(),
             replay.trailing_partial_bytes,
             main_ref,
+            current_branch::displayed_current_branch(&layout).as_deref(),
             None,
             None,
             &[],
@@ -575,6 +582,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
         replay.records.len(),
         replay.trailing_partial_bytes,
         main_ref,
+        current_branch::displayed_current_branch(&layout).as_deref(),
         Some(&target),
         Some((&threshold_status, thresholds.warn, thresholds.limit)),
         &patches,

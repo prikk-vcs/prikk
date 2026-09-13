@@ -531,6 +531,25 @@ pub(crate) struct FoldedWorktreeBaseline {
     pub(crate) queued_on_other_ref: Option<String>,
 }
 
+/// [`resolve_folded_worktree_baseline`] with a text cache of its own, for a caller that has no later
+/// use for one (RFC 151's `branch_switch`) -- so that caller depends on this module alone rather than
+/// also reaching into `lifecycle_cache::replay` for the cache type.
+pub(crate) fn resolve_folded_worktree_baseline_with_own_cache(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+    active_replay: &WalReplay,
+) -> Result<FoldedWorktreeBaseline> {
+    let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
+    resolve_folded_worktree_baseline(
+        layout,
+        object_store,
+        ref_name,
+        active_replay,
+        &mut text_cache,
+    )
+}
+
 /// **The single derivation every worktree-comparing command uses** (RFC 122 §3,
 /// `replay-baseline-handoff-v1.md`): `commit` (`node_authoring.rs`) and `worktree-status`
 /// (`worktree_status.rs`) both call this rather than each reconstructing baseline state their own

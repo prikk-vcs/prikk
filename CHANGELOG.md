@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — `prikk branch switch`
+
+```text
+prikk branch switch heads/<name>
+```
+
+Moves the worktree to another branch's files and then points `.prikk/current-branch` at it. It
+refuses, writing nothing, when the branch does not exist or is closed, when the active WAL holds
+unsealed work for a different branch, when the worktree has changes against the branch being left,
+or when an untracked file sits where the other branch has a file. Untracked files are never touched,
+and a file of the old branch is deleted only when its bytes are still exactly the old branch's.
+
+An interrupted switch leaves no torn file and the pointer on the old branch; `commit` refuses until
+the worktree is re-verified, and running the same `branch switch` again completes it.
+
+`status` now prints `current branch:` and carries `"current_branch"` in `status-report-v1`. The
+`branch --help` note is replaced by the synopsis.
+
 ### Added — the current branch: `--ref` defaults to it
 
 `.prikk/current-branch` holds one local branch ref name. `init` and `setup` write `heads/main`, and

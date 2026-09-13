@@ -351,11 +351,11 @@ fn branch_create_fails_closed_on_surviving_log_with_no_live_pointer() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-// DC-61 supersedes this test's original name and its "no `branch delete`" assertion: deletion
-// became closure (`branch close`), which does exist now. Renamed and updated rather than left
-// asserting a claim DC-61 made false.
+// DC-61 superseded this test's original name and its "no `branch delete`" assertion: deletion
+// became closure (`branch close`). RFC 151 increment 2 did the same to "no `branch switch`": the
+// switch exists, so the help must name it rather than deny it.
 #[test]
-fn branch_help_states_no_switch_support() {
+fn branch_help_names_close_and_switch() {
     let out = Command::new(env!("CARGO_BIN_EXE_prikk"))
         .arg("--help")
         .output()
@@ -368,8 +368,8 @@ fn branch_help_states_no_switch_support() {
     );
     let lower = stdout.to_lowercase();
     assert!(
-        lower.contains("no `branch switch`"),
-        "help must state switching is unsupported: {stdout}"
+        lower.contains("prikk branch switch heads/<name>") && !lower.contains("no `branch switch`"),
+        "help must name branch switch (RFC 151): {stdout}"
     );
     assert!(
         lower.contains("branch close"),
