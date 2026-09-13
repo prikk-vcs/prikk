@@ -1,6 +1,6 @@
 # RFC 137 — The project's entrance: a landing page, and how it stays true
 
-**Status.** **ACCEPTED by the project owner 2026-09-04**, the same day it was opened at their
+**Status.** **CLOSED 2026-09-13 on the owner's word** ("Close it"): increments 1–5 shipped, the last on 2026-09-08 when `prikk.org` went live; the story-section artwork (§10.1b) remains an optional owner asset, not an increment. Earlier: **ACCEPTED by the project owner 2026-09-04**, the same day it was opened at their
 instruction, after a design discussion that settled the whole option space. **This RFC records decisions
 already made rather than re-opening them** (§3), and contributes the two things the discussion did
 not settle: **how a landing page stays true** (§4) and **what it may say that the other two entrance

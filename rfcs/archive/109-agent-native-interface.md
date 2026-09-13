@@ -1,6 +1,6 @@
 # RFC 109 — Agent-native interface
 
-**Status.** **Proposed** — concept under discussion. Authored by the project owner 2026-08-18; recorded
+**Status.** **ARCHIVED 2026-09-13 on the owner's authorization** — a concept record with no requirement behind it: no consumer has asked for an agent-native interface; the machine-readable surface grows by consumer ask (RFCs 140–150). Returns the day a requirement names it. Earlier: **Proposed** — concept under discussion. Authored by the project owner 2026-08-18; recorded
 here by the architect with analysis. **No design exists and implementation must not start from this
 record.**
 

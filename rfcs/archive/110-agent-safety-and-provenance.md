@@ -1,6 +1,6 @@
 # RFC 110 — Agent safety and code provenance
 
-**Status.** **Proposed** — rough concept, direction not yet established. Authored by the project owner
+**Status.** **ARCHIVED 2026-09-13 on the owner's authorization** — a concept record with no requirement behind it and §2–§5's objections standing. Returns the day a requirement names it. Earlier: **Proposed** — rough concept, direction not yet established. Authored by the project owner
 2026-08-18, who states the direction is unproven. Recorded with the architect's assessment of whether it
 is right. **No design exists and implementation must not start from this record.**
 

@@ -1,6 +1,6 @@
 # RFC (proposed) - DC-43 Release Security and Distribution Controls
 
-**Status.** Proposed; security/architect design review required. **Re-reviewed 2026-09-13:** the signer bootstrap (two natural persons, DC-35) still has not happened and is the owner's; but the design goals split — `SECURITY.md` exists and `cargo audit` gates every push already; **SHA-pinned actions, an SBOM per release asset, and a written dependency/advisory policy need no authority and can start as small tooling**; key custody, rotation and quorum stay behind the bootstrap. Architect's recommendation: authorize the no-authority part.
+**Status.** Proposed; security/architect design review required. **Re-reviewed 2026-09-13:** the signer bootstrap (two natural persons, DC-35) still has not happened and is the owner's; but the design goals split — `SECURITY.md` exists and `cargo audit` gates every push already; **SHA-pinned actions, an SBOM per release asset, and a written dependency/advisory policy need no authority and can start as small tooling**; key custody, rotation and quorum stay behind the bootstrap. **The owner refused the no-authority part 2026-09-13** and ruled that DC-35's rules are to be revised for the project's reality — RFC 152. DC-43 is held here until RFC 152 is accepted, then archived as superseded.
 
 **Status update, 2026-08-27 (evidenced, not a ruling — the schedule position below is stale; the
 public-preview prerequisite is unaffected and stands as originally written).** DC-42, the cited
