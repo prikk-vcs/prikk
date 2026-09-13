@@ -397,3 +397,14 @@ block** — the `--ref tags/<name>` row of their RFC 144 §4t table stops failin
   §2b option 2 cheap and it would stop being true.
 - **`CreateSymlink` authoring comes into scope.** Case A's whole premise is that the refusal is
   permanent.
+
+## 3f. Case C — unrepresentable names (2026-09-13, from stikk's letter 010)
+
+Measured by stikk on 0.41.0 and 0.28.0 and reproduced here: an entry whose name cannot be a repository
+path (`back\slash.txt`, a non-UTF-8 name) is `kind: unsupported-path` with `authoring: "authored"` and
+`refusal: null`, while `commit` refuses it with `invalid name: …`. §2e(b) kept the kind's meaning
+("unrepresentable name") correctly and left the verdict wrong — the `Err` arm holds the exact error
+`commit` prints and discards it. **RULED:** the entry carries that error as its `refusal` and is
+`refused`; and its `path`, absolute today, becomes the OS name relative to the worktree root, rendered
+lossily, with `worktree-status-report-v1`'s description saying so for this one kind (stikk's second
+question). Handoff: `147-refusal-visibility/unrepresentable-names-handoff-v1.md`.
