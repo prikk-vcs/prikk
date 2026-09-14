@@ -2,10 +2,11 @@
 
 use std::path::Path;
 
+use crate::RepositoryLayout;
 use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
-use crate::test_gates::test_support::unique_temp_dir;
-use crate::worktree::materialize_manifest_entries;
-use crate::{RepoPath, RepositoryLayout, SnapshotEntry, SnapshotManifest};
+use crate::patch_replay::ReplayManifest;
+use crate::test_gates::test_support::{text_replay_manifest, unique_temp_dir};
+use crate::worktree::materialize_replay_manifest_entries;
 
 const COMPONENT_POINTS: [TestFailPoint; 2] = [
     TestFailPoint::DirectoryCreate,
@@ -114,19 +115,14 @@ fn worktree_directory_component_matrix() -> prikk_error::Result<()> {
         let nested = root.join("nested");
         let manifest = manifest("nested/file.txt")?;
         fail_once_for_test(point);
-        assert!(materialize_manifest_entries(&layout, &manifest).is_err());
+        assert!(materialize_replay_manifest_entries(&layout, &manifest).is_err());
         assert_retained_component(point, &nested);
-        assert!(materialize_manifest_entries(&layout, &manifest).is_ok());
+        assert!(materialize_replay_manifest_entries(&layout, &manifest).is_ok());
         let _ = std::fs::remove_dir_all(root);
     }
     Ok(())
 }
 
-fn manifest(path: &str) -> prikk_error::Result<SnapshotManifest> {
-    Ok(SnapshotManifest {
-        files: vec![SnapshotEntry {
-            path: RepoPath::parse(path)?,
-            bytes: b"content".to_vec(),
-        }],
-    })
+fn manifest(path: &str) -> prikk_error::Result<ReplayManifest> {
+    text_replay_manifest(path, b"content")
 }

@@ -34,14 +34,14 @@ use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::path::RepoPath;
 use crate::refs::RefStore;
-use crate::snapshot::SnapshotManifest;
+use crate::snapshot::load_block_snapshot;
 use crate::validate_local_branch_ref;
 use crate::wal::WalReplay;
 
 use apply::{apply_decoded_operation, apply_rename_batch};
 use decode::{DecodedOperationKind, decode_patch_operations};
 use read::{
-    files_to_manifest, files_to_replay_manifest, load_snapshot_files, read_block, read_patch,
+    files_to_replay_manifest, read_block, read_patch, replay_state_from_snapshot,
     single_parent_chain,
 };
 
@@ -223,11 +223,9 @@ pub fn prepare_patch_plan_content_report(
 }
 
 /// One file entry in a replay-derived manifest, carrying the mode bits `CreateFile`/`ChangePerm`
-/// recorded (DC-73). Deliberately **not** `crate::snapshot::SnapshotEntry`: that type is also what
-/// `SnapshotManifest::decode` reads from a stored snapshot Blob's wire bytes, which have no mode
-/// field of their own — adding one to the shared type would force a default on the decode side for
-/// a value the stored bytes never contained. This type exists only in memory, built by replaying
-/// operations, and never crosses the object-format boundary.
+/// recorded (DC-73) and the node kind replay tracked. It exists only in memory, built by replaying
+/// operations or by seeding from a snapshot's state entries (RFC 136 §10.1a), and never crosses the
+/// object-format boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct ReplayManifestEntry {
@@ -237,14 +235,13 @@ pub(crate) struct ReplayManifestEntry {
     pub(crate) bytes: Vec<u8>,
     /// Mode bits, as recorded by the most recent `CreateFile`/`ChangePerm` for this node.
     pub(crate) mode: u32,
-    /// This entry's node kind, when the replayed window's own live-node tracking has one --
-    /// `None` for a path seeded by a snapshot boundary and never subsequently touched by a
-    /// node-addressed operation (`replay_supported_patch_chain` clears `live_nodes` at each
-    /// snapshot without repopulating it from the loaded snapshot, and `SnapshotEntry` itself
-    /// carries no kind field to fall back on -- RFC 143 §5's own content report treats this as a
-    /// third state, neither text nor binary, rather than guessing). Never `Symlink`: a symlink
-    /// node never enters `files`/`live_nodes` at all, since both `DeleteNode(symlink)` and
-    /// `CreateSymlink` are refused by `ensure_apply_supported` before application.
+    /// This entry's node kind. **Always `Some`** since RFC 136 §10.1a: a snapshot seeds live nodes
+    /// with their real kinds, so every path in a replay manifest has one, and a path without one is
+    /// refused as `Integrity` (`read::files_to_replay_manifest`). The field stays an `Option` because
+    /// RFC 143's `patch-plan-content-v1` report keeps its `opaque` state; nothing produces it now.
+    /// Never `Symlink`: a symlink node never enters `files`/`live_nodes` at all, since both
+    /// `DeleteNode(symlink)` and `CreateSymlink` are refused by `ensure_apply_supported` before
+    /// application, and a snapshot holding one is refused by `snapshot::load_block_snapshot`.
     pub(crate) kind: Option<NodeKind>,
     /// The blob id backing this entry's *current* content -- `Some` only when `kind` is
     /// `Some(NodeKind::BinaryFile)` (see [`super::apply::ReplayLiveNode`]'s own doc for why a
@@ -252,8 +249,7 @@ pub(crate) struct ReplayManifestEntry {
     pub(crate) blob_id: Option<ObjectId>,
 }
 
-/// Replay-derived manifest, sorted by path. See [`ReplayManifestEntry`] for why this is not
-/// `crate::snapshot::SnapshotManifest`.
+/// Replay-derived manifest, sorted by path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct ReplayManifest {
@@ -292,10 +288,10 @@ pub(crate) struct PatchReplaySnapshot {
     pub(crate) manifest: ReplayManifest,
     /// Files explicitly removed by replayed patches and still absent in the final manifest.
     pub(crate) deleted_files: Vec<PatchReplayDeletedFile>,
-    /// Latest snapshot baseline used as the rollback-preview target for the supported replay
-    /// window. Mode-unaware like the wire-decoded snapshot format it is seeded from — the
-    /// rollback-preview consumer compares paths and bytes only.
-    pub(crate) baseline_manifest: SnapshotManifest,
+    /// The latest snapshot's state in the replayed window -- the rollback-preview target. Empty when
+    /// no block in the window carries a snapshot. Mode- and kind-aware like any replay manifest;
+    /// rollback preview compares its paths and bytes.
+    pub(crate) baseline_manifest: ReplayManifest,
 }
 
 /// A file explicitly deleted while replaying the supported patch subset.
@@ -379,14 +375,18 @@ pub(crate) fn replay_supported_patch_chain(
     let mut applied_operation_count = 0_usize;
     let mut applied_operation_kinds = std::collections::BTreeSet::new();
     let mut baseline_files = BTreeMap::new();
+    let mut baseline_live_nodes = BTreeMap::new();
 
     for block_id in &block_ids {
         let block = read_block(&object_store, *block_id)?;
-        if let Some(snapshot_blob_ref) = block.snapshot_blob_ref {
-            files = load_snapshot_files(&object_store, snapshot_blob_ref)?;
-            live_nodes.clear();
+        if let Some(snapshot) = load_block_snapshot(&object_store, *block_id, &block)? {
+            // RFC 136 §10.1a: a snapshot is its block's own state, after the block's patches --
+            // applying them again would create what already exists.
+            (files, live_nodes) = replay_state_from_snapshot(snapshot);
             baseline_files = files.clone();
+            baseline_live_nodes = live_nodes.clone();
             deleted_files.clear();
+            continue;
         }
         for patch_id in block.patch_ids {
             let patch = read_patch(&object_store, patch_id)?;
@@ -414,7 +414,7 @@ pub(crate) fn replay_supported_patch_chain(
         applied_operation_kinds,
         manifest: files_to_replay_manifest(files, &live_nodes)?,
         deleted_files: deleted_files.into_values().collect(),
-        baseline_manifest: files_to_manifest(baseline_files)?,
+        baseline_manifest: files_to_replay_manifest(baseline_files, &baseline_live_nodes)?,
     })
 }
 

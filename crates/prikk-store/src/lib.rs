@@ -213,7 +213,7 @@ pub use show::{
     ShowPathResolution, show,
 };
 pub use signature_diagnostics::{SignatureEnvelopeIssue, SignatureEnvelopeSource};
-pub use snapshot::{SnapshotEntry, SnapshotManifest};
+pub use snapshot::SnapshotManifest;
 pub use state_root::{
     StateRootContent, StateRootEntry, compute_state_root, state_leaf_hash, state_leaf_preimage,
 };

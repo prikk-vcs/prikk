@@ -1,12 +1,11 @@
 //! Read helpers for supported inverse planning.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockKind, BlockPayload, ObjectEnvelope, ObjectId, ObjectType};
 
 use crate::object_store::ObjectReader;
-use crate::snapshot::SnapshotManifest;
 
 /// Return the single-parent chain from oldest to newest.
 pub(super) fn single_parent_chain(
@@ -74,25 +73,6 @@ pub(super) fn read_patch(
     object_store
         .read_typed(patch_id, ObjectType::Patch)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing Patch {patch_id}")))
-}
-
-/// Load a snapshot manifest into a path-to-bytes map.
-pub(super) fn load_snapshot_files(
-    object_store: &impl ObjectReader,
-    snapshot_blob_ref: ObjectId,
-) -> Result<BTreeMap<String, Vec<u8>>> {
-    let envelope = object_store
-        .read_typed(snapshot_blob_ref, ObjectType::Blob)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!("missing snapshot Blob {snapshot_blob_ref}"))
-        })?;
-    let snapshot_content = crate::blob_access::decode_snapshot_blob(&envelope.canonical_payload)?;
-    let manifest = SnapshotManifest::decode(&snapshot_content)?;
-    let mut files = BTreeMap::new();
-    for entry in manifest.files {
-        files.insert(entry.path.as_str().to_string(), entry.bytes);
-    }
-    Ok(files)
 }
 
 /// Read a file-content Blob, returning the derived node kind and bytes. Used to

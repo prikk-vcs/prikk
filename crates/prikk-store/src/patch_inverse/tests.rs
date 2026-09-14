@@ -8,13 +8,13 @@ use prikk_object::{
 
 use crate::{
     FileObjectStore, ObjectWriter, RefPublication, RefStore, RepoPath, RepositoryLayout,
-    SnapshotEntry, SnapshotManifest, prepare_patch_inverse_plan,
+    prepare_patch_inverse_plan,
 };
 
 use crate::test_gates::test_support::{
-    dummy_signature, maintainer_signature, publish_text_create_then_edit_block,
-    publish_text_edit_then_rename_path_block, signed_ref_state_envelope,
-    signed_ref_update_envelope, unique_temp_dir,
+    dummy_signature, maintainer_signature, publish_snapshot_then_patch_block,
+    publish_text_create_then_edit_block, publish_text_edit_then_rename_path_block,
+    signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
 };
 
 #[test]
@@ -54,74 +54,6 @@ fn inverse_plan_reverses_supported_file_operations() {
         }
     }
     let _ = std::fs::remove_dir_all(root);
-}
-
-fn publish_snapshot_then_patch_block(layout: &RepositoryLayout) -> prikk_error::Result<()> {
-    let mut object_store = FileObjectStore::new(layout.clone());
-    let old_blob = write_blob(&mut object_store, b"old\n")?;
-    let extra_blob = write_blob(&mut object_store, b"extra\n")?;
-
-    let snapshot_manifest = SnapshotManifest {
-        files: vec![
-            SnapshotEntry {
-                path: RepoPath::parse("README.md")?,
-                bytes: b"hello\n".to_vec(),
-            },
-            SnapshotEntry {
-                path: RepoPath::parse("old.txt")?,
-                bytes: b"old\n".to_vec(),
-            },
-        ],
-    };
-    let snapshot_blob = BlobPayload::new(BlobKind::Snapshot, snapshot_manifest.encode()?);
-    let snapshot_bytes = snapshot_blob.to_canonical_bytes()?;
-    let mut snapshot_envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, snapshot_bytes);
-    snapshot_envelope.add_signature(maintainer_signature())?;
-    let snapshot_blob_id = object_store.write_object(&snapshot_envelope)?;
-
-    let root_block = signed_block(
-        BlockKind::Root,
-        Vec::new(),
-        Vec::new(),
-        Some(snapshot_blob_id),
-    );
-    let root_block_id = object_store.write_object(&root_block)?;
-
-    let patch_payload = PatchPayload {
-        operations: vec![
-            Operation {
-                op_seq: 1,
-                op_id: None,
-                preconditions: Vec::new(),
-                kind: OperationKind::DeleteNode(DeleteNode {
-                    path: "old.txt".to_string(),
-                    node_id: NodeId::from_bytes([0x71; 32]),
-                    old_node_kind: NodeKind::TextFile,
-                    preimage: DeleteNodePreimage::File {
-                        old_blob_id: old_blob,
-                        old_mode: 0o100644,
-                    },
-                }),
-            },
-            Operation {
-                op_seq: 2,
-                op_id: None,
-                preconditions: Vec::new(),
-                kind: OperationKind::CreateFile(CreateFile {
-                    path: "extra.txt".to_string(),
-                    node_id: NodeId::from_bytes([0x72; 32]),
-                    blob_id: extra_blob,
-                    mode: 0o100644,
-                }),
-            },
-        ],
-        intent: None,
-        preconditions: Vec::new(),
-        purpose: PatchPurpose::Normal,
-        message: None,
-    };
-    let patch_id = write_patch(&mut object_store, patch_payload)?;
-    publish_root_then_patch_ref(layout, root_block_id, patch_id)
 }
 
 #[test]
@@ -528,23 +460,45 @@ fn publish_binary_file_delete_block(layout: &RepositoryLayout) -> prikk_error::R
     bin_envelope.add_signature(maintainer_signature())?;
     let bin_blob_id = object_store.write_object(&bin_envelope)?;
 
-    let snapshot_manifest = SnapshotManifest {
-        files: vec![SnapshotEntry {
-            path: RepoPath::parse("data.bin")?,
-            bytes: bin_bytes,
+    // RFC 136 §10.1a: the root block creates data.bin and its snapshot is that post-patch state, so
+    // inversion starts after the root block and inverts only the delete.
+    let create_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "data.bin".to_string(),
+                node_id: NodeId::from_bytes([0x81; 32]),
+                blob_id: bin_blob_id,
+                mode: 0o100644,
+            }),
         }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
     };
-    let snapshot_blob = BlobPayload::new(BlobKind::Snapshot, snapshot_manifest.encode()?);
-    let mut snapshot_envelope =
-        ObjectEnvelope::unsigned(ObjectType::Blob, 1, snapshot_blob.to_canonical_bytes()?);
-    snapshot_envelope.add_signature(maintainer_signature())?;
-    let snapshot_blob_id = object_store.write_object(&snapshot_envelope)?;
+    let create_patch_id = write_patch(&mut object_store, create_payload)?;
+    let root_state = crate::derive_next_state_root(&object_store, None, &[create_patch_id])?;
+    let snapshot_blob_id = crate::test_gates::test_support::write_snapshot(
+        &mut object_store,
+        vec![crate::StateRootEntry {
+            path: RepoPath::parse("data.bin")?,
+            node_id: NodeId::from_bytes([0x81; 32]),
+            kind: NodeKind::BinaryFile,
+            mode: 0o100644,
+            content: crate::StateRootContent::Blob(bin_blob_id),
+        }],
+        root_state,
+    )?;
 
-    let root_block = signed_block(
+    let root_block = crate::test_gates::test_support::signed_block_with_state_root(
         BlockKind::Root,
         Vec::new(),
-        Vec::new(),
+        vec![create_patch_id],
         Some(snapshot_blob_id),
+        root_state,
     );
     let root_block_id = object_store.write_object(&root_block)?;
 

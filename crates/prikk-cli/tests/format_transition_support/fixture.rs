@@ -48,15 +48,23 @@ pub(crate) fn build_legacy_fixture(
         &author,
     )?;
 
+    // RFC 136 §10.1a: the left block's own state, after its patch. This repository is refused at
+    // open, so nothing reads the manifest; it stays so the retired-format fixture keeps a snapshot.
     let snapshot = SnapshotManifest {
-        files: vec![
-            SnapshotEntry {
+        entries: vec![
+            StateRootEntry {
                 path: prikk_store::RepoPath::parse("README.md")?,
-                bytes: b"hello\n".to_vec(),
+                node_id: NodeId::from_bytes([0x70; 32]),
+                kind: NodeKind::TextFile,
+                mode: 0o100644,
+                content: StateRootContent::Blob(readme_blob),
             },
-            SnapshotEntry {
-                path: prikk_store::RepoPath::parse("old.txt")?,
-                bytes: b"old\n".to_vec(),
+            StateRootEntry {
+                path: prikk_store::RepoPath::parse("extra.txt")?,
+                node_id: NodeId::from_bytes([0x72; 32]),
+                kind: NodeKind::TextFile,
+                mode: 0o100644,
+                content: StateRootContent::Blob(extra_blob),
             },
         ],
     };

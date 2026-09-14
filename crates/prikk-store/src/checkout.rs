@@ -10,7 +10,7 @@ use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayloa
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::refs::{RefStore, resolve_ref_tip_block};
-use crate::snapshot::SnapshotManifest;
+use crate::snapshot::{SnapshotFile, load_block_snapshot};
 
 /// Default ref used by checkout planning.
 pub const DEFAULT_CHECKOUT_REF: &str = "heads/main";
@@ -90,13 +90,24 @@ pub fn prepare_snapshot_checkout_plan(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<SnapshotCheckoutPlan> {
+    Ok(load_snapshot_checkout(layout, ref_name)?.0)
+}
+
+/// [`prepare_snapshot_checkout_plan`] together with the loaded files, for the materializer. The
+/// snapshot is the target block's own state (RFC 136 §10.1a), loaded and checked by
+/// `snapshot::load_block_snapshot` -- the same loader every replay reader uses.
+pub(crate) fn load_snapshot_checkout(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(SnapshotCheckoutPlan, Vec<SnapshotFile>)> {
     let checkout = prepare_checkout_plan(layout, ref_name)?;
     // RFC 132 per-site: a block with **no** snapshot reference is by design, not damage. RFC 136 §7
     // ruled that no block-creating path writes a snapshot yet, so every block in every repository is
     // in this state today -- reporting the normal case as `integrity error:` told a user their
     // repository was broken when nothing was wrong. `Precondition`, and the message now carries the
     // route that works instead of only the fact.
-    let Some(snapshot_blob_id) = checkout.snapshot_blob_ref else {
+    let (Some(snapshot_blob_id), Some(block_id)) = (checkout.snapshot_blob_ref, checkout.block_id)
+    else {
         return Err(PrikkError::Precondition(format!(
             "checkout target for {ref_name} does not contain a snapshot blob; no block-creating \
              path writes one yet, so use `prikk checkout --patch-plan --ref {ref_name}`, which \
@@ -104,29 +115,24 @@ pub fn prepare_snapshot_checkout_plan(
         )));
     };
     let object_store = ObjectReadSnapshot::open(layout)?;
-    // **The adjacent arm stays `Integrity`, deliberately.** A block that *references* a snapshot
-    // Blob which is not there is a different fact entirely: something wrote the reference and the
-    // Blob is gone. That is damage, and the two must not be reclassified together just because they
-    // sit one line apart.
-    let Some(envelope) = object_store.read_typed(snapshot_blob_id, ObjectType::Blob)? else {
-        return Err(PrikkError::Integrity(format!(
-            "snapshot Blob {snapshot_blob_id} is missing"
-        )));
-    };
-    let snapshot_content = crate::blob_access::decode_snapshot_blob(&envelope.canonical_payload)?;
-    let manifest = SnapshotManifest::decode(&snapshot_content)?;
-    let paths = manifest
-        .files
-        .iter()
-        .map(|entry| entry.path.as_str().to_string())
-        .collect();
-    Ok(SnapshotCheckoutPlan {
+    // **The loader's refusals stay `Integrity`, deliberately.** A block that *references* a
+    // snapshot Blob which is not there, or one that does not recompute to the block's state root, is
+    // a different fact from a block with no snapshot at all: something wrote the reference and it
+    // does not hold. That is damage, and the two must not be reclassified together.
+    let block = load_block(&object_store, block_id)?;
+    let files = load_block_snapshot(&object_store, block_id, &block)?.ok_or_else(|| {
+        PrikkError::Integrity(format!(
+            "checkout target Block {block_id} no longer references snapshot Blob {snapshot_blob_id}"
+        ))
+    })?;
+    let plan = SnapshotCheckoutPlan {
         checkout,
         snapshot_blob_id,
-        file_count: manifest.files.len(),
-        total_content_bytes: manifest.total_content_bytes(),
-        paths,
-    })
+        file_count: files.len(),
+        total_content_bytes: files.iter().map(|file| file.bytes.len() as u64).sum(),
+        paths: files.iter().map(|file| file.path.clone()).collect(),
+    };
+    Ok((plan, files))
 }
 
 /// Prepare a checkout plan for a ref without modifying the worktree.

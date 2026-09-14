@@ -7,18 +7,16 @@
 use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::ObjectType;
 
-use crate::checkout::prepare_snapshot_checkout_plan;
+use crate::checkout::load_snapshot_checkout;
 use crate::foundation::fsutil::{
     ensure_directory_required, read_file_if_exists, set_regular_file_mode_required,
     stat_file_state_if_exists, sync_directory_required, write_worktree_file_atomically,
 };
 use crate::foundation::layout::RepositoryLayout;
-use crate::object_store::{FileObjectStore, ObjectReader};
+use crate::patch_replay::read::{files_to_replay_manifest, replay_state_from_snapshot};
 use crate::patch_replay::{ReplayManifest, ReplayManifestEntry};
 use crate::path::join_repo_path_to_root;
-use crate::snapshot::{SnapshotEntry, SnapshotManifest};
 use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty};
 
 /// Result of an opt-in snapshot worktree materialization.
@@ -52,25 +50,25 @@ pub fn materialize_snapshot_checkout(
     ref_name: &str,
 ) -> Result<SnapshotMaterializationReport> {
     layout.require_current_format()?;
-    let plan = prepare_snapshot_checkout_plan(layout, ref_name)?;
-    let manifest = load_snapshot_manifest(layout, plan.snapshot_blob_id)?;
+    // RFC 136 §10.1a: the snapshot is the target block's own state. Each file is written from its
+    // Blob with the mode its state entry records, through the same mode-aware materializer patch
+    // checkout uses.
+    let (plan, files) = load_snapshot_checkout(layout, ref_name)?;
+    let (files, live_nodes) = replay_state_from_snapshot(files);
+    let manifest = files_to_replay_manifest(files, &live_nodes)?;
     // RFC 102 Stage 1: dirty before the first possible worktree write, cleared only after every
     // write in this call has durably completed -- see `worktree_marker`'s own doc for why the
     // ordering, not just the primitive, is what closes T12.
     mark_worktree_dirty(layout)?;
-    let write_report = materialize_manifest_entries(layout, &manifest)?;
+    let write_report = materialize_replay_manifest_entries(layout, &manifest)?;
     clear_worktree_dirty(layout)?;
     Ok(SnapshotMaterializationReport {
         ref_name: ref_name.to_string(),
-        planned_files: manifest.files.len(),
+        planned_files: plan.file_count,
         written_files: write_report.written_files,
         unchanged_files: write_report.unchanged_files,
-        total_content_bytes: manifest.total_content_bytes(),
-        paths: manifest
-            .files
-            .iter()
-            .map(|entry| entry.path.as_str().to_string())
-            .collect(),
+        total_content_bytes: plan.total_content_bytes,
+        paths: plan.paths,
     })
 }
 
@@ -83,29 +81,8 @@ pub(crate) struct ManifestMaterializationReport {
     pub(crate) unchanged_files: usize,
 }
 
-/// Materialize a validated manifest without deleting extra files.
-pub(crate) fn materialize_manifest_entries(
-    layout: &RepositoryLayout,
-    manifest: &SnapshotManifest,
-) -> Result<ManifestMaterializationReport> {
-    let mut written_files = 0_usize;
-    let mut unchanged_files = 0_usize;
-    for entry in &manifest.files {
-        match materialize_entry(layout, entry)? {
-            EntryWriteOutcome::Written => written_files += 1,
-            EntryWriteOutcome::Unchanged => unchanged_files += 1,
-        }
-    }
-    Ok(ManifestMaterializationReport {
-        written_files,
-        unchanged_files,
-    })
-}
-
-/// Materialize a mode-aware replay manifest without deleting extra files (DC-73). Otherwise
-/// identical to [`materialize_manifest_entries`] — kept as a separate function rather than a
-/// generic one because the two manifest types are deliberately not unified (see
-/// `ReplayManifestEntry`'s doc comment).
+/// Materialize a mode-aware replay manifest without deleting extra files (DC-73) -- the one
+/// materializer for patch checkout and, since RFC 136 §10.1a, snapshot checkout.
 pub(crate) fn materialize_replay_manifest_entries(
     layout: &RepositoryLayout,
     manifest: &ReplayManifest,
@@ -147,8 +124,12 @@ fn materialize_replay_entry(
         let current_mode = stat_file_state_if_exists(layout.worktree_mutation_root(), relative)?
             .and_then(|stat| stat.mode)
             .map(|mode| mode & 0o7777);
+        // Re-sync the containing directory on both arms: identical bytes here may be an earlier
+        // attempt's write whose directory sync failed, and that attempt also never set the mode --
+        // so the mode-fixing arm is exactly where an unrepaired rename would otherwise stay
+        // undurable (found moving `sync_matrix`'s retry test onto this materializer, RFC 136 1a).
+        sync_directory_required(layout.worktree_mutation_root(), relative)?;
         if current_mode == Some(entry.mode & 0o7777) {
-            sync_directory_required(layout.worktree_mutation_root(), relative)?;
             return Ok(EntryWriteOutcome::Unchanged);
         }
         set_regular_file_mode_required(layout.worktree_mutation_root(), relative, entry.mode)?;
@@ -159,53 +140,10 @@ fn materialize_replay_entry(
     Ok(EntryWriteOutcome::Written)
 }
 
-fn load_snapshot_manifest(
-    layout: &RepositoryLayout,
-    snapshot_blob_id: prikk_object::ObjectId,
-) -> Result<SnapshotManifest> {
-    let object_store = FileObjectStore::new(layout.clone());
-    let Some(envelope) = object_store.read_object(snapshot_blob_id)? else {
-        return Err(PrikkError::Integrity(format!(
-            "snapshot Blob {snapshot_blob_id} is missing"
-        )));
-    };
-    if envelope.object_type != ObjectType::Blob {
-        return Err(PrikkError::ObjectTypeMismatch {
-            expected: ObjectType::Blob.to_string(),
-            actual: envelope.object_type.to_string(),
-        });
-    }
-    let snapshot_content = crate::blob_access::decode_snapshot_blob(&envelope.canonical_payload)?;
-    SnapshotManifest::decode(&snapshot_content)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EntryWriteOutcome {
     Written,
     Unchanged,
-}
-
-fn materialize_entry(
-    layout: &RepositoryLayout,
-    entry: &SnapshotEntry,
-) -> Result<EntryWriteOutcome> {
-    let root = layout.root();
-    let target = join_repo_path_to_root(&entry.path, root);
-    ensure_target_is_inside_root(root, &target)?;
-    ensure_parent_directory(layout, entry.path.as_str())?;
-    let relative = Path::new(entry.path.as_str());
-    if let Some(current) = read_file_if_exists(layout.worktree_mutation_root(), relative)? {
-        if current == entry.bytes {
-            sync_directory_required(layout.worktree_mutation_root(), relative)?;
-            return Ok(EntryWriteOutcome::Unchanged);
-        }
-        return Err(PrikkError::Integrity(format!(
-            "refusing to overwrite existing file with different content: {}",
-            target.display()
-        )));
-    }
-    write_worktree_file_atomically(layout.worktree_mutation_root(), relative, &entry.bytes)?;
-    Ok(EntryWriteOutcome::Written)
 }
 
 fn ensure_parent_directory(layout: &RepositoryLayout, repo_path: &str) -> Result<()> {

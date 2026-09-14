@@ -301,7 +301,10 @@ pub(crate) use rename_history::{
 };
 
 mod snapshot_history;
-pub(crate) use snapshot_history::publish_snapshot_then_patch_block;
+pub(crate) use snapshot_history::{
+    SnapshotAt, publish_snapshot_history, publish_snapshot_then_patch_block, text_entry,
+    write_snapshot, write_snapshot_content,
+};
 
 /// Publish one block creating a text node and a second editing it, and return the sealed ids.
 pub(crate) fn publish_text_create_then_edit_block(
@@ -788,6 +791,24 @@ pub(crate) fn write_blob(
     let mut envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, payload.to_canonical_bytes()?);
     envelope.add_signature(maintainer_signature())?;
     store.write_object(&envelope)
+}
+
+/// A one-file, mode-aware replay manifest -- the worktree materializer's input -- for the fsutil
+/// caller matrices (Linux and macOS only) and the retained-root test (not Windows); gated to match.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn text_replay_manifest(
+    path: &str,
+    bytes: &[u8],
+) -> prikk_error::Result<crate::patch_replay::ReplayManifest> {
+    Ok(crate::patch_replay::ReplayManifest {
+        files: vec![crate::patch_replay::ReplayManifestEntry {
+            path: crate::RepoPath::parse(path)?,
+            bytes: bytes.to_vec(),
+            mode: 0o100644,
+            kind: Some(prikk_object::NodeKind::TextFile),
+            blob_id: None,
+        }],
+    })
 }
 
 /// A signed `Block` over the given patches, with the given parents.

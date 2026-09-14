@@ -13,7 +13,6 @@ use prikk_object::ObjectId;
 use crate::foundation::layout::RepositoryLayout;
 use crate::patch_inverse::prepare_patch_inverse_plan;
 use crate::patch_replay::{ReplayManifest, replay_supported_patch_chain};
-use crate::snapshot::SnapshotManifest;
 
 /// Read-only preview of applying the supported inverse plan back to the latest snapshot baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +103,7 @@ pub fn prepare_rollback_preview(
     }
 
     let current = replay_manifest_to_map(&replay.manifest);
-    let preview = manifest_to_map(&replay.baseline_manifest);
+    let preview = replay_manifest_to_map(&replay.baseline_manifest);
     let changes = compare_maps(&current, &preview);
     let would_create_files = changes
         .iter()
@@ -138,16 +137,8 @@ pub fn prepare_rollback_preview(
     })
 }
 
-fn manifest_to_map(manifest: &SnapshotManifest) -> BTreeMap<String, Vec<u8>> {
-    let mut files = BTreeMap::new();
-    for entry in &manifest.files {
-        files.insert(entry.path.as_str().to_string(), entry.bytes.clone());
-    }
-    files
-}
-
-/// Content-only view of a mode-aware replay manifest — this comparison is bytes-in/bytes-out, the
-/// same as `manifest_to_map`; mode does not participate in "would this file change" preview logic.
+/// Content-only view of a mode-aware replay manifest -- the current state and the snapshot baseline
+/// both; mode does not participate in "would this file change" preview logic.
 fn replay_manifest_to_map(manifest: &ReplayManifest) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
     for entry in &manifest.files {

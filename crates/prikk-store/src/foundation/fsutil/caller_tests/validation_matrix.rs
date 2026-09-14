@@ -5,13 +5,12 @@ use prikk_object::{ObjectEnvelope, ObjectType};
 use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
 use crate::test_gates::test_support::{
     dummy_signature, signed_empty_block_envelope, signed_patch_envelope, signed_ref_state_envelope,
-    signed_ref_update_envelope, unique_temp_dir,
+    signed_ref_update_envelope, text_replay_manifest, unique_temp_dir,
 };
-use crate::worktree::materialize_manifest_entries;
+use crate::worktree::materialize_replay_manifest_entries;
 use crate::{
     DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RefLock, RefPublication, RefStore,
-    RepoPath, RepositoryLayout, SnapshotEntry, SnapshotManifest, Wal, add_trusted_maintainer,
-    write_active_ref_metadata,
+    RepositoryLayout, Wal, add_trusted_maintainer, write_active_ref_metadata,
 };
 
 #[test]
@@ -125,15 +124,10 @@ fn worktree_observed_component_sync_propagates_and_retries() -> prikk_error::Res
     let root = unique_temp_dir("worktree-observed-component");
     let layout = RepositoryLayout::init(root.clone())?;
     std::fs::create_dir(root.join("nested"))?;
-    let manifest = SnapshotManifest {
-        files: vec![SnapshotEntry {
-            path: RepoPath::parse("nested/file.txt")?,
-            bytes: b"content".to_vec(),
-        }],
-    };
+    let manifest = text_replay_manifest("nested/file.txt", b"content")?;
     fail_once_for_test(TestFailPoint::ObservedDirectoryParentSync);
-    assert!(materialize_manifest_entries(&layout, &manifest).is_err());
-    assert!(materialize_manifest_entries(&layout, &manifest).is_ok());
+    assert!(materialize_replay_manifest_entries(&layout, &manifest).is_err());
+    assert!(materialize_replay_manifest_entries(&layout, &manifest).is_ok());
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

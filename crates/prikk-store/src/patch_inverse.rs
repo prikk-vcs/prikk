@@ -23,9 +23,9 @@ use crate::text_span;
 
 mod read;
 
-use read::{
-    load_snapshot_files, read_blob_bytes_with_kind, read_block, read_patch, single_parent_chain,
-};
+use read::{read_blob_bytes_with_kind, read_block, read_patch, single_parent_chain};
+
+use crate::snapshot::load_block_snapshot;
 
 /// Read-only inverse plan for the supported patch-operation subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,12 +109,25 @@ pub fn prepare_patch_inverse_plan(
 
     for block_id in &block_ids {
         let block = read_block(&object_store, *block_id)?;
-        if let Some(snapshot_blob_ref) = block.snapshot_blob_ref {
-            files = load_snapshot_files(&object_store, snapshot_blob_ref)?;
+        if let Some(snapshot) = load_block_snapshot(&object_store, *block_id, &block)? {
+            // RFC 136 §10.1a: a snapshot is its block's own state, after the block's patches, so
+            // inversion starts after it and the block's own patches are not inverted.
+            files.clear();
             live_nodes.clear();
+            for file in snapshot {
+                live_nodes.insert(
+                    file.node_id,
+                    InverseLiveNode {
+                        path: file.path.clone(),
+                        kind: file.kind,
+                    },
+                );
+                files.insert(file.path, file.bytes);
+            }
             inverse_operations.clear();
             patch_count = 0;
             original_operation_count = 0;
+            continue;
         }
         for patch_id in block.patch_ids {
             let patch = read_patch(&object_store, patch_id)?;

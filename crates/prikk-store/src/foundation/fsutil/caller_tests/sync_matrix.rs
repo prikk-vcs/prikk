@@ -5,12 +5,12 @@ use prikk_object::{ObjectEnvelope, ObjectType};
 use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
 use crate::test_gates::test_support::{
     dummy_signature, signed_empty_block_envelope, signed_patch_envelope, signed_ref_state_envelope,
-    signed_ref_update_envelope, unique_temp_dir,
+    signed_ref_update_envelope, text_replay_manifest, unique_temp_dir,
 };
-use crate::worktree::materialize_manifest_entries;
+use crate::worktree::materialize_replay_manifest_entries;
 use crate::{
     ActiveLock, DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RefPublication, RefStore,
-    RepoPath, RepositoryLayout, SnapshotEntry, SnapshotManifest, Wal, write_active_ref_metadata,
+    RepositoryLayout, Wal, write_active_ref_metadata,
 };
 
 /// RFC 102 Stage 5, design-v1.md §14.10: `FORMAT` now goes through `create_new_file_required`
@@ -201,18 +201,13 @@ fn lock_parent_sync_failure_retains_stale_state_until_explicit_cleanup() -> prik
 fn worktree_parent_sync_failure_is_repaired_before_unchanged_success() -> prikk_error::Result<()> {
     let root = unique_temp_dir("worktree-sync-matrix");
     let layout = RepositoryLayout::init(root.clone())?;
-    let manifest = SnapshotManifest {
-        files: vec![SnapshotEntry {
-            path: RepoPath::parse("file.txt")?,
-            bytes: b"content".to_vec(),
-        }],
-    };
+    let manifest = text_replay_manifest("file.txt", b"content")?;
     fail_once_for_test(TestFailPoint::MutableParentSync);
-    assert!(materialize_manifest_entries(&layout, &manifest).is_err());
+    assert!(materialize_replay_manifest_entries(&layout, &manifest).is_err());
     assert_eq!(std::fs::read(root.join("file.txt"))?, b"content");
     fail_once_for_test(TestFailPoint::RequiredDirectorySync);
-    assert!(materialize_manifest_entries(&layout, &manifest).is_err());
-    assert!(materialize_manifest_entries(&layout, &manifest).is_ok());
+    assert!(materialize_replay_manifest_entries(&layout, &manifest).is_err());
+    assert!(materialize_replay_manifest_entries(&layout, &manifest).is_ok());
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

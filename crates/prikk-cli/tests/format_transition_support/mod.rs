@@ -9,7 +9,7 @@ use prikk_object::{
 };
 use prikk_store::{
     AuthorSigner, Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout,
-    SnapshotEntry, SnapshotManifest, add_trusted_maintainer, author_signature,
+    SnapshotManifest, StateRootContent, StateRootEntry, add_trusted_maintainer, author_signature,
     maintainer_signature, write_active_ref_metadata,
 };
 

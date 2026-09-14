@@ -434,11 +434,11 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         }
     }
 
-    // E3: distinguish a snapshot-only baseline (path-keyed, no node identity) from a genuinely
-    // empty node repo. An empty node state with a snapshot blob reference means the only identity
-    // authority available is the path-keyed snapshot manifest, which Option A excludes — fail closed
-    // rather than treat every snapshot-tracked file as untracked and mint fresh ids for it. This can
-    // only arise for a published baseline; a genesis baseline has no block and no snapshot.
+    // E3: an empty node state on a baseline block carrying a snapshot reference. Written for path-keyed
+    // v1 snapshots with no node identity. Under RFC 136 §10.1a a snapshot has real node ids and must
+    // recompute to this same (empty) state root, so this now names an empty tree whose block carries an
+    // empty snapshot, not a baseline without identity. Unchanged while nothing writes a snapshot
+    // (increment 1b is the writer); whether it goes is for the ruling on increment 1a's report.
     if let Some((baseline_block, _horizon)) = resolved.lineage {
         if baseline_files.is_empty()
             && baseline_symlinks.is_empty()

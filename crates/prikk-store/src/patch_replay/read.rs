@@ -11,7 +11,7 @@ use prikk_object::{
 
 use crate::object_store::ObjectReader;
 use crate::path::RepoPath;
-use crate::snapshot::{SnapshotEntry, SnapshotManifest};
+use crate::snapshot::SnapshotFile;
 
 use super::apply::ReplayLiveNode;
 use super::{ReplayManifest, ReplayManifestEntry};
@@ -91,51 +91,34 @@ pub(crate) fn read_patch(
         .ok_or_else(|| PrikkError::Integrity(format!("missing Patch {patch_id}")))
 }
 
-/// Load a snapshot's manifest and every file it names, keyed by repository-relative path.
-pub(crate) fn load_snapshot_files(
-    object_store: &impl ObjectReader,
-    snapshot_blob_ref: ObjectId,
-) -> Result<BTreeMap<String, Vec<u8>>> {
-    let envelope = object_store
-        .read_typed(snapshot_blob_ref, ObjectType::Blob)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!("missing snapshot Blob {snapshot_blob_ref}"))
-        })?;
-    let snapshot_content = crate::blob_access::decode_snapshot_blob(&envelope.canonical_payload)?;
-    let manifest = SnapshotManifest::decode(&snapshot_content)?;
+/// Replay state seeded from a loaded snapshot (RFC 136 §10.1a): path-keyed bytes and node-keyed live
+/// nodes, carrying each entry's real node id, kind, mode and Blob id. Used by every replay walk that
+/// meets a snapshot, which then skips that block's patches.
+pub(crate) fn replay_state_from_snapshot(
+    snapshot: Vec<SnapshotFile>,
+) -> (BTreeMap<String, Vec<u8>>, BTreeMap<NodeId, ReplayLiveNode>) {
     let mut files = BTreeMap::new();
-    for entry in manifest.files {
-        files.insert(entry.path.as_str().to_string(), entry.bytes);
+    let mut live_nodes = BTreeMap::new();
+    for file in snapshot {
+        live_nodes.insert(
+            file.node_id,
+            ReplayLiveNode {
+                path: file.path.clone(),
+                kind: file.kind,
+                mode: file.mode,
+                blob_id: file.blob_id,
+            },
+        );
+        files.insert(file.path, file.bytes);
     }
-    Ok(files)
+    (files, live_nodes)
 }
 
-pub(super) fn files_to_manifest(files: BTreeMap<String, Vec<u8>>) -> Result<SnapshotManifest> {
-    let mut entries = Vec::with_capacity(files.len());
-    for (path, bytes) in files {
-        entries.push(SnapshotEntry {
-            path: RepoPath::parse(&path)?,
-            bytes,
-        });
-    }
-    Ok(SnapshotManifest { files: entries })
-}
-
-/// A snapshot-seeded live node's mode: legacy format-1 snapshot blobs (`SnapshotEntry`) carry no
-/// mode field at all (see `ReplayManifestEntry`'s doc comment), so a path that entered `files`
-/// through `load_snapshot_files` and was never subsequently touched by a `CreateFile`/`ChangePerm`
-/// in the replayed window has no recorded mode to thread through. `open_new_regular`'s create-time
-/// default was `0o600` before DC-73 (`fsutil/anchored/regular.rs`) and every such path materialized
-/// at that mode unconditionally; this preserves that exact prior behavior rather than manufacturing
-/// a mode the snapshot bytes never recorded.
-const SNAPSHOT_SEEDED_FALLBACK_MODE: u32 = 0o600;
-
-/// Build the final, mode-aware replay manifest (DC-73). `files` and `live_nodes` are one-to-one for
-/// every path created or touched by a node-addressed operation within the current replay window —
-/// but a path seeded by a snapshot block and never subsequently touched has no live-node entry at
-/// all (`replay_supported_patch_chain` clears `live_nodes` at each snapshot boundary without
-/// repopulating it from the loaded snapshot). `SNAPSHOT_SEEDED_FALLBACK_MODE` covers that case.
-pub(super) fn files_to_replay_manifest(
+/// Build the final, mode-aware replay manifest (DC-73). `files` and `live_nodes` are one-to-one:
+/// every operation that adds, moves or removes a path does the same to its live node, and a snapshot
+/// seeds both together ([`replay_state_from_snapshot`]). A path with no live node is therefore a
+/// replay defect, refused as `Integrity` rather than given a guessed mode.
+pub(crate) fn files_to_replay_manifest(
     files: BTreeMap<String, Vec<u8>>,
     live_nodes: &BTreeMap<NodeId, ReplayLiveNode>,
 ) -> Result<ReplayManifest> {
@@ -145,19 +128,15 @@ pub(super) fn files_to_replay_manifest(
         .collect();
     let mut entries = Vec::with_capacity(files.len());
     for (path, bytes) in files {
-        let live = live_by_path.get(path.as_str()).copied();
-        let mode = live
-            .map(|node| node.mode)
-            .unwrap_or(SNAPSHOT_SEEDED_FALLBACK_MODE);
-        let kind = live.map(|node| node.kind);
-        let blob_id =
-            live.and_then(|node| (node.kind == NodeKind::BinaryFile).then_some(node.blob_id));
+        let live = live_by_path.get(path.as_str()).copied().ok_or_else(|| {
+            PrikkError::Integrity(format!("replayed path {path} has no live node"))
+        })?;
         entries.push(ReplayManifestEntry {
             path: RepoPath::parse(&path)?,
             bytes,
-            mode,
-            kind,
-            blob_id,
+            mode: live.mode,
+            kind: Some(live.kind),
+            blob_id: (live.kind == NodeKind::BinaryFile).then_some(live.blob_id),
         });
     }
     Ok(ReplayManifest { files: entries })

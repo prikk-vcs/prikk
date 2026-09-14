@@ -90,11 +90,11 @@ fn absent_paths_degrade_to_not_found_not_error() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A path seeded by a snapshot boundary and never subsequently touched carries no live-node
-/// entry, so its kind cannot be determined from the replayed window -- `Opaque`, not a guess.
+/// A path seeded by a snapshot and never touched afterwards carries its state entry's real kind and
+/// mode (RFC 136 §10.1a) -- text, not the `Opaque` a v1 snapshot's missing kind used to force.
 #[test]
-fn snapshot_seeded_untouched_path_is_opaque() {
-    let root = unique_temp_dir("content-report-opaque");
+fn snapshot_seeded_untouched_path_reports_its_kind() {
+    let root = unique_temp_dir("content-report-seeded");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     publish_snapshot_then_patch_block(&layout).unwrap();
 
@@ -105,9 +105,10 @@ fn snapshot_seeded_untouched_path_is_opaque() {
     let [entry] = report.entries.as_slice() else {
         panic!("expected exactly one entry, got {:?}", report.entries);
     };
+    assert_eq!(entry.mode, 0o100644);
     match &entry.content {
-        PatchPlanContent::Opaque { size } => assert_eq!(*size, b"hello\n".len() as u64),
-        other => panic!("expected Opaque, got {other:?}"),
+        PatchPlanContent::Text(bytes) => assert_eq!(bytes, b"hello\n"),
+        other => panic!("expected Text, got {other:?}"),
     }
 
     let _ = std::fs::remove_dir_all(root);

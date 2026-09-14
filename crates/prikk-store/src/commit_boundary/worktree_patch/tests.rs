@@ -7,9 +7,9 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use prikk_object::{
-    BlobKind, BlobPayload, BlockKind, BlockPayload, CanonicalEncode, CreateFile, MerkleRoot,
-    NodeId, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PatchPayload,
-    PatchPurpose, RefStatePayload, SignatureAlgorithm, SignerRole,
+    BlobKind, BlobPayload, BlockKind, BlockPayload, CanonicalEncode, CreateFile, NodeId,
+    ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
+    RefStatePayload, SignatureAlgorithm, SignerRole,
 };
 
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
@@ -20,9 +20,9 @@ use crate::test_gates::test_support::{
 };
 use crate::{
     ActiveLock, ActiveRefMetadata, AuthorSigner, DEFAULT_ACTIVE_NAME, Ed25519AuthorSigner,
-    FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore, RepoPath,
-    RepositoryLayout, Wal, WorktreePatchCommitOptions, WorktreePatchOperationKind,
-    finish_active_publication_cleanup, read_active_ref_metadata,
+    FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore, RepositoryLayout, Wal,
+    WorktreePatchCommitOptions, WorktreePatchOperationKind, finish_active_publication_cleanup,
+    read_active_ref_metadata,
 };
 
 /// Deterministic Ed25519 AUTHOR signer for reproducible authoring (real signing, fixed seed).
@@ -175,15 +175,13 @@ fn seal_active_patch(layout: &RepositoryLayout, ref_name: &str) -> ObjectId {
     block_id
 }
 
-/// Publish a snapshot-only baseline (path-keyed, no node identity) for the E3 rejection test.
+/// Publish an empty-state baseline block that references a snapshot, with `path` present in the
+/// worktree, for the E3 rejection test. Under RFC 136 §10.1a a snapshot is its block's own state; this
+/// block's state is empty, so its manifest is empty too. E3 looks only at the reference.
 fn publish_snapshot_baseline(layout: &RepositoryLayout, path: &str, bytes: &[u8]) {
-    use crate::snapshot::{SnapshotEntry, SnapshotManifest};
     let mut object_store = FileObjectStore::new(layout.clone());
-    let manifest = SnapshotManifest {
-        files: vec![SnapshotEntry {
-            path: RepoPath::parse(path).unwrap(),
-            bytes: bytes.to_vec(),
-        }],
+    let manifest = crate::SnapshotManifest {
+        entries: Vec::new(),
     };
     let blob = BlobPayload::new(BlobKind::Snapshot, manifest.encode().unwrap());
     let mut blob_env =
@@ -196,7 +194,7 @@ fn publish_snapshot_baseline(layout: &RepositoryLayout, path: &str, bytes: &[u8]
         parent_block_ids: Vec::new(),
         kind: BlockKind::Normal,
         patch_ids: Vec::new(),
-        state_merkle_root: MerkleRoot([0_u8; 32]),
+        state_merkle_root: crate::compute_state_root(&[]).unwrap(),
         snapshot_blob_ref: Some(blob_id),
         mainline_parent_id: None,
         merge_baseline_block_id: None,

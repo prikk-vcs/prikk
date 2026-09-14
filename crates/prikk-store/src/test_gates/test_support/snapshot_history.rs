@@ -1,7 +1,17 @@
+//! The shared snapshot fixture (RFC 136 §10.1a): a two-block history on `heads/main` whose snapshot
+//! is the carrying block's own state, after that block's patches. It replaces three copies of a v1
+//! fixture whose snapshot was the pre-state of its block.
+//!
+//! The root block creates `README.md` and `old.txt`; the tip block deletes `old.txt` and creates
+//! `extra.txt`. Both blocks have patches, so a reader that applied the carrying block's patches on
+//! top of its snapshot would refuse, and one that ignored the snapshot would still agree -- the
+//! meaning is tested either way. [`SnapshotAt`] picks the carrying block.
+
+use prikk_error::PrikkError;
 use prikk_object::{
     BlobKind, BlobPayload, BlockKind, CanonicalEncode, CreateFile, DeleteNode, DeleteNodePreimage,
-    NodeId, NodeKind, ObjectEnvelope, ObjectType, Operation, OperationKind, PatchPayload,
-    PatchPurpose,
+    MerkleRoot, NodeId, NodeKind, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind,
+    PatchPayload, PatchPurpose,
 };
 
 use super::{
@@ -10,35 +20,78 @@ use super::{
 };
 use crate::{
     FileObjectStore, ObjectWriter, RefPublication, RefStore, RepoPath, RepositoryLayout,
-    SnapshotEntry, SnapshotManifest,
+    SnapshotManifest, StateRootContent, StateRootEntry,
 };
 
-/// Publish a snapshot block and then a patch block on top of it, returning both ids.
+/// Which block of the shared history carries the snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SnapshotAt {
+    /// The root block: readers seed its state, skip its patches, then replay the tip.
+    Root,
+    /// The tip block: the snapshot is the ref's own state.
+    Tip,
+}
+
+/// The shared history with the snapshot on the root block. Every reader sees the same final state,
+/// deletion and baseline the old v1 fixture produced.
 pub(crate) fn publish_snapshot_then_patch_block(
     layout: &RepositoryLayout,
+) -> prikk_error::Result<()> {
+    publish_snapshot_history(layout, SnapshotAt::Root)
+}
+
+/// A text file's state entry at the regular mode.
+pub(crate) fn text_entry(
+    path: &str,
+    node_seed: u8,
+    blob_id: ObjectId,
+) -> prikk_error::Result<StateRootEntry> {
+    Ok(StateRootEntry {
+        path: RepoPath::parse(path)?,
+        node_id: NodeId::from_bytes([node_seed; 32]),
+        kind: NodeKind::TextFile,
+        mode: 0o100644,
+        content: StateRootContent::Blob(blob_id),
+    })
+}
+
+/// Write `content` as a `SNAPSHOT` Blob, whatever it holds -- for controls that need a manifest
+/// which does not decode or does not recompute.
+pub(crate) fn write_snapshot_content(
+    store: &mut FileObjectStore,
+    content: Vec<u8>,
+) -> prikk_error::Result<ObjectId> {
+    let blob = BlobPayload::new(BlobKind::Snapshot, content);
+    let mut envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, blob.to_canonical_bytes()?);
+    envelope.add_signature(maintainer_signature())?;
+    store.write_object(&envelope)
+}
+
+/// Write `entries` as a v2 manifest. The fixture's own guard: entries that do not recompute to
+/// `state_root` are refused, so no test can start from a snapshot that lies about its block.
+pub(crate) fn write_snapshot(
+    store: &mut FileObjectStore,
+    entries: Vec<StateRootEntry>,
+    state_root: MerkleRoot,
+) -> prikk_error::Result<ObjectId> {
+    let manifest = SnapshotManifest { entries };
+    if manifest.recomputed_state_root()? != state_root {
+        return Err(PrikkError::Integrity(
+            "fixture snapshot does not recompute to its block's state root".to_string(),
+        ));
+    }
+    write_snapshot_content(store, manifest.encode()?)
+}
+
+/// Publish the shared history with the snapshot on `at`.
+pub(crate) fn publish_snapshot_history(
+    layout: &RepositoryLayout,
+    at: SnapshotAt,
 ) -> prikk_error::Result<()> {
     let mut object_store = FileObjectStore::new(layout.clone());
     let readme_blob = write_blob(&mut object_store, b"hello\n")?;
     let old_blob = write_blob(&mut object_store, b"old\n")?;
     let extra_blob = write_blob(&mut object_store, b"extra\n")?;
-
-    let snapshot_manifest = SnapshotManifest {
-        files: vec![
-            SnapshotEntry {
-                path: RepoPath::parse("README.md")?,
-                bytes: b"hello\n".to_vec(),
-            },
-            SnapshotEntry {
-                path: RepoPath::parse("old.txt")?,
-                bytes: b"old\n".to_vec(),
-            },
-        ],
-    };
-    let snapshot_blob = BlobPayload::new(BlobKind::Snapshot, snapshot_manifest.encode()?);
-    let snapshot_bytes = snapshot_blob.to_canonical_bytes()?;
-    let mut snapshot_envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, snapshot_bytes);
-    snapshot_envelope.add_signature(maintainer_signature())?;
-    let snapshot_blob_id = object_store.write_object(&snapshot_envelope)?;
 
     let root_patch_payload = PatchPayload {
         operations: vec![
@@ -78,17 +131,28 @@ pub(crate) fn publish_snapshot_then_patch_block(
     root_patch.add_signature(dummy_signature())?;
     let root_patch_id = object_store.write_object(&root_patch)?;
     let root_state = crate::derive_next_state_root(&object_store, None, &[root_patch_id])?;
+    let root_snapshot = match at {
+        SnapshotAt::Root => Some(write_snapshot(
+            &mut object_store,
+            vec![
+                text_entry("README.md", 0x70, readme_blob)?,
+                text_entry("old.txt", 0x71, old_blob)?,
+            ],
+            root_state,
+        )?),
+        SnapshotAt::Tip => None,
+    };
     let root_block = signed_block_with_state_root(
         BlockKind::Root,
         Vec::new(),
         vec![root_patch_id],
-        None,
+        root_snapshot,
         root_state,
     );
     let root_block_id = object_store.write_object(&root_block)?;
 
     // ReplaceBinary replay is deferred to the node model, so this fixture uses
-    // the supported DeleteNode plus CreateFile path over the snapshot baseline.
+    // the supported DeleteNode plus CreateFile path.
     let patch_payload = PatchPayload {
         operations: vec![
             Operation {
@@ -129,11 +193,22 @@ pub(crate) fn publish_snapshot_then_patch_block(
 
     let patch_state =
         crate::derive_next_state_root(&object_store, Some(root_block_id), &[patch_id])?;
+    let tip_snapshot = match at {
+        SnapshotAt::Tip => Some(write_snapshot(
+            &mut object_store,
+            vec![
+                text_entry("README.md", 0x70, readme_blob)?,
+                text_entry("extra.txt", 0x72, extra_blob)?,
+            ],
+            patch_state,
+        )?),
+        SnapshotAt::Root => None,
+    };
     let patch_block = signed_block_with_state_root(
         BlockKind::Normal,
         vec![root_block_id],
         vec![patch_id],
-        Some(snapshot_blob_id),
+        tip_snapshot,
         patch_state,
     );
     let patch_block_id = object_store.write_object(&patch_block)?;
