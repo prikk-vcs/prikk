@@ -105,14 +105,19 @@ fn rollback_draft_verify_prefix_changes_to_precondition() {
 /// stayed green, and the ruled perturbation — flip it back, watch a test fail — had nothing to fail.
 /// A classification nothing asserts is a classification the next round can undo by accident.
 ///
-/// Every block in every repository is in this state today (no block-creating path writes a snapshot
-/// yet), so the fixture is simply an ordinary sealed repository.
+/// Only a checkpoint carries a snapshot (RFC 136 §10.2: a ref's first block and every 64 blocks
+/// after), so the fixture seals a second block: an ordinary block that is not one.
 #[test]
 fn snapshot_plan_without_a_snapshot_is_a_precondition() {
     let repo = support::unique_repo("rfc132-snapshot-plan");
     support::init(&repo);
     write_and_commit(&repo, "a.txt", "hello", "genesis");
     support::ok(&support::seal(&repo, "heads/main"), "seal");
+    write_and_commit(&repo, "b.txt", "second", "second");
+    support::ok(
+        &support::seal(&repo, "heads/main"),
+        "seal a block that is not a checkpoint",
+    );
 
     let out = support::prikk(&repo)
         .args(["checkout", "--snapshot-plan"])
@@ -122,8 +127,8 @@ fn snapshot_plan_without_a_snapshot_is_a_precondition() {
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
         stderr.starts_with(
-            "error: precondition not met: checkout target for heads/main does not \
-                            contain a snapshot blob"
+            "error: precondition not met: checkout target for heads/main is not a \
+                            checkpoint, so it carries no snapshot"
         ),
         "the class must be a precondition: {stderr}"
     );

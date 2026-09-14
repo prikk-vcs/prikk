@@ -1,9 +1,9 @@
 //! Non-mutating rollback preview for the supported patch subset.
 //!
 //! PR-027 keeps rollback behavior read-only. It combines the supported inverse-plan validation
-//! with the supported patch replay result, then compares the current replayed state with the latest
-//! snapshot baseline. It does not publish rollback refs, write inverse patches, or modify the
-//! worktree.
+//! with the supported patch replay result, then compares the current replayed state with the empty
+//! state before the replayed chain (RFC 136 §10.3a ruling 3: rollback never anchors at a snapshot).
+//! It does not publish rollback refs, write inverse patches, or modify the worktree.
 
 use std::collections::BTreeMap;
 
@@ -14,14 +14,14 @@ use crate::foundation::layout::RepositoryLayout;
 use crate::patch_inverse::prepare_patch_inverse_plan;
 use crate::patch_replay::{ReplayManifest, replay_supported_patch_chain};
 
-/// Read-only preview of applying the supported inverse plan back to the latest snapshot baseline.
+/// Read-only preview of applying the supported inverse plan back to the empty state before the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RollbackPreviewPlan {
     /// Ref used as the rollback-preview target.
     pub ref_name: String,
     /// Current target block ID whose supported chain was validated.
     pub target_block_id: ObjectId,
-    /// Number of blocks validated from the latest snapshot baseline to the target.
+    /// Number of blocks validated, from genesis to the target.
     pub block_count: usize,
     /// Number of patch objects validated.
     pub patch_count: usize,
@@ -87,8 +87,9 @@ impl RollbackPreviewChangeKind {
 
 /// Prepare a non-mutating rollback preview for the supported patch-operation subset.
 ///
-/// The preview target is the latest snapshot baseline inside the supported single-parent replay
-/// window. Refs, objects, WAL files, and worktree files are not modified.
+/// The preview target is the empty state before the supported single-parent chain -- what rollback
+/// has always compared against, since no release ever wrote a snapshot; a checkpoint never moves it
+/// (RFC 136 §10.3a). Refs, objects, WAL files, and worktree files are not modified.
 pub fn prepare_rollback_preview(
     layout: &RepositoryLayout,
     ref_name: &str,
@@ -103,7 +104,7 @@ pub fn prepare_rollback_preview(
     }
 
     let current = replay_manifest_to_map(&replay.manifest);
-    let preview = replay_manifest_to_map(&replay.baseline_manifest);
+    let preview: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let changes = compare_maps(&current, &preview);
     let would_create_files = changes
         .iter()
@@ -127,8 +128,8 @@ pub fn prepare_rollback_preview(
         inverse_patch_id_hint: inverse.inverse_patch_id_hint,
         current_file_count: replay.manifest.files.len(),
         current_content_bytes: replay.manifest.total_content_bytes(),
-        preview_file_count: replay.baseline_manifest.files.len(),
-        preview_content_bytes: replay.baseline_manifest.total_content_bytes(),
+        preview_file_count: preview.len(),
+        preview_content_bytes: 0,
         change_count: changes.len(),
         would_create_files,
         would_delete_files,
@@ -137,8 +138,8 @@ pub fn prepare_rollback_preview(
     })
 }
 
-/// Content-only view of a mode-aware replay manifest -- the current state and the snapshot baseline
-/// both; mode does not participate in "would this file change" preview logic.
+/// Content-only view of a mode-aware replay manifest; mode does not participate in "would this file
+/// change" preview logic.
 fn replay_manifest_to_map(manifest: &ReplayManifest) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
     for entry in &manifest.files {

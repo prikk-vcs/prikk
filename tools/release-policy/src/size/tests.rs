@@ -83,7 +83,7 @@ fn removing_a_declaration_names_its_file() {
         "{detail}"
     );
     assert!(
-        detail.contains("1677"),
+        detail.contains("1680"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -143,8 +143,8 @@ fn a_placeholder_reason_is_not_a_recorded_decision() {
 /// Control 3: **a `#[cfg(test)]` module inside a production file is not counted.**
 ///
 /// Asserted against the real file rather than a fixture, because the fixture that matters is the
-/// one that exists: `node_authoring.rs` is 1,416 physical lines with a 49-line `mode_change_tests`
-/// module at the end, and the gate must see 1,367. Counting the test module would not change this
+/// one that exists: `node_authoring.rs` is 1,372 physical lines with a 49-line `mode_change_tests`
+/// module at the end, and the gate must see 1,323 (RFC 136 increment 1b removed the E3 refusal). Counting the test module would not change this
 /// file's verdict — it is declared either way — but it would change `layout.rs`'s the moment
 /// someone put tests beside it, which is the shape of the mistake.
 #[test]
@@ -156,7 +156,7 @@ fn an_inline_test_module_is_not_production() {
         .lines()
         .count();
     assert_eq!(
-        physical, 1416,
+        physical, 1372,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -166,7 +166,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1367);
+    assert_eq!(counted.production_lines, 1323);
     assert_eq!(
         physical - counted.production_lines,
         49,

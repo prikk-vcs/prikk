@@ -69,9 +69,6 @@ const EXECUTABLE_FILE_MODE: u32 = 0o100_755;
 /// [`PrikkError`] only at the public command boundary.
 #[derive(Debug)]
 pub(in crate::commit_boundary) enum AuthorError {
-    /// A changed existing path does not resolve to a live node id in the replay-derived baseline
-    /// (e.g. a snapshot-only baseline, which carries no node identity). Fails closed; never minted.
-    NodeIdentityUnavailable(String),
     /// New worktree bytes would change an existing node's kind (text↔binary). Out of scope.
     UnsupportedKindTransition(String),
     /// Symlink authoring is out of scope until FDD-04 §5.4a static target validation.
@@ -91,9 +88,6 @@ pub(in crate::commit_boundary) enum AuthorError {
 impl fmt::Display for AuthorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NodeIdentityUnavailable(detail) => {
-                write!(f, "worktree authoring: node identity unavailable: {detail}")
-            }
             Self::UnsupportedKindTransition(detail) => {
                 write!(
                     f,
@@ -134,7 +128,6 @@ impl From<AuthorError> for PrikkError {
             // makes classifying them as damage doubly wrong: the tool said the commit would refuse.
             AuthorError::UnsupportedSymlinkAuthoring(detail)
             | AuthorError::UnsupportedKindTransition(detail) => PrikkError::Precondition(detail),
-            other => PrikkError::Integrity(other.to_string()),
         }
     }
 }
@@ -431,24 +424,6 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             NodeContent::Symlink { .. } => {
                 baseline_symlinks.insert(node.path.as_str().to_string(), *node_id);
             }
-        }
-    }
-
-    // E3: an empty node state on a baseline block carrying a snapshot reference. Written for path-keyed
-    // v1 snapshots with no node identity. Under RFC 136 §10.1a a snapshot has real node ids and must
-    // recompute to this same (empty) state root, so this now names an empty tree whose block carries an
-    // empty snapshot, not a baseline without identity. Unchanged while nothing writes a snapshot
-    // (increment 1b is the writer); whether it goes is for the ruling on increment 1a's report.
-    if let Some((baseline_block, _horizon)) = resolved.lineage {
-        if baseline_files.is_empty()
-            && baseline_symlinks.is_empty()
-            && baseline_block_has_snapshot_ref(&object_store, baseline_block)?
-        {
-            return Err(AuthorError::NodeIdentityUnavailable(
-                "baseline is snapshot-derived and carries no node identity; \
-                 a node-addressed baseline is required for worktree authoring"
-                    .to_string(),
-            ));
         }
     }
 
@@ -1035,25 +1010,6 @@ fn plan_move_hints(
     } else {
         MoveHints::Pairs(candidates)
     })
-}
-
-/// True if the baseline block carries a snapshot blob reference. Used to reject a snapshot-only
-/// baseline (review E3) while still allowing a genuinely empty node repo to create its first file.
-fn baseline_block_has_snapshot_ref(
-    object_store: &impl ObjectReader,
-    baseline_block: ObjectId,
-) -> std::result::Result<bool, AuthorError> {
-    let envelope = object_store
-        .read_typed(baseline_block, ObjectType::Block)
-        .map_err(AuthorError::Store)?
-        .ok_or_else(|| {
-            AuthorError::Store(PrikkError::Integrity(format!(
-                "baseline Block {baseline_block} is missing"
-            )))
-        })?;
-    let block = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload)
-        .map_err(AuthorError::Store)?;
-    Ok(block.snapshot_blob_ref.is_some())
 }
 
 /// Classify a *new* file's blob/node kind by UTF-8 validity (existing nodes are never reclassified).

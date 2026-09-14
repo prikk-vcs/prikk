@@ -9,7 +9,7 @@ use crate::test_gates::test_support::{
 };
 
 #[test]
-fn rollback_preview_reports_file_level_changes_to_snapshot_baseline() {
+fn rollback_preview_reports_file_level_changes_to_the_empty_state() {
     let root = unique_temp_dir("rollback-preview-file-ops");
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
@@ -19,14 +19,16 @@ fn rollback_preview_reports_file_level_changes_to_snapshot_baseline() {
         let preview = prepare_rollback_preview(&layout, "heads/main");
         assert!(preview.is_ok());
         if let Ok(preview) = preview {
+            // RFC 136 §10.3a ruling 3: rollback's target is the empty state before the chain, never
+            // the root block's checkpoint.
             assert_eq!(preview.block_count, 2);
-            assert_eq!(preview.patch_count, 1);
-            assert_eq!(preview.inverse_operation_count, 2);
+            assert_eq!(preview.patch_count, 2);
+            assert_eq!(preview.inverse_operation_count, 4);
             assert_eq!(preview.current_file_count, 2);
-            assert_eq!(preview.preview_file_count, 2);
+            assert_eq!(preview.preview_file_count, 0);
             assert_eq!(preview.change_count, 2);
-            assert_eq!(preview.would_create_files, 1);
-            assert_eq!(preview.would_delete_files, 1);
+            assert_eq!(preview.would_create_files, 0);
+            assert_eq!(preview.would_delete_files, 2);
             assert_eq!(preview.would_replace_files, 0);
             let changes: Vec<(&str, RollbackPreviewChangeKind)> = preview
                 .changes
@@ -36,8 +38,8 @@ fn rollback_preview_reports_file_level_changes_to_snapshot_baseline() {
             assert_eq!(
                 changes,
                 vec![
+                    ("README.md", RollbackPreviewChangeKind::WouldDelete),
                     ("extra.txt", RollbackPreviewChangeKind::WouldDelete),
-                    ("old.txt", RollbackPreviewChangeKind::WouldCreate),
                 ]
             );
         }

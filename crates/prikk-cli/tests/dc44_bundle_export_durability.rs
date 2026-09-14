@@ -73,9 +73,9 @@ fn export_without_force_refuses_an_existing_destination_and_leaves_it_verifiable
     support::ok(&verify, "the untouched original must still verify");
     let verify_stdout = String::from_utf8_lossy(&verify.stdout);
     assert!(
-        verify_stdout.contains("objects: 4"),
+        verify_stdout.contains("objects: 5"),
         "must still report the first export's own object count (1 RefState + 1 Block + 1 Patch \
-         + 1 Blob), not the second history's: {verify_stdout}"
+         + 1 Blob + the root checkpoint's snapshot Blob), not the second history's: {verify_stdout}"
     );
 
     let _ = std::fs::remove_dir_all(repo);
@@ -137,9 +137,9 @@ fn export_with_force_overwrites_and_the_result_is_the_new_export() {
     support::ok(&forced, "second export with --force must succeed");
     let forced_stdout = String::from_utf8_lossy(&forced.stdout);
     assert!(
-        forced_stdout.contains("objects: 8"),
+        forced_stdout.contains("objects: 9"),
         "the forced export must report the full two-generation closure (2 RefStates via the \
-         previous_ref_state_id chain + 2 Blocks + 2 Patches + 2 Blobs -- the same count \
+         previous_ref_state_id chain + 2 Blocks + 2 Patches + 2 Blobs + the root checkpoint's snapshot Blob -- the same count \
          dc78_bundle_exchange.rs's own two-generation fixture establishes): {forced_stdout}"
     );
 
@@ -150,7 +150,7 @@ fn export_with_force_overwrites_and_the_result_is_the_new_export() {
     support::ok(&verify, "the forced export's own result must verify");
     let verify_stdout = String::from_utf8_lossy(&verify.stdout);
     assert!(
-        verify_stdout.contains("objects: 8"),
+        verify_stdout.contains("objects: 9"),
         "verify must see the forced export's own content, not the first export's: {verify_stdout}"
     );
 

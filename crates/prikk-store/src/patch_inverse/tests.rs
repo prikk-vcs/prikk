@@ -28,29 +28,34 @@ fn inverse_plan_reverses_supported_file_operations() {
         let plan = prepare_patch_inverse_plan(&layout, "heads/main");
         assert!(plan.is_ok());
         if let Ok(plan) = plan {
+            // RFC 136 §10.3a ruling 3: inverse planning never anchors, so the root block's creates
+            // are inverted too, after the tip's operations.
             assert_eq!(plan.block_count, 2);
-            assert_eq!(plan.patch_count, 1);
-            assert_eq!(plan.original_operation_count, 2);
-            assert_eq!(plan.inverse_operation_count, 2);
+            assert_eq!(plan.patch_count, 2);
+            assert_eq!(plan.original_operation_count, 4);
+            assert_eq!(plan.inverse_operation_count, 4);
             let labels: Vec<&str> = plan
                 .operations
                 .iter()
                 .map(|operation| operation.kind.as_str())
                 .collect();
-            assert_eq!(labels, vec!["delete-file", "create-file"]);
+            assert_eq!(
+                labels,
+                vec!["delete-file", "create-file", "delete-file", "delete-file"]
+            );
             let paths: Vec<&str> = plan
                 .operations
                 .iter()
                 .map(|operation| operation.path.as_str())
                 .collect();
-            assert_eq!(paths, vec!["extra.txt", "old.txt"]);
+            assert_eq!(paths, vec!["extra.txt", "old.txt", "old.txt", "README.md"]);
             let seqs: Vec<u32> = plan
                 .operations
                 .iter()
                 .map(|operation| operation.op_seq)
                 .collect();
-            assert_eq!(seqs, vec![1, 2]);
-            assert_eq!(plan.inverse_payload.operations.len(), 2);
+            assert_eq!(seqs, vec![1, 2, 3, 4]);
+            assert_eq!(plan.inverse_payload.operations.len(), 4);
         }
     }
     let _ = std::fs::remove_dir_all(root);
@@ -539,8 +544,9 @@ fn inverse_plan_reverses_binary_file_deletion() {
             "binary-file DeleteNode inverse should succeed"
         );
         if let Ok(plan) = plan {
-            assert_eq!(plan.original_operation_count, 1);
-            assert_eq!(plan.inverse_operation_count, 1);
+            // RFC 136 §10.3a ruling 3: the root block's create is inverted too, after the delete.
+            assert_eq!(plan.original_operation_count, 2);
+            assert_eq!(plan.inverse_operation_count, 2);
             // inverse(DeleteNode) reconstructs the file via CreateFile.
             assert_eq!(
                 plan.operations.first().map(|op| op.kind.as_str()),

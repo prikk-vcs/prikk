@@ -10,16 +10,91 @@
 //! `Integrity`. Nothing writes a snapshot yet (RFC 136 §10.5 increment 1b is the writer).
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlockPayload, MerkleRoot, NodeId, NodeKind, ObjectId, ObjectType};
+use prikk_object::{
+    BlobKind, BlobPayload, BlockPayload, CanonicalEncode, MerkleRoot, NodeId, NodeKind,
+    ObjectEnvelope, ObjectId, ObjectType,
+};
 
 use crate::blob_access::{decode_file_content_blob_with_kind, decode_snapshot_blob};
-use crate::object_store::ObjectReader;
+use crate::object_store::{ObjectReader, ObjectWriter};
 use crate::state_root::{
     StateRootContent, StateRootEntry, compute_state_root, decode_state_leaf_fields,
     state_leaf_fields, validate_entries,
 };
 
 const SNAPSHOT_MAGIC: &[u8] = b"PRIKK-SNAPSHOT-MANIFEST-v2\n";
+
+/// Blocks between checkpoints (RFC 136 §10.2): a sealed Block carries a snapshot when the nearest
+/// snapshotted ancestor on its derivation line is this many blocks back or more, or there is none.
+/// The same number bounds the lifecycle cache's incremental steps before it reanchors -- one number,
+/// one place.
+pub(crate) const CHECKPOINT_CADENCE: u32 = 64;
+
+/// Write a checkpoint snapshot for a new Block whose state is `entries` -- the exact entries its
+/// state root hashes -- and return the manifest Blob's id, for `snapshot_blob_ref` before the Block
+/// is encoded and signed. Every write goes through `object_store`'s ordinary object write, which
+/// takes the object-store lock.
+///
+/// **Content Blobs first** (RFC 136 increment 1a review, ruling 1). A file entry's `blob_id` is
+/// normally a stored Blob, but a text file edited by `EditText` names content no one stored (DC-65).
+/// For each entry whose Blob the store lacks, the bytes come from `edited_text` (the derivation's
+/// own text cache) and are written as the same unsigned schema-1 Text Blob a fresh create writes. The
+/// written id must equal the entry's `blob_id`; a mismatch is refused as `Integrity`, never a snapshot
+/// written anyway. A binary entry's Blob is always stored by the patch that set it, so its absence is
+/// `Integrity` too. Symlink entries carry their target inline and need nothing stored.
+pub(crate) fn write_checkpoint_snapshot(
+    object_store: &mut (impl ObjectReader + ObjectWriter),
+    entries: Vec<StateRootEntry>,
+    edited_text: impl Fn(&NodeId) -> Option<Vec<u8>>,
+) -> Result<ObjectId> {
+    for entry in &entries {
+        let StateRootContent::Blob(blob_id) = &entry.content else {
+            continue;
+        };
+        let blob_id = *blob_id;
+        if object_store
+            .read_typed(blob_id, ObjectType::Blob)?
+            .is_some()
+        {
+            continue;
+        }
+        let path = entry.path.as_str();
+        let bytes = match entry.kind {
+            NodeKind::TextFile => edited_text(&entry.node_id).ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "checkpoint for {path}: Blob {blob_id} is not stored and replay holds no \
+                     text for its node"
+                ))
+            })?,
+            NodeKind::BinaryFile | NodeKind::Symlink => {
+                return Err(PrikkError::Integrity(format!(
+                    "checkpoint for {path}: {:?} Blob {blob_id} is not stored",
+                    entry.kind
+                )));
+            }
+        };
+        let envelope = ObjectEnvelope::unsigned(
+            ObjectType::Blob,
+            1,
+            BlobPayload::new(BlobKind::Text, bytes).to_canonical_bytes()?,
+        );
+        let actual = envelope.object_id();
+        if actual != blob_id {
+            return Err(PrikkError::Integrity(format!(
+                "checkpoint content for {path} hashes to Blob {actual}, but its state entry names \
+                 {blob_id}"
+            )));
+        }
+        object_store.write_object(&envelope)?;
+    }
+    let content = SnapshotManifest { entries }.encode()?;
+    let envelope = ObjectEnvelope::unsigned(
+        ObjectType::Blob,
+        1,
+        BlobPayload::new(BlobKind::Snapshot, content).to_canonical_bytes()?,
+    );
+    object_store.write_object(&envelope)
+}
 
 /// A decoded snapshot manifest: one Block's state entries, in canonical path order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,23 +168,22 @@ pub(crate) struct SnapshotFile {
     pub(crate) bytes: Vec<u8>,
 }
 
-/// Load `block`'s snapshot, or `None` when it carries none -- the one loader every snapshot reader
-/// uses, so every reader checks the same things in the same order:
+/// Check `block`'s snapshot, or return `None` when it carries none -- the one validator the loader,
+/// `verify` and bundle export share (RFC 136 increment 1b), so each checks the same things in the
+/// same order:
 ///
 /// 1. the snapshot Blob exists and is a `SNAPSHOT` Blob, and its manifest decodes as v2;
 /// 2. the manifest recomputes to `block.state_merkle_root` (§10.1: a snapshot that does not describe
 ///    its own block is damage);
-/// 3. every file's Blob exists and its kind matches the entry.
+/// 3. every content Blob a file entry names is present -- asked of the store's index, never read.
 ///
-/// All three are `Integrity`. A symlink entry is refused as unsupported, the same refusal replay gives
-/// a symlink operation: no snapshot reader can hold one. **A text file edited by `EditText` names a
-/// content identity that need not be a stored Blob (DC-65)**, so a manifest over such a file refuses
-/// at step 3 until its writer stores that Blob.
-pub(crate) fn load_block_snapshot(
+/// All three are `Integrity`. Step 3 comes after step 2, so a forged manifest never directs a single
+/// presence check.
+pub(crate) fn validate_snapshot_manifest(
     reader: &impl ObjectReader,
     block_id: ObjectId,
     block: &BlockPayload,
-) -> Result<Option<Vec<SnapshotFile>>> {
+) -> Result<Option<SnapshotManifest>> {
     let Some(snapshot_blob_id) = block.snapshot_blob_ref else {
         return Ok(None);
     };
@@ -127,6 +201,31 @@ pub(crate) fn load_block_snapshot(
              snapshot Blob {snapshot_blob_id})"
         )));
     }
+    for entry in &manifest.entries {
+        if let StateRootContent::Blob(blob_id) = &entry.content {
+            if !reader.has_object(*blob_id, ObjectType::Blob)? {
+                return Err(PrikkError::Integrity(format!(
+                    "snapshot of Block {block_id} names Blob {blob_id} for {}, which is missing",
+                    entry.path.as_str()
+                )));
+            }
+        }
+    }
+    Ok(Some(manifest))
+}
+
+/// Load `block`'s snapshot for `checkout --snapshot-*`, or `None` when it carries none: validated by
+/// [`validate_snapshot_manifest`], then each file's bytes read by Blob id and its kind matched to the
+/// entry (`Integrity` on a mismatch). A symlink entry is refused as unsupported, the same refusal
+/// replay gives a symlink operation.
+pub(crate) fn load_block_snapshot(
+    reader: &impl ObjectReader,
+    block_id: ObjectId,
+    block: &BlockPayload,
+) -> Result<Option<Vec<SnapshotFile>>> {
+    let Some(manifest) = validate_snapshot_manifest(reader, block_id, block)? else {
+        return Ok(None);
+    };
     let mut files = Vec::with_capacity(manifest.entries.len());
     for entry in manifest.entries {
         let path = entry.path.as_str().to_string();

@@ -4,9 +4,10 @@
 //! One history exercises all four callers -- the real `prikk seal` binary, `branch create`, the RFC
 //! 111 seal simulation, `sync seal --claim` (`seal_from_accepted_claim`) and `merge`
 //! (`execute_merge`) -- with fixed signer seeds and fixed NodeIds, so every object id is determined
-//! by content alone. The ids below were recorded on the tree *before* the refactor (the commit this
-//! test's own report names as its base) and are pinned as ids, not counts: a changed payload field,
-//! field order, kind, parent set or signature on any path changes one of them.
+//! by content alone. Increment 0 pinned the ids recorded on the tree *before* the refactor; RFC 136
+//! increment 1b re-pinned them when the root block became a checkpoint, keeping the old ones beside
+//! the new. They are pinned as ids, not counts: a changed payload field, field order, kind, parent set
+//! or signature on any path changes one of them.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
@@ -14,9 +15,9 @@ use std::path::Path;
 use std::process::Output;
 
 use prikk_object::{
-    BlobKind, BlobPayload, CanonicalEncode, CreateFile, NodeId, ObjectEnvelope, ObjectId,
-    ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose, RecognitionClaimPayload,
-    RefStatePayload,
+    BlobKind, BlobPayload, BlockPayload, CanonicalEncode, CreateFile, NodeId, ObjectEnvelope,
+    ObjectId, ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
+    RecognitionClaimPayload, RefStatePayload,
 };
 use prikk_store::{
     DEFAULT_ACTIVE_NAME, Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore,
@@ -30,8 +31,25 @@ mod support;
 const MAIN: &str = "heads/main";
 const FEATURE: &str = "heads/feature";
 
-/// Recorded before the refactor: `[prikk seal, RFC 111 simulation, sync seal --claim, merge]`.
+/// Pinned at RFC 136 increment 1b: `[prikk seal, RFC 111 simulation, sync seal --claim, merge]`. The
+/// root block is a checkpoint (it has no snapshotted ancestor), so it carries a snapshot; every later
+/// id follows its parent's.
 const PINNED_BLOCK_IDS: [&str; 4] = [
+    "10072f3a5ac26f44409db3a3392e6dc33e66971b3232f817bc1449ada771a29e",
+    "07755db1486f1236b8620b0acdb193bb52c659849df900e29e1c05d74e29d38c",
+    "cf381a995b245babe761e6ba7359aeb6ded903c397ffa46ec4ae2633d89e848a",
+    "dd5f8312d9baf5cb20d06b3cdda3248fff60a7207fd757f43afbab36fa1dff86",
+];
+
+/// Which of those four blocks carry a snapshot: the root only. The merge's mainline is two blocks
+/// deep and `sync seal --claim` sealed on a one-block branch, so neither reaches the cadence.
+const CARRIES_SNAPSHOT: [bool; 4] = [true, false, false, false];
+
+/// Increment 0's pins, recorded on the tree before `seal_block` existed. Forcing `checkpoint_due` to
+/// `false` must restore exactly these -- the proof that increment 1b changed a block's payload in the
+/// snapshot field and nowhere else.
+#[allow(dead_code)]
+const INCREMENT_0_BLOCK_IDS: [&str; 4] = [
     "bef81e32e0cdad8e11eb68c44102071704fd0438f8e86fb706d3df213aca0bac",
     "2298a33fa92560c590394e4b462e849b48225711e7c9b16c786b5296595bf380",
     "7a0ede9d89c3011362e2aca8ffdf678ea1364a2a7d37cf73d8d5b2bd6532ca32",
@@ -123,15 +141,15 @@ fn write_claim(
     objects.write_object(&envelope).unwrap()
 }
 
-/// Checked right after each seal, so a changed id names its own path before a later step (which
-/// builds on that block) or `verify` can fail for a derived reason.
-fn assert_pinned(step: usize, path: &str, block_id: ObjectId) {
-    assert_eq!(
-        block_id.to_string(),
-        PINNED_BLOCK_IDS[step],
-        "{path}'s block id changed (step {step} of [prikk seal, RFC 111 simulation, \
-         sync seal --claim, merge])"
-    );
+fn carries_snapshot(layout: &RepositoryLayout, block_id: ObjectId) -> bool {
+    let envelope = FileObjectStore::new(layout.clone())
+        .read_typed(block_id, ObjectType::Block)
+        .expect("read Block")
+        .expect("Block exists");
+    BlockPayload::decode_canonical(&envelope.canonical_payload)
+        .expect("decode Block")
+        .snapshot_blob_ref
+        .is_some()
 }
 
 fn branch_create(repo: &Path, name: &str, from: &str) -> Output {
@@ -172,7 +190,6 @@ fn every_seal_path_yields_its_pinned_block_id() {
     write_active_ref_metadata(&layout, MAIN).expect("own the active WAL for main");
     support::ok(&support::seal(&root, MAIN), "prikk seal");
     let sealed = tip(&layout, MAIN);
-    assert_pinned(0, "prikk seal", sealed);
 
     support::ok(&branch_create(&root, FEATURE, MAIN), "branch create");
 
@@ -183,7 +200,6 @@ fn every_seal_path_yields_its_pinned_block_id() {
     write_active_ref_metadata(&layout, MAIN).expect("own the active WAL for main");
     simulate_one_seal_for_test_support(&layout, MAIN, &maintainer).expect("simulated seal");
     let simulated = tip(&layout, MAIN);
-    assert_pinned(1, "the RFC 111 simulation", simulated);
 
     // 3. `sync seal --claim`: a Normal block on feature creating c.txt from an accepted claim.
     let c_blob = write_blob(&mut objects, &maintainer, b"c\n");
@@ -198,12 +214,26 @@ fn every_seal_path_yields_its_pinned_block_id() {
         "the claim must seal: {outcome:?}"
     );
     let accepted = tip(&layout, FEATURE);
-    assert_pinned(2, "sync seal --claim", accepted);
 
     // 4. `merge`: a Merge block on main adopting feature's c.txt from baseline `sealed`.
     let report = execute_merge(&layout, sealed, MAIN, FEATURE, &maintainer).expect("merge");
     assert_eq!(report.block_id, tip(&layout, MAIN));
-    assert_pinned(3, "merge", report.block_id);
+    let merged = report.block_id;
 
     support::ok(&support::verify(&root), "verify");
+
+    let blocks = [sealed, simulated, accepted, merged];
+    assert_eq!(
+        blocks
+            .map(|id| id.to_string())
+            .each_ref()
+            .map(String::as_str),
+        PINNED_BLOCK_IDS,
+        "a seal path's block id changed: [prikk seal, RFC 111 simulation, sync seal --claim, merge]"
+    );
+    assert_eq!(
+        blocks.map(|id| carries_snapshot(&layout, id)),
+        CARRIES_SNAPSHOT,
+        "which blocks are checkpoints: [prikk seal, RFC 111 simulation, sync seal --claim, merge]"
+    );
 }

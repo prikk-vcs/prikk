@@ -49,10 +49,7 @@ use crate::object_store::ObjectReader;
 use crate::patch_replay::apply::ReplayLiveNode;
 use crate::patch_replay::apply_operation_sequence;
 use crate::patch_replay::decode::{DecodedPatchOperation, decode_patch_operations};
-use crate::patch_replay::read::{
-    read_block, read_patch, replay_state_from_snapshot, single_parent_chain,
-};
-use crate::snapshot::load_block_snapshot;
+use crate::patch_replay::read::{read_block, read_patch, single_parent_chain};
 
 /// Path-keyed file bytes, as `patch_replay`'s own replay loop builds them.
 type ReplayedFiles = BTreeMap<String, Vec<u8>>;
@@ -135,13 +132,8 @@ fn walk_and_replay(
     let mut live_nodes = BTreeMap::new();
     let mut deleted_files = BTreeMap::new();
     for block_id in block_ids {
+        // RFC 136 §10.3a: a checkpoint changes cost, never output; every block is replayed.
         let block = read_block(reader, *block_id)?;
-        if let Some(snapshot) = load_block_snapshot(reader, *block_id, &block)? {
-            // RFC 136 §10.1a: a snapshot is its block's own state; the block's patches are in it.
-            (files, live_nodes) = replay_state_from_snapshot(snapshot);
-            deleted_files.clear();
-            continue;
-        }
         for patch_id in block.patch_ids {
             let patch = read_patch(reader, patch_id)?;
             let operations =

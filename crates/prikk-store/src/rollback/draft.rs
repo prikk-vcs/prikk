@@ -56,7 +56,7 @@ pub struct RollbackDraftReport {
     pub patch_count: usize,
     /// Number of inverse operations appended.
     pub inverse_operation_count: usize,
-    /// Number of file-level preview changes compared with the latest snapshot baseline.
+    /// Number of file-level preview changes compared with the empty state before the chain.
     pub preview_change_count: usize,
     /// Number of files rollback would create or restore.
     pub would_create_files: usize,

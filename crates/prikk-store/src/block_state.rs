@@ -13,7 +13,8 @@ use crate::lifecycle_cache::replay::{
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReader, ObjectWriter};
-use crate::state_root::{compute_state_root, entries_from_state};
+use crate::snapshot::{CHECKPOINT_CADENCE, write_checkpoint_snapshot};
+use crate::state_root::{StateRootEntry, compute_state_root, entries_from_state};
 
 /// Validate the format-2 Block kind and parent cardinality contract.
 pub fn validate_block_v2_shape(payload: &BlockPayload) -> Result<()> {
@@ -165,7 +166,7 @@ pub(crate) fn derive_next_state_root_with_memo(
     compute_state_root(&entries_from_state(&state)?)
 }
 
-/// Failure of [`derive_next_state_root_for_candidate`], split at exactly the point RFC 115 Stage 4
+/// Failure of [`derive_next_state_for_candidate`], split at exactly the point RFC 115 Stage 4
 /// needs classified: whether *the parent's own already-sealed lineage* failed to resolve (always an
 /// integrity failure -- this repository's own history is broken), or whether *applying the
 /// candidate patches themselves* failed (needs further classification by the caller, since an
@@ -191,18 +192,71 @@ pub(crate) enum CandidateStateDerivationError {
 /// defect. Every other caller of state derivation replays already-sealed history, where a patch
 /// failing to apply always does mean corruption -- this function changes nothing about that; it only
 /// stops discarding the distinction for the one caller that needs it.
-pub(crate) fn derive_next_state_root_for_candidate(
+///
+/// Returns the new state's entries -- exactly what its state root hashes -- and the text cache the
+/// derivation carried, so a checkpoint snapshot (RFC 136 increment 1b) is written from the very
+/// derivation that produces the root and the two cannot disagree.
+pub(crate) fn derive_next_state_for_candidate(
     reader: &impl ObjectReader,
     parent: Option<ObjectId>,
     patch_ids: &[ObjectId],
-) -> std::result::Result<MerkleRoot, CandidateStateDerivationError> {
+) -> std::result::Result<(Vec<StateRootEntry>, TextCache), CandidateStateDerivationError> {
     let (mut state, mut text_cache) =
         resolved_parent_state(reader, parent, &mut LineageStateMemo::new())
             .map_err(CandidateStateDerivationError::Lineage)?;
     apply_candidate_patches(reader, &mut state, &mut text_cache, patch_ids)
         .map_err(CandidateStateDerivationError::Patch)?;
-    compute_state_root(&entries_from_state(&state).map_err(CandidateStateDerivationError::Lineage)?)
-        .map_err(CandidateStateDerivationError::Lineage)
+    let entries = entries_from_state(&state).map_err(CandidateStateDerivationError::Lineage)?;
+    Ok((entries, text_cache))
+}
+
+#[cfg(test)]
+thread_local! {
+    static CHECKPOINTS_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only: run `body` with checkpoints suppressed on this thread, so a test can seal the same
+/// history twice -- once as `seal_block` seals it, once carrying no snapshot -- through the one seal
+/// path. `cfg(test)`: compiled only into this crate's own unit tests, so neither a production build
+/// nor the `test-support` feature (which other crates' tests use) can reach it.
+#[cfg(test)]
+pub(crate) fn without_checkpoints_for_test<T>(body: impl FnOnce() -> T) -> T {
+    CHECKPOINTS_SUPPRESSED.with(|flag| flag.set(true));
+    let result = body();
+    CHECKPOINTS_SUPPRESSED.with(|flag| flag.set(false));
+    result
+}
+
+/// Whether a Block sealed on `parent` is a checkpoint (RFC 136 §10.2): the nearest snapshotted
+/// ancestor on its derivation line (mainline for a merge) is [`CHECKPOINT_CADENCE`] or more blocks
+/// back, or there is none. Depends on history alone, and reads at most `CHECKPOINT_CADENCE`
+/// ancestors: the answer is already `true` once that many blocks without a snapshot have been seen.
+fn checkpoint_due(reader: &impl ObjectReader, parent: Option<ObjectId>) -> Result<bool> {
+    #[cfg(test)]
+    if CHECKPOINTS_SUPPRESSED.with(std::cell::Cell::get) {
+        return Ok(false);
+    }
+    let mut current = parent;
+    let mut distance = 1_u32;
+    while let Some(block_id) = current {
+        if distance >= CHECKPOINT_CADENCE {
+            return Ok(true);
+        }
+        let envelope = reader
+            .read_typed(block_id, ObjectType::Block)?
+            .ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "checkpoint cadence: ancestor Block {block_id} is missing"
+                ))
+            })?;
+        let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+        if payload.snapshot_blob_ref.is_some() {
+            return Ok(false);
+        }
+        current = state_derivation_parent(&payload);
+        distance += 1;
+    }
+    Ok(true)
 }
 
 /// Where a new Block sits in its history -- the one thing that differs between the paths that seal a
@@ -230,6 +284,9 @@ pub enum BlockLineage {
 /// return its id. This is the only place a new Block's payload is built -- `seal`, `merge`,
 /// `sync seal --claim` and the RFC 111 simulation all call it -- so what a sealed Block carries is
 /// decided once. A derivation failure is flattened exactly as [`derive_next_state_root`] flattens it.
+///
+/// A Block that is a checkpoint (RFC 136 §10.2: no snapshotted ancestor within `CHECKPOINT_CADENCE`
+/// blocks on its derivation line) also carries a snapshot of its own state, written first.
 pub fn seal_block(
     object_store: &mut (impl ObjectReader + ObjectWriter),
     lineage: BlockLineage,
@@ -275,15 +332,27 @@ pub(crate) fn seal_block_classified(
                 )
             }
         };
-    let state_merkle_root =
-        derive_next_state_root_for_candidate(&*object_store, state_parent, patch_ids)
+    let (entries, text_cache) =
+        derive_next_state_for_candidate(&*object_store, state_parent, patch_ids)
             .map_err(classify)?;
+    let state_merkle_root = compute_state_root(&entries)?;
+    // RFC 136 increment 1b: a checkpoint carries its own state, written before the Block is encoded
+    // and signed -- `snapshot_blob_ref` is inside the signed payload.
+    let snapshot_blob_ref = if checkpoint_due(&*object_store, state_parent)? {
+        Some(write_checkpoint_snapshot(
+            object_store,
+            entries,
+            |node_id| text_cache.get(node_id).cloned(),
+        )?)
+    } else {
+        None
+    };
     let block_payload = BlockPayload {
         parent_block_ids,
         kind,
         patch_ids: patch_ids.to_vec(),
         state_merkle_root,
-        snapshot_blob_ref: None,
+        snapshot_blob_ref,
         mainline_parent_id,
         merge_baseline_block_id,
     };

@@ -25,8 +25,6 @@ mod read;
 
 use read::{read_blob_bytes_with_kind, read_block, read_patch, single_parent_chain};
 
-use crate::snapshot::load_block_snapshot;
-
 /// Read-only inverse plan for the supported patch-operation subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchInversePlan {
@@ -108,27 +106,9 @@ pub fn prepare_patch_inverse_plan(
     let mut original_operation_count = 0_usize;
 
     for block_id in &block_ids {
+        // RFC 136 §10.3a ruling 3: inverse planning never anchors. Its output is the history it
+        // inverts, which a snapshot does not carry, so every block from genesis is inverted.
         let block = read_block(&object_store, *block_id)?;
-        if let Some(snapshot) = load_block_snapshot(&object_store, *block_id, &block)? {
-            // RFC 136 §10.1a: a snapshot is its block's own state, after the block's patches, so
-            // inversion starts after it and the block's own patches are not inverted.
-            files.clear();
-            live_nodes.clear();
-            for file in snapshot {
-                live_nodes.insert(
-                    file.node_id,
-                    InverseLiveNode {
-                        path: file.path.clone(),
-                        kind: file.kind,
-                    },
-                );
-                files.insert(file.path, file.bytes);
-            }
-            inverse_operations.clear();
-            patch_count = 0;
-            original_operation_count = 0;
-            continue;
-        }
         for patch_id in block.patch_ids {
             let patch = read_patch(&object_store, patch_id)?;
             let operations =

@@ -36,6 +36,13 @@ pub trait ObjectReader {
         }
         Ok(Some(envelope))
     }
+
+    /// Whether an object with this id and type is present. The default reads it; an implementor
+    /// holding an index answers from the index without reading the object (RFC 136 increment 1b:
+    /// checking a snapshot's content Blobs must not read every file's bytes).
+    fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
+        Ok(self.read_typed(id, object_type)?.is_some())
+    }
 }
 
 /// Write object boundary.
@@ -82,6 +89,13 @@ impl ObjectReader for FileObjectStore {
             return Ok(None);
         };
         read_object_at_entry(&self.layout, &entry, id)
+    }
+
+    fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
+        Ok(matches!(
+            lookup_object_location(&self.layout, id)?,
+            Some(entry) if entry.object_type == object_type
+        ))
     }
 }
 
@@ -294,6 +308,10 @@ impl ObjectReader for ObjectReadSnapshot {
         };
         read_object_at_entry(&self.layout, entry, id)
     }
+
+    fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
+        Ok(matches!(self.snapshot.lookup(id), Some(entry) if entry.object_type == object_type))
+    }
 }
 
 /// Read-write object access for one writing operation's lifetime (RFC 111 §6.1). Holds the same kind
@@ -333,6 +351,12 @@ impl ObjectReader for ObjectWriteSession {
             return Ok(None);
         };
         read_object_at_entry(&self.layout, entry, id)
+    }
+
+    /// Answers from the same snapshot `read_object` reads, without refreshing it -- a session's own
+    /// writes are already in it (`write_object` refreshes after every append).
+    fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
+        Ok(matches!(self.snapshot.lookup(id), Some(entry) if entry.object_type == object_type))
     }
 }
 

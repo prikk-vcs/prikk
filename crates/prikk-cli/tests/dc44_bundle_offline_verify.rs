@@ -62,9 +62,9 @@ fn verify_of_a_real_export_succeeds_with_no_repository_present_and_writes_nothin
         "verify stdout: {verify_stdout}"
     );
     assert!(
-        verify_stdout.contains("objects: 4"),
+        verify_stdout.contains("objects: 5"),
         "verify must report the same object count export did (1 RefState + 1 Block + 1 Patch + \
-         1 Blob): {verify_stdout}\nexport stdout was: {export_stdout}"
+         1 Blob + the root checkpoint's snapshot Blob): {verify_stdout}\nexport stdout was: {export_stdout}"
     );
     assert!(
         verify_stdout.contains("no signature is cryptographically verified"),

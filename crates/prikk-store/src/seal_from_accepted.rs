@@ -288,7 +288,7 @@ pub fn seal_from_accepted_claim(
 }
 
 /// §4's ruled classification, applied to the one `LifecycleReplayError` variant
-/// [`derive_next_state_root_for_candidate`] can actually surface from applying candidate patches
+/// [`derive_next_state_for_candidate`] can actually surface from applying candidate patches
 /// (the lineage-walk variants are impossible here -- they belong to
 /// `CandidateStateDerivationError::Lineage`, already handled by the caller before this function is
 /// reached -- but the match stays exhaustive over every variant so the classification is total, not

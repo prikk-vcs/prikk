@@ -17,8 +17,8 @@ The preview performs two read-only validations:
 1. derive the unsigned inverse Patch payload for the supported operation subset;
 2. replay the current target state from the supported single-parent block chain.
 
-It then compares the current replayed state with the latest snapshot baseline in that replay
-window. The result is a file-level preview of what rollback would need to create, delete, or
+It then compares the current replayed state with the empty state before the replayed chain: rollback
+reaches back to the chain's first block, and a checkpoint snapshot never moves that target. The result is a file-level preview of what rollback would need to create, delete, or
 replace.
 
 No repository state is changed. The command does not write objects, append WAL records, publish

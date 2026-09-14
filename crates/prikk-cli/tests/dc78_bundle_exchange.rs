@@ -49,9 +49,9 @@ fn import_never_advances_a_local_ref_and_verify_reports_it_untrusted_until_adopt
     support::ok(&export, "bundle export");
     let export_stdout = String::from_utf8_lossy(&export.stdout);
     assert!(
-        export_stdout.contains("objects: 8"),
+        export_stdout.contains("objects: 9"),
         "expected 2 RefStates (the full previous_ref_state_id publication chain, not only the tip) \
-         + 2 Blocks + 2 Patches + 2 Blobs (each generation's CreateFile references its own Blob, \
+         + 2 Blocks + 2 Patches + 2 Blobs + the root checkpoint's snapshot Blob (each generation's CreateFile references its own Blob, \
          discovered by decoding the Patch's own operations, not just each Block's \
          snapshot_blob_ref): {export_stdout}"
     );
@@ -75,7 +75,7 @@ fn import_never_advances_a_local_ref_and_verify_reports_it_untrusted_until_adopt
         "import must report the received namespace name: {import_stdout}"
     );
     assert!(
-        import_stdout.contains("new objects: 8"),
+        import_stdout.contains("new objects: 9"),
         "first import of every object must be new: {import_stdout}"
     );
 

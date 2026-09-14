@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added — `verify` checks every snapshot against the block that carries it
+
+A block that carries a snapshot is now checked by `prikk verify`: its manifest must decode, recompute
+to the block's own state root, and every content blob it names must be present. A failure is an
+integrity finding in the objects stage, naming the block. Replay verification is unchanged: `verify`
+never reads a snapshot in place of replaying history.
+
 ## 0.42.0 — 2026-09-13
 
 ### Changed — breaking once for Rust callers: two report types are `#[non_exhaustive]`

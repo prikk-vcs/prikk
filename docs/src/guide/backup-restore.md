@@ -65,7 +65,7 @@ prikk bundle export --ref heads/main --output ../backup.bundle
 ```
 exported heads/main
 tip block: ...
-objects: 4
+objects: 5
 author key material: 1 included (continuity only, not a trust decision)
 repository format: 6
 tool version: ...
@@ -103,7 +103,7 @@ prikk bundle export --ref heads/main --output ../backup-after-unsealed-commit.bu
 ```
 exported heads/main
 tip block: ...
-objects: 4
+objects: 5
 ```
 
 **The tip block and object count are identical to the first export.** The second commit is not an
@@ -139,7 +139,7 @@ heads/main RefState: ...
 ...
 exported heads/main
 tip block: ...
-objects: 8
+objects: 9
 author key material: 1 included (continuity only, not a trust decision)
 repository format: 6
 tool version: ...
@@ -147,7 +147,7 @@ note: this bundle contains one ref's closure only -- other refs in the source re
 wrote ../backup.bundle
 ```
 
-`objects: 8` now (two RefStates, two blocks, two patches, two blobs) — `--force` was necessary
+`objects: 9` now (two RefStates, two blocks, two patches, two blobs, and the snapshot the first block carries as a checkpoint) — `--force` was necessary
 because `../backup.bundle` already existed from the first export.
 
 ## A bundle is one ref
@@ -171,7 +171,7 @@ prikk bundle verify --input backup.bundle
 bundle verifies: heads/main
 RefState: ...
 tip block: ...
-objects: 8
+objects: 9
 author key material: 1 present (continuity only, not a trust decision)
 repository format: 6
 tool version: ...
@@ -194,8 +194,8 @@ prikk bundle import --input ../backup.bundle
 initialized Prikk repository at /path/to/restored-repo/.prikk
 received remotes/heads/main
 RefState: ...
-objects: 8
-new objects: 8
+objects: 9
+new objects: 9
 author key material: 1 recorded (continuity only, not a trust decision)
 note: no local ref was created or advanced, and no MAINTAINER key was trusted; run `trust maintainer add` to trust the sealing key, then `merge` to incorporate this history
 ```
@@ -225,7 +225,7 @@ prikk verify
 ```
 verified repository: /path/to/restored-repo/.prikk
 ...
-object items: 8 scanned, 0 failed
+object items: 9 scanned, 0 failed
 ...
 publication trust issues: 0
 sealed blocks: 2

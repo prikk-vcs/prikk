@@ -88,8 +88,8 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     support::ok(&export, "first bundle export");
     let export_stdout = String::from_utf8_lossy(&export.stdout);
     assert!(
-        export_stdout.contains("objects: 4"),
-        "page quotes objects: 4 for the first export: {export_stdout}"
+        export_stdout.contains("objects: 5"),
+        "page quotes objects: 5 for the first export: {export_stdout}"
     );
     assert!(
         export_stdout.contains("this bundle contains one ref's closure only"),
@@ -158,7 +158,7 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     support::ok(&export_after_unsealed, "export after an unsealed commit");
     let export_after_unsealed_stdout = String::from_utf8_lossy(&export_after_unsealed.stdout);
     assert!(
-        export_after_unsealed_stdout.contains("objects: 4"),
+        export_after_unsealed_stdout.contains("objects: 5"),
         "page's central claim: the unsealed commit must not appear -- object count stays 4: \
          {export_after_unsealed_stdout}"
     );
@@ -209,8 +209,8 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     support::ok(&export_forced, "export --force after sealing everything");
     let export_forced_stdout = String::from_utf8_lossy(&export_forced.stdout);
     assert!(
-        export_forced_stdout.contains("objects: 8"),
-        "page quotes objects: 8 once both generations are sealed: {export_forced_stdout}"
+        export_forced_stdout.contains("objects: 9"),
+        "page quotes objects: 9 once both generations are sealed: {export_forced_stdout}"
     );
     assert!(
         export_forced_stdout.contains("tool version: "),
@@ -226,8 +226,8 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     support::ok(&verify, "bundle verify with no repository present");
     let verify_stdout = String::from_utf8_lossy(&verify.stdout);
     assert!(
-        verify_stdout.contains("objects: 8"),
-        "page quotes objects: 8 from verify too: {verify_stdout}"
+        verify_stdout.contains("objects: 9"),
+        "page quotes objects: 9 from verify too: {verify_stdout}"
     );
     assert!(
         verify_stdout.contains("tool version: "),
@@ -283,7 +283,7 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
     support::ok(&restore_verify, "verify the restored repository");
     let restore_verify_stdout = String::from_utf8_lossy(&restore_verify.stdout);
     assert!(
-        restore_verify_stdout.contains("object items: 8 scanned, 0 failed"),
+        restore_verify_stdout.contains("object items: 9 scanned, 0 failed"),
         "page quotes this verify line: {restore_verify_stdout}"
     );
     assert!(

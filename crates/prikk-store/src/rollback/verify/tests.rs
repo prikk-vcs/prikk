@@ -45,8 +45,9 @@ fn rollback_draft_verify_matches_current_inverse_plan() {
             assert_eq!(verification.ref_name, "heads/main");
             assert_eq!(verification.wal_sequence, 1);
             assert_eq!(verification.author_key_id, "rollback-author-key");
-            assert_eq!(verification.inverse_operation_count, 2);
-            assert_eq!(verification.decoded_operation_count, 2);
+            // RFC 136 §10.3a ruling 3: both blocks are inverted.
+            assert_eq!(verification.inverse_operation_count, 4);
+            assert_eq!(verification.decoded_operation_count, 4);
         }
         let repository = verify_repository(&layout);
         assert!(repository.is_ok());

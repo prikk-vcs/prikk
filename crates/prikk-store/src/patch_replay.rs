@@ -34,16 +34,12 @@ use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::path::RepoPath;
 use crate::refs::RefStore;
-use crate::snapshot::load_block_snapshot;
 use crate::validate_local_branch_ref;
 use crate::wal::WalReplay;
 
 use apply::{apply_decoded_operation, apply_rename_batch};
 use decode::{DecodedOperationKind, decode_patch_operations};
-use read::{
-    files_to_replay_manifest, read_block, read_patch, replay_state_from_snapshot,
-    single_parent_chain,
-};
+use read::{files_to_replay_manifest, read_block, read_patch, single_parent_chain};
 
 /// Read-only result of replaying supported patch operations to an in-memory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,10 +284,6 @@ pub(crate) struct PatchReplaySnapshot {
     pub(crate) manifest: ReplayManifest,
     /// Files explicitly removed by replayed patches and still absent in the final manifest.
     pub(crate) deleted_files: Vec<PatchReplayDeletedFile>,
-    /// The latest snapshot's state in the replayed window -- the rollback-preview target. Empty when
-    /// no block in the window carries a snapshot. Mode- and kind-aware like any replay manifest;
-    /// rollback preview compares its paths and bytes.
-    pub(crate) baseline_manifest: ReplayManifest,
 }
 
 /// A file explicitly deleted while replaying the supported patch subset.
@@ -374,20 +366,11 @@ pub(crate) fn replay_supported_patch_chain(
     let mut patch_count = 0_usize;
     let mut applied_operation_count = 0_usize;
     let mut applied_operation_kinds = std::collections::BTreeSet::new();
-    let mut baseline_files = BTreeMap::new();
-    let mut baseline_live_nodes = BTreeMap::new();
 
+    // RFC 136 §10.3a: a checkpoint changes cost, never output. Every block's patches are replayed
+    // from genesis and `snapshot_blob_ref` is not read here.
     for block_id in &block_ids {
         let block = read_block(&object_store, *block_id)?;
-        if let Some(snapshot) = load_block_snapshot(&object_store, *block_id, &block)? {
-            // RFC 136 §10.1a: a snapshot is its block's own state, after the block's patches --
-            // applying them again would create what already exists.
-            (files, live_nodes) = replay_state_from_snapshot(snapshot);
-            baseline_files = files.clone();
-            baseline_live_nodes = live_nodes.clone();
-            deleted_files.clear();
-            continue;
-        }
         for patch_id in block.patch_ids {
             let patch = read_patch(&object_store, patch_id)?;
             let operations =
@@ -414,7 +397,6 @@ pub(crate) fn replay_supported_patch_chain(
         applied_operation_kinds,
         manifest: files_to_replay_manifest(files, &live_nodes)?,
         deleted_files: deleted_files.into_values().collect(),
-        baseline_manifest: files_to_replay_manifest(baseline_files, &baseline_live_nodes)?,
     })
 }
 

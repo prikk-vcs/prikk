@@ -1,6 +1,7 @@
 //! Snapshot path-safety, v2 manifest, and snapshot-checkout tests.
 
 mod readers;
+mod writer;
 
 use prikk_object::{
     BlockKind, CanonicalEncode, CreateFile, NodeId, ObjectEnvelope, ObjectId, ObjectType,

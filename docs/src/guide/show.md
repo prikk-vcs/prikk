@@ -40,7 +40,9 @@ nobody has asked to see binary bytes in a terminal.
 **A content reference is an id, not a guarantee.** `CreateFile`, `DeleteNode`'s file preimage, and
 both sides of `ReplaceBinary` name a blob by content-addressed id — and once a text file has been
 edited, its *pre-edit* identity is deliberately never written back to the object store (the content
-is reconstructed by replay instead). If a referenced blob is simply **absent** from the object
+is reconstructed by replay instead). The exception is a checkpoint: every 64th sealed block stores the
+content of every file live at that block, edited or not, so content that was live at a checkpoint
+reports normally. If a referenced blob is simply **absent** from the object
 store, that one piece of content reports as **unavailable** — a named state carrying the blob id,
 distinct from real empty content — rather than failing the command. Every other operation in the
 block still renders, and the command still exits `0`. This is not evidence of a damaged repository:

@@ -25,9 +25,8 @@ use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, LockableCont
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::received::read_received_pointer;
 use crate::test_gates::test_support::{
-    publish_text_create_then_edit_block_v1, rollback_patch_blob_envelope, signed_block,
-    signed_patch_blob_envelope, signed_patch_envelope, signed_ref_state_envelope,
-    signed_ref_update_envelope, unique_temp_dir,
+    publish_text_create_then_edit_block_v1, signed_block, signed_patch_blob_envelope,
+    signed_patch_envelope, signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
 };
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectReader,
@@ -93,8 +92,15 @@ fn seal_two_block_history_with_snapshot_blob(
     let patch = signed_patch_envelope();
     let patch_id = object_store.write_object(&patch)?;
 
-    let snapshot_blob = rollback_patch_blob_envelope();
-    let snapshot_blob_id = object_store.write_object(&snapshot_blob)?;
+    // RFC 136 increment 1b: export validates a snapshot before carrying it, so this is a real v2
+    // manifest -- empty, recomputing to the root block's own empty state.
+    let snapshot_blob_id = crate::test_gates::test_support::write_snapshot_content(
+        &mut object_store,
+        crate::SnapshotManifest {
+            entries: Vec::new(),
+        }
+        .encode()?,
+    )?;
 
     let root_block = signed_block(
         BlockKind::Root,
@@ -2323,5 +2329,153 @@ fn verify_and_import_agree_a_well_formed_bundle_is_accepted() -> prikk_error::Re
 
     let _ = std::fs::remove_dir_all(source_root);
     let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// RFC 136 increment 1b: a checkpoint's manifest names a content blob no patch names -- an edited
+/// file's text, stored at the checkpoint. Export carries it, import lands it and the receiver's
+/// snapshot loads with its bytes; the same bundle without that blob is refused.
+#[test]
+fn a_bundle_carries_a_checkpoints_content_blobs_and_refuses_one_without_them()
+-> prikk_error::Result<()> {
+    use crate::MaintainerSigner as _;
+    use prikk_object::{
+        BlobKind, BlobPayload, BlockPayload, CreateFile, EditText, NodeId, Operation,
+        OperationKind, PatchPayload,
+    };
+
+    let source_root = unique_temp_dir("rfc136-1b-bundle-content-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    let maintainer = crate::Ed25519MaintainerSigner::from_seed("rfc136-1b-bundle", &[0x3C; 32])?;
+    crate::add_trusted_maintainer(
+        &source,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    let author = crate::Ed25519AuthorSigner::from_seed("rfc136-1b-bundle-author", &[0x3D; 32])?;
+    let node_id = NodeId::from_bytes([0x5B; 32]);
+    let (old, new) = (b"alpha beta\n", b"alpha BETA\n");
+    let mut objects = FileObjectStore::new(source.clone());
+    let old_blob = objects.write_object(&ObjectEnvelope::unsigned(
+        ObjectType::Blob,
+        1,
+        BlobPayload::new(BlobKind::Text, old.to_vec()).to_canonical_bytes()?,
+    ))?;
+    let span = crate::text_span::plan_authored_text_span(old, new, node_id)
+        .map_err(|err| prikk_error::PrikkError::Integrity(err.to_string()))?
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("unchanged".to_string()))?;
+    let payload = PatchPayload {
+        operations: vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "a.txt".to_string(),
+                    node_id,
+                    blob_id: old_blob,
+                    mode: 0o100644,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::EditText(EditText {
+                    node_id,
+                    span_id: span.span_id,
+                    old_span_hash: span.old_span_hash,
+                    left_anchor_hash: span.left_anchor_hash,
+                    right_anchor_hash: span.right_anchor_hash,
+                    replacement_text: span.replacement_text,
+                    presentation_hint_line: None,
+                    presentation_hint_column: None,
+                    old_span_text: span.old_span_text,
+                    left_anchor_len: Some(span.left_anchor_len),
+                    right_anchor_len: Some(span.right_anchor_len),
+                }),
+            },
+        ],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        prikk_object::PATCH_TEXT_SPAN_V2_SCHEMA,
+        payload.to_canonical_bytes()?,
+    );
+    let patch_id = patch.object_id();
+    patch.add_signature(crate::author_signature(&author, patch_id)?)?;
+    crate::Wal::for_layout(&source, crate::DEFAULT_ACTIVE_NAME).append_patch(&patch)?;
+    crate::write_active_ref_metadata(&source, "heads/main")?;
+    crate::rfc111_seal_simulation::simulate_one_seal(&source, "heads/main", &maintainer)?;
+
+    let tip = crate::refs::read_current_ref_tip_block(&source, &objects, "heads/main")?;
+    let block_envelope = objects
+        .read_typed(tip, ObjectType::Block)?
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("tip missing".to_string()))?;
+    let block = BlockPayload::decode_canonical(&block_envelope.canonical_payload)?;
+    let edited_blob_id = ObjectId::from_canonical_payload(
+        ObjectType::Blob,
+        1,
+        &BlobPayload::new(BlobKind::Text, new.to_vec()).to_canonical_bytes()?,
+    );
+    assert!(
+        block.snapshot_blob_ref.is_some(),
+        "fixture sanity: the root block is a checkpoint"
+    );
+
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+    let (ref_name, carried, author_keys, _manifest) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    assert!(
+        carried
+            .iter()
+            .any(|envelope| envelope.object_id() == edited_blob_id),
+        "the export carries the edited content blob no patch names"
+    );
+
+    let good_root = unique_temp_dir("rfc136-1b-bundle-content-good");
+    let good = RepositoryLayout::init(good_root.clone())?;
+    import_bundle(&good, &bytes, &BundleImportOptions::default_limits())?;
+    let good_objects = FileObjectStore::new(good.clone());
+    let files = crate::snapshot::load_block_snapshot(&good_objects, tip, &block)?
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("no snapshot".to_string()))?;
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.bytes.clone())
+            .collect::<Vec<_>>(),
+        vec![new.to_vec()],
+        "the receiver's snapshot loads with the edited bytes"
+    );
+
+    let broken: Vec<ObjectEnvelope> = carried
+        .into_iter()
+        .filter(|envelope| envelope.object_id() != edited_blob_id)
+        .collect();
+    let broken_bytes = encode_bundle(&ref_name, &broken, &author_keys, &test_manifest())?;
+    let broken_root = unique_temp_dir("rfc136-1b-bundle-content-broken");
+    let broken_target = RepositoryLayout::init(broken_root.clone())?;
+    let err = match import_bundle(
+        &broken_target,
+        &broken_bytes,
+        &BundleImportOptions::default_limits(),
+    ) {
+        Ok(report) => {
+            panic!("a bundle missing a checkpoint's content blob must be refused: {report:?}")
+        }
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string().contains("names content blob"),
+        "unexpected error: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(good_root);
+    let _ = std::fs::remove_dir_all(broken_root);
     Ok(())
 }

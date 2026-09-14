@@ -101,17 +101,17 @@ pub(crate) fn load_snapshot_checkout(
     ref_name: &str,
 ) -> Result<(SnapshotCheckoutPlan, Vec<SnapshotFile>)> {
     let checkout = prepare_checkout_plan(layout, ref_name)?;
-    // RFC 132 per-site: a block with **no** snapshot reference is by design, not damage. RFC 136 §7
-    // ruled that no block-creating path writes a snapshot yet, so every block in every repository is
-    // in this state today -- reporting the normal case as `integrity error:` told a user their
-    // repository was broken when nothing was wrong. `Precondition`, and the message now carries the
+    // RFC 132 per-site: a block with **no** snapshot reference is by design, not damage. Only a
+    // checkpoint carries one (RFC 136 §10.2: a ref's first block and every 64 blocks after), so most
+    // blocks are in this state -- reporting the normal case as `integrity error:` would tell a user
+    // their repository was broken when nothing was wrong. `Precondition`, and the message carries the
     // route that works instead of only the fact.
     let (Some(snapshot_blob_id), Some(block_id)) = (checkout.snapshot_blob_ref, checkout.block_id)
     else {
         return Err(PrikkError::Precondition(format!(
-            "checkout target for {ref_name} does not contain a snapshot blob; no block-creating \
-             path writes one yet, so use `prikk checkout --patch-plan --ref {ref_name}`, which \
-             replays without a snapshot"
+            "checkout target for {ref_name} is not a checkpoint, so it carries no snapshot \
+             (checkpoints fall at a ref's first block and every 64 blocks after); use `prikk \
+             checkout --patch-plan --ref {ref_name}`, which replays without one"
         )));
     };
     let object_store = ObjectReadSnapshot::open(layout)?;

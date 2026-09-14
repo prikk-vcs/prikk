@@ -21,8 +21,9 @@ fn patch_materialization_writes_replayed_files() {
         assert!(report.is_ok());
         if let Ok(report) = report {
             assert_eq!(report.block_count, 2);
-            assert_eq!(report.patch_count, 1);
-            assert_eq!(report.applied_operation_count, 2);
+            // RFC 136 §10.3a: every block is replayed, the root's creates included.
+            assert_eq!(report.patch_count, 2);
+            assert_eq!(report.applied_operation_count, 4);
             assert_eq!(report.planned_files, 2);
             assert_eq!(report.written_files, 2);
             assert_eq!(report.unchanged_files, 0);

@@ -600,10 +600,24 @@ pub fn export_bundle(
 
     let mut patch_ids: BTreeSet<ObjectId> = BTreeSet::new();
     let mut blob_ids: BTreeSet<ObjectId> = BTreeSet::new();
-    for payload in ancestors.values() {
+    for (block_id, payload) in &ancestors {
         patch_ids.extend(payload.patch_ids.iter().copied());
-        if let Some(blob_id) = payload.snapshot_blob_ref {
-            blob_ids.insert(blob_id);
+        // RFC 136 increment 1b: a checkpoint's manifest names content Blobs no patch names (an
+        // edited file's text, stored at the checkpoint). The manifest is validated first, so a
+        // damaged one is refused for what it is before any id it names is trusted.
+        if let Some(manifest) =
+            crate::snapshot::validate_snapshot_manifest(&object_store, *block_id, payload)?
+        {
+            blob_ids.extend(payload.snapshot_blob_ref);
+            blob_ids.extend(
+                manifest
+                    .entries
+                    .iter()
+                    .filter_map(|entry| match &entry.content {
+                        crate::state_root::StateRootContent::Blob(blob_id) => Some(*blob_id),
+                        crate::state_root::StateRootContent::Symlink(_) => None,
+                    }),
+            );
         }
     }
 
@@ -1078,6 +1092,28 @@ fn validate_bundle_contents(
                     "block {block_id} names snapshot blob {snapshot_blob_id}, which is \
                      {missing_clause}"
                 )));
+            }
+            // RFC 136 increment 1b: a carried manifest names content blobs no patch names; each is a
+            // blob reference on the same terms. A manifest already in this repository was checked
+            // when it arrived.
+            if let Some(manifest_envelope) = bundle_objects_by_id.get(&snapshot_blob_id) {
+                let manifest = crate::snapshot::SnapshotManifest::decode(
+                    &crate::blob_access::decode_snapshot_blob(
+                        &manifest_envelope.canonical_payload,
+                    )?,
+                )?;
+                for entry in &manifest.entries {
+                    if let crate::state_root::StateRootContent::Blob(content_blob_id) =
+                        &entry.content
+                    {
+                        if !present(ObjectType::Blob, *content_blob_id) {
+                            return Err(PrikkError::Integrity(format!(
+                                "block {block_id} snapshot blob {snapshot_blob_id} names content \
+                                 blob {content_blob_id}, which is {missing_clause}"
+                            )));
+                        }
+                    }
+                }
             }
         }
     }

@@ -93,7 +93,8 @@ fn rollback_draft_appends_inverse_patch_to_empty_active_wal() {
             assert_eq!(report.ref_name, "heads/main");
             assert_eq!(report.wal_sequence, 1);
             assert_eq!(report.author_key_id, "rollback-author-key");
-            assert_eq!(report.inverse_operation_count, 2);
+            // RFC 136 §10.3a ruling 3: both blocks are inverted.
+            assert_eq!(report.inverse_operation_count, 4);
             assert_eq!(report.preview_change_count, 2);
             let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
             let replay = wal.replay();

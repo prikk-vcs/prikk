@@ -1570,6 +1570,9 @@ fn verify_block_payload(
             "snapshot blob",
             block_id,
         )?;
+        // RFC 136 increment 1b: the snapshot describes this block (decodes, recomputes to its root,
+        // names only present content Blobs). `verify` never reads a snapshot in place of replay.
+        crate::snapshot::validate_snapshot_manifest(object_store, block_id, &payload)?;
     }
     let merge_baseline_divergence = if format == RepositoryFormat::CurrentV6 {
         verify_merge_baseline(object_store, block_id, &payload)?

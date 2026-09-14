@@ -15,8 +15,8 @@ use prikk_object::{
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
 use crate::node::node_id_gen::{NodeIdGenerator, SequenceEntropySource};
 use crate::test_gates::test_support::{
-    dummy_signature, maintainer_signature, signed_block, signed_ref_state_envelope,
-    signed_ref_update_envelope, unique_temp_dir,
+    dummy_signature, signed_block, signed_ref_state_envelope, signed_ref_update_envelope,
+    unique_temp_dir,
 };
 use crate::{
     ActiveLock, ActiveRefMetadata, AuthorSigner, DEFAULT_ACTIVE_NAME, Ed25519AuthorSigner,
@@ -173,51 +173,6 @@ fn seal_active_patch(layout: &RepositoryLayout, ref_name: &str) -> ObjectId {
     let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME).unwrap();
     finish_active_publication_cleanup(layout, &active_lock).unwrap();
     block_id
-}
-
-/// Publish an empty-state baseline block that references a snapshot, with `path` present in the
-/// worktree, for the E3 rejection test. Under RFC 136 §10.1a a snapshot is its block's own state; this
-/// block's state is empty, so its manifest is empty too. E3 looks only at the reference.
-fn publish_snapshot_baseline(layout: &RepositoryLayout, path: &str, bytes: &[u8]) {
-    let mut object_store = FileObjectStore::new(layout.clone());
-    let manifest = crate::SnapshotManifest {
-        entries: Vec::new(),
-    };
-    let blob = BlobPayload::new(BlobKind::Snapshot, manifest.encode().unwrap());
-    let mut blob_env =
-        ObjectEnvelope::unsigned(ObjectType::Blob, 1, blob.to_canonical_bytes().unwrap());
-    blob_env.add_signature(maintainer_signature()).unwrap();
-    let blob_id = blob_env.object_id();
-    object_store.write_object(&blob_env).unwrap();
-
-    let payload = BlockPayload {
-        parent_block_ids: Vec::new(),
-        kind: BlockKind::Normal,
-        patch_ids: Vec::new(),
-        state_merkle_root: crate::compute_state_root(&[]).unwrap(),
-        snapshot_blob_ref: Some(blob_id),
-        mainline_parent_id: None,
-        merge_baseline_block_id: None,
-    };
-    let mut block =
-        ObjectEnvelope::unsigned(ObjectType::Block, 2, payload.to_canonical_bytes().unwrap());
-    block.add_signature(maintainer_signature()).unwrap();
-    let block_id = block.object_id();
-    object_store.write_object(&block).unwrap();
-    std::fs::write(layout.root().join(path), bytes).unwrap();
-
-    let ref_store = RefStore::new(layout.clone());
-    let ref_state = signed_ref_state_envelope("heads/main", None, block_id, 1);
-    let ref_state_id = ref_state.object_id();
-    let ref_update = signed_ref_update_envelope("heads/main", None, ref_state_id, block_id, 1);
-    ref_store
-        .publish(&RefPublication {
-            ref_name: "heads/main".to_string(),
-            expected_previous_ref_state_id: None,
-            ref_state,
-            ref_update,
-        })
-        .unwrap();
 }
 
 #[test]
@@ -849,32 +804,6 @@ fn existing_text_node_rejects_non_utf8_content() {
             .to_string()
             .contains("existing TextFile cannot accept non-UTF-8 content"),
         "and the detail still names what the caller must fix: {error}"
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn snapshot_only_baseline_fails_closed() {
-    // E3: a snapshot-only baseline carries no node identity; authoring must fail closed.
-    let root = unique_temp_dir("wt-snapshot-reject");
-    let layout = RepositoryLayout::init(root.clone()).unwrap();
-    publish_snapshot_baseline(&layout, "README.md", b"hello\n");
-    std::fs::write(root.join("README.md"), b"changed\n").unwrap();
-
-    let mut generator = deterministic_generator();
-    let report = commit_worktree_changes_with_generator(
-        &layout,
-        "heads/main",
-        "change",
-        WorktreePatchCommitOptions::file_level(),
-        &mut generator,
-        &test_signer(),
-    );
-    assert!(report.is_err());
-    let message = report.err().unwrap().to_string();
-    assert!(
-        message.contains("node identity unavailable"),
-        "expected node-identity-unavailable class, got: {message}"
     );
     let _ = std::fs::remove_dir_all(root);
 }
@@ -2277,5 +2206,76 @@ fn concurrent_genesis_commits_serialize_to_one_record() {
     );
     assert_eq!(replay.records[0].seq, 1);
     assert_eq!(replay.trailing_partial_bytes, 0);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 136 increment 1a review, ruling 2: the E3 refusal is gone. A root block whose queued patches
+/// create and then delete a file is a checkpoint over an emptied tree -- its snapshot is empty -- and a
+/// commit on top of it authors normally.
+#[test]
+fn commit_on_an_emptied_tree_at_a_checkpoint_authors_normally() {
+    use crate::MaintainerSigner as _;
+    let root = unique_temp_dir("wt-emptied-checkpoint");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let maintainer =
+        crate::Ed25519MaintainerSigner::from_seed("wt-emptied-checkpoint", &[0x5C; 32]).unwrap();
+    crate::add_trusted_maintainer(
+        &layout,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )
+    .unwrap();
+    let mut generator = deterministic_generator();
+    std::fs::write(root.join("a.txt"), b"a\n").unwrap();
+    commit_worktree_changes_with_generator(
+        &layout,
+        "heads/main",
+        "create",
+        WorktreePatchCommitOptions::file_level(),
+        &mut generator,
+        &test_signer(),
+    )
+    .unwrap();
+    std::fs::remove_file(root.join("a.txt")).unwrap();
+    commit_worktree_changes_with_generator(
+        &layout,
+        "heads/main",
+        "delete",
+        WorktreePatchCommitOptions::file_level(),
+        &mut generator,
+        &test_signer(),
+    )
+    .unwrap();
+    crate::rfc111_seal_simulation::simulate_one_seal(&layout, "heads/main", &maintainer).unwrap();
+
+    let object_store = FileObjectStore::new(layout.clone());
+    let tip =
+        crate::refs::read_current_ref_tip_block(&layout, &object_store, "heads/main").unwrap();
+    let envelope = object_store
+        .read_typed(tip, ObjectType::Block)
+        .unwrap()
+        .unwrap();
+    let block = BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap();
+    assert_eq!(
+        crate::snapshot::load_block_snapshot(&object_store, tip, &block).unwrap(),
+        Some(Vec::new()),
+        "the root block is a checkpoint over an empty tree"
+    );
+
+    std::fs::write(root.join("b.txt"), b"b\n").unwrap();
+    let report = commit_worktree_changes_with_generator(
+        &layout,
+        "heads/main",
+        "after the checkpoint",
+        WorktreePatchCommitOptions::file_level(),
+        &mut generator,
+        &test_signer(),
+    )
+    .unwrap();
+    assert_eq!(report.operation_count, 1);
+    assert_eq!(
+        report.changes[0].operation,
+        WorktreePatchOperationKind::CreateFile
+    );
     let _ = std::fs::remove_dir_all(root);
 }

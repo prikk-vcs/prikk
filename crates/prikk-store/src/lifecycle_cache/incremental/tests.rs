@@ -466,7 +466,7 @@ fn reanchor_bound_forces_a_full_replay() {
         // Directly install a cache claiming the reanchor bound has already been reached, rather
         // than performing 64 real steps — this tests the boundary condition, not the loop.
         let mut at_bound = load(&layout).expect("warm cache");
-        at_bound.steps_since_reanchor = REANCHOR_BOUND;
+        at_bound.steps_since_reanchor = CHECKPOINT_CADENCE;
         assert!(save(&layout, &at_bound).is_ok());
 
         // If the reanchor bound is honoured, this must fall back to a full replay, which needs the

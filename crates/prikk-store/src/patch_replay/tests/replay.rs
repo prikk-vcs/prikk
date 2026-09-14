@@ -17,10 +17,9 @@ fn patch_replay_applies_create_delete_and_replace() {
         assert!(plan.is_ok());
         if let Ok(plan) = plan {
             assert_eq!(plan.block_count, 2);
-            // RFC 136 §10.1a: the root block's snapshot already is its state, so only the tip
-            // block's patch is replayed.
-            assert_eq!(plan.patch_count, 1);
-            assert_eq!(plan.applied_operation_count, 2);
+            // RFC 136 §10.3a: a checkpoint changes cost, never output -- both blocks are replayed.
+            assert_eq!(plan.patch_count, 2);
+            assert_eq!(plan.applied_operation_count, 4);
             assert_eq!(plan.file_count, 2);
             assert!(plan.paths.contains(&"README.md".to_string()));
             assert!(plan.paths.contains(&"extra.txt".to_string()));

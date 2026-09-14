@@ -28,12 +28,13 @@ const CACHE_FILE_NAME: &str = "lifecycle-state.v1";
 const CACHE_MAGIC: &[u8] = b"PRIKK-LIFECYCLE-INCREMENTAL-CACHE-v1\0";
 const CACHE_SCHEMA_VERSION: u32 = 1;
 
-/// After this many consecutive incremental steps on one lineage, the next commit is forced through
-/// an unmodified full replay regardless of cache eligibility. This is the only control on how long a
-/// persistence fault that survives the checksum and `from_replay`'s structural check could live
-/// before an independent reconstruction overwrites the cache with ground truth. See the design
-/// document §5 for the exposure/amortized-overhead reasoning behind this exact value.
-const REANCHOR_BOUND: u32 = 64;
+// After `CHECKPOINT_CADENCE` consecutive incremental steps on one lineage, the next commit is forced
+// through an unmodified full replay regardless of cache eligibility. This is the only control on how
+// long a persistence fault that survives the checksum and `from_replay`'s structural check could live
+// before an independent reconstruction overwrites the cache with ground truth. See the design
+// document §5 for the exposure/amortized-overhead reasoning behind the value; RFC 136 §10.2 made the
+// reanchor bound and the snapshot checkpoint cadence one number.
+use crate::snapshot::CHECKPOINT_CADENCE;
 
 struct IncrementalCache {
     baseline_block_id: ObjectId,
@@ -90,7 +91,7 @@ pub(crate) fn resolve_baseline_state(
     horizon_id: ObjectId,
 ) -> Result<ReplayDerivedLifecycleState> {
     if let Some(cached) = load(layout) {
-        if cached.horizon_id == horizon_id && cached.steps_since_reanchor < REANCHOR_BOUND {
+        if cached.horizon_id == horizon_id && cached.steps_since_reanchor < CHECKPOINT_CADENCE {
             if let Some(state) = try_incremental_step(reader, &cached, baseline_block_id)? {
                 let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
                 persist(

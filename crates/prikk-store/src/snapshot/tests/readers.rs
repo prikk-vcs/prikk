@@ -156,62 +156,94 @@ fn preview_into_empty_repository(layout: &RepositoryLayout) -> prikk_error::Resu
         .collect())
 }
 
-/// Every snapshot reader over `heads/main`, by name. Read-only readers first, materializers last.
-fn every_reader(layout: &RepositoryLayout) -> Vec<(&'static str, prikk_error::Result<()>)> {
-    vec![
-        (
-            "patch replay plan",
-            prepare_patch_replay_plan(layout, MAIN).map(|_| ()),
-        ),
-        (
-            "patch deletion plan",
-            plan_patch_checkout_deletions(layout, MAIN).map(|_| ()),
-        ),
-        (
-            "inverse plan",
-            prepare_patch_inverse_plan(layout, MAIN).map(|_| ()),
-        ),
-        (
-            "rollback preview",
-            prepare_rollback_preview(layout, MAIN).map(|_| ()),
-        ),
-        (
-            "bundle preview",
-            preview_into_empty_repository(layout).map(|_| ()),
-        ),
+/// Every replay reader's report over `heads/main`, as text with the tip's block id replaced -- the
+/// id differs between a repository whose block carries a snapshot and its twin that does not, by
+/// design (the reference is signed). RFC 136 §10.3a: none of these reads a snapshot.
+fn replay_reports(layout: &RepositoryLayout, tip: ObjectId) -> prikk_error::Result<Vec<String>> {
+    let reports = vec![
+        format!("{:?}", prepare_patch_replay_plan(layout, MAIN)?),
+        format!("{:?}", plan_patch_checkout_deletions(layout, MAIN)?),
+        format!("{:?}", prepare_patch_inverse_plan(layout, MAIN)?),
+        format!("{:?}", prepare_rollback_preview(layout, MAIN)?),
+    ];
+    let tip = format!("{tip:?}");
+    Ok(reports
+        .into_iter()
+        .map(|report| report.replace(&tip, "<tip>"))
+        .collect())
+}
+
+/// A one-block history creating `a.txt`, with `snapshot` on the block. Returns the block id.
+fn publish_one_block(
+    layout: &RepositoryLayout,
+    snapshot: Snapshot,
+) -> prikk_error::Result<ObjectId> {
+    let mut chain = Chain::new(layout);
+    let a = chain.blob(b"a\n")?;
+    chain.seal(vec![create(1, "a.txt", 0xA1, a)], snapshot)?;
+    chain
+        .tip
+        .ok_or_else(|| PrikkError::Integrity("fixture sealed no block".to_string()))
+}
+
+/// A damaged snapshot changes no replay output, and is refused by exactly its own surfaces:
+/// `checkout --snapshot-plan`, snapshot materialization, `verify`, and bundle export (which carries
+/// the snapshot and validates it first).
+fn assert_only_the_snapshot_surfaces_refuse(
+    content: Vec<u8>,
+    needle: &str,
+) -> prikk_error::Result<()> {
+    let damaged_root = unique_temp_dir("snapshot-damaged");
+    let twin_root = unique_temp_dir("snapshot-damaged-twin");
+    let damaged = RepositoryLayout::init(damaged_root.clone())?;
+    let twin = RepositoryLayout::init(twin_root.clone())?;
+    let damaged_tip = publish_one_block(&damaged, Snapshot::Content(content))?;
+    let twin_tip = publish_one_block(&twin, Snapshot::None)?;
+
+    assert_eq!(
+        replay_reports(&damaged, damaged_tip)?,
+        replay_reports(&twin, twin_tip)?,
+        "every replay reader's output equals the output with no snapshot"
+    );
+
+    let surfaces: Vec<(&str, prikk_error::Result<()>)> = vec![
         (
             "snapshot checkout plan",
-            prepare_snapshot_checkout_plan(layout, MAIN).map(|_| ()),
-        ),
-        (
-            "patch materialization",
-            materialize_patch_checkout(layout, MAIN).map(|_| ()),
+            prepare_snapshot_checkout_plan(&damaged, MAIN).map(|_| ()),
         ),
         (
             "snapshot materialization",
-            materialize_snapshot_checkout(layout, MAIN).map(|_| ()),
+            materialize_snapshot_checkout(&damaged, MAIN).map(|_| ()),
         ),
-    ]
-}
-
-fn assert_every_reader_refuses_as_integrity(layout: &RepositoryLayout, needle: &str) {
-    for (reader, result) in every_reader(layout) {
+        ("bundle export", export_bundle(&damaged, MAIN).map(|_| ())),
+    ];
+    for (surface, result) in surfaces {
         match result {
             Err(PrikkError::Integrity(message)) => assert!(
                 message.contains(needle),
-                "{reader} refused as Integrity, but not naming `{needle}`: {message}"
+                "{surface} refused as Integrity, but not naming `{needle}`: {message}"
             ),
-            other => panic!("{reader} must refuse as Integrity naming `{needle}`, got {other:?}"),
+            other => panic!("{surface} must refuse as Integrity naming `{needle}`, got {other:?}"),
         }
     }
+    let verification = verify_repository(&damaged)?;
+    assert!(
+        verification.has_item_failure() && format!("{verification:?}").contains(needle),
+        "verify must report the snapshot: {verification:?}"
+    );
+    assert!(
+        !verify_repository(&twin)?.has_item_failure(),
+        "fixture sanity: the twin verifies"
+    );
+    let _ = std::fs::remove_dir_all(damaged_root);
+    let _ = std::fs::remove_dir_all(twin_root);
+    Ok(())
 }
 
-/// The team's §2.2 measurement, kept: a snapshot on the block whose own patch creates `a.txt`. Before
-/// §10.1a every replay reader applied that patch on top of the snapshot and refused with `CreateFile
-/// would overwrite existing path a.txt`. Each reader must now seed from the snapshot, skip the
-/// block's patch, and yield `a.txt` exactly once. A second block creates `b.txt`, so the inverse plan
-/// has something to invert (with nothing, it refuses to encode an empty patch -- unrelated to
-/// snapshots).
+/// The team's §2.2 measurement, kept: a post-state snapshot on the block whose own patch creates
+/// `a.txt`. Under 1a's anchor a reader that applied that patch on top of the snapshot refused with
+/// `CreateFile would overwrite existing path a.txt`. Since RFC 136 §10.3a no replay reader reads the
+/// snapshot at all: every reader replays both blocks and yields `a.txt` exactly once.
 #[test]
 fn a_post_state_snapshot_on_the_block_that_creates_its_file_yields_the_file_once()
 -> prikk_error::Result<()> {
@@ -228,20 +260,22 @@ fn a_post_state_snapshot_on_the_block_that_creates_its_file_yields_the_file_once
 
     let plan = prepare_patch_replay_plan(&layout, MAIN)?;
     assert_eq!(plan.paths, vec!["a.txt".to_string(), "b.txt".to_string()]);
-    assert_eq!(
-        plan.patch_count, 1,
-        "the snapshot block's own patch is not replayed"
-    );
+    assert_eq!(plan.patch_count, 2, "both blocks are replayed (§10.3a)");
     assert_eq!(
         plan_patch_checkout_deletions(&layout, MAIN)?.planned_deletions,
         0
     );
     let inverse = prepare_patch_inverse_plan(&layout, MAIN)?;
-    assert_eq!(inverse.inverse_operation_count, 1);
     assert_eq!(
-        inverse.operations.first().map(|op| op.path.as_str()),
-        Some("b.txt")
+        inverse.inverse_operation_count, 2,
+        "rollback never anchors (§10.3a)"
     );
+    let inverted: Vec<&str> = inverse
+        .operations
+        .iter()
+        .map(|op| op.path.as_str())
+        .collect();
+    assert_eq!(inverted, vec!["b.txt", "a.txt"]);
     assert!(prepare_rollback_preview(&layout, MAIN).is_ok());
     let previewed = preview_into_empty_repository(&layout)?;
     assert_eq!(
@@ -318,9 +352,9 @@ fn publish_four_block_history(
     )
 }
 
-/// Readers with and without an anchor agree: the same history, once with a snapshot on a block that
-/// has patches and once without, replays to the same manifest -- paths, bytes, modes and kinds -- and
-/// materializes to the same bytes. The patch counts prove the snapshot was used, not ignored.
+/// A snapshot changes no replay output (RFC 136 §10.3a): the same history, once with a snapshot on a
+/// block that has patches and once without, replays to the same manifest -- paths, bytes, modes and
+/// kinds -- with the same counts, and materializes to the same bytes.
 #[test]
 fn replay_from_a_snapshot_agrees_with_replay_without_one() -> prikk_error::Result<()> {
     let with_root = unique_temp_dir("snapshot-agrees-with");
@@ -333,13 +367,13 @@ fn replay_from_a_snapshot_agrees_with_replay_without_one() -> prikk_error::Resul
     let replay_with = replay_supported_patch_chain(&with, MAIN)?;
     let replay_without = replay_supported_patch_chain(&without, MAIN)?;
     assert_eq!(replay_with.manifest, replay_without.manifest);
-    // The count is cumulative across the walk: block 1's patch, not block 2's (its snapshot already
-    // holds it), then blocks 3 and 4.
+    assert_eq!(replay_with.patch_count, 4, "no block is skipped");
+    assert_eq!(replay_with.patch_count, replay_without.patch_count);
     assert_eq!(
-        replay_with.patch_count, 3,
-        "the snapshot block's own patch is skipped"
+        replay_with.applied_operation_kinds,
+        replay_without.applied_operation_kinds
     );
-    assert_eq!(replay_without.patch_count, 4);
+    assert_eq!(replay_with.deleted_files, replay_without.deleted_files);
 
     materialize_patch_checkout(&with, MAIN)?;
     materialize_patch_checkout(&without, MAIN)?;
@@ -387,16 +421,15 @@ fn every_single_byte_flip_of_a_manifest_is_refused() -> prikk_error::Result<()> 
     Ok(())
 }
 
-/// One manifest byte changed (inside `a.txt`'s Blob id) on a real block: every reader refuses as
-/// `Integrity`, and the block still verifies by replay -- `verify` does not read the manifest in this
-/// increment.
+/// One manifest byte changed (inside `a.txt`'s Blob id): replay output is unchanged, and only the
+/// snapshot's own surfaces refuse, naming the recompute failure.
 #[test]
-fn a_tampered_manifest_is_refused_by_every_reader_while_the_block_still_verifies()
+fn a_tampered_manifest_changes_no_replay_output_and_its_own_surfaces_refuse()
 -> prikk_error::Result<()> {
-    let root = unique_temp_dir("snapshot-tampered");
+    let root = unique_temp_dir("snapshot-tamper-blob");
     let layout = RepositoryLayout::init(root.clone())?;
-    let mut chain = Chain::new(&layout);
-    let a = chain.blob(b"a\n")?;
+    let a = write_blob(&mut FileObjectStore::new(layout.clone()), b"a\n")?;
+    let _ = std::fs::remove_dir_all(root);
     let mut content = SnapshotManifest {
         entries: vec![text_entry("a.txt", 0xA1, a)?],
     }
@@ -404,44 +437,26 @@ fn a_tampered_manifest_is_refused_by_every_reader_while_the_block_still_verifies
     if let Some(last) = content.last_mut() {
         *last ^= 0x01;
     }
-    chain.seal(
-        vec![create(1, "a.txt", 0xA1, a)],
-        Snapshot::Content(content),
-    )?;
-
-    assert_every_reader_refuses_as_integrity(
-        &layout,
+    assert_only_the_snapshot_surfaces_refuse(
+        content,
         "snapshot manifest does not recompute to its block's state root",
-    );
-    let verification = verify_repository(&layout)?;
-    assert!(
-        !verification.has_stage_failure() && !verification.has_item_failure(),
-        "the block still verifies by replay: {verification:?}"
-    );
-    let _ = std::fs::remove_dir_all(root);
-    Ok(())
+    )
 }
 
-/// A v1-magic Blob in `snapshot_blob_ref`: v1 is retired, and every reader says which magic it found.
+/// A v1-magic Blob in `snapshot_blob_ref`: replay output is unchanged, and the snapshot's own surfaces
+/// refuse, naming the magic found.
 #[test]
-fn a_v1_manifest_is_refused_naming_its_magic() -> prikk_error::Result<()> {
-    let root = unique_temp_dir("snapshot-v1-magic");
-    let layout = RepositoryLayout::init(root.clone())?;
-    let mut chain = Chain::new(&layout);
-    let a = chain.blob(b"a\n")?;
+fn a_v1_manifest_changes_no_replay_output_and_its_own_surfaces_name_its_magic()
+-> prikk_error::Result<()> {
     let mut v1 = b"PRIKK-SNAPSHOT-MANIFEST-v1\n".to_vec();
     v1.extend_from_slice(&5_u32.to_be_bytes());
     v1.extend_from_slice(b"a.txt");
     v1.extend_from_slice(&2_u64.to_be_bytes());
     v1.extend_from_slice(b"a\n");
-    chain.seal(vec![create(1, "a.txt", 0xA1, a)], Snapshot::Content(v1))?;
-
-    assert_every_reader_refuses_as_integrity(
-        &layout,
+    assert_only_the_snapshot_surfaces_refuse(
+        v1,
         "snapshot manifest magic `PRIKK-SNAPSHOT-MANIFEST-v1` is not PRIKK-SNAPSHOT-MANIFEST-v2",
-    );
-    let _ = std::fs::remove_dir_all(root);
-    Ok(())
+    )
 }
 
 /// `checkout --snapshot-materialize` on the shared fixture with the snapshot on the tip yields the

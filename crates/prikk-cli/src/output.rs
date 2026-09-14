@@ -274,7 +274,7 @@ pub(crate) fn print_rollback_preview_plan(layout: &RepositoryLayout, plan: &Roll
         }
     }
     println!(
-        "note: this is a non-mutating rollback preview to the latest snapshot baseline; \
+        "note: this is a non-mutating rollback preview to the empty state before the chain; \
          rollback refs, authorization, worktree writes, and full patch algebra remain later PRs"
     );
 }

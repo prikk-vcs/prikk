@@ -322,6 +322,14 @@ struct DeclaredHub {
 /// internals" shape RFC 131 §3 argued for.
 const DECLARED_HUBS: &[DeclaredHub] = &[
     DeclaredHub {
+        module: "block_state",
+        reason: "the one seal function derives, decides the checkpoint and writes (RFC 136 \
+                  increments 0 and 1b): every path that seals a Block -- seal, merge, sync seal \
+                  --claim, the RFC 111 simulation -- calls it, and its one new edge is into \
+                  `snapshot`, the manifest a checkpoint writes. Consolidation of four builders \
+                  into one, not reach that crept outward",
+    },
+    DeclaredHub {
         module: "merge::evidence",
         reason: "RFC 142's `show` reuses this module's own lineage-horizon-to-replay sequence \
                   through one new narrow function (`lifecycle_state_at`) rather than duplicating \
