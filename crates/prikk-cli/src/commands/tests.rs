@@ -403,6 +403,58 @@ fn declared_undocumented_names_are_real_registry_entries() {
     }
 }
 
+/// The Git vocabulary map rule (C) holds to the whole registry.
+const GIT_MAPPING_PAGE: &str = "docs/src/reference/git-mapping.md";
+
+/// Registry entries rule (C) does not require on the Git map, each with the reason. **Empty**: every
+/// command prikk has is either a Git counterpart or a "no counterpart" row there.
+const GIT_MAPPING_EXEMPT: &[(&str, &str)] = &[];
+
+/// Rule (C) (RFC 128 git-mapping currency handoff §3): every registry entry is named as `prikk
+/// <name>` in a code region of the Git map. Rules (A) and (B) cannot see that page calling an existing
+/// command "Missing" -- `show`, `branch switch`, `key status` and `doctor --repair-index` all shipped
+/// after the page and tripped nothing. Subcommands are below the registry's granularity and stay a
+/// release-prep step.
+#[test]
+fn rule_c_every_registry_entry_is_named_on_the_git_mapping_page() {
+    let root = repo_root();
+    let text = fs::read_to_string(root.join(GIT_MAPPING_PAGE))
+        .unwrap_or_else(|err| panic!("{GIT_MAPPING_PAGE} must read: {err}"));
+    let named: Vec<&str> = code_regions(&text)
+        .into_iter()
+        .flat_map(command_tokens)
+        .collect();
+    for command in COMMANDS {
+        if GIT_MAPPING_EXEMPT
+            .iter()
+            .any(|(name, _)| *name == command.name)
+        {
+            continue;
+        }
+        assert!(
+            named.contains(&command.name),
+            "{GIT_MAPPING_PAGE} never names `prikk {}` in a code region -- a command that exists \
+             must have a row there, or be declared in GIT_MAPPING_EXEMPT with a reason",
+            command.name
+        );
+    }
+}
+
+/// Self-guard on rule (C)'s escape hatch, mirroring `declared_undocumented_names_are_real_registry_entries`.
+#[test]
+fn git_mapping_exempt_names_are_real_registry_entries() {
+    for (name, reason) in GIT_MAPPING_EXEMPT {
+        assert!(
+            COMMANDS.iter().any(|command| &command.name == name),
+            "GIT_MAPPING_EXEMPT names `{name}`, which is not a real registry command"
+        );
+        assert!(
+            !reason.trim().is_empty(),
+            "GIT_MAPPING_EXEMPT entry for `{name}` has no reason"
+        );
+    }
+}
+
 // ---- RFC 137 §4.3: code_regions' HTML arm (`<pre>`/`<code>`) ----
 
 /// Basic recognition: a bare `<code>` span and a bare `<pre>` block each yield one region, and
