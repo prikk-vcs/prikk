@@ -603,7 +603,7 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
 
 ### 10.5 Increments — revised 2026-09-13 (§10.1a); the original three-step plan is superseded
 
-0. **One seal function.** A store function builds, signs and publishes every Block: the CLI's `seal`, the
+0. **One seal function — DONE 2026-09-15 (`9d227afe`, `prikk_store::seal_block` + `BlockLineage`; pins verified against the pre-refactor tree by the architect).** A store function builds, signs and publishes every Block: the CLI's `seal`, the
    merge path, `sync accept`'s `seal_from_accepted` and the RFC 111 simulation all call it. No behaviour
    change; block ids byte-identical before and after on a history that exercises all four callers.
 1a. **Readers on v2.** `SnapshotManifest` v2 encode/decode, v1 removed; `recomputed_state_root()`;
