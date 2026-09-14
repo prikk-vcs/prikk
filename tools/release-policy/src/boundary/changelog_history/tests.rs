@@ -68,7 +68,16 @@ fn scratch_repo(tags: &[&str]) -> tempfile::TempDir {
     git(&["config", "user.name", "test"]);
     std::fs::write(root.join("CHANGELOG.md"), "# Changelog\n").unwrap();
     git(&["add", "CHANGELOG.md"]);
-    git(&["commit", "--quiet", "-m", "genesis"]);
+    // `-c commit.gpgsign=false`: same reason as the tag below -- a machine with
+    // `commit.gpgsign = true` otherwise makes this fixture call gpg (RFC 136 increment 0 review).
+    git(&[
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "genesis",
+    ]);
     for tag in tags {
         // `-c tag.gpgsign=false` overrides a developer machine's own global
         // `tag.gpgsign = true` (which turns a plain `git tag <name>` into a signed tag that
