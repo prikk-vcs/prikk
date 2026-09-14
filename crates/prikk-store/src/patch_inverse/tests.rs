@@ -560,3 +560,33 @@ fn inverse_plan_reverses_binary_file_deletion() {
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// RFC 136 §10.3a ruling 3: a chain with nothing to invert is a `Precondition` naming the ref, not
+/// the canonical encoding error an empty inverse patch used to produce.
+#[test]
+fn nothing_to_invert_is_a_precondition_naming_the_ref() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("patch-inverse-nothing");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let block = signed_block(BlockKind::Root, Vec::new(), Vec::new(), None);
+    let block_id = object_store.write_object(&block)?;
+    let ref_state = signed_ref_state_envelope("heads/main", None, block_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = signed_ref_update_envelope("heads/main", None, ref_state_id, block_id, 1);
+    RefStore::new(layout.clone()).publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    })?;
+
+    match prepare_patch_inverse_plan(&layout, "heads/main") {
+        Err(prikk_error::PrikkError::Precondition(message)) => assert!(
+            message.contains("heads/main has nothing to invert"),
+            "{message}"
+        ),
+        other => panic!("nothing to invert must be a Precondition naming the ref, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

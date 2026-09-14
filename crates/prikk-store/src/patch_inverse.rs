@@ -127,6 +127,16 @@ pub fn prepare_patch_inverse_plan(
         }
     }
 
+    // RFC 136 §10.3a ruling 3 (RFC 132's mould): a chain with no supported operation has nothing to
+    // invert. That is a fact about the ref the caller can act on, not damage -- and building an inverse
+    // patch from nothing would surface as an encoding error about an empty patch instead.
+    if inverse_operations.is_empty() {
+        return Err(PrikkError::Precondition(format!(
+            "{ref_name} has nothing to invert: its {} block(s) carry no operation to reverse, so no \
+             inverse patch can be planned",
+            block_ids.len()
+        )));
+    }
     inverse_operations.reverse();
     renumber_operations(&mut inverse_operations)?;
     let summaries = summarize_operations(&inverse_operations);

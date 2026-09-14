@@ -9,6 +9,13 @@ to the block's own state root, and every content blob it names must be present. 
 integrity finding in the objects stage, naming the block. Replay verification is unchanged: `verify`
 never reads a snapshot in place of replaying history.
 
+### Fixed — nothing to invert is a precondition, not an encoding error
+
+`prikk inverse-plan`, `rollback-preview` and `rollback-draft` on a ref whose history carries no
+operation to reverse now fail with `precondition not met: heads/main has nothing to invert: …`, naming
+the ref, instead of `canonical encoding error: patch operations must contain at least one operation`.
+The exit code is unchanged (`1`).
+
 ## 0.42.0 — 2026-09-13
 
 ### Changed — breaking once for Rust callers: two report types are `#[non_exhaustive]`
