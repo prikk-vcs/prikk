@@ -658,7 +658,7 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
    loading by Blob id (files, node ids, kinds, modes — the readers' "mode-unaware" caveats shrink and
    say so); every reader seeds from a snapshot and skips that block's patches; `checkout --snapshot-*`
    materializes by Blob id. One shared fixture whose snapshot block has patches. No writer.
-1b. **The writer.** `CHECKPOINT_CADENCE`, the decision inside the one seal function, `verify`'s
+1b. **The writer — DONE 2026-09-15 (`fdbdfd79`, `f3723bd4`; reviewed `.git-exclude/reviewed/rfc136-increment-1b-review-v1.md`).** **Owed to increment 3's CHANGELOG entry:** a bundle's object count now includes checkpoint manifests, and `show` reports content a checkpoint stored where it said *unavailable*. `CHECKPOINT_CADENCE`, the decision inside the one seal function, `verify`'s
    self-consistency check, the determinism, bundle, digest and storage controls of the first handoff.
    **Two rulings from increment 1a's review (2026-09-15):** (i) *the writer stores every entry's
    content Blob when the store lacks it* — after an `EditText` a text node's `blob_id` is
@@ -672,6 +672,9 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
 2. **The anchor and the gate**: checkout and baseline reconstruction start at the nearest snapshot; the
    provisional marker and the derivation gate. Controls as before: byte-equal output with and without a
    snapshot; the gate's refusal and clearing; a corrupted snapshot surfaces its `Integrity` finding.
+   **Before increment 2 (2026-09-15):** the pre-existing merge defect found at 1b's review — two edits of
+   one file on a side after the baseline refuse a confluent merge as an integrity error —
+   `handoffs/DC-75-merge-block-lineage/merge-refuses-a-side-that-edits-a-file-twice-handoff-v1.md`.
 3. **Measurement, docs, CHANGELOG** (`### Added — sealed snapshots`; `### Changed` for the gate's new
    refusal), and RFC 136 moves to `done/`.
 
