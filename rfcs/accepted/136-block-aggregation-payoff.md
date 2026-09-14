@@ -594,6 +594,54 @@ question as narrowly as it can be answered: block ids remain local by design, an
 - **Bundles and sync** carry snapshot blobs as reachable blobs (already, `bundle.rs:801`); a receiver
   that lacks one falls back to replay. Nothing in the exchange format changes.
 
+### 10.3a A checkpoint changes cost, never output — ruled 2026-09-15, on the dev team's hold of increment 1b
+
+**What the hold found.** Once the writer exists, every repository's first sealed block is a checkpoint.
+Increment 1a had moved three readers to *seed from a snapshot and skip that block's patches* — the
+architect's handoff said "every reader", and §10.3 names only checkout and baseline reconstruction. Live,
+that changes meaning:
+
+- **Rollback and inverse planning** reach back only to the latest checkpoint. A tip that *is* a checkpoint
+  — every single-block repository, every 64th seal — refuses with *"canonical encoding error: patch
+  operations must contain at least one operation"*: the inverse `PatchPayload` is built from nothing
+  (`patch_inverse.rs:153-160`) and encoding refuses it (`prikk-object/src/payload/patch.rs:107`).
+- **`checkout --patch-plan --format json`'s `coverage.applied_operation_kinds`**, and the prose counts
+  *patches replayed* / *operations applied*, shrink to the replay window.
+- **Found at review, not in the hold:** `checkout --patch-delete-plan` and `--patch-materialize-delete`
+  lose every `DeleteFile` before the checkpoint. The replay fills `deleted_files` from history
+  (`patch_replay/apply.rs:122`) and the anchor clears it, so a stale worktree file that earlier history
+  deleted is silently kept.
+
+§6 already forbids all three: snapshots are *checked auxiliary data* and *cannot override replay*. A
+storage cadence must never move a user-visible answer.
+
+**Rulings.**
+
+1. **Principle.** Every output derived from state or history is byte-identical with and without
+   checkpoints. Exempt, by what they are: the snapshot's own surfaces (`checkout --snapshot-*`, `verify`'s
+   snapshot check); inventories that count stored objects (a bundle's object count); and block ids (the
+   snapshot reference is signed, §10.2).
+2. **Increment 1b is additive: no reader anchors.** `patch_replay`, `patch_inverse` and bundle preview
+   replay every block from genesis and ignore `snapshot_blob_ref`. The 1a seeding goes; increment 2
+   reintroduces only what ruling 5 allows. The v2 loader stays for `checkout --snapshot-*`.
+3. **Rollback and inverse planning never anchor, in any increment.** Their output *is* the history they
+   invert, and a snapshot carries none. Rollback's baseline is the empty state before the chain — what
+   every release has shipped, since no snapshot ever existed. `rollback-preview.md`'s *"latest snapshot
+   baseline"* (PR-027, written when a snapshot was imagined as a deliberate baseline) is retired. *Nothing
+   to invert* becomes a `Precondition` naming the ref, not an encoding error.
+4. **`coverage` keeps its meaning:** the kinds applied by a replay of the whole single-parent chain.
+   stikk relies on it; their letter 006 says it *"did exactly the job you designed it for"*. The window
+   meaning (the hold's option A) is refused; a v2 schema (option C) is unnecessary.
+5. **Increment 2's anchor is bound by ruling 1.** A reader may start at a snapshot only for outputs that
+   are functions of the tip's state: the file manifest, modes, content entries, branch switch's target
+   tree. Fields that are functions of history — `deleted_files`, patch and operation counts, coverage
+   kinds — are computed over the whole chain *without applying*: block payloads give patch counts, and
+   decoding gives kinds and `DeleteFile` preimages. Otherwise that reader stays unanchored. Increment 2's
+   control is byte-equal output of every report, prose and JSON, with and without snapshots, with the
+   cost measured. If decoding the chain eats the saving, the increment returns with the numbers.
+6. **Release: no cut between increments 1b and 2.** After 1b every repository holds snapshots, and
+   §10.3's derivation gate for `--snapshot-materialize` is increment 2.
+
 ### 10.4 Measurements that close §9 item 4, taken on RFC 139's corpus
 
 Storage per snapshot and per repository at cadence 64 on `profiles/prikk-self.toml`; checkout and
@@ -619,6 +667,8 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
    without it no history that edits text could use its snapshot; (ii) *the E3 refusal in
    `node_authoring.rs` goes in 1b's commit*, with its test — under §10.1a it names an empty tree whose
    block carries an empty snapshot, a legitimate state, and 1b is what makes it reachable.
+   **(iii) ruled 2026-09-15, §10.3a:** 1b anchors no reader, rollback never anchors, `coverage` keeps its
+   whole-chain meaning, and there is no release cut between 1b and 2.
 2. **The anchor and the gate**: checkout and baseline reconstruction start at the nearest snapshot; the
    provisional marker and the derivation gate. Controls as before: byte-equal output with and without a
    snapshot; the gate's refusal and clearing; a corrupted snapshot surfaces its `Integrity` finding.

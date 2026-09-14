@@ -94,6 +94,77 @@ reviewed. Sizes: 0 is a move, 1a is the substance, 1b is small once 0 and 1a sta
    it instead of *unavailable*: say so in the report and in `show.md` if its text changes. Hard stops of v1 §3 stand. Report:
    `.git-exclude/review-request/rfc136-increment-1b-report-v1.md`.
 
+## Increment 1b — revised 2026-09-15 after your hold (read RFC 136 §10.3a first)
+
+Your hold was right, and it was the right stop: six tests would have been edited into a new meaning for
+rollback. The cause was my 1a handoff's *"every reader seeds and skips"*. Where this section conflicts
+with the 1b section above, this section wins. Your WIP stands, with these changes.
+
+**Asked, answered.**
+1. Rollback and inverse: **A**, and permanently (§10.3a ruling 3). Rollback never anchors.
+2. Coverage: **none of A, B or C in 1b**, because no reader anchors in 1b (ruling 2), so coverage cannot
+   change. For increment 2, coverage stays whole-chain (ruling 4).
+3. Declaring `block_state` a hub: **yes**, with the reason "the one seal function derives, decides the
+   checkpoint and writes" in `DECLARED_HUBS`. The size pin moves in this commit: yes.
+
+**Changes to the WIP.**
+- **Readers do not anchor.** Remove seed-and-`continue` from `patch_replay.rs`, `patch_inverse.rs` and
+  `bundle/preview.rs`, so they replay every block's patches and never read `snapshot_blob_ref`. Delete
+  `replay_state_from_snapshot` if nothing else uses it. `load_block_snapshot` stays for
+  `checkout --snapshot-*`.
+- **One validator.** A single `validate_snapshot_manifest(reader, block_id, block)` decodes, recomputes
+  and checks each content Blob's presence without reading bytes. `load_block_snapshot`, `verify` and
+  bundle export call it. Export validates *before* enumerating content ids, so a tampered manifest is
+  refused for the real reason, not as *missing blob*.
+- **Nothing to invert** becomes a `Precondition` naming the ref (RFC 132 mould), in its own commit in this
+  round. `CHANGELOG.md` gets `### Fixed`.
+- **`rollback-preview.md:20`** changes from *"the latest snapshot baseline in that replay window"* to the
+  empty state before the replayed chain.
+- **`checkout --snapshot-plan`'s `Precondition`** can no longer say *"no block-creating path writes one
+  yet"*. It says the block is not a checkpoint, and that checkpoints fall at genesis and every 64 blocks.
+
+**The six held tests pass unmodified.** That is the evidence ruling 1 holds; do not touch them. Name them
+in the report as passing at the final commit.
+
+**Increment 1a's controls, revised to the ruling.**
+- **C1 and C2 stand.**
+- **C3 and C5:** with a tampered or v1-magic manifest present, every replay reader's output equals the
+  output with no snapshot, because they do not read it. `checkout --snapshot-plan`, snapshot
+  materialization and `verify` refuse it.
+- **Perturbation:** make `patch_replay` read the snapshot again; the identity control must fail.
+
+**New controls.**
+- **Checkpoints are invisible.** On one history containing, before the second checkpoint:
+  - an `EditText`;
+  - a `DeleteFile` whose path is still present in the worktree with its old bytes;
+  - a rename and a `ChangePerm`;
+
+  every report must be equal, prose and JSON, between the repository as sealed and the same history
+  sealed with no checkpoints. The reports: `--patch-plan` (with `coverage`), the content report,
+  `--patch-delete-plan` and `--patch-materialize-delete` (the stale file is deleted), `inverse-plan`,
+  `rollback-preview`, `rollback-draft --append-inverse`, bundle preview and branch switch. Block and
+  RefState ids differ by design: normalize them, or seal the comparison repository through a test-only
+  path that writes no snapshot. Say which, and why it cannot leak into production.
+  **Perturbation:** restore 1a's anchor in `patch_replay` and the delete plan must lose the stale file.
+- **A checkpoint never fails a seal that would succeed without it.** Seal 130 blocks with `EditText`
+  scattered across blocks, a delete of an edited node, a rename of an edited node, and a `merge` whose
+  mainline reaches the cadence. Every seal succeeds, every checkpoint loads, `verify` is clean.
+  - **Why it should hold:** the cache is complete by construction. `resolved_parent_state` takes the
+    parent's (state, cache) from the replay memo (`block_state.rs:356-362`, stored at `:390`), and every
+    `EditText` inserts (`effect.rs:220`) with no eviction.
+  - **Perturbation:** evict one entry; the writer must refuse as `Integrity` and the seal must fail
+    visibly, never write a partial snapshot.
+- **Re-pin increment 0's ids** with old and new shown, plus two assertions:
+  - which blocks carry a snapshot (the root only);
+  - a perturbation forcing `checkpoint_due` to `false` restores all four old pins, proving the change is
+    exactly that field.
+
+**The other seven mechanical failures** are accepted as you listed them. Update the counts and their
+explanations, and give `row2b`'s fixture a real v2 manifest.
+
+**Release note for the report.** Increments 1b and 2 ship in one release (ruling 6). Do not propose a cut
+after 1b.
+
 ## Also in this round: nothing else
 
 The RFC 152 docs commits (`26fea4f8`, `52838ed7`) are accepted; one wording change to `SECURITY.md` and
