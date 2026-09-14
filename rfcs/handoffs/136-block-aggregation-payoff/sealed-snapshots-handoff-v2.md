@@ -75,11 +75,23 @@ reviewed. Sizes: 0 is a move, 1a is the substance, 1b is small once 0 and 1a sta
 2. `verify`: for every block with a snapshot, the Blob exists (already) and the manifest recomputes to
    the block's root; a failure is an `Integrity` finding in the objects stage.
    `CHANGELOG.md` `### Added` for that finding alone.
+   **Content Blobs (ruled 2026-09-15, increment 1a review).** For each file entry, if the store does not
+   hold its `blob_id`, write the Blob — the same schema-1 envelope `write_content_blob`
+   (`node_authoring.rs`) writes for a fresh create — under the object-store lock, before the manifest
+   Blob. Assert on write that the stored id equals the entry's `blob_id`; a mismatch is a bug, refused as
+   `Integrity`, never a snapshot written anyway. Symlink entries are written as the state has them (the
+   manifest must recompute); readers refuse them as replay already refuses symlink operations.
+   **E3 (ruled):** delete the refusal at `node_authoring.rs` (the `baseline_files.is_empty() &&
+   baseline_symlinks.is_empty()` arm with a snapshot reference) and its test in this commit; a commit on
+   an emptied tree at a checkpoint must author normally — add that as a control.
 3. Controls: handoff v1 §2 in full (65 blocks → snapshots at depth 1 and 65; two repositories, same
    history, same block ids; tamper → `verify` finding + `--snapshot-plan` `Integrity`; bundle round-trip
    and the missing-Blob refusal; `patch_set_digest` unchanged; bytes per snapshot on the RFC 139 corpus
    profile). Plus: a repository sealed with 1b, read by 1a's readers, checks out byte-equal to the same
-   history sealed without snapshots. Hard stops of v1 §3 stand. Report:
+   history sealed without snapshots — **on a history with at least one `EditText` before the
+   checkpoint** (the case that needs the content Blob), and perturbing the Blob write away must make it
+   fail at the loader's missing-Blob step. `show` on a block whose edited content is now stored reports
+   it instead of *unavailable*: say so in the report and in `show.md` if its text changes. Hard stops of v1 §3 stand. Report:
    `.git-exclude/review-request/rfc136-increment-1b-report-v1.md`.
 
 ## Also in this round: nothing else

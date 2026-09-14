@@ -606,12 +606,19 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
 0. **One seal function — DONE 2026-09-15 (`9d227afe`, `prikk_store::seal_block` + `BlockLineage`; pins verified against the pre-refactor tree by the architect).** A store function builds, signs and publishes every Block: the CLI's `seal`, the
    merge path, `sync accept`'s `seal_from_accepted` and the RFC 111 simulation all call it. No behaviour
    change; block ids byte-identical before and after on a history that exercises all four callers.
-1a. **Readers on v2.** `SnapshotManifest` v2 encode/decode, v1 removed; `recomputed_state_root()`;
+1a. **Readers on v2 — DONE 2026-09-15 (`cb7d940a`; reviewed `.git-exclude/reviewed/rfc136-increment-1a-review-v1.md`).** `SnapshotManifest` v2 encode/decode, v1 removed; `recomputed_state_root()`;
    loading by Blob id (files, node ids, kinds, modes — the readers' "mode-unaware" caveats shrink and
    say so); every reader seeds from a snapshot and skips that block's patches; `checkout --snapshot-*`
    materializes by Blob id. One shared fixture whose snapshot block has patches. No writer.
 1b. **The writer.** `CHECKPOINT_CADENCE`, the decision inside the one seal function, `verify`'s
    self-consistency check, the determinism, bundle, digest and storage controls of the first handoff.
+   **Two rulings from increment 1a's review (2026-09-15):** (i) *the writer stores every entry's
+   content Blob when the store lacks it* — after an `EditText` a text node's `blob_id` is
+   `text_blob_id(content)`, the id of the ordinary schema-1 Text Blob, and DC-65 says only that it is
+   *not necessarily* stored, so storing it at a checkpoint is additive and makes every entry resolvable;
+   without it no history that edits text could use its snapshot; (ii) *the E3 refusal in
+   `node_authoring.rs` goes in 1b's commit*, with its test — under §10.1a it names an empty tree whose
+   block carries an empty snapshot, a legitimate state, and 1b is what makes it reachable.
 2. **The anchor and the gate**: checkout and baseline reconstruction start at the nearest snapshot; the
    provisional marker and the derivation gate. Controls as before: byte-equal output with and without a
    snapshot; the gate's refusal and clearing; a corrupted snapshot surfaces its `Integrity` finding.
