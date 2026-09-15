@@ -327,8 +327,10 @@ fn candidate_blocks(
     target: ObjectId,
 ) -> Result<Vec<(ObjectId, BlockPayload)>> {
     let target_ancestors = ancestors_inclusive(object_store, target)?;
+    // `--baseline-block` is user input: a block that is not an ancestor is a precondition, not damage
+    // (DC-75 two-edits handoff §6).
     if !target_ancestors.contains_key(&baseline) {
-        return Err(PrikkError::Integrity(format!(
+        return Err(PrikkError::Precondition(format!(
             "baseline Block {baseline} is not an ancestor of target Block {target}"
         )));
     }

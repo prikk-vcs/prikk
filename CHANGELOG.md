@@ -34,6 +34,17 @@ does not replay is now shown as the right operation, not as the left operation a
 the prefix and the exit code (`1`) are unchanged. A merge whose inputs are damaged, such as a missing
 block, is still an integrity error.
 
+### Changed — three more merge refusals name their class, not damage
+
+- `prikk merge` from a branch with nothing new since the baseline fails with `precondition not met: … has
+  no patches to adopt since baseline …`, not `integrity error:`.
+- `prikk merge` and `prikk merge-evidence` given a `--baseline-block` that is not an ancestor of a side fail
+  with `precondition not met: baseline Block … is not an ancestor of target Block …`.
+- A merge whose target ref another writer advanced while the evidence was gathered fails with `lock
+  conflict: ref … advanced during merge evidence gathering; retry`.
+
+The words after the prefix and the exit code (`1`) are unchanged in all three.
+
 ## 0.42.0 — 2026-09-13
 
 ### Changed — breaking once for Rust callers: two report types are `#[non_exhaustive]`

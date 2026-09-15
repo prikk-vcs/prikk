@@ -138,8 +138,9 @@ pub fn execute_merge(
         baseline_block_id,
         evidence.right_selector.target_block_id,
     )?;
+    // Nothing to adopt is the state of the two refs, not damage (DC-75 two-edits handoff §6).
     if adopted_patch_ids.is_empty() {
-        return Err(PrikkError::Integrity(format!(
+        return Err(PrikkError::Precondition(format!(
             "{from_ref} has no patches to adopt since baseline {baseline_block_id}"
         )));
     }
@@ -158,11 +159,11 @@ pub fn execute_merge(
         into_ref_state_envelope.schema_version,
     )?;
     let parent_block_id = into_ref_state.target_object_id;
-    if parent_block_id != evidence.left_selector.target_block_id {
-        return Err(PrikkError::Integrity(format!(
-            "ref {into_ref} advanced during merge evidence gathering; retry"
-        )));
-    }
+    ensure_into_ref_unmoved(
+        &into_ref,
+        parent_block_id,
+        evidence.left_selector.target_block_id,
+    )?;
 
     let adopted_target_block_id = evidence.right_selector.target_block_id;
     let block_id = seal_block(
@@ -233,6 +234,23 @@ pub fn execute_merge(
         block_id,
         ref_state_id: published_ref_state_id,
     })
+}
+
+/// `into_ref` must still point where the evidence read it. If another writer advanced it in between,
+/// that is `LockConflict` (DC-75 two-edits handoff §6): *"another writer may be active"*, and running
+/// the same merge again can succeed. Not `Precondition`, whose documented meaning is that *"nothing
+/// here is transient and waiting does not help"*.
+fn ensure_into_ref_unmoved(
+    into_ref: &str,
+    current_target: ObjectId,
+    evidence_target: ObjectId,
+) -> Result<()> {
+    if current_target == evidence_target {
+        return Ok(());
+    }
+    Err(PrikkError::LockConflict(format!(
+        "ref {into_ref} advanced during merge evidence gathering; retry"
+    )))
 }
 
 fn signed_envelope(
