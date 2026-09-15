@@ -10,6 +10,7 @@ pub(super) use super::super::evidence_types::{
     Evidence, EvidenceError, EvidenceFact, EvidenceScope, PatchAlgebraEvidence,
 };
 pub(super) use super::super::facts::{operation_facts, path_effects};
+pub(super) use super::super::fold::fold_side;
 pub(super) use super::super::replay_oracle::replay_operations;
 pub(super) use super::super::report::{
     MergeEvidenceItem, MergeEvidenceOperationKind, MergeEvidenceOutcome, MergeEvidenceProofPhase,

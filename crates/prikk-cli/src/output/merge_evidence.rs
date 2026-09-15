@@ -116,5 +116,11 @@ fn print_labeled_operation(label: &str, operation: Option<&MergeEvidenceDisplayO
     if let MergeEvidenceDisplayOperationContent::RenamePath { author_key_id } = &operation.content {
         print!(" asserted-by={author_key_id}");
     }
+    if let Some(last) = operation.folded_through {
+        print!(" folded-through={label}[{}]", last.index);
+        if let Some(op_seq) = last.op_seq {
+            print!(" op_seq={op_seq}");
+        }
+    }
     println!();
 }

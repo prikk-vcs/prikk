@@ -11,6 +11,7 @@ mod delete;
 mod evidence;
 mod evidence_types;
 mod facts;
+mod fold;
 mod preimage;
 mod replay_oracle;
 mod report;

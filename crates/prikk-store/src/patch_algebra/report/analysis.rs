@@ -9,7 +9,7 @@ use super::mapping::pair_class_report;
 use super::mapping::{report_item, unknown_report, witness_report};
 use super::types::{
     MergeEvidenceItem, MergeEvidenceOutcome, MergeEvidenceProofPhase, MergeEvidenceReasonCode,
-    MergeEvidenceReport, MergeEvidenceSequence,
+    MergeEvidenceReport, MergeEvidenceSequence, MergeEvidenceSide,
 };
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::patch_replay::decode::DecodedPatchOperation;
@@ -18,6 +18,7 @@ use crate::patch_algebra::commutation::check_confluence;
 #[cfg(test)]
 use crate::patch_algebra::commutation::commute_pair;
 use crate::patch_algebra::evidence_types::{EvidenceScope, PatchAlgebraEvidence};
+use crate::patch_algebra::fold::{FoldedSide, fold_side};
 #[cfg(test)]
 use crate::patch_algebra::types::{CommutationAnalysisResult, CommutationResult};
 use crate::patch_algebra::types::{ConfluenceAnalysisResult, ConfluenceResult};
@@ -56,14 +57,69 @@ pub(crate) fn analyze_merge_evidence<R: PatchAlgebraEvidence>(
             vec![item],
         );
     }
-    report_from_analysis(
+    // DC-75 two-edits handoff §6 (R1): every original operation passed the two checks above; the
+    // engine now judges each side's net effect, and the report names original operations.
+    let left_folded = fold_side(baseline, evidence, candidate_scope, left);
+    let right_folded = fold_side(baseline, evidence, candidate_scope, right);
+    let mut left_sequence = left_sequence;
+    let mut right_sequence = right_sequence;
+    left_sequence.folded_through = folded_ranges(&left_folded);
+    right_sequence.folded_through = folded_ranges(&right_folded);
+    let mut report = report_from_analysis(
         baseline_block_id,
         replay_horizon,
         left_sequence,
         right_sequence,
-        check_confluence(baseline, evidence, candidate_scope, left, right),
+        check_confluence(
+            baseline,
+            evidence,
+            candidate_scope,
+            &left_folded.operations,
+            &right_folded.operations,
+        ),
         candidate_scope,
-    )
+    );
+    for item in &mut report.items {
+        let own = match item.side {
+            MergeEvidenceSide::Right => (&right_folded, right),
+            MergeEvidenceSide::Left | MergeEvidenceSide::Cross | MergeEvidenceSide::Report => {
+                (&left_folded, left)
+            }
+        };
+        to_original(&mut item.operation_index, &mut item.op_seq, own.0, own.1);
+        to_original(
+            &mut item.peer_operation_index,
+            &mut item.peer_op_seq,
+            &right_folded,
+            right,
+        );
+    }
+    sort_report_items(&mut report.items);
+    report
+}
+
+fn folded_ranges(side: &FoldedSide) -> std::collections::BTreeMap<usize, usize> {
+    side.origins
+        .iter()
+        .filter(|(first, last)| first != last)
+        .copied()
+        .collect()
+}
+
+/// Map an index into the folded sequence back to the first original operation it stands for.
+fn to_original(
+    index: &mut Option<usize>,
+    op_seq: &mut Option<u32>,
+    folded: &FoldedSide,
+    original: &[DecodedPatchOperation],
+) {
+    let Some(&(first, _)) = index.and_then(|folded_index| folded.origins.get(folded_index)) else {
+        return;
+    };
+    *index = Some(first);
+    if op_seq.is_some() {
+        *op_seq = original.get(first).map(|operation| operation.op_seq);
+    }
 }
 
 #[cfg(test)]

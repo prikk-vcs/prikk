@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use prikk_object::{NodeId, ObjectId};
 
 use crate::patch_algebra::types::ConflictWitnessKind;
@@ -30,6 +32,9 @@ pub(crate) struct MergeEvidenceSequence {
     pub(crate) label: &'static str,
     pub(crate) operation_count: usize,
     pub(crate) operations: Vec<MergeEvidenceOperation>,
+    /// DC-75 two-edits handoff §6 (R1): each run of operations the evidence judged as one net
+    /// operation, keyed by its first original index, valued by its last. Indices are original.
+    pub(crate) folded_through: BTreeMap<usize, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

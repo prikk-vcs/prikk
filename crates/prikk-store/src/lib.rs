@@ -146,9 +146,10 @@ pub use lock::{ActiveLock, ContainerLockGuard, RefLock, acquire_container_locks}
 pub use maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner, maintainer_signature};
 pub use memory_store::MemoryObjectStore;
 pub use merge::evidence::{
-    MergeEvidenceDisplay, MergeEvidenceDisplayItem, MergeEvidenceDisplayOperation,
-    MergeEvidenceDisplayOperationContent, MergeEvidenceDisplaySelector, MergeEvidenceTarget,
-    MergePlanDisplay, prepare_merge_evidence, prepare_merge_plan,
+    MergeEvidenceDisplay, MergeEvidenceDisplayFoldedThrough, MergeEvidenceDisplayItem,
+    MergeEvidenceDisplayOperation, MergeEvidenceDisplayOperationContent,
+    MergeEvidenceDisplaySelector, MergeEvidenceTarget, MergePlanDisplay, prepare_merge_evidence,
+    prepare_merge_plan,
 };
 pub use merge::execute::{MergeExecutionReport, execute_merge};
 pub use object_store::{

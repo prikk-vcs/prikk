@@ -19,6 +19,18 @@ pub(super) struct OracleState {
     texts: BTreeMap<NodeId, Vec<u8>>,
 }
 
+impl OracleState {
+    /// The materialized text of `node_id`, when this replay read or edited it.
+    pub(super) fn text(&self, node_id: &NodeId) -> Option<&[u8]> {
+        self.texts.get(node_id).map(Vec::as_slice)
+    }
+
+    /// Every node whose text this replay materialized.
+    pub(super) fn text_nodes(&self) -> impl Iterator<Item = &NodeId> {
+        self.texts.keys()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum OracleFailure {
     Evidence(EvidenceError),

@@ -48,8 +48,8 @@ pub(crate) fn check_confluence<R: PatchAlgebraEvidence>(
     left: &[DecodedPatchOperation],
     right: &[DecodedPatchOperation],
 ) -> ConfluenceAnalysisResult {
-    let left_check = ensure_flat_sequence(baseline, evidence, candidate_scope, left)?;
-    let right_check = ensure_flat_sequence(baseline, evidence, candidate_scope, right)?;
+    let left_check = ensure_flat_sequence(baseline, evidence, candidate_scope, left, false)?;
+    let right_check = ensure_flat_sequence(baseline, evidence, candidate_scope, right, true)?;
     // RFC 144 §4r.1: a genuine replay/evidence/prefix-dependency problem (`FlatSequenceCheck::hard`)
     // still pre-empts everything below, at the same point in the same order as before this round --
     // this is not about rename/symlink reachability, and nothing here changes it.
@@ -173,6 +173,9 @@ fn ensure_flat_sequence<R: PatchAlgebraEvidence>(
     evidence: &R,
     candidate_scope: EvidenceScope,
     sequence: &[DecodedPatchOperation],
+    // A right-side replay failure names its index as `right_index`, so a report shows the right
+    // side's operation (DC-75 two-edits handoff §6, R1 condition 6: indices name the operation).
+    is_right: bool,
 ) -> Result<FlatSequenceCheck, EvidenceError> {
     let mut hard = None;
     let mut deferred = None;
@@ -203,8 +206,8 @@ fn ensure_flat_sequence<R: PatchAlgebraEvidence>(
                         ConfluenceResult::NotConfluent {
                             witness: ConfluenceWitness {
                                 kind: ConfluenceWitnessKind::ReplayFailure,
-                                left_index: Some(index),
-                                right_index: None,
+                                left_index: (!is_right).then_some(index),
+                                right_index: is_right.then_some(index),
                                 pair_class: None,
                             },
                         }

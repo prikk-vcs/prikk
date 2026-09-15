@@ -16,6 +16,17 @@ operation to reverse now fail with `precondition not met: heads/main has nothing
 the ref, instead of `canonical encoding error: patch operations must contain at least one operation`.
 The exit code is unchanged (`1`).
 
+### Fixed — merging a branch that edits a file more than once after the branch point
+
+`prikk merge` and `prikk merge-evidence` refused a healthy merge with `pair_replay_failed` whenever either
+side changed one file more than once after the baseline: two edits of one file, an edit then a delete,
+two permission changes. The evidence now judges each side's changes to one file by their net effect
+from the baseline, and uses that only when replaying it reproduces the side exactly; the merge still
+adopts the original patches unchanged. Two sides that change the same part of one file still refuse,
+as `pair_conflict` or `same_node_text_transform_deferred`. `merge-evidence` names a run judged this way by
+its first operation and `folded-through=` its last, in the original sequence. A right-side operation that
+does not replay is now shown as the right operation, not as the left operation at the same index.
+
 ### Changed — a merge that is not proven confluent is a precondition, not an integrity error
 
 `prikk merge` refusing because the two sides are not proven confluent from the baseline now fails with

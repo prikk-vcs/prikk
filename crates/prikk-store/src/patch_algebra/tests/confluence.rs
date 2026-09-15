@@ -45,8 +45,10 @@ fn cross_sequence_baseline_invalid_dependency_is_not_confluent() {
     {
         ConfluenceResult::NotConfluent { witness } => {
             assert_eq!(witness.kind, ConfluenceWitnessKind::ReplayFailure);
-            assert_eq!(witness.left_index, Some(0));
-            assert_eq!(witness.right_index, None);
+            // The operation that does not replay is `right[0]`, so the witness names it as a right
+            // index (DC-75 two-edits handoff §6, R1 condition 6; it used to be named as `left_index`).
+            assert_eq!(witness.left_index, None);
+            assert_eq!(witness.right_index, Some(0));
         }
         other => panic!("expected ordered not-confluent, got {other:?}"),
     }
@@ -222,10 +224,10 @@ fn right_same_sequence_evidence_error_wins_over_earlier_unknown_operation() {
     }
 }
 
-/// DC-75 two-edits handoff: the defect's smallest reproduction. Fails today with `ReplayFailure` at
-/// left index 1, because `ensure_flat_sequence` replays the second edit alone against the baseline.
+/// DC-75 two-edits handoff: the defect's smallest reproduction. Before per-side folding it failed with
+/// `ReplayFailure` at left index 1, because `ensure_flat_sequence` replayed the second edit alone
+/// against the baseline. This drives `check_confluence` over folded sequences, as the report does.
 #[test]
-#[ignore = "DC-75 two-edits defect: fails until the ruled fix lands"]
 fn a_side_that_edits_one_text_twice_is_confluent_with_an_unrelated_create() {
     let mut baseline = NodeLifecycleState::new();
     seed_text(
@@ -246,17 +248,17 @@ fn a_side_that_edits_one_text_twice_is_confluent_with_an_unrelated_create() {
         b"g".to_vec(),
     );
 
-    match check_confluence_result(
-        &baseline,
-        &evidence,
-        EvidenceScope::SealedCandidateRequired,
-        &left,
-        &right,
-    )
-    .expect("confluence evidence")
+    let scope = EvidenceScope::SealedCandidateRequired;
+    let left = fold_side(&baseline, &evidence, scope, &left).operations;
+    let right = fold_side(&baseline, &evidence, scope, &right).operations;
+    match check_confluence_result(&baseline, &evidence, scope, &left, &right)
+        .expect("confluence evidence")
     {
         ConfluenceResult::Confluent { proof } => {
-            assert_eq!(proof.left_len, 2);
+            assert_eq!(
+                proof.left_len, 1,
+                "the two edits are judged as one net edit"
+            );
             assert_eq!(proof.right_len, 1);
         }
         other => panic!("expected confluent, got {other:?}"),

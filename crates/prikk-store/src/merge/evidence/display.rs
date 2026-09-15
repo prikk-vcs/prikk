@@ -115,6 +115,20 @@ pub struct MergeEvidenceDisplayOperation {
     /// constructed without its asserting AUTHOR key id, so this is the one value a surface must
     /// consult to know a rename is being shown, and it cannot omit the signer.
     pub content: MergeEvidenceDisplayOperationContent,
+    /// When the evidence judged a run of this side's operations on one node as their net effect
+    /// (DC-75 two-edits handoff §6, R1), the run's last operation; `index` and `op_seq` name its
+    /// first. `None` for an operation judged on its own.
+    pub folded_through: Option<MergeEvidenceDisplayFoldedThrough>,
+}
+
+/// The last operation of a folded run -- see [`MergeEvidenceDisplayOperation::folded_through`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeEvidenceDisplayFoldedThrough {
+    /// Zero-based index of the run's last operation in the displayed side.
+    pub index: usize,
+    /// One-based operation sequence recorded by that operation's patch.
+    pub op_seq: Option<u32>,
 }
 
 /// What a [`MergeEvidenceDisplayOperation`] carries beyond kind, op_seq, and path.
@@ -254,6 +268,12 @@ fn operation_for_item(
         kind: operation.map(|op| operation_kind_name(op.operation_kind)),
         path: operation.and_then(|op| op.path.as_ref().map(|path| path.as_str().to_string())),
         content,
+        folded_through: sequence.folded_through.get(&index).map(|last| {
+            MergeEvidenceDisplayFoldedThrough {
+                index: *last,
+                op_seq: sequence.operations.get(*last).map(|op| op.op_seq),
+            }
+        }),
     })
 }
 

@@ -487,7 +487,7 @@ fn checkpoints_are_invisible_to_every_report() -> Result<()> {
 }
 
 /// §10.3a: a checkpoint never fails a seal that would succeed without it. 130 blocks with edits
-/// scattered before the merge's baseline, a delete of an edited node, a rename of an edited node, and a
+/// scattered before and after the merge's baseline (a side editing one text more than once), a delete of an edited node, a rename of an edited node, and a
 /// merge whose mainline reaches the cadence (the merge block is the checkpoint at 129); block 130 edits
 /// again after it.
 #[test]
@@ -506,12 +506,9 @@ fn a_checkpoint_never_fails_a_seal_that_would_succeed_without_it() -> Result<()>
             41 => sealer.delete("g.txt", 0xE2),
             50 => sealer.edit(0xE3, b"moved 50\n"),
             51 => Ok(Sealer::rename(0xE3, "h.txt", "h2.txt")),
-            // Edits stay before the merge's baseline (block 100): a merge's pair replay from its
-            // baseline cannot materialize an edited text whose identity was never stored -- a merge
-            // limitation independent of checkpoints -- and this control is about the checkpoint.
-            number if number % 7 == 0 && number < 100 => {
-                sealer.edit(0xE1, format!("edit {number}\n").as_bytes())
-            }
+            // Edits continue on main after the merge's baseline (block 100), at 105, 112, 119 and 126:
+            // a side that edits one text more than once merges (DC-75 two-edits handoff §3).
+            number if number % 7 == 0 => sealer.edit(0xE1, format!("edit {number}\n").as_bytes()),
             number => {
                 filler += 1;
                 sealer.create(&format!("f{number}.txt"), filler, b"filler\n")

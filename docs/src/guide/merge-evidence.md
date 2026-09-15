@@ -76,6 +76,11 @@ Reading the output:
   adds no display filtering);
 - cross-side items render as a `cross:` block with separate `left[...]` and `right[...]` operation
   lines, rather than an ambiguous one-line form;
+- when a side changes one file more than once (edits, an edit then a delete, permission changes, binary
+  replacements), the evidence judges that run by its net effect from the baseline, and uses it only when
+  replaying it reproduces the side exactly. An operation line for such a run names its first operation
+  and adds `folded-through=left[N] op_seq=M` for its last; indices and counts are always those of the
+  original sequence;
 - report-level items render as `report:` without a fake operation label;
 - DC-21 outcome and reason-code names are preserved exactly;
 - a `RenamePath` operand's line also carries `asserted-by=<key-id>` — the patch's AUTHOR signature

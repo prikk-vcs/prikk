@@ -41,6 +41,7 @@ pub(super) fn sequence_summary(
             .enumerate()
             .map(|(operation_index, operation)| operation_summary(operation_index, operation))
             .collect(),
+        folded_through: std::collections::BTreeMap::new(),
     }
 }
 

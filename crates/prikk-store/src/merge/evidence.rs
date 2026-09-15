@@ -9,8 +9,9 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayload};
 
 pub use display::{
-    MergeEvidenceDisplay, MergeEvidenceDisplayItem, MergeEvidenceDisplayOperation,
-    MergeEvidenceDisplayOperationContent, MergeEvidenceDisplaySelector,
+    MergeEvidenceDisplay, MergeEvidenceDisplayFoldedThrough, MergeEvidenceDisplayItem,
+    MergeEvidenceDisplayOperation, MergeEvidenceDisplayOperationContent,
+    MergeEvidenceDisplaySelector,
 };
 pub use merge_plan::MergePlanDisplay;
 
