@@ -154,6 +154,11 @@ pub fn simulate_one_seal_for_test_support(
 // ---- RFC 136 increment 2b §0: a block whose snapshot is absent, damaged or lying --------------------
 
 /// What [`publish_snapshot_fixture_for_test_support`] puts in its block's snapshot field.
+///
+/// Gated on the item as well as by this module's inner attribute, so moving it out of this module
+/// cannot ungate it (RFC 136 increment 2b review). `test` stays in the gate: this crate's own tests call
+/// the fixture without the feature.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotFixture {
     /// No snapshot: the twin every other fixture is compared with.
@@ -168,7 +173,9 @@ pub enum SnapshotFixture {
 /// Test-support only (RFC 136 increment 2b §0): publish `heads/main` as one root Block whose patch
 /// creates `a.txt` with `replayed\n`, signed by `maintainer`, with `fixture` in its snapshot field.
 /// Under [`SnapshotFixture::Lying`] the Block's signed root is that of `a.txt` holding `asserted\n`.
-/// Returns the Block id. Never compiled into a shipped build.
+/// Returns the Block id. Never compiled into a shipped build: gated here and by the module's inner
+/// attribute, with `test` kept so this crate's own tests can call it without the feature.
+#[cfg(any(test, feature = "test-support"))]
 pub fn publish_snapshot_fixture_for_test_support(
     layout: &RepositoryLayout,
     maintainer: &Ed25519MaintainerSigner,

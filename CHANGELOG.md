@@ -27,6 +27,14 @@ materialized from the snapshot of Block <block> on <ref> and is not replay-verif
 and write nothing. `checkout --snapshot-materialize` also now takes the active lock, so it refuses with
 `lock conflict` while another writer holds it.
 
+### Changed — breaking once for Rust callers: `SnapshotMaterializationReport` is `#[non_exhaustive]`
+
+`prikk_store::SnapshotMaterializationReport`, which gained `provisional` in this release, is now
+`#[non_exhaustive]`: code outside `prikk-store` can read its fields but can no longer build it with a
+struct literal or match it exhaustively. The other report types this release added or extended —
+`BranchSwitchReport` (`anchor_fallback`), `SnapshotAnchorFallback` and `ProvisionalWorktree` — already
+were. The CLI's output is unchanged.
+
 ### Changed — `--snapshot-materialize` of a replay-verified block no longer marks the worktree
 
 `checkout --snapshot-materialize` writes no provisional marker when this repository has already confirmed

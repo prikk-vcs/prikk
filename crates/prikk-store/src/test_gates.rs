@@ -19,4 +19,6 @@ pub(crate) mod signature_contract_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
+pub(crate) mod test_support_gating;
+#[cfg(test)]
 pub(crate) mod trust_gated_operations_binding_gate;

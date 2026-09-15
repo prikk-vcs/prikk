@@ -92,8 +92,8 @@ mod worktree_status;
 
 // RFC 131 §2.2a ruling (a): these eight were already one contiguous #[cfg(test)] run above --
 // gates, evidence harnesses and shared fixtures, not production code -- and are now one directory
-// (`test_gates/`) rather than eight top-level entries. `rfc111_seal_simulation` is production and
-// stays where it was.
+// (`test_gates/`) rather than eight top-level entries. `rfc111_seal_simulation` stays where it was: it
+// is gated `cfg(any(test, feature = "test-support"))` by its own inner attribute, not by this run.
 #[cfg(test)]
 mod test_gates;
 

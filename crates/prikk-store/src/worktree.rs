@@ -25,6 +25,7 @@ use crate::worktree_marker::{
 
 /// Result of an opt-in snapshot worktree materialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SnapshotMaterializationReport {
     /// Human-readable ref name.
     pub ref_name: String,
