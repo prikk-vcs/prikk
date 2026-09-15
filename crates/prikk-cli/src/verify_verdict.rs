@@ -36,6 +36,10 @@ pub(crate) struct VerdictCondition {
     pub(crate) message: &'static str,
     /// Whether this condition is currently true of `report`.
     pub(crate) check: fn(&RepositoryVerification) -> bool,
+    /// RFC 136 §10.3b.1: whether this condition, when true, keeps the provisional-worktree marker set.
+    /// A condition about objects, the WAL, refs or block state blocks clearing, because it leaves open
+    /// whether replay produces the state a snapshot claimed. Each row says why it is marked as it is.
+    pub(crate) blocks_provisional_clear: bool,
 }
 
 /// Declared in exit-chain order: `main.rs::run_verify` reports the *first* true condition (its
@@ -47,47 +51,67 @@ pub(crate) const VERDICT_CONDITIONS: &[VerdictCondition] = &[
         id: "stage-failure",
         message: "repository verification did not complete every stage; see stage outcomes above",
         check: RepositoryVerification::has_stage_failure,
+        // A stage that did not complete may be the one that replays blocks.
+        blocks_provisional_clear: true,
     },
     VerdictCondition {
         id: "item-failure",
         message: "repository verification found at least one failed object, block, or ref; see \
                    item outcomes above",
         check: RepositoryVerification::has_item_failure,
+        // A failed object, block or ref: objects, block state, refs.
+        blocks_provisional_clear: true,
     },
     VerdictCondition {
         id: "active-wal-metadata-integrity",
         message: "repository has active-WAL metadata integrity issues",
         check: RepositoryVerification::has_active_wal_metadata_integrity_issue,
+        // The WAL.
+        blocks_provisional_clear: true,
     },
     VerdictCondition {
         id: "blocking-ref-publication",
         message: "repository has interrupted or divergent ref publication state",
         check: RepositoryVerification::has_blocking_ref_publication_issues,
+        // Refs: an interrupted or divergent publication leaves which tip was replayed open.
+        blocks_provisional_clear: true,
     },
     VerdictCondition {
         id: "publication-trust",
         message: "repository has publication-trust issues",
         check: RepositoryVerification::has_publication_trust_issues,
+        // Ruled (RFC 136 §10.3b.1): who signed says nothing about whether replay equals the snapshot.
+        blocks_provisional_clear: false,
     },
     VerdictCondition {
         id: "commit-index-divergence",
         message: "commit-index cache disagrees with the worktree for at least one path",
         check: RepositoryVerification::has_commit_index_divergence,
+        // A worktree cache compared with the worktree, not history. A worktree just written from a
+        // snapshot can disagree with it by construction, so counting it would keep the marker forever.
+        blocks_provisional_clear: false,
     },
     VerdictCondition {
         id: "lifecycle-cache-divergence",
         message: "lifecycle-state cache disagrees with an independent replay",
         check: RepositoryVerification::has_lifecycle_cache_divergence,
+        // Counted, conservatively: the lifecycle cache holds replay-derived block state, and a
+        // disagreement with an independent replay is a block-state question left open.
+        blocks_provisional_clear: true,
     },
     VerdictCondition {
         id: "active-wal-ordering",
         message: "active WAL contains an out-of-order or duplicate queued patch sequence",
         check: RepositoryVerification::has_active_wal_ordering_issue,
+        // The WAL.
+        blocks_provisional_clear: true,
     },
     VerdictCondition {
         id: "merge-baseline-divergence",
         message: "a merge block's recorded baseline is not a common ancestor of its parents",
         check: RepositoryVerification::has_merge_baseline_divergence,
+        // Block state: a merge block's recorded baseline.
+        blocks_provisional_clear: true,
     },
 ];
 
@@ -99,6 +123,16 @@ pub(crate) fn first_true_condition(
     VERDICT_CONDITIONS
         .iter()
         .find(|condition| (condition.check)(report))
+}
+
+/// Every currently-true condition that keeps the provisional-worktree marker set (RFC 136 §10.3b.1).
+pub(crate) fn provisional_clear_blockers(
+    report: &RepositoryVerification,
+) -> Vec<&'static VerdictCondition> {
+    VERDICT_CONDITIONS
+        .iter()
+        .filter(|condition| condition.blocks_provisional_clear && (condition.check)(report))
+        .collect()
 }
 
 /// Every currently-true condition, in declared order -- what `--format json` reports, since a

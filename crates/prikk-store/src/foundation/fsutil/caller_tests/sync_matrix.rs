@@ -23,18 +23,19 @@ use crate::{
 /// pair and generation log -- 3 names apiece instead of the 1 each carried before this stage. RFC 115
 /// Stage 2 added `ObjectType::RecognitionClaim` as a seventh persisted object type (two more slot
 /// creations, A and B).
-/// Recomputed directly from `init`'s own call sequence: 4 fixed names (worktree marker, WAL,
-/// active-ref metadata, RFC 144 §4o.2's rename-declaration store) + 7 persisted object types × 2
-/// slots (14) + the object index + generation log (2) + 2 ref-log slots + 3 ref-pointer-index
-/// (A/B/genlog) + 3 received-index (A/B/genlog) + 1 trust key + 3 trust-policy (A/B/genlog) = 32
-/// names before `FORMAT` itself, so skip 32 to land on the 33rd occurrence. If a future stage adds
+/// Recomputed directly from `init`'s own call sequence: 5 fixed names (worktree marker, RFC 136
+/// §10.3b's provisional-worktree marker, WAL, active-ref metadata, RFC 144 §4o.2's rename-declaration
+/// store) + 7 persisted object types × 2 slots (14) + the object index + generation log (2) + 2
+/// ref-log slots + 3 ref-pointer-index (A/B/genlog) + 3 received-index (A/B/genlog) + 1 trust key + 3
+/// trust-policy (A/B/genlog) = 33 names before `FORMAT` itself. The skip below is one more than the
+/// name count, as it was before the provisional marker (32 names, skip 33). If a future stage adds
 /// another `init`-time name before `FORMAT`, this count needs updating -- the same maintenance
 /// `ref_log_parent_sync_failure_retains_one_update_and_retries` below already carries for the same
 /// reason.
 #[test]
 fn repository_format_create_sync_failure_retains_and_retries() -> prikk_error::Result<()> {
     let root = unique_temp_dir("repository-sync-matrix");
-    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 33);
+    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 34);
     assert!(RepositoryLayout::init(root.clone()).is_err());
     assert!(
         root.join(".prikk/FORMAT").is_file(),

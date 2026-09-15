@@ -264,3 +264,36 @@ fn publish_snapshot_block(
     })?;
     Ok(snapshot_blob_id)
 }
+
+/// RFC 136 §10.3b.2: the provisional marker is durable before the first worktree write. A failure
+/// injected at that first write leaves the marker set, so the derivation gate refuses.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_crash_after_the_marker_and_before_the_first_file_leaves_the_marker_set() {
+    use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
+
+    let root = unique_temp_dir("snapshot-materialize-crash-after-marker");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    publish_snapshot_block(&layout, "README.md", b"hello\n").expect("publish");
+
+    // The marker appends never rename; the first worktree file write does.
+    fail_once_for_test(TestFailPoint::MutableRename);
+    assert!(
+        crate::materialize_snapshot_checkout(&layout, "heads/main").is_err(),
+        "fixture sanity: the injected failure must stop materialization"
+    );
+    assert!(
+        !root.join("README.md").exists(),
+        "fixture sanity: the failure fired before the first file landed"
+    );
+    assert!(
+        crate::provisional_worktree(&layout)
+            .expect("read")
+            .is_some()
+    );
+    assert!(matches!(
+        crate::ensure_worktree_replay_verified(&layout),
+        Err(prikk_error::PrikkError::Precondition(_))
+    ));
+    let _ = std::fs::remove_dir_all(root);
+}

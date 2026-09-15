@@ -89,6 +89,8 @@ pub fn switch_branch(
     layout.require_current_format()?;
     let target = validate_local_branch_ref(target)?;
     let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
 
     // Refusal 1: an existing, open local branch.
     require_open_branch(layout, &target)?;

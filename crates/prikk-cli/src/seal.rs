@@ -85,6 +85,8 @@ fn seal_active_no_audit(
     signer: &impl MaintainerSigner,
 ) -> std::result::Result<SealCommandResult, String> {
     let ref_name = validate_local_branch_ref(ref_name).map_err(|err| err.to_string())?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    prikk_store::ensure_worktree_replay_verified(&layout).map_err(|err| err.to_string())?;
     let active_lock =
         ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).map_err(|err| err.to_string())?;
     let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);

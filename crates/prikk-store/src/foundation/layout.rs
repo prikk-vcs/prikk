@@ -225,6 +225,9 @@ impl RepositoryLayout {
         // RFC 102 Stage 1: created at `init`, never later -- a missing file and an idempotent
         // re-`init` on an already-initialized repository must not clobber either.
         create_empty_file_once(&layout, &layout.worktree_unclean_shutdown_marker_path())?;
+        // RFC 136 §10.3b.2: created at `init` on the same pattern, so setting it later is an append to
+        // an existing name rather than a new-name event.
+        create_empty_file_once(&layout, &layout.provisional_worktree_marker_path())?;
         create_empty_file_once(&layout, &layout.default_queue_wal_path())?;
         // RFC 102 Stage 5, design-v1.md §14.6: the active-WAL ref-ownership metadata, on the same
         // marker pattern as the worktree marker above -- created empty at `init`, set by truncate-then
@@ -397,6 +400,16 @@ impl RepositoryLayout {
     #[must_use]
     pub fn worktree_unclean_shutdown_marker_path(&self) -> PathBuf {
         self.prikk_dir.join("worktree.marker")
+    }
+
+    /// Return the provisional-worktree marker path (RFC 136 §10.3b.2), beside the unclean-shutdown
+    /// marker and on the same pattern: created empty at `init`, set by appending a record naming the
+    /// ref and snapshot block `checkout --snapshot-materialize` wrote from, and cleared only by
+    /// `prikk verify` truncating it to empty. Non-empty means the worktree is not replay-verified, and
+    /// the derivation gate refuses every command that turns worktree content into history.
+    #[must_use]
+    pub fn provisional_worktree_marker_path(&self) -> PathBuf {
+        self.prikk_dir.join("worktree.provisional")
     }
 
     /// Return the object root directory.

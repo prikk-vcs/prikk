@@ -91,3 +91,97 @@ fn missing_marker_file_reads_as_clean() {
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---- RFC 136 §10.3b: the provisional-worktree marker ---------------------------------------------------
+
+fn block(byte: u8) -> prikk_object::ObjectId {
+    prikk_object::ObjectId::from_bytes([byte; 32])
+}
+
+#[test]
+fn the_provisional_marker_is_created_clear_at_init_and_names_its_last_record() {
+    let root = unique_temp_dir("provisional-marker-round-trip");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    assert!(layout.provisional_worktree_marker_path().exists());
+    assert_eq!(crate::provisional_worktree(&layout).expect("read"), None);
+    assert!(crate::ensure_worktree_replay_verified(&layout).is_ok());
+
+    crate::worktree_marker::mark_worktree_provisional(&layout, "heads/main", block(1))
+        .expect("mark");
+    crate::worktree_marker::mark_worktree_provisional(&layout, "heads/side", block(2))
+        .expect("mark");
+    let named = crate::provisional_worktree(&layout)
+        .expect("read")
+        .expect("set");
+    assert_eq!(
+        (named.ref_name.as_str(), named.block_id.as_str()),
+        ("heads/side", block(2).to_string().as_str()),
+        "the last record names the most recent materialization"
+    );
+    match crate::ensure_worktree_replay_verified(&layout) {
+        Err(prikk_error::PrikkError::Precondition(message)) => {
+            assert!(message.contains(&block(2).to_string()), "{message}");
+            assert!(message.contains("heads/side"), "{message}");
+            assert!(message.contains("prikk verify"), "{message}");
+        }
+        other => panic!("expected a precondition, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 136 §10.3b.1: compare-and-remove. `verify` read the marker's bytes before verifying; a
+/// materialization that appended while it ran changes them, and that marker must survive.
+#[test]
+fn compare_and_remove_keeps_a_marker_a_materialization_changed_during_verify() {
+    let root = unique_temp_dir("provisional-marker-race");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    crate::worktree_marker::mark_worktree_provisional(&layout, "heads/main", block(1))
+        .expect("mark");
+    let observed = crate::provisional_marker_bytes(&layout)
+        .expect("read")
+        .expect("set");
+
+    // The race: a `--snapshot-materialize` appends between verify's read and its clear.
+    crate::worktree_marker::mark_worktree_provisional(&layout, "heads/main", block(3))
+        .expect("mark");
+    assert_eq!(
+        crate::clear_provisional_marker_if_unchanged(&layout, &observed).expect("clear"),
+        crate::ProvisionalClearOutcome::ChangedDuringVerify
+    );
+    assert!(crate::ensure_worktree_replay_verified(&layout).is_err());
+
+    // Verified again, with nothing appended since: the marker clears.
+    let observed = crate::provisional_marker_bytes(&layout)
+        .expect("read")
+        .expect("set");
+    assert_eq!(
+        crate::clear_provisional_marker_if_unchanged(&layout, &observed).expect("clear"),
+        crate::ProvisionalClearOutcome::Cleared
+    );
+    assert!(crate::ensure_worktree_replay_verified(&layout).is_ok());
+    assert_eq!(
+        crate::clear_provisional_marker_if_unchanged(&layout, &observed).expect("clear"),
+        crate::ProvisionalClearOutcome::NotSet
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The compare-and-remove runs under the active lock: while a writer holds it, `verify` cannot clear.
+#[test]
+fn compare_and_remove_takes_the_active_lock() {
+    let root = unique_temp_dir("provisional-marker-lock");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    crate::worktree_marker::mark_worktree_provisional(&layout, "heads/main", block(1))
+        .expect("mark");
+    let observed = crate::provisional_marker_bytes(&layout)
+        .expect("read")
+        .expect("set");
+    let held = crate::lock::ActiveLock::acquire(&layout, crate::DEFAULT_ACTIVE_NAME).expect("lock");
+    assert!(matches!(
+        crate::clear_provisional_marker_if_unchanged(&layout, &observed),
+        Err(prikk_error::PrikkError::LockConflict(_))
+    ));
+    drop(held);
+    assert!(crate::ensure_worktree_replay_verified(&layout).is_err());
+    let _ = std::fs::remove_dir_all(root);
+}

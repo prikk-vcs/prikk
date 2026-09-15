@@ -89,6 +89,8 @@ pub fn append_rollback_draft(
 ) -> Result<RollbackDraftReport> {
     layout.require_current_format()?;
     crate::refs::ensure_no_incomplete_publication(layout)?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     let canonical_ref = validate_local_branch_ref(ref_name)?;
     if message.trim().is_empty() {
         return Err(PrikkError::InvalidName(

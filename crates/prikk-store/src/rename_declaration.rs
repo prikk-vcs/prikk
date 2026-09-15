@@ -157,6 +157,8 @@ pub fn record_rename_declaration(
     // Held across the whole read-modify-write -- see this module's own doc comment for the race
     // this closes (a concurrent `commit` clearing the store between this call's read and write).
     let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     let mut map = read_declarations_map(layout)?;
     let chained_origin = map
         .iter()

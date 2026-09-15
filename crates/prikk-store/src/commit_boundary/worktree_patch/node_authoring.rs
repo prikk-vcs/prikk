@@ -308,6 +308,8 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     let active_lock =
         ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME).map_err(AuthorError::Store)?;
     crate::refs::ensure_no_incomplete_publication(layout).map_err(AuthorError::Store)?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout).map_err(AuthorError::Store)?;
 
     // RFC 102 Stage 1: a dirty worktree marker means a prior materialization call did not complete
     // durably -- this function's own deletion-inference loop (below) cannot distinguish "the user

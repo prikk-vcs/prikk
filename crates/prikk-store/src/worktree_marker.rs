@@ -28,12 +28,16 @@
 //! dirty) rather than an error -- this project's standing direction is that migration for existing
 //! repositories is not required, and a missing marker is not evidence of an unclean shutdown.
 
-use prikk_error::Result;
+use prikk_error::{PrikkError, Result};
+use prikk_object::ObjectId;
 
+use crate::DEFAULT_ACTIVE_NAME;
 use crate::foundation::fsutil::{
-    append_file_required, read_file_if_exists, truncate_file_empty_required,
+    append_file_required, create_new_file_required, read_file_if_exists,
+    truncate_file_empty_required,
 };
 use crate::foundation::layout::RepositoryLayout;
+use crate::lock::ActiveLock;
 
 /// Fixed sentinel appended on each dirty-set. Content is never parsed -- only "the file has any
 /// bytes" is meaningful -- but a recognizable magic makes the file self-explanatory to inspection.
@@ -61,6 +65,128 @@ pub(crate) fn worktree_is_dirty(layout: &RepositoryLayout) -> Result<bool> {
     let relative = layout.repository_relative(&layout.worktree_unclean_shutdown_marker_path())?;
     let bytes = read_file_if_exists(layout.repository_mutation_root(), &relative)?;
     Ok(bytes.is_some_and(|bytes| !bytes.is_empty()))
+}
+
+// ---- The provisional-worktree marker and the derivation gate (RFC 136 §10.3b.1-3) ---------------------
+//
+// `checkout --snapshot-materialize` writes a worktree from a snapshot, which proves only that it matches
+// its block's signed state root, never that replaying history produces it (RFC 136 §6). Until `prikk
+// verify` has replayed the repository, that worktree must not become history: `commit` would sign its
+// difference from true replay as the user's own patch. The marker records that state; the gate refuses
+// every command that would derive history from it; only `verify` clears it.
+//
+// **Append-only while set.** Each materialization appends one record and nothing rewrites a record, so a
+// crash can never leave the marker half-cleared: the file is empty (clear) or holds at least one whole
+// or partial record (set). The last whole record names the most recent materialization.
+
+/// The first field of every marker record.
+const PROVISIONAL_RECORD_MAGIC: &str = "PRIKK-PROVISIONAL-WORKTREE-v1";
+
+/// What the provisional-worktree marker names: the ref and the snapshot block the worktree was
+/// materialized from. `"<unreadable marker>"` in both fields when the marker is set but its last record
+/// does not parse; the marker still counts as set.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionalWorktree {
+    /// The ref `checkout --snapshot-materialize` read.
+    pub ref_name: String,
+    /// The snapshot's block id.
+    pub block_id: String,
+}
+
+/// What [`clear_provisional_marker_if_unchanged`] did.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProvisionalClearOutcome {
+    /// The marker still held the bytes `verify` read before verifying, and is now empty.
+    Cleared,
+    /// A materialization appended to the marker while `verify` ran; the marker is kept.
+    ChangedDuringVerify,
+    /// The marker was already clear.
+    NotSet,
+}
+
+/// Set the provisional marker for a worktree about to be written from `block_id`'s snapshot on
+/// `ref_name`. Must be called, and succeed, before the first worktree write, under the active lock.
+pub(crate) fn mark_worktree_provisional(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_id: ObjectId,
+) -> Result<()> {
+    let relative = layout.repository_relative(&layout.provisional_worktree_marker_path())?;
+    let root = layout.repository_mutation_root();
+    // A repository initialized before this marker existed has no file: create it, empty, first.
+    if read_file_if_exists(root, &relative)?.is_none() {
+        create_new_file_required(root, &relative, &[])?;
+    }
+    let record = format!("{PROVISIONAL_RECORD_MAGIC} {ref_name} {block_id}\n");
+    append_file_required(root, &relative, record.as_bytes())
+}
+
+/// The marker's bytes when it is set, `None` when it is clear or absent. `verify` reads this before
+/// verifying, to compare against at the end.
+pub fn provisional_marker_bytes(layout: &RepositoryLayout) -> Result<Option<Vec<u8>>> {
+    let relative = layout.repository_relative(&layout.provisional_worktree_marker_path())?;
+    let bytes = read_file_if_exists(layout.repository_mutation_root(), &relative)?;
+    Ok(bytes.filter(|bytes| !bytes.is_empty()))
+}
+
+/// What the marker names, when it is set.
+pub fn provisional_worktree(layout: &RepositoryLayout) -> Result<Option<ProvisionalWorktree>> {
+    let Some(bytes) = provisional_marker_bytes(layout)? else {
+        return Ok(None);
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let named =
+        text.lines().rev().find_map(
+            |line| match line.split(' ').collect::<Vec<_>>().as_slice() {
+                [PROVISIONAL_RECORD_MAGIC, ref_name, block_id] => {
+                    Some(((*ref_name).to_string(), (*block_id).to_string()))
+                }
+                _ => None,
+            },
+        );
+    let (ref_name, block_id) = named.unwrap_or_else(|| {
+        (
+            "<unreadable marker>".to_string(),
+            "<unreadable marker>".to_string(),
+        )
+    });
+    Ok(Some(ProvisionalWorktree { ref_name, block_id }))
+}
+
+/// **The derivation gate** (RFC 136 §10.3b.3): the one check every command that turns worktree
+/// content into history calls before any write. `Precondition` while the marker is set, naming the ref,
+/// the block and the route.
+pub fn ensure_worktree_replay_verified(layout: &RepositoryLayout) -> Result<()> {
+    match provisional_worktree(layout)? {
+        None => Ok(()),
+        Some(provisional) => Err(PrikkError::Precondition(format!(
+            "the worktree was materialized from the snapshot of Block {} on {} and is not \
+             replay-verified; run `prikk verify` to replay the repository and clear this",
+            provisional.block_id, provisional.ref_name
+        ))),
+    }
+}
+
+/// Clear the marker if it still holds `observed`, the bytes `verify` read before verifying (RFC 136
+/// §10.3b.1). Compare-and-remove under the active lock, which `checkout --snapshot-materialize` holds
+/// while it appends: a materialization that ran during `verify` changed the bytes and keeps its marker,
+/// and one cannot append between this comparison and the truncation.
+pub fn clear_provisional_marker_if_unchanged(
+    layout: &RepositoryLayout,
+    observed: &[u8],
+) -> Result<ProvisionalClearOutcome> {
+    let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let Some(current) = provisional_marker_bytes(layout)? else {
+        return Ok(ProvisionalClearOutcome::NotSet);
+    };
+    if current != observed {
+        return Ok(ProvisionalClearOutcome::ChangedDuringVerify);
+    }
+    let relative = layout.repository_relative(&layout.provisional_worktree_marker_path())?;
+    truncate_file_empty_required(layout.repository_mutation_root(), &relative)?;
+    Ok(ProvisionalClearOutcome::Cleared)
 }
 
 #[cfg(all(test, target_os = "linux"))]

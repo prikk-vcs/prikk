@@ -62,6 +62,7 @@ pub(crate) fn print_status_json(
     trailing_partial_wal_bytes: usize,
     heads_main_ref_state: Option<ObjectId>,
     current_branch: Option<&str>,
+    provisional: Option<&prikk_store::ProvisionalWorktree>,
     queue_target: Option<&QueueTarget>,
     threshold: Option<(&QueueThresholdStatus, usize, usize)>,
     patches: &[QueuedPatchEntry],
@@ -94,6 +95,16 @@ pub(crate) fn print_status_json(
             escape_json_string(branch)
         )),
         None => json.push_str("  \"current_branch\": null,\n"),
+    }
+    // RFC 136 §10.3b.2: additive within `status-report-v1`; `null` when the worktree is not
+    // provisional, never an omitted field.
+    match provisional {
+        Some(provisional) => json.push_str(&format!(
+            "  \"provisional_worktree\": {{\"ref\": {}, \"block_id\": {}, \"replay_verified\": false}},\n",
+            escape_json_string(&provisional.ref_name),
+            escape_json_string(&provisional.block_id)
+        )),
+        None => json.push_str("  \"provisional_worktree\": null,\n"),
     }
     json.push_str("  \"queue\": {\n");
     json.push_str(&format!("    \"count\": {},\n", patches.len()));

@@ -489,6 +489,16 @@ fn run_status(format_json: bool) -> std::result::Result<(), CliError> {
         Some(branch) => println!("current branch: {branch}"),
         None => println!("current branch: <unresolved; run `prikk doctor`>"),
     }
+    // RFC 136 §10.3b.2: `status` reports the provisional-worktree marker.
+    if let Some(provisional) =
+        prikk_store::provisional_worktree(&layout).map_err(|err| err.to_string())?
+    {
+        println!(
+            "provisional worktree: materialized from the snapshot of {} on {}; not replay-verified \
+             — run prikk verify",
+            provisional.block_id, provisional.ref_name
+        );
+    }
     // DC-66 criterion 7: report the queued patch count and the ref the queue targets, distinct from
     // `replay.records.len()` (a raw count with no ownership) and `heads/main RefState` (the last
     // *sealed* state, not what an active queue is targeting).
@@ -542,6 +552,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
     let main_ref = ref_store
         .read_current_ref_state_id("heads/main")
         .map_err(|err| err.to_string())?;
+    let provisional = prikk_store::provisional_worktree(&layout).map_err(|err| err.to_string())?;
 
     if replay.records.is_empty() {
         print_status_json(
@@ -550,6 +561,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
             replay.trailing_partial_bytes,
             main_ref,
             current_branch::displayed_current_branch(&layout).as_deref(),
+            provisional.as_ref(),
             None,
             None,
             &[],
@@ -583,6 +595,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
         replay.trailing_partial_bytes,
         main_ref,
         current_branch::displayed_current_branch(&layout).as_deref(),
+        provisional.as_ref(),
         Some(&target),
         Some((&threshold_status, thresholds.warn, thresholds.limit)),
         &patches,
@@ -848,6 +861,10 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     let options = VerifyOptions {
         stop_on_first_error: verify_args.stop_on_first_error,
     };
+    // RFC 136 §10.3b.1: read the provisional marker before verifying, so the clear below removes only
+    // the marker this run verified -- not one a `--snapshot-materialize` appended while it ran.
+    let provisional_before =
+        prikk_store::provisional_marker_bytes(&layout).map_err(|err| err.to_string())?;
     let report = verify_repository_with_options(&layout, options).map_err(|err| err.to_string())?;
     // RFC 118 stage 5: `--format json` emits exactly one JSON document and nothing else -- the
     // default prose path's received-refs lines below are additive presentation, not part of the
@@ -866,6 +883,32 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
             println!(
                 "received-ref {}: {}",
                 pointer.ref_name, pointer.ref_state_id
+            );
+        }
+    }
+    if let Some(observed) = provisional_before {
+        let prose = verify_args.format != VerifyOutputFormat::Json;
+        let blockers = verify_verdict::provisional_clear_blockers(&report);
+        if blockers.is_empty() {
+            match prikk_store::clear_provisional_marker_if_unchanged(&layout, &observed) {
+                Ok(prikk_store::ProvisionalClearOutcome::Cleared) if prose => {
+                    println!("provisional worktree: replay-verified; marker cleared");
+                }
+                Ok(prikk_store::ProvisionalClearOutcome::ChangedDuringVerify) if prose => {
+                    println!(
+                        "provisional worktree: kept; a snapshot materialization changed the marker \
+                         while verify ran -- run `prikk verify` again"
+                    );
+                }
+                Ok(_) => {}
+                Err(err) if prose => println!("provisional worktree: kept; {err}"),
+                Err(_) => {}
+            }
+        } else if prose {
+            let ids: Vec<&str> = blockers.iter().map(|condition| condition.id).collect();
+            println!(
+                "provisional worktree: kept; verify found {}",
+                ids.join(", ")
             );
         }
     }

@@ -111,6 +111,8 @@ pub fn accept_exchange_artifact(
     bytes: &[u8],
     options: &AcceptOptions,
 ) -> Result<AcceptReport> {
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     // Phase A, item 1: total byte length, before any decoding.
     if bytes.len() > options.max_total_bytes {
         return Err(PrikkError::MalformedData(format!(

@@ -8,16 +8,20 @@ use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
 
+use crate::DEFAULT_ACTIVE_NAME;
 use crate::checkout::load_snapshot_checkout;
 use crate::foundation::fsutil::{
     ensure_directory_required, read_file_if_exists, set_regular_file_mode_required,
     stat_file_state_if_exists, sync_directory_required, write_worktree_file_atomically,
 };
 use crate::foundation::layout::RepositoryLayout;
+use crate::lock::ActiveLock;
 use crate::patch_replay::read::{files_to_replay_manifest, replay_state_from_snapshot};
 use crate::patch_replay::{ReplayManifest, ReplayManifestEntry};
 use crate::path::join_repo_path_to_root;
-use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty};
+use crate::worktree_marker::{
+    clear_worktree_dirty, mark_worktree_dirty, mark_worktree_provisional,
+};
 
 /// Result of an opt-in snapshot worktree materialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,8 +58,19 @@ pub fn materialize_snapshot_checkout(
     // Blob with the mode its state entry records, through the same mode-aware materializer patch
     // checkout uses.
     let (plan, files) = load_snapshot_checkout(layout, ref_name)?;
+    let block_id = plan.checkout.block_id.ok_or_else(|| {
+        PrikkError::Integrity(format!(
+            "snapshot checkout plan for {ref_name} names no block"
+        ))
+    })?;
     let (files, live_nodes) = replay_state_from_snapshot(files);
     let manifest = files_to_replay_manifest(files, &live_nodes)?;
+    // RFC 136 §10.3b.2: the worktree about to be written is the block's signed state, not replay's.
+    // The active lock is held across the marker and every write, so `verify`'s compare-and-remove of
+    // the marker cannot interleave with this append. The marker is durable before the first write; a
+    // crash between the two leaves it set, which fails closed.
+    let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    mark_worktree_provisional(layout, ref_name, block_id)?;
     // RFC 102 Stage 1: dirty before the first possible worktree write, cleared only after every
     // write in this call has durably completed -- see `worktree_marker`'s own doc for why the
     // ordering, not just the primitive, is what closes T12.

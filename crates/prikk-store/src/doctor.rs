@@ -524,6 +524,29 @@ fn push_current_branch_issue(layout: &RepositoryLayout, issues: &mut Vec<DoctorI
     }
 }
 
+/// RFC 136 §10.3b.2: `doctor` knows the provisional-worktree marker. A warning, not an error: the
+/// repository is not damaged, and `prikk verify` is the route that clears it.
+fn push_provisional_worktree_issue(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue>) {
+    match crate::worktree_marker::provisional_worktree(layout) {
+        Ok(None) => {}
+        Ok(Some(provisional)) => issues.push(DoctorIssue::warning(
+            "PRIKK-DOCTOR-PROVISIONAL-WORKTREE",
+            format!(
+                "the worktree was materialized from the snapshot of Block {} on {} and is not \
+                 replay-verified",
+                provisional.block_id, provisional.ref_name
+            ),
+            "run `prikk verify`; until it passes, commit, mv, seal, merge, sync accept, sync seal, \
+             rollback-draft and branch switch refuse",
+        )),
+        Err(err) => issues.push(DoctorIssue::warning(
+            "PRIKK-DOCTOR-PROVISIONAL-WORKTREE",
+            format!("the provisional-worktree marker could not be read: {err}"),
+            "run `prikk verify`",
+        )),
+    }
+}
+
 /// Run doctor diagnostics for a repository layout.
 #[must_use]
 pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
@@ -531,6 +554,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     push_missing_required_directory_issues(layout, &mut issues);
     push_non_default_active_session_wal_issues(layout, &mut issues);
     push_current_branch_issue(layout, &mut issues);
+    push_provisional_worktree_issue(layout, &mut issues);
     match verify_repository(layout) {
         Ok(verification) => {
             issues.push(DoctorIssue::info(

@@ -67,6 +67,8 @@ pub fn execute_merge(
 ) -> Result<MergeExecutionReport> {
     layout.require_current_format()?;
     let into_ref = validate_local_branch_ref(into_ref)?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     // DC-85: `from_ref` may be a local branch or a received ref (`remotes/<name>`) — never widen
     // `validate_local_branch_ref` itself to accept `remotes/`, since it also gates `into_ref` here
     // and `branch create --from` elsewhere; a merge source that happens to be received gets its own

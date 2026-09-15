@@ -107,6 +107,8 @@ pub fn seal_from_accepted_claim(
     layout.require_current_format()?;
     let canonical_ref = validate_local_branch_ref(ref_name)?;
     crate::refs::ensure_no_incomplete_publication(layout)?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write.
+    crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
 
     // §3 item 1: the named claim must exist and decode.
     let read_snapshot = ObjectReadSnapshot::open(layout)?;

@@ -243,6 +243,10 @@ pub use verify::{
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};
+pub use worktree_marker::{
+    ProvisionalClearOutcome, ProvisionalWorktree, clear_provisional_marker_if_unchanged,
+    ensure_worktree_replay_verified, provisional_marker_bytes, provisional_worktree,
+};
 pub use worktree_status::{
     QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,
     WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,
