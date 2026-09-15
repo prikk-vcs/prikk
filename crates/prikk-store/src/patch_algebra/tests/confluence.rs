@@ -221,3 +221,44 @@ fn right_same_sequence_evidence_error_wins_over_earlier_unknown_operation() {
         other => panic!("expected right same-sequence sealed evidence error, got {other:?}"),
     }
 }
+
+/// DC-75 two-edits handoff: the defect's smallest reproduction. Fails today with `ReplayFailure` at
+/// left index 1, because `ensure_flat_sequence` replays the second edit alone against the baseline.
+#[test]
+#[ignore = "DC-75 two-edits defect: fails until the ruled fix lands"]
+fn a_side_that_edits_one_text_twice_is_confluent_with_an_unrelated_create() {
+    let mut baseline = NodeLifecycleState::new();
+    seed_text(
+        &mut baseline,
+        node(1),
+        "e.txt",
+        b"alpha beta gamma",
+        MODE_REGULAR,
+    );
+    let left = [
+        edit_text(1, node(1), b"alpha beta gamma", b"alpha BETA gamma"),
+        edit_text(2, node(1), b"alpha BETA gamma", b"alpha BETA GAMMA"),
+    ];
+    let right = [create_file(3, "g.bin", node(2), blob(2), MODE_REGULAR)];
+    let evidence = TestTextResolver::new([(node(1), b"alpha beta gamma".to_vec())]).with_blob(
+        blob(2),
+        BlobKind::Binary,
+        b"g".to_vec(),
+    );
+
+    match check_confluence_result(
+        &baseline,
+        &evidence,
+        EvidenceScope::SealedCandidateRequired,
+        &left,
+        &right,
+    )
+    .expect("confluence evidence")
+    {
+        ConfluenceResult::Confluent { proof } => {
+            assert_eq!(proof.left_len, 2);
+            assert_eq!(proof.right_len, 1);
+        }
+        other => panic!("expected confluent, got {other:?}"),
+    }
+}
