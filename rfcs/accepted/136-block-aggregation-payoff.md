@@ -718,6 +718,20 @@ that root; only replay proves that (§6).
    - **Otherwise** `commit` keeps DC-64's incremental cache, which already reanchors at
      `CHECKPOINT_CADENCE`.
 
+**2a DONE 2026-09-15** (`14ac8b3f`, `f5e8dc1c`, `8b303094`, `2d96196b`; reviewed
+`.git-exclude/reviewed/rfc136-increment-2a-review-v1.md`).
+- **What landed:** the provisional marker with compare-and-remove clearing; the gate, one check with a
+  source-scan guard over eight commands; and anchored read-only reports whose history fields are decoded
+  over the whole chain.
+- **Byte identity** was confirmed by the architect on the real binaries against the pre-anchoring build.
+- **Cost:** `--patch-plan` takes 0.28× at depth 256, with peak memory +12 %.
+- **Rulings at review:**
+  - `lifecycle-cache-divergence` does not block clearing. It is a cache fault; verify's own replay is the
+    authority.
+  - The damaged-snapshot test-support helper and its binary control come in 2b.
+  - Checkout peak memory is measured again in increment 3.
+- **2b handoff:** `136-block-aggregation-payoff/sealed-snapshots-increment-2b-handoff-v1.md`.
+
 **Increment 2 is split.** §10.5's increment 2 becomes:
 - **2a:** the marker and derivation gate (§10.3b.1–3), plus anchored **read-only** reports (ruling 1)
   with §10.3a ruling 5's whole-chain history fields and §10.3b.4's fallback;
