@@ -1276,6 +1276,15 @@ pub fn verify_repository_with_options(
         (objects_evaluated && ref_update_schema_trust_evaluated && local_tag_trust_evaluated)
             .then_some(trust_verifier.checked_records);
 
+    // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
+    // the run found -- each such outcome is individually sound. Best-effort; never fails verify.
+    crate::verified_blocks::record_verified_blocks(
+        layout,
+        block_state_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome.status, BlockStateStatus::Verified))
+            .map(|outcome| outcome.block_id),
+    );
     Ok(RepositoryVerification {
         stage_outcomes: pipeline.outcomes,
         object_outcomes,

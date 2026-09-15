@@ -196,18 +196,24 @@ pub(crate) enum CandidateStateDerivationError {
 /// Returns the new state's entries -- exactly what its state root hashes -- and the text cache the
 /// derivation carried, so a checkpoint snapshot (RFC 136 increment 1b) is written from the very
 /// derivation that produces the root and the two cannot disagree.
+/// Also returns every ancestor Block whose root this derivation confirmed by replay: the lineage memo's
+/// keys, each inserted only after `computed == payload.state_merkle_root` (RFC 136 increment 2b).
+#[allow(clippy::type_complexity)]
 pub(crate) fn derive_next_state_for_candidate(
     reader: &impl ObjectReader,
     parent: Option<ObjectId>,
     patch_ids: &[ObjectId],
-) -> std::result::Result<(Vec<StateRootEntry>, TextCache), CandidateStateDerivationError> {
-    let (mut state, mut text_cache) =
-        resolved_parent_state(reader, parent, &mut LineageStateMemo::new())
-            .map_err(CandidateStateDerivationError::Lineage)?;
+) -> std::result::Result<
+    (Vec<StateRootEntry>, TextCache, Vec<ObjectId>),
+    CandidateStateDerivationError,
+> {
+    let mut memo = LineageStateMemo::new();
+    let (mut state, mut text_cache) = resolved_parent_state(reader, parent, &mut memo)
+        .map_err(CandidateStateDerivationError::Lineage)?;
     apply_candidate_patches(reader, &mut state, &mut text_cache, patch_ids)
         .map_err(CandidateStateDerivationError::Patch)?;
     let entries = entries_from_state(&state).map_err(CandidateStateDerivationError::Lineage)?;
-    Ok((entries, text_cache))
+    Ok((entries, text_cache, memo.verified.keys().copied().collect()))
 }
 
 #[cfg(test)]
@@ -287,21 +293,33 @@ pub enum BlockLineage {
 ///
 /// A Block that is a checkpoint (RFC 136 §10.2: no snapshotted ancestor within `CHECKPOINT_CADENCE`
 /// blocks on its derivation line) also carries a snapshot of its own state, written first.
+///
+/// After the Block is written, the replay-verified record (RFC 136 increment 2b) gains the lineage the
+/// derivation verified and the new Block, whose root was computed here, never asserted.
 pub fn seal_block(
+    layout: &crate::RepositoryLayout,
     object_store: &mut (impl ObjectReader + ObjectWriter),
     lineage: BlockLineage,
     patch_ids: &[ObjectId],
     signer: &impl MaintainerSigner,
 ) -> Result<ObjectId> {
-    seal_block_classified(object_store, lineage, patch_ids, signer, |err| match err {
-        CandidateStateDerivationError::Lineage(err) => err,
-        CandidateStateDerivationError::Patch(err) => err.into(),
-    })
+    seal_block_classified(
+        layout,
+        object_store,
+        lineage,
+        patch_ids,
+        signer,
+        |err| match err {
+            CandidateStateDerivationError::Lineage(err) => err,
+            CandidateStateDerivationError::Patch(err) => err.into(),
+        },
+    )
 }
 
 /// [`seal_block`] for the one caller that classifies a derivation failure itself (the
 /// seal-from-accepted path, RFC 115 Stage 4 §4) rather than receiving it flattened.
 pub(crate) fn seal_block_classified(
+    layout: &crate::RepositoryLayout,
     object_store: &mut (impl ObjectReader + ObjectWriter),
     lineage: BlockLineage,
     patch_ids: &[ObjectId],
@@ -332,7 +350,7 @@ pub(crate) fn seal_block_classified(
                 )
             }
         };
-    let (entries, text_cache) =
+    let (entries, text_cache, replay_verified) =
         derive_next_state_for_candidate(&*object_store, state_parent, patch_ids)
             .map_err(classify)?;
     let state_merkle_root = compute_state_root(&entries)?;
@@ -360,7 +378,12 @@ pub(crate) fn seal_block_classified(
         ObjectEnvelope::unsigned(ObjectType::Block, 2, block_payload.to_canonical_bytes()?);
     let block_id = block_envelope.object_id();
     block_envelope.add_signature(maintainer_signature(signer, ObjectType::Block, block_id)?)?;
-    object_store.write_object(&block_envelope)
+    let block_id = object_store.write_object(&block_envelope)?;
+    crate::verified_blocks::record_verified_blocks(
+        layout,
+        replay_verified.into_iter().chain(std::iter::once(block_id)),
+    );
+    Ok(block_id)
 }
 
 /// Shared by [`derive_next_state_root_with_memo`] and [`verify_block_v2_state`]: resolve `parent`'s

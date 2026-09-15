@@ -85,6 +85,7 @@ mod wal;
 // coupling gate's own SCC (worktree_patch -> worktree -> active/patch_replay/lifecycle_cache ->
 // ... -> active); see the report. `worktree_patch` itself moved to `commit_boundary` at §6d.2,
 // grouped with `active` specifically, not with this family.
+mod verified_blocks;
 mod worktree;
 mod worktree_marker;
 mod worktree_status;

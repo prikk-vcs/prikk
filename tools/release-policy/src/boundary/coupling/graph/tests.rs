@@ -124,8 +124,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // increment 2 added `branch_switch`, the switch's own upper-layer module: 130 -> 131. The DC-75
     // two-edits fix added `patch_algebra::fold`, per-side net-effect folding for merge evidence:
     // 131 -> 132. RFC 136 increment 2a added `patch_replay::anchor`, anchored replay for read-only
-    // reports: 132 -> 133.
-    assert_eq!(modules.len(), 133, "modules: {modules:?}");
+    // reports: 132 -> 133. RFC 136 increment 2b added `verified_blocks`, the replay-verified block
+    // record: 133 -> 134.
+    assert_eq!(modules.len(), 134, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

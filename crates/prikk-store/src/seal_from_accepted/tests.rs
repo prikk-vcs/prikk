@@ -799,3 +799,29 @@ fn d7_a_claim_overlapping_an_already_sealed_patch_no_longer_deadlocks() -> Resul
     cleanup(&layout);
     Ok(())
 }
+
+/// RFC 136 increment 2b §3: `sync seal --claim` seals through `seal_block_classified`, which records the
+/// Block whose root it just computed.
+#[test]
+fn sealing_from_an_accepted_claim_records_the_sealed_block() -> Result<()> {
+    let fixture = base_fixture("seal-from-accepted-records")?;
+    assert!(
+        crate::verified_blocks::load_verified_blocks(&fixture.layout).is_empty(),
+        "fixture sanity: nothing recorded before the seal"
+    );
+    let outcome = seal_from_accepted_claim(
+        &fixture.layout,
+        TARGET_REF,
+        fixture.claim_id,
+        &fixture.signer,
+    )?;
+    let SealFromAcceptedOutcome::Sealed { block_id, .. } = outcome else {
+        panic!("expected Sealed, got {outcome:?}");
+    };
+    assert!(
+        crate::verified_blocks::load_verified_blocks(&fixture.layout).contains(&block_id),
+        "sync seal recorded its Block"
+    );
+    cleanup(&fixture.layout);
+    Ok(())
+}

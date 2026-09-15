@@ -163,6 +163,7 @@ fn seal_active_no_audit(
     let patch_ids = persist_wal_patches(&mut object_store, &replay.records)?;
     let parent = current.as_ref().map(|state| state.target_block_id);
     let block_id = seal_block(
+        &layout,
         &mut object_store,
         BlockLineage::Linear { parent },
         &patch_ids,

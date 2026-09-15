@@ -210,6 +210,7 @@ pub fn seal_from_accepted_claim(
     // `PrikkError::Integrity` the way ordinary `seal_block` does.
     let mut object_store = ObjectWriteSession::open(layout)?;
     let block_id = seal_block_classified(
+        layout,
         &mut object_store,
         BlockLineage::Linear { parent },
         &selected_patch_ids,

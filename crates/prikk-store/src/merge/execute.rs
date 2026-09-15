@@ -169,6 +169,7 @@ pub fn execute_merge(
 
     let adopted_target_block_id = evidence.right_selector.target_block_id;
     let block_id = seal_block(
+        layout,
         &mut object_store,
         BlockLineage::Merge {
             mainline_parent: parent_block_id,

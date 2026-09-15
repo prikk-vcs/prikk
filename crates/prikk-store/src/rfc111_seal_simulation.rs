@@ -79,6 +79,7 @@ pub(crate) fn simulate_one_seal(
         .as_ref()
         .map(|(_, payload)| payload.target_object_id);
     let block_id = seal_block(
+        layout,
         &mut object_store,
         BlockLineage::Linear { parent },
         &patch_ids,

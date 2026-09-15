@@ -83,7 +83,8 @@ fn removing_a_declaration_names_its_file() {
         "{detail}"
     );
     assert!(
-        detail.contains("1680"),
+        // RFC 136 increment 2b: verify records the blocks it replay-verified, 1,680 -> 1,689 lines.
+        detail.contains("1689"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -200,8 +201,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 130 graph nodes plus `lib.rs`, which is a file the gate weighs and not a node the graph has.
     // RFC 151 increment 2 added `branch_switch.rs`, the store's one new production file: 131 -> 132.
     // The DC-75 two-edits fix added `patch_algebra/fold.rs`: 132 -> 133. RFC 136 increment 2a added
-    // `patch_replay/anchor.rs`: 133 -> 134.
-    assert_eq!(store.production_files, 134);
+    // `patch_replay/anchor.rs`: 133 -> 134. RFC 136 increment 2b added `verified_blocks.rs`: 134 -> 135.
+    assert_eq!(store.production_files, 135);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

@@ -847,3 +847,65 @@ fn worktree_writes_and_rollback_preview_load_no_snapshot() -> Result<()> {
     assert!(snapshot_anchor_loads_for_test() > after_other);
     Ok(())
 }
+
+// ---- RFC 136 increment 2b §3: the record's writers ----------------------------------------------------
+
+/// `seal_block` records the lineage it verified and the Block it sealed; `execute_merge` records its merge
+/// Block; `verify` records every Block it replay-verified, from an empty record.
+#[test]
+fn seal_merge_and_verify_record_the_blocks_they_replay_verified() -> Result<()> {
+    use crate::verified_blocks::{load_verified_blocks, record_path};
+
+    let mut sealer = Sealer::new("rfc136-2b-writers", true)?;
+    let first = vec![sealer.create("a.txt", 0xA1, b"alpha\n")?];
+    sealer.seal(first)?;
+    for number in 2..=5_u8 {
+        let op = sealer.create(&format!("f{number}.txt"), number, b"filler\n")?;
+        sealer.seal(vec![op])?;
+    }
+    let recorded = load_verified_blocks(&sealer.layout);
+    for block_id in &sealer.blocks {
+        assert!(recorded.contains(block_id), "seal recorded {block_id}");
+    }
+
+    let baseline = *sealer
+        .blocks
+        .get(2)
+        .ok_or_else(|| integrity("no third block"))?;
+    sealer.publish_branch("heads/side", baseline)?;
+    let side_op = sealer.create("side.txt", 0xF0, b"side\n")?;
+    sealer.seal_on("heads/side", vec![side_op])?;
+    let merged = execute_merge(
+        &sealer.layout,
+        baseline,
+        MAIN,
+        "heads/side",
+        &sealer.maintainer,
+    )?;
+    assert!(
+        load_verified_blocks(&sealer.layout).contains(&merged.block_id),
+        "merge recorded its Block"
+    );
+
+    std::fs::remove_file(record_path(&sealer.layout))?;
+    assert!(
+        load_verified_blocks(&sealer.layout).is_empty(),
+        "fixture sanity"
+    );
+    let verification = verify_repository(&sealer.layout)?;
+    let verified: Vec<ObjectId> = verification
+        .block_state_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome.status, crate::BlockStateStatus::Verified))
+        .map(|outcome| outcome.block_id)
+        .collect();
+    assert!(
+        verified.len() >= sealer.blocks.len(),
+        "fixture sanity: verify replayed the history"
+    );
+    let recorded = load_verified_blocks(&sealer.layout);
+    for block_id in &verified {
+        assert!(recorded.contains(block_id), "verify recorded {block_id}");
+    }
+    Ok(())
+}
