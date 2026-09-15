@@ -470,3 +470,26 @@ fn two_mode_changes_and_an_edit_execute_both_ways() {
         ]
     });
 }
+
+// ---- §7.3 R7: create-then-delete never folds --------------------------------------------------------
+
+/// The side creates `h.txt` and deletes it again; main edits `f.txt`. Never proven confluent, in either
+/// direction, and labelled by R8.
+#[test]
+fn a_create_then_delete_refuses_both_ways() {
+    let side = [write("h.txt", "h\n"), Step::Delete("h.txt")];
+    let main = [write("f.txt", "one TWO three\n")];
+    let reasons = assert_refuses_both_ways(
+        "dc75-fold-create-delete",
+        &soundness_baseline(),
+        &main,
+        &side,
+    );
+    assert_eq!(
+        reasons,
+        [
+            "sequence_internal_dependency_deferred".to_string(),
+            "sequence_internal_dependency_deferred".to_string()
+        ]
+    );
+}

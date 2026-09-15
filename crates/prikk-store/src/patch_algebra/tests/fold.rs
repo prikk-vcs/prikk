@@ -461,3 +461,37 @@ fn mode_changes_that_restore_the_mode_leave_only_the_edit() {
     ));
     assert_confluent(judge(&baseline, &evidence, &left, &right), 1, 1);
 }
+
+/// Ruling R7: create-then-delete never folds. The run holds a path for part of the side's history, and
+/// the original create replayed onto the other side's tip can find that path taken, so a net nothing
+/// would be §7.1 again. The side is judged as authored: the delete has a same-node predecessor (R8).
+#[test]
+fn a_create_then_delete_never_folds() {
+    let (baseline, _) = text_baseline();
+    let created = text_span::text_blob_id(b"new").expect("blob id");
+    let evidence = TestTextResolver::new([(node(1), T0.to_vec())])
+        .with_blob(created, BlobKind::Text, b"new".to_vec())
+        .with_blob(blob(2), BlobKind::Binary, b"g".to_vec());
+    let left = [
+        create_file(1, "h.txt", node(7), created, MODE_REGULAR),
+        delete_file(
+            2,
+            "h.txt",
+            node(7),
+            NodeKind::TextFile,
+            created,
+            MODE_REGULAR,
+        ),
+    ];
+    let right = [create_g(3)];
+
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
+    assert_eq!(folded.operations, left.to_vec());
+    assert_eq!(folded.origins, vec![(0, 0), (1, 1)]);
+    match judge(&baseline, &evidence, &left, &right) {
+        ConfluenceResult::Unknown { reason } => {
+            assert_eq!(reason, UnknownReason::SequenceInternalDependencyDeferred);
+        }
+        other => panic!("expected a sequence-internal deferral, got {other:?}"),
+    }
+}
