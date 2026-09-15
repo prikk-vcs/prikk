@@ -108,7 +108,7 @@ Current public reason-code names include:
 | `unsupported_operation` | The operation or relation is outside the current supported subset. |
 | `same_node_text_transform_deferred` | Same-node text operational transforms are intentionally deferred. |
 | `sequence_internal_dependency_deferred` | A sequence-internal dependency blocks flat confluence analysis. |
-| `pair_replay_failed` | Replaying a pair in both orders did not prove commutation. |
+| `pair_replay_failed` | An operation on one side does not replay against the baseline, even after that side's repeated changes to one file are judged by their net effect. Ordinary histories still reach it when a side mixes kinds of change on one file, or creates a file and later deletes it; crafted or damaged input reaches it too. |
 | `final_state_mismatch` | Final lifecycle states differed after composed replay. |
 | `missing_required_evidence` | Required sealed evidence was absent. |
 | `malformed_required_evidence` | Required sealed evidence was present but malformed. |

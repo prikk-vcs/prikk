@@ -23,7 +23,9 @@ side changed one file more than once after the baseline: two edits of one file, 
 two permission changes. The evidence now judges each side's changes to one file by their net effect
 from the baseline, and uses that only when replaying it reproduces the side exactly; the merge still
 adopts the original patches unchanged. Two sides that change the same part of one file still refuse,
-as `pair_conflict` or `same_node_text_transform_deferred`. `merge-evidence` names a run judged this way by
+as `pair_conflict` or `same_node_text_transform_deferred`. Some ordinary histories still refuse, as the merge
+guide lists: a side that renames a file, that creates a file and then edits or deletes it, or that mixes
+kinds of change on one file. `merge-evidence` names a run judged this way by
 its first operation and `folded-through=` its last, in the original sequence. A right-side operation that
 does not replay is now shown as the right operation, not as the left operation at the same index.
 
