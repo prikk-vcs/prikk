@@ -70,7 +70,6 @@ use prikk_store::{
     add_trusted_maintainer, append_rollback_draft, commit_worktree_changes_signed,
     doctor_repository, enumerate_queued_patches, list_received_pointers,
     load_maintainer_trust_policy_or_empty, load_received_ref_history, load_ref_history,
-    materialize_patch_checkout, materialize_patch_checkout_with_deletions,
     materialize_snapshot_checkout, prepare_checkout_plan, prepare_merge_evidence,
     prepare_merge_plan, prepare_patch_inverse_plan, prepare_rollback_preview,
     prepare_snapshot_checkout_plan, read_active_ref_metadata, remove_trusted_maintainer,
@@ -719,8 +718,10 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
             }
         }
         CheckoutMode::PatchMaterialize => {
-            let report =
-                materialize_patch_checkout(&layout, &ref_name).map_err(|err| err.to_string())?;
+            let (report, fallback) =
+                prikk_store::materialize_patch_checkout_reporting_anchor(&layout, &ref_name)
+                    .map_err(|err| err.to_string())?;
+            warn_anchor_fallbacks(fallback.iter());
             print_patch_materialization_report(&layout, &report);
         }
         CheckoutMode::PatchDeletePlan => {
@@ -736,8 +737,12 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
             }
         }
         CheckoutMode::PatchMaterializeDelete => {
-            let report = materialize_patch_checkout_with_deletions(&layout, &ref_name)
+            let (report, fallback) =
+                prikk_store::materialize_patch_checkout_with_deletions_reporting_anchor(
+                    &layout, &ref_name,
+                )
                 .map_err(|err| err.to_string())?;
+            warn_anchor_fallbacks(fallback.iter());
             print_patch_materialization_report(&layout, &report);
         }
     }

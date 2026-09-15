@@ -584,3 +584,52 @@ fn the_snapshot_fixture_lies_only_where_replay_can_see_it() -> prikk_error::Resu
     let _ = std::fs::remove_dir_all(damaged_root);
     Ok(())
 }
+
+/// RFC 136 increment 2b §3, the reason for the increment: a lying snapshot on a Block this repository
+/// never replay-verified never reaches the worktree. `--patch-materialize` loads no snapshot and writes
+/// what replay gives; `verify` reports the Block and does not record it.
+#[test]
+fn a_lying_snapshot_on_an_unverified_block_never_reaches_the_worktree() -> prikk_error::Result<()> {
+    use crate::patch_replay::anchor::snapshot_anchor_loads_for_test;
+    use crate::rfc111_seal_simulation::{
+        SnapshotFixture, publish_snapshot_fixture_for_test_support,
+    };
+
+    let maintainer =
+        crate::Ed25519MaintainerSigner::from_seed("snapshot-fixture-maintainer", &[0x3C; 32])?;
+    let root = unique_temp_dir("snapshot-lying-worktree-write");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let lying =
+        publish_snapshot_fixture_for_test_support(&layout, &maintainer, SnapshotFixture::Lying)?;
+    assert!(
+        !crate::verified_blocks::load_verified_blocks(&layout).contains(&lying),
+        "fixture sanity: the lying Block was never replay-verified here"
+    );
+
+    let before = snapshot_anchor_loads_for_test();
+    let (report, fallback) = crate::materialize_patch_checkout_reporting_anchor(&layout, MAIN)?;
+    assert_eq!(
+        snapshot_anchor_loads_for_test(),
+        before,
+        "no snapshot was loaded"
+    );
+    assert_eq!(fallback, None);
+    assert_eq!(report.written_files, 1);
+    assert_eq!(
+        std::fs::read(root.join("a.txt"))?,
+        b"replayed\n",
+        "the worktree holds what replay gives"
+    );
+
+    let verification = verify_repository(&layout)?;
+    assert!(
+        verification.has_item_failure(),
+        "verify reports the lying Block"
+    );
+    assert!(
+        !crate::verified_blocks::load_verified_blocks(&layout).contains(&lying),
+        "verify does not record the lying Block"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

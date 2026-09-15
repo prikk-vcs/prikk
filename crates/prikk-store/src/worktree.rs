@@ -28,6 +28,10 @@ use crate::worktree_marker::{
 pub struct SnapshotMaterializationReport {
     /// Human-readable ref name.
     pub ref_name: String,
+    /// Whether the worktree was marked provisional (RFC 136 §10.3b.2). `false` when the snapshot's Block
+    /// is in this repository's replay-verified record (§10.3c ruling 2): its content is what replay
+    /// gives, so no marker is written.
+    pub provisional: bool,
     /// Number of files described by the snapshot manifest.
     pub planned_files: usize,
     /// Number of files written by this invocation.
@@ -70,7 +74,10 @@ pub fn materialize_snapshot_checkout(
     // the marker cannot interleave with this append. The marker is durable before the first write; a
     // crash between the two leaves it set, which fails closed.
     let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
-    mark_worktree_provisional(layout, ref_name, block_id)?;
+    let provisional = !crate::verified_blocks::load_verified_blocks(layout).contains(&block_id);
+    if provisional {
+        mark_worktree_provisional(layout, ref_name, block_id)?;
+    }
     // RFC 102 Stage 1: dirty before the first possible worktree write, cleared only after every
     // write in this call has durably completed -- see `worktree_marker`'s own doc for why the
     // ordering, not just the primitive, is what closes T12.
@@ -79,6 +86,7 @@ pub fn materialize_snapshot_checkout(
     clear_worktree_dirty(layout)?;
     Ok(SnapshotMaterializationReport {
         ref_name: ref_name.to_string(),
+        provisional,
         planned_files: plan.file_count,
         written_files: write_report.written_files,
         unchanged_files: write_report.unchanged_files,

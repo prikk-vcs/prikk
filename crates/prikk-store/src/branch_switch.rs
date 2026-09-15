@@ -52,8 +52,7 @@ use crate::lock::ActiveLock;
 use crate::node::node_lifecycle::NodeContent;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::{
-    ReplayManifestEntry, replay_supported_patch_chain,
-    resolve_folded_worktree_baseline_with_own_cache,
+    ReplayManifestEntry, SnapshotAnchorFallback, resolve_folded_worktree_baseline_with_own_cache,
 };
 use crate::refs::{RefStore, validate_local_branch_ref};
 use crate::wal::Wal;
@@ -77,6 +76,9 @@ pub struct BranchSwitchReport {
     pub deleted_files: usize,
     /// `true` when `to` was already the current branch and nothing was done.
     pub already_current: bool,
+    /// The replay-verified snapshot the switch could not anchor at, if any (RFC 136 increment 2b). The
+    /// switch replayed from genesis instead; the worktree is the same either way.
+    pub anchor_fallback: Option<SnapshotAnchorFallback>,
 }
 
 /// Switch the worktree and the current branch from `from` to `target`. See the module doc for the
@@ -102,6 +104,7 @@ pub fn switch_branch(
             unchanged_files: 0,
             deleted_files: 0,
             already_current: true,
+            anchor_fallback: None,
         });
     }
 
@@ -123,7 +126,10 @@ pub fn switch_branch(
         }
     }
 
-    let target_manifest = replay_supported_patch_chain(layout, &target)?.manifest;
+    // RFC 136 increment 2b: the target's tree may start only at a replay-verified snapshot.
+    let (target_replay, anchor_fallback) =
+        crate::patch_replay::replay_for_verified_worktree_write(layout, &target)?;
+    let target_manifest = target_replay.manifest;
     let target_files: BTreeMap<&str, &ReplayManifestEntry> = target_manifest
         .files
         .iter()
@@ -226,6 +232,7 @@ pub fn switch_branch(
         unchanged_files: unchanged.len(),
         deleted_files: deletes.len(),
         already_current: false,
+        anchor_fallback,
     })
 }
 

@@ -300,6 +300,8 @@ fn run_switch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     let from = crate::current_branch::displayed_current_branch(&layout);
     let report = prikk_store::switch_branch(&layout, from.as_deref(), &name)
         .map_err(|err| err.to_string())?;
+    // RFC 136 increment 2b: a replay-verified snapshot the switch could not anchor at is named on stderr.
+    crate::warn_anchor_fallbacks(report.anchor_fallback.iter());
     if report.already_current {
         println!("already on {}", report.to);
         return Ok(());

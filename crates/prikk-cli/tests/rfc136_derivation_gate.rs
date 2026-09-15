@@ -76,7 +76,11 @@ fn run(repo: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Materialize the tip's snapshot as an **unverified** block. Since RFC 136 increment 2b a locally sealed
+/// tip is in the replay-verified record and gets no marker; these gate controls delete the record first,
+/// so the tip reads as unverified and the marker is written, exactly as for a received block.
 fn materialize(repo: &Path) {
+    let _ = std::fs::remove_file(repo.join(".prikk/cache/replay-verified-blocks.v1"));
     support::ok(
         &run(repo, &["checkout", "--snapshot-materialize"]),
         "checkout --snapshot-materialize",
@@ -437,8 +441,10 @@ fn fixture_repo(tag: &str, fixture: prikk_store::SnapshotFixture) -> (PathBuf, S
     let repo = support::unique_repo(tag);
     support::init(&repo);
     let layout = prikk_store::RepositoryLayout::open(repo.clone()).unwrap();
+    // The support maintainer key, so a receiving repository can trust it with `trust_maintainer`.
     let maintainer =
-        Ed25519MaintainerSigner::from_seed("snapshot-fixture-maintainer", &[0x3C; 32]).unwrap();
+        Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
+            .unwrap();
     let block =
         prikk_store::publish_snapshot_fixture_for_test_support(&layout, &maintainer, fixture)
             .unwrap();
@@ -514,4 +520,176 @@ fn a_damaged_anchor_leaves_stdout_unchanged_and_warns_once_on_the_binary() {
     }
     let _ = std::fs::remove_dir_all(&damaged);
     let _ = std::fs::remove_dir_all(&twin);
+}
+
+// ---- RFC 136 increment 2b: the marker skip and the lying anchor, on the binary -----------------------
+
+/// `--snapshot-materialize` of a locally sealed tip, which `seal` recorded as replay-verified, writes no
+/// marker and says so; `commit` proceeds. The same tip after deleting the record sets the marker.
+#[test]
+fn a_replay_verified_tip_materializes_without_a_marker() {
+    let repo = sealed_repo("rfc136-2b-marker-skip");
+    let verified = run(&repo, &["checkout", "--snapshot-materialize"]);
+    support::ok(&verified, "snapshot-materialize of a verified tip");
+    assert!(
+        stdout(&verified).contains("provisional: no"),
+        "{}",
+        stdout(&verified)
+    );
+    assert!(!stdout(&run(&repo, &["status"])).contains("provisional worktree"));
+    let sealed_bytes = std::fs::read(repo.join("readme.txt")).unwrap();
+    std::fs::write(repo.join("readme.txt"), b"changed\n").unwrap();
+    support::ok(
+        &run(&repo, &["commit", "-m", "after a verified materialize"]),
+        "commit",
+    );
+    // Back to the sealed tip's bytes, so the second materialization has nothing to refuse to overwrite.
+    std::fs::write(repo.join("readme.txt"), &sealed_bytes).unwrap();
+
+    std::fs::remove_file(repo.join(".prikk/cache/replay-verified-blocks.v1")).unwrap();
+    let unverified = run(&repo, &["checkout", "--snapshot-materialize"]);
+    support::ok(&unverified, "snapshot-materialize with no record");
+    assert!(
+        stdout(&unverified).contains("provisional: yes"),
+        "{}",
+        stdout(&unverified)
+    );
+    assert!(stdout(&run(&repo, &["status"])).contains("provisional worktree"));
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The lying anchor through the binary: a Block whose snapshot recomputes to its signed root while its
+/// patch produces another, published but never sealed or replayed here, so it is not in the record.
+///
+/// The handoff's route (bundle import, then `branch create heads/x --from remotes/heads/main`) cannot
+/// reach a worktree write on this build: `branch create --from` and both checkout writes resolve only
+/// locally published refs, and this control asserts both refusals. The fixture repository's own
+/// `heads/main` is the unrecorded history instead.
+///
+/// `--patch-materialize` writes what replay gives, never the lie; `--snapshot-materialize` marks the
+/// worktree and `commit` refuses; `verify` fails, keeps the marker, and does not record the Block.
+#[test]
+fn a_lying_snapshot_never_reaches_the_worktree_on_the_binary() {
+    let (source, lying_block) = fixture_repo(
+        "rfc136-2b-lying-source",
+        prikk_store::SnapshotFixture::Lying,
+    );
+    support::trust_maintainer(&source);
+    let bundle = source.join("lying.bundle");
+    support::ok(
+        &run(
+            &source,
+            &[
+                "bundle",
+                "export",
+                "--ref",
+                "heads/main",
+                "--output",
+                bundle.to_str().unwrap(),
+            ],
+        ),
+        "bundle export",
+    );
+    let received = support::unique_repo("rfc136-2b-lying-received");
+    support::init(&received);
+    support::trust_maintainer(&received);
+    support::ok(
+        &run(
+            &received,
+            &["bundle", "import", "--input", bundle.to_str().unwrap()],
+        ),
+        "bundle import",
+    );
+    for args in [
+        vec![
+            "branch",
+            "create",
+            "heads/x",
+            "--from",
+            "remotes/heads/main",
+        ],
+        vec![
+            "checkout",
+            "--patch-materialize",
+            "--ref",
+            "remotes/heads/main",
+        ],
+        vec![
+            "checkout",
+            "--snapshot-materialize",
+            "--ref",
+            "remotes/heads/main",
+        ],
+    ] {
+        let refused = run(&received, &args);
+        assert_ne!(
+            refused.status.code(),
+            Some(0),
+            "{args:?} from a received ref"
+        );
+        assert!(
+            !received.join("a.txt").exists(),
+            "{args:?} wrote the worktree"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&received);
+
+    let (patch_repo, _) =
+        fixture_repo("rfc136-2b-lying-patch", prikk_store::SnapshotFixture::Lying);
+    support::ok(
+        &run(
+            &patch_repo,
+            &["checkout", "--patch-materialize", "--ref", "heads/main"],
+        ),
+        "patch-materialize",
+    );
+    assert_eq!(
+        std::fs::read(patch_repo.join("a.txt")).unwrap(),
+        b"replayed\n",
+        "the worktree holds what replay gives, not the snapshot's assertion"
+    );
+
+    let materialized = run(
+        &source,
+        &["checkout", "--snapshot-materialize", "--ref", "heads/main"],
+    );
+    support::ok(&materialized, "snapshot-materialize");
+    assert!(
+        stdout(&materialized).contains("provisional: yes"),
+        "{}",
+        stdout(&materialized)
+    );
+    assert_eq!(std::fs::read(source.join("a.txt")).unwrap(), b"asserted\n");
+    let commit = run(&source, &["commit", "--ref", "heads/main", "-m", "launder"]);
+    assert!(
+        stderr(&commit).contains(GATE_MESSAGE),
+        "{}",
+        stderr(&commit)
+    );
+    let verify = run(&source, &["verify"]);
+    assert_ne!(
+        verify.status.code(),
+        Some(0),
+        "verify reports the lying block"
+    );
+    assert!(
+        stdout(&verify).contains("provisional worktree: kept"),
+        "{}",
+        stdout(&verify)
+    );
+    let record =
+        std::fs::read(source.join(".prikk/cache/replay-verified-blocks.v1")).unwrap_or_default();
+    let id_bytes: Vec<u8> = (0..lying_block.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&lying_block[at..at + 2], 16).unwrap())
+        .collect();
+    assert!(
+        !record
+            .windows(id_bytes.len())
+            .any(|window| window == id_bytes.as_slice()),
+        "the lying block is not recorded"
+    );
+    for dir in [source, patch_repo] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -182,6 +182,15 @@ pub(crate) fn print_snapshot_materialization_report(
         layout.prikk_dir().display()
     );
     println!("ref: {}", report.ref_name);
+    // RFC 136 increment 2b: say whether this worktree is provisional.
+    if report.provisional {
+        println!(
+            "provisional: yes -- this snapshot's block is not replay-verified in this repository; \
+             run `prikk verify` before committing"
+        );
+    } else {
+        println!("provisional: no -- this snapshot's block is replay-verified in this repository");
+    }
     println!("planned files: {}", report.planned_files);
     println!("written files: {}", report.written_files);
     println!("unchanged files: {}", report.unchanged_files);

@@ -803,9 +803,10 @@ fn anchored_read_only_reports_equal_the_same_reports_replayed_from_genesis() -> 
     Ok(())
 }
 
-/// §10.3c ruling 2: worktree writes and rollback preview replay from genesis and load no snapshot.
-/// Asserted through the anchor search's own counter, not through timing. Rollback preview runs on a
-/// rename-free history, because inverse planning refuses a rename.
+/// §10.3c ruling 2: rollback preview replays from genesis and loads no snapshot, even with every checkpoint
+/// recorded as replay-verified; worktree writes load none once the record is gone (RFC 136 increment 2b:
+/// they anchor only at recorded blocks). Asserted through the anchor search's own counter, not through
+/// timing. Rollback preview runs on a rename-free history, because inverse planning refuses a rename.
 #[test]
 fn worktree_writes_and_rollback_preview_load_no_snapshot() -> Result<()> {
     use crate::patch_replay::anchor::snapshot_anchor_loads_for_test;
@@ -828,6 +829,11 @@ fn worktree_writes_and_rollback_preview_load_no_snapshot() -> Result<()> {
         rename_free.seal(vec![op])?;
     }
     assert_eq!(rename_free.checkpoint_positions()?, vec![1, 65]);
+    assert!(
+        !crate::verified_blocks::load_verified_blocks(&rename_free.layout).is_empty(),
+        "fixture sanity: rollback preview's repository keeps its record"
+    );
+    std::fs::remove_file(crate::verified_blocks::record_path(layout))?;
 
     let before = snapshot_anchor_loads_for_test();
     prepare_rollback_preview(&rename_free.layout, MAIN)?;
@@ -906,6 +912,164 @@ fn seal_merge_and_verify_record_the_blocks_they_replay_verified() -> Result<()> 
     let recorded = load_verified_blocks(&sealer.layout);
     for block_id in &verified {
         assert!(recorded.contains(block_id), "verify recorded {block_id}");
+    }
+    Ok(())
+}
+
+// ---- RFC 136 increment 2b §3: anchored worktree writes ------------------------------------------------
+
+/// Every file under the worktree with its bytes and executable bit, excluding `.prikk`.
+fn worktree_with_modes(root: &Path) -> Result<Vec<(String, Vec<u8>, bool)>> {
+    let mut out = Vec::new();
+    for (path, bytes) in worktree_listing(root)? {
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(root.join(&path))?.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let executable = false;
+        out.push((path, bytes, executable));
+    }
+    Ok(out)
+}
+
+/// Run `--patch-materialize`, `--patch-materialize-delete` (with the pre-checkpoint deletion's stale file
+/// back in the worktree) and `branch switch` on `sealer`, returning every report and worktree.
+fn worktree_write_outputs(sealer: &Sealer) -> Result<Vec<String>> {
+    let layout = &sealer.layout;
+    let mut outputs = Vec::new();
+    let (plain, plain_fallback) = crate::materialize_patch_checkout_reporting_anchor(layout, MAIN)?;
+    outputs.push(format!("{plain:?} {plain_fallback:?}"));
+    std::fs::write(layout.root().join("old.txt"), b"old\n")?;
+    let (deleting, deleting_fallback) =
+        crate::materialize_patch_checkout_with_deletions_reporting_anchor(layout, MAIN)?;
+    outputs.push(format!("{deleting:?} {deleting_fallback:?}"));
+    outputs.push(format!("{:?}", worktree_with_modes(layout.root())?));
+    let switched = switch_branch(layout, Some(MAIN), "heads/other")?;
+    outputs.push(format!("{switched:?}"));
+    outputs.push(format!("{:?}", worktree_with_modes(layout.root())?));
+    Ok(outputs)
+}
+
+/// §10.3c ruling 2: on a locally sealed history every checkpoint is replay-verified, so the worktree
+/// writes anchor, and their reports and worktrees equal the same writes replayed from genesis.
+#[test]
+fn verified_anchors_leave_every_worktree_write_byte_identical() -> Result<()> {
+    use crate::patch_replay::anchor::{snapshot_anchor_loads_for_test, without_anchoring_for_test};
+
+    let mut anchored = Sealer::new("rfc136-2b-verified-anchored", true)?;
+    let mut genesis = Sealer::new("rfc136-2b-verified-genesis", true)?;
+    for sealer in [&mut anchored, &mut genesis] {
+        seal_anchor_history(sealer)?;
+        let other = *sealer
+            .blocks
+            .get(100)
+            .ok_or_else(|| integrity("no block 101"))?;
+        sealer.publish_branch("heads/other", other)?;
+    }
+    assert_eq!(
+        anchored.blocks, genesis.blocks,
+        "fixture sanity: identical histories"
+    );
+
+    let before = snapshot_anchor_loads_for_test();
+    let anchored_outputs = worktree_write_outputs(&anchored)?;
+    assert!(
+        snapshot_anchor_loads_for_test() > before,
+        "fixture sanity: the anchored writes loaded a verified snapshot"
+    );
+    let genesis_outputs = without_anchoring_for_test(|| worktree_write_outputs(&genesis))?;
+    assert_eq!(anchored_outputs.len(), genesis_outputs.len());
+    for (anchored_output, genesis_output) in anchored_outputs.iter().zip(&genesis_outputs) {
+        assert_eq!(
+            anchored_output, genesis_output,
+            "a verified-anchor worktree write differs"
+        );
+    }
+    Ok(())
+}
+
+/// §3, record failure is safe: a flipped byte, a truncation, or another recorded version gives a full
+/// replay (no snapshot loaded), the same output as a verified anchor gives, and no error.
+#[test]
+fn a_damaged_record_gives_full_replay_and_the_same_output() -> Result<()> {
+    use crate::patch_replay::anchor::snapshot_anchor_loads_for_test;
+    use crate::verified_blocks::{load_verified_blocks, record_path};
+
+    let mut reference = Sealer::new("rfc136-2b-record-reference", true)?;
+    seal_rename_free_history(&mut reference, 70)?;
+    let (reference_report, _) =
+        crate::materialize_patch_checkout_reporting_anchor(&reference.layout, MAIN)?;
+    let reference_tree = worktree_with_modes(reference.layout.root())?;
+
+    for damage in ["flipped byte", "truncated", "other version"] {
+        let mut sealer = Sealer::new(
+            &format!("rfc136-2b-record-{}", damage.replace(' ', "-")),
+            true,
+        )?;
+        seal_rename_free_history(&mut sealer, 70)?;
+        let path = record_path(&sealer.layout);
+        let mut bytes = std::fs::read(&path)?;
+        match damage {
+            "flipped byte" => {
+                if let Some(byte) = bytes.last_mut() {
+                    *byte ^= 0x01;
+                }
+            }
+            "truncated" => bytes.truncate(bytes.len() / 2),
+            _ => {
+                // The version string sits after the magic, the checksum, the schema and its length.
+                let at = b"PRIKK-REPLAY-VERIFIED-BLOCKS-v1\0".len() + 32 + 4 + 2;
+                if let Some(byte) = bytes.get_mut(at) {
+                    *byte = byte.wrapping_add(1);
+                }
+                let body_at = b"PRIKK-REPLAY-VERIFIED-BLOCKS-v1\0".len() + 32;
+                let checksum = prikk_hash::sha256(bytes.get(body_at..).unwrap_or_default());
+                if let Some(slot) = bytes.get_mut(body_at - 32..body_at) {
+                    slot.copy_from_slice(&checksum);
+                }
+            }
+        }
+        std::fs::write(&path, &bytes)?;
+        assert!(
+            load_verified_blocks(&sealer.layout).is_empty(),
+            "{damage}: reads empty"
+        );
+        let before = snapshot_anchor_loads_for_test();
+        let (report, fallback) =
+            crate::materialize_patch_checkout_reporting_anchor(&sealer.layout, MAIN)?;
+        assert_eq!(
+            snapshot_anchor_loads_for_test(),
+            before,
+            "{damage}: no snapshot loaded"
+        );
+        assert_eq!(
+            fallback, None,
+            "{damage}: no fallback line, because nothing anchored"
+        );
+        assert_eq!(
+            format!("{report:?}"),
+            format!("{reference_report:?}"),
+            "{damage}: same report"
+        );
+        assert_eq!(
+            worktree_with_modes(sealer.layout.root())?,
+            reference_tree,
+            "{damage}: same tree"
+        );
+    }
+    Ok(())
+}
+
+/// A rename-free history of `blocks` blocks: `a.txt` edited in every block.
+fn seal_rename_free_history(sealer: &mut Sealer, blocks: usize) -> Result<()> {
+    let first = vec![sealer.create("a.txt", 0xA1, b"alpha 0\n")?];
+    sealer.seal(first)?;
+    while sealer.blocks.len() < blocks {
+        let number = sealer.blocks.len() + 1;
+        let op = sealer.edit(0xA1, format!("alpha {number}\n").as_bytes())?;
+        sealer.seal(vec![op])?;
     }
     Ok(())
 }

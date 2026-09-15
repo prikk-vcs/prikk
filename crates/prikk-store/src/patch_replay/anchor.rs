@@ -36,11 +36,15 @@ use crate::snapshot::{SnapshotFile, load_block_snapshot};
 
 /// Whether a replay may start at a snapshot. There is no default: every caller states it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Anchoring {
-    /// Replay every block from genesis. Every worktree write and rollback preview.
+pub(crate) enum Anchoring<'a> {
+    /// Replay every block from genesis. Rollback preview.
     Never,
     /// A read-only report: may start at the nearest snapshot that passes the loader.
     ReadOnlyReport,
+    /// A worktree write (RFC 136 §10.3c ruling 2, increment 2b): may start only at the nearest snapshot
+    /// whose Block is in this repository's replay-verified record **and** that passes the loader.
+    /// A snapshot on an unrecorded Block is skipped without being read.
+    VerifiedWorktreeWrite(&'a BTreeSet<ObjectId>),
 }
 
 /// A snapshot a read-only report could not anchor at because it failed validation (RFC 136 §10.3b.4).
@@ -80,7 +84,7 @@ pub(crate) struct ChainReplay {
 pub(crate) fn replay_chain(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
-    anchoring: Anchoring,
+    anchoring: Anchoring<'_>,
 ) -> Result<ChainReplay> {
     let mut chain = ChainReplay {
         files: BTreeMap::new(),
@@ -93,7 +97,10 @@ pub(crate) fn replay_chain(
     };
     let (anchor, fallback) = match anchoring {
         Anchoring::Never => (None, None),
-        Anchoring::ReadOnlyReport => find_anchor(reader, block_ids)?,
+        Anchoring::ReadOnlyReport => find_anchor(reader, block_ids, None)?,
+        Anchoring::VerifiedWorktreeWrite(verified) => {
+            find_anchor(reader, block_ids, Some(verified))?
+        }
     };
     chain.fallback = fallback;
     let replay_from = match anchor {
@@ -134,6 +141,7 @@ pub(crate) fn replay_chain(
 fn find_anchor(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
+    verified: Option<&BTreeSet<ObjectId>>,
 ) -> Result<(
     Option<(usize, Vec<SnapshotFile>)>,
     Option<SnapshotAnchorFallback>,
@@ -145,6 +153,10 @@ fn find_anchor(
     for (index, block_id) in block_ids.iter().enumerate().rev() {
         let block = read_block(reader, *block_id)?;
         if block.snapshot_blob_ref.is_none() {
+            continue;
+        }
+        // A worktree write anchors only at a Block this repository replay-verified (§10.3c ruling 2).
+        if verified.is_some_and(|recorded| !recorded.contains(block_id)) {
             continue;
         }
         #[cfg(test)]

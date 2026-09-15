@@ -12,7 +12,7 @@ use crate::foundation::fsutil::{
     EntryKind, inspect_entry, read_file_required, remove_worktree_file_required,
 };
 use crate::foundation::layout::RepositoryLayout;
-use crate::patch_replay::{PatchReplayDeletedFile, replay_supported_patch_chain};
+use crate::patch_replay::{PatchReplayDeletedFile, SnapshotAnchorFallback};
 use crate::path::join_repo_path_to_root;
 use crate::worktree::materialize_replay_manifest_entries;
 use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty};
@@ -93,6 +93,15 @@ pub fn materialize_patch_checkout(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchMaterializationReport> {
+    Ok(materialize_patch_checkout_reporting_anchor(layout, ref_name)?.0)
+}
+
+/// [`materialize_patch_checkout`], plus the replay-verified snapshot it could not anchor at, if any
+/// (RFC 136 increment 2b). The worktree written is the same either way.
+pub fn materialize_patch_checkout_reporting_anchor(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
     layout.require_current_format()?;
     materialize_patch_checkout_inner(layout, ref_name, false)
 }
@@ -106,6 +115,15 @@ pub fn materialize_patch_checkout_with_deletions(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchMaterializationReport> {
+    Ok(materialize_patch_checkout_with_deletions_reporting_anchor(layout, ref_name)?.0)
+}
+
+/// [`materialize_patch_checkout_with_deletions`], plus the replay-verified snapshot it could not
+/// anchor at, if any (RFC 136 increment 2b).
+pub fn materialize_patch_checkout_with_deletions_reporting_anchor(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
     layout.require_current_format()?;
     materialize_patch_checkout_inner(layout, ref_name, true)
 }
@@ -150,8 +168,10 @@ fn materialize_patch_checkout_inner(
     layout: &RepositoryLayout,
     ref_name: &str,
     delete_removed: bool,
-) -> Result<PatchMaterializationReport> {
-    let snapshot = replay_supported_patch_chain(layout, ref_name)?;
+) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
+    // RFC 136 increment 2b: a worktree write may start only at a replay-verified snapshot.
+    let (snapshot, fallback) =
+        crate::patch_replay::replay_for_verified_worktree_write(layout, ref_name)?;
     let deletion_analysis = analyze_deletions(layout, &snapshot.deleted_files)?;
     if delete_removed && !deletion_analysis.conflicts.is_empty() {
         return Err(PrikkError::Integrity(format!(
@@ -185,20 +205,23 @@ fn materialize_patch_checkout_inner(
         .iter()
         .map(|entry| entry.path.as_str().to_string())
         .collect();
-    Ok(PatchMaterializationReport {
-        ref_name: snapshot.ref_name,
-        block_count: snapshot.block_count,
-        patch_count: snapshot.patch_count,
-        applied_operation_count: snapshot.applied_operation_count,
-        planned_files: snapshot.manifest.files.len(),
-        written_files: write_report.written_files,
-        unchanged_files: write_report.unchanged_files,
-        deleted_files,
-        already_absent_deleted_files: deletion_analysis.already_absent,
-        deletion_conflicts: deletion_analysis.conflicts.len(),
-        total_content_bytes: snapshot.manifest.total_content_bytes(),
-        paths,
-    })
+    Ok((
+        PatchMaterializationReport {
+            ref_name: snapshot.ref_name,
+            block_count: snapshot.block_count,
+            patch_count: snapshot.patch_count,
+            applied_operation_count: snapshot.applied_operation_count,
+            planned_files: snapshot.manifest.files.len(),
+            written_files: write_report.written_files,
+            unchanged_files: write_report.unchanged_files,
+            deleted_files,
+            already_absent_deleted_files: deletion_analysis.already_absent,
+            deletion_conflicts: deletion_analysis.conflicts.len(),
+            total_content_bytes: snapshot.manifest.total_content_bytes(),
+            paths,
+        },
+        fallback,
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -379,9 +379,8 @@ pub(crate) fn apply_operation_sequence(
     Ok((applied_operation_count, applied_operation_kinds))
 }
 
-/// Replay the supported operation subset into a validated in-memory manifest, from genesis. Every
-/// worktree write and rollback preview uses this: a snapshot never anchors it (RFC 136 §10.3a, §10.3c
-/// ruling 2).
+/// Replay the supported operation subset into a validated in-memory manifest, from genesis. Rollback
+/// preview uses this: a snapshot never anchors it (RFC 136 §10.3a ruling 3).
 pub(crate) fn replay_supported_patch_chain(
     layout: &RepositoryLayout,
     ref_name: &str,
@@ -399,10 +398,25 @@ pub(crate) fn replay_for_read_only_report(
     replay_ref_chain(layout, ref_name, anchor::Anchoring::ReadOnlyReport)
 }
 
+/// The replay for a **worktree write** (RFC 136 §10.3c ruling 2): it may start only at a snapshot whose
+/// Block is in this repository's replay-verified record and that passes the loader; otherwise it
+/// replays from genesis. A missing or damaged record is the empty set, so the replay runs in full.
+pub(crate) fn replay_for_verified_worktree_write(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
+    let verified = crate::verified_blocks::load_verified_blocks(layout);
+    replay_ref_chain(
+        layout,
+        ref_name,
+        anchor::Anchoring::VerifiedWorktreeWrite(&verified),
+    )
+}
+
 fn replay_ref_chain(
     layout: &RepositoryLayout,
     ref_name: &str,
-    anchoring: anchor::Anchoring,
+    anchoring: anchor::Anchoring<'_>,
 ) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
     // RFC 111 §6.1: safe as a read-only snapshot because every production caller
     // (`patch_checkout.rs`, `rollback_preview.rs`) only reads -- neither ever writes an object.

@@ -159,8 +159,10 @@ pub use object_store::{
 };
 pub use patch_checkout::{
     PatchDeletionConflict, PatchDeletionPlan, PatchMaterializationReport,
-    materialize_patch_checkout, materialize_patch_checkout_with_deletions,
-    plan_patch_checkout_deletions, plan_patch_checkout_deletions_reporting_anchor,
+    materialize_patch_checkout, materialize_patch_checkout_reporting_anchor,
+    materialize_patch_checkout_with_deletions,
+    materialize_patch_checkout_with_deletions_reporting_anchor, plan_patch_checkout_deletions,
+    plan_patch_checkout_deletions_reporting_anchor,
 };
 pub use patch_exchange::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification,
