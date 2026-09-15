@@ -642,6 +642,91 @@ storage cadence must never move a user-visible answer.
 6. **Release: no cut between increments 1b and 2.** After 1b every repository holds snapshots, and
    §10.3's derivation gate for `--snapshot-materialize` is increment 2.
 
+### 10.3b Corrections before increment 2 — 2026-09-15, checked against the code
+
+These rulings correct §10.3 where its words do not match the code, or leave a gap. Each was checked before
+the increment 2 handoff was written.
+
+1. **`prikk verify` has no `--ref`.** Neither the CLI nor the store's `verify_repository` has a per-ref
+   mode, yet §10.3 names `prikk verify --ref <ref>` as the route. So a plain `prikk verify` clears the
+   provisional marker, and increment 2 adds no flag.
+   - **What clears it:** a run where no condition in `verify_verdict::VERDICT_CONDITIONS` concerning
+     objects, the WAL, refs or block state is true. That is the same table the exit code and the JSON
+     verdict read.
+   - **What does not block clearing:** a publication-trust issue alone. It says nothing about whether the
+     snapshot's state equals replay.
+   - **The refusal names the route:** `prikk verify`.
+2. **The marker.**
+   - `checkout --snapshot-materialize` writes it **before its first worktree write**, durably, beside the
+     RFC 102 worktree-dirty marker. It names the ref and the snapshot's block.
+   - Only (1) removes it.
+   - `status` reports it, and `doctor` knows it.
+3. **The derivation gate.** These refuse as `Precondition` while the marker is set:
+   - `commit` and `mv`, the two ways worktree content becomes a patch;
+   - `seal`, `merge`, `sync accept` and `sync seal`, which write history (§10.3's list, kept);
+   - `rollback-draft --append-inverse`;
+   - `branch switch`, which would move a worktree that is not replay-verified.
+
+   Reads stay allowed, and so do `checkout --patch-*`, `tag create`, `branch create`/`close`, `trust` and
+   `bundle`. None of those turns worktree content into history.
+4. **A snapshot that fails validation on an anchored read** is never trusted and never silently skipped.
+   The read falls back to replay from genesis and prints the `Integrity` finding on stderr, naming the
+   block and `prikk verify`. Stdout is unchanged, so §10.3a ruling 1 holds.
+   - `checkout --snapshot-*` has nothing to fall back to and refuses, as today.
+5. **Baseline reconstruction** (`replay_derived_state`, which `commit`'s DC-64 cache, `merge-evidence`
+   and the patch-algebra evidence use) builds a lifecycle state that carries **tombstones**, and a
+   snapshot's leaf set carries none.
+   - **The condition:** it may anchor only when the entire anchored state equals full replay's —
+     tombstones and every other field, recovered over the whole chain by decoding without applying.
+   - **Otherwise** it stays unanchored for this increment, and the report says why with numbers.
+   - **Why it matters:** what `commit` authors must not depend on a storage cadence.
+
+### 10.3c Anchor trust — ruled 2026-09-15, before the increment 2 handoff
+
+**The problem.** A snapshot that passes the loader proves only that it matches its block's *signed*
+`state_merkle_root`. It does not prove that replaying that block's history in this repository produces
+that root; only replay proves that (§6).
+- **Where an unconfirmed root comes from:** a received block (`bundle import`, `sync`, or a branch created
+  at a received target) can carry a self-consistent snapshot of a root its own patches do not produce.
+- **Why it matters:** state read from such an anchor is the signer's assertion. If that state reaches the
+  worktree, a later `commit` authors its difference from true replay as the user's own signed patch. That
+  is the laundering §10.3's derivation gate exists for. It applies to *every* anchored worktree write
+  (`checkout --patch-materialize`, `--patch-materialize-delete`, `branch switch`), not only to
+  `--snapshot-materialize`.
+
+**Rulings.**
+1. **Read-only reports may anchor at any snapshot that passes the loader.** They show state as its block
+   signs it, and `verify` remains the certification. §10.3a ruling 1's byte-identity is required for
+   histories that verify. For a history `verify` refuses, an anchored report may show the signed state
+   where full replay refuses. It never writes anything, and §10.3b.4 covers a snapshot that fails the
+   loader.
+2. **State from a snapshot may reach the worktree or new history only through an anchor that this
+   repository has replay-verified.**
+   - **The record:** a durable, monotonic set of replay-verified block ids. Blocks are immutable, so a
+     verified root stays verified.
+   - **Who writes it:** the operations that already verify lineage roots. `seal_block`'s derivation
+     (`verify_v2_lineage_roots`) covers `seal`, `merge` and `sync seal`, and `verify` covers everything.
+   - **Its standing:** rebuildable and never authoritative. If it is missing, replay runs in full.
+   - **The rule:** anchored worktree writes use only anchors in that set, and otherwise replay from genesis.
+   - **`--snapshot-materialize`** of a block in the set needs no provisional marker, because its content
+     is what replay gives. Otherwise the marker and gate of §10.3b apply.
+3. **Baseline reconstruction** (`replay_derived_state`) builds a `prikk-replay` `NodeLifecycleState`
+   whose `latest_tombstone_by_id` and `seen_ids` are history, and `create_node` consults both
+   (`node_lifecycle/mutation.rs:37-51`).
+   - **The conditions:** it may anchor only at a verified anchor (ruling 2), and only when the whole
+     anchored state, both fields included, equals full replay's.
+   - **Otherwise** `commit` keeps DC-64's incremental cache, which already reanchors at
+     `CHECKPOINT_CADENCE`.
+
+**Increment 2 is split.** §10.5's increment 2 becomes:
+- **2a:** the marker and derivation gate (§10.3b.1–3), plus anchored **read-only** reports (ruling 1)
+  with §10.3a ruling 5's whole-chain history fields and §10.3b.4's fallback;
+- **2b:** the verified-block record, plus anchored worktree writes (ruling 2);
+- **2c:** baseline reconstruction (ruling 3), or a measured reason to leave it to DC-64.
+
+**No release cut before 2b** (§10.3a ruling 6, extended). 2c may follow the 0.43.0 cut if it measures as
+unnecessary.
+
 ### 10.4 Measurements that close §9 item 4, taken on RFC 139's corpus
 
 Storage per snapshot and per repository at cadence 64 on `profiles/prikk-self.toml`; checkout and
@@ -669,7 +754,7 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
    block carries an empty snapshot, a legitimate state, and 1b is what makes it reachable.
    **(iii) ruled 2026-09-15, §10.3a:** 1b anchors no reader, rollback never anchors, `coverage` keeps its
    whole-chain meaning, and there is no release cut between 1b and 2.
-2. **The anchor and the gate**: checkout and baseline reconstruction start at the nearest snapshot; the
+2. **The anchor and the gate — split 2026-09-15 into 2a / 2b / 2c (§10.3c)** (read §10.3a ruling 5, §10.3b and §10.3c first; 2a handoff `136-block-aggregation-payoff/sealed-snapshots-increment-2-handoff-v1.md`): checkout and baseline reconstruction start at the nearest snapshot; the
    provisional marker and the derivation gate. Controls as before: byte-equal output with and without a
    snapshot; the gate's refusal and clearing; a corrupted snapshot surfaces its `Integrity` finding.
    **Before increment 2 (2026-09-15):** the pre-existing merge defect found at 1b's review — two edits of

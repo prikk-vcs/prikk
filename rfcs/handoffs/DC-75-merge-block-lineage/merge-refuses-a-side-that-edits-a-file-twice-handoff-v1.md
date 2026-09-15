@@ -268,3 +268,25 @@ Each is its own commit, after 7.2, under the same guard and with controls in bot
 - **Reports:**
   - 7.2 is `.git-exclude/review-request/merge-two-edits-noop-report-v1.md`; the push follows its review.
   - 7.3 is `.git-exclude/review-request/merge-two-edits-folds-report-v1.md`.
+
+## 8. Closing rulings — 2026-09-15
+
+**Sources:** the reports are `merge-two-edits-noop-report-v1.md` (§7.2, `5ba1a0d3`) and
+`merge-two-edits-folds-report-v1.md` (§7.3, `b42744fe`..`7a7072c3`). The review is
+`.git-exclude/reviewed/merge-two-edits-folds-review-v1.md`.
+
+**Both are accepted. The defect is closed.**
+
+**The long file — §7.2.1 stands.** §7.2.3's expectation that *"the long-file case still merges"* was the
+architect's error: that case merged only through the hole §7.1 measured. Deciding one case by trial
+replay inside the evidence would add a second proof method for a narrow shape. The refusal is honest
+(`sequence_internal_dependency_deferred`, a precondition), and `merge.md` documents it. The team's
+proposal is declined.
+
+**Shapes recorded in the folds report §5:**
+
+| shape | disposition |
+|---|---|
+| create then a mode change | admissible in principle: the create persists and no path changes before the end. Recorded as a candidate fold, not built now |
+| delete then re-create at the same path | never folds: a path is handed from one node to another before the run's end (§7.2.2) |
+| a rename | R3, ROADMAP row 15b |
