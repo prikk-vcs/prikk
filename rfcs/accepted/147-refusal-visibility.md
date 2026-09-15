@@ -410,3 +410,58 @@ lossily, with `worktree-status-report-v1`'s description saying so for this one k
 question). Handoff: `147-refusal-visibility/unrepresentable-names-handoff-v1.md`.
 
 **§3f DELIVERED 2026-09-13 (`bf36b2ee`, `804b3b51`)**: the entry carries `commit`'s own `invalid name` refusal (same two functions, root-relative path), is `refused`, and its `path` is root-relative; `worktree-status.md` states the one-kind exception. Measured by the architect on the binary.
+
+## 2f. RULED 2026-09-16 — G1: a declaration reports what `commit` will do with it
+
+Arises from stikk's letter 013
+(`.git-exclude/upstream/stikk/receive/013-a-declared-rename-cannot-say-whether-its-content-changed.md`).
+§2e left G1 open ("needs a shape ruling first"). The architect measured every case on a binary built
+from current code (`47fb6def`; later commits touch no code), in fresh repositories, with `a.txt` and
+`keep.txt` sealed and then `prikk mv a.txt b.txt`:
+
+| Worktree afterwards | `worktree-status --format json` | `prikk commit` |
+|---|---|---|
+| unchanged | `missing a.txt`, `untracked b.txt`, declaration `a.txt → b.txt` | `rename-path` |
+| `b.txt` edited | **byte-identical to the row above** | `rename-path` **and** `edit-text` |
+| `b.txt` deleted | `missing a.txt`, declaration still listed | `delete-file a.txt`, declaration named as a deletion |
+| `a.txt` recreated beside `b.txt` | `untracked b.txt` `"authoring": "authored"`, `refused_count: 0` | **refused**: "…move b.txt back to a.txt to clear the declaration…" |
+| shell `mv b.txt a.txt` | **`clean: true`, `changes: []`, `refused_count: 0`**, declaration still listed | **refused, with the same advice** |
+
+**The loop.** The refusal's advice (`node_authoring.rs:499-501`) and the status note
+(`output/worktree.rs:82-84`) both say to move the destination back to the source. Done in the shell, that
+produces exactly the state the refusal names, so the user loops. What actually clears it, measured:
+- **Source back, destination gone:** `prikk mv b.txt a.txt` ("nets to no move, dropped"), or
+  `prikk mv a.txt b.txt` (redoes the move; commit authors the rename).
+- **Both present:** `prikk mv` refuses in both directions ("both paths exist"). Setting aside the copy
+  that is not wanted is the only way out. Removing the recreated `a.txt` let commit author the rename.
+
+§4o.2 of RFC 144 rules the refusal itself; it is not reopened. The advice is what is wrong, and a status
+report that says `clean` before a refused commit fails §2e's own question: *"will this commit succeed?"*
+
+**RULED 1 — per declaration, from commit's own classifier.** Each `declarations` entry gains:
+- `resolution`: `"rename"` | `"deletion"` | `"deletion-ignored"` | `"never-tracked"` | `"refused"`;
+- `refusal`: `null`, or commit's own message.
+
+It must be computed by **one function commit also uses**, evaluating the whole batch (the two-node swap
+tolerance at `node_authoring.rs:452-460` included), never re-derived in status. The fields sit per
+declaration, not per path, because the shell-move-back state has **no path entry at all** to mark. The
+report gains `refused_declaration_count`, and prose `refused declarations: N`. `refused_count` and
+`clean` keep their documented path-level meanings, and the docs say that a refused declaration can sit
+in a `clean` worktree. Additive within `worktree-status-report-v1`.
+
+**RULED 2 — every refusal names a command measured to work in that state.**
+- Source back, destination gone: `prikk mv <new> <old>` to drop the declaration, or
+  `prikk mv <old> <new>` to redo the move.
+- Both present: keep one copy (set the other aside); then commit, or `prikk mv <new> <old>`.
+- Destination occupied by another tracked node: the route is measured by the round before it is quoted.
+
+The status note stops advising a shell move. A control runs the command each refusal names and must fail
+against today's text.
+
+**RULED 3 — a rename says whether content or mode also changed.** On `resolution: "rename"`, add
+`content_changed` and `mode_changed` (booleans; `null` for every other resolution). They come from the
+comparison commit uses to author the accompanying `edit-text` or mode operation, not a second read path.
+
+**Scheduling:** after RFC 136 increment 3's review; **0.43.0 does not cut without it**, because stikk
+re-baselines on 0.43.0 and the advice today strands a user. Handoff:
+`rfcs/handoffs/147-refusal-visibility/declarations-say-what-commit-does-handoff-v1.md`.

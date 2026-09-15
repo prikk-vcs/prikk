@@ -610,6 +610,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 
 | item | handoff |
 |---|---|
+| A declaration reports what `commit` will do with it; refusal advice names commands that work (RFC 147 §2f, stikk 013) — after RFC 136 increment 3, before the 0.43.0 cut | `147-…/declarations-say-what-commit-does-handoff-v1.md` |
 | `prikk setup` refuses on an existing repository before touching anything | `135-…/setup-existing-repository-handoff-v1.md` |
 | RFC 146 §8e — three listing synopses advertise `[--format json]` | `146-…/help-synopsis-handoff-v1.md` |
 | ~~RFC 131 §6e — grouping census~~ **DONE 2026-09-12** (`60f17dcf` step 0; census reviewed; §6f ruled: A first, C second, B refused by measurement). **`rollback/` DONE (`05ac6b29`), `merge/` DONE (`e15a1ea5`); §6f closed — grouping is finished, 52 → 49 top-level modules; what remains is RFC 149.** Was: grouping census, **with step 0: `boundary-check --graph`** (the gate emits no graph today; the handoff had assumed it did — corrected) | `131-…/grouping-census-handoff-v1.md` |
@@ -619,7 +620,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 | item | source | note |
 |---|---|---|
 | `checkout --snapshot-plan`: `Integrity` for a by-design missing snapshot → `Precondition` | RFC 147 §3d | per-site, RFC 132 mould |
-| G1 — a contradicted rename declaration is refused by `commit` but is not per-path | RFC 147 §2e | needs a shape ruling first |
+| ~~G1 — a contradicted rename declaration is refused by `commit` but is not per-path~~ | RFC 147 §2e, §2f | **RULED 2026-09-16 (§2f), handed off** (`147-refusal-visibility/declarations-say-what-commit-does-handoff-v1.md`): per-declaration resolution from commit's classifier; refusal advice that looped (shell move back) replaced by measured commands; rename says whether content/mode changed. stikk letter 013. After RFC 136 increment 3; 0.43.0 does not cut without it |
 | G2 — baseline symlink nodes skipped by `worktree-status` | RFC 147 §2e | out of scope until symlink authoring is |
 | Bare `--ref <block-id>` for content at a point | RFC 144 §4t | stikk's remaining named dependency; tagged blocks now work |
 | ~~`import_bundle` does not hold `ActiveLock` across its object writes~~ | `docs/…/concurrency-locking.md:202` | **moved to the 0.40.0 plan, item 3** — correctness over cost |
