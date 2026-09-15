@@ -16,6 +16,13 @@ operation to reverse now fail with `precondition not met: heads/main has nothing
 the ref, instead of `canonical encoding error: patch operations must contain at least one operation`.
 The exit code is unchanged (`1`).
 
+### Changed — a merge that is not proven confluent is a precondition, not an integrity error
+
+`prikk merge` refusing because the two sides are not proven confluent from the baseline now fails with
+`precondition not met: merge refused: …` instead of `integrity error: merge refused: …`. The words after
+the prefix and the exit code (`1`) are unchanged. A merge whose inputs are damaged, such as a missing
+block, is still an integrity error.
+
 ## 0.42.0 — 2026-09-13
 
 ### Changed — breaking once for Rust callers: two report types are `#[non_exhaustive]`

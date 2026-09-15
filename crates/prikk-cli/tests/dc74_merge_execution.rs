@@ -191,8 +191,8 @@ fn merge_refuses_same_path_create_conflict_with_no_partial_state() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("merge refused"),
-        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr).contains("precondition not met: merge refused"),
+        "a non-confluent merge is a precondition, not damage; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(

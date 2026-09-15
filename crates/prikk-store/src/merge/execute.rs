@@ -102,8 +102,10 @@ pub fn execute_merge(
         MergeEvidenceTarget::Ref(into_ref.clone()),
         from_target,
     )?;
+    // A merge the evidence does not prove confluent is refused as a precondition, not damage
+    // (DC-75 two-edits handoff §4): the repository verifies clean. Damaged inputs stay `Integrity`.
     if !evidence.is_confluent() {
-        return Err(PrikkError::Integrity(format!(
+        return Err(PrikkError::Precondition(format!(
             "merge refused: {from_ref} is not confluent with {into_ref} from baseline \
              {baseline_block_id} (outcome: {}{})",
             evidence.outcome,
