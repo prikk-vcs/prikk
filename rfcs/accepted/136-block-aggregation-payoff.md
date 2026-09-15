@@ -732,6 +732,25 @@ that root; only replay proves that (§6).
   - Checkout peak memory is measured again in increment 3.
 - **2b handoff:** `136-block-aggregation-payoff/sealed-snapshots-increment-2b-handoff-v1.md`.
 
+**2b DONE 2026-09-15** (`512a409b`, `eeef5b61`, `38222a91`, `1a492d72`; reviewed
+`.git-exclude/reviewed/rfc136-increment-2b-review-v1.md`).
+- **What landed:** the replay-verified record, written only by `seal_block` and `verify`; worktree writes
+  anchor only at recorded blocks; `--snapshot-materialize` of a recorded block writes no marker.
+- **Measured:** 0.31× at depth 256 for `--patch-materialize` and `branch switch`. Worktrees are
+  byte-identical on the binaries.
+- **Carried into the next round:** gate the lying-snapshot test fixture, and mark the extended report
+  structs `#[non_exhaustive]`.
+- **Received history cannot reach a worktree write today** (`branch create --from remotes/…` and
+  `checkout --ref remotes/…` refuse). When a repository-complete or relay artifact changes that, the
+  lying-anchor control must be extended to received refs before it ships.
+
+**Order:**
+1. the checkout-refusal fix (stikk letter 012);
+2. increment 3: measurement, docs, CHANGELOG, done;
+3. the 0.43.0 prep.
+
+**2c follows 0.43.0** unless increment 3's measurement shows baseline reconstruction needs it.
+
 **Increment 2 is split.** §10.5's increment 2 becomes:
 - **2a:** the marker and derivation gate (§10.3b.1–3), plus anchored **read-only** reports (ruling 1)
   with §10.3a ruling 5's whole-chain history fields and §10.3b.4's fallback;

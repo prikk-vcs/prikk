@@ -7,6 +7,23 @@ architect's own measurement, which found more than the letter did.
 **Order:** start after RFC 136 increment 2b's report is reviewed. 2b changes
 `materialize_patch_checkout_inner`, so this lands on top of it. **0.43.0 does not cut without it.**
 
+## 0. Carried from RFC 136 increment 2b's review (first commit of this round)
+
+These come from `.git-exclude/reviewed/rfc136-increment-2b-review-v1.md`. They come first because this round
+touches the same materializers.
+
+1. **Gate the lying-snapshot fixture.**
+   - **The defect:** `pub enum SnapshotFixture` and `pub fn publish_snapshot_fixture_for_test_support`
+     (`rfc111_seal_simulation.rs`) carry no `#[cfg(feature = "test-support")]`. Only their re-export in
+     `lib.rs` is gated, so the code is compiled into every `prikk-store` build. Its doc says otherwise.
+   - **The fix:** put the gate on each item, and on every helper only they use.
+   - **Add a guard:** a source scan requiring every `pub` item whose name ends in `_for_test_support`, and
+     every type only such items use, to carry the gate. Perturb by removing one, and the guard must name it.
+2. **`#[non_exhaustive]` on the report structs 2a/2b extended.** `SnapshotMaterializationReport` gained
+   `provisional` without it.
+   - List every `pub` report struct 2a and 2b added a field to, and mark each.
+   - `CHANGELOG.md`: `### Changed — breaking once for Rust callers`, naming them.
+
 ## 1. Measured by the architect
 
 A binary of `origin/main` (`26e8c528`) and an isolated repository. `heads/main` holds `shared.txt` =
