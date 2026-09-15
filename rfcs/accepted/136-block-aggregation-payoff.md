@@ -738,8 +738,10 @@ that root; only replay proves that (§6).
   anchor only at recorded blocks; `--snapshot-materialize` of a recorded block writes no marker.
 - **Measured:** 0.31× at depth 256 for `--patch-materialize` and `branch switch`. Worktrees are
   byte-identical on the binaries.
-- **Carried into the next round:** gate the lying-snapshot test fixture, and mark the extended report
-  structs `#[non_exhaustive]`.
+- **Carried into the next round:** mark the extended report structs `#[non_exhaustive]`, and add item-level
+  test-support gates with a source guard as hardening. **Correction, 2026-09-16:** the review had called the
+  lying-snapshot fixture ungated. That was false: its module is gated by an inner
+  `#![cfg(any(test, feature = "test-support"))]`, and the team's probe confirmed it.
 - **Received history cannot reach a worktree write today** (`branch create --from remotes/…` and
   `checkout --ref remotes/…` refuse). When a repository-complete or relay artifact changes that, the
   lying-anchor control must be extended to received refs before it ships.
@@ -795,6 +797,9 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
    `handoffs/DC-75-merge-block-lineage/merge-refuses-a-side-that-edits-a-file-twice-handoff-v1.md`.
 3. **Measurement, docs, CHANGELOG** (`### Added — sealed snapshots`; `### Changed` for the gate's new
    refusal), and RFC 136 moves to `done/`.
+   **Handoff (2026-09-16):** `136-block-aggregation-payoff/sealed-snapshots-increment-3-handoff-v1.md`.
+   Its measurements decide 2c and answer the 2a and 2b memory questions. The architect moves this RFC to
+   `done/` at the 0.43.0 cut.
 
 Handoff: `136-block-aggregation-payoff/sealed-snapshots-handoff-v2.md` (increments 0, 1a, 1b; v1 of the
 handoff is superseded and kept for its controls).
