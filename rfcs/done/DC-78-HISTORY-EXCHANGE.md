@@ -231,6 +231,13 @@ DC-85.**
 and adopt trust for a bundle, **but cannot fold it into local history.** Exchange is complete for an
 auditor and incomplete for a collaborator.
 
+**Amended in premise 2026-09-16 by RFC 154 (owner-accepted).** The letter stands: import advances
+nothing and creates no ref the operator did not ask for. A received RefState signed by a locally adopted
+key may become a local ref through a **separate, explicit adoption act**: fast-forward only, not
+re-signed, with every block replay-verified and publication protected by the local compare-and-swap
+(`rfcs/accepted/154-shared-branch-adoption.md` §4). Until that act ships, the consequence above holds as
+written.
+
 ### D5. The TOFU record
 
 Adoption binds, in the trust store: **key id, public key, the block id at which it was first accepted,

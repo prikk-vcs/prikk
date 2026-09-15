@@ -1,11 +1,26 @@
 # RFC 154 — A branch several maintainers advance: adopting a trusted, fast-forward ref advance
 
-**Status.** **PROPOSED 2026-09-16 by the architect.** Arises from planeter's letter of 2026-09-15
-(`.git-exclude/upstream/planeter/receive/2026-09-15-hosted-repository-trust-model-discussion.md`),
-which asks whether a shared, multi-maintainer repository that holds no key is a case prikk intends to
-support. That is a scope and trust-model decision, so it is the **owner's** (§8). Nothing here is
-scheduled. Author-review independence: the architect proposes and would review; the gap is
-compensated by §9's controls, each of which must be shown to fail.
+**Status.** **ACCEPTED by the project owner 2026-09-16** (*"RFC 154 is accepted."*); proposed the same
+day by the architect. It arises from planeter's letter of 2026-09-15
+(`.git-exclude/upstream/planeter/receive/2026-09-15-hosted-repository-trust-model-discussion.md`).
+Author-review independence: the architect proposed and will review; the gap is compensated by §9's
+controls, each of which must be shown to fail.
+
+**The architect's reading of the approval, stated so it can be corrected:**
+- **§8.1:** option 1, as a symmetric primitive, is the direction.
+- **§8.2:** both amendments are accepted for this one act.
+  - DC-78 §D4 keeps its letter (import advances nothing; adoption is an explicit act the operator asks
+    for) but loses the premise that exchange needs no adoption.
+  - The sync guide's *"under its own key, always"* gains one exception.
+  - Both take effect **when the act ships**: the guide describes the binary, so its text changes in that
+    increment, not before.
+- **§8.3:** scheduling was not ruled by the word. The architect's proposal (release scheduling is the
+  architect's): after 0.43.0, in the order
+  1. the maintainer key-id collision fix (§6.3);
+  2. the repository-complete artifact, proposed as RFC 155 (§6.2);
+  3. the adoption act.
+
+  ROADMAP carries the row. **Nothing is handed off yet.**
 
 ## 1. The question
 
@@ -136,7 +151,7 @@ anyone else; each client verifies against its own set.
 Hosting, networking, accounts, fetch scheduling, remote tracking, repository identity, and threshold
 signatures. prikk stays bytes-in, bytes-out.
 
-## 8. What the owner rules
+## 8. What the owner rules (ruled 2026-09-16; the reading is in Status)
 
 1. **Direction.** Option 1 as a symmetric primitive (recommended), option 2 as the intended pattern
    for shared hosting, or neither for now.
