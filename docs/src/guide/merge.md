@@ -39,15 +39,21 @@ The two sides must be **proven confluent** from the given baseline — the same 
 record, or ref update of any kind is created until confluence is confirmed, so a refused merge leaves
 `--into` exactly where it was.
 
-**What cannot be merged yet.** The confluence proof judges each side's changes against the baseline;
-several changes to one file on one side are judged together by their net effect (an edit run, edits
-then a delete, a permission-change run, a binary-replacement run). Some ordinary histories still refuse:
+**What cannot be merged yet.** The confluence proof judges each side's changes against the baseline.
+Several changes to one file on one side are judged together by their net effect: any mix of edits,
+permission changes and binary replacements, optionally ending in a delete, and a new text file followed
+by edits. A no-op run (a change and its undo) is set aside only when the other side does not touch that
+file; the merge replays each side's original patches onto the other side's tip, so the proof never
+claims what that replay could not do. Some ordinary histories still refuse:
 - **A side containing a rename** (`prikk mv`) is not merged yet, whether or not the renamed file was
   also edited. The proof cannot replay a rename, so it refuses as `unsupported_operation` (RFC 144's
   designed deferral) rather than guess how a rename commutes with the other side.
-- **A side that creates a file and then edits it** refuses as `sequence_internal_dependency_deferred`.
-- **A side that mixes kinds of change on one file** (an edit, a permission change, another edit), **or
-  creates a file and later deletes it**, refuses as `pair_replay_failed`.
+- **A side that creates a file and then deletes it, or changes its mode**, and **a side that deletes a
+  file and creates another at the same path**, refuse as `sequence_internal_dependency_deferred`. A file
+  created and deleted on one side held its path for part of that side's history, so treating it as
+  nothing could hide a clash with the other side.
+- **A side that changes a word and then restores it, while the other side edits the same file**, refuses
+  as `sequence_internal_dependency_deferred`.
 
 None of these is damage: the repository verifies clean, and the refusal is a precondition.
 

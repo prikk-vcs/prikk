@@ -20,12 +20,16 @@ The exit code is unchanged (`1`).
 
 `prikk merge` and `prikk merge-evidence` refused a healthy merge with `pair_replay_failed` whenever either
 side changed one file more than once after the baseline: two edits of one file, an edit then a delete,
-two permission changes. The evidence now judges each side's changes to one file by their net effect
-from the baseline, and uses that only when replaying it reproduces the side exactly; the merge still
-adopts the original patches unchanged. Two sides that change the same part of one file still refuse,
-as `pair_conflict` or `same_node_text_transform_deferred`. Some ordinary histories still refuse, as the merge
-guide lists: a side that renames a file, that creates a file and then edits or deletes it, or that mixes
-kinds of change on one file. `merge-evidence` names a run judged this way by
+two permission changes, an edit and a permission change, a new file edited after it was added. The
+evidence now judges each side's changes to one file by their net effect from the baseline, and uses that
+only when replaying it reproduces the side exactly; a change and its undo are set aside only when the
+other side does not touch that file. The merge still adopts the original patches unchanged. Two sides
+that change the same part of one file still refuse, as `pair_conflict` or
+`same_node_text_transform_deferred`. Some ordinary histories still refuse, as the merge guide lists: a side
+that renames a file (`unsupported_operation`), and a side that adds a file and then deletes it or changes
+its mode, or deletes a file and adds another at the same path (`sequence_internal_dependency_deferred`).
+An operation that does not replay because an earlier change on its side touched the same file now
+reports `sequence_internal_dependency_deferred`, not `pair_replay_failed`. `merge-evidence` names a run judged this way by
 its first operation and `folded-through=` its last, in the original sequence. A right-side operation that
 does not replay is now shown as the right operation, not as the left operation at the same index.
 

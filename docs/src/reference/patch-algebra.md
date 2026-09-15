@@ -107,8 +107,8 @@ Current public reason-code names include:
 | `ordered_dependency` | A cross-side pair requires a specific order. |
 | `unsupported_operation` | The operation or relation is outside the current supported subset. |
 | `same_node_text_transform_deferred` | Same-node text operational transforms are intentionally deferred. |
-| `sequence_internal_dependency_deferred` | A sequence-internal dependency blocks flat confluence analysis. |
-| `pair_replay_failed` | An operation on one side does not replay against the baseline, even after that side's repeated changes to one file are judged by their net effect. Ordinary histories still reach it when a side mixes kinds of change on one file, or creates a file and later deletes it; crafted or damaged input reaches it too. |
+| `sequence_internal_dependency_deferred` | A sequence-internal dependency blocks flat confluence analysis: an operation does not replay alone against the baseline, and an earlier operation on its side either orders before it or acts on the same file. |
+| `pair_replay_failed` | An operation on one side does not replay against the baseline, and nothing earlier on its side explains why. No history `commit` can author is known to reach it: it signals a patch not authored against its side's history (crafted or damaged input) or a proof-engine fault. |
 | `final_state_mismatch` | Final lifecycle states differed after composed replay. |
 | `missing_required_evidence` | Required sealed evidence was absent. |
 | `malformed_required_evidence` | Required sealed evidence was present but malformed. |
