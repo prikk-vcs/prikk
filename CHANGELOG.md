@@ -27,6 +27,34 @@ materialized from the snapshot of Block <block> on <ref> and is not replay-verif
 and write nothing. `checkout --snapshot-materialize` also now takes the active lock, so it refuses with
 `lock conflict` while another writer holds it.
 
+### Fixed — a refused checkout writes nothing and no longer blocks `commit` (stikk letter 012)
+
+`checkout --patch-materialize`, `--patch-materialize-delete` and `--snapshot-materialize` now check every
+file before writing any. A conflict refuses the whole checkout with nothing written and neither the
+interrupted-checkout marker nor the provisional marker set, so `commit` keeps working. Before, every file
+ahead of the first conflict was written, the marker stayed set, and `commit` refused with a route that
+refused again. Reported by the stikk project in letter 012.
+
+### Changed — checkout refusals are preconditions that name every path (stikk letter 012)
+
+- `refusing to overwrite existing file with different content` (`integrity error:`, first path only)
+  became `precondition not met: refusing to materialize: <n> path(s) in the way: <path> (<why>), …`.
+- `refusing checkout deletion because <n> candidate(s) are unsafe` is a `precondition not met:` naming
+  each path and why.
+- `commit`'s `worktree materialization was interrupted` is a `precondition not met:` naming two routes
+  that clear it: `prikk checkout --patch-materialize --ref <the current branch>` or
+  `prikk branch switch <the current branch>`.
+- A file that changes during a checkout refuses as `precondition not met: <path> changed during the
+  checkout, …`. `materialization target escaped repository root` stays an `integrity error:`.
+
+### Added — `status` and `doctor` report a checkout that stopped part-way (stikk letter 012)
+
+`prikk status` prints `interrupted materialization: …` with both routes for the current branch;
+`status --format json` gains `interrupted_materialization` (`{"routes": [...]}`, or `null`), additive
+within `status-report-v1`; `prikk doctor` warns `PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION`. After the fix
+above only a crash or a change during a checkout sets it, and a repository already stuck by the old
+behaviour finds its way out here.
+
 ### Changed — breaking once for Rust callers: `SnapshotMaterializationReport` is `#[non_exhaustive]`
 
 `prikk_store::SnapshotMaterializationReport`, which gained `provisional` in this release, is now

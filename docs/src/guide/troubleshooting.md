@@ -220,8 +220,43 @@ the branch you are on — usually an untracked file with the same name. Nothing 
 listed paths aside and switch again.
 
 **If a switch was interrupted** (a crash, a full disk), no file is torn and the current branch is still
-the old one; `commit` then refuses with `worktree materialization was interrupted`. Run the same
+the old one; `commit` then refuses with `worktree materialization was interrupted` (below). Run the same
 `prikk branch switch heads/<name>` again: it recognises the half-switched files and completes.
+
+## `error: precondition not met: refusing to materialize: <n> path(s) in the way: …`
+
+`checkout --patch-materialize`, `--patch-materialize-delete` or `--snapshot-materialize` found files
+that would have to be overwritten: each is listed with why, such as `an existing file with different
+content` or `not a regular file`. Nothing was written. This is the ordinary result of checking out
+another branch's files over your own: move the listed paths aside, or commit them, and run the checkout
+again. Earlier releases wrote every file before the first conflict, left the worktree part-written and
+reported `integrity error: refusing to overwrite existing file with different content`.
+
+## `error: precondition not met: refusing checkout deletion because <n> candidate(s) are unsafe: …`
+
+`--patch-materialize-delete` would delete files that no longer match what history deleted; each is named
+with the reason. Nothing was written. Earlier releases reported this as an `integrity error:` without the
+paths.
+
+## `error: precondition not met: <path> changed during the checkout, so the worktree is partly written; …`
+
+A file the checkout had checked changed before it was written, usually because another program wrote it
+at the same moment. The checkout stopped part-way and the worktree is marked as interrupted. Move that
+file aside, then run one of the two routes below.
+
+## `error: precondition not met: worktree materialization was interrupted, …`
+
+A checkout or `branch switch` stopped part-way: a crash, or the change above. `prikk status` prints
+`interrupted materialization: …` naming your current branch, `status --format json` carries
+`interrupted_materialization` with the two routes, and `prikk doctor` warns
+`PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION`. Until it is cleared, `commit` refuses, because it cannot tell
+a file you deleted from one the stopped checkout never wrote. Move aside any file the stopped checkout
+named, then run either
+`prikk checkout --patch-materialize --ref heads/<current branch>` or
+`prikk branch switch heads/<current branch>`; both write the branch's files again and clear it. A file
+the stopped checkout had already written stays in the worktree as an untracked file, and `commit` authors
+the whole worktree as it always does. Earlier releases reported this as an `integrity error:` whose
+suggested route could refuse again.
 
 ## `error: precondition not met: no object <id> in the object store or the active WAL; …`
 

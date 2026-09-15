@@ -19,6 +19,11 @@ For each invocation, the CLI reports:
   the repository since, `provisional worktree: materialized from the snapshot of <block> on <ref>; not
   replay-verified — run prikk verify` (`provisional_worktree` in `--format json`, `null` otherwise; see
   [snapshot materialization](checkout/snapshot-materialization.md));
+- when a checkout or `branch switch` stopped part-way (a crash, or a file changed during it),
+  `interrupted materialization: a checkout or branch switch stopped part-way; move aside any file it
+  named, then run prikk checkout --patch-materialize --ref <branch> or prikk branch switch <branch>`,
+  naming the current branch (`interrupted_materialization` in `--format json`, holding those two
+  `routes`, `null` otherwise; see [troubleshooting](troubleshooting.md));
 - a warning once the queued-patch count reaches the recommended threshold or the configured hard
   limit (`PRIKK_ACTIVE_PATCH_WARN`/`PRIKK_ACTIVE_PATCH_LIMIT`; see NFR-PERF-02), the same thresholds
   [`prikk commit`](patches/worktree-patch.md) enforces on the write path.
