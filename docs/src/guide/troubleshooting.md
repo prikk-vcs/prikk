@@ -142,9 +142,9 @@ exists for repositories damaged before that.
 
 ## `error: precondition not met: checkout target for <ref> does not contain a snapshot blob`
 
-The block you asked to check out has no snapshot, which is the normal state of every block in every
-repository today — no block-creating path writes one yet. Use the patch-replay route instead, which
-does not need a snapshot:
+The block you asked to check out has no snapshot, which is the normal state of most blocks: `seal`
+writes one only at a ref's first block and every 64 blocks after it. Use the patch-replay route instead,
+which does not need a snapshot:
 
 ```sh
 prikk checkout --patch-plan --ref <ref>
@@ -152,6 +152,28 @@ prikk checkout --patch-plan --ref <ref>
 
 Earlier releases reported this as `error: integrity error: checkout target for <ref> does not contain
 a snapshot blob`, which read as damage. Nothing is damaged, and nothing was ever missing.
+
+## `error: precondition not met: the worktree was materialized from the snapshot of Block <block> on <ref> and is not replay-verified; run `prikk verify` …`
+
+You ran `checkout --snapshot-materialize`, and the worktree it wrote is the block's signed state rather
+than a replay of its history. Until the repository has been replayed, `commit`, `mv`, `seal`, `merge`,
+`sync accept`, `sync seal`, `rollback-draft --append-inverse` and `branch switch` refuse, so nothing
+derived from an unverified worktree becomes history. Run:
+
+```sh
+prikk verify
+```
+
+When verify finds nothing about objects, the WAL, refs or block state, it prints `provisional worktree:
+replay-verified; marker cleared` and the commands work again. If it prints `provisional worktree: kept`,
+fix what verify reported first. See [snapshot materialization](checkout/snapshot-materialization.md).
+
+## `warning: the snapshot of Block <block> failed validation (…); this report replayed the whole history instead -- run `prikk verify``
+
+`checkout --patch-plan`, `--patch-delete-plan` or `bundle preview` tried to start at a snapshot, and the
+snapshot did not validate. The report did not use it: it replayed the whole history, and its output and
+exit code are what they would have been with no snapshot. The warning is a sign of a damaged or
+tampered snapshot object. Run `prikk verify`, which names the block and the finding.
 
 ## `error: active WAL has no patch records to seal`
 

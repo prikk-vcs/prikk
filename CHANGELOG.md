@@ -9,6 +9,24 @@ to the block's own state root, and every content blob it names must be present. 
 integrity finding in the objects stage, naming the block. Replay verification is unchanged: `verify`
 never reads a snapshot in place of replaying history.
 
+### Added — a worktree written from a snapshot is provisional until `prikk verify`
+
+`checkout --snapshot-materialize` now records the ref and snapshot block it wrote from before its first
+write. While that marker is set, `status` prints `provisional worktree: materialized from the snapshot of
+<block> on <ref>; not replay-verified — run prikk verify` (and `status --format json` carries
+`provisional_worktree`), and `doctor` lists `PRIKK-DOCTOR-PROVISIONAL-WORKTREE`. `prikk verify` clears it
+when it finds nothing about objects, the WAL, refs or block state; a publication-trust finding alone does
+not keep it. A snapshot proves only that its files match the block's signed state root, not that replaying
+history produces them.
+
+### Changed — commands that derive history refuse while the worktree is provisional
+
+While the marker above is set, `commit`, `mv`, `seal`, `merge`, `sync accept`, `sync seal`,
+`rollback-draft --append-inverse` and `branch switch` fail with ``precondition not met: the worktree was
+materialized from the snapshot of Block <block> on <ref> and is not replay-verified; run `prikk verify` …``
+and write nothing. `checkout --snapshot-materialize` also now takes the active lock, so it refuses with
+`lock conflict` while another writer holds it.
+
 ### Fixed — nothing to invert is a precondition, not an encoding error
 
 `prikk inverse-plan`, `rollback-preview` and `rollback-draft` on a ref whose history carries no

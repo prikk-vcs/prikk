@@ -15,6 +15,10 @@ For each invocation, the CLI reports:
 - `heads/main`'s current `RefState` ID, specifically — not whichever ref the active queue is targeting,
   which is reported separately;
 - the queued-patch count and the ref it targets, when the queue is non-empty;
+- when the worktree was written by `checkout --snapshot-materialize` and `prikk verify` has not replayed
+  the repository since, `provisional worktree: materialized from the snapshot of <block> on <ref>; not
+  replay-verified — run prikk verify` (`provisional_worktree` in `--format json`, `null` otherwise; see
+  [snapshot materialization](checkout/snapshot-materialization.md));
 - a warning once the queued-patch count reaches the recommended threshold or the configured hard
   limit (`PRIKK_ACTIVE_PATCH_WARN`/`PRIKK_ACTIVE_PATCH_LIMIT`; see NFR-PERF-02), the same thresholds
   [`prikk commit`](patches/worktree-patch.md) enforces on the write path.
