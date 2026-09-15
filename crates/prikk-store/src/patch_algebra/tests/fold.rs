@@ -285,9 +285,9 @@ fn a_side_that_does_not_replay_is_judged_unfolded_as_before() {
     assert_eq!(folded.operations, left.to_vec());
     assert_eq!(folded.origins, vec![(0, 0), (1, 1)]);
     match judge(&baseline, &evidence, &left, &right) {
-        ConfluenceResult::NotConfluent { witness } => {
-            assert_eq!(witness.kind, ConfluenceWitnessKind::ReplayFailure);
-            assert_eq!(witness.left_index, Some(1));
+        // R8: the operation that does not replay has a same-node predecessor on its side.
+        ConfluenceResult::Unknown { reason } => {
+            assert_eq!(reason, UnknownReason::SequenceInternalDependencyDeferred);
         }
         other => panic!("expected the unfolded refusal, got {other:?}"),
     }

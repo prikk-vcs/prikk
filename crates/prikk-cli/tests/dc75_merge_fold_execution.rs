@@ -305,10 +305,10 @@ fn a_restored_word_beside_the_other_sides_edit_of_that_short_file_refuses_both_w
     assert_eq!(
         reasons,
         [
-            "pair_replay_failed".to_string(),
-            "pair_replay_failed".to_string()
+            "sequence_internal_dependency_deferred".to_string(),
+            "sequence_internal_dependency_deferred".to_string()
         ],
-        "the run is judged as authored (a same-node label arrives with R8)"
+        "the run is judged as authored, and its later edit has a same-node predecessor (R8)"
     );
 }
 
@@ -326,7 +326,8 @@ fn long_text(first: &str, far: &str) -> String {
 /// **Measured, and in tension with §7.2.3.** Handoff §7.2.3 expects this case to keep merging. Under
 /// §7.2.1 as ruled (a net no-op drops its node only when the other side has no operation on it), the
 /// side's run on `e.txt` is judged as authored, and the second edit does not replay alone against the
-/// baseline. So it refuses in both directions, like the short file. Raised for a ruling in
+/// baseline, so its label is `sequence_internal_dependency_deferred` (R8). It refuses in both directions,
+/// like the short file. Raised for a ruling in
 /// `merge-two-edits-noop-report-v1.md`; this test pins what the rule does today.
 #[test]
 fn a_restored_word_far_from_the_other_sides_edit_of_that_long_file_refuses_under_rule_1() {
@@ -344,8 +345,8 @@ fn a_restored_word_far_from_the_other_sides_edit_of_that_long_file_refuses_under
     assert_eq!(
         reasons,
         [
-            "pair_replay_failed".to_string(),
-            "pair_replay_failed".to_string()
+            "sequence_internal_dependency_deferred".to_string(),
+            "sequence_internal_dependency_deferred".to_string()
         ]
     );
 }

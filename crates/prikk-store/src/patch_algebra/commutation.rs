@@ -232,8 +232,19 @@ fn has_prefix_dependency<R: PatchAlgebraEvidence>(
     let Some(prior_operations) = sequence.get(..index) else {
         return Ok(false);
     };
+    // DC-75 two-edits handoff §7.3, R8: an earlier operation on the *same node* is a sequence-internal
+    // dependency too. Authoring sequences a side's operations on one node, so a later one not replaying
+    // alone against the baseline is expected, not a proof-engine failure.
+    let subject_node = operation_facts(subject)
+        .ok()
+        .and_then(|facts| facts.node_id);
     for prior in prior_operations {
         validate_operation_provenance(prior, candidate_scope)?;
+        if subject_node.is_some()
+            && operation_facts(prior).ok().and_then(|facts| facts.node_id) == subject_node
+        {
+            return Ok(true);
+        }
         if let PairClass::OrderedDependency { .. } =
             classify_pair_with_text_resolver(baseline, evidence, prior, subject)?
         {
