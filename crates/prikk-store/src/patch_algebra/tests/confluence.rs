@@ -249,8 +249,10 @@ fn a_side_that_edits_one_text_twice_is_confluent_with_an_unrelated_create() {
     );
 
     let scope = EvidenceScope::SealedCandidateRequired;
-    let left = fold_side(&baseline, &evidence, scope, &left).operations;
-    let right = fold_side(&baseline, &evidence, scope, &right).operations;
+    let (left, right) = (
+        fold_side(&baseline, &evidence, scope, &left, &right).operations,
+        fold_side(&baseline, &evidence, scope, &right, &left).operations,
+    );
     match check_confluence_result(&baseline, &evidence, scope, &left, &right)
         .expect("confluence evidence")
     {

@@ -8,12 +8,21 @@
 //!
 //! - **Fold kinds:** a run of `EditText`; `EditText`s then a file `DeleteNode`; a run of
 //!   `ChangePerm`; a run of `ReplaceBinary`. Nothing else folds: renames and symlinks stay deferred.
-//! - **A net no-op** (the run restores the baseline) drops the node from the side.
+//! - **A net no-op** (the run restores the baseline) drops the node from the side, but only when the
+//!   other side has no operation on that node (handoff §7.2); otherwise that run is judged as authored.
 //! - **The guard:** a fold is used only when replaying the folded side reproduces replaying the
 //!   original side ([`equivalent`]). Otherwise the original sequence is judged, exactly as before.
 //! - **Deterministic:** nodes are visited in `NodeId` order and the output keeps original order.
 //!
 //! Merge execution never sees a fold: it adopts the original patches verbatim.
+//!
+//! **Admissibility (handoff §7.2).** The evidence judges folds, but execution replays a side's
+//! *originals* onto the *other* side's tip. So a fold may let a merge through only when the other side
+//! has no operation on the folded node and the run changes no path before its end: then the originals
+//! replay onto that tip exactly as they did on their own side. Every fold kind here changes no path
+//! before its end. A folded operation kept in the sequence on a node the other side touches forms a
+//! same-node pair, which the engine judges and refuses. A dropped node forms no pair at all, so a drop
+//! is the one fold that must check the other side itself.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,13 +62,15 @@ enum Net {
 
 /// Fold `operations` (one side) against `baseline`, or return it unfolded when no fold applies or
 /// the guard refuses one. Callers validate every original operation first (R1 condition 1).
+/// `other_side` is the opposite side's original sequence, consulted only for which nodes it touches.
 pub(super) fn fold_side<R: PatchAlgebraEvidence>(
     baseline: &NodeLifecycleState,
     evidence: &R,
     candidate_scope: EvidenceScope,
     operations: &[DecodedPatchOperation],
+    other_side: &[DecodedPatchOperation],
 ) -> FoldedSide {
-    fold(baseline, evidence, candidate_scope, operations)
+    fold(baseline, evidence, candidate_scope, operations, other_side)
         .unwrap_or_else(|| FoldedSide::unfolded(operations))
 }
 
@@ -68,6 +79,7 @@ fn fold<R: PatchAlgebraEvidence>(
     evidence: &R,
     candidate_scope: EvidenceScope,
     operations: &[DecodedPatchOperation],
+    other_side: &[DecodedPatchOperation],
 ) -> Option<FoldedSide> {
     let mut by_node: BTreeMap<NodeId, Vec<usize>> = BTreeMap::new();
     for (index, operation) in operations.iter().enumerate() {
@@ -78,6 +90,15 @@ fn fold<R: PatchAlgebraEvidence>(
         return None;
     }
     let original = replay_operations(baseline, evidence, candidate_scope, operations).ok()?;
+    // `None` when an operation of the other side names no node: then no drop is admissible.
+    let other_nodes: Option<BTreeSet<NodeId>> = other_side
+        .iter()
+        .map(|operation| {
+            operation_facts(operation)
+                .ok()
+                .and_then(|facts| facts.node_id)
+        })
+        .collect();
 
     // Keyed by the last original index of each folded run: the folded operation takes that position,
     // so it stays after anything the run's last operation followed.
@@ -98,6 +119,12 @@ fn fold<R: PatchAlgebraEvidence>(
         let Some(net) = net_effect(baseline, evidence, &original, *node_id, &run) else {
             continue;
         };
+        let other_leaves_node_alone = other_nodes
+            .as_ref()
+            .is_some_and(|nodes| !nodes.contains(node_id));
+        if matches!(net, Net::Drop) && !other_leaves_node_alone {
+            continue;
+        }
         if matches!(&net, Net::Replace(replacement)
             if matches!(replacement.kind, DecodedOperationKind::DeleteNode { .. }))
         {

@@ -16,8 +16,10 @@ fn judge(
     left: &[DecodedPatchOperation],
     right: &[DecodedPatchOperation],
 ) -> ConfluenceResult {
-    let left = fold_side(baseline, evidence, SCOPE, left).operations;
-    let right = fold_side(baseline, evidence, SCOPE, right).operations;
+    let (left, right) = (
+        fold_side(baseline, evidence, SCOPE, left, right).operations,
+        fold_side(baseline, evidence, SCOPE, right, left).operations,
+    );
     check_confluence_result(baseline, evidence, SCOPE, &left, &right).expect("confluence evidence")
 }
 
@@ -139,7 +141,7 @@ fn edits_then_a_delete_are_judged_as_one_delete_of_the_baseline_content() {
     ];
     let right = [create_g(3)];
 
-    let folded = fold_side(&baseline, &evidence, SCOPE, &left);
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
     assert_eq!(folded.origins, vec![(0, 1)]);
     match &folded.operations.as_slice() {
         [
@@ -183,7 +185,7 @@ fn a_change_perm_run_is_judged_as_one_change_perm() {
         "fixture sanity: unfolded, the run is refused"
     );
     assert_eq!(
-        fold_side(&baseline, &evidence, SCOPE, &left).operations,
+        fold_side(&baseline, &evidence, SCOPE, &left, &right).operations,
         vec![change_perm(1, node(1), MODE_REGULAR, 0o100600)]
     );
     assert_confluent(judge(&baseline, &evidence, &left, &right), 1, 1);
@@ -211,14 +213,17 @@ fn a_replace_binary_run_is_judged_as_one_replace_binary() {
         "fixture sanity: unfolded, the run is refused"
     );
     assert_eq!(
-        fold_side(&baseline, &evidence, SCOPE, &left).operations,
+        fold_side(&baseline, &evidence, SCOPE, &left, &right).operations,
         vec![replace_binary(1, node(1), blob(1), blob(4))]
     );
     assert_confluent(judge(&baseline, &evidence, &left, &right), 1, 1);
 }
 
+/// Handoff §7.2 rule 1. A net no-op drops its node only when the other side has no operation on it.
+/// When the other side edits that node, dropping would hide the same-node pair, and execution would
+/// replay the originals onto a text they were not authored against (§7.1).
 #[test]
-fn a_net_no_op_drops_the_node_from_the_side() {
+fn a_net_no_op_drops_the_node_only_when_the_other_side_leaves_it_alone() {
     let (baseline, evidence) = text_baseline();
     let t1: &[u8] = b"alpha BETA gamma";
     let left = [
@@ -226,13 +231,26 @@ fn a_net_no_op_drops_the_node_from_the_side() {
         edit_text(2, node(1), t1, T0),
         create_g(3),
     ];
-    // Without the drop, the left edits and this edit share node 1 and would be deferred.
-    let right = [edit_text(4, node(1), T0, b"alpha beta GAMMA")];
 
-    let folded = fold_side(&baseline, &evidence, SCOPE, &left);
-    assert_eq!(folded.operations, vec![create_g(3)]);
-    assert_eq!(folded.origins, vec![(2, 2)]);
-    assert_confluent(judge(&baseline, &evidence, &left, &right), 1, 1);
+    let touches = [edit_text(4, node(1), T0, b"alpha beta GAMMA")];
+    let kept = fold_side(&baseline, &evidence, SCOPE, &left, &touches);
+    assert_eq!(
+        kept.operations,
+        left.to_vec(),
+        "the run on node 1 is judged as authored"
+    );
+    assert!(
+        !matches!(
+            judge(&baseline, &evidence, &left, &touches),
+            ConfluenceResult::Confluent { .. }
+        ),
+        "the other side edits node 1: never proven confluent"
+    );
+
+    let elsewhere = [create_file(4, "other.bin", node(3), blob(2), MODE_REGULAR)];
+    let dropped = fold_side(&baseline, &evidence, SCOPE, &left, &elsewhere);
+    assert_eq!(dropped.operations, vec![create_g(3)]);
+    assert_eq!(dropped.origins, vec![(2, 2)]);
 }
 
 #[test]
@@ -243,7 +261,7 @@ fn a_side_that_folds_to_nothing_is_judged_as_empty() {
     let right = [create_g(3)];
 
     assert!(
-        fold_side(&baseline, &evidence, SCOPE, &left)
+        fold_side(&baseline, &evidence, SCOPE, &left, &right)
             .operations
             .is_empty()
     );
@@ -263,7 +281,7 @@ fn a_side_that_does_not_replay_is_judged_unfolded_as_before() {
     ];
     let right = [create_g(3)];
 
-    let folded = fold_side(&baseline, &evidence, SCOPE, &left);
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
     assert_eq!(folded.operations, left.to_vec());
     assert_eq!(folded.origins, vec![(0, 0), (1, 1)]);
     match judge(&baseline, &evidence, &left, &right) {
@@ -325,7 +343,7 @@ fn a_folded_conflict_names_the_original_range() {
     // The same net change from the baseline: the same span, so a true overlap (R2).
     let right = [edit_text_v2(4, node(1), T0, t2)];
 
-    let folded = fold_side(&baseline, &evidence, SCOPE, &left);
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
     assert_eq!(folded.origins, vec![(1, 1), (0, 2)], "fixture sanity");
     let first = report(&baseline, &evidence, &left, &right);
     assert_eq!(first.outcome, MergeEvidenceOutcome::Conflict);

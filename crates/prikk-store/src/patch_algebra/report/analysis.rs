@@ -59,8 +59,8 @@ pub(crate) fn analyze_merge_evidence<R: PatchAlgebraEvidence>(
     }
     // DC-75 two-edits handoff §6 (R1): every original operation passed the two checks above; the
     // engine now judges each side's net effect, and the report names original operations.
-    let left_folded = fold_side(baseline, evidence, candidate_scope, left);
-    let right_folded = fold_side(baseline, evidence, candidate_scope, right);
+    let left_folded = fold_side(baseline, evidence, candidate_scope, left, right);
+    let right_folded = fold_side(baseline, evidence, candidate_scope, right, left);
     let mut left_sequence = left_sequence;
     let mut right_sequence = right_sequence;
     left_sequence.folded_through = folded_ranges(&left_folded);
