@@ -28,6 +28,16 @@ replaying the history before that block produces the same files: only replay pro
   WAL, refs or block state. A publication-trust finding alone does not keep it: who signed a block says
   nothing about whether replay reproduces the snapshot. A materialization that runs while `verify` is
   running keeps its marker, and verify says so.
+- **When no marker is written.** If this repository has already confirmed the block's state by replay,
+  the snapshot's files are exactly what replay gives, so `--snapshot-materialize` writes no marker and
+  prints `provisional: no`. Otherwise it prints `provisional: yes` and the marker applies. A block is
+  confirmed when `seal`, `merge` or `sync seal` sealed it or replayed it as part of its parent history,
+  or when `prikk verify` replay-verified it. Receiving a block (`bundle import`, `sync accept`) never
+  confirms it.
+- **The record.** Those confirmed block ids live in `.prikk/cache/replay-verified-blocks.v1`. It is a
+  cache, never authoritative: a damaged, truncated or other-version file reads as empty, and deleting it
+  is always safe. Without it, every snapshot materialization is provisional and every worktree write
+  replays from genesis, until `seal` or `verify` records the blocks again.
 - **Where it shows.** `prikk status` prints `provisional worktree: materialized from the snapshot of
   <block> on <ref>; not replay-verified — run prikk verify`, `status --format json` carries
   `provisional_worktree`, and `prikk doctor` lists `PRIKK-DOCTOR-PROVISIONAL-WORKTREE`.
@@ -42,8 +52,11 @@ operation counts, `coverage`, files history deleted — is still computed over t
 that fails validation is never used: the report replays from genesis, prints the same output, exits `0`,
 and adds one line on stderr naming the block and `prikk verify`.
 
-Every command that writes the worktree — `checkout --patch-materialize`, `--patch-materialize-delete`
-and `branch switch` — and `rollback-preview` still replay the whole history.
+Commands that write the worktree — `checkout --patch-materialize`, `--patch-materialize-delete` and
+`branch switch` — start at a snapshot only when its block is in the record above and the snapshot passes
+validation; otherwise they replay the whole history. A received block's snapshot is never a starting
+point for a worktree write. The written files are identical either way. `rollback-preview` always
+replays the whole history.
 
 The path validator remains conservative: non-ASCII paths are deferred until Unicode NFC
 normalization is implemented, and paths targeting `.prikk/` are rejected. For the exact validator and

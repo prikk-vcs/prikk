@@ -27,6 +27,20 @@ materialized from the snapshot of Block <block> on <ref> and is not replay-verif
 and write nothing. `checkout --snapshot-materialize` also now takes the active lock, so it refuses with
 `lock conflict` while another writer holds it.
 
+### Changed — `--snapshot-materialize` of a replay-verified block no longer marks the worktree
+
+`checkout --snapshot-materialize` writes no provisional marker when this repository has already confirmed
+the target block by replay (`seal`, `merge`, `sync seal` or `prikk verify`), and prints `provisional: no`;
+otherwise it prints `provisional: yes` and marks the worktree as before. The confirmed block ids are kept
+in `.prikk/cache/replay-verified-blocks.v1`, a cache that is always safe to delete.
+`checkout --patch-materialize`, `--patch-materialize-delete` and `branch switch` now start at such a
+block's snapshot instead of genesis; their output is unchanged.
+
+### Changed — a stale lifecycle cache no longer keeps the provisional marker
+
+`prikk verify` now clears the provisional-worktree marker even when it reports a lifecycle-cache
+divergence: that cache is rebuildable, and verify's own replay decides block state.
+
 ### Fixed — nothing to invert is a precondition, not an encoding error
 
 `prikk inverse-plan`, `rollback-preview` and `rollback-draft` on a ref whose history carries no
