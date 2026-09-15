@@ -371,3 +371,93 @@ fn a_folded_conflict_names_the_original_range() {
         "deterministic"
     );
 }
+
+/// Ruling R6: mixed kinds on one node fold. Edit, `chmod +x`, edit nets to one edit plus one mode change.
+#[test]
+fn an_edit_a_mode_change_and_an_edit_are_judged_as_one_edit_and_one_mode_change() {
+    let (baseline, evidence) = text_baseline();
+    let t1: &[u8] = b"alpha BETA gamma";
+    let t2: &[u8] = b"alpha BETA GAMMA";
+    let left = [
+        edit_text(1, node(1), T0, t1),
+        change_perm(2, node(1), MODE_REGULAR, MODE_EXECUTABLE),
+        edit_text(3, node(1), t1, t2),
+    ];
+    let right = [create_g(4)];
+
+    assert!(
+        !matches!(
+            check_confluence_result(&baseline, &evidence, SCOPE, &left, &right),
+            Ok(ConfluenceResult::Confluent { .. })
+        ),
+        "fixture sanity: unfolded, the run is refused"
+    );
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
+    assert_eq!(folded.operations.len(), 2);
+    assert!(matches!(
+        folded.operations.first().map(|operation| &operation.kind),
+        Some(DecodedOperationKind::EditText { .. })
+    ));
+    assert_eq!(
+        folded.operations.get(1),
+        Some(&change_perm(1, node(1), MODE_REGULAR, MODE_EXECUTABLE))
+    );
+    assert_eq!(folded.origins, vec![(0, 2), (0, 2)]);
+    assert_confluent(judge(&baseline, &evidence, &left, &right), 2, 1);
+}
+
+/// Ruling R6: edit, `chmod +x`, delete nets to one delete of the baseline content and mode; the guard's
+/// tombstone exception covers the mode the original delete named.
+#[test]
+fn an_edit_a_mode_change_and_a_delete_are_judged_as_one_delete_of_the_baseline() {
+    let (baseline, evidence) = text_baseline();
+    let t1: &[u8] = b"alpha BETA gamma";
+    let left = [
+        edit_text(1, node(1), T0, t1),
+        change_perm(2, node(1), MODE_REGULAR, MODE_EXECUTABLE),
+        delete_file(
+            3,
+            "e.txt",
+            node(1),
+            NodeKind::TextFile,
+            text_span::text_blob_id(t1).expect("blob id"),
+            MODE_EXECUTABLE,
+        ),
+    ];
+    let right = [create_g(4)];
+
+    assert_eq!(
+        fold_side(&baseline, &evidence, SCOPE, &left, &right).operations,
+        vec![delete_file(
+            1,
+            "e.txt",
+            node(1),
+            NodeKind::TextFile,
+            text_span::text_blob_id(T0).expect("blob id"),
+            MODE_REGULAR,
+        )]
+    );
+    assert_confluent(judge(&baseline, &evidence, &left, &right), 1, 1);
+}
+
+/// Ruling R6: `chmod +x`, `chmod -x`, edit restores the mode, so only the edit remains.
+#[test]
+fn mode_changes_that_restore_the_mode_leave_only_the_edit() {
+    let (baseline, evidence) = text_baseline();
+    let left = [
+        change_perm(1, node(1), MODE_REGULAR, MODE_EXECUTABLE),
+        change_perm(2, node(1), MODE_EXECUTABLE, MODE_REGULAR),
+        edit_text(3, node(1), T0, b"alpha BETA gamma"),
+    ];
+    let right = [create_g(4)];
+
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
+    assert!(matches!(
+        folded.operations.as_slice(),
+        [DecodedPatchOperation {
+            kind: DecodedOperationKind::EditText { .. },
+            ..
+        }]
+    ));
+    assert_confluent(judge(&baseline, &evidence, &left, &right), 1, 1);
+}

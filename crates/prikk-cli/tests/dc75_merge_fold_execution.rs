@@ -432,3 +432,41 @@ fn a_net_no_op_executes_both_ways() {
         ]
     });
 }
+
+// ---- §7.3 R6: mixed kinds on one file, both directions --------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn an_edit_a_mode_change_and_an_edit_execute_both_ways() {
+    assert_fold_kind_executes("mixed-edit-chmod-edit", || {
+        vec![
+            write("e.txt", "alpha BETA gamma delta\n"),
+            Step::Executable("e.txt", true),
+            write("e.txt", "alpha BETA GAMMA delta\n"),
+        ]
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn an_edit_a_mode_change_and_a_delete_execute_both_ways() {
+    assert_fold_kind_executes("mixed-edit-chmod-delete", || {
+        vec![
+            write("e.txt", "alpha BETA gamma delta\n"),
+            Step::Executable("e.txt", true),
+            Step::Delete("e.txt"),
+        ]
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn two_mode_changes_and_an_edit_execute_both_ways() {
+    assert_fold_kind_executes("mixed-chmod-chmod-edit", || {
+        vec![
+            Step::Executable("e.txt", true),
+            Step::Executable("e.txt", false),
+            write("e.txt", "alpha beta GAMMA delta\n"),
+        ]
+    });
+}

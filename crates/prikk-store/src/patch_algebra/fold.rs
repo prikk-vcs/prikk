@@ -6,8 +6,11 @@
 //! rewrites each side, **for evidence only**, into one baseline-relative operation per node where
 //! that is expressible, and the rest of the engine runs unchanged over the result.
 //!
-//! - **Fold kinds:** a run of `EditText`; `EditText`s then a file `DeleteNode`; a run of
-//!   `ChangePerm`; a run of `ReplaceBinary`. Nothing else folds: renames and symlinks stay deferred.
+//! - **Fold kinds:** on one file node, any run of `EditText`, `ChangePerm` and `ReplaceBinary` (mixed
+//!   kinds are ruling R6), optionally ending in a `DeleteNode`. Its net is an `EditText` or
+//!   `ReplaceBinary` if the content changed plus a `ChangePerm` if the mode changed, or one `DeleteNode`
+//!   of the baseline content if the run ends in a delete. Nothing else folds: renames and symlinks stay
+//!   deferred, and create-then-delete never folds (R7: the run holds a path for part of the side).
 //! - **A net no-op** (the run restores the baseline) drops the node from the side, but only when the
 //!   other side has no operation on that node (handoff §7.2); otherwise that run is judged as authored.
 //! - **The guard:** a fold is used only when replaying the folded side reproduces replaying the
@@ -56,7 +59,8 @@ impl FoldedSide {
 }
 
 enum Net {
-    Replace(Box<DecodedPatchOperation>),
+    /// One or two operations: content then mode, or a single delete.
+    Replace(Vec<DecodedPatchOperation>),
     Drop,
 }
 
@@ -125,8 +129,10 @@ fn fold<R: PatchAlgebraEvidence>(
         if matches!(net, Net::Drop) && !other_leaves_node_alone {
             continue;
         }
-        if matches!(&net, Net::Replace(replacement)
-            if matches!(replacement.kind, DecodedOperationKind::DeleteNode { .. }))
+        if matches!(&net, Net::Replace(replacements)
+            if replacements
+                .iter()
+                .any(|replacement| matches!(replacement.kind, DecodedOperationKind::DeleteNode { .. })))
         {
             folded_deletes.insert(*node_id);
         }
@@ -143,9 +149,11 @@ fn fold<R: PatchAlgebraEvidence>(
     };
     for (index, operation) in operations.iter().enumerate() {
         if let Some((first, net)) = nets.remove(&index) {
-            if let Net::Replace(replacement) = net {
-                folded.operations.push(*replacement);
-                folded.origins.push((first, index));
+            if let Net::Replace(replacements) = net {
+                for replacement in replacements {
+                    folded.operations.push(replacement);
+                    folded.origins.push((first, index));
+                }
             }
         } else if !consumed.contains(&index) {
             folded.operations.push(operation.clone());
@@ -157,7 +165,7 @@ fn fold<R: PatchAlgebraEvidence>(
     equivalent(&original, &replayed, &folded_deletes).then_some(folded)
 }
 
-/// The one baseline-relative operation a run on `node_id` amounts to, or `None` when the run is not a
+/// The baseline-relative operations a run on `node_id` amounts to, or `None` when the run is not a
 /// fold kind or its net effect cannot be expressed.
 fn net_effect<R: PatchAlgebraEvidence>(
     baseline: &NodeLifecycleState,
@@ -176,37 +184,15 @@ fn net_effect<R: PatchAlgebraEvidence>(
     else {
         return None;
     };
-    let is_edit = |operation: &&DecodedPatchOperation| {
-        matches!(operation.kind, DecodedOperationKind::EditText { .. })
+    let changes_content_or_mode = |operation: &&DecodedPatchOperation| {
+        matches!(
+            operation.kind,
+            DecodedOperationKind::EditText { .. }
+                | DecodedOperationKind::ChangePerm { .. }
+                | DecodedOperationKind::ReplaceBinary { .. }
+        )
     };
-    let operation = |kind| Box::new(DecodedPatchOperation { op_seq, kind });
-
-    if run.iter().all(is_edit) {
-        if base.kind != NodeKind::TextFile {
-            return None;
-        }
-        let Evidence::Known(base_text) =
-            evidence.baseline_text(EvidenceScope::SealedBaselineRequired, node_id, base_blob_id)
-        else {
-            return None;
-        };
-        let final_text = original.text(&node_id)?;
-        if final_text == base_text.as_slice() {
-            return Some(Net::Drop);
-        }
-        let plan = text_span::plan_authored_text_span(&base_text, final_text, node_id).ok()??;
-        return Some(Net::Replace(operation(DecodedOperationKind::EditText {
-            node_id,
-            span_id: plan.span_id,
-            old_span_hash: plan.old_span_hash,
-            left_anchor_hash: plan.left_anchor_hash,
-            right_anchor_hash: plan.right_anchor_hash,
-            replacement_text: plan.replacement_text,
-            old_span_text: plan.old_span_text,
-            left_anchor_len: Some(plan.left_anchor_len),
-            right_anchor_len: Some(plan.right_anchor_len),
-        })));
-    }
+    let operation = |kind| DecodedPatchOperation { op_seq, kind };
 
     if let DecodedOperationKind::DeleteNode {
         path,
@@ -214,18 +200,23 @@ fn net_effect<R: PatchAlgebraEvidence>(
         ..
     } = &last.kind
     {
-        if base.kind != NodeKind::TextFile || !before_last.iter().all(is_edit) {
+        if before_last.is_empty() || !before_last.iter().all(changes_content_or_mode) {
             return None;
         }
-        return Some(Net::Replace(operation(DecodedOperationKind::DeleteNode {
-            path: path.clone(),
-            node_id,
-            preimage: DecodedDeletePreimage::File {
-                old_node_kind: base.kind,
-                old_blob_id: base_blob_id,
-                old_mode: base_mode,
+        return Some(Net::Replace(vec![operation(
+            DecodedOperationKind::DeleteNode {
+                path: path.clone(),
+                node_id,
+                preimage: DecodedDeletePreimage::File {
+                    old_node_kind: base.kind,
+                    old_blob_id: base_blob_id,
+                    old_mode: base_mode,
+                },
             },
-        })));
+        )]));
+    }
+    if !run.iter().all(changes_content_or_mode) {
+        return None;
     }
 
     let NodeContent::File {
@@ -235,44 +226,66 @@ fn net_effect<R: PatchAlgebraEvidence>(
     else {
         return None;
     };
-    if run
-        .iter()
-        .all(|operation| matches!(operation.kind, DecodedOperationKind::ChangePerm { .. }))
-    {
-        if final_mode == base_mode {
-            return Some(Net::Drop);
+    let mut net = Vec::new();
+    match base.kind {
+        NodeKind::TextFile => {
+            let Evidence::Known(base_text) = evidence.baseline_text(
+                EvidenceScope::SealedBaselineRequired,
+                node_id,
+                base_blob_id,
+            ) else {
+                return None;
+            };
+            // A run with no edit materializes no text: the content is the baseline's.
+            let final_text = original.text(&node_id).unwrap_or(base_text.as_slice());
+            if final_text != base_text.as_slice() {
+                let plan =
+                    text_span::plan_authored_text_span(&base_text, final_text, node_id).ok()??;
+                net.push(operation(DecodedOperationKind::EditText {
+                    node_id,
+                    span_id: plan.span_id,
+                    old_span_hash: plan.old_span_hash,
+                    left_anchor_hash: plan.left_anchor_hash,
+                    right_anchor_hash: plan.right_anchor_hash,
+                    replacement_text: plan.replacement_text,
+                    old_span_text: plan.old_span_text,
+                    left_anchor_len: Some(plan.left_anchor_len),
+                    right_anchor_len: Some(plan.right_anchor_len),
+                }));
+            }
         }
-        return Some(Net::Replace(operation(DecodedOperationKind::ChangePerm {
+        NodeKind::BinaryFile => {
+            if final_blob_id != base_blob_id {
+                net.push(operation(DecodedOperationKind::ReplaceBinary {
+                    node_id,
+                    old_blob_id: base_blob_id,
+                    new_blob_id: final_blob_id,
+                }));
+            }
+        }
+        _ => return None,
+    }
+    if final_mode != base_mode {
+        net.push(operation(DecodedOperationKind::ChangePerm {
             node_id,
             old_mode: base_mode,
             new_mode: final_mode,
-        })));
+        }));
     }
-    if run
-        .iter()
-        .all(|operation| matches!(operation.kind, DecodedOperationKind::ReplaceBinary { .. }))
-    {
-        if final_blob_id == base_blob_id {
-            return Some(Net::Drop);
-        }
-        return Some(Net::Replace(operation(
-            DecodedOperationKind::ReplaceBinary {
-                node_id,
-                old_blob_id: base_blob_id,
-                new_blob_id: final_blob_id,
-            },
-        )));
-    }
-    None
+    Some(if net.is_empty() {
+        Net::Drop
+    } else {
+        Net::Replace(net)
+    })
 }
 
 /// The guard (R1 condition 2): the folded side's replay equals the original side's.
 ///
 /// - Live nodes (path, kind, content) must be equal.
-/// - Tombstones must be equal, with one exception: a delete folded here names the **baseline** blob as
-///   its preimage, since that is what it replays against, while the original delete named the
-///   post-edit blob. So for exactly those nodes, the tombstone's blob id may differ; its path, kind
-///   and mode may not.
+/// - Tombstones must be equal, with one exception: a delete folded here names the **baseline** content
+///   as its preimage, since that is what it replays against, while the original delete named the
+///   content the run left. So for exactly those nodes, the tombstone's blob id and mode may differ
+///   (R6); its path and kind may not.
 /// - Materialized texts must agree. A text present on one side only must be the content of the node
 ///   the equal live state holds, or belong to a node that is no longer live.
 ///
@@ -299,21 +312,14 @@ fn equivalent(
         if left_tombstone == right_tombstone {
             continue;
         }
-        let same_but_blob = match (&left_tombstone.content, &right_tombstone.content) {
-            (
-                NodeContent::File {
-                    mode: left_mode, ..
-                },
-                NodeContent::File {
-                    mode: right_mode, ..
-                },
-            ) => left_mode == right_mode,
-            _ => false,
-        };
+        let both_files = matches!(
+            (&left_tombstone.content, &right_tombstone.content),
+            (NodeContent::File { .. }, NodeContent::File { .. })
+        );
         if !folded_deletes.contains(*node_id)
             || left_tombstone.kind != right_tombstone.kind
             || left_tombstone.path != right_tombstone.path
-            || !same_but_blob
+            || !both_files
         {
             return false;
         }
