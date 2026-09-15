@@ -9,6 +9,8 @@ use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
 use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block, unique_temp_dir,
 };
+use crate::worktree::between_plan_and_write_for_test;
+use crate::worktree_marker::worktree_is_dirty;
 
 #[test]
 fn patch_materialization_writes_replayed_files() {
@@ -163,9 +165,158 @@ fn patch_materialization_with_deletions_refuses_modified_removed_file() {
         assert!(publish_snapshot_then_patch_block(&layout).is_ok());
         assert!(std::fs::write(root.join("old.txt"), b"local edit\n").is_ok());
         let report = materialize_patch_checkout_with_deletions(&layout, "heads/main");
-        assert!(report.is_err());
+        // Checkout-refusal round §2.3: `Precondition`, naming the path.
+        let message = precondition_message(report).unwrap_or_default();
+        assert!(
+            message.contains(
+                "refusing checkout deletion because 1 candidate(s) are unsafe: old.txt ("
+            ),
+            "{message}"
+        );
         assert!(!root.join("README.md").exists());
         assert!(std::fs::read(root.join("old.txt")).is_ok_and(|x| x == b"local edit\n".to_vec()));
     }
     let _ = std::fs::remove_dir_all(root);
+}
+
+// ---- Checkout-refusal round §3: a refused checkout writes nothing -------------------------------------
+
+/// Every worktree file outside `.prikk`, with its bytes.
+fn worktree_files(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".prikk") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                files.insert(
+                    path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                    bytes,
+                );
+            }
+        }
+    }
+    files
+}
+
+/// The message of a `Precondition` refusal; `None` for success or any other class.
+fn precondition_message<T>(result: prikk_error::Result<T>) -> Option<String> {
+    match result {
+        Err(prikk_error::PrikkError::Precondition(message)) => Some(message),
+        _ => None,
+    }
+}
+
+/// stikk's letter 012 in the store: `README.md` sorts before the conflicting `extra.txt`, so before the
+/// planner it was written before the refusal. Now both writers refuse with nothing written, no marker
+/// set, and a `Precondition` naming the path.
+#[test]
+fn a_refused_patch_materialization_writes_nothing_and_sets_no_marker() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("checkout-refusal-writes-nothing");
+    let layout = RepositoryLayout::init(root.clone())?;
+    publish_snapshot_then_patch_block(&layout)?;
+    std::fs::write(root.join("extra.txt"), b"mine\n")?;
+    let before = worktree_files(&root);
+
+    let message =
+        precondition_message(materialize_patch_checkout(&layout, "heads/main")).unwrap_or_default();
+    assert!(
+        message
+            .contains("1 path(s) in the way: extra.txt (an existing file with different content)"),
+        "{message}"
+    );
+    assert!(message.contains("nothing was written"), "{message}");
+    assert_eq!(worktree_files(&root), before, "the refusal wrote README.md");
+    assert!(
+        !worktree_is_dirty(&layout)?,
+        "the refusal set the dirty marker"
+    );
+
+    let deleting = precondition_message(materialize_patch_checkout_with_deletions(
+        &layout,
+        "heads/main",
+    ))
+    .unwrap_or_default();
+    assert!(
+        deleting.contains("extra.txt (an existing file"),
+        "{deleting}"
+    );
+    assert_eq!(
+        worktree_files(&root),
+        before,
+        "the deleting variant wrote README.md"
+    );
+    assert!(!worktree_is_dirty(&layout)?);
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Two conflicting paths of different kinds are both named, not the first.
+#[test]
+fn every_conflicting_path_is_named() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("checkout-refusal-two-conflicts");
+    let layout = RepositoryLayout::init(root.clone())?;
+    publish_snapshot_then_patch_block(&layout)?;
+    std::fs::write(root.join("README.md"), b"local\n")?;
+    std::fs::create_dir(root.join("extra.txt"))?;
+    let message =
+        precondition_message(materialize_patch_checkout(&layout, "heads/main")).unwrap_or_default();
+    assert!(message.contains("2 path(s) in the way"), "{message}");
+    assert!(
+        message.contains("README.md (an existing file with different content)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extra.txt (not a regular file)"),
+        "{message}"
+    );
+    assert!(!worktree_is_dirty(&layout)?);
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// The second guard (§2.2): a file that changes between the plan and the write refuses at write time,
+/// the dirty marker stays set, `doctor` reports it, and the route clears it once the file is moved aside.
+#[test]
+fn a_file_changed_during_the_checkout_keeps_the_marker_and_names_the_route()
+-> prikk_error::Result<()> {
+    const CODE: &str = "PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION";
+    let root = unique_temp_dir("checkout-refusal-concurrent-change");
+    let layout = RepositoryLayout::init(root.clone())?;
+    publish_snapshot_then_patch_block(&layout)?;
+    let changed = root.join("extra.txt");
+    between_plan_and_write_for_test(move || {
+        let _ = std::fs::write(&changed, b"concurrent\n");
+    });
+
+    let message =
+        precondition_message(materialize_patch_checkout(&layout, "heads/main")).unwrap_or_default();
+    assert!(
+        message.contains("extra.txt changed during the checkout"),
+        "{message}"
+    );
+    assert!(
+        message.contains("`prikk checkout --patch-materialize --ref <the current branch>`")
+            && message.contains("`prikk branch switch <the current branch>`"),
+        "{message}"
+    );
+    assert!(
+        worktree_is_dirty(&layout)?,
+        "the partly written worktree keeps the marker"
+    );
+    assert!(format!("{:?}", crate::doctor_repository(&layout)).contains(CODE));
+
+    std::fs::remove_file(root.join("extra.txt"))?;
+    materialize_patch_checkout(&layout, "heads/main")?;
+    assert!(!worktree_is_dirty(&layout)?, "the route clears the marker");
+    assert!(!format!("{:?}", crate::doctor_repository(&layout)).contains(CODE));
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
 }

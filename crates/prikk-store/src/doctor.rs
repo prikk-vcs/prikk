@@ -547,6 +547,36 @@ fn push_provisional_worktree_issue(layout: &RepositoryLayout, issues: &mut Vec<D
     }
 }
 
+/// Checkout-refusal round §2.4: `doctor` reports a checkout or branch switch that stopped part-way (the
+/// RFC 102 dirty marker), naming the two routes that clear it. A warning: nothing is damaged.
+fn push_interrupted_materialization_issue(
+    layout: &RepositoryLayout,
+    issues: &mut Vec<DoctorIssue>,
+) {
+    match crate::worktree_marker::worktree_materialization_interrupted(layout) {
+        Ok(false) => {}
+        Ok(true) => {
+            let branch = crate::refs::current_branch(layout)
+                .unwrap_or_else(|_| "<the current branch>".to_string());
+            issues.push(DoctorIssue::warning(
+                "PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION",
+                "a checkout or branch switch stopped part-way, so the worktree is not verified \
+                 against its baseline and `commit` refuses",
+                format!(
+                    "move aside any file the stopped checkout named, then run `prikk checkout \
+                     --patch-materialize --ref {branch}` or `prikk branch switch {branch}`; either \
+                     clears it"
+                ),
+            ));
+        }
+        Err(err) => issues.push(DoctorIssue::warning(
+            "PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION",
+            format!("the worktree dirty marker could not be read: {err}"),
+            "run `prikk checkout --patch-materialize --ref <the current branch>`",
+        )),
+    }
+}
+
 /// Run doctor diagnostics for a repository layout.
 #[must_use]
 pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
@@ -555,6 +585,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     push_non_default_active_session_wal_issues(layout, &mut issues);
     push_current_branch_issue(layout, &mut issues);
     push_provisional_worktree_issue(layout, &mut issues);
+    push_interrupted_materialization_issue(layout, &mut issues);
     match verify_repository(layout) {
         Ok(verification) => {
             issues.push(DoctorIssue::info(

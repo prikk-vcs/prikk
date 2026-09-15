@@ -4,15 +4,16 @@
 //! repository-validated snapshot entries, refuses conflicting existing files, refuses symlinked
 //! parents/targets, and never removes files.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
 
 use crate::DEFAULT_ACTIVE_NAME;
 use crate::checkout::load_snapshot_checkout;
 use crate::foundation::fsutil::{
-    ensure_directory_required, read_file_if_exists, set_regular_file_mode_required,
-    stat_file_state_if_exists, sync_directory_required, write_worktree_file_atomically,
+    EntryKind, ensure_directory_required, inspect_entry, read_file_if_exists, read_file_required,
+    set_regular_file_mode_required, stat_file_state_if_exists, sync_directory_required,
+    write_worktree_file_atomically,
 };
 use crate::foundation::layout::RepositoryLayout;
 use crate::lock::ActiveLock;
@@ -20,7 +21,7 @@ use crate::patch_replay::read::{files_to_replay_manifest, replay_state_from_snap
 use crate::patch_replay::{ReplayManifest, ReplayManifestEntry};
 use crate::path::join_repo_path_to_root;
 use crate::worktree_marker::{
-    clear_worktree_dirty, mark_worktree_dirty, mark_worktree_provisional,
+    DIRTY_MARKER_ROUTE, clear_worktree_dirty, mark_worktree_dirty, mark_worktree_provisional,
 };
 
 /// Result of an opt-in snapshot worktree materialization.
@@ -75,6 +76,9 @@ pub fn materialize_snapshot_checkout(
     // the marker cannot interleave with this append. The marker is durable before the first write; a
     // crash between the two leaves it set, which fails closed.
     let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    // Checkout-refusal round §2.1: every conflict refuses here, before the provisional marker and the
+    // dirty marker, so a refused materialization writes nothing at all.
+    refuse_manifest_conflicts(layout, &manifest)?;
     let provisional = !crate::verified_blocks::load_verified_blocks(layout).contains(&block_id);
     if provisional {
         mark_worktree_provisional(layout, ref_name, block_id)?;
@@ -111,6 +115,10 @@ pub(crate) fn materialize_replay_manifest_entries(
     layout: &RepositoryLayout,
     manifest: &ReplayManifest,
 ) -> Result<ManifestMaterializationReport> {
+    #[cfg(test)]
+    if let Some(change) = BETWEEN_PLAN_AND_WRITE.with(|slot| slot.borrow_mut().take()) {
+        change();
+    }
     let mut written_files = 0_usize;
     let mut unchanged_files = 0_usize;
     for entry in &manifest.files {
@@ -135,10 +143,14 @@ fn materialize_replay_entry(
     ensure_parent_directory(layout, entry.path.as_str())?;
     let relative = Path::new(entry.path.as_str());
     if let Some(current) = read_file_if_exists(layout.worktree_mutation_root(), relative)? {
+        // The second guard (checkout-refusal round §2.2). Every caller ran `refuse_manifest_conflicts`
+        // first, so a difference here means the file changed during the checkout. The dirty marker
+        // stays set, correctly: the worktree is partly written (RFC 102).
         if current != entry.bytes {
-            return Err(PrikkError::Integrity(format!(
-                "refusing to overwrite existing file with different content: {}",
-                target.display()
+            return Err(PrikkError::Precondition(format!(
+                "{} changed during the checkout, so the worktree is partly written; move that file \
+                 aside, then {DIRTY_MARKER_ROUTE}",
+                entry.path.as_str()
             )));
         }
         // `stat.mode` is `None` on a platform with no observable POSIX mode (DC-87 §3.3/§4.3), in
@@ -184,4 +196,79 @@ fn ensure_target_is_inside_root(root: &Path, target: &Path) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Checkout-refusal round §2.1, the one planner: a pure pass over every manifest entry, applying the
+/// checks `materialize_replay_entry` applies, before any marker and any write. Every conflict is
+/// named, not the first. A path escaping the root stays `Integrity`: it is not a user state.
+///
+/// Callers: `--patch-materialize`, `--patch-materialize-delete` (`patch_checkout.rs`) and
+/// `--snapshot-materialize` (above). `branch switch` keeps its own refusal 4: its rule differs, since it
+/// may replace a file that still matches the branch being left.
+pub(crate) fn refuse_manifest_conflicts(
+    layout: &RepositoryLayout,
+    manifest: &ReplayManifest,
+) -> Result<()> {
+    let root = layout.root();
+    let mut conflicts = Vec::new();
+    for entry in &manifest.files {
+        let target = join_repo_path_to_root(&entry.path, root);
+        ensure_target_is_inside_root(root, &target)?;
+        if let Some(conflict) =
+            entry_conflict(layout, Path::new(entry.path.as_str()), &entry.bytes)?
+        {
+            conflicts.push(format!("{} ({conflict})", entry.path.as_str()));
+        }
+    }
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    Err(PrikkError::Precondition(format!(
+        "refusing to materialize: {} path(s) in the way: {}; move them aside, or commit them on \
+         their own branch, and run the checkout again (nothing was written)",
+        conflicts.len(),
+        conflicts.join(", ")
+    )))
+}
+
+/// Why writing `bytes` at `relative` would refuse, if it would: a parent that is a symlink or not a
+/// directory, walked from the top so no read follows a link, or a target that is not a regular file or
+/// holds other bytes.
+fn entry_conflict(
+    layout: &RepositoryLayout,
+    relative: &Path,
+    bytes: &[u8],
+) -> Result<Option<&'static str>> {
+    let root = layout.worktree_mutation_root();
+    let mut ancestor = PathBuf::new();
+    for component in relative.parent().into_iter().flat_map(Path::components) {
+        ancestor.push(component);
+        match inspect_entry(root, &ancestor)? {
+            // Nothing below an absent directory exists; the write creates it.
+            None => return Ok(None),
+            Some(EntryKind::Directory) => {}
+            Some(EntryKind::Symlink) => return Ok(Some("a parent directory is a symlink")),
+            Some(_) => return Ok(Some("a parent path is not a directory")),
+        }
+    }
+    match inspect_entry(root, relative)? {
+        None => Ok(None),
+        Some(EntryKind::Regular) => Ok((read_file_required(root, relative)? != bytes)
+            .then_some("an existing file with different content")),
+        Some(EntryKind::Symlink) => Ok(Some("a symlink")),
+        Some(_) => Ok(Some("not a regular file")),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BETWEEN_PLAN_AND_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam, unreachable from production (checkout-refusal round §3): run `change` once, after the
+/// plan and before the first write of the next `materialize_replay_manifest_entries` on this thread.
+#[cfg(test)]
+pub(crate) fn between_plan_and_write_for_test(change: impl FnOnce() + 'static) {
+    BETWEEN_PLAN_AND_WRITE.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }

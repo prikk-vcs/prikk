@@ -947,7 +947,14 @@ fn dirty_worktree_marker_refuses_to_infer_deletion() {
         &mut generator,
         &test_signer(),
     );
-    assert!(refused.is_err());
+    // Checkout-refusal round §2.3: `Precondition`, naming a route that clears the marker.
+    let refused = format!("{:?}", refused.err());
+    assert!(refused.contains("Precondition("), "{refused}");
+    assert!(
+        refused.contains("prikk checkout --patch-materialize --ref <the current branch>")
+            && refused.contains("prikk branch switch <the current branch>"),
+        "{refused}"
+    );
 
     crate::worktree_marker::clear_worktree_dirty(&layout).unwrap();
     let mut generator = deterministic_generator();

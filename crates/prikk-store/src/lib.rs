@@ -254,6 +254,7 @@ pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout}
 pub use worktree_marker::{
     ProvisionalClearOutcome, ProvisionalWorktree, clear_provisional_marker_if_unchanged,
     ensure_worktree_replay_verified, provisional_marker_bytes, provisional_worktree,
+    worktree_materialization_interrupted,
 };
 pub use worktree_status::{
     QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,

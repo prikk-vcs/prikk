@@ -57,6 +57,20 @@ pub(crate) fn clear_worktree_dirty(layout: &RepositoryLayout) -> Result<()> {
     truncate_file_empty_required(layout.repository_mutation_root(), &relative)
 }
 
+/// The way out of a set dirty marker, for every refusal that names it (checkout-refusal round §2.3).
+/// Both routes run a whole materialization of the current branch, which clears the marker; both were
+/// measured to. The store never reads the current-branch pointer (RFC 151 §2.1), so the branch is named
+/// by `prikk status`, not here.
+pub(crate) const DIRTY_MARKER_ROUTE: &str = "run `prikk checkout --patch-materialize --ref <the current \
+     branch>` or `prikk branch switch <the current branch>` (`prikk status` names the current branch); \
+     either one writes the branch's files again and clears this";
+
+/// Whether a checkout or branch switch stopped part-way: the dirty marker (RFC 102) is set. After the
+/// checkout-refusal round only a crash or a change during the checkout sets it. For `status`.
+pub fn worktree_materialization_interrupted(layout: &RepositoryLayout) -> Result<bool> {
+    worktree_is_dirty(layout)
+}
+
 /// Return true when the worktree marker is dirty -- a prior materialization call did not complete,
 /// and commit-authoring must not infer deletion from worktree absence until the worktree is
 /// re-verified against its baseline. A missing marker file (a repository initialized before this

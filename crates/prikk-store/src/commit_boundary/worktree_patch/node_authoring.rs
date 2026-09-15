@@ -317,11 +317,13 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // until the worktree has been re-verified against its baseline. Checked before any worktree
     // read below, not only before the deletion loop specifically, since nothing here re-verifies.
     if worktree_is_dirty(layout).map_err(AuthorError::Store)? {
-        return Err(AuthorError::Store(PrikkError::Integrity(
-            "worktree materialization was interrupted; the worktree must be re-verified against \
-             its baseline before committing (re-run checkout materialization to complete it)"
-                .to_string(),
-        )));
+        // Checkout-refusal round §2.3: a user state with a way out, so `Precondition`, and the route
+        // it names is one that clears the marker.
+        return Err(AuthorError::Store(PrikkError::Precondition(format!(
+            "worktree materialization was interrupted, so the worktree is not verified against its \
+             baseline and nothing can be committed; {}",
+            crate::worktree_marker::DIRTY_MARKER_ROUTE
+        ))));
     }
 
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);

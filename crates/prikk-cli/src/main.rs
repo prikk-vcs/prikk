@@ -497,6 +497,16 @@ fn run_status(format_json: bool) -> std::result::Result<(), CliError> {
             provisional.block_id, provisional.ref_name
         );
     }
+    // Checkout-refusal round §2.4: `status` reports a checkout or switch that stopped part-way.
+    if prikk_store::worktree_materialization_interrupted(&layout).map_err(|err| err.to_string())? {
+        let branch = current_branch::displayed_current_branch(&layout)
+            .unwrap_or_else(|| "<the current branch>".to_string());
+        println!(
+            "interrupted materialization: a checkout or branch switch stopped part-way; move aside \
+             any file it named, then run prikk checkout --patch-materialize --ref {branch} or prikk \
+             branch switch {branch}"
+        );
+    }
     // DC-66 criterion 7: report the queued patch count and the ref the queue targets, distinct from
     // `replay.records.len()` (a raw count with no ownership) and `heads/main RefState` (the last
     // *sealed* state, not what an active queue is targeting).
@@ -551,6 +561,8 @@ fn run_status_json() -> std::result::Result<(), CliError> {
         .read_current_ref_state_id("heads/main")
         .map_err(|err| err.to_string())?;
     let provisional = prikk_store::provisional_worktree(&layout).map_err(|err| err.to_string())?;
+    let interrupted = prikk_store::worktree_materialization_interrupted(&layout)
+        .map_err(|err| err.to_string())?;
 
     if replay.records.is_empty() {
         print_status_json(
@@ -560,6 +572,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
             main_ref,
             current_branch::displayed_current_branch(&layout).as_deref(),
             provisional.as_ref(),
+            interrupted,
             None,
             None,
             &[],
@@ -594,6 +607,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
         main_ref,
         current_branch::displayed_current_branch(&layout).as_deref(),
         provisional.as_ref(),
+        interrupted,
         Some(&target),
         Some((&threshold_status, thresholds.warn, thresholds.limit)),
         &patches,

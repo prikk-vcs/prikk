@@ -14,7 +14,7 @@ use crate::foundation::fsutil::{
 use crate::foundation::layout::RepositoryLayout;
 use crate::patch_replay::{PatchReplayDeletedFile, SnapshotAnchorFallback};
 use crate::path::join_repo_path_to_root;
-use crate::worktree::materialize_replay_manifest_entries;
+use crate::worktree::{materialize_replay_manifest_entries, refuse_manifest_conflicts};
 use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty};
 
 /// Result of an opt-in patch replay materialization.
@@ -174,11 +174,21 @@ fn materialize_patch_checkout_inner(
         crate::patch_replay::replay_for_verified_worktree_write(layout, ref_name)?;
     let deletion_analysis = analyze_deletions(layout, &snapshot.deleted_files)?;
     if delete_removed && !deletion_analysis.conflicts.is_empty() {
-        return Err(PrikkError::Integrity(format!(
-            "refusing checkout deletion because {} candidate(s) are unsafe",
-            deletion_analysis.conflicts.len()
+        // Checkout-refusal round §2.3: the user's own files, so `Precondition`, naming each one.
+        return Err(PrikkError::Precondition(format!(
+            "refusing checkout deletion because {} candidate(s) are unsafe: {}; nothing was written",
+            deletion_analysis.conflicts.len(),
+            deletion_analysis
+                .conflicts
+                .iter()
+                .map(|conflict| format!("{} ({})", conflict.path, conflict.reason))
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     }
+    // Checkout-refusal round §2.1: every write conflict refuses before the dirty marker below, so a
+    // refused checkout writes nothing.
+    refuse_manifest_conflicts(layout, &snapshot.manifest)?;
 
     // RFC 102 Stage 1: brackets the write phase *and* the deletion phase in one dirty/clean cycle,
     // deliberately, not just the writes. `apply_deletions`' own targets are precondition-verified

@@ -63,6 +63,7 @@ pub(crate) fn print_status_json(
     heads_main_ref_state: Option<ObjectId>,
     current_branch: Option<&str>,
     provisional: Option<&prikk_store::ProvisionalWorktree>,
+    interrupted_materialization: bool,
     queue_target: Option<&QueueTarget>,
     threshold: Option<(&QueueThresholdStatus, usize, usize)>,
     patches: &[QueuedPatchEntry],
@@ -105,6 +106,20 @@ pub(crate) fn print_status_json(
             escape_json_string(&provisional.block_id)
         )),
         None => json.push_str("  \"provisional_worktree\": null,\n"),
+    }
+    // Checkout-refusal round §2.4: additive within `status-report-v1`; `null` when no checkout or
+    // switch stopped part-way, never an omitted field.
+    if interrupted_materialization {
+        let branch = current_branch.unwrap_or("<the current branch>");
+        json.push_str(&format!(
+            "  \"interrupted_materialization\": {{\"routes\": [{}, {}]}},\n",
+            escape_json_string(&format!(
+                "prikk checkout --patch-materialize --ref {branch}"
+            )),
+            escape_json_string(&format!("prikk branch switch {branch}"))
+        ));
+    } else {
+        json.push_str("  \"interrupted_materialization\": null,\n");
     }
     json.push_str("  \"queue\": {\n");
     json.push_str(&format!("    \"count\": {},\n", patches.len()));
