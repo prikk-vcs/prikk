@@ -198,7 +198,8 @@ fn a_cfg_test_subtree_is_never_walked() {
         .expect("prikk-store");
     // 130 graph nodes plus `lib.rs`, which is a file the gate weighs and not a node the graph has.
     // RFC 151 increment 2 added `branch_switch.rs`, the store's one new production file: 131 -> 132.
-    assert_eq!(store.production_files, 132);
+    // The DC-75 two-edits fix added `patch_algebra/fold.rs`: 132 -> 133.
+    assert_eq!(store.production_files, 133);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.
