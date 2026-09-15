@@ -238,6 +238,7 @@ item is open.
 <!-- open-work-index:start -->
 
 - [`153-content-diff.md`](rfcs/proposed/153-content-diff.md) — `prikk diff`: two points of history or the worktree against its baseline; owner approved the direction 2026-09-13; proposed as the theme after 0.43
+- [`154-shared-branch-adoption.md`](rfcs/proposed/154-shared-branch-adoption.md) — a branch several maintainers advance: adopting a trusted, fast-forward ref advance without re-signing (planeter 2026-09-15); direction and scheduling are the owner's
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here
