@@ -315,14 +315,18 @@ fn a_folded_conflict_names_the_original_range() {
     let (baseline, evidence) = text_baseline();
     let t1: &[u8] = b"alpha BETA gamma";
     let t2: &[u8] = b"alpha BETA GAMMA";
+    // The run on node 1 is interleaved with another node's operation, so the folded sequence
+    // `[create, net edit]` puts the net edit at folded index 1 while its run starts at original 0.
     let left = [
-        create_g(1),
-        edit_text_v2(2, node(1), T0, t1),
+        edit_text_v2(1, node(1), T0, t1),
+        create_g(2),
         edit_text_v2(3, node(1), t1, t2),
     ];
     // The same net change from the baseline: the same span, so a true overlap (R2).
     let right = [edit_text_v2(4, node(1), T0, t2)];
 
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left);
+    assert_eq!(folded.origins, vec![(1, 1), (0, 2)], "fixture sanity");
     let first = report(&baseline, &evidence, &left, &right);
     assert_eq!(first.outcome, MergeEvidenceOutcome::Conflict);
     let [item] = first.items.as_slice() else {
@@ -334,14 +338,14 @@ fn a_folded_conflict_names_the_original_range() {
     );
     assert_eq!(
         (item.operation_index, item.op_seq),
-        (Some(1), Some(2)),
+        (Some(0), Some(1)),
         "the folded operation is named by the first original operation of its run"
     );
     assert_eq!(
         (item.peer_operation_index, item.peer_op_seq),
         (Some(0), Some(4))
     );
-    assert_eq!(first.left_sequence.folded_through, BTreeMap::from([(1, 2)]));
+    assert_eq!(first.left_sequence.folded_through, BTreeMap::from([(0, 2)]));
     assert_eq!(first.left_sequence.operation_count, 3);
     assert_eq!(
         first,
