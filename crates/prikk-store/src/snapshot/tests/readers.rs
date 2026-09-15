@@ -533,3 +533,54 @@ fn a_tampered_anchor_falls_back_to_genesis_and_names_the_block() -> prikk_error:
     let _ = std::fs::remove_dir_all(twin_root);
     Ok(())
 }
+
+/// RFC 136 increment 2b §0: the test-support fixture does what it says. A lying snapshot passes the
+/// loader, because it recomputes to the signed root, and only `verify`'s replay shows the lie. A damaged
+/// one fails the loader.
+#[test]
+fn the_snapshot_fixture_lies_only_where_replay_can_see_it() -> prikk_error::Result<()> {
+    use crate::rfc111_seal_simulation::{
+        SnapshotFixture, publish_snapshot_fixture_for_test_support,
+    };
+
+    let maintainer =
+        crate::Ed25519MaintainerSigner::from_seed("snapshot-fixture-maintainer", &[0x3C; 32])?;
+    let lying_root = unique_temp_dir("snapshot-fixture-lying");
+    let lying = RepositoryLayout::init(lying_root.clone())?;
+    let lying_block =
+        publish_snapshot_fixture_for_test_support(&lying, &maintainer, SnapshotFixture::Lying)?;
+    let store = FileObjectStore::new(lying.clone());
+    let envelope = crate::ObjectReader::read_typed(&store, lying_block, ObjectType::Block)?
+        .ok_or_else(|| PrikkError::Integrity("fixture block missing".to_string()))?;
+    let payload = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+    assert!(
+        crate::snapshot::load_block_snapshot(&store, lying_block, &payload)?.is_some(),
+        "the lying snapshot passes the loader"
+    );
+    let verification = verify_repository(&lying)?;
+    assert!(
+        verification
+            .block_state_outcomes
+            .iter()
+            .any(|outcome| outcome.block_id == lying_block
+                && !matches!(
+                    outcome.status,
+                    crate::block_state::BlockStateStatus::Verified
+                )),
+        "verify's replay reports the lying block: {:?}",
+        verification.block_state_outcomes
+    );
+
+    let damaged_root = unique_temp_dir("snapshot-fixture-damaged");
+    let damaged = RepositoryLayout::init(damaged_root.clone())?;
+    let damaged_block =
+        publish_snapshot_fixture_for_test_support(&damaged, &maintainer, SnapshotFixture::Damaged)?;
+    let store = FileObjectStore::new(damaged.clone());
+    let envelope = crate::ObjectReader::read_typed(&store, damaged_block, ObjectType::Block)?
+        .ok_or_else(|| PrikkError::Integrity("fixture block missing".to_string()))?;
+    let payload = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+    assert!(crate::snapshot::load_block_snapshot(&store, damaged_block, &payload).is_err());
+    let _ = std::fs::remove_dir_all(lying_root);
+    let _ = std::fs::remove_dir_all(damaged_root);
+    Ok(())
+}

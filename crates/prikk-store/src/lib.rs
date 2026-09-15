@@ -206,6 +206,8 @@ pub use rename_declaration::{
 };
 #[cfg(feature = "test-support")]
 pub use rfc111_seal_simulation::simulate_one_seal_for_test_support;
+#[cfg(feature = "test-support")]
+pub use rfc111_seal_simulation::{SnapshotFixture, publish_snapshot_fixture_for_test_support};
 pub use rollback::draft::{RollbackDraftReport, append_rollback_draft};
 pub use rollback::preview::{
     RollbackPreviewChange, RollbackPreviewChangeKind, RollbackPreviewPlan, prepare_rollback_preview,

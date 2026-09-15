@@ -381,3 +381,137 @@ fn verify_whose_only_finding_is_publication_trust_clears_the_marker() {
     assert!(!stdout(&run(&repo, &["status"])).contains("provisional worktree"));
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+// ---- RFC 136 increment 2b §0: the carried items ------------------------------------------------------
+
+/// `lifecycle-cache-divergence` no longer keeps the marker (2a review, ruling 1): a deliberately stale
+/// lifecycle cache plus a set marker, and `verify` reports the divergence yet clears the marker.
+#[test]
+fn a_stale_lifecycle_cache_does_not_keep_the_marker() {
+    let repo = support::unique_repo("rfc136-2b-stale-lifecycle-cache");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
+    std::fs::write(repo.join("b.txt"), b"bravo\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "genesis"),
+        "commit genesis",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "seal genesis");
+    std::fs::write(repo.join("a.txt"), b"alpha, edited\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "second"),
+        "commit second",
+    );
+
+    // dc64's recipe: flip the body's last byte and recompute the checksum, so the cache decodes but
+    // disagrees with an independent replay.
+    let cache_path = repo.join(".prikk/cache/lifecycle-state.v1");
+    let mut bytes = std::fs::read(&cache_path).unwrap();
+    const MAGIC: &[u8] = b"PRIKK-LIFECYCLE-INCREMENTAL-CACHE-v1\0";
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    let checksum = prikk_hash::sha256(&bytes[MAGIC.len() + 32..]);
+    bytes[MAGIC.len()..MAGIC.len() + 32].copy_from_slice(&checksum);
+    std::fs::write(&cache_path, &bytes).unwrap();
+
+    // The snapshot holds the genesis a.txt; take the edited one out of its way.
+    std::fs::remove_file(repo.join("a.txt")).unwrap();
+    materialize(&repo);
+
+    let verify = run(&repo, &["verify"]);
+    assert!(
+        stdout(&verify).contains("lifecycle-cache divergences: 1"),
+        "fixture sanity: the cache diverges\n{}",
+        stdout(&verify)
+    );
+    assert!(
+        stdout(&verify).contains("provisional worktree: replay-verified; marker cleared"),
+        "{}",
+        stdout(&verify)
+    );
+    assert!(!stdout(&run(&repo, &["status"])).contains("provisional worktree"));
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+fn fixture_repo(tag: &str, fixture: prikk_store::SnapshotFixture) -> (PathBuf, String) {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    let layout = prikk_store::RepositoryLayout::open(repo.clone()).unwrap();
+    let maintainer =
+        Ed25519MaintainerSigner::from_seed("snapshot-fixture-maintainer", &[0x3C; 32]).unwrap();
+    let block =
+        prikk_store::publish_snapshot_fixture_for_test_support(&layout, &maintainer, fixture)
+            .unwrap();
+    (repo, block.to_string())
+}
+
+/// 2a's read-only fallback, on the binary (2a review, ruling 2): a damaged snapshot at the anchor
+/// leaves stdout equal to the same history with no snapshot, puts one warning line on stderr naming
+/// the block and `prikk verify`, and exits 0.
+#[test]
+fn a_damaged_anchor_leaves_stdout_unchanged_and_warns_once_on_the_binary() {
+    let (damaged, damaged_block) = fixture_repo(
+        "rfc136-2b-fallback-damaged",
+        prikk_store::SnapshotFixture::Damaged,
+    );
+    let (twin, twin_block) = fixture_repo(
+        "rfc136-2b-fallback-twin",
+        prikk_store::SnapshotFixture::None,
+    );
+    let normalize = |output: &Output, repo: &Path, block: &str| {
+        stdout(output)
+            .replace(&repo.join(".prikk").display().to_string(), "<repo>")
+            .replace(block, "<block>")
+    };
+    for args in [
+        vec!["checkout", "--patch-plan"],
+        vec![
+            "checkout",
+            "--patch-plan",
+            "--format",
+            "json",
+            "--content-path",
+            "a.txt",
+        ],
+        vec!["checkout", "--patch-delete-plan"],
+    ] {
+        let from_damaged = run(&damaged, &args);
+        let from_twin = run(&twin, &args);
+        assert_eq!(
+            from_damaged.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            stderr(&from_damaged)
+        );
+        assert_eq!(
+            from_twin.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            stderr(&from_twin)
+        );
+        assert_eq!(
+            normalize(&from_damaged, &damaged, &damaged_block),
+            normalize(&from_twin, &twin, &twin_block),
+            "{args:?}: stdout equals the no-snapshot twin"
+        );
+        let warning = stderr(&from_damaged);
+        assert_eq!(
+            warning.lines().count(),
+            1,
+            "{args:?}: one warning line: {warning}"
+        );
+        assert!(
+            warning.starts_with(&format!(
+                "warning: the snapshot of Block {damaged_block} failed validation"
+            )) && warning.contains("prikk verify"),
+            "{args:?}: {warning}"
+        );
+        assert!(
+            stderr(&from_twin).is_empty(),
+            "{args:?}: {}",
+            stderr(&from_twin)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&damaged);
+    let _ = std::fs::remove_dir_all(&twin);
+}

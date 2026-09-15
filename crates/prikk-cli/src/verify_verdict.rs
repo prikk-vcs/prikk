@@ -95,9 +95,11 @@ pub(crate) const VERDICT_CONDITIONS: &[VerdictCondition] = &[
         id: "lifecycle-cache-divergence",
         message: "lifecycle-state cache disagrees with an independent replay",
         check: RepositoryVerification::has_lifecycle_cache_divergence,
-        // Counted, conservatively: the lifecycle cache holds replay-derived block state, and a
-        // disagreement with an independent replay is a block-state question left open.
-        blocks_provisional_clear: true,
+        // Ruled at 2a's review (RFC 136 2b §0): not counted. The DC-64 cache is rebuildable and never
+        // authoritative, a divergence is a cache fault, and verify's own replay decides block state.
+        // Counting it would keep the marker set for a reason unrelated to the snapshot, with a
+        // recovery no user would find.
+        blocks_provisional_clear: false,
     },
     VerdictCondition {
         id: "active-wal-ordering",
