@@ -11,6 +11,10 @@
 //!   `ReplaceBinary` if the content changed plus a `ChangePerm` if the mode changed, or one `DeleteNode`
 //!   of the baseline content if the run ends in a delete. Nothing else folds: renames and symlinks stay
 //!   deferred, and create-then-delete never folds (R7: the run holds a path for part of the side).
+//! - **Create then edits (ruling R4):** a text `CreateFile` of a node the baseline does not hold, then
+//!   only `EditText`s on it, is one `CreateFile` of the side's final content. That content id is never
+//!   stored and never read: its kind comes from the original create's Blob, through [`FoldEvidence`].
+//!   A create that does not persist to the run's end is create-then-delete, which never folds (R7).
 //! - **A net no-op** (the run restores the baseline) drops the node from the side, but only when the
 //!   other side has no operation on that node (handoff §7.2); otherwise that run is judged as authored.
 //! - **The guard:** a fold is used only when replaying the folded side reproduces replaying the
@@ -29,7 +33,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use prikk_object::{NodeId, NodeKind};
+use prikk_object::{BlobKind, NodeId, NodeKind, ObjectId};
 
 use super::evidence_types::{Evidence, EvidenceScope, PatchAlgebraEvidence};
 use super::facts::operation_facts;
@@ -47,6 +51,8 @@ pub(super) struct FoldedSide {
     /// For each operation in `operations`, the first and last original index it stands for
     /// (equal for an operation that was not folded).
     pub(super) origins: Vec<(usize, usize)>,
+    /// The kind of each content id a folded create names, taken from the original create's Blob (R4).
+    pub(super) derived_kinds: BTreeMap<ObjectId, BlobKind>,
 }
 
 impl FoldedSide {
@@ -54,7 +60,54 @@ impl FoldedSide {
         Self {
             operations: operations.to_vec(),
             origins: (0..operations.len()).map(|index| (index, index)).collect(),
+            derived_kinds: BTreeMap::new(),
         }
+    }
+}
+
+/// Evidence for judging folded sides (R4(b)): a folded create's content id answers its kind from
+/// `derived_kinds`, so nothing asks the store about an id that was never stored. Every other question
+/// goes to the store's evidence unchanged.
+pub(super) struct FoldEvidence<'a, R> {
+    inner: &'a R,
+    derived_kinds: BTreeMap<ObjectId, BlobKind>,
+}
+
+impl<'a, R: PatchAlgebraEvidence> FoldEvidence<'a, R> {
+    pub(super) fn new(inner: &'a R, sides: [&FoldedSide; 2]) -> Self {
+        Self {
+            inner,
+            derived_kinds: sides
+                .iter()
+                .flat_map(|side| side.derived_kinds.iter().map(|(id, kind)| (*id, *kind)))
+                .collect(),
+        }
+    }
+}
+
+impl<R: PatchAlgebraEvidence> PatchAlgebraEvidence for FoldEvidence<'_, R> {
+    fn baseline_text(
+        &self,
+        scope: EvidenceScope,
+        node_id: NodeId,
+        blob_id: ObjectId,
+    ) -> Evidence<Vec<u8>> {
+        self.inner.baseline_text(scope, node_id, blob_id)
+    }
+
+    fn blob_kind(&self, scope: EvidenceScope, blob_id: ObjectId) -> Evidence<BlobKind> {
+        match self.derived_kinds.get(&blob_id) {
+            Some(kind) => Evidence::Known(*kind),
+            None => self.inner.blob_kind(scope, blob_id),
+        }
+    }
+
+    fn blob_content(
+        &self,
+        scope: EvidenceScope,
+        blob_id: ObjectId,
+    ) -> Evidence<(BlobKind, Vec<u8>)> {
+        self.inner.blob_content(scope, blob_id)
     }
 }
 
@@ -109,6 +162,7 @@ fn fold<R: PatchAlgebraEvidence>(
     let mut nets: BTreeMap<usize, (usize, Net)> = BTreeMap::new();
     let mut consumed = BTreeSet::new();
     let mut folded_deletes = BTreeSet::new();
+    let mut derived_kinds = BTreeMap::new();
     for (node_id, indices) in &by_node {
         let (Some(&first), Some(&last)) = (indices.first(), indices.last()) else {
             continue;
@@ -120,8 +174,15 @@ fn fold<R: PatchAlgebraEvidence>(
             .iter()
             .filter_map(|index| operations.get(*index))
             .collect();
-        let Some(net) = net_effect(baseline, evidence, &original, *node_id, &run) else {
-            continue;
+        let net = match create_then_edits(baseline, evidence, candidate_scope, &original, &run) {
+            Some((create, content_id, kind)) => {
+                derived_kinds.insert(content_id, kind);
+                Net::Replace(vec![create])
+            }
+            None => match net_effect(baseline, evidence, &original, *node_id, &run) {
+                Some(net) => net,
+                None => continue,
+            },
         };
         let other_leaves_node_alone = other_nodes
             .as_ref()
@@ -146,6 +207,7 @@ fn fold<R: PatchAlgebraEvidence>(
     let mut folded = FoldedSide {
         operations: Vec::new(),
         origins: Vec::new(),
+        derived_kinds,
     };
     for (index, operation) in operations.iter().enumerate() {
         if let Some((first, net)) = nets.remove(&index) {
@@ -160,9 +222,60 @@ fn fold<R: PatchAlgebraEvidence>(
             folded.origins.push((index, index));
         }
     }
-    let replayed =
-        replay_operations(baseline, evidence, candidate_scope, &folded.operations).ok()?;
+    let fold_evidence = FoldEvidence::new(evidence, [&folded, &folded]);
+    let replayed = replay_operations(
+        baseline,
+        &fold_evidence,
+        candidate_scope,
+        &folded.operations,
+    )
+    .ok()?;
     equivalent(&original, &replayed, &folded_deletes).then_some(folded)
+}
+
+/// Ruling R4: a text `CreateFile` of a node the baseline does not hold, then only `EditText`s on it
+/// (so the create persists to the run's end), is one `CreateFile` of the side's final content. That
+/// content id is derived from the replayed text and never read; its kind is the original create's
+/// stored Blob kind, which `EditText` never changes.
+fn create_then_edits<R: PatchAlgebraEvidence>(
+    baseline: &NodeLifecycleState,
+    evidence: &R,
+    candidate_scope: EvidenceScope,
+    original: &OracleState,
+    run: &[&DecodedPatchOperation],
+) -> Option<(DecodedPatchOperation, ObjectId, BlobKind)> {
+    let (first, edits) = run.split_first()?;
+    let DecodedOperationKind::CreateFile {
+        path,
+        node_id,
+        blob_id,
+        mode,
+    } = &first.kind
+    else {
+        return None;
+    };
+    if edits.is_empty()
+        || baseline.live_node(node_id).is_some()
+        || !edits
+            .iter()
+            .all(|operation| matches!(operation.kind, DecodedOperationKind::EditText { .. }))
+    {
+        return None;
+    }
+    let Evidence::Known(BlobKind::Text) = evidence.blob_kind(candidate_scope, *blob_id) else {
+        return None;
+    };
+    let content_id = text_span::text_blob_id(original.text(node_id)?).ok()?;
+    let create = DecodedPatchOperation {
+        op_seq: first.op_seq,
+        kind: DecodedOperationKind::CreateFile {
+            path: path.clone(),
+            node_id: *node_id,
+            blob_id: content_id,
+            mode: *mode,
+        },
+    };
+    Some((create, content_id, BlobKind::Text))
 }
 
 /// The baseline-relative operations a run on `node_id` amounts to, or `None` when the run is not a

@@ -495,3 +495,80 @@ fn a_create_then_delete_never_folds() {
         other => panic!("expected a sequence-internal deferral, got {other:?}"),
     }
 }
+
+/// Ruling R4. The resolver holds only the original create's Blob. Were anything to read the folded
+/// create's content id, it would be missing required evidence and the report an evidence failure.
+#[test]
+fn a_create_then_edits_is_judged_as_one_create_of_the_final_content() {
+    let (baseline, _) = text_baseline();
+    let created = text_span::text_blob_id(b"new").expect("blob id");
+    let evidence = TestTextResolver::new([(node(1), T0.to_vec())]).with_blob(
+        created,
+        BlobKind::Text,
+        b"new".to_vec(),
+    );
+    let left = [
+        create_file(1, "h.txt", node(7), created, MODE_REGULAR),
+        edit_text(2, node(7), b"new", b"NEW"),
+        edit_text(3, node(7), b"NEW", b"NEW!"),
+    ];
+    let right = [edit_text(4, node(1), T0, b"alpha BETA gamma")];
+
+    assert!(
+        matches!(
+            check_confluence_result(&baseline, &evidence, SCOPE, &left, &right),
+            Ok(ConfluenceResult::Unknown {
+                reason: UnknownReason::SequenceInternalDependencyDeferred
+            })
+        ),
+        "fixture sanity: unfolded, the side is deferred"
+    );
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
+    assert_eq!(
+        folded.operations,
+        vec![create_file(
+            1,
+            "h.txt",
+            node(7),
+            text_span::text_blob_id(b"NEW!").expect("blob id"),
+            MODE_REGULAR
+        )]
+    );
+    assert_eq!(folded.origins, vec![(0, 2)]);
+    let report = report(&baseline, &evidence, &left, &right);
+    assert_eq!(report.outcome, MergeEvidenceOutcome::Confluent);
+    assert_eq!(
+        report.left_sequence.folded_through,
+        BTreeMap::from([(0, 2)])
+    );
+}
+
+/// R4(a): the fallback reads a created node's content only as `Text`. A create whose stored Blob is
+/// binary cannot be edited as text: the replay refuses, and nothing folds.
+#[test]
+fn the_created_content_fallback_refuses_a_non_text_blob() {
+    let (baseline, _) = text_baseline();
+    let created = blob(8);
+    // The kind evidence says text, so the create replays as a text node; the stored content says
+    // binary. The fallback trusts only the content's own kind.
+    let evidence = TestTextResolver::new([(node(1), T0.to_vec())])
+        .with_blob(created, BlobKind::Binary, b"new".to_vec())
+        .with_blob_kind_evidence(created, Evidence::Known(BlobKind::Text))
+        .with_blob(blob(2), BlobKind::Binary, b"g".to_vec());
+    let left = [
+        create_file(1, "h.txt", node(7), created, MODE_REGULAR),
+        edit_text(2, node(7), b"new", b"NEW"),
+    ];
+    let right = [create_g(3)];
+
+    assert_eq!(
+        fold_side(&baseline, &evidence, SCOPE, &left, &right).operations,
+        left.to_vec()
+    );
+    assert!(matches!(
+        replay_operations(&baseline, &evidence, SCOPE, &left),
+        Err(super::super::replay_oracle::OracleFailure::Evidence(
+            EvidenceError::WrongBlobKind { .. }
+        ))
+    ));
+}

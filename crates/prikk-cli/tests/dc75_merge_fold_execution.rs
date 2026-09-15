@@ -493,3 +493,16 @@ fn a_create_then_delete_refuses_both_ways() {
         ]
     );
 }
+
+// ---- §7.3 R4: create then edit, both directions -----------------------------------------------------
+
+#[test]
+fn a_create_then_edits_execute_both_ways() {
+    assert_fold_kind_executes("create-then-edit", || {
+        vec![
+            write("h.txt", "h 0\n"),
+            write("h.txt", "h 1\n"),
+            write("h.txt", "h 2\n"),
+        ]
+    });
+}

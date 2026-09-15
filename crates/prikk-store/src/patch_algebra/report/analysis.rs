@@ -18,7 +18,7 @@ use crate::patch_algebra::commutation::check_confluence;
 #[cfg(test)]
 use crate::patch_algebra::commutation::commute_pair;
 use crate::patch_algebra::evidence_types::{EvidenceScope, PatchAlgebraEvidence};
-use crate::patch_algebra::fold::{FoldedSide, fold_side};
+use crate::patch_algebra::fold::{FoldEvidence, FoldedSide, fold_side};
 #[cfg(test)]
 use crate::patch_algebra::types::{CommutationAnalysisResult, CommutationResult};
 use crate::patch_algebra::types::{ConfluenceAnalysisResult, ConfluenceResult};
@@ -65,6 +65,7 @@ pub(crate) fn analyze_merge_evidence<R: PatchAlgebraEvidence>(
     let mut right_sequence = right_sequence;
     left_sequence.folded_through = folded_ranges(&left_folded);
     right_sequence.folded_through = folded_ranges(&right_folded);
+    let fold_evidence = FoldEvidence::new(evidence, [&left_folded, &right_folded]);
     let mut report = report_from_analysis(
         baseline_block_id,
         replay_horizon,
@@ -72,7 +73,7 @@ pub(crate) fn analyze_merge_evidence<R: PatchAlgebraEvidence>(
         right_sequence,
         check_confluence(
             baseline,
-            evidence,
+            &fold_evidence,
             candidate_scope,
             &left_folded.operations,
             &right_folded.operations,

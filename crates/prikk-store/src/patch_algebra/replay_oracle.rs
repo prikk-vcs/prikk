@@ -53,13 +53,14 @@ where
         texts: BTreeMap::new(),
     };
     for operation in operations {
-        apply_operation(&mut oracle, evidence, candidate_scope, operation)?;
+        apply_operation(&mut oracle, baseline, evidence, candidate_scope, operation)?;
     }
     Ok(oracle)
 }
 
 fn apply_operation<R: PatchAlgebraEvidence>(
     oracle: &mut OracleState,
+    baseline: &NodeLifecycleState,
     evidence: &R,
     candidate_scope: EvidenceScope,
     operation: &DecodedPatchOperation,
@@ -117,7 +118,9 @@ fn apply_operation<R: PatchAlgebraEvidence>(
             *old_blob_id,
             *new_blob_id,
         ),
-        DecodedOperationKind::EditText { .. } => apply_text_edit(oracle, evidence, operation),
+        DecodedOperationKind::EditText { .. } => {
+            apply_text_edit(oracle, baseline, evidence, candidate_scope, operation)
+        }
         DecodedOperationKind::RenamePath { .. }
         | DecodedOperationKind::CreateSymlink { .. }
         | DecodedOperationKind::DeleteNode {
@@ -224,7 +227,9 @@ fn apply_replace_binary<R: PatchAlgebraEvidence>(
 
 fn apply_text_edit<R: PatchAlgebraEvidence>(
     oracle: &mut OracleState,
+    baseline: &NodeLifecycleState,
     evidence: &R,
+    candidate_scope: EvidenceScope,
     operation: &DecodedPatchOperation,
 ) -> Result<(), OracleFailure> {
     let DecodedOperationKind::EditText {
@@ -241,7 +246,7 @@ fn apply_text_edit<R: PatchAlgebraEvidence>(
     else {
         return Err(OracleFailure::Replay);
     };
-    let current_text = current_text(oracle, evidence, *node_id)?;
+    let current_text = current_text(oracle, baseline, evidence, candidate_scope, *node_id)?;
     let (start, end) = text_span::resolve_text_span(
         &current_text,
         old_span_text,
@@ -267,7 +272,9 @@ fn apply_text_edit<R: PatchAlgebraEvidence>(
 
 fn current_text<R: PatchAlgebraEvidence>(
     oracle: &mut OracleState,
+    baseline: &NodeLifecycleState,
     evidence: &R,
+    candidate_scope: EvidenceScope,
     node_id: NodeId,
 ) -> Result<Vec<u8>, OracleFailure> {
     if let Some(text) = oracle.texts.get(&node_id) {
@@ -283,6 +290,32 @@ fn current_text<R: PatchAlgebraEvidence>(
     let NodeContent::File { blob_id, .. } = live.content else {
         return Err(OracleFailure::Replay);
     };
+    // DC-75 two-edits handoff §7.3, R4(a): a node the baseline does not hold was created on this side,
+    // and its content is that create's stored Blob. Read with the caller's scope, and only as `Text`.
+    // This is the candidate `blob_content` read `create.rs` already makes, not a new kind of read.
+    if baseline.live_node(&node_id).is_none() {
+        return match evidence.blob_content(candidate_scope, blob_id) {
+            Evidence::Known((BlobKind::Text, text)) => {
+                oracle.texts.insert(node_id, text.clone());
+                Ok(text)
+            }
+            Evidence::Known((actual, _)) => {
+                Err(OracleFailure::Evidence(EvidenceError::WrongBlobKind {
+                    scope: candidate_scope,
+                    blob_id,
+                    expected: BlobKind::Text,
+                    actual,
+                }))
+            }
+            Evidence::Missing {
+                scope: EvidenceScope::UnsealedCandidateOptional,
+                ..
+            } => Err(OracleFailure::Unknown(
+                UnknownReason::MissingCandidateEvidence,
+            )),
+            other => Err(OracleFailure::Evidence(other.into_error())),
+        };
+    }
     match evidence.baseline_text(EvidenceScope::SealedBaselineRequired, node_id, blob_id) {
         Evidence::Known(text) => {
             oracle.texts.insert(node_id, text.clone());
