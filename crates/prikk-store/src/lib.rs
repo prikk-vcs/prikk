@@ -107,7 +107,8 @@ pub use bundle::{
     BundleExportReport, BundleImportOptions, BundleImportReport, BundleManifest,
     BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffect, BundlePreviewEffectKind,
     BundlePreviewReport, BundleScope, BundleVerifyReport, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, preview_bundle, verify_bundle,
+    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, preview_bundle,
+    preview_bundle_reporting_anchor, verify_bundle,
 };
 pub use checkout::{
     CheckoutMaterialization, CheckoutPlan, DEFAULT_CHECKOUT_REF, SnapshotCheckoutPlan,
@@ -158,7 +159,7 @@ pub use object_store::{
 pub use patch_checkout::{
     PatchDeletionConflict, PatchDeletionPlan, PatchMaterializationReport,
     materialize_patch_checkout, materialize_patch_checkout_with_deletions,
-    plan_patch_checkout_deletions,
+    plan_patch_checkout_deletions, plan_patch_checkout_deletions_reporting_anchor,
 };
 pub use patch_exchange::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification,
@@ -172,7 +173,9 @@ pub use patch_inverse::{
 };
 pub use patch_replay::{
     PatchPlanContent, PatchPlanContentEntry, PatchPlanContentReport, PatchPlanCoverage,
-    PatchReplayPlan, prepare_patch_plan_content_report, prepare_patch_replay_plan,
+    PatchReplayPlan, SnapshotAnchorFallback, prepare_patch_plan_content_report,
+    prepare_patch_plan_content_report_reporting_anchor, prepare_patch_replay_plan,
+    prepare_patch_replay_plan_reporting_anchor,
 };
 pub use patch_set_digest::{
     PatchSetDigest, PatchSetResolution, compute_patch_set_digest,

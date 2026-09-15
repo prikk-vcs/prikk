@@ -618,3 +618,232 @@ fn a_checkpoint_over_edited_text_checks_out_the_replayed_bytes_and_show_can_read
     );
     Ok(())
 }
+
+// ---- RFC 136 increment 2a: anchored read-only reports (§10.3c ruling 1, §10.3a ruling 5) --------------
+
+/// A binary file created on `seed`.
+fn create_binary(
+    sealer: &mut Sealer,
+    path: &str,
+    seed: u8,
+    bytes: &[u8],
+) -> Result<(OperationKind, ObjectId)> {
+    let envelope = ObjectEnvelope::unsigned(
+        ObjectType::Blob,
+        1,
+        BlobPayload::new(BlobKind::Binary, bytes.to_vec()).to_canonical_bytes()?,
+    );
+    let blob_id = sealer.store.write_object(&envelope)?;
+    sealer.modes.insert(seed, REGULAR);
+    Ok((
+        OperationKind::CreateFile(CreateFile {
+            path: path.to_string(),
+            node_id: node(seed),
+            blob_id,
+            mode: REGULAR,
+        }),
+        blob_id,
+    ))
+}
+
+/// A binary replacement of `seed`'s content `old` with `bytes`.
+fn replace_binary(
+    sealer: &mut Sealer,
+    seed: u8,
+    old: ObjectId,
+    bytes: &[u8],
+) -> Result<(OperationKind, ObjectId)> {
+    let envelope = ObjectEnvelope::unsigned(
+        ObjectType::Blob,
+        1,
+        BlobPayload::new(BlobKind::Binary, bytes.to_vec()).to_canonical_bytes()?,
+    );
+    let new_blob_id = sealer.store.write_object(&envelope)?;
+    Ok((
+        OperationKind::ReplaceBinary(prikk_object::ReplaceBinary {
+            node_id: node(seed),
+            old_blob_id: old,
+            new_blob_id,
+        }),
+        new_blob_id,
+    ))
+}
+
+/// 130 blocks, checkpoints at 1, 65 and 129: edits of `a.txt` across blocks, a `DeleteFile` of
+/// `old.txt` at 20 (before the checkpoint at 65), a rename at 30, a `chmod` at 40, and binary
+/// replacements at 50 (before the anchor) and 120 (after the checkpoint at 65).
+fn seal_anchor_history(sealer: &mut Sealer) -> Result<()> {
+    let (binary, mut binary_id) = create_binary(sealer, "bin.dat", 0xB1, b"\0binary 0")?;
+    let first = vec![
+        sealer.create("a.txt", 0xA1, b"alpha 0\n")?,
+        sealer.create("keep.txt", 0xA2, b"keep\n")?,
+        sealer.create("old.txt", 0xA3, b"old\n")?,
+        binary,
+    ];
+    sealer.seal(first)?;
+    let mut filler: u8 = 0;
+    while sealer.blocks.len() < 130 {
+        let number = sealer.blocks.len() + 1;
+        let op = match number {
+            20 => sealer.delete("old.txt", 0xA3)?,
+            30 => Sealer::rename(0xA2, "keep.txt", "renamed.txt"),
+            40 => sealer.chmod(0xA1, 0o100755),
+            50 | 120 => {
+                let bytes = format!("\0binary {number}");
+                let (op, id) = replace_binary(sealer, 0xB1, binary_id, bytes.as_bytes())?;
+                binary_id = id;
+                op
+            }
+            number if number % 5 == 0 => {
+                sealer.edit(0xA1, format!("alpha {number}\n").as_bytes())?
+            }
+            number => {
+                filler += 1;
+                sealer.create(&format!("f{number}.txt"), filler, b"filler\n")?
+            }
+        };
+        sealer.seal(vec![op])?;
+    }
+    Ok(())
+}
+
+/// §10.3a ruling 1 and §10.3c ruling 1: every read-only report anchored at a snapshot equals the same
+/// report replayed from genesis -- `checkout --patch-plan`, its content report, `--patch-delete-plan`
+/// and bundle preview. The counter proves each one did anchor.
+#[test]
+fn anchored_read_only_reports_equal_the_same_reports_replayed_from_genesis() -> Result<()> {
+    use crate::patch_replay::anchor::{snapshot_anchor_loads_for_test, without_anchoring_for_test};
+
+    let mut sealer = Sealer::new("rfc136-2a-anchored", true)?;
+    seal_anchor_history(&mut sealer)?;
+    assert_eq!(sealer.checkpoint_positions()?, vec![1, 65, 129]);
+    let layout = &sealer.layout;
+    // The stale file the DeleteFile at block 20 removed, back in the worktree with its old bytes.
+    std::fs::write(layout.root().join("old.txt"), b"old\n")?;
+    let requested: Vec<String> = ["a.txt", "renamed.txt", "old.txt", "bin.dat", "missing.txt"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let (_, bundle) = export_bundle(layout, MAIN)?;
+
+    let reports = |label: &str| -> Result<Vec<String>> {
+        let target_root = unique_temp_dir(&format!("rfc136-2a-preview-{label}"));
+        let target = RepositoryLayout::init(target_root.clone())?;
+        let (plan, plan_fallback) =
+            crate::prepare_patch_replay_plan_reporting_anchor(layout, MAIN)?;
+        let (content, content_fallback) =
+            crate::prepare_patch_plan_content_report_reporting_anchor(layout, MAIN, &requested)?;
+        let (deletions, deletion_fallback) =
+            crate::plan_patch_checkout_deletions_reporting_anchor(layout, MAIN)?;
+        let (preview, preview_fallbacks) = crate::preview_bundle_reporting_anchor(
+            &target,
+            &bundle,
+            &BundleImportOptions::default_limits(),
+            MAIN,
+        )?;
+        let _ = std::fs::remove_dir_all(target_root);
+        assert!(
+            plan_fallback.is_none()
+                && content_fallback.is_none()
+                && deletion_fallback.is_none()
+                && preview_fallbacks.is_empty(),
+            "{label}: no snapshot in this history fails validation"
+        );
+        Ok(vec![
+            format!("{plan:?}"),
+            format!("{content:?}"),
+            format!("{deletions:?}"),
+            format!(
+                "{:?} {:?} {:?}",
+                preview.connectivity, preview.conflict, preview.effects
+            ),
+        ])
+    };
+
+    let loads_before = snapshot_anchor_loads_for_test();
+    let anchored = reports("anchored")?;
+    let loads = snapshot_anchor_loads_for_test().saturating_sub(loads_before);
+    assert!(
+        loads >= 4,
+        "fixture sanity: all four reports anchored ({loads} snapshot loads)"
+    );
+    let loads_before = snapshot_anchor_loads_for_test();
+    let from_genesis = without_anchoring_for_test(|| reports("genesis"))?;
+    assert_eq!(
+        snapshot_anchor_loads_for_test(),
+        loads_before,
+        "fixture sanity: the comparison did not anchor"
+    );
+    for (anchored, genesis) in anchored.iter().zip(&from_genesis) {
+        assert_eq!(
+            anchored, genesis,
+            "an anchored report differs from genesis replay"
+        );
+    }
+
+    let [_, content, deletions, _] = anchored.as_slice() else {
+        return Err(integrity("four reports"));
+    };
+    for kind in [
+        "delete-node",
+        "rename-path",
+        "change-perm",
+        "replace-binary",
+        "edit-text",
+    ] {
+        assert!(
+            content.contains(kind),
+            "fixture sanity: pre-anchor history carries {kind}: {content}"
+        );
+    }
+    assert!(
+        deletions.contains("planned_deletions: 1") && deletions.contains("deletable_files: 1"),
+        "fixture sanity: the pre-checkpoint deletion is planned: {deletions}"
+    );
+    Ok(())
+}
+
+/// §10.3c ruling 2: worktree writes and rollback preview replay from genesis and load no snapshot.
+/// Asserted through the anchor search's own counter, not through timing. Rollback preview runs on a
+/// rename-free history, because inverse planning refuses a rename.
+#[test]
+fn worktree_writes_and_rollback_preview_load_no_snapshot() -> Result<()> {
+    use crate::patch_replay::anchor::snapshot_anchor_loads_for_test;
+
+    let mut sealer = Sealer::new("rfc136-2a-unanchored-writers", true)?;
+    seal_anchor_history(&mut sealer)?;
+    let other = *sealer
+        .blocks
+        .get(100)
+        .ok_or_else(|| integrity("history has no block 101"))?;
+    sealer.publish_branch("heads/other", other)?;
+    let layout = &sealer.layout;
+
+    let mut rename_free = Sealer::new("rfc136-2a-unanchored-rollback", true)?;
+    let first = vec![rename_free.create("a.txt", 0xA1, b"alpha 0\n")?];
+    rename_free.seal(first)?;
+    while rename_free.blocks.len() < 70 {
+        let number = rename_free.blocks.len() + 1;
+        let op = rename_free.edit(0xA1, format!("alpha {number}\n").as_bytes())?;
+        rename_free.seal(vec![op])?;
+    }
+    assert_eq!(rename_free.checkpoint_positions()?, vec![1, 65]);
+
+    let before = snapshot_anchor_loads_for_test();
+    prepare_rollback_preview(&rename_free.layout, MAIN)?;
+    materialize_patch_checkout_with_deletions(layout, MAIN)?;
+    switch_branch(layout, Some(MAIN), "heads/other")?;
+    assert_eq!(
+        snapshot_anchor_loads_for_test(),
+        before,
+        "a worktree write or rollback preview loaded a snapshot"
+    );
+
+    // Control: a read-only report on each repository does load one.
+    crate::prepare_patch_replay_plan_reporting_anchor(layout, "heads/other")?;
+    let after_other = snapshot_anchor_loads_for_test();
+    assert!(after_other > before);
+    crate::prepare_patch_replay_plan_reporting_anchor(&rename_free.layout, MAIN)?;
+    assert!(snapshot_anchor_loads_for_test() > after_other);
+    Ok(())
+}

@@ -39,7 +39,7 @@ use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
 use crate::stdout::println;
 use prikk_store::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, preview_bundle, verify_bundle,
+    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, verify_bundle,
 };
 
 /// Dispatch `prikk bundle [export|import|preview|verify]`.
@@ -130,8 +130,11 @@ fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
     let options = bundle_import_options_from_env()?;
     // RFC 151 §2.2: the local branch the preview compares against, not anything the bundle carries.
     let ref_name = crate::current_branch::resolve_ref(&layout, parsed.ref_name)?;
-    let report =
-        preview_bundle(&layout, &bytes, &options, &ref_name).map_err(|err| err.to_string())?;
+    let (report, anchor_fallbacks) =
+        prikk_store::preview_bundle_reporting_anchor(&layout, &bytes, &options, &ref_name)
+            .map_err(|err| err.to_string())?;
+    // RFC 136 §10.3b.4: a snapshot the preview could not anchor at is named on stderr.
+    crate::warn_anchor_fallbacks(anchor_fallbacks.iter());
     if parsed.format_json {
         print_bundle_preview_json(&report);
     } else {

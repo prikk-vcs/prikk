@@ -115,20 +115,35 @@ pub fn plan_patch_checkout_deletions(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchDeletionPlan> {
-    let snapshot = replay_supported_patch_chain(layout, ref_name)?;
+    Ok(plan_patch_checkout_deletions_reporting_anchor(layout, ref_name)?.0)
+}
+
+/// [`plan_patch_checkout_deletions`], plus the snapshot this read-only report could not anchor at, if
+/// any (RFC 136 §10.3b.4). It writes nothing; `--patch-materialize-delete` still replays from genesis.
+pub fn plan_patch_checkout_deletions_reporting_anchor(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(
+    PatchDeletionPlan,
+    Option<crate::patch_replay::SnapshotAnchorFallback>,
+)> {
+    let (snapshot, fallback) = crate::patch_replay::replay_for_read_only_report(layout, ref_name)?;
     let analysis = analyze_deletions(layout, &snapshot.deleted_files)?;
-    Ok(PatchDeletionPlan {
-        ref_name: snapshot.ref_name,
-        planned_deletions: snapshot.deleted_files.len(),
-        deletable_files: analysis.deletable.len(),
-        already_absent_files: analysis.already_absent,
-        conflicts: analysis.conflicts,
-        deletable_paths: analysis
-            .deletable
-            .iter()
-            .map(|entry| entry.path.path.as_str().to_string())
-            .collect(),
-    })
+    Ok((
+        PatchDeletionPlan {
+            ref_name: snapshot.ref_name,
+            planned_deletions: snapshot.deleted_files.len(),
+            deletable_files: analysis.deletable.len(),
+            already_absent_files: analysis.already_absent,
+            conflicts: analysis.conflicts,
+            deletable_paths: analysis
+                .deletable
+                .iter()
+                .map(|entry| entry.path.path.as_str().to_string())
+                .collect(),
+        },
+        fallback,
+    ))
 }
 
 fn materialize_patch_checkout_inner(
@@ -234,7 +249,13 @@ fn analyze_deletions(
             }
         }
         let current = read_file_required(layout.worktree_mutation_root(), relative)?;
-        if current != deleted_file.old_bytes {
+        // The bytes the delete precondition names, compared by content id: the same answer as
+        // comparing bytes, because replay checked that id against the deleted bytes (RFC 136 2a).
+        if !crate::blob_access::bytes_match_blob_id(
+            &current,
+            deleted_file.old_blob_id,
+            deleted_file.old_node_kind,
+        )? {
             conflicts.push(PatchDeletionConflict {
                 path: deleted_file.path.as_str().to_string(),
                 reason: format!(

@@ -103,7 +103,7 @@ pub(super) fn apply_decoded_operation(
             let deleted = PatchReplayDeletedFile {
                 path: repo_path,
                 old_blob_id,
-                old_bytes: old_bytes.clone(),
+                old_node_kind,
             };
             files.remove(&path);
             if let Some(live) = live_nodes.remove(&node_id) {

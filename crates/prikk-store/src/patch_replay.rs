@@ -22,9 +22,12 @@
 
 use std::collections::BTreeMap;
 
+pub(crate) mod anchor;
 pub(crate) mod apply;
 pub(crate) mod decode;
 pub(crate) mod read;
+
+pub use anchor::SnapshotAnchorFallback;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{NodeId, NodeKind, ObjectId};
@@ -38,8 +41,8 @@ use crate::validate_local_branch_ref;
 use crate::wal::WalReplay;
 
 use apply::{apply_decoded_operation, apply_rename_batch};
-use decode::{DecodedOperationKind, decode_patch_operations};
-use read::{files_to_replay_manifest, read_block, read_patch, single_parent_chain};
+use decode::DecodedOperationKind;
+use read::{files_to_replay_manifest, single_parent_chain};
 
 /// Read-only result of replaying supported patch operations to an in-memory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,23 +70,35 @@ pub fn prepare_patch_replay_plan(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchReplayPlan> {
-    let snapshot = replay_supported_patch_chain(layout, ref_name)?;
+    Ok(prepare_patch_replay_plan_reporting_anchor(layout, ref_name)?.0)
+}
+
+/// [`prepare_patch_replay_plan`], plus the snapshot this read-only report could not anchor at, if any
+/// (RFC 136 §10.3b.4): the plan is unchanged either way, and a caller prints the fallback on stderr.
+pub fn prepare_patch_replay_plan_reporting_anchor(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(PatchReplayPlan, Option<SnapshotAnchorFallback>)> {
+    let (snapshot, fallback) = replay_for_read_only_report(layout, ref_name)?;
     let paths = snapshot
         .manifest
         .files
         .iter()
         .map(|entry| entry.path.as_str().to_string())
         .collect();
-    Ok(PatchReplayPlan {
-        ref_name: snapshot.ref_name,
-        target_block_id: snapshot.target_block_id,
-        block_count: snapshot.block_count,
-        patch_count: snapshot.patch_count,
-        applied_operation_count: snapshot.applied_operation_count,
-        file_count: snapshot.manifest.files.len(),
-        total_content_bytes: snapshot.manifest.total_content_bytes(),
-        paths,
-    })
+    Ok((
+        PatchReplayPlan {
+            ref_name: snapshot.ref_name,
+            target_block_id: snapshot.target_block_id,
+            block_count: snapshot.block_count,
+            patch_count: snapshot.patch_count,
+            applied_operation_count: snapshot.applied_operation_count,
+            file_count: snapshot.manifest.files.len(),
+            total_content_bytes: snapshot.manifest.total_content_bytes(),
+            paths,
+        },
+        fallback,
+    ))
 }
 
 /// RFC 143 §6: the replay's own structural coverage, exposed so a consumer can tell "the complete
@@ -175,7 +190,17 @@ pub fn prepare_patch_plan_content_report(
     ref_name: &str,
     requested_paths: &[String],
 ) -> Result<PatchPlanContentReport> {
-    let snapshot = replay_supported_patch_chain(layout, ref_name)?;
+    Ok(prepare_patch_plan_content_report_reporting_anchor(layout, ref_name, requested_paths)?.0)
+}
+
+/// [`prepare_patch_plan_content_report`], plus the snapshot this read-only report could not anchor at,
+/// if any (RFC 136 §10.3b.4).
+pub fn prepare_patch_plan_content_report_reporting_anchor(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    requested_paths: &[String],
+) -> Result<(PatchPlanContentReport, Option<SnapshotAnchorFallback>)> {
+    let (snapshot, fallback) = replay_for_read_only_report(layout, ref_name)?;
     let by_path: BTreeMap<&str, &ReplayManifestEntry> = snapshot
         .manifest
         .files
@@ -206,16 +231,19 @@ pub fn prepare_patch_plan_content_report(
             None => not_found.push(requested.clone()),
         }
     }
-    Ok(PatchPlanContentReport {
-        ref_name: snapshot.ref_name,
-        target_block_id: snapshot.target_block_id,
-        coverage: PatchPlanCoverage {
-            applied_operation_kinds: snapshot.applied_operation_kinds.into_iter().collect(),
-            walk: "single-parent",
+    Ok((
+        PatchPlanContentReport {
+            ref_name: snapshot.ref_name,
+            target_block_id: snapshot.target_block_id,
+            coverage: PatchPlanCoverage {
+                applied_operation_kinds: snapshot.applied_operation_kinds.into_iter().collect(),
+                walk: "single-parent",
+            },
+            entries,
+            not_found,
         },
-        entries,
-        not_found,
-    })
+        fallback,
+    ))
 }
 
 /// One file entry in a replay-derived manifest, carrying the mode bits `CreateFile`/`ChangePerm`
@@ -294,8 +322,11 @@ pub(crate) struct PatchReplayDeletedFile {
     pub(crate) path: RepoPath,
     /// Blob ID recorded as the delete precondition.
     pub(crate) old_blob_id: ObjectId,
-    /// Bytes that must still be present before an opt-in destructive delete may occur.
-    pub(crate) old_bytes: Vec<u8>,
+    /// The deleted node's kind, which with `old_blob_id` names the exact bytes an opt-in destructive
+    /// delete requires the worktree file to still hold. Recorded instead of the bytes themselves so a
+    /// read-only report can recover it by decoding history (RFC 136 increment 2a): an edited text's
+    /// post-edit content id is never stored (DC-65), but it is in the `DeleteNode` record.
+    pub(crate) old_node_kind: NodeKind,
 }
 
 /// Apply a decoded operation sequence -- already concatenated across whatever patch(es) produced
@@ -348,11 +379,31 @@ pub(crate) fn apply_operation_sequence(
     Ok((applied_operation_count, applied_operation_kinds))
 }
 
-/// Replay the supported operation subset into a validated in-memory manifest.
+/// Replay the supported operation subset into a validated in-memory manifest, from genesis. Every
+/// worktree write and rollback preview uses this: a snapshot never anchors it (RFC 136 §10.3a, §10.3c
+/// ruling 2).
 pub(crate) fn replay_supported_patch_chain(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchReplaySnapshot> {
+    Ok(replay_ref_chain(layout, ref_name, anchor::Anchoring::Never)?.0)
+}
+
+/// The same replay for a **read-only report**, which may start at the nearest snapshot that passes the
+/// loader (RFC 136 §10.3c ruling 1). History fields still cover the whole chain (`anchor.rs`). Never
+/// call this from a path that writes the worktree or history.
+pub(crate) fn replay_for_read_only_report(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
+    replay_ref_chain(layout, ref_name, anchor::Anchoring::ReadOnlyReport)
+}
+
+fn replay_ref_chain(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    anchoring: anchor::Anchoring,
+) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
     // RFC 111 §6.1: safe as a read-only snapshot because every production caller
     // (`patch_checkout.rs`, `rollback_preview.rs`) only reads -- neither ever writes an object.
     // If a future caller reaches this from a writing operation, confirm its own write happens
@@ -360,44 +411,20 @@ pub(crate) fn replay_supported_patch_chain(
     let object_store = ObjectReadSnapshot::open(layout)?;
     let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
     let block_ids = single_parent_chain(&object_store, target_block_id)?;
-    let mut files = BTreeMap::new();
-    let mut live_nodes = BTreeMap::new();
-    let mut deleted_files = BTreeMap::new();
-    let mut patch_count = 0_usize;
-    let mut applied_operation_count = 0_usize;
-    let mut applied_operation_kinds = std::collections::BTreeSet::new();
-
-    // RFC 136 §10.3a: a checkpoint changes cost, never output. Every block's patches are replayed
-    // from genesis and `snapshot_blob_ref` is not read here.
-    for block_id in &block_ids {
-        let block = read_block(&object_store, *block_id)?;
-        for patch_id in block.patch_ids {
-            let patch = read_patch(&object_store, patch_id)?;
-            let operations =
-                decode_patch_operations(&patch.canonical_payload, patch.schema_version)?;
-            let (count, kinds) = apply_operation_sequence(
-                &object_store,
-                &mut files,
-                &mut live_nodes,
-                &mut deleted_files,
-                operations,
-            )?;
-            applied_operation_count += count;
-            applied_operation_kinds.extend(kinds);
-            patch_count += 1;
-        }
-    }
-
-    Ok(PatchReplaySnapshot {
-        ref_name: ref_name.to_string(),
-        target_block_id,
-        block_count: block_ids.len(),
-        patch_count,
-        applied_operation_count,
-        applied_operation_kinds,
-        manifest: files_to_replay_manifest(files, &live_nodes)?,
-        deleted_files: deleted_files.into_values().collect(),
-    })
+    let chain = anchor::replay_chain(&object_store, &block_ids, anchoring)?;
+    Ok((
+        PatchReplaySnapshot {
+            ref_name: ref_name.to_string(),
+            target_block_id,
+            block_count: block_ids.len(),
+            patch_count: chain.patch_count,
+            applied_operation_count: chain.applied_operation_count,
+            applied_operation_kinds: chain.applied_operation_kinds,
+            manifest: files_to_replay_manifest(chain.files, &chain.live_nodes)?,
+            deleted_files: chain.deleted_files.into_values().collect(),
+        },
+        chain.fallback,
+    ))
 }
 
 /// Resolve the node-addressed lineage bounds for a ref: the current target block (baseline) and the

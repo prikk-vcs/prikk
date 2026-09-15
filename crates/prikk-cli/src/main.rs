@@ -71,9 +71,8 @@ use prikk_store::{
     doctor_repository, enumerate_queued_patches, list_received_pointers,
     load_maintainer_trust_policy_or_empty, load_received_ref_history, load_ref_history,
     materialize_patch_checkout, materialize_patch_checkout_with_deletions,
-    materialize_snapshot_checkout, plan_patch_checkout_deletions, prepare_checkout_plan,
-    prepare_merge_evidence, prepare_merge_plan, prepare_patch_inverse_plan,
-    prepare_patch_plan_content_report, prepare_patch_replay_plan, prepare_rollback_preview,
+    materialize_snapshot_checkout, prepare_checkout_plan, prepare_merge_evidence,
+    prepare_merge_plan, prepare_patch_inverse_plan, prepare_rollback_preview,
     prepare_snapshot_checkout_plan, read_active_ref_metadata, remove_trusted_maintainer,
     repair_repository, show, verify_active_rollback_draft, verify_repository_with_options,
     worktree_status,
@@ -698,15 +697,24 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
                 materialize_snapshot_checkout(&layout, &ref_name).map_err(|err| err.to_string())?;
             print_snapshot_materialization_report(&layout, &report);
         }
+        // RFC 136 increment 2a: read-only reports may anchor at a snapshot. One that fails
+        // validation is reported on stderr; stdout is unchanged (§10.3b.4).
         CheckoutMode::PatchPlan => {
             if args.format_json {
-                let report =
-                    prepare_patch_plan_content_report(&layout, &ref_name, &args.content_paths)
-                        .map_err(|err| err.to_string())?;
+                let (report, fallback) =
+                    prikk_store::prepare_patch_plan_content_report_reporting_anchor(
+                        &layout,
+                        &ref_name,
+                        &args.content_paths,
+                    )
+                    .map_err(|err| err.to_string())?;
+                warn_anchor_fallbacks(fallback.iter());
                 print_patch_plan_content_json(&report);
             } else {
-                let plan =
-                    prepare_patch_replay_plan(&layout, &ref_name).map_err(|err| err.to_string())?;
+                let (plan, fallback) =
+                    prikk_store::prepare_patch_replay_plan_reporting_anchor(&layout, &ref_name)
+                        .map_err(|err| err.to_string())?;
+                warn_anchor_fallbacks(fallback.iter());
                 print_patch_replay_plan(&layout, &plan);
             }
         }
@@ -716,8 +724,10 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
             print_patch_materialization_report(&layout, &report);
         }
         CheckoutMode::PatchDeletePlan => {
-            let plan =
-                plan_patch_checkout_deletions(&layout, &ref_name).map_err(|err| err.to_string())?;
+            let (plan, fallback) =
+                prikk_store::plan_patch_checkout_deletions_reporting_anchor(&layout, &ref_name)
+                    .map_err(|err| err.to_string())?;
+            warn_anchor_fallbacks(fallback.iter());
             print_patch_deletion_plan(&layout, &plan);
             if !plan.is_safe_to_apply() {
                 return Err("patch deletion plan has unsafe candidates"
@@ -852,6 +862,15 @@ fn run_worktree_status(args: Vec<String>) -> std::result::Result<(), CliError> {
         Err("worktree has changes against the baseline"
             .to_string()
             .into())
+    }
+}
+
+/// RFC 136 §10.3b.4: one stderr line per snapshot a read-only report could not anchor at.
+pub(crate) fn warn_anchor_fallbacks<'a>(
+    fallbacks: impl Iterator<Item = &'a prikk_store::SnapshotAnchorFallback>,
+) {
+    for fallback in fallbacks {
+        eprintln!("{fallback}");
     }
 }
 

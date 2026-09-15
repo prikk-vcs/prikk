@@ -46,10 +46,11 @@ use prikk_object::{BlockPayload, ObjectId};
 
 use crate::merge::evidence::{ancestors_inclusive, candidate_patch_ids};
 use crate::object_store::ObjectReader;
+use crate::patch_replay::anchor::{Anchoring, replay_chain};
 use crate::patch_replay::apply::ReplayLiveNode;
-use crate::patch_replay::apply_operation_sequence;
 use crate::patch_replay::decode::{DecodedPatchOperation, decode_patch_operations};
-use crate::patch_replay::read::{read_block, read_patch, single_parent_chain};
+use crate::patch_replay::read::single_parent_chain;
+use crate::patch_replay::{SnapshotAnchorFallback, apply_operation_sequence};
 
 /// Path-keyed file bytes, as `patch_replay`'s own replay loop builds them.
 type ReplayedFiles = BTreeMap<String, Vec<u8>>;
@@ -121,33 +122,18 @@ pub(crate) struct BundlePreviewResult {
     pub(crate) effects: Vec<BundleImpactEffect>,
 }
 
-/// Walk `block_ids` (oldest-first, as [`single_parent_chain`] returns) and replay every patch's
-/// operations into fresh state -- the same block-walk `replay_supported_patch_chain` performs,
-/// factored out so it can run over an arbitrary chain, not only one backed by a local ref.
+/// Walk `block_ids` (oldest-first, as [`single_parent_chain`] returns) into replayed state. Bundle
+/// preview is a read-only report, so the walk may start at a snapshot (RFC 136 §10.3c ruling 1); its
+/// outputs are state only. A snapshot that fails the loader is pushed onto `fallbacks`, and the walk
+/// replays from genesis.
 fn walk_and_replay(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
+    fallbacks: &mut Vec<SnapshotAnchorFallback>,
 ) -> Result<(ReplayedFiles, ReplayedLiveNodes)> {
-    let mut files = BTreeMap::new();
-    let mut live_nodes = BTreeMap::new();
-    let mut deleted_files = BTreeMap::new();
-    for block_id in block_ids {
-        // RFC 136 §10.3a: a checkpoint changes cost, never output; every block is replayed.
-        let block = read_block(reader, *block_id)?;
-        for patch_id in block.patch_ids {
-            let patch = read_patch(reader, patch_id)?;
-            let operations =
-                decode_patch_operations(&patch.canonical_payload, patch.schema_version)?;
-            apply_operation_sequence(
-                reader,
-                &mut files,
-                &mut live_nodes,
-                &mut deleted_files,
-                operations,
-            )?;
-        }
-    }
-    Ok((files, live_nodes))
+    let chain = replay_chain(reader, block_ids, Anchoring::ReadOnlyReport)?;
+    fallbacks.extend(chain.fallback);
+    Ok((chain.files, chain.live_nodes))
 }
 
 /// Every candidate patch strictly between `baseline` and `target`, decoded and concatenated in
@@ -236,10 +222,12 @@ fn find_lowest_common_ancestors(
 pub(crate) fn preview_new_repository_impact(
     bundle_only_reader: &impl ObjectReader,
     bundle_target: ObjectId,
+    fallbacks: &mut Vec<SnapshotAnchorFallback>,
 ) -> Result<BundlePreviewResult> {
     let (after_files, after_live) = walk_and_replay(
         bundle_only_reader,
         &single_parent_chain(bundle_only_reader, bundle_target)?,
+        fallbacks,
     )?;
     let after_modes = modes_by_path(&after_live);
     let effects = diff_effects(
@@ -266,6 +254,7 @@ pub(crate) fn preview_impact(
     bundle_only_reader: &impl ObjectReader,
     local_target: ObjectId,
     bundle_target: ObjectId,
+    fallbacks: &mut Vec<SnapshotAnchorFallback>,
 ) -> Result<BundlePreviewResult> {
     let local_ancestors = ancestors_inclusive(reader, local_target)?;
     let bundle_ancestors = ancestors_inclusive(bundle_only_reader, bundle_target)?;
@@ -292,8 +281,11 @@ pub(crate) fn preview_impact(
     if bundle_ancestors.contains_key(&local_target) {
         // Fast-forward: local_target is a real ancestor of bundle_target, so the bundle's own
         // candidate operations since local_target are, by construction, exactly what is new.
-        let (current_files, current_live) =
-            walk_and_replay(reader, &single_parent_chain(reader, local_target)?)?;
+        let (current_files, current_live) = walk_and_replay(
+            reader,
+            &single_parent_chain(reader, local_target)?,
+            fallbacks,
+        )?;
         let operations = candidate_operations(reader, local_target, bundle_target)?;
         let (effects, _) =
             apply_new_operations_and_diff(reader, current_files, current_live, operations)?;
@@ -319,8 +311,11 @@ pub(crate) fn preview_impact(
         });
     };
 
-    let (current_files, current_live) =
-        walk_and_replay(reader, &single_parent_chain(reader, local_target)?)?;
+    let (current_files, current_live) = walk_and_replay(
+        reader,
+        &single_parent_chain(reader, local_target)?,
+        fallbacks,
+    )?;
     let operations = candidate_operations(reader, *baseline, bundle_target)?;
     match apply_new_operations_and_diff(reader, current_files, current_live, operations) {
         Ok((effects, _)) => Ok(BundlePreviewResult {

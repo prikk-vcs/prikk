@@ -80,6 +80,26 @@ pub(crate) fn ensure_blob_matches_node_kind(
     expected: ObjectId,
     old_node_kind: NodeKind,
 ) -> Result<()> {
+    let id = file_blob_id_for_kind(bytes, old_node_kind)?;
+    if id == expected {
+        return Ok(());
+    }
+    Err(PrikkError::Integrity(format!(
+        "DeleteNode old_blob_id/old_node_kind mismatch: expected {expected}, got {id}"
+    )))
+}
+
+/// Whether `bytes`, as a file of `node_kind`, are exactly the content `expected` names. Content ids are
+/// hashes of the canonical Blob payload, so this is byte equality with the named content.
+pub(crate) fn bytes_match_blob_id(
+    bytes: &[u8],
+    expected: ObjectId,
+    node_kind: NodeKind,
+) -> Result<bool> {
+    Ok(file_blob_id_for_kind(bytes, node_kind)? == expected)
+}
+
+fn file_blob_id_for_kind(bytes: &[u8], old_node_kind: NodeKind) -> Result<ObjectId> {
     let blob_kind = match old_node_kind {
         NodeKind::TextFile => BlobKind::Text,
         NodeKind::BinaryFile => BlobKind::Binary,
@@ -90,13 +110,11 @@ pub(crate) fn ensure_blob_matches_node_kind(
         }
     };
     let payload = BlobPayload::new(blob_kind, bytes.to_vec());
-    let id = ObjectId::from_canonical_payload(ObjectType::Blob, 1, &payload.to_canonical_bytes()?);
-    if id == expected {
-        return Ok(());
-    }
-    Err(PrikkError::Integrity(format!(
-        "DeleteNode old_blob_id/old_node_kind mismatch: expected {expected}, got {id}"
-    )))
+    Ok(ObjectId::from_canonical_payload(
+        ObjectType::Blob,
+        1,
+        &payload.to_canonical_bytes()?,
+    ))
 }
 
 #[cfg(test)]

@@ -436,6 +436,20 @@ pub fn preview_bundle(
     options: &BundleImportOptions,
     ref_name: &str,
 ) -> Result<BundlePreviewReport> {
+    Ok(preview_bundle_reporting_anchor(layout, bytes, options, ref_name)?.0)
+}
+
+/// [`preview_bundle`], plus every snapshot the preview's chain walks could not anchor at (RFC 136
+/// §10.3b.4). The report is unchanged either way; a caller prints each fallback on stderr.
+pub fn preview_bundle_reporting_anchor(
+    layout: &RepositoryLayout,
+    bytes: &[u8],
+    options: &BundleImportOptions,
+    ref_name: &str,
+) -> Result<(
+    BundlePreviewReport,
+    Vec<crate::patch_replay::SnapshotAnchorFallback>,
+)> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
     let contents = validate_bundle_contents(bytes, options, Some(&read_snapshot))?;
 
@@ -462,8 +476,13 @@ pub fn preview_bundle(
     // `preview_impact`'s own ancestor walk. Reachable and common (the tutorial's own sequence is
     // `init` -> `commit` -> `seal`, so nothing is published until the first seal); it is a
     // legitimate connectivity state (§4m.3 rule 1's own family), not an error.
+    let mut anchor_fallbacks = Vec::new();
     let preview = match local_ref_state_id {
-        None => preview::preview_new_repository_impact(&bundle_only_reader, bundle_target)?,
+        None => preview::preview_new_repository_impact(
+            &bundle_only_reader,
+            bundle_target,
+            &mut anchor_fallbacks,
+        )?,
         Some(local_ref_state_id) => {
             let local_ref_state_envelope = read_snapshot
                 .read_typed(local_ref_state_id, ObjectType::RefState)?
@@ -487,6 +506,7 @@ pub fn preview_bundle(
                 &bundle_only_reader,
                 local_target,
                 bundle_target,
+                &mut anchor_fallbacks,
             )?
         }
     };
@@ -523,15 +543,18 @@ pub fn preview_bundle(
         })
         .collect();
 
-    Ok(BundlePreviewReport {
-        bundle_ref_name: contents.origin_ref_name,
-        local_ref_name: ref_name.to_string(),
-        connectivity,
-        conflict,
-        sealed_by,
-        effects,
-        manifest: contents.manifest,
-    })
+    Ok((
+        BundlePreviewReport {
+            bundle_ref_name: contents.origin_ref_name,
+            local_ref_name: ref_name.to_string(),
+            connectivity,
+            conflict,
+            sealed_by,
+            effects,
+            manifest: contents.manifest,
+        },
+        anchor_fallbacks,
+    ))
 }
 
 /// Export a genesis-complete, verifiable subset of objects for `ref_name` (DC-78 §D4/§D6). Walks the

@@ -123,8 +123,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // it to `cfg(test)` once the crate cut was not made, and the count with it: 134 -> 130. RFC 151
     // increment 2 added `branch_switch`, the switch's own upper-layer module: 130 -> 131. The DC-75
     // two-edits fix added `patch_algebra::fold`, per-side net-effect folding for merge evidence:
-    // 131 -> 132.
-    assert_eq!(modules.len(), 132, "modules: {modules:?}");
+    // 131 -> 132. RFC 136 increment 2a added `patch_replay::anchor`, anchored replay for read-only
+    // reports: 132 -> 133.
+    assert_eq!(modules.len(), 133, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

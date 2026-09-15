@@ -477,3 +477,59 @@ fn snapshot_materialization_yields_the_tips_state_not_its_parents() -> prikk_err
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+/// RFC 136 §10.3b.4: a snapshot that fails the loader at the anchor is never trusted and never silently
+/// skipped. Each read-only report equals the report with no snapshot, and returns the finding naming the
+/// block and `prikk verify`.
+#[test]
+fn a_tampered_anchor_falls_back_to_genesis_and_names_the_block() -> prikk_error::Result<()> {
+    let damaged_root = unique_temp_dir("snapshot-anchor-tampered");
+    let twin_root = unique_temp_dir("snapshot-anchor-tampered-twin");
+    let damaged = RepositoryLayout::init(damaged_root.clone())?;
+    let twin = RepositoryLayout::init(twin_root.clone())?;
+    let damaged_tip = publish_one_block(
+        &damaged,
+        Snapshot::Content(b"PRIKK-SNAPSHOT-MANIFEST-v2\nnot a manifest".to_vec()),
+    )?;
+    let twin_tip = publish_one_block(&twin, Snapshot::None)?;
+    let normalize = |text: String, tip: ObjectId| text.replace(&format!("{tip:?}"), "<tip>");
+
+    let (plan, plan_fallback) = crate::prepare_patch_replay_plan_reporting_anchor(&damaged, MAIN)?;
+    let (twin_plan, twin_fallback) =
+        crate::prepare_patch_replay_plan_reporting_anchor(&twin, MAIN)?;
+    assert_eq!(
+        normalize(format!("{plan:?}"), damaged_tip),
+        normalize(format!("{twin_plan:?}"), twin_tip),
+        "the fallback report equals the report with no snapshot"
+    );
+    assert_eq!(twin_fallback, None);
+    let fallback = plan_fallback
+        .ok_or_else(|| PrikkError::Integrity("the tampered anchor must be reported".to_string()))?;
+    assert_eq!(fallback.block_id, damaged_tip);
+    let line = fallback.to_string();
+    assert!(
+        line.contains(&damaged_tip.to_string()) && line.contains("prikk verify"),
+        "{line}"
+    );
+
+    let (deletions, deletion_fallback) =
+        crate::plan_patch_checkout_deletions_reporting_anchor(&damaged, MAIN)?;
+    assert_eq!(
+        format!("{deletions:?}"),
+        format!("{:?}", plan_patch_checkout_deletions(&twin, MAIN)?)
+    );
+    assert!(deletion_fallback.is_some());
+    let requested = vec!["a.txt".to_string()];
+    let (content, content_fallback) =
+        crate::prepare_patch_plan_content_report_reporting_anchor(&damaged, MAIN, &requested)?;
+    let (twin_content, _) =
+        crate::prepare_patch_plan_content_report_reporting_anchor(&twin, MAIN, &requested)?;
+    assert_eq!(
+        normalize(format!("{content:?}"), damaged_tip),
+        normalize(format!("{twin_content:?}"), twin_tip)
+    );
+    assert!(content_fallback.is_some());
+    let _ = std::fs::remove_dir_all(damaged_root);
+    let _ = std::fs::remove_dir_all(twin_root);
+    Ok(())
+}
