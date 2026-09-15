@@ -1,11 +1,24 @@
 # RFC 155 — The repository-complete artifact: a whole repository, verbatim, in one file
 
-**Status.** **PROPOSED 2026-09-16 by the architect.** This is the "own RFC" that RFC 114 §5.2 (format
-carry-forward), RFC 115 §6.2 and RFC 116 §7 left open. RFC 154 §6.2 (accepted 2026-09-16) now needs it
-too. planeter's requirements letter
+**Status.** **ACCEPTED by the project owner 2026-09-16** (*"RFC 155 is accepted."*); proposed the same
+day by the architect. This is the "own RFC" that RFC 114 §5.2 (format carry-forward), RFC 115 §6.2 and
+RFC 116 §7 left open, and RFC 154 §6.2 needs it. planeter's requirements letter
 (`.git-exclude/upstream/planeter/receive/2026-09-16-repository-complete-artifact-requirements.md`, R1–R6)
-is folded in as input. **Direction and scheduling are the owner's** (§7). Author-review independence: the
-architect proposes and would review; §8's controls compensate, and each must be shown to fail.
+is folded in as input. Author-review independence: the architect proposed and will review; §8's
+controls compensate, and each must be shown to fail.
+
+**The architect's reading of the approval, stated so it can be corrected:**
+- **§7.1:** the direction is §3–§6 as written.
+- **§7.2:** maintainer trust material travels as inert data and is never adopted by import.
+- **§7.3:** landing goes through RFC 154's rule, and only on an explicit `--adopt`; the default stays
+  `remotes/`, and DC-78 §D4's letter holds.
+- **§7.4:** scheduling was not ruled by the word. The architect's proposal stands, after 0.43.0:
+  1. the maintainer key-id collision fix;
+  2. this artifact;
+  3. RFC 154's adoption act.
+
+  ROADMAP row 18 carries it. **Nothing is handed off yet.** R4's all-or-nothing import is the largest
+  piece and gets a design round (report before implementation) of its own.
 
 ## 1. Why it is needed
 
