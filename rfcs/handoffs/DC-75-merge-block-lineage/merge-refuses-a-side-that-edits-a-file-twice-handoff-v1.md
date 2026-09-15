@@ -175,3 +175,96 @@ an engine fault, can reach it, say so. The class for that case is ruled from you
 it.
 
 **Report:** `.git-exclude/review-request/merge-two-edits-report-v1.md`.
+
+## 7. Rulings on the fix report — 2026-09-15
+
+**Sources:** the report is `merge-two-edits-report-v1.md`, and the review is
+`.git-exclude/reviewed/merge-two-edits-review-v1.md`.
+
+**The five commits `b5b92373`..`70afbc8a` are accepted in substance:**
+- all fourteen gates are green on `70afbc8a` in the architect's run, with 1,998 tests on both toolchains;
+- 2 / 0 and 0 / 2 merge on the binary;
+- the inventory classes are right.
+
+**They are not pushed yet.** The architect's own ruling R1.4 (*"a net no-op drops that node"*) makes them
+claim confluence that a merge cannot realize.
+
+### 7.1 The hole — measured by the architect on a binary built from `70afbc8a`
+
+The file `e.txt` is on both sides. The adopted side edits a word and then restores it; the target side
+edits another word in the same file.
+
+| file | direction | `merge-evidence` | `merge` |
+|---|---|---|---|
+| short (anchors cover both words) | side into main | **`proven_confluent`** | **exit 1: `integrity error: lifecycle replay: EditText span … could not be localized`** |
+| short | main into side | `proven_confluent` | exit 0, verify clean, content right |
+| long (words 200 lines apart) | both | `proven_confluent` | exit 0, verify clean |
+
+**The cause.**
+- `fold.rs`'s `Net::Drop` removes a node whose run restores the baseline. `fold_side` never sees the other
+  side, so the evidence has no same-node pair for that file.
+- Execution then replays the adopted side's *original* edits onto the other side's tip, where their
+  anchors no longer match.
+
+**Severity.** The failed merge leaves the repository verifying clean and `heads/main` unmoved, so the
+defect is a false `proven_confluent` followed by a failure reported as damage, not a wrong tree. On `main`
+today the same history refuses honestly. The error is the ruling's, not the implementation's.
+
+### 7.2 Required before push — the next commit
+
+1. **A net no-op drops its node only when the other side has no operation on that node.** Otherwise that
+   node's run is judged as authored. The rule is symmetric.
+2. **Write the principle into `fold.rs`'s module doc.** The evidence judges folds, but execution replays
+   the *originals* onto the other side's tip. A fold is admissible only when the other side has no
+   operation on the folded node and the run changes no path before its end. Then the originals replay
+   onto that tip exactly as they did on their own side.
+3. **Controls.**
+   - The short-file case in both directions refuses with a same-node witness, not `proven_confluent`.
+   - The long-file case still merges in both directions.
+   - Perturb rule 1 away, and the short case claims confluence again.
+   - **Execution soundness.** For every fold kind, with the other side (a) untouched and (b) editing a
+     *different* file, `merge-evidence` says `proven_confluent` **and** `merge` succeeds in both
+     directions, with `verify` clean and the expected tree.
+4. **The gate slip is recorded, not rewritten.** `b5b92373`..`3df5c354` fail two release-policy pins
+   that `70afbc8a` fixes, and history stays as it is. From now on, `cargo test --workspace --locked` runs
+   before every commit.
+
+### 7.3 The §6 asks and R4 — ruled
+
+Each is its own commit, after 7.2, under the same guard and with controls in both directions.
+
+- **R6 — mixed kinds on one node: fold.** No path changes before the end, so it is admissible under
+  7.2.2.
+  - **The net:** an `EditText` if the text changed, a `ChangePerm` if the mode changed, or one
+    `DeleteNode` with the baseline preimage if the run ends in a delete.
+  - **The tombstone exception widens** to what such a delete legitimately changes: a folded delete's
+    tombstone may differ in blob id *and mode*; path and kind may not.
+  - **Controls:** the three mixed shapes of your §6 merge in both directions.
+- **R7 — create-then-delete: never fold.** The run holds a path for part of the side's history. Replaying
+  the original create onto the other side's tip can find that path taken, so a net "nothing" would be
+  7.1 again. It stays refused.
+- **R8 — the label.** An operation that does not replay alone against the baseline, and that has an
+  earlier operation on the *same node* on its side, is `sequence_internal_dependency_deferred`, not
+  `pair_replay_failed`. Widen `has_prefix_dependency`'s escape to a same-node predecessor.
+  - **The class stays `Precondition`.**
+  - **After R6–R8,** report every ordinary shape that still reaches `pair_replay_failed`, and make
+    `patch-algebra.md`'s row say the result.
+- **R4 — create-then-edit: accepted as proposed,** with four conditions.
+  - (a) **The fallback.** `current_text` falls back only for a node not live in the baseline, to
+    `blob_content(candidate_scope, blob)`, where `blob` is that node's live blob in the oracle state. It
+    refuses unless the kind is `Text`. This is the evidence read `create.rs:203` already makes, not a new
+    one. Pass the caller's scope, never a weaker one.
+  - (b) **No read of the final content.** The folded `CreateFile`'s final content id is never read; its
+    kind comes from the original create's Blob.
+  - (c) **Admissible only when the create persists** to the run's end. A run ending in a delete falls
+    under R7.
+  - (d) **A cross-side node-id reuse** that degrades to `MissingCandidateEvidence` is accepted.
+
+### 7.4 Docs, CHANGELOG, reports
+
+- **Docs and CHANGELOG follow the result:** `merge.md`'s "What cannot be merged yet", `patch-algebra.md`'s
+  row, and the `### Fixed` entry, which currently names mixed kinds and create-then-edit as still
+  refusing.
+- **Reports:**
+  - 7.2 is `.git-exclude/review-request/merge-two-edits-noop-report-v1.md`; the push follows its review.
+  - 7.3 is `.git-exclude/review-request/merge-two-edits-folds-report-v1.md`.
