@@ -111,9 +111,15 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         "author key material: {} recorded (continuity only, not a trust decision)",
         report.recorded_author_key_count
     );
+    // The note says what the import gave and stops there. It used to advise `merge`, which refuses in a
+    // fresh repository (`ref heads/main is not published`): a received ref cannot become a local branch
+    // today, by any route, and `docs/src/guide/backup-restore.md` says so.
     println!(
-        "note: no local ref was created or advanced, and no MAINTAINER key was trusted; run \
-         `trust maintainer add` to trust the sealing key, then `merge` to incorporate this history"
+        "note: no local ref was created or advanced, and no MAINTAINER key was trusted; this \
+         repository now holds the received history at {ref_name}, which `prikk log --ref {ref_name}` \
+         and `prikk show` read, and `prikk verify` checks once `trust maintainer add` trusts the \
+         sealing key",
+        ref_name = report.ref_name
     );
     Ok(())
 }

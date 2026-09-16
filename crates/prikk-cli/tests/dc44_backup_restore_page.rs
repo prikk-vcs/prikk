@@ -256,6 +256,23 @@ fn backup_restore_page_sequence_runs_exactly_as_the_page_shows_it() {
             .contains("no local ref was created or advanced, and no MAINTAINER key was trusted"),
         "page quotes this exact note: {import_stdout}"
     );
+    // The note names what the import gave, and no route that refuses. It used to end "then `merge` to
+    // incorporate this history"; `merge` into an unpublished `heads/main` is refused, and the page's own
+    // "What a restore gives, and what it does not" says so. The message must not outlive that correction.
+    for phrase in [
+        "this repository now holds the received history at remotes/heads/main",
+        "`prikk log --ref remotes/heads/main`",
+        "`prikk verify` checks once `trust maintainer add` trusts the sealing key",
+    ] {
+        assert!(
+            import_stdout.contains(phrase),
+            "the import note must say {phrase:?}: {import_stdout}"
+        );
+    }
+    assert!(
+        !import_stdout.contains("merge"),
+        "the import note must not advise `merge`, which refuses in a fresh repository: {import_stdout}"
+    );
 
     let trust_restored = support::prikk(&restored_repo)
         .args([

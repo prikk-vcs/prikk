@@ -108,11 +108,15 @@ reference is empty.
 **What a checkpoint costs.** Measured on the RFC 139 corpus profile (`profiles/prikk-self.toml`), against
 the same history sealed by a build from before checkpoints existed:
 
-| history depth | checkpoints | repository bytes without | with | added |
-|---:|---:|---:|---:|---:|
-| 64 | 1 | 628,486 | 629,944 | 1,458 (0.2 %) |
-| 128 | 2 | 1,621,001 | 1,829,897 | 208,896 (11 %) |
-| 256 | 4 | 3,069,495 | 4,425,512 | 1,356,017 (31 %) |
+| history depth | checkpoints | repository bytes without | with | checkpoints add | growth over the repository without them |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 1 | 628,486 | 629,944 | 1,458 | +0.2 % |
+| 128 | 2 | 1,621,001 | 1,829,897 | 208,896 | +12.9 % |
+| 256 | 4 | 3,069,495 | 4,425,512 | 1,356,017 | +44.2 % |
+
+The last column is growth: what checkpoints add, as a share of the same repository sealed without them.
+Read as a share of the repository that *has* them, the same bytes are 11.4 % at depth 128 and 30.6 % at
+256.
 
 The manifest itself is small — 177 bytes at block 1, 12,268 bytes at block 193, where it lists 114 entries
 — and is under 2 % of what a checkpoint adds. The rest is the content Blobs a checkpoint stores for text

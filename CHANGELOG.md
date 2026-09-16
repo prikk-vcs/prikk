@@ -13,8 +13,10 @@ text files whose content had only ever arrived as edits. No command's output cha
   read-only reports (`checkout --patch-plan`, `--patch-delete-plan`, `bundle preview`) at the nearest valid
   one. On the RFC 139 corpus at depth 256, median of three samples: `--patch-materialize` 13.4 s → 4.0 s,
   `branch switch` 13.7 s → 4.0 s. Both stop growing with depth past about 128 blocks.
-- **What it costs.** One checkpoint adds 1,458 bytes to a 64-block repository (0.2 %); four add 31 % to a
-  256-block one, almost all of it the stored text content. See the data model reference.
+- **What it costs.** One checkpoint adds 1,458 bytes to a 64-block repository, which is 0.2 % more than the
+  same history sealed without checkpoints; four checkpoints make a 256-block repository 44 % larger than
+  the same history without them (1,356,017 bytes, or 31 % of the repository that has them). Almost all of
+  it is stored text content. See the data model reference.
 - **Bundles carry them.** A bundle's object count includes each checkpoint's manifest and the content Blobs
   it stores — a one-block bundle is 5 objects where it was 4.
 - **`show` reports content a checkpoint stored**, where it printed `<unavailable blob …>` before.
@@ -72,6 +74,14 @@ refused again. Reported by the stikk project in letter 012.
 within `status-report-v1`; `prikk doctor` warns `PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION`. After the fix
 above only a crash or a change during a checkout sets it, and a repository already stuck by the old
 behaviour finds its way out here.
+
+### Changed — `bundle import`'s note says what the import gave, not a route that refuses
+
+`bundle import` ended its output with *"run `trust maintainer add` to trust the sealing key, then `merge`
+to incorporate this history"*. `merge` refuses in a fresh repository (`ref heads/main is not published`),
+and no command turns a received ref into a local branch today. The note now names what the import gave:
+the received history at `remotes/<ref>`, readable with `prikk log --ref remotes/<ref>` and `prikk show`,
+and checked by `prikk verify` once the sealing key is trusted.
 
 ### Changed — breaking once for Rust callers: `SnapshotMaterializationReport` is `#[non_exhaustive]`
 

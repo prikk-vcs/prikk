@@ -197,11 +197,8 @@ RefState: ...
 objects: 9
 new objects: 9
 author key material: 1 recorded (continuity only, not a trust decision)
-note: no local ref was created or advanced, and no MAINTAINER key was trusted; run `trust maintainer add` to trust the sealing key, then `merge` to incorporate this history
+note: no local ref was created or advanced, and no MAINTAINER key was trusted; this repository now holds the received history at remotes/heads/main, which `prikk log --ref remotes/heads/main` and `prikk show` read, and `prikk verify` checks once `trust maintainer add` trusts the sealing key
 ```
-
-The note's last step does not work in a fresh repository: `merge` refuses there, because the repository
-has no `heads/main` to merge into (see *What a restore gives, and what it does not*, below).
 
 **Import records material; it does not create trust.** The imported history lands as
 `remotes/heads/main`, not `heads/main` — no local ref moved, and the maintainer key that sealed it
