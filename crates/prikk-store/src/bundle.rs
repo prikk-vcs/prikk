@@ -928,16 +928,22 @@ pub(crate) fn admit_carried_signatures(
         merged_object_count: 0,
         dropped: Vec::new(),
     };
-    if !layout.format().holds_several_records_per_id() {
-        admission.envelopes = carried.to_vec();
-        return Ok(admission);
-    }
     let policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
+    let several_records = layout.format().holds_several_records_per_id();
     for envelope in carried {
+        // Read through the caller's session, opened under the active lock, so the count below is the one
+        // every other importer sees (RFC 156 §7.4 rule 5).
         let Some(stored) = stored_objects.read_object(envelope.object_id())? else {
+            // A new object is stored as carried; the bound applies to it as to a merge.
+            crate::signature_admission::require_within_signature_bound(envelope, &policy)?;
             admission.envelopes.push(envelope.clone());
             continue;
         };
+        if !several_records {
+            // Format 6: the store keeps the stored record or refuses a different one; nothing merges.
+            admission.envelopes.push(envelope.clone());
+            continue;
+        }
         let decided = crate::signature_admission::admit_signatures(
             &stored,
             envelope,
@@ -945,6 +951,9 @@ pub(crate) fn admit_carried_signatures(
             &mut author_material,
         )?;
         if decided.adds_signatures {
+            // Judged as it would be stored: the union. A copy adding nothing writes nothing, so a set a
+            // local writer filled past the limit never refuses a re-import.
+            crate::signature_admission::require_within_signature_bound(&decided.envelope, &policy)?;
             admission.merged_object_count = admission
                 .merged_object_count
                 .checked_add(1)

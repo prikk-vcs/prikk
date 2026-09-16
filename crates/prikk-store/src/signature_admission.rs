@@ -17,12 +17,60 @@
 //!
 //! An object the repository does not hold yet is not a union, and imports keep storing it as carried,
 //! exactly as before: import records, `verify` decides.
+//!
+//! **The bound (RFC 156 §7.4).** Every envelope an import or exchange would store — new or already held,
+//! as it would be stored after the rules above — may carry at most [`MAX_COUNTED_SIGNATURES_PER_OBJECT`]
+//! counted signatures, or the whole operation is refused with nothing written. Every signature counts
+//! except a MAINTAINER signature by an adopted key that verifies. Whether a signature arrived through an
+//! import is not stored state, so a local writer's own signatures count too; local writers never check,
+//! and are never refused.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, SignerRole};
 
 use crate::author::author_key_index::{AuthorKeyEntry, verify_one_author_signature};
 use crate::trust::{MaintainerTrustPolicy, verify_trusted_signature};
+
+/// The most counted signatures one object may carry when `bundle import` or `sync accept` would store it
+/// (RFC 156 §7.4): every signature except a MAINTAINER signature by an adopted key that verifies.
+pub const MAX_COUNTED_SIGNATURES_PER_OBJECT: usize = 4;
+
+/// The signatures of `envelope` that count toward [`MAX_COUNTED_SIGNATURES_PER_OBJECT`].
+pub(crate) fn counted_signature_count(
+    envelope: &ObjectEnvelope,
+    policy: &MaintainerTrustPolicy,
+) -> usize {
+    let object_id = envelope.object_id();
+    envelope
+        .signatures
+        .iter()
+        .filter(|signature| {
+            !(signature.signer_role == SignerRole::Maintainer
+                && policy.find(&signature.key_id).is_some()
+                && verify_trusted_signature(policy, envelope, signature, object_id).is_ok())
+        })
+        .count()
+}
+
+/// Refuse `envelope` if storing it would put more than [`MAX_COUNTED_SIGNATURES_PER_OBJECT`] counted
+/// signatures on one object.
+pub(crate) fn require_within_signature_bound(
+    envelope: &ObjectEnvelope,
+    policy: &MaintainerTrustPolicy,
+) -> Result<()> {
+    let counted = counted_signature_count(envelope, policy);
+    if counted > MAX_COUNTED_SIGNATURES_PER_OBJECT {
+        return Err(PrikkError::Precondition(format!(
+            "{} {} would carry {counted} counted signatures, above the limit of {} per object -- its \
+             signer set is full (a MAINTAINER signature by an adopted key is not counted); refusing \
+             the whole operation, nothing was written",
+            envelope.object_type,
+            envelope.object_id(),
+            MAX_COUNTED_SIGNATURES_PER_OBJECT
+        )));
+    }
+    Ok(())
+}
 
 /// Why a signature was not stored.
 #[non_exhaustive]

@@ -2862,3 +2862,217 @@ fn a_non_adopted_maintainer_signature_for_a_held_object_is_dropped_and_reported(
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+// RFC 156 §7.4: the bound. The fixture patch is signed by `transport_test_signer(0xa1)`; each bundle below
+// adds AUTHOR signatures by further transport signers, whose key material the target records first — so
+// every one is admissible, and only the bound can refuse.
+
+/// A bundle of `seal_two_block_history_with_author`'s history whose patch also carries a signature by
+/// `transport_test_signer(d)` for every `d` in `extra`, and one by `maintainer` if given.
+fn bundle_with_patch_signers(
+    tag: &str,
+    extra: &[u8],
+    maintainer: Option<&Ed25519MaintainerSigner>,
+) -> prikk_error::Result<(Vec<u8>, ObjectId)> {
+    let root = unique_temp_dir(&format!("{tag}-source"));
+    let source = RepositoryLayout::init(root.clone())?;
+    seal_two_block_history_with_author(&source, &transport_test_signer(0xa1)?, true)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+    let _ = std::fs::remove_dir_all(root);
+    let (ref_name, mut objects, author_keys, _) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let patch = objects
+        .iter_mut()
+        .find(|envelope| envelope.object_type == ObjectType::Patch)
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("no patch".to_string()))?;
+    let patch_id = patch.object_id();
+    for &discriminant in extra {
+        patch.add_signature(author_signature(
+            &transport_test_signer(discriminant)?,
+            patch_id,
+        )?)?;
+    }
+    if let Some(maintainer) = maintainer {
+        patch.add_signature(crate::maintainer_signing::maintainer_signature(
+            maintainer,
+            ObjectType::Patch,
+            patch_id,
+        )?)?;
+    }
+    Ok((
+        encode_bundle(&ref_name, &objects, &author_keys, &test_manifest())?,
+        patch_id,
+    ))
+}
+
+/// A format-7 target that has recorded key material for every transport signer in `signers`.
+fn target_knowing(tag: &str, signers: &[u8]) -> prikk_error::Result<RepositoryLayout> {
+    let target = RepositoryLayout::init(unique_temp_dir(&format!("{tag}-target")))?;
+    let lock = ActiveLock::acquire(&target, DEFAULT_ACTIVE_NAME)?;
+    for &discriminant in signers {
+        let signer = transport_test_signer(discriminant)?;
+        record_author_key_material(&target, signer.key_id(), signer.public_key_bytes(), &lock)?;
+    }
+    Ok(target)
+}
+
+fn assert_bound_refusal(
+    result: &prikk_error::Result<crate::BundleImportReport>,
+    patch_id: ObjectId,
+    count: usize,
+) {
+    assert!(
+        matches!(result, Err(prikk_error::PrikkError::Precondition(message))
+            if message.contains(&format!("patch {patch_id}"))
+                && message.contains(&format!("{count} counted signatures"))
+                && message.contains("limit of 4")),
+        "{result:?}"
+    );
+}
+
+/// §7.4 controls 1 and 3: exactly four counted signatures import; a copy adding a fifth to the held
+/// object refuses, naming it, its count and the limit, and every `.prikk` file is unchanged.
+#[test]
+fn a_fifth_counted_signature_on_a_held_object_refuses_with_nothing_written()
+-> prikk_error::Result<()> {
+    let target = target_knowing("bound-held", &[0xb1, 0xb2, 0xb3, 0xb4])?;
+    let (four, patch_id) = bundle_with_patch_signers("bound-held-four", &[0xb1, 0xb2, 0xb3], None)?;
+    let options = BundleImportOptions::default_limits();
+    import_bundle(&target, &four, &options)?;
+    assert_eq!(stored(&target, patch_id)?.signatures.len(), 4);
+
+    let (five, _) = bundle_with_patch_signers("bound-held-five", &[0xb1, 0xb2, 0xb3, 0xb4], None)?;
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let refused = import_bundle(&target, &five, &options);
+    assert_bound_refusal(&refused, patch_id, 5);
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before
+    );
+    let _ = std::fs::remove_dir_all(target.root());
+    Ok(())
+}
+
+/// §7.4 control 2: a **new** object carrying five counted signatures refuses too, with nothing written.
+#[test]
+fn a_new_object_carrying_five_counted_signatures_refuses_with_nothing_written()
+-> prikk_error::Result<()> {
+    let target = target_knowing("bound-new", &[0xb1, 0xb2, 0xb3, 0xb4])?;
+    let (five, patch_id) =
+        bundle_with_patch_signers("bound-new-five", &[0xb1, 0xb2, 0xb3, 0xb4], None)?;
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let refused = import_bundle(&target, &five, &BundleImportOptions::default_limits());
+    assert_bound_refusal(&refused, patch_id, 5);
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before
+    );
+    let _ = std::fs::remove_dir_all(target.root());
+    Ok(())
+}
+
+/// §7.4 control 3 on its own: a new object with exactly four counted signatures imports.
+#[test]
+fn exactly_four_counted_signatures_import() -> prikk_error::Result<()> {
+    let target = target_knowing("bound-exact", &[0xb1, 0xb2, 0xb3])?;
+    let (four, patch_id) =
+        bundle_with_patch_signers("bound-exact-four", &[0xb1, 0xb2, 0xb3], None)?;
+    import_bundle(&target, &four, &BundleImportOptions::default_limits())?;
+    assert_eq!(stored(&target, patch_id)?.signatures.len(), 4);
+    let _ = std::fs::remove_dir_all(target.root());
+    Ok(())
+}
+
+/// §7.4 control 4: a MAINTAINER signature by an adopted key that verifies does not count — four AUTHOR
+/// signatures plus one import, on a new object and merged onto a held one.
+#[test]
+fn an_adopted_maintainer_signature_is_not_counted() -> prikk_error::Result<()> {
+    let maintainer = Ed25519MaintainerSigner::from_seed("bound-adopted-maintainer", &[0x7a; 32])?;
+    let target = target_knowing("bound-adopted", &[0xb1, 0xb2, 0xb3])?;
+    crate::trust::add_trusted_maintainer(
+        &target,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    let options = BundleImportOptions::default_limits();
+
+    let (four, patch_id) =
+        bundle_with_patch_signers("bound-adopted-four", &[0xb1, 0xb2, 0xb3], None)?;
+    import_bundle(&target, &four, &options)?;
+    let (with_maintainer, _) = bundle_with_patch_signers(
+        "bound-adopted-merge",
+        &[0xb1, 0xb2, 0xb3],
+        Some(&maintainer),
+    )?;
+    let merged = import_bundle(&target, &with_maintainer, &options)?;
+    assert_eq!(merged.merged_object_count, 1);
+    assert_eq!(stored(&target, patch_id)?.signatures.len(), 5);
+
+    let fresh = target_knowing("bound-adopted-fresh", &[0xb1, 0xb2, 0xb3])?;
+    crate::trust::add_trusted_maintainer(
+        &fresh,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    import_bundle(&fresh, &with_maintainer, &options)?;
+    assert_eq!(stored(&fresh, patch_id)?.signatures.len(), 5);
+
+    let _ = std::fs::remove_dir_all(target.root());
+    let _ = std::fs::remove_dir_all(fresh.root());
+    Ok(())
+}
+
+/// §7.4 control 5: a local writer merging onto a full set is not refused; and a later import adding
+/// nothing to that set is not refused either (nothing would be stored).
+#[test]
+fn a_local_writer_merges_onto_a_full_set_and_a_reimport_adding_nothing_still_imports()
+-> prikk_error::Result<()> {
+    let target = target_knowing("bound-local", &[0xb1, 0xb2, 0xb3])?;
+    let (four, patch_id) =
+        bundle_with_patch_signers("bound-local-four", &[0xb1, 0xb2, 0xb3], None)?;
+    let options = BundleImportOptions::default_limits();
+    import_bundle(&target, &four, &options)?;
+
+    let mut local = stored(&target, patch_id)?;
+    local.add_signature(author_signature(&transport_test_signer(0xb4)?, patch_id)?)?;
+    FileObjectStore::new(target.clone()).write_object(&local)?;
+    assert_eq!(stored(&target, patch_id)?.signatures.len(), 5);
+
+    let reimported = import_bundle(&target, &four, &options)?;
+    assert_eq!(reimported.merged_object_count, 0);
+    let _ = std::fs::remove_dir_all(target.root());
+    Ok(())
+}
+
+/// §7.4 control 7: an import that fills the set between another import's validation and its lock is
+/// seen by that import, which then refuses — the count is read under the lock.
+#[test]
+fn an_import_filling_the_set_before_the_lock_is_seen_by_the_racing_import()
+-> prikk_error::Result<()> {
+    let target = target_knowing("bound-race", &[0xb1, 0xb2, 0xb3, 0xb4])?;
+    let options = BundleImportOptions::default_limits();
+    let (three, patch_id) = bundle_with_patch_signers("bound-race-three", &[0xb1, 0xb2], None)?;
+    import_bundle(&target, &three, &options)?;
+    let (filling, _) = bundle_with_patch_signers("bound-race-fill", &[0xb1, 0xb2, 0xb3], None)?;
+    let (racing, _) = bundle_with_patch_signers("bound-race-racing", &[0xb1, 0xb2, 0xb4], None)?;
+
+    let concurrent = target.clone();
+    let filled = std::rc::Rc::new(std::cell::Cell::new(false));
+    let filled_in_seam = std::rc::Rc::clone(&filled);
+    crate::bundle::before_import_lock_for_test(move || {
+        filled_in_seam.set(
+            import_bundle(
+                &concurrent,
+                &filling,
+                &BundleImportOptions::default_limits(),
+            )
+            .is_ok(),
+        );
+    });
+    let refused = import_bundle(&target, &racing, &options);
+    assert!(filled.get(), "the concurrent import must fill the set");
+    assert_bound_refusal(&refused, patch_id, 5);
+    assert_eq!(stored(&target, patch_id)?.signatures.len(), 4);
+    let _ = std::fs::remove_dir_all(target.root());
+    Ok(())
+}

@@ -229,7 +229,9 @@ pub use show::{
     ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent, ShowPatch,
     ShowPathResolution, show,
 };
-pub use signature_admission::{DroppedSignature, DroppedSignatureReason};
+pub use signature_admission::{
+    DroppedSignature, DroppedSignatureReason, MAX_COUNTED_SIGNATURES_PER_OBJECT,
+};
 pub use signature_diagnostics::{SignatureEnvelopeIssue, SignatureEnvelopeSource};
 pub use snapshot::SnapshotManifest;
 pub use state_root::{

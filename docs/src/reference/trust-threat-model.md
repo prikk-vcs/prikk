@@ -201,7 +201,9 @@ Patch's AUTHOR signatures against recorded key material (DC-53), and fails when 
 when a `key_id`'s recorded material contradicts itself** — but that is continuity, not identity.
 **Every signature of a role is checked, not only the first:** an object may carry several signers
 (format 7), and a second AUTHOR signature that does not verify fails `verify` just as a first would; so
-does a MAINTAINER signature by an adopted key on a publication object.
+does a MAINTAINER signature by an adopted key on a publication object. It does not enforce historical PKI
+semantics, AUTHOR revocation, rotation, expiration, threshold policy beyond `required = 1`, remote policy,
+hosted identity, or complete crash-proof durability.
 
 **Several signers on one object.** Signatures are not part of an object's id, so two signers of the same
 content produce the same id — in format 7 their copies merge into one stored object carrying both
@@ -210,9 +212,22 @@ incoming signature first and refuse the whole import or exchange, writing nothin
 MAINTAINER signature is kept only when this repository has adopted its key, and is otherwise dropped and
 reported; an AUTHOR signature needs recorded or carried key material, under unchanged trust-on-first-use
 binding. `show` names every AUTHOR signer of a rename; `author_key_id` stays the first in canonical order
-(key id bytes), which is ordering, not precedence — no signer on an object outranks another. It does
-not enforce historical PKI semantics, AUTHOR revocation, rotation, expiration, threshold policy beyond
-`required = 1`, remote policy, hosted identity, or complete crash-proof durability.
+(key id bytes), which is ordering, not precedence — no signer on an object outranks another.
+
+**At most 4 counted signatures per object, at the door.** Every signature `verify` checks costs a
+verification, so `bundle import` and `sync accept` refuse — the whole operation, nothing written — any
+object they would store, new or already held, carrying more than **4** counted signatures
+(`MAX_COUNTED_SIGNATURES_PER_OBJECT`). Every signature counts except a MAINTAINER signature by a key this
+repository has adopted that verifies; for a new object that includes non-adopted MAINTAINER, CI and AUDIT
+signatures, which are still stored as carried so a later adoption can trust them. The refusal names the
+object, its count and the limit. Local writers (`commit`, `seal`, `sync seal`, rollback drafts, tags)
+never check the limit and are never refused. Whether a signature arrived through an import is not
+recorded, so the count is read from the object as stored, under the lock every importer takes.
+
+**The residual.** A signer that is neither adopted here nor the operator can be refused on an object
+whose set is full, and the operator's own AUTHOR signatures count toward filling it. That needs a local
+AUTHOR signature on an object other signers also hold, which in practice only deterministic payloads such
+as rollback drafts reach.
 
 ## Rollback-Draft Boundary
 

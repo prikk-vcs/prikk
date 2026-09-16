@@ -91,7 +91,15 @@ other order, when the receiver imports first and seals afterwards. What may join
 checked first: every incoming signature must verify, or the whole import or exchange is refused with
 nothing written; a MAINTAINER signature is kept only if this repository has adopted its key, and is
 otherwise dropped and named on a `signature not stored:` line; an AUTHOR signature needs key material
-under the usual trust-on-first-use rules. Nothing arrives pre-trusted. A format-6 repository — one
+under the usual trust-on-first-use rules. Nothing arrives pre-trusted.
+
+**An object carries at most 4 counted signatures when an import or exchange would store it.** Every
+signature counts except a MAINTAINER signature by an adopted key that verifies; above the limit the whole
+import or exchange refuses, naming the object, its count and `limit of 4`, and writes nothing. It applies
+to new objects and merges alike. Local commands never check it and are never refused. `seal` signs with
+an adopted maintainer key, which does not count; your own AUTHOR signatures do, so on an object whose set
+they helped fill, another signer's copy is refused. See
+[Trust and Threat Model](../reference/trust-threat-model.md). A format-6 repository — one
 created by 0.44.0 or earlier and not yet upgraded — still holds one signed copy per id and refuses with
 `existing container record for <id> differs from candidate`, naming `prikk format upgrade`.
 

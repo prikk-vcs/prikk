@@ -822,3 +822,58 @@ fn a_patch_whose_second_author_signature_is_invalid_refuses_the_exchange() -> Re
     let _ = std::fs::remove_dir_all(receiver.root());
     Ok(())
 }
+
+/// RFC 156 §7.4 control 6: the bound through `sync accept` — five counted signatures on a new patch
+/// refuse; four accept; a copy adding a fifth to the held patch refuses. Nothing is written by a refusal.
+#[test]
+fn the_signature_bound_holds_through_accept() -> Result<()> {
+    let first = author_signer(0x61)?;
+    let extra = [
+        author_signer(0x62)?,
+        author_signer(0x63)?,
+        author_signer(0x64)?,
+        author_signer(0x65)?,
+    ];
+    let (bytes, patch_id) = build_single_patch_artifact("pexch-accept-bound-sender", &first, true)?;
+    let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000)?;
+    let with_signers = |count: usize| -> Result<Vec<u8>> {
+        let mut patch = decoded.patches[0].clone();
+        for signer in extra.iter().take(count) {
+            patch.add_signature(crate::author_signature(signer, patch_id)?)?;
+        }
+        reencode_artifact(&bytes, Some(vec![patch]), None, None, None)
+    };
+    let receiver = fresh_repo("pexch-accept-bound-receiver")?;
+    let lock = ActiveLock::acquire(&receiver, DEFAULT_ACTIVE_NAME)?;
+    for signer in &extra {
+        record_author_key_material(&receiver, signer.key_id(), signer.public_key_bytes(), &lock)?;
+    }
+    drop(lock);
+    let options = AcceptOptions::default_limits();
+    let is_bound_refusal = |result: &Result<super::AcceptReport>, count: usize| {
+        matches!(result, Err(prikk_error::PrikkError::Precondition(message))
+            if message.contains(&format!("patch {patch_id}"))
+                && message.contains(&format!("{count} counted signatures"))
+                && message.contains("limit of 4"))
+    };
+
+    let before = crate::test_gates::test_support::repository_bytes(&receiver)?;
+    let new_five = accept_exchange_artifact(&receiver, &with_signers(4)?, &options);
+    assert!(is_bound_refusal(&new_five, 5), "{new_five:?}");
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&receiver)?,
+        before
+    );
+
+    accept_exchange_artifact(&receiver, &with_signers(3)?, &options)?;
+    let before = crate::test_gates::test_support::repository_bytes(&receiver)?;
+    let held_five = accept_exchange_artifact(&receiver, &with_signers(4)?, &options);
+    assert!(is_bound_refusal(&held_five, 5), "{held_five:?}");
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&receiver)?,
+        before
+    );
+
+    let _ = std::fs::remove_dir_all(receiver.root());
+    Ok(())
+}

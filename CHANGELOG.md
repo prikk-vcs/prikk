@@ -30,6 +30,11 @@ trust-on-first-use binding. Both commands print `objects gaining signatures: N` 
 whose payload differs under the same id is still refused as corruption, and a format-6 repository still
 refuses any second copy, naming `prikk format upgrade`.
 
+**At most 4 counted signatures per object** (`MAX_COUNTED_SIGNATURES_PER_OBJECT`, new): `bundle import` and
+`sync accept` refuse — the whole operation, nothing written — any object they would store, new or already
+held, carrying more. A MAINTAINER signature by an adopted key that verifies does not count. Local writers
+never check the limit, but their own AUTHOR signatures count toward it.
+
 ### Fixed — `verify` checked only the first signature of a role
 
 `verify` checked a patch's first AUTHOR signature and a publication object's first adopted MAINTAINER
