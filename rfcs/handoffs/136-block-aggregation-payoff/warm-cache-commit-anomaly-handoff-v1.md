@@ -1,6 +1,8 @@
 # The warm-cache `commit` anomaly — measurement handoff v1
 
-**Live 2026-09-17.** 0.45.0, measure-only. **Do this first among the 0.45.0 items:** the answer decides whether 0.47.0
+**Order of work for 0.45.0 (the four handoffs of 2026-09-17):** 1. `136-block-aggregation-payoff/warm-cache-commit-anomaly-handoff-v1.md` (measure-only); 2. `135-first-run-entrance-and-configuration/distinct-default-key-ids-handoff-v1.md`; 3. `144-two-point-comparison/merge-with-renames-design-handoff-v1.md` (report only); 4. `132-error-taxonomy-structure/absent-and-received-ref-refusals-handoff-v1.md`. Take them one at a time, each reported and reviewed before the next.
+
+**Live 2026-09-17.** 0.45.0, measure-only. It goes first because the answer decides whether 0.47.0
 (RFC 136 increment 2c) is a performance round or a cache-defect fix that moves ahead of 0.46.0 (ROADMAP schedule row).
 **No product code changes in this round.**
 

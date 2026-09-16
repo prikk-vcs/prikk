@@ -1,5 +1,7 @@
 # Merge of a branch containing a rename — design-round handoff v1
 
+**Order of work for 0.45.0 (the four handoffs of 2026-09-17):** 1. `136-block-aggregation-payoff/warm-cache-commit-anomaly-handoff-v1.md` (measure-only); 2. `135-first-run-entrance-and-configuration/distinct-default-key-ids-handoff-v1.md`; 3. `144-two-point-comparison/merge-with-renames-design-handoff-v1.md` (report only); 4. `132-error-taxonomy-structure/absent-and-received-ref-refusals-handoff-v1.md`. Take them one at a time, each reported and reviewed before the next.
+
 **Live 2026-09-17.** 0.45.0 item 2 (ROADMAP row 15b). **This is a design round: it ends in a report, and no product
 code changes.** Implementation is handed off only after the architect rules on the report.
 
