@@ -489,3 +489,28 @@ rather than by a reader.
    the status side — **go into the 0.43.0 prep round** as regression protection.
 3. **`prikk mv --drop-declaration`** is a candidate for the owner's scheduling, not this round's work; the
    refusal explains the manual route.
+
+## 2g. RULED 2026-09-16 — presence is one definition, because §2f's two views disagreed
+
+stikk's letter 014 measured a state §2f's parity claim did not hold in: with a **directory** at a declaration's
+destination, `worktree-status` resolved `rename` while `commit` recorded a deletion and called the destination
+*ignored*. Reproduced by the architect on the released 0.43.0 asset, empty directory and non-empty alike.
+
+**Where §2f went wrong.** It ruled one classifier "called by both callers with their own baseline and presence
+views". The classifier was shared; the definition of *present* was not. Status counted any entry on disk,
+commit counted regular files from its walk, and `resolve_one` then read "on disk but absent" as "ignored". §2f's
+review verified parity across its table's states — all regular files — and never varied the entry kind. **The
+architect's miss.**
+
+**RULED:**
+1. **Presence is decided inside the classifier, by commit's own entry classification** — never by a
+   caller-supplied closure.
+2. **A directory at the destination resolves `deletion`**, and commit's disclosure names it
+   (*"destination is a directory; recorded as a deletion, not a rename"*).
+3. **`deletion-ignored` only when the ignore rules exclude the destination.**
+4. **No new resolution value** in the patch release; `deletion`'s documented meaning widens to cover a destination
+   that is no longer a file.
+5. **Symlinks and special files are measured, and kept or reported**, not assumed.
+
+A parity matrix across entry kinds becomes the control. Handoff:
+`rfcs/handoffs/147-refusal-visibility/declaration-presence-is-one-definition-handoff-v1.md`. Ships in 0.43.1.
