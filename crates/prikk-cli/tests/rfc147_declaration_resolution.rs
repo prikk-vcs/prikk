@@ -244,67 +244,112 @@ fn every_route_a_refusal_names_works_in_that_state() {
     for State {
         tag,
         reach,
-        resolution: expected,
+        resolution,
     } in states()
     {
-        if expected != "refused" {
+        if resolution != "refused" {
             continue;
         }
-        let probe = declared_repo(&format!("rfc147-routes-{tag}"));
-        reach(&probe);
+        let build = |repo_tag: &str| {
+            let repo = declared_repo(repo_tag);
+            reach(&repo);
+            repo
+        };
+        let probe = build(&format!("rfc147-routes-{tag}"));
         let refusal = only_declaration(&status(&probe))
             .get("refusal")
             .as_str()
             .to_owned();
         let _ = std::fs::remove_dir_all(&probe);
-        let routes = routes(&refusal);
-        assert!(
-            !routes.is_empty(),
-            "{tag}: the refusal must name at least one way out: {refusal}"
+        run_named_routes(tag, &refusal, &build);
+    }
+}
+
+/// Control 2b (§3.2, the third refusal): the destination is another tracked node this commit does
+/// not also move. Reached by deleting the tracked destination and then declaring the move onto it.
+#[test]
+fn an_occupied_destination_names_a_route_that_works() {
+    let build = |tag: &str| {
+        let repo = support::unique_repo(tag);
+        support::init(&repo);
+        support::trust_maintainer(&repo);
+        std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
+        std::fs::write(repo.join("b.txt"), b"beta\n").unwrap();
+        support::ok(
+            &support::commit(&repo, "heads/main", "genesis"),
+            "genesis commit",
         );
+        support::ok(&support::seal(&repo, "heads/main"), "genesis seal");
+        std::fs::remove_file(repo.join("b.txt")).unwrap();
+        support::ok(&run(&repo, &["mv", "a.txt", "b.txt"]), "mv a.txt b.txt");
+        repo
+    };
 
-        for (index, route) in routes.iter().enumerate() {
-            let repo = declared_repo(&format!("rfc147-route-{tag}-{index}"));
-            reach(&repo);
-            for path in &route.deletes {
-                std::fs::remove_file(repo.join(path)).unwrap_or_else(|err| {
-                    panic!("{tag}: the refusal says to delete {path}: {err}")
-                });
-            }
-            if let Some(command) = &route.command {
-                let args: Vec<&str> = command.iter().map(String::as_str).collect();
-                support::ok(
-                    &run(&repo, &args),
-                    &format!("{tag}: the named command `prikk {}`", args.join(" ")),
-                );
-            }
+    let probe = build("rfc147-occupied");
+    let report = status(&probe);
+    let declaration = only_declaration(&report);
+    assert_eq!(declaration.get("resolution").as_str(), "refused");
+    let refusal = declaration.get("refusal").as_str().to_owned();
+    assert!(
+        refusal.contains("the destination is already occupied"),
+        "{refusal}"
+    );
+    let refused = run(&probe, &["commit", "--ref", "heads/main", "-m", "occupied"]);
+    assert_eq!(
+        stderr(&refused).trim(),
+        format!("error: precondition not met: {refusal}"),
+        "commit refuses with the reported message"
+    );
+    let _ = std::fs::remove_dir_all(&probe);
 
-            let report = status(&repo);
-            assert_eq!(
-                count(&report, "refused_declaration_count"),
-                "0",
-                "{tag} route {index}: no refusal may survive the route it named: {refusal}"
-            );
-            // A route that drops the declaration can leave the worktree matching its baseline
-            // exactly -- `prikk mv b.txt a.txt` in the moved-back state nets to no move -- and
-            // "nothing to commit" is that route working, not failing. Anything else is not.
-            let committed = run(
-                &repo,
-                &["commit", "--ref", "heads/main", "-m", "after the route"],
-            );
-            assert!(
-                committed.status.success()
-                    || stderr(&committed)
-                        .contains("worktree has no node-addressed changes to commit"),
-                "{tag} route {index}: the commit after `{refusal}` failed: {}",
-                stderr(&committed)
-            );
-            let kept = std::fs::read(repo.join("a.txt"))
-                .or_else(|_| std::fs::read(repo.join("b.txt")))
-                .unwrap_or_else(|err| panic!("{tag} route {index}: the file is gone: {err}"));
-            assert!(!kept.is_empty(), "{tag} route {index}: the file is empty");
-            let _ = std::fs::remove_dir_all(&repo);
+    run_named_routes("occupied-destination", &refusal, &build);
+}
+
+/// Run every route a refusal names, in a fresh repository put back into the state that produced it.
+fn run_named_routes(tag: &str, refusal: &str, build: &impl Fn(&str) -> PathBuf) {
+    let routes = routes(refusal);
+    assert!(
+        !routes.is_empty(),
+        "{tag}: the refusal must name at least one way out: {refusal}"
+    );
+    for (index, route) in routes.iter().enumerate() {
+        let repo = build(&format!("rfc147-route-{tag}-{index}"));
+        for path in &route.deletes {
+            std::fs::remove_file(repo.join(path))
+                .unwrap_or_else(|err| panic!("{tag}: the refusal says to delete {path}: {err}"));
         }
+        if let Some(command) = &route.command {
+            let args: Vec<&str> = command.iter().map(String::as_str).collect();
+            support::ok(
+                &run(&repo, &args),
+                &format!("{tag}: the named command `prikk {}`", args.join(" ")),
+            );
+        }
+
+        let report = status(&repo);
+        assert_eq!(
+            count(&report, "refused_declaration_count"),
+            "0",
+            "{tag} route {index}: no refusal may survive the route it named: {refusal}"
+        );
+        // A route that drops the declaration can leave the worktree matching its baseline exactly --
+        // `prikk mv b.txt a.txt` in the moved-back state nets to no move -- and "nothing to commit"
+        // is that route working, not failing. Anything else is not.
+        let committed = run(
+            &repo,
+            &["commit", "--ref", "heads/main", "-m", "after the route"],
+        );
+        assert!(
+            committed.status.success()
+                || stderr(&committed).contains("worktree has no node-addressed changes to commit"),
+            "{tag} route {index}: the commit after `{refusal}` failed: {}",
+            stderr(&committed)
+        );
+        let kept = std::fs::read(repo.join("a.txt"))
+            .or_else(|_| std::fs::read(repo.join("b.txt")))
+            .unwrap_or_else(|err| panic!("{tag} route {index}: the file is gone: {err}"));
+        assert!(!kept.is_empty(), "{tag} route {index}: the file is empty");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
 
