@@ -238,6 +238,7 @@ item is open.
 <!-- open-work-index:start -->
 
 - [`153-content-diff.md`](rfcs/proposed/153-content-diff.md) — `prikk diff`: two points of history or the worktree against its baseline; owner approved the direction 2026-09-13; proposed as the theme after 0.43
+- [`156-one-object-several-signers.md`](rfcs/proposed/156-one-object-several-signers.md) — what a repository does when one object arrives under a second valid signature: a verified signature union instead of first-copy-wins; 0.45.0 item 0; direction and the signer bound are the owner's
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here
