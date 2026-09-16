@@ -165,6 +165,16 @@ deletion names. Receivers are unchanged, and a bundle from this release still im
 content nothing had stored. `seal` now derives that content and stores it, so undoing such a deletion
 works locally.
 
+### Fixed — on Windows, re-checking out an unchanged file was reported as a write
+
+`checkout --snapshot-materialize` and `--patch-materialize` decide "unchanged" by comparing the file's
+bytes and then its POSIX mode. On a platform with no observable POSIX mode — Windows — there is no mode to
+compare, so the comparison never matched: every file whose bytes already matched was counted under
+`written files:` instead of `unchanged files:`, and the mode was set again for it. Identical bytes are now
+`unchanged` there, as they already were on Linux. **Nothing on disk changes**: setting the mode is a
+documented no-op on Windows, so this corrects a count and stops work that achieved nothing. A file that
+disappears mid-checkout is still refused, on every platform.
+
 ### Fixed — a checkout retry that only fixes a file's mode makes the write durable
 
 When a checkout wrote a file but failed to sync its directory, the next checkout found the file's

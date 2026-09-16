@@ -274,3 +274,10 @@ one where a different platform checks Windows' output.
   on Windows (see the guarantee table above) — this is a missing capability (an executable file's
   initial creation cannot be authored from such a worktree), not data loss — a previously-recorded
   executable bit is never silently dropped from sealed history by this platform difference.
+- **Re-checking out a file whose bytes already match, on such a platform**: the file is recognized as
+  unchanged **by its bytes alone**, since there is no observable mode to compare them against, and
+  `checkout --snapshot-materialize` / `--patch-materialize` count it under `unchanged files:` exactly as
+  they do on Linux. Until 0.43.0 every such file was counted under `written files:` instead, and the
+  no-op `set_permission_bits` was called again for it — a wrong count and pointless work, never a wrong
+  byte on disk (DC-87). A file that *disappears* between its bytes being read and its mode being read
+  is a different case and still refuses the checkout, on every platform.

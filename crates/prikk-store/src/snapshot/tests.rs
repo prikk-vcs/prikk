@@ -184,6 +184,64 @@ fn snapshot_materialization_is_idempotent_for_same_bytes() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// DC-87: the same idempotency, on a platform with **no observable POSIX mode** — where the mode
+/// comparison that decides `Unchanged` has nothing to compare.
+///
+/// This is the Windows failure, reproduced on Linux through the observation seam rather than a `cfg`,
+/// so the control exercises the code Windows runs. Before the fix, the second materialization set the
+/// mode again and reported `written_files: 1` for a file whose bytes already matched.
+#[test]
+fn snapshot_materialization_is_idempotent_without_an_observable_mode() {
+    let root = unique_temp_dir("snapshot-materialize-idempotent-no-mode");
+    let layout = RepositoryLayout::init(root.clone());
+    assert!(layout.is_ok());
+    if let Ok(layout) = layout {
+        let published = publish_snapshot_block(&layout, "README.md", b"hello\n");
+        assert!(published.is_ok());
+        assert!(crate::materialize_snapshot_checkout(&layout, "heads/main").is_ok());
+        let second = crate::worktree::with_unobservable_mode_for_test(|| {
+            crate::materialize_snapshot_checkout(&layout, "heads/main")
+        });
+        assert!(second.is_ok());
+        if let Ok(second) = second {
+            assert_eq!(
+                second.written_files, 0,
+                "identical bytes are not a write, with or without an observable mode"
+            );
+            assert_eq!(second.unchanged_files, 1);
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// DC-87: a file that disappears between its bytes being read and its mode being stat'd is the
+/// changed-during-the-checkout case, not "this platform has no mode". Both arrive as a `None`, and
+/// only the inner one may be read as unchanged.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_removed_mid_entry_is_refused_not_reported_unchanged() {
+    let root = unique_temp_dir("snapshot-materialize-vanished");
+    let layout = RepositoryLayout::init(root.clone());
+    assert!(layout.is_ok());
+    if let Ok(layout) = layout {
+        let published = publish_snapshot_block(&layout, "README.md", b"hello\n");
+        assert!(published.is_ok());
+        assert!(crate::materialize_snapshot_checkout(&layout, "heads/main").is_ok());
+        let target = root.join("README.md");
+        crate::worktree::before_stat_for_test(move || {
+            let _ = std::fs::remove_file(&target);
+        });
+        let second = crate::materialize_snapshot_checkout(&layout, "heads/main");
+        match second {
+            Err(prikk_error::PrikkError::Precondition(message)) => {
+                assert!(message.contains("changed during the checkout"), "{message}")
+            }
+            other => panic!("expected the changed-during-the-checkout precondition, got {other:?}"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 fn snapshot_materialization_refuses_conflicting_existing_file() {
     let root = unique_temp_dir("snapshot-materialize-conflict");

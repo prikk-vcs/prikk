@@ -74,7 +74,10 @@ fn every_read_only_anchor_caller_is_a_read_only_report() {
 /// either fails here, naming the file.
 #[test]
 fn only_worktree_writes_use_the_verified_anchor() {
-    fn files_naming(needle: &str) -> Vec<String> {
+    // Paths, never rendered strings: `Path` compares by component, so `Path::new("a/b.rs")` equals the
+    // `a\b.rs` this walk yields on Windows, while the `display()` string it used to build did not --
+    // which is what made this test the Windows suite's second failure (DC-87).
+    fn files_naming(needle: &str) -> Vec<PathBuf> {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut stack = vec![src.clone()];
         let mut found = Vec::new();
@@ -105,12 +108,7 @@ fn only_worktree_writes_use_the_verified_anchor() {
                     .lines()
                     .any(|line| !line.trim_start().starts_with("//") && line.contains(needle))
                 {
-                    found.push(
-                        path.strip_prefix(&src)
-                            .unwrap_or(&path)
-                            .display()
-                            .to_string(),
-                    );
+                    found.push(path.strip_prefix(&src).unwrap_or(&path).to_path_buf());
                 }
             }
         }
@@ -119,12 +117,21 @@ fn only_worktree_writes_use_the_verified_anchor() {
     }
     assert_eq!(
         files_naming("Anchoring::VerifiedWorktreeWrite"),
-        ["patch_replay.rs", "patch_replay/anchor.rs"],
+        // Component order, not byte order: `Path`'s `Ord` compares components, so the directory entry
+        // sorts before the file whose stem it shares -- the same on every platform.
+        [
+            Path::new("patch_replay/anchor.rs"),
+            Path::new("patch_replay.rs")
+        ],
         "files naming the verified worktree-write anchor"
     );
     assert_eq!(
         files_naming("replay_for_verified_worktree_write("),
-        ["branch_switch.rs", "patch_checkout.rs", "patch_replay.rs"],
+        [
+            Path::new("branch_switch.rs"),
+            Path::new("patch_checkout.rs"),
+            Path::new("patch_replay.rs")
+        ],
         "callers of the verified worktree-write replay"
     );
 }

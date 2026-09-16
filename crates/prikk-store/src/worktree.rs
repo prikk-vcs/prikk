@@ -11,9 +11,9 @@ use prikk_error::{PrikkError, Result};
 use crate::DEFAULT_ACTIVE_NAME;
 use crate::checkout::load_snapshot_checkout;
 use crate::foundation::fsutil::{
-    EntryKind, ensure_directory_required, inspect_entry, read_file_if_exists, read_file_required,
-    set_regular_file_mode_required, stat_file_state_if_exists, sync_directory_required,
-    write_worktree_file_atomically,
+    EntryKind, RootFileStat, ensure_directory_required, inspect_entry, read_file_if_exists,
+    read_file_required, set_regular_file_mode_required, stat_file_state_if_exists,
+    sync_directory_required, write_worktree_file_atomically,
 };
 use crate::foundation::layout::RepositoryLayout;
 use crate::lock::ActiveLock;
@@ -154,20 +154,37 @@ fn materialize_replay_entry(
                 entry.path.as_str()
             )));
         }
-        // `stat.mode` is `None` on a platform with no observable POSIX mode (DC-87 §3.3/§4.3), in
-        // which case `current_mode` is `None` here too: the comparison below never matches, the
-        // skip-optimization never fires, and `set_regular_file_mode_required` always runs — `entry`'s
-        // already-decided mode, not this stat, is what ends up on disk either way.
-        let current_mode = stat_file_state_if_exists(layout.worktree_mutation_root(), relative)?
-            .and_then(|stat| stat.mode)
-            .map(|mode| mode & 0o7777);
-        // Re-sync the containing directory on both arms: identical bytes here may be an earlier
+        // Gated like the seam above, and for the same reason: its only callers are Linux-only tests.
+        #[cfg(all(test, target_os = "linux"))]
+        if let Some(change) = BEFORE_STAT.with(|slot| slot.borrow_mut().take()) {
+            change();
+        }
+        // **Two different `None`s, and collapsing them was the defect (DC-87).** The *outer* one is
+        // the file having gone between the read above and this stat — the same
+        // changed-during-the-checkout case as the byte difference, so it stays an error. The *inner*
+        // one is a platform with no observable POSIX mode (DC-87 §3.3/§4.3), where there is no mode
+        // to compare and the bytes are the whole of "unchanged".
+        let Some(stat) = stat_file_state_if_exists(layout.worktree_mutation_root(), relative)?
+        else {
+            return Err(PrikkError::Precondition(format!(
+                "{} changed during the checkout, so the worktree is partly written; move that file \
+                 aside, then {DIRTY_MARKER_ROUTE}",
+                entry.path.as_str()
+            )));
+        };
+        // Re-sync the containing directory on every arm: identical bytes here may be an earlier
         // attempt's write whose directory sync failed, and that attempt also never set the mode --
         // so the mode-fixing arm is exactly where an unrepaired rename would otherwise stay
         // undurable (found moving `sync_matrix`'s retry test onto this materializer, RFC 136 1a).
         sync_directory_required(layout.worktree_mutation_root(), relative)?;
-        if current_mode == Some(entry.mode & 0o7777) {
-            return Ok(EntryWriteOutcome::Unchanged);
+        match observed_mode(&stat) {
+            // No observable mode: the bytes already match, so nothing about this file differs from
+            // what the manifest asks for. Setting the mode here is a documented no-op on such a
+            // platform (`anchored/windows.rs::set_permission_bits`), so skipping it changes nothing
+            // on disk — it only stops the report claiming a write that wrote nothing.
+            None => return Ok(EntryWriteOutcome::Unchanged),
+            Some(mode) if mode == entry.mode & 0o7777 => return Ok(EntryWriteOutcome::Unchanged),
+            Some(_) => {}
         }
         set_regular_file_mode_required(layout.worktree_mutation_root(), relative, entry.mode)?;
         return Ok(EntryWriteOutcome::Written);
@@ -175,6 +192,34 @@ fn materialize_replay_entry(
     write_worktree_file_atomically(layout.worktree_mutation_root(), relative, &entry.bytes)?;
     set_regular_file_mode_required(layout.worktree_mutation_root(), relative, entry.mode)?;
     Ok(EntryWriteOutcome::Written)
+}
+
+/// The file's POSIX mode as this platform can observe it, or `None` where it cannot.
+///
+/// A function rather than a field read so the "no observable mode" arm above can be reached on Linux,
+/// where a real stat always carries a mode. The seam is on the **observation**, not a `cfg`: the
+/// control then runs the same code Windows runs, instead of a second copy of it (DC-87).
+fn observed_mode(stat: &RootFileStat) -> Option<u32> {
+    #[cfg(test)]
+    if UNOBSERVABLE_MODE.with(std::cell::Cell::get) {
+        return None;
+    }
+    stat.mode.map(|mode| mode & 0o7777)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: report every mode as unobservable, as a platform without POSIX modes does.
+    static UNOBSERVABLE_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `body` with modes reported as unobservable, then restore. Test-only.
+#[cfg(test)]
+pub(crate) fn with_unobservable_mode_for_test<T>(body: impl FnOnce() -> T) -> T {
+    UNOBSERVABLE_MODE.with(|flag| flag.set(true));
+    let outcome = body();
+    UNOBSERVABLE_MODE.with(|flag| flag.set(false));
+    outcome
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,4 +318,18 @@ thread_local! {
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) fn between_plan_and_write_for_test(change: impl FnOnce() + 'static) {
     BETWEEN_PLAN_AND_WRITE.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
+}
+
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    static BEFORE_STAT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam, unreachable from production: run `change` once, after an existing file's bytes are read
+/// and before it is stat'd — the window in which the file can disappear, which is the *outer* `None`
+/// the mode check must not confuse with a platform that has no POSIX mode (DC-87).
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn before_stat_for_test(change: impl FnOnce() + 'static) {
+    BEFORE_STAT.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
