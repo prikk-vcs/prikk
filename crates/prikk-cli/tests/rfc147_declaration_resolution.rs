@@ -87,18 +87,61 @@ fn declared_repo(tag: &str) -> PathBuf {
     repo
 }
 
-/// One row of the handoff's table: a name, the step that reaches the state, and what `commit` does.
+/// A repository whose only tracked file is `keep.txt`, plus an untracked `c.txt` declared moved to
+/// `d.txt`: the declaration's source was never a node.
+fn never_tracked_repo(tag: &str) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("keep.txt"), b"keep\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "genesis"),
+        "genesis commit",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "genesis seal");
+    std::fs::write(repo.join("c.txt"), b"never committed\n").unwrap();
+    support::ok(&run(&repo, &["mv", "c.txt", "d.txt"]), "mv c.txt d.txt");
+    repo
+}
+
+/// `a.txt` tracked, `build/` ignored, then `prikk mv a.txt build/a.txt`: the destination is on disk
+/// but excluded, which is a different cause from a deleted destination and has its own resolution.
+fn ignored_destination_repo(tag: &str) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
+    std::fs::write(repo.join(".prikkignore"), b"build/\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "genesis"),
+        "genesis commit",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "genesis seal");
+    std::fs::create_dir(repo.join("build")).unwrap();
+    support::ok(
+        &run(&repo, &["mv", "a.txt", "build/a.txt"]),
+        "mv a.txt build/a.txt",
+    );
+    repo
+}
+
+/// One row of the handoff's table: a name, the repository it starts from, the step that reaches the
+/// state, and what `commit` does with the declaration there.
 struct State {
     tag: &'static str,
+    fixture: fn(&str) -> PathBuf,
     reach: fn(&Path),
     resolution: &'static str,
 }
 
-/// The six worktree states of that table, each as a step applied to `declared_repo`.
+/// Every state, covering all five resolutions. The first six are the handoff's own table, each a step
+/// applied to `declared_repo`; the last two (0.43.0 prep, review ruling 2) start from their own
+/// fixtures, because `never-tracked` and `deletion-ignored` cannot be reached from a tracked move.
 fn states() -> Vec<State> {
     fn state(tag: &'static str, reach: fn(&Path), resolution: &'static str) -> State {
         State {
             tag,
+            fixture: declared_repo,
             reach,
             resolution,
         }
@@ -130,6 +173,18 @@ fn states() -> Vec<State> {
             |repo| std::fs::rename(repo.join("b.txt"), repo.join("a.txt")).unwrap(),
             "refused",
         ),
+        State {
+            tag: "source-never-tracked",
+            fixture: never_tracked_repo,
+            reach: |_repo| {},
+            resolution: "never-tracked",
+        },
+        State {
+            tag: "destination-ignored",
+            fixture: ignored_destination_repo,
+            reach: |_repo| {},
+            resolution: "deletion-ignored",
+        },
     ]
 }
 
@@ -139,14 +194,17 @@ fn states() -> Vec<State> {
 fn every_resolution_matches_what_commit_then_does() {
     for State {
         tag,
+        fixture,
         reach,
         resolution: expected,
     } in states()
     {
-        let repo = declared_repo(&format!("rfc147-parity-{tag}"));
+        let repo = fixture(&format!("rfc147-parity-{tag}"));
         reach(&repo);
         let report = status(&repo);
         let declaration = only_declaration(&report);
+        let old_path = declaration.get("old_path").as_str().to_owned();
+        let new_path = declaration.get("new_path").as_str().to_owned();
         assert_eq!(
             declaration.get("resolution").as_str(),
             expected,
@@ -175,7 +233,7 @@ fn every_resolution_matches_what_commit_then_does() {
             "rename" => {
                 support::ok(&committed, "commit");
                 assert!(
-                    stdout(&committed).contains("rename-path a.txt -> b.txt"),
+                    stdout(&committed).contains(&format!("rename-path {old_path} -> {new_path}")),
                     "{tag}: commit must author the rename: {}",
                     stdout(&committed)
                 );
@@ -187,7 +245,7 @@ fn every_resolution_matches_what_commit_then_does() {
             _ => {
                 support::ok(&committed, "commit");
                 assert!(
-                    stdout(&committed).contains("declaration a.txt -> b.txt:"),
+                    stdout(&committed).contains(&format!("declaration {old_path} -> {new_path}:")),
                     "{tag}: commit must disclose what the declaration became: {}",
                     stdout(&committed)
                 );
@@ -243,6 +301,7 @@ fn routes(refusal: &str) -> Vec<Route> {
 fn every_route_a_refusal_names_works_in_that_state() {
     for State {
         tag,
+        fixture,
         reach,
         resolution,
     } in states()
@@ -251,7 +310,7 @@ fn every_route_a_refusal_names_works_in_that_state() {
             continue;
         }
         let build = |repo_tag: &str| {
-            let repo = declared_repo(repo_tag);
+            let repo = fixture(repo_tag);
             reach(&repo);
             repo
         };
