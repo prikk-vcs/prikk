@@ -1,6 +1,6 @@
 # RFC 136 — The block aggregation payoff: what sealing a block should make cheap
 
-**Status.** **ACCEPTED by the project owner 2026-09-04**, the same day it was opened at their
+**Status.** **DONE 2026-09-16 — shipped in 0.43.0 ("sealed snapshots"), release commit `f3860e28`.** Increments 0, 1a, 1b, 2a, 2b and 3 delivered (§10.5); **2c (baseline reconstruction for `commit` and `merge-evidence`) is scheduled after 0.43.0 on measurement**, and the checkpoint cadence question stays open (§10.5 increment 3). Originally: **ACCEPTED by the project owner 2026-09-04**, the same day it was opened at their
 instruction, in answer to their own question: the block concept came from the fact that patch-based
 version control is forced into heavy calculation, and the intent was *"to make it by far more efficient
 by aggregating multiple patches into a single patch as block when a cycle of development on some theme
