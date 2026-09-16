@@ -9,6 +9,8 @@ configured signing keys" is implemented as **signatures written by this reposito
 `seal`, `merge`, `sync seal`, `rollback-draft`, `tag create`, `sync adopt-tag`) — never counted, never refused — while
 every AUTHOR signature arriving through `bundle import` or `sync accept` counts. An import never has to read secret key
 material to recognise a local key, and no outsider can reach a local writer, so the property is the same.
+*(Amended 2026-09-17, §7.4: that reading cannot be derived from stored state. Local writers are never refused, but
+their signatures now count. The bound also covers new objects. The owner confirms before 0.45.0.)*
 Handoff: `rfcs/handoffs/156-one-object-several-signers/one-object-several-signers-handoff-v1.md`.
 
 Author-review independence: the architect proposes and would review; §9's
@@ -198,6 +200,50 @@ imports can create.
 
 **Residual, stated in the docs:** a signer that neither this repository's operator configured nor adopted can be
 refused on an object whose set other such signers have already filled.
+
+### 7.4 Deriving the count — ruled by the architect 2026-09-17, for the owner to confirm before 0.45.0
+
+**Measured by the dev team (Stage 3 stop), checked at source by the architect:** "arrived through an import" is not
+stored state.
+- A `Signature` has no origin field, and its `created_at` is chosen by the signer.
+- A container record written by import is byte-identical to a local write of the same envelope.
+- An `AuthorKeyEntry` recorded by import equals one recorded by local authoring.
+- The configured key lives in the environment, and its default id is `author` in every installation.
+
+Rule 1, read as "local writers' signatures are never counted", therefore cannot be enforced without a second store of
+truth.
+
+**A second finding widens the rule.** Admission covered only objects already held. A *new* object is stored as
+carried, and nothing caps its signature count: `ObjectEnvelope::validate` has no limit, and decode reads a `u32`
+count. Since Stage 1, `verify` checks every one of those signatures. So the bound as handed off left its own cost
+open through the first copy.
+
+**Ruling (the dev team's option C, widened to new objects):**
+1. **Where it applies:** to every envelope `bundle import` or `sync accept` would store, whether the object is new or
+   already held. It is judged on the envelope **as it would be stored**, after admission.
+2. **What counts:** every signature except a MAINTAINER signature by an adopted key that verifies. For a held object
+   this is, in effect, the AUTHOR signatures, because §4 rule 2 drops the rest. For a new object it also counts a
+   non-adopted MAINTAINER, CI or AUDIT signature. Those are stored as carried, as before, and they are not dropped:
+   a later adoption must still be able to trust them.
+3. **The limit is 4**, as one named, documented constant. Above it, the whole import or exchange refuses, naming the
+   object, its count and the limit, with nothing written.
+4. **Local writers never check the limit**, so they are never refused. **What changes from rule 1's wording:** their
+   own AUTHOR signatures are no longer "never counted". They occupy slots that later imports see. They are never
+   refused.
+5. **Serialization:** both importers hold the active lock across admission and writes (`bundle.rs:835/847`,
+   `accept.rs:302/344`). So the count read at admission is the count every other importer sees.
+
+**Why not the alternatives:**
+- **Persisted provenance (option B)** adds a second store of truth with rebuild and doctor semantics, only to spare
+  the operator's own signatures a slot.
+- **Exempting signatures that verify under the configured key** needs an import to read the secret seed.
+  `sync accept` must stay keyless (RFC 154, planeter). Matching by key id alone lets import-carried material bind the
+  default id `author` first.
+
+**Residual, as amended:** a signer that is neither adopted nor the operator can be refused on an object whose set is
+full. The operator's own signatures count toward filling it. The case needs one local AUTHOR signature on an object
+other signers also hold, which only deterministic payloads such as rollback drafts reach. The owner may instead
+choose option B. The count site this ruling adds would remain either way.
 
 ## 8. Non-goals
 

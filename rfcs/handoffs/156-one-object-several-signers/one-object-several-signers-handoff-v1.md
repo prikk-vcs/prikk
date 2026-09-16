@@ -187,3 +187,38 @@ written only when the repository is format 7.
 **Reports:** Stage 1 as in the first addendum; Stages 2a–5 in
 `.git-exclude/review-request/one-object-several-signers-report-v1.md`.
 
+
+## Addendum 3 2026-09-17 — Stage 3 ruled; Stages 1–2b, 4 and 5 accepted
+
+**Accepted** (review `one-object-several-signers-review-v1`): `121e68c6`, `12269445`, `7e9a1f85`, `1a59aecf`. Your
+three admission readings are confirmed. `log` stays signer-free. `status` and `merge-evidence` keep `author_key_id`
+this round.
+
+**Stage 3, as ruled in RFC 156 §7.4.** Your option C, widened:
+1. **Every envelope** `bundle import` or `sync accept` would store is counted, **new or already held**, as it would
+   be stored after admission.
+2. **Counted:** every signature except a MAINTAINER signature by an adopted key that verifies. On a new object,
+   non-adopted MAINTAINER, CI and AUDIT signatures count, and stay stored as carried. Never drop them.
+3. **Limit 4**, one named constant. Above it, refuse the whole operation, naming the object type and id, the count
+   and the limit, with nothing written.
+4. **Local writers never check.** Their signatures count against later imports.
+5. **Enforce the count in admission, under the active lock** both importers already hold. No new lock, no new
+   persisted state.
+
+**Docs and CHANGELOG:** `trust-threat-model.md` and `guide/sync.md` state the constant, the refusal and §7.4's
+residual. CHANGELOG gets one entry under the RFC 156 changes. Name the constant in `commands.md` only if a refusal
+there cites it.
+
+**Controls (each shown failing under the named perturbation, then restored byte-identical):**
+1. A held object with 4 counted signatures: an import adding a 5th refuses, names the object and the limit, and every
+   `.prikk` file is unchanged. *Perturb: remove the check.*
+2. A **new** object carrying 5 counted signatures: refused, with nothing written. *Perturb: count held objects only.*
+3. Exactly 4 is accepted. *Perturb: an off-by-one.*
+4. 4 AUTHOR signatures plus one adopted MAINTAINER signature that verifies: accepted. *Perturb: count every role.*
+5. A local writer merging onto a full set is not refused. *Perturb: the writer path checks the limit.*
+6. Controls 1 and 2 also through `sync accept`. *Perturb: accept skips the count.*
+7. An import through `before_import_lock_for_test` that fills the set lets the racing import see the full set.
+   *Perturb: count from a read taken before the lock.*
+
+**Report:** `.git-exclude/review-request/one-object-several-signers-stage3-report-v1.md`. After Stage 3, 0.45.0
+item 0 is complete.
