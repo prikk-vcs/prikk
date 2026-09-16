@@ -346,6 +346,7 @@ pub(crate) fn apply_operation_sequence(
     files: &mut BTreeMap<String, Vec<u8>>,
     live_nodes: &mut BTreeMap<NodeId, apply::ReplayLiveNode>,
     deleted_files: &mut BTreeMap<String, PatchReplayDeletedFile>,
+    capture: &mut apply::DeletedContentCapture,
     operations: Vec<decode::DecodedPatchOperation>,
 ) -> Result<(usize, std::collections::BTreeSet<&'static str>)> {
     let mut applied_operation_count = 0_usize;
@@ -371,7 +372,14 @@ pub(crate) fn apply_operation_sequence(
             // apply's own further validation (a real Integrity error), and that must propagate
             // rather than being recorded as "covered".
             let kind_label = decode::applied_operation_kind_label(&first.kind);
-            apply_decoded_operation(object_store, files, live_nodes, deleted_files, first)?;
+            apply_decoded_operation(
+                object_store,
+                files,
+                live_nodes,
+                deleted_files,
+                capture,
+                first,
+            )?;
             applied_operation_kinds.insert(kind_label);
             applied_operation_count += 1;
         }
@@ -386,6 +394,63 @@ pub(crate) fn replay_supported_patch_chain(
     ref_name: &str,
 ) -> Result<PatchReplaySnapshot> {
     Ok(replay_ref_chain(layout, ref_name, anchor::Anchoring::Never)?.0)
+}
+
+/// DC-78 v2: the content of the deletions whose preimage Blobs `wanted` names, derived by replay.
+///
+/// **Why anyone needs this.** A text file whose content only ever arrived as `EditText` spans has no
+/// stored content Blob (DC-65), so when it is deleted the deletion's preimage names an id nothing
+/// holds. Exporters must still carry that Blob -- every released prikk requires it -- and the
+/// rollback seal must store it, because the inverse of the deletion is a `CreateFile` naming it.
+///
+/// **One derivation, two callers** (the v2 ruling): replay already materializes exactly these bytes,
+/// and [`anchor::replay_chain_capturing`] records them at the moment it applies the deletion. Replay's
+/// own `ensure_blob_matches_node_kind` has already checked that they hash to the id the patch names,
+/// so a mismatch is an `Integrity` error from the replay itself, never a silently wrong Blob.
+///
+/// **Anchored first** (RFC 136): the anchored pass starts at the nearest valid snapshot, which is
+/// enough whenever the deletion is after it. Anything still wanted is then derived by a full replay,
+/// because an anchor's skipped prefix never materializes its bytes. Content from a snapshot is safe
+/// here even though a snapshot is not replay-verified: the id check above is what makes it so.
+///
+/// Returns what it found; an id whose deletion is not on `tip_block_id`'s single-parent chain is
+/// simply absent, and the caller reports it as it did before.
+pub(crate) fn derive_deleted_content(
+    reader: &impl ObjectReader,
+    tip_block_id: ObjectId,
+    wanted: &std::collections::BTreeSet<ObjectId>,
+) -> Result<BTreeMap<ObjectId, (prikk_object::NodeKind, Vec<u8>)>> {
+    if wanted.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    // A merge block has no single-parent chain (`single_parent_chain`), so a history the supported
+    // replay subset cannot walk derives nothing and the caller refuses exactly as it does today.
+    let Ok(chain) = read::single_parent_chain(reader, tip_block_id) else {
+        return Ok(BTreeMap::new());
+    };
+    let anchored = anchor::replay_chain_capturing(
+        reader,
+        &chain,
+        anchor::Anchoring::ReadOnlyReport,
+        apply::DeletedContentCapture::for_ids(wanted.clone()),
+    )?;
+    if anchored.capture.is_satisfied() {
+        return Ok(anchored.capture.into_found());
+    }
+    let mut found = anchored.capture.into_found();
+    let remaining: std::collections::BTreeSet<ObjectId> = wanted
+        .iter()
+        .copied()
+        .filter(|id| !found.contains_key(id))
+        .collect();
+    let full = anchor::replay_chain_capturing(
+        reader,
+        &chain,
+        anchor::Anchoring::Never,
+        apply::DeletedContentCapture::for_ids(remaining),
+    )?;
+    found.extend(full.capture.into_found());
+    Ok(found)
 }
 
 /// The same replay for a **read-only report**, which may start at the nearest snapshot that passes the

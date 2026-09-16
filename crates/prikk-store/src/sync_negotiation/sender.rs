@@ -240,7 +240,7 @@ pub fn build_sync_artifact(
 
     // §1 step 5: now also carries `tag_ids` (RFC 117 stage 3 §2).
     let (export_report, bytes) =
-        export_exchange_artifact(layout, &delta_patch_ids, &claim_ids, &tag_ids)?;
+        export_exchange_artifact(layout, &delta_patch_ids, &claim_ids, &tag_ids, tip_block_id)?;
 
     Ok(SyncArtifactOutcome::Artifact {
         report: SyncArtifactBuildReport {

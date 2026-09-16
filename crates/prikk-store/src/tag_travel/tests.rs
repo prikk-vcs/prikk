@@ -101,7 +101,7 @@ fn sender_with_one_tag(
         &sender_signer,
     )?;
 
-    let (_, bytes) = export_exchange_artifact(&layout, &[], &[], &[created.tag_object_id])?;
+    let (_, bytes) = export_exchange_artifact(&layout, &[], &[], &[created.tag_object_id], None)?;
     Ok((layout, digest, count, bytes))
 }
 
@@ -346,8 +346,13 @@ fn row6_a_refused_exchange_records_no_tag() -> Result<()> {
     let mut sender_write_session = ObjectWriteSession::open(&sender_layout)?;
     let written_claim_id = sender_write_session.write_object(&claim_envelope)?;
 
-    let (_, bytes) =
-        export_exchange_artifact(&sender_layout, &[], &[written_claim_id], &[tag_object_id])?;
+    let (_, bytes) = export_exchange_artifact(
+        &sender_layout,
+        &[],
+        &[written_claim_id],
+        &[tag_object_id],
+        None,
+    )?;
 
     let error =
         accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits()).unwrap_err();

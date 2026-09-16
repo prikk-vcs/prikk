@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 
+use std::collections::BTreeSet;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{NodeId, NodeKind, ObjectId, text_span_hash};
 
@@ -40,11 +42,49 @@ pub(crate) struct ReplayLiveNode {
     pub(crate) blob_id: ObjectId,
 }
 
+/// DC-78 v2: the content of files a replay deletes, for the ids a caller asked about.
+///
+/// A text file whose content only ever arrived as `EditText` spans has no stored content Blob
+/// (DC-65), so a deletion's preimage names an id nothing holds. Exporters must still carry that Blob
+/// (every released prikk requires it) and the rollback seal must store it, so both derive the bytes
+/// from replay -- and replay already has them in `files` at the moment it applies the deletion.
+///
+/// Empty `wanted` captures nothing and clones nothing, which is every ordinary replay.
+#[derive(Debug, Default)]
+pub(crate) struct DeletedContentCapture {
+    wanted: BTreeSet<ObjectId>,
+    found: BTreeMap<ObjectId, (NodeKind, Vec<u8>)>,
+}
+
+impl DeletedContentCapture {
+    pub(crate) fn for_ids(wanted: BTreeSet<ObjectId>) -> Self {
+        Self {
+            wanted,
+            found: BTreeMap::new(),
+        }
+    }
+
+    fn take(&mut self, blob_id: ObjectId, kind: NodeKind, bytes: &[u8]) {
+        if self.wanted.remove(&blob_id) {
+            self.found.insert(blob_id, (kind, bytes.to_vec()));
+        }
+    }
+
+    pub(crate) fn is_satisfied(&self) -> bool {
+        self.wanted.is_empty()
+    }
+
+    pub(crate) fn into_found(self) -> BTreeMap<ObjectId, (NodeKind, Vec<u8>)> {
+        self.found
+    }
+}
+
 pub(super) fn apply_decoded_operation(
     object_store: &impl ObjectReader,
     files: &mut BTreeMap<String, Vec<u8>>,
     live_nodes: &mut BTreeMap<NodeId, ReplayLiveNode>,
     deleted_files: &mut BTreeMap<String, PatchReplayDeletedFile>,
+    capture: &mut DeletedContentCapture,
     operation: DecodedPatchOperation,
 ) -> Result<()> {
     // Erratum P1: decode success does not imply applicability. The apply-supported
@@ -99,6 +139,10 @@ pub(super) fn apply_decoded_operation(
                 old_blob_id,
                 old_node_kind,
             )?;
+            // DC-78 v2: the content a deletion's preimage names, captured at the one moment replay
+            // holds it. The check above is exactly the id check the ruling requires: these bytes hash
+            // to `old_blob_id` as this node's kind, or this replay has already failed.
+            capture.take(old_blob_id, old_node_kind, old_bytes);
             let repo_path = RepoPath::parse(&path)?;
             let deleted = PatchReplayDeletedFile {
                 path: repo_path,

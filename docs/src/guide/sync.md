@@ -61,6 +61,12 @@ narrower than "everything," though: the artifact carries only the objects the de
 walk actually name, plus **public** key material for the patches' own authors — never a secret key or
 seed, which live only in each operator's own environment variables and never appear in any artifact.
 
+**A deletion's own content travels too.** An artifact carries the content each deleted node held, so the
+receiver can replay and roll back that deletion. When nothing stored it — a text file whose edits only
+ever travelled as spans — `sync build` derives it by replaying the history and carries the result,
+checked against the id the deletion names. Before 0.43.0, building an artifact for such a history
+refused.
+
 **prikk stays off the network by design, not by omission.** Every check in the accept path already
 treats the artifact as untrusted input from an unknown origin; adding a transport would add attack
 surface without adding verification strength, so RFC 116 ruled negotiation-as-artifacts first and

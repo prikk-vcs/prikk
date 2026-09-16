@@ -105,6 +105,22 @@ block's snapshot instead of genesis; their output is unchanged.
 `prikk verify` now clears the provisional-worktree marker even when it reports a lifecycle-cache
 divergence: that cache is rebuildable, and verify's own replay decides block state.
 
+### Fixed — exporting or syncing a history that deletes a file it edited earlier
+
+`bundle export` and `sync build` refused any history that deleted a text file whose content had only ever
+arrived as edits, with `integrity error: missing blob object: <id>`. An edit carries a span rather than
+the whole file, so nothing had stored the content the deletion names, while both exporters required it.
+Every release since 0.28.0 refused such a history; `prikk verify` passed on the same repository. Both
+exporters now derive that content by replaying the history and carry it, checked against the id the
+deletion names. Receivers are unchanged, and a bundle from this release still imports into 0.42.0.
+
+### Fixed — sealing the inverse of such a deletion
+
+`rollback-draft --append-inverse` followed by `seal` failed with `integrity error: lifecycle replay: blob
+<id> required for a state effect is missing`, because the inverse re-creates the deleted file from the
+content nothing had stored. `seal` now derives that content and stores it, so undoing such a deletion
+works locally.
+
 ### Fixed — a checkout retry that only fixes a file's mode makes the write durable
 
 When a checkout wrote a file but failed to sync its directory, the next checkout found the file's

@@ -99,6 +99,30 @@ pub(crate) fn bytes_match_blob_id(
     Ok(file_blob_id_for_kind(bytes, node_kind)? == expected)
 }
 
+/// The unsigned schema-1 Blob envelope for file content of `node_kind` -- the same object a fresh
+/// create would have written, and the same shape a checkpoint writes for edited text
+/// (`snapshot.rs`). DC-78 v2: exporters carry a derived deletion preimage as this, and the rollback
+/// seal stores it.
+pub(crate) fn blob_envelope_for_kind(
+    bytes: Vec<u8>,
+    node_kind: NodeKind,
+) -> Result<prikk_object::ObjectEnvelope> {
+    let blob_kind = match node_kind {
+        NodeKind::TextFile => BlobKind::Text,
+        NodeKind::BinaryFile => BlobKind::Binary,
+        NodeKind::Symlink => {
+            return Err(PrikkError::Integrity(
+                "a symlink node has no file-content blob to derive".to_string(),
+            ));
+        }
+    };
+    Ok(prikk_object::ObjectEnvelope::unsigned(
+        ObjectType::Blob,
+        1,
+        BlobPayload::new(blob_kind, bytes).to_canonical_bytes()?,
+    ))
+}
+
 fn file_blob_id_for_kind(bytes: &[u8], old_node_kind: NodeKind) -> Result<ObjectId> {
     let blob_kind = match old_node_kind {
         NodeKind::TextFile => BlobKind::Text,

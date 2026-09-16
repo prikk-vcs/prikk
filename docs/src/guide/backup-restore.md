@@ -266,6 +266,11 @@ implemented.
   confirms every reference inside the bundle resolves to an object whose recomputed id matches.
   Content addressing works the same way a downloaded release's checksum does: it proves the bytes
   are intact and internally consistent, not who produced them.
+- **A deletion carries the content it removed.** A bundle includes the file content each deleted node
+  held, so a receiver can read and roll back that deletion. Where nothing stored that content — a text
+  file whose edits only ever travelled as spans — the exporter derives it by replaying the history and
+  carries the result, checked against the id the deletion names. Before 0.43.0, exporting such a history
+  refused outright.
 - **`bundle verify` answers "is this file intact" without a repository or a restore.** Nothing is
   written; nothing needs to exist first.
 - **`verify_repository` after import is what turns a restored copy into a checked one** — the same

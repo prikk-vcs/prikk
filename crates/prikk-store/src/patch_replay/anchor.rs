@@ -78,6 +78,10 @@ pub(crate) struct ChainReplay {
     pub(crate) applied_operation_count: usize,
     pub(crate) applied_operation_kinds: BTreeSet<&'static str>,
     pub(crate) fallback: Option<SnapshotAnchorFallback>,
+    /// DC-78 v2: the content of deleted files whose preimage Blob a caller asked for. Empty unless
+    /// [`replay_chain_capturing`] was given ids, and never filled for blocks an anchor skipped --
+    /// their bytes were never replayed. [`super::derive_deleted_content`] handles that.
+    pub(crate) capture: super::apply::DeletedContentCapture,
 }
 
 /// Replay `block_ids` (oldest first, as `single_parent_chain` returns them).
@@ -85,6 +89,21 @@ pub(crate) fn replay_chain(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
     anchoring: Anchoring<'_>,
+) -> Result<ChainReplay> {
+    replay_chain_capturing(
+        reader,
+        block_ids,
+        anchoring,
+        super::apply::DeletedContentCapture::default(),
+    )
+}
+
+/// [`replay_chain`], recording the content of any deletion whose preimage Blob `capture` wants.
+pub(crate) fn replay_chain_capturing(
+    reader: &impl ObjectReader,
+    block_ids: &[ObjectId],
+    anchoring: Anchoring<'_>,
+    capture: super::apply::DeletedContentCapture,
 ) -> Result<ChainReplay> {
     let mut chain = ChainReplay {
         files: BTreeMap::new(),
@@ -94,6 +113,7 @@ pub(crate) fn replay_chain(
         applied_operation_count: 0,
         applied_operation_kinds: BTreeSet::new(),
         fallback: None,
+        capture,
     };
     let (anchor, fallback) = match anchoring {
         Anchoring::Never => (None, None),
@@ -125,6 +145,7 @@ pub(crate) fn replay_chain(
                 &mut chain.files,
                 &mut chain.live_nodes,
                 &mut chain.deleted_files,
+                &mut chain.capture,
                 operations,
             )?;
             chain.applied_operation_count += count;

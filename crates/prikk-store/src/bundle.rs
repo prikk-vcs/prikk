@@ -687,8 +687,29 @@ pub fn export_bundle(
         patch_envelopes.push(envelope);
     }
     objects.extend(patch_envelopes);
+    // DC-78 v2: a deletion's preimage Blob is required by every released prikk, but a text file whose
+    // content only ever arrived as `EditText` spans has none stored (DC-65). Derive those by replay and
+    // carry them; export writes nothing locally. Anything still absent fails exactly as before.
+    let missing: BTreeSet<ObjectId> = blob_ids
+        .iter()
+        .copied()
+        .filter(|blob_id| {
+            !object_store
+                .read_typed(*blob_id, ObjectType::Blob)
+                .is_ok_and(|found| found.is_some())
+        })
+        .collect();
+    let mut derived =
+        crate::patch_replay::derive_deleted_content(&object_store, tip_block_id, &missing)?;
     for blob_id in &blob_ids {
-        objects.push(read_required(&object_store, *blob_id, ObjectType::Blob)?);
+        match derived.remove(blob_id) {
+            Some((node_kind, bytes)) => {
+                objects.push(crate::blob_access::blob_envelope_for_kind(
+                    bytes, node_kind,
+                )?);
+            }
+            None => objects.push(read_required(&object_store, *blob_id, ObjectType::Blob)?),
+        }
     }
     for attestation_id in &required_attestation_ids {
         objects.push(read_required(

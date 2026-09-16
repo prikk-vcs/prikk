@@ -103,11 +103,15 @@ pub(super) struct DecodedExchangeArtifact {
 /// carries. **Which tags belong in `tag_ids` is the caller's decision** (`sender.rs`'s own ancestry
 /// filter) -- this function carries whatever it is given, the same separation it already keeps for
 /// `claim_ids`.
+/// `tip_block_id` is the ref's own tip, used only to derive a deletion preimage the store lacks
+/// (DC-78 v2, shared with `bundle.rs` through `patch_replay::derive_deleted_content`). `None` derives
+/// nothing, and a missing Blob then fails exactly as it did before.
 pub fn export_exchange_artifact(
     layout: &RepositoryLayout,
     patch_ids: &[ObjectId],
     claim_ids: &[ObjectId],
     tag_ids: &[ObjectId],
+    tip_block_id: Option<ObjectId>,
 ) -> Result<(ExchangeExportReport, Vec<u8>)> {
     let mut seen_patch_ids: BTreeSet<ObjectId> = BTreeSet::new();
     for patch_id in patch_ids {
@@ -154,9 +158,31 @@ pub fn export_exchange_artifact(
         patch_envelopes.push(envelope);
     }
 
+    // DC-78 v2: same rule as `bundle.rs` -- carry a deletion's preimage Blob, deriving it by replay
+    // when nothing stored it (an `EditText`-only text file, DC-65). Read-only: nothing is written here.
+    let missing: BTreeSet<ObjectId> = blob_ids
+        .iter()
+        .copied()
+        .filter(|blob_id| {
+            !object_store
+                .read_typed(*blob_id, ObjectType::Blob)
+                .is_ok_and(|found| found.is_some())
+        })
+        .collect();
+    let mut derived = match tip_block_id {
+        Some(tip) => crate::patch_replay::derive_deleted_content(&object_store, tip, &missing)?,
+        None => std::collections::BTreeMap::new(),
+    };
     let mut blob_envelopes: Vec<ObjectEnvelope> = Vec::with_capacity(blob_ids.len());
     for blob_id in &blob_ids {
-        blob_envelopes.push(read_required(&object_store, *blob_id, ObjectType::Blob)?);
+        match derived.remove(blob_id) {
+            Some((node_kind, bytes)) => {
+                blob_envelopes.push(crate::blob_access::blob_envelope_for_kind(
+                    bytes, node_kind,
+                )?);
+            }
+            None => blob_envelopes.push(read_required(&object_store, *blob_id, ObjectType::Blob)?),
+        }
     }
 
     // DC-53 Stage 2, D6's own reasoning, restated for this format: the author-key section's scope is

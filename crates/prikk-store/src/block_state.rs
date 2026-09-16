@@ -350,6 +350,11 @@ pub(crate) fn seal_block_classified(
                 )
             }
         };
+    // DC-78 v2: the inverse of a deletion is a `CreateFile` naming the deleted content's Blob, and a
+    // text file edited by `EditText` never had one stored (DC-65). Sealing that inverse needs it, so
+    // derive it by replay and store it here -- sealing is a writer, which is why the store happens on
+    // this path and never in an exporter. Nothing to do when every named Blob is already present.
+    store_derived_content_for_candidate(object_store, state_parent, patch_ids)?;
     let (entries, text_cache, replay_verified) =
         derive_next_state_for_candidate(&*object_store, state_parent, patch_ids)
             .map_err(classify)?;
@@ -384,6 +389,45 @@ pub(crate) fn seal_block_classified(
         replay_verified.into_iter().chain(std::iter::once(block_id)),
     );
     Ok(block_id)
+}
+
+/// DC-78 v2: write the content Blobs this candidate's own operations name and the store lacks, derived
+/// by replaying the parent's history. Only `CreateFile` can name one -- an appended rollback inverse of
+/// a deletion is exactly that -- and a Blob replay cannot produce is left alone, so the ordinary
+/// missing-blob error still fires where it should.
+fn store_derived_content_for_candidate(
+    object_store: &mut (impl ObjectReader + ObjectWriter),
+    state_parent: Option<ObjectId>,
+    patch_ids: &[ObjectId],
+) -> Result<()> {
+    let Some(parent) = state_parent else {
+        return Ok(());
+    };
+    let mut wanted: BTreeSet<ObjectId> = BTreeSet::new();
+    for patch_id in patch_ids {
+        let Some(envelope) = object_store.read_typed(*patch_id, ObjectType::Patch)? else {
+            continue;
+        };
+        for operation in crate::patch_replay::decode::decode_patch_operations(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )? {
+            if let crate::patch_replay::decode::DecodedOperationKind::CreateFile { blob_id, .. } =
+                operation.kind
+                && object_store
+                    .read_typed(blob_id, ObjectType::Blob)?
+                    .is_none()
+            {
+                wanted.insert(blob_id);
+            }
+        }
+    }
+    let derived = crate::patch_replay::derive_deleted_content(&*object_store, parent, &wanted)?;
+    for (_, (node_kind, bytes)) in derived {
+        let envelope = crate::blob_access::blob_envelope_for_kind(bytes, node_kind)?;
+        object_store.write_object(&envelope)?;
+    }
+    Ok(())
 }
 
 /// Shared by [`derive_next_state_root_with_memo`] and [`verify_block_v2_state`]: resolve `parent`'s

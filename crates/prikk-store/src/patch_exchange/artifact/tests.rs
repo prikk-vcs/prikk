@@ -33,7 +33,7 @@ fn repo_with_one_patch(root_name: &str) -> Result<(RepositoryLayout, prikk_objec
 #[test]
 fn export_then_decode_round_trips_every_section() -> Result<()> {
     let (layout, patch_id) = repo_with_one_patch("pexch-artifact-roundtrip")?;
-    let (report, bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[])?;
+    let (report, bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[], None)?;
     assert_eq!(report.patch_count, 1);
     assert_eq!(report.blob_count, 1);
     assert_eq!(report.claim_count, 0);
@@ -73,7 +73,7 @@ fn export_then_decode_round_trips_the_tag_section() -> Result<()> {
     )?;
     let tag_id = store.write_object(&tag)?;
 
-    let (report, bytes) = export_exchange_artifact(&layout, &[], &[], &[tag_id])?;
+    let (report, bytes) = export_exchange_artifact(&layout, &[], &[], &[tag_id], None)?;
     assert_eq!(report.tag_count, 1);
 
     let decoded = decode_exchange_artifact(&bytes, 1_000)?;
@@ -107,7 +107,7 @@ fn decode_rejects_the_retired_pexch001_magic() {
 #[test]
 fn decode_rejects_a_declared_patch_count_over_the_configured_limit() -> Result<()> {
     let (layout, patch_id) = repo_with_one_patch("pexch-artifact-count-limit")?;
-    let (_, bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[])?;
+    let (_, bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[], None)?;
     // The artifact declares one patch; a limit of 0 must refuse on the declared count alone,
     // before any patch is decoded.
     let error = decode_exchange_artifact(&bytes, 0).unwrap_err();
@@ -124,7 +124,7 @@ fn decode_rejects_a_declared_patch_count_over_the_configured_limit() -> Result<(
 #[test]
 fn decode_rejects_trailing_bytes() -> Result<()> {
     let (layout, patch_id) = repo_with_one_patch("pexch-artifact-trailing")?;
-    let (_, mut bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[])?;
+    let (_, mut bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[], None)?;
     bytes.push(0xAB);
     assert!(decode_exchange_artifact(&bytes, 1_000).is_err());
     let _ = std::fs::remove_dir_all(layout.root());
@@ -134,7 +134,8 @@ fn decode_rejects_trailing_bytes() -> Result<()> {
 #[test]
 fn export_refuses_a_duplicate_patch_id() -> Result<()> {
     let (layout, patch_id) = repo_with_one_patch("pexch-artifact-dup")?;
-    let error = export_exchange_artifact(&layout, &[patch_id, patch_id], &[], &[]).unwrap_err();
+    let error =
+        export_exchange_artifact(&layout, &[patch_id, patch_id], &[], &[], None).unwrap_err();
     assert!(error.to_string().contains("more than once"));
     let _ = std::fs::remove_dir_all(layout.root());
     Ok(())

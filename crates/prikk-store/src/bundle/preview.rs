@@ -351,6 +351,8 @@ fn apply_new_operations_and_diff(
         &mut after_files,
         &mut after_live,
         &mut after_deleted,
+        // DC-78 v2: a preview derives nothing; it only reports what a bundle would do.
+        &mut crate::patch_replay::apply::DeletedContentCapture::default(),
         operations,
     )?;
     let current_modes = modes_by_path(&current_live);
