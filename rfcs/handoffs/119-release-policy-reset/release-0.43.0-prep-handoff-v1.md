@@ -84,3 +84,24 @@ release** (see the reading above); do not prepare anything that assumes it.
 RFC 136 moves from `accepted/` to `done/`; ROADMAP row 15 closes; the gates run again on the exact release
 commit; push, CI, signed tag, Release workflow, asset verification with the team's `smoke.sh`; then the
 release letters to stikk (letters 012 and 013 both land in this release) and planeter.
+
+## 5. The release commit, take two — 2026-09-16, after the Windows hold
+
+The sweep (`9253dee4`, `3e5bb3c0`) is accepted and pushed. The first release commit `dee02867` was never
+pushed and was dropped while the Windows mutation suite was red; that suite is now **green on
+`353c7464`** (all 16 CI jobs), so the cut proceeds.
+
+**Redo the release commit, unchanged in shape:** exactly three files — `Cargo.toml` (workspace version and
+the seven internal pins), `Cargo.lock` (`cargo update --workspace --offline`, member versions only),
+`CHANGELOG.md` (`## Unreleased` → `## 0.43.0 — 2026-09-16`, em-dash; **still today's date**, since the
+hold was resolved the same day).
+
+One line to add first: the round that lifted the hold shipped a user-visible fix
+(`### Fixed — on Windows, re-checking out an unchanged file was reported as a write`), which is already in
+`## Unreleased` — check it sits under the right heading before the date line moves.
+
+Message: `Release 0.43.0: sealed snapshots — checkpoints, anchored checkouts, and refusals that say what to do`
+
+Full gate set on that commit, stated verbatim, and nothing pushed. Report:
+`.git-exclude/review-request/release-0.43.0-prep-report-v2.md` — short: the three files, the gates, and
+anything the re-run turned up.
