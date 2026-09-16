@@ -1,7 +1,9 @@
 # RFC 156 — One object, several signers
 
-**Status.** **PROPOSED 2026-09-16 by the architect**, as item 0 of 0.45.0 ("working together"). **Direction and the
-open question in §7 are the owner's.** Author-review independence: the architect proposes and would review; §9's
+**Status.** **PROPOSED 2026-09-16 by the architect**, as item 0 of 0.45.0 ("working together"). **Direction B
+(§4) authorized by the owner 2026-09-16** (*"Yes. Authorized."*). **§7's bound: the owner found the recommendation
+acceptable and asked what the number rests on; §7 is revised with that basis, and a flaw found while answering, and
+awaits the owner's confirmation.** Author-review independence: the architect proposes and would review; §9's
 controls compensate, each of which must be shown to fail.
 
 ## 1. The question
@@ -94,24 +96,50 @@ different copy today; a newer receiver merges it. Both behaviours are measured a
 - **`sync.md`** loses the refusal it documents, and **the advisory's related limitation** is marked closed in the
   release that ships this.
 
-## 7. Open question for the owner — bounding the signer set
+## 7. Bounding the signer set — revised 2026-09-16, awaiting the owner's confirmation
 
-Rules 2–3 stop unverifiable and non-adopted-maintainer signatures, but **anyone can mint AUTHOR keys**, and each
-verifies under trust-on-first-use. Without a bound, one object's signer set can be grown without limit.
+**The first recommendation (8, with no limit for keys recorded before the import) rested on judgement, not measurement,
+and its exemption does not hold.** Answering "why 8" produced the basis below.
 
-A bound has its own cost: a full set would refuse the next signer, which is a milder form of the blocking this RFC
-removes.
+### 7.1 What a bound controls, and what it cannot
 
-**The architect's recommendation:**
-- a per-object limit on AUTHOR signatures by keys **first recorded by the same import that carries them** (proposed: 8);
-- no limit on signatures by keys this repository had already recorded before that import;
-- refusal beyond the limit, named, with nothing written.
+- **It bounds cost, not blocking.** Anyone can mint AUTHOR keys, and each verifies under trust-on-first-use, so an
+  adversary can fill a limit of *any* size. The choice of number buys nothing against blocking; it only limits how much
+  one object can cost.
+- **What one stored signature costs, at source.** Five canonical fields, each with an 11-byte header, plus its record
+  header; the key id is at most 128 bytes (`SIGNATURE_KEY_ID_MAX_LEN`). That is **about 160 bytes typically, 274 at
+  most**, plus **one Ed25519 verification each time `verify` runs**. An object filled to a limit of *N* costs up to
+  *N* × 274 bytes more, and *N* + 1 verifications instead of one.
+- **What legitimate use needs.** prikk signs a patch once, with its author's key. Nothing in the codebase, docs or RFCs
+  co-signs a patch, and relay never re-signs (RFC 154/155). The plausible cases are the author plus a second key of
+  their own, and rarely a byte-identical patch reached independently — **one to three signers**. **There is no
+  observed data**: the store has never allowed more than one, and this RFC says so rather than invent a figure.
 
-A signer this repository already knows can always be added. What remains is a stranger's new key meeting a set already
-filled by other strangers' new keys; state it in the docs as the residual.
+### 7.2 The exemption was gameable
 
-**Alternative for the owner to weigh:** no bound, with `doctor` reporting objects whose signer count exceeds a
-threshold. Simpler, no blocking at all, unbounded growth.
+"No limit on keys this repository had already recorded before the import" does not bound anything. Keys are recorded
+**by imports**, which anyone can supply: one import records many keys on unrelated objects, and a later import signs a
+target object with all of them, now "already recorded". The protected class must be one the operator controls, not one
+imports can create.
+
+### 7.3 Revised rule
+
+1. **Never counted, never refused:** signatures made by **this repository's own configured signing keys**, and
+   MAINTAINER signatures by **adopted keys** (rule 2 already stores no other maintainer signature). The operator
+   controls both sets.
+2. **Every other AUTHOR signature counts against one limit per object, across all imports** — a total, not a per-import
+   allowance.
+3. **The limit is 4**: the original author plus room for three more, above the one-to-three legitimate range with
+   margin. Worst case per object: about 1.1 KB more and five verifications instead of one. At 8 it would be 2.2 KB and
+   nine, for no gain against blocking.
+4. **At the limit, the next counted signature is refused and named** — the object, and that its set is full — with
+   nothing written, so an operator can see a filled set rather than meet a silent omission.
+5. **The limit is one named constant, documented.** Raising it later is compatible: releases before this RFC store no
+   union at all, so no older reader enforces it. The trigger to raise it is a legitimate workflow shown to need more
+   than four.
+
+**Residual, stated in the docs:** a signer that neither this repository's operator configured nor adopted can be
+refused on an object whose set other such signers have already filled.
 
 ## 8. Non-goals
 
@@ -130,5 +158,6 @@ id binds to a public key; network transport.
    maintainer signatures reported.
 7. **§5's gate:** a 0.44.0 binary opens and verifies a repository holding a superseding record — or the RFC's schedule
    changes.
-8. **The bound (§7, as ruled):** at the limit, the next new-key signer is refused, a previously recorded signer is
-   still added, and nothing is written on refusal.
+8. **The bound (§7.3):** at four counted signers the next is refused and named with nothing written; a signature by
+   this repository's own configured key, or by an adopted maintainer key, is still added; and keys recorded by an
+   earlier import still count (§7.2's exemption must not come back).
