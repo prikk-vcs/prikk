@@ -160,22 +160,20 @@ pub fn export_exchange_artifact(
 
     // DC-78 v2: same rule as `bundle.rs` -- carry a deletion's preimage Blob, deriving it by replay
     // when nothing stored it (an `EditText`-only text file, DC-65). Read-only: nothing is written here.
-    let missing: BTreeSet<ObjectId> = blob_ids
-        .iter()
-        .copied()
-        .filter(|blob_id| {
-            !object_store
-                .read_typed(*blob_id, ObjectType::Blob)
-                .is_ok_and(|found| found.is_some())
-        })
-        .collect();
+    // `has_object` answers from the index rather than reading each Blob (review v2, finding 3).
+    let mut missing: BTreeSet<ObjectId> = BTreeSet::new();
+    for blob_id in &blob_ids {
+        if !object_store.has_object(*blob_id, ObjectType::Blob)? {
+            missing.insert(*blob_id);
+        }
+    }
     let mut derived = match tip_block_id {
         Some(tip) => crate::patch_replay::derive_deleted_content(&object_store, tip, &missing)?,
-        None => std::collections::BTreeMap::new(),
+        None => crate::patch_replay::DerivedDeletedContent::default(),
     };
     let mut blob_envelopes: Vec<ObjectEnvelope> = Vec::with_capacity(blob_ids.len());
     for blob_id in &blob_ids {
-        match derived.remove(blob_id) {
+        match derived.found.remove(blob_id) {
             Some((node_kind, bytes)) => {
                 blob_envelopes.push(crate::blob_access::blob_envelope_for_kind(
                     bytes, node_kind,

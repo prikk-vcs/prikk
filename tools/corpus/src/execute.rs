@@ -317,6 +317,30 @@ pub fn trust_maintainer(
     Ok(())
 }
 
+/// Build (without running) the `prikk seal --allow-no-audit --ref <ref_name>` command [`run_seal`] runs,
+/// for callers that must `.spawn()` and poll rather than `.output()` — the same reason
+/// [`commit_command`] exists (DC-78 follow-ups §3's seal measurement).
+pub fn seal_command(
+    binary_path: &Path,
+    repo_root: &Path,
+    profile: &Profile,
+    ref_name: &str,
+) -> Result<Command, ExecuteError> {
+    let mut command = Command::new(binary_path);
+    command
+        .current_dir(repo_root)
+        .env(
+            "PRIKK_MAINTAINER_KEY_ID",
+            &profile.builder_inputs.maintainer_key_id,
+        )
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&profile.builder_inputs.maintainer_seed_hex)?,
+        )
+        .args(["seal", "--allow-no-audit", "--ref", ref_name]);
+    Ok(command)
+}
+
 /// Run `prikk seal --allow-no-audit --ref <ref_name>`, using the profile's fixed maintainer key.
 pub fn run_seal(
     binary_path: &Path,

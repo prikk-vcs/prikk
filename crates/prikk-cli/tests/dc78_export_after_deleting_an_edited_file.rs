@@ -254,3 +254,163 @@ fn the_inverse_of_such_a_deletion_seals() {
     );
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// The genesis block of `heads/main`, as `log` prints it (oldest last).
+fn genesis_block(repo: &Path) -> String {
+    stdout(&run(repo, &["log", "--ref", "heads/main"]))
+        .lines()
+        .filter_map(|line| line.strip_prefix("block ").map(str::to_owned))
+        .filter_map(|rest| rest.split_whitespace().next().map(str::to_owned))
+        .next_back()
+        .expect("log names a genesis block")
+}
+
+fn merge(repo: &Path, baseline: &str, into_ref: &str, from_ref: &str) -> Output {
+    run(
+        repo,
+        &[
+            "merge",
+            "--allow-no-audit",
+            "--baseline-block",
+            baseline,
+            "--into",
+            into_ref,
+            "--from",
+            from_ref,
+        ],
+    )
+}
+
+fn export_import_verify(repo: &Path, tag: &str) -> Output {
+    let bundle = repo.join(format!("{tag}.bundle"));
+    let export = run(
+        repo,
+        &[
+            "bundle",
+            "export",
+            "--ref",
+            "heads/main",
+            "--output",
+            bundle.to_str().unwrap(),
+        ],
+    );
+    if !export.status.success() {
+        return export;
+    }
+    let received = support::unique_repo(&format!("{tag}-received"));
+    support::init(&received);
+    support::trust_maintainer(&received);
+    support::ok(
+        &run(
+            &received,
+            &["bundle", "import", "--input", bundle.to_str().unwrap()],
+        ),
+        "bundle import",
+    );
+    support::ok(&run(&received, &["verify"]), "verify after import");
+    let _ = std::fs::remove_dir_all(&received);
+    export
+}
+
+/// Follow-ups §1: a merge history **does** derive — `single_parent_chain` follows a `Merge` block's
+/// mainline parent. Here the mainline is the side that edited and deleted the file, and the export must
+/// carry the derived content, import and verify.
+///
+/// The v2 report claimed such a history derives nothing. It was wrong, and unmeasured; this keeps the
+/// truth pinned.
+#[test]
+fn a_merge_whose_mainline_deleted_an_edited_file_exports() {
+    let repo = support::unique_repo("dc78v3-merge-mainline");
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("notes.txt"), b"line one\nline two\n").unwrap();
+    commit_and_seal(&repo, "create notes.txt");
+    let baseline = genesis_block(&repo);
+    support::ok(
+        &support::branch_create(&repo, "heads/dev", "heads/main"),
+        "branch create heads/dev",
+    );
+
+    // The mainline edits the file and then deletes it: the preimage nothing stored.
+    std::fs::write(repo.join("notes.txt"), b"line one\nline two, edited\n").unwrap();
+    commit_and_seal(&repo, "edit notes.txt");
+    std::fs::remove_file(repo.join("notes.txt")).unwrap();
+    commit_and_seal(&repo, "delete notes.txt");
+
+    // The side branch adds a file of its own, so the merge has something to adopt.
+    support::ok(
+        &run(&repo, &["branch", "switch", "heads/dev"]),
+        "switch to heads/dev",
+    );
+    std::fs::write(repo.join("dev.txt"), b"dev\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/dev", "dev"),
+        "commit on heads/dev",
+    );
+    support::ok(&support::seal(&repo, "heads/dev"), "seal heads/dev");
+    support::ok(
+        &run(&repo, &["branch", "switch", "heads/main"]),
+        "switch back",
+    );
+
+    support::ok(
+        &merge(&repo, &baseline, "heads/main", "heads/dev"),
+        "merge heads/dev into heads/main",
+    );
+    support::ok(
+        &export_import_verify(&repo, "merge-mainline"),
+        "export of a merged history whose mainline deleted an edited file",
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Follow-ups §1, the other shape: the **side** branch edited and deleted the file, and the mainline did
+/// not. Whether the derivation reaches it depends on whether the merge block carries those patches on the
+/// mainline walk — measured here rather than asserted from reading.
+#[test]
+fn a_merge_whose_side_branch_deleted_an_edited_file_exports() {
+    let repo = support::unique_repo("dc78v3-merge-side");
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("notes.txt"), b"line one\nline two\n").unwrap();
+    commit_and_seal(&repo, "create notes.txt");
+    let baseline = genesis_block(&repo);
+    support::ok(
+        &support::branch_create(&repo, "heads/dev", "heads/main"),
+        "branch create heads/dev",
+    );
+
+    // The side branch edits and deletes; the mainline only adds a file of its own.
+    support::ok(
+        &run(&repo, &["branch", "switch", "heads/dev"]),
+        "switch to heads/dev",
+    );
+    std::fs::write(repo.join("notes.txt"), b"line one\nline two, edited\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/dev", "edit"),
+        "edit on heads/dev",
+    );
+    support::ok(&support::seal(&repo, "heads/dev"), "seal the edit");
+    std::fs::remove_file(repo.join("notes.txt")).unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/dev", "delete"),
+        "delete on heads/dev",
+    );
+    support::ok(&support::seal(&repo, "heads/dev"), "seal the delete");
+    support::ok(
+        &run(&repo, &["branch", "switch", "heads/main"]),
+        "switch back",
+    );
+    std::fs::write(repo.join("main.txt"), b"main\n").unwrap();
+    commit_and_seal(&repo, "main-only file");
+
+    support::ok(
+        &merge(&repo, &baseline, "heads/main", "heads/dev"),
+        "merge heads/dev into heads/main",
+    );
+    support::ok(
+        &export_import_verify(&repo, "merge-side"),
+        "export of a merged history whose side branch deleted an edited file",
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}

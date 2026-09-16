@@ -690,25 +690,28 @@ pub fn export_bundle(
     // DC-78 v2: a deletion's preimage Blob is required by every released prikk, but a text file whose
     // content only ever arrived as `EditText` spans has none stored (DC-65). Derive those by replay and
     // carry them; export writes nothing locally. Anything still absent fails exactly as before.
-    let missing: BTreeSet<ObjectId> = blob_ids
-        .iter()
-        .copied()
-        .filter(|blob_id| {
-            !object_store
-                .read_typed(*blob_id, ObjectType::Blob)
-                .is_ok_and(|found| found.is_some())
-        })
-        .collect();
+    // `has_object` answers from the index; `read_typed` would read every Blob's bytes just to ask
+    // whether it exists (review v2, finding 3).
+    let mut missing: BTreeSet<ObjectId> = BTreeSet::new();
+    for blob_id in &blob_ids {
+        if !object_store.has_object(*blob_id, ObjectType::Blob)? {
+            missing.insert(*blob_id);
+        }
+    }
     let mut derived =
         crate::patch_replay::derive_deleted_content(&object_store, tip_block_id, &missing)?;
     for blob_id in &blob_ids {
-        match derived.remove(blob_id) {
+        match derived.found.remove(blob_id) {
             Some((node_kind, bytes)) => {
                 objects.push(crate::blob_access::blob_envelope_for_kind(
                     bytes, node_kind,
                 )?);
             }
-            None => objects.push(read_required(&object_store, *blob_id, ObjectType::Blob)?),
+            None => objects.push(read_required_blob(
+                &object_store,
+                *blob_id,
+                derived.unsupported_chain.as_deref(),
+            )?),
         }
     }
     for attestation_id in &required_attestation_ids {
@@ -1184,6 +1187,25 @@ fn validate_bundle_contents(
 const fn repository_format_number(format: RepositoryFormat) -> u32 {
     match format {
         RepositoryFormat::CurrentV6 => 6,
+    }
+}
+
+/// A Blob the export must carry, naming the block-chain shape when that is why it could not be derived
+/// (review v2, finding 2): a bare `missing blob object` would hide the reason.
+fn read_required_blob(
+    object_store: &impl ObjectReader,
+    blob_id: ObjectId,
+    unsupported_chain: Option<&str>,
+) -> Result<ObjectEnvelope> {
+    match object_store.read_typed(blob_id, ObjectType::Blob)? {
+        Some(envelope) => Ok(envelope),
+        None => Err(PrikkError::Integrity(match unsupported_chain {
+            Some(detail) => format!(
+                "missing blob object: {blob_id}; its content could not be derived because this \
+                 history's block chain could not be walked ({detail})"
+            ),
+            None => format!("missing blob object: {blob_id}"),
+        })),
     }
 }
 

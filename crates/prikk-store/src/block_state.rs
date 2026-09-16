@@ -417,17 +417,16 @@ fn store_derived_content_for_candidate(
                 blob_id, ..
             } = operation.kind
             {
-                if object_store
-                    .read_typed(blob_id, ObjectType::Blob)?
-                    .is_none()
-                {
+                // The index, not the object: this runs on every seal, for every `CreateFile`
+                // (review v2, finding 3).
+                if !object_store.has_object(blob_id, ObjectType::Blob)? {
                     wanted.insert(blob_id);
                 }
             }
         }
     }
     let derived = crate::patch_replay::derive_deleted_content(&*object_store, parent, &wanted)?;
-    for (_, (node_kind, bytes)) in derived {
+    for (_, (node_kind, bytes)) in derived.found {
         let envelope = crate::blob_access::blob_envelope_for_kind(bytes, node_kind)?;
         object_store.write_object(&envelope)?;
     }

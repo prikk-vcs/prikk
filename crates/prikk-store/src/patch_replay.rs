@@ -413,20 +413,36 @@ pub(crate) fn replay_supported_patch_chain(
 /// because an anchor's skipped prefix never materializes its bytes. Content from a snapshot is safe
 /// here even though a snapshot is not replay-verified: the id check above is what makes it so.
 ///
-/// Returns what it found; an id whose deletion is not on `tip_block_id`'s single-parent chain is
-/// simply absent, and the caller reports it as it did before.
+/// **A merge history does derive**, and both shapes are measured
+/// (`dc78_export_after_deleting_an_edited_file.rs`). `single_parent_chain` follows a `Merge` block's
+/// mainline parent, so a mainline deletion is reached like any other; a deletion that happened only on
+/// the merged-in side is reached too, because the merge block adopts those patches and the mainline walk
+/// applies them. What remains unreachable is a block shape this walk cannot follow at all — a non-`Merge`
+/// block with several parents, or a `Merge` with no valid mainline — reported as `unsupported_chain`
+/// rather than silently empty.
+///
+/// **A chain failure is not "nothing to derive"** (review v2, finding 2): only an unsupported *shape*
+/// falls back to an empty result; a cycle or an unreadable block propagates, so corruption is never
+/// reported as a missing Blob.
 pub(crate) fn derive_deleted_content(
     reader: &impl ObjectReader,
     tip_block_id: ObjectId,
     wanted: &std::collections::BTreeSet<ObjectId>,
-) -> Result<BTreeMap<ObjectId, (prikk_object::NodeKind, Vec<u8>)>> {
+) -> Result<DerivedDeletedContent> {
     if wanted.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(DerivedDeletedContent::default());
     }
-    // A merge block has no single-parent chain (`single_parent_chain`), so a history the supported
-    // replay subset cannot walk derives nothing and the caller refuses exactly as it does today.
-    let Ok(chain) = read::single_parent_chain(reader, tip_block_id) else {
-        return Ok(BTreeMap::new());
+    let chain = match read::single_parent_chain(reader, tip_block_id) {
+        Ok(chain) => chain,
+        // The one shape this walk legitimately cannot follow. Reported, not swallowed: the caller says
+        // it in the refusal, so a user reads "this shape was not walked" rather than only a blob id.
+        Err(PrikkError::UnsupportedObjectType(detail)) => {
+            return Ok(DerivedDeletedContent {
+                found: BTreeMap::new(),
+                unsupported_chain: Some(detail),
+            });
+        }
+        Err(err) => return Err(err),
     };
     let anchored = anchor::replay_chain_capturing(
         reader,
@@ -435,7 +451,10 @@ pub(crate) fn derive_deleted_content(
         apply::DeletedContentCapture::for_ids(wanted.clone()),
     )?;
     if anchored.capture.is_satisfied() {
-        return Ok(anchored.capture.into_found());
+        return Ok(DerivedDeletedContent {
+            found: anchored.capture.into_found(),
+            unsupported_chain: None,
+        });
     }
     let mut found = anchored.capture.into_found();
     let remaining: std::collections::BTreeSet<ObjectId> = wanted
@@ -450,7 +469,18 @@ pub(crate) fn derive_deleted_content(
         apply::DeletedContentCapture::for_ids(remaining),
     )?;
     found.extend(full.capture.into_found());
-    Ok(found)
+    Ok(DerivedDeletedContent {
+        found,
+        unsupported_chain: None,
+    })
+}
+
+/// What [`derive_deleted_content`] produced: the content it derived, and the block-chain shape it could
+/// not walk, if that is why something is missing.
+#[derive(Debug, Default)]
+pub(crate) struct DerivedDeletedContent {
+    pub(crate) found: BTreeMap<ObjectId, (prikk_object::NodeKind, Vec<u8>)>,
+    pub(crate) unsupported_chain: Option<String>,
 }
 
 /// The same replay for a **read-only report**, which may start at the nearest snapshot that passes the

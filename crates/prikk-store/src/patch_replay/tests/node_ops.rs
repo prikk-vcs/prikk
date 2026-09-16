@@ -787,3 +787,75 @@ fn decode_rejects_op_seq_physical_order_mismatch() {
     let err = decode_patch_operations(&bytes, 1).expect_err("order mismatch");
     assert!(matches!(err, PrikkError::MalformedData(_)), "{err:?}");
 }
+
+/// DC-78 follow-ups §5: a deletion whose `old_blob_id` does not name the content replay holds is an
+/// `Integrity` refusal from the apply layer itself.
+///
+/// This is the check the derivation leans on: the same arm that captures a deleted file's bytes
+/// (`DeletedContentCapture`) first hashes them as the recorded node kind and compares with the id the
+/// patch carries, so a derived Blob can never be silently wrong. The control lives here, at the layer
+/// that refuses, rather than at the CLI, where a corrupt history cannot be built without reaching into
+/// container storage.
+#[test]
+fn delete_node_whose_preimage_id_does_not_match_the_content_refuses() {
+    use std::collections::BTreeMap;
+
+    let bytes = patch_bytes(OperationKind::DeleteNode(DeleteNode {
+        path: "a.txt".to_string(),
+        node_id: NodeId::from_bytes([0x51; 32]),
+        old_node_kind: NodeKind::TextFile,
+        preimage: DeleteNodePreimage::File {
+            // Not the id of the content below, which is the whole point.
+            old_blob_id: ObjectId::from_bytes([0x52; 32]),
+            old_mode: 0o100_644,
+        },
+    }));
+    let operations = decode_patch_operations(&bytes, 1).expect("decodes");
+    let mut files = BTreeMap::from([("a.txt".to_string(), b"replayed content\n".to_vec())]);
+    let mut live_nodes = BTreeMap::new();
+    let mut deleted_files = BTreeMap::new();
+    let mut capture = crate::patch_replay::apply::DeletedContentCapture::default();
+    let store = crate::MemoryObjectStore::new();
+
+    let err = crate::patch_replay::apply_operation_sequence(
+        &store,
+        &mut files,
+        &mut live_nodes,
+        &mut deleted_files,
+        &mut capture,
+        operations,
+    )
+    .expect_err("a preimage that does not match the content must refuse");
+    match err {
+        PrikkError::Integrity(message) => assert!(
+            message.contains("old_blob_id/old_node_kind mismatch"),
+            "the refusal must name the mismatch: {message}"
+        ),
+        other => panic!("expected an Integrity refusal, got {other:?}"),
+    }
+    assert!(
+        files.contains_key("a.txt"),
+        "a refused deletion must leave the replayed state alone"
+    );
+}
+
+/// DC-78 follow-ups §2: a chain failure is not "nothing to derive". A tip whose Block is absent is a
+/// real failure, and it propagates rather than being reported later as a missing Blob.
+#[test]
+fn a_derivation_whose_chain_cannot_be_read_propagates_that_failure() {
+    let store = crate::MemoryObjectStore::new();
+    let wanted = std::collections::BTreeSet::from([ObjectId::from_bytes([0x61; 32])]);
+    let err = crate::patch_replay::derive_deleted_content(
+        &store,
+        ObjectId::from_bytes([0x62; 32]),
+        &wanted,
+    )
+    .expect_err("an unreadable chain must not be silently empty");
+    match err {
+        PrikkError::Integrity(message) => assert!(
+            message.contains("missing Block"),
+            "the failure must name the block it could not read: {message}"
+        ),
+        other => panic!("expected an Integrity failure, got {other:?}"),
+    }
+}
