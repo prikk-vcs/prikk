@@ -1,9 +1,17 @@
 # RFC 156 — One object, several signers
 
-**Status.** **PROPOSED 2026-09-16 by the architect**, as item 0 of 0.45.0 ("working together"). **Direction B
-(§4) authorized by the owner 2026-09-16** (*"Yes. Authorized."*). **§7's bound: the owner found the recommendation
-acceptable and asked what the number rests on; §7 is revised with that basis, and a flaw found while answering, and
-awaits the owner's confirmation.** Author-review independence: the architect proposes and would review; §9's
+**Status.** **ACCEPTED by the project owner 2026-09-16**, proposed the same day by the architect as item 0 of 0.45.0
+("working together"). Direction B (§4): *"Yes. Authorized."* §7.3's revised bound — a limit of **4** counted
+signatures per object, the exemption based on previously recorded keys removed — confirmed: *"Reviewed. Authorized."*
+
+**The architect's reading of §7.3 rule 1, stated so it can be corrected:** "signatures made by this repository's own
+configured signing keys" is implemented as **signatures written by this repository's local writers** (`commit`,
+`seal`, `merge`, `sync seal`, `rollback-draft`, `tag create`, `sync adopt-tag`) — never counted, never refused — while
+every AUTHOR signature arriving through `bundle import` or `sync accept` counts. An import never has to read secret key
+material to recognise a local key, and no outsider can reach a local writer, so the property is the same.
+Handoff: `rfcs/handoffs/156-one-object-several-signers/one-object-several-signers-handoff-v1.md`.
+
+Author-review independence: the architect proposes and would review; §9's
 controls compensate, each of which must be shown to fail.
 
 ## 1. The question
@@ -96,7 +104,7 @@ different copy today; a newer receiver merges it. Both behaviours are measured a
 - **`sync.md`** loses the refusal it documents, and **the advisory's related limitation** is marked closed in the
   release that ships this.
 
-## 7. Bounding the signer set — revised 2026-09-16, awaiting the owner's confirmation
+## 7. Bounding the signer set — revised 2026-09-16, confirmed by the owner
 
 **The first recommendation (8, with no limit for keys recorded before the import) rested on judgement, not measurement,
 and its exemption does not hold.** Answering "why 8" produced the basis below.

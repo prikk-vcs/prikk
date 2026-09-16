@@ -82,7 +82,7 @@ principle and needs no new ruling.
 - Bounded in memory by streaming, not by loading the whole artifact. The bound is measured, not
   asserted.
 
-**R6 — Identity-stable, idempotent.**
+**R6 — Identity-stable, idempotent.** *(Superseded in part 2026-09-16 by RFC 156: the same id under different signatures is **merged** under RFC 156 §4's rules, not refused.)*
 - An object already held with identical bytes is a no-op. Re-importing the same artifact changes nothing
   and says so.
 - The same id with **different** signature bytes stays **refused and named**; never union and never
