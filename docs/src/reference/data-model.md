@@ -78,6 +78,48 @@ Verification replays every Block from empty state or its one parent and rejects 
 missing evidence, invalid path/mode/kind/content state, or mixed Block schema lineage. Snapshots and
 caches may be used only as checked auxiliary data; they cannot override replay.
 
+## Checkpoints and snapshots
+
+A **checkpoint** is a Block that carries a snapshot. `seal`, `merge` and `sync seal` write one at a
+ref's first Block and at every 64th Block after it (RFC 136 §10.2); every other Block's snapshot
+reference is empty.
+
+- **What a snapshot is.** A Blob of kind `Snapshot` holding a v2 manifest: the Block's own state, entry
+  for entry — the exact leaves its state root hashes (path, NodeId, kind, mode, and the file's content
+  Blob id or the symlink target). A text file whose content only ever arrived through `EditText` has no
+  stored content Blob (edits carry spans, not whole files), so the checkpoint stores that content as an
+  ordinary Text Blob first, and only then the manifest. A bundle carries the manifest and those content
+  Blobs with the history.
+- **What `verify` does with it.** Every snapshot is checked: the manifest must decode, recompute to its
+  own Block's state root, and name only content Blobs that are present. A failure is an integrity
+  finding naming the Block. `verify` never replays less because a snapshot exists.
+- **A checkpoint changes cost, never output** (RFC 136 §10.3a). Every command gives byte-identical
+  output with or without checkpoints; a snapshot only lets a command start part-way along the chain.
+- **Who may start from one.** Read-only reports (`checkout --patch-plan`, `--patch-delete-plan`,
+  `bundle preview`) may start at the nearest snapshot that passes validation. Commands that write the
+  worktree (`checkout --patch-materialize`, `--patch-materialize-delete`, `branch switch`) start only at a
+  snapshot whose Block this repository has itself confirmed by replay; otherwise they replay from genesis.
+  `rollback-preview`, `commit`'s baseline and `merge-evidence` always replay the whole chain.
+- **The replay-verified record and the provisional marker.** Which Blocks count as confirmed is kept in
+  `.prikk/cache/replay-verified-blocks.v1`, a cache that is always safe to delete. A worktree written
+  directly from an unconfirmed snapshot is marked provisional until `prikk verify`. Both are described in
+  [snapshot materialization](../guide/checkout/snapshot-materialization.md).
+
+**What a checkpoint costs.** Measured on the RFC 139 corpus profile (`profiles/prikk-self.toml`), against
+the same history sealed by a build from before checkpoints existed:
+
+| history depth | checkpoints | repository bytes without | with | added |
+|---:|---:|---:|---:|---:|
+| 64 | 1 | 628,486 | 629,944 | 1,458 (0.2 %) |
+| 128 | 2 | 1,621,001 | 1,829,897 | 208,896 (11 %) |
+| 256 | 4 | 3,069,495 | 4,425,512 | 1,356,017 (31 %) |
+
+The manifest itself is small — 177 bytes at block 1, 12,268 bytes at block 193, where it lists 114 entries
+— and is under 2 % of what a checkpoint adds. The rest is the content Blobs a checkpoint stores for text
+files whose content had only ever arrived as edits. A repository whose files are mostly edited rather than
+created therefore pays close to one full copy of its text content per checkpoint, and one whose files are
+mostly created pays almost nothing, because those Blobs are already stored.
+
 ## Tags
 
 A Tag is a named, signed pointer into history, created by `prikk tag create` or `sync adopt-tag`

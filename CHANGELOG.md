@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — sealed snapshots: a checkpoint every 64 blocks makes deep history cheaper to check out
+
+`seal`, `merge` and `sync seal` now write a **checkpoint** at a ref's first block and at every 64th block
+after it: the block carries a snapshot of its own state — a manifest Blob, plus the content Blobs of any
+text files whose content had only ever arrived as edits. No command's output changes.
+
+- **Faster at depth.** `checkout --patch-materialize`, `--patch-materialize-delete` and `branch switch`
+  start at the nearest snapshot this repository has replay-verified instead of at genesis, and the
+  read-only reports (`checkout --patch-plan`, `--patch-delete-plan`, `bundle preview`) at the nearest valid
+  one. On the RFC 139 corpus at depth 256, median of three samples: `--patch-materialize` 13.4 s → 4.0 s,
+  `branch switch` 13.7 s → 4.0 s. Both stop growing with depth past about 128 blocks.
+- **What it costs.** One checkpoint adds 1,458 bytes to a 64-block repository (0.2 %); four add 31 % to a
+  256-block one, almost all of it the stored text content. See the data model reference.
+- **Bundles carry them.** A bundle's object count includes each checkpoint's manifest and the content Blobs
+  it stores — a one-block bundle is 5 objects where it was 4.
+- **`show` reports content a checkpoint stored**, where it printed `<unavailable blob …>` before.
+- `prikk verify` checks every snapshot and never replays less because one exists (below).
+
 ### Added — `verify` checks every snapshot against the block that carries it
 
 A block that carries a snapshot is now checked by `prikk verify`: its manifest must decode, recompute
@@ -76,6 +94,13 @@ block's snapshot instead of genesis; their output is unchanged.
 
 `prikk verify` now clears the provisional-worktree marker even when it reports a lifecycle-cache
 divergence: that cache is rebuildable, and verify's own replay decides block state.
+
+### Fixed — a checkout retry that only fixes a file's mode makes the write durable
+
+When a checkout wrote a file but failed to sync its directory, the next checkout found the file's
+bytes already in place and only corrected its mode — without syncing the directory, so the earlier
+rename could stay undurable across a crash. The replay materializer now re-syncs the directory on
+that path too.
 
 ### Fixed — nothing to invert is a precondition, not an encoding error
 

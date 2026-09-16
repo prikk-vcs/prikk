@@ -67,11 +67,21 @@ surface without adding verification strength, so RFC 116 ruled negotiation-as-ar
 network code out of scope for now.
 
 **The receiver seals and adopts under its own key, always.** Accepting an artifact never adopts a
-maintainer key, never advances a ref, and never creates a local tag by itself — those are three
-separate, explicit acts (`seal`, `adopt-tag`), each signed locally. A sender's block and the
-receiver's sealed block for the same patches are different objects; a sender's tag and the receiver's
-adopted tag are different objects too, sharing the same patch set but not the same identity — expect
-the ids to differ, since that is nothing arriving pre-trusted, working as intended.
+maintainer key, never advances a ref, and never creates a local tag by itself — those are separate,
+explicit acts (`seal`, `adopt-tag`), each signed locally.
+
+**An object's id is the hash of its payload, and signatures are not part of the payload.** So a receiver
+that seals the same patches, in the same grouping, onto the same parent produces the sender's block id
+and the sender's `RefState` id exactly; only the signatures on them differ. (Measured: a receiver
+sealing one accepted claim under its own maintainer key got the sender's block and `heads/main`
+`RefState` ids.) Sealing the patches in a different grouping, or onto a different tip, gives different
+ids. A sender's tag and the receiver's adopted tag are different objects: `adopt-tag` writes a tag object
+and `RefState` of its own, naming the same target block.
+
+**A repository holds one signed copy of each id.** So it cannot hold the same history under two signers:
+after the receiver has sealed the sender's patches as above, importing the sender's bundle of that ref
+refuses with `existing container record for <id> differs from candidate`. Nothing arrives pre-trusted;
+that is working as intended.
 
 **Divergence is reported, not treated as damage.** If an accepted patch does not apply to the
 receiver's current tip, that means the two histories have moved differently since they last agreed —

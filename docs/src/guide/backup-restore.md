@@ -200,6 +200,9 @@ author key material: 1 recorded (continuity only, not a trust decision)
 note: no local ref was created or advanced, and no MAINTAINER key was trusted; run `trust maintainer add` to trust the sealing key, then `merge` to incorporate this history
 ```
 
+The note's last step does not work in a fresh repository: `merge` refuses there, because the repository
+has no `heads/main` to merge into (see *What a restore gives, and what it does not*, below).
+
 **Import records material; it does not create trust.** The imported history lands as
 `remotes/heads/main`, not `heads/main` — no local ref moved, and the maintainer key that sealed it
 is not yet trusted here. Trust it explicitly, the same key id and public key
@@ -240,8 +243,25 @@ received-ref remotes/heads/main: ...
 format adds no separate verification path. A restored copy is only as checked as this command says
 it is; import's own report is not a substitute for running it.
 
-Turning `remotes/heads/main` into your own working `heads/main` is an ordinary `merge` from here —
-outside this page's own scope, since bundle export/import add no "pull" concept of their own.
+**What a restore gives, and what it does not.** Measured on the binary, in a fresh repository after
+`bundle import`:
+
+- **It gives verifiable history at `remotes/heads/main`.** `prikk log --ref remotes/heads/main` lists the
+  received blocks, `prikk show <block>` reads their patches and content, and `prikk verify` checks
+  every object and names the key that sealed each block. With no maintainer key trusted, `verify` reports
+  publication-trust issues and exits non-zero; after `trust maintainer add` for the sealing key, it passes.
+- **It does not give a working branch.** None of these turn the received ref into your own `heads/main`
+  today: `prikk branch create heads/main --from remotes/heads/main` refuses (`--from ref
+  remotes/heads/main does not resolve to a published ref`); `prikk checkout --patch-plan` and
+  `--patch-materialize --ref remotes/heads/main` refuse (`ref remotes/heads/main is not published`), so
+  no worktree is written; and `prikk merge --into heads/main --from remotes/heads/main` refuses in a fresh
+  repository (`ref heads/main is not published`), even with the sealing key trusted.
+- **It cannot be passed on.** `prikk bundle export --ref remotes/heads/main` refuses, so a restored copy
+  is not itself a backup source.
+
+A restore is therefore an intact, checkable copy of the history, not a repository you continue working
+in. A whole-repository artifact that lands as working branches is accepted as RFC 155 and not yet
+implemented.
 
 ## What this proves, stated precisely
 

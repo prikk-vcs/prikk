@@ -165,3 +165,144 @@ pub fn count_tree_files(root: &Path) -> u64 {
     walk(root, &mut count);
     count
 }
+
+// ---- RFC 136 increment 3: shared measurement helpers -------------------------------------------------
+// Added here so the increment 3 instrument does not become a third copy of `run_measured`
+// (`two_measurements.rs`, `rfc136_*` carry their own from earlier rounds and are left as they were).
+
+/// `(elapsed, peak_kb, output)`: peak RSS sampled from `/proc/<pid>/status` (`VmHWM`) on Linux, `None`
+/// elsewhere. A missed sample is *not measured*, never zero.
+pub fn run_measured(
+    mut command: std::process::Command,
+) -> (std::time::Duration, Option<u64>, std::process::Output) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Stdio;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let start = std::time::Instant::now();
+        let mut child = command.spawn().expect("spawning prikk");
+        let pid = child.id();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let out_reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = stdout {
+                std::io::Read::read_to_end(&mut pipe, &mut bytes).ok();
+            }
+            bytes
+        });
+        let err_reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = stderr {
+                std::io::Read::read_to_end(&mut pipe, &mut bytes).ok();
+            }
+            bytes
+        });
+        let mut peak_kb: Option<u64> = None;
+        let status = loop {
+            let hwm = std::fs::read_to_string(format!("/proc/{pid}/status"))
+                .ok()
+                .and_then(|text| {
+                    text.lines()
+                        .find_map(|line| line.strip_prefix("VmHWM:"))
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .and_then(|kb| kb.parse::<u64>().ok())
+                });
+            if let Some(kb) = hwm {
+                peak_kb = Some(peak_kb.map_or(kb, |current| current.max(kb)));
+            }
+            if let Some(status) = child.try_wait().expect("waiting for prikk") {
+                break status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let elapsed = start.elapsed();
+        let output = std::process::Output {
+            status,
+            stdout: out_reader.join().expect("stdout reader"),
+            stderr: err_reader.join().expect("stderr reader"),
+        };
+        (elapsed, peak_kb, output)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let start = std::time::Instant::now();
+        let output = command.output().expect("running prikk");
+        (start.elapsed(), None, output)
+    }
+}
+
+/// Every worktree file outside `.prikk`: its relative path, bytes and executable bit.
+pub fn worktree_digest(root: &Path) -> std::collections::BTreeMap<PathBuf, (Vec<u8>, bool)> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("reading worktree").flatten() {
+            let path = entry.path();
+            if entry.file_name() == ".prikk" {
+                continue;
+            }
+            if entry.file_type().expect("file type").is_dir() {
+                stack.push(path);
+                continue;
+            }
+            #[cfg(unix)]
+            let executable = {
+                use std::os::unix::fs::PermissionsExt;
+                entry.metadata().expect("metadata").permissions().mode() & 0o111 != 0
+            };
+            #[cfg(not(unix))]
+            let executable = false;
+            let bytes = std::fs::read(&path).expect("reading worktree file");
+            files.insert(
+                path.strip_prefix(root).expect("under root").to_path_buf(),
+                (bytes, executable),
+            );
+        }
+    }
+    files
+}
+
+/// Total bytes of every file under `dir`.
+pub fn dir_bytes(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current)
+            .expect("reading directory")
+            .flatten()
+        {
+            let file_type = entry.file_type().expect("file type");
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total += entry.metadata().map_or(0, |metadata| metadata.len());
+            }
+        }
+    }
+    total
+}
+
+/// The object count `prikk verify` reports (`object items: N scanned`).
+pub fn verified_object_count(binary: &Path, repo_root: &Path) -> Option<u64> {
+    let output = std::process::Command::new(binary)
+        .current_dir(repo_root)
+        .arg("verify")
+        .output()
+        .expect("running prikk verify");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("object items: "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+}
+
+/// `(median, min, max)` of `samples`; `None` when any sample is `None` or there are none.
+pub fn median_range<T: Copy + PartialOrd>(samples: &[Option<T>]) -> Option<(T, T, T)> {
+    let mut values: Vec<T> = samples.iter().copied().collect::<Option<Vec<T>>>()?;
+    values.sort_by(|a, b| a.partial_cmp(b).expect("comparable samples"));
+    // `get`/`first`/`last` rather than indexing: this crate's tests are linted with
+    // `-D clippy::indexing-slicing`, and an empty sample set is a `None`, not a panic.
+    let median = *values.get(values.len() / 2)?;
+    Some((median, *values.first()?, *values.last()?))
+}

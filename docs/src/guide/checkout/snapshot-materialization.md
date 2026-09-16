@@ -6,10 +6,12 @@ PR-017 adds an explicit, opt-in snapshot materialization path:
 prikk checkout --snapshot-materialize [path] [--ref REF]
 ```
 
-The command writes files only from a validated snapshot manifest. It does not apply patch algebra,
-does not remove extra files, and refuses to overwrite existing files with different content. It also
-refuses symlinked parent directories and symlink targets so snapshot checkout cannot be used to
-write outside the repository worktree.
+The command writes files only from a validated snapshot manifest. It does not apply patch algebra and
+does not remove extra files. Before writing anything it checks every file it would write: an existing
+file with different content, a non-file at a path, a symlink target or a symlinked parent directory is a
+conflict, and any conflict refuses the whole checkout with every such path named and nothing written (see
+[checkout](checkout.md#a-refused-checkout-writes-nothing)). So snapshot checkout cannot be used to write
+outside the repository worktree.
 
 ## A snapshot worktree is provisional until `prikk verify`
 
@@ -45,8 +47,8 @@ replaying the history before that block produces the same files: only replay pro
 ## Reports that start at a snapshot
 
 `checkout --patch-plan` (prose and `--format json`, including `--content-path`),
-`checkout --patch-delete-plan` and `bundle preview` read nothing but write nothing either, so they may
-start at the nearest snapshot on the ref's history instead of genesis. Their output is byte-identical
+`checkout --patch-delete-plan` and `bundle preview` only read, so they may start at the nearest valid
+snapshot on the ref's history instead of genesis. Their output is byte-identical
 either way: the file manifest comes from the snapshot, and everything about history — patch and
 operation counts, `coverage`, files history deleted — is still computed over the whole chain. A snapshot
 that fails validation is never used: the report replays from genesis, prints the same output, exits `0`,
