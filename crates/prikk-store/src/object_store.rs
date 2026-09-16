@@ -167,6 +167,21 @@ fn append_object_under_lock(
     append_object_to_container(layout, object_type, envelope)
 }
 
+/// Test-support only (RFC 156 Stage 0): append `envelope` as a **new record** for its id — to its
+/// container and the index — **bypassing the write decision**, which would refuse a second envelope for
+/// an id already stored. It builds the state RFC 156's union rule will write (a superseding record whose
+/// signatures are the stored ones plus more) so released binaries can be measured against it before the
+/// rule exists. Never compiled into a shipped build.
+#[cfg(any(test, feature = "test-support"))]
+pub fn append_superseding_record_for_test_support(
+    layout: &RepositoryLayout,
+    envelope: &ObjectEnvelope,
+) -> Result<()> {
+    layout.validate_format()?;
+    crate::format::validate_object_envelope(layout.format(), envelope)?;
+    append_object_under_lock(layout, envelope.object_type, envelope).map(|_| ())
+}
+
 /// Read validation shared by every reader below (`FileObjectStore`, `ObjectReadSnapshot`,
 /// `ObjectWriteSession`): the index is trusted for *location*, but the bytes found there are always
 /// checked against the id actually asked for by recomputing it from the decoded content -- free,

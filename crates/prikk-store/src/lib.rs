@@ -157,6 +157,8 @@ pub use merge::evidence::{
     prepare_merge_plan,
 };
 pub use merge::execute::{MergeExecutionReport, execute_merge};
+#[cfg(feature = "test-support")]
+pub use object_store::append_superseding_record_for_test_support;
 pub use object_store::{
     FileObjectStore, ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter,
 };
