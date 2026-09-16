@@ -2,8 +2,8 @@
 
 **Live 2026-09-16**, from stikk's letter 014
 (`.git-exclude/upstream/stikk/receive/014-a-directory-at-the-destination-resolves-rename-and-commit-records-a-deletion.md`).
-Rulings recorded in RFC 147 §2g. **Ships in 0.43.1.** Order: after the round the owner has already handed you;
-nothing is pushed until the architect cuts 0.43.1.
+Rulings recorded in RFC 147 §2g. **Ships in 0.44.0.** Order: after the round the owner has already handed you;
+nothing is pushed until the architect cuts 0.44.0.
 
 ## 1. Measured by the architect
 
@@ -84,6 +84,6 @@ Your stop was right. **Option (A)**, with your recommendation taken whole:
   restoring the unconditional read, and it must fail by timeout.
 - The symlink row's `content_changed` is asserted `null`.
 
-**CHANGELOG `### Fixed`** also carries the hang, as a 0.43.0 defect. This round ships in 0.43.1, **on top of the
-round you have already committed**. Nothing is pushed until the architect cuts 0.43.1.
+**CHANGELOG `### Fixed`** also carries the hang, as a 0.43.0 defect. This round ships in 0.44.0, **on top of the
+round you have already committed**. Nothing is pushed until the architect cuts 0.44.0.
 

@@ -513,7 +513,7 @@ architect's miss.**
 5. **Symlinks and special files are measured, and kept or reported**, not assumed.
 
 A parity matrix across entry kinds becomes the control. Handoff:
-`rfcs/handoffs/147-refusal-visibility/declaration-presence-is-one-definition-handoff-v1.md`. Ships in 0.43.1.
+`rfcs/handoffs/147-refusal-visibility/declaration-presence-is-one-definition-handoff-v1.md`. Ships in 0.44.0.
 
 ## 2h. RULED 2026-09-16 — a destination that is not a regular file is never read, and reports no difference
 
