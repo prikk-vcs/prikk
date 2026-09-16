@@ -266,6 +266,33 @@ pub(crate) fn create_fifo_for_test(path: &std::path::Path, mode: u32) -> std::io
     }
 }
 
+/// Every file under `.prikk`, keyed by path, except lock files — those are created and removed by the
+/// operation itself and are never state a refusal could leave behind.
+pub(crate) fn repository_bytes(
+    layout: &crate::RepositoryLayout,
+) -> prikk_error::Result<std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut stack = vec![layout.prikk_dir().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains("lock"))
+            {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.insert(path.clone(), std::fs::read(&path)?);
+            }
+        }
+    }
+    Ok(files)
+}
+
 /// DC-84: routed through `unique_suffix()` below, which is the only part that actually guarantees
 /// collision-freedom under thread contention.
 pub(crate) fn unique_temp_dir(name: &str) -> std::path::PathBuf {

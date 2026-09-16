@@ -360,8 +360,20 @@ impl ObjectReader for ObjectWriteSession {
     }
 }
 
-impl ObjectWriter for ObjectWriteSession {
-    fn write_object(&mut self, envelope: &ObjectEnvelope) -> Result<ObjectId> {
+impl ObjectWriteSession {
+    /// Every refusal [`ObjectWriter::write_object`] can return for `envelope`, decided without writing
+    /// anything: an unsupported type, an envelope the repository format rejects, or an id already
+    /// stored under different envelope bytes.
+    ///
+    /// **One decision, two callers.** `write_object` makes this exact decision and then appends; a
+    /// caller that must refuse before its first write — `import_bundle`, whose refusal must leave the
+    /// repository as it found it — runs it over every object first. Only an I/O failure, or a lock
+    /// held by a concurrent writer, can then stop a write this approved.
+    pub(crate) fn check_write(&mut self, envelope: &ObjectEnvelope) -> Result<()> {
+        self.decide_write(envelope).map(|_| ())
+    }
+
+    fn decide_write(&mut self, envelope: &ObjectEnvelope) -> Result<WriteDecision> {
         if envelope.object_type == ObjectType::RefUpdate {
             return Err(PrikkError::UnsupportedObjectType(
                 "RefUpdate is stored inline in ref logs for v1".to_string(),
@@ -371,7 +383,13 @@ impl ObjectWriter for ObjectWriteSession {
         crate::format::validate_object_envelope(self.layout.format(), envelope)?;
         self.snapshot.ensure_current(&self.layout)?;
         let existing = self.snapshot.lookup(envelope.object_id());
-        match decide_write_outcome(&self.layout, envelope.object_type, envelope, existing)? {
+        decide_write_outcome(&self.layout, envelope.object_type, envelope, existing)
+    }
+}
+
+impl ObjectWriter for ObjectWriteSession {
+    fn write_object(&mut self, envelope: &ObjectEnvelope) -> Result<ObjectId> {
+        match self.decide_write(envelope)? {
             WriteDecision::AlreadyPresent(id) => Ok(id),
             WriteDecision::New => {
                 let object_id = envelope.object_id();

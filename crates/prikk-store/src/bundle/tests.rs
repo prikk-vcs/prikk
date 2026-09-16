@@ -2479,3 +2479,211 @@ fn a_bundle_carries_a_checkpoints_content_blobs_and_refuses_one_without_them()
     let _ = std::fs::remove_dir_all(broken_root);
     Ok(())
 }
+
+// A refused import writes nothing. Every control below compares the whole `.prikk` directory byte for
+// byte, not one container: "nothing" is only a claim if every file is in it.
+
+/// A source repository whose history is signed by `signer`, exported, and a target that already binds
+/// `signer`'s key id to a different public key.
+fn conflicting_import_fixture(
+    tag: &str,
+) -> prikk_error::Result<(
+    std::path::PathBuf,
+    std::path::PathBuf,
+    RepositoryLayout,
+    Vec<u8>,
+)> {
+    let source_root = unique_temp_dir(&format!("{tag}-source"));
+    let source = RepositoryLayout::init(source_root.clone())?;
+    let signer = transport_test_signer(0xc3)?;
+    seal_two_block_history_with_author(&source, &signer, true)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let target_root = unique_temp_dir(&format!("{tag}-target"));
+    let target = RepositoryLayout::init(target_root.clone())?;
+    Ok((source_root, target_root, target, bytes))
+}
+
+/// The case that shipped: the target already binds the bundle's author key id to a different key.
+/// The import must refuse, and the repository must be byte-identical afterwards — before, every
+/// object in the bundle was written first and the refusal came after.
+#[test]
+fn an_import_refused_for_a_conflicting_author_key_writes_nothing() -> prikk_error::Result<()> {
+    let (source_root, target_root, target, bytes) =
+        conflicting_import_fixture("import-conflict-writes-nothing")?;
+    let signer = transport_test_signer(0xc3)?;
+    let active_lock = ActiveLock::acquire(&target, DEFAULT_ACTIVE_NAME)?;
+    record_author_key_material(&target, signer.key_id(), [0xdd; 32], &active_lock)?;
+    drop(active_lock);
+
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let result = import_bundle(&target, &bytes, &BundleImportOptions::default_limits());
+    assert!(
+        matches!(result, Err(prikk_error::PrikkError::Integrity(ref message)) if message.contains("already has a different recorded public key")),
+        "the conflict must refuse the import: {result:?}"
+    );
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before,
+        "a refused import must leave every file under .prikk unchanged"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// A conflicting key recorded by another writer after the bundle is validated but before the import
+/// locks: the check inside the lock sees it, so the import still refuses and still writes nothing.
+#[test]
+fn a_key_recorded_concurrently_before_the_lock_still_refuses_with_nothing_written()
+-> prikk_error::Result<()> {
+    let (source_root, target_root, target, bytes) =
+        conflicting_import_fixture("import-conflict-concurrent")?;
+    let signer = transport_test_signer(0xc3)?;
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+
+    let concurrent = target.clone();
+    let key_id = signer.key_id().to_string();
+    // The seam cannot return an error, so it reports whether the concurrent writer really recorded
+    // its key; the test asserts that below rather than letting a failed recording pass silently.
+    let recorded = std::rc::Rc::new(std::cell::Cell::new(false));
+    let recorded_in_seam = std::rc::Rc::clone(&recorded);
+    crate::bundle::before_import_lock_for_test(move || {
+        recorded_in_seam.set(
+            ActiveLock::acquire(&concurrent, DEFAULT_ACTIVE_NAME).is_ok_and(|lock| {
+                record_author_key_material(&concurrent, &key_id, [0xee; 32], &lock).is_ok()
+            }),
+        );
+    });
+    let result = import_bundle(&target, &bytes, &BundleImportOptions::default_limits());
+    assert!(
+        result.is_err(),
+        "the conflict recorded concurrently must refuse: {result:?}"
+    );
+    assert!(
+        recorded.get(),
+        "the concurrent writer must have recorded its key"
+    );
+
+    // The only change is the concurrent writer's own key, never anything from the bundle.
+    let after = crate::test_gates::test_support::repository_bytes(&target)?;
+    let changed: Vec<_> = after
+        .iter()
+        .filter(|(path, bytes)| before.get(*path) != Some(*bytes))
+        .map(|(path, _)| path.clone())
+        .collect();
+    assert_eq!(
+        changed,
+        vec![target.author_key_container_path()],
+        "only the concurrent writer's key container may change"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// The lock is held from the check through the writes: another recorder trying to take it while the
+/// import is writing is refused, and the import completes with the bundle's own key recorded.
+#[test]
+fn the_import_holds_the_active_lock_across_its_object_writes() -> prikk_error::Result<()> {
+    let (source_root, target_root, target, bytes) =
+        conflicting_import_fixture("import-lock-held-across-writes")?;
+    let signer = transport_test_signer(0xc3)?;
+
+    let concurrent = target.clone();
+    let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = std::rc::Rc::clone(&observed);
+    crate::bundle::during_import_writes_for_test(move || {
+        seen.set(matches!(
+            ActiveLock::acquire(&concurrent, DEFAULT_ACTIVE_NAME),
+            Err(prikk_error::PrikkError::LockConflict(_))
+        ));
+    });
+    import_bundle(&target, &bytes, &BundleImportOptions::default_limits())?;
+    assert!(
+        observed.get(),
+        "a concurrent recorder must be refused while the import writes"
+    );
+    assert_eq!(
+        lookup_author_key_entries(&target, signer.key_id())?.len(),
+        1,
+        "the import records the bundle's own key"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// The store's own write decision runs before the first write: an id this repository already holds
+/// under different envelope bytes refuses the import with nothing further written. Before, the objects
+/// ahead of it in the bundle were written and the store refused mid-loop.
+#[test]
+fn an_import_meeting_a_stored_id_with_other_envelope_bytes_writes_nothing()
+-> prikk_error::Result<()> {
+    let (source_root, target_root, target, bytes) =
+        conflicting_import_fixture("import-stored-id-conflict")?;
+    let (_, objects, _, _) = decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    // The last object, so every object ahead of it would have been written under the old order.
+    let last = objects.last().cloned().ok_or_else(|| {
+        prikk_error::PrikkError::Integrity("the bundle carries no objects".to_string())
+    })?;
+    let mut other = last.clone();
+    let resigned = transport_test_signer(0x7e)?;
+    other.signatures.clear();
+    other.add_signature(author_signature(&resigned, other.object_id())?)?;
+    assert_eq!(other.object_id(), last.object_id());
+    assert_ne!(other, last);
+    FileObjectStore::new(target.clone()).write_object(&other)?;
+
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let result = import_bundle(&target, &bytes, &BundleImportOptions::default_limits());
+    assert!(result.is_err(), "the stored id must refuse: {result:?}");
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// One id carried twice with different envelopes is a malformed bundle, refused by the validation
+/// `bundle verify` shares — before, import wrote the first and was refused by the store on the second.
+#[test]
+fn a_bundle_carrying_one_id_twice_with_different_envelopes_is_refused_before_writing()
+-> prikk_error::Result<()> {
+    let (source_root, target_root, target, bytes) =
+        conflicting_import_fixture("import-duplicate-id")?;
+    let (ref_name, mut objects, author_keys, _manifest) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let mut twin = objects.last().cloned().ok_or_else(|| {
+        prikk_error::PrikkError::Integrity("the bundle carries no objects".to_string())
+    })?;
+    let resigned = transport_test_signer(0x7f)?;
+    twin.signatures.clear();
+    twin.add_signature(author_signature(&resigned, twin.object_id())?)?;
+    objects.push(twin);
+    let tampered = encode_bundle(&ref_name, &objects, &author_keys, &test_manifest())?;
+
+    assert!(
+        matches!(
+            verify_bundle(&tampered, &BundleImportOptions::default_limits()),
+            Err(prikk_error::PrikkError::MalformedData(ref message)) if message.contains("twice")
+        ),
+        "offline verification refuses it"
+    );
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    assert!(import_bundle(&target, &tampered, &BundleImportOptions::default_limits()).is_err());
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}

@@ -729,3 +729,51 @@ fn decode_rejects_a_declared_tag_count_over_the_configured_limit() -> Result<()>
     let _ = std::fs::remove_dir_all(receiver.root());
     Ok(())
 }
+
+/// A refused exchange writes nothing. A key recorded by another writer after the early read-only check
+/// but before the lock must still refuse the exchange, and nothing the artifact carries may be written.
+#[test]
+fn a_key_recorded_concurrently_after_the_early_check_refuses_with_nothing_written() -> Result<()> {
+    let signer = author_signer(0x41)?;
+    let (bytes, _patch_id) =
+        build_single_patch_artifact("pexch-accept-concurrent-sender", &signer, true)?;
+    let receiver = fresh_repo("pexch-accept-concurrent-receiver")?;
+    let before = crate::test_gates::test_support::repository_bytes(&receiver)?;
+
+    let concurrent = receiver.clone();
+    let key_id = signer.key_id().to_string();
+    // The seam cannot return an error, so it reports whether the concurrent writer really recorded
+    // its key; the test asserts that below rather than letting a failed recording pass silently.
+    let recorded = std::rc::Rc::new(std::cell::Cell::new(false));
+    let recorded_in_seam = std::rc::Rc::clone(&recorded);
+    super::before_accept_writes_for_test(move || {
+        recorded_in_seam.set(
+            ActiveLock::acquire(&concurrent, DEFAULT_ACTIVE_NAME).is_ok_and(|lock| {
+                record_author_key_material(&concurrent, &key_id, [0xee; 32], &lock).is_ok()
+            }),
+        );
+    });
+    let result = accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits());
+    assert!(
+        result.is_err(),
+        "the conflict recorded concurrently must refuse: {result:?}"
+    );
+    assert!(
+        recorded.get(),
+        "the concurrent writer must have recorded its key"
+    );
+
+    let after = crate::test_gates::test_support::repository_bytes(&receiver)?;
+    let changed: Vec<_> = after
+        .iter()
+        .filter(|(path, bytes)| before.get(*path) != Some(*bytes))
+        .map(|(path, _)| path.clone())
+        .collect();
+    assert_eq!(
+        changed,
+        vec![receiver.author_key_container_path()],
+        "only the concurrent writer's key container may change"
+    );
+    let _ = std::fs::remove_dir_all(receiver.root());
+    Ok(())
+}

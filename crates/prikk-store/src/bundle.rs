@@ -798,12 +798,43 @@ pub fn import_bundle(
 ) -> Result<BundleImportReport> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
     let contents = validate_bundle_contents(bytes, options, Some(&read_snapshot))?;
+    let received_ref_name = format!("remotes/{}", contents.origin_ref_name);
+    crate::received::validate_received_ref(&received_ref_name)?;
 
-    // RFC 111 §6.1 Stage 2: `import_bundle`'s ref-equivalent write is `received::write_received_-
-    // pointer`, a wholly separate mechanism (received-ref index, not the pointer-index/ref-log
-    // `RefStore::publish` touches) with no `FileObjectStore` construction of its own -- confirmed by
-    // reading `received.rs`. No ref-publication threading needed, only the plain swap.
+    #[cfg(test)]
+    if let Some(change) = BEFORE_IMPORT_LOCK.with(|slot| slot.borrow_mut().take()) {
+        change();
+    }
+
+    // **A refused import writes nothing.** Every check that can refuse runs before the first object
+    // write, and the locks are held from those checks through the last write:
+    //
+    // - `ActiveLock` serializes author-key recording against every other recorder (`commit`,
+    //   `rollback-draft`, `sync accept`, another import), so the conflict check below cannot be
+    //   invalidated by a key recorded between it and `record_author_key_material`. Holding it across
+    //   the object writes is the order `commit` and `seal` already use.
+    // - The received-index lock is taken here rather than just before the pointer write, so a
+    //   concurrent compaction refuses this import up front instead of after its objects are written.
+    //   Object appends take only the object-store lock, declared last and a leaf, so holding this one
+    //   across them follows the documented order.
+    //
+    // Before this, the author-key conflict check ran after every object was written, so a refused
+    // import left the bundle's objects behind -- appended to containers nothing prunes.
+    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _received_index_lock =
+        acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
+    for (key_id, public_key) in &contents.bundle_key_ids {
+        check_author_key_conflict(layout, key_id, *public_key)?;
+    }
+    // The store's own write decision for every object, before any of them is written: an envelope the
+    // format rejects, or an id this repository already holds under different envelope bytes.
     let mut object_store = ObjectWriteSession::open(layout)?;
+    for envelope in &contents.objects {
+        object_store.check_write(envelope)?;
+    }
+
+    // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
+    // can stop the import -- never a decision about the bundle's content.
     let mut written_object_count = 0_usize;
     for envelope in &contents.objects {
         let id = envelope.object_id();
@@ -815,48 +846,22 @@ pub fn import_bundle(
         object_store.write_object(envelope)?;
     }
 
-    // DC-53 Stage 2, D7: import records material, `verify` decides -- no cryptographic check here,
-    // matching the object writes above. `import_bundle` is now a third caller of
-    // `record_author_key_material` (`node_authoring.rs`, `rollback_draft.rs` are the other two),
-    // so it acquires `ActiveLock` around this section the same way they do -- the same container,
-    // the same check-then-act, the same unrecoverable conflict state, one lock path per
-    // repository so this also serializes against a concurrent commit or rollback-draft, not only
-    // against another import. A conflict here (against this repository's own existing material,
-    // distinct from the bundle-internal check above) fails the whole import, not just this entry.
-    //
-    // DC-53 Stage 2 follow-up (`multi-key-import-partial-write-v1.md`): with `m > 1` transported
-    // keys, checking-then-recording one entry at a time let a conflict at entry `k` leave entries
-    // `1..k-1` durably appended to a container with no prune, no compaction, and no repair --
-    // exactly the partial-write hazard layer 1's bundle-internal check exists to prevent, just one
-    // layer later. Fixed the same way: validate every entry against local material *before*
-    // recording any of it, both passes inside the one `ActiveLock` already held (a validate-then-
-    // record split across the lock boundary would be a check-then-act race across the two passes,
-    // the same defect this fixes).
-    let mut recorded_author_key_count = 0_usize;
-    {
-        let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
-        for (key_id, public_key) in &contents.bundle_key_ids {
-            check_author_key_conflict(layout, key_id, *public_key)?;
-        }
-        for entry in &contents.author_keys {
-            record_author_key_material(layout, &entry.key_id, entry.public_key, &active_lock)?;
-            recorded_author_key_count =
-                recorded_author_key_count.checked_add(1).ok_or_else(|| {
-                    PrikkError::Integrity(
-                        "bundle import recorded-author-key count overflow".to_string(),
-                    )
-                })?;
-        }
+    #[cfg(test)]
+    if let Some(change) = DURING_IMPORT_WRITES.with(|slot| slot.borrow_mut().take()) {
+        change();
     }
 
-    let received_ref_name = format!("remotes/{}", contents.origin_ref_name);
-    // RFC 102 Stage 6 Step 2, design-v1.md §15.8: `import_bundle` held no lock at all before this
-    // stage. Scoped to the received-index write alone, not the object writes above: those have
-    // their own, separately registered concurrency gap -- see
-    // docs/src/reference/concurrency-locking.md#object-container-writes-are-not-among-the-four-locked-containers,
-    // out of this stage's scope.
-    let _received_index_lock =
-        acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
+    // DC-53 Stage 2, D7: import records material, `verify` decides. Every entry was checked above,
+    // under this same lock, so recording cannot meet a conflict here (`multi-key-import-partial-write-
+    // v1.md`'s all-or-nothing rule holds for the same reason it always did).
+    let mut recorded_author_key_count = 0_usize;
+    for entry in &contents.author_keys {
+        record_author_key_material(layout, &entry.key_id, entry.public_key, &active_lock)?;
+        recorded_author_key_count = recorded_author_key_count.checked_add(1).ok_or_else(|| {
+            PrikkError::Integrity("bundle import recorded-author-key count overflow".to_string())
+        })?;
+    }
+
     crate::received::write_received_pointer(layout, &received_ref_name, contents.ref_state_id)?;
 
     Ok(BundleImportReport {
@@ -866,6 +871,28 @@ pub fn import_bundle(
         written_object_count,
         recorded_author_key_count,
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_IMPORT_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static DURING_IMPORT_WRITES: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam, unreachable from production: run `change` once, after the bundle is validated and before
+/// `import_bundle` takes its locks — where a concurrent writer could record an author key.
+#[cfg(test)]
+pub(crate) fn before_import_lock_for_test(change: impl FnOnce() + 'static) {
+    BEFORE_IMPORT_LOCK.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
+}
+
+/// Test seam, unreachable from production: run `change` once, after `import_bundle`'s object writes
+/// and before it records author keys — while it still holds `ActiveLock`.
+#[cfg(test)]
+pub(crate) fn during_import_writes_for_test(change: impl FnOnce() + 'static) {
+    DURING_IMPORT_WRITES.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 /// Read a bundle and report whether it is structurally sound and internally consistent, **without
@@ -1007,10 +1034,28 @@ fn validate_bundle_contents(
     // patch-exchange path; this makes `import_bundle` match it rather than "align" it to something
     // new (§6's own instruction). When `local` is `None`, "present" narrows to "carried by this
     // bundle" -- see `verify_bundle`'s own doc comment for why that is the correct offline check.
-    let bundle_objects_by_id: BTreeMap<ObjectId, ObjectEnvelope> = objects
-        .iter()
-        .map(|envelope| (envelope.object_id(), envelope.clone()))
-        .collect();
+    //
+    // One id, one envelope. An object id does not cover signatures, so a bundle can carry the same
+    // id twice with different signature bytes; collecting into a map used to keep the last silently,
+    // and `import_bundle` then wrote the first and was refused by the store on the second -- a
+    // refusal after a write. Refused here instead, so `verify` and `import` agree and import's own
+    // refusal still comes before anything is written. An exact repeat is harmless and allowed.
+    let mut bundle_objects_by_id: BTreeMap<ObjectId, ObjectEnvelope> = BTreeMap::new();
+    for envelope in &objects {
+        let id = envelope.object_id();
+        match bundle_objects_by_id.get(&id) {
+            Some(existing) if existing != envelope => {
+                return Err(PrikkError::MalformedData(format!(
+                    "bundle carries object {id} twice with different envelopes -- refusing the \
+                     whole bundle"
+                )));
+            }
+            Some(_) => {}
+            None => {
+                bundle_objects_by_id.insert(id, envelope.clone());
+            }
+        }
+    }
     let local_available = local.is_some();
     let present = |object_type: ObjectType, id: ObjectId| -> bool {
         bundle_objects_by_id.contains_key(&id)

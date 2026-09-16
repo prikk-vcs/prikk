@@ -283,10 +283,55 @@ pub fn accept_exchange_artifact(
         tag_signature_outcomes.push((tag_id, outcome));
     }
 
-    // Phase D item 10 (patches and blobs only -- see the claim-write note below): write the patch
-    // and blob objects. Content-addressed and idempotent -- a replayed accept (§4.3) writes nothing
-    // new here.
+    #[cfg(test)]
+    if let Some(change) = BEFORE_ACCEPT_WRITES.with(|slot| slot.borrow_mut().take()) {
+        change();
+    }
+
+    // Phase D, reordered so a refused exchange writes nothing (the rule `import_bundle` now follows
+    // too). Item 11's authoritative author-key check, and the store's own write decision for every
+    // carried object, both run under `ActiveLock` before the first write, and the lock is held through
+    // the last one. Before, patches and blobs were written first and this check ran after them, so a
+    // key recorded by another writer between Phase B's read-only check (item 5b) and this lock left
+    // them behind — design §8.1 called that harmless because they are content-addressed, but a refused
+    // exchange that changes the repository is not one a user can reason about. Item 5b stays as the
+    // cheap early refusal before signature work; this one is what makes the refusal complete.
+    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    for (&key_id, &public_key) in &artifact_key_ids {
+        check_author_key_conflict(layout, key_id, public_key)?;
+    }
     let mut object_store = ObjectWriteSession::open(layout)?;
+    // One id, one envelope — an object id does not cover signatures, so the same id can arrive twice
+    // with different signature bytes; the store would refuse the second after writing the first.
+    let mut carried: BTreeMap<ObjectId, &ObjectEnvelope> = BTreeMap::new();
+    for envelope in decoded
+        .patches
+        .iter()
+        .chain(decoded.blobs.iter())
+        .chain(decoded.claims.iter())
+        .chain(decoded.tags.iter())
+    {
+        let id = envelope.object_id();
+        match carried.get(&id) {
+            Some(existing) if *existing != envelope => {
+                return Err(PrikkError::MalformedData(format!(
+                    "patch-exchange artifact carries object {id} twice with different envelopes \
+                     -- refusing the whole exchange"
+                )));
+            }
+            Some(_) => {}
+            None => {
+                carried.insert(id, envelope);
+            }
+        }
+        object_store.check_write(envelope)?;
+    }
+
+    // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
+    // can stop the exchange — never a decision about what it carries.
+    //
+    // Item 10: patches and blobs. Content-addressed and idempotent -- a replayed accept (§4.3) writes
+    // nothing new here.
     let mut written_object_count = 0_usize;
     for envelope in decoded.patches.iter().chain(decoded.blobs.iter()) {
         let id = envelope.object_id();
@@ -298,36 +343,19 @@ pub fn accept_exchange_artifact(
         object_store.write_object(envelope)?;
     }
 
-    // Phase D item 11: under a single `ActiveLock`, validate every entry against this repository's
-    // material, then record every entry -- never check-then-record one entry at a time
-    // (`multi-key-import-partial-write-v1.md`). `import_bundle` already does this correctly; same
-    // structure, copied.
+    // Item 11: record every entry, each already checked above under this same lock
+    // (`multi-key-import-partial-write-v1.md`: never check-then-record one entry at a time).
     let mut recorded_author_key_count = 0_usize;
-    {
-        let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
-        for (&key_id, &public_key) in &artifact_key_ids {
-            check_author_key_conflict(layout, key_id, public_key)?;
-        }
-        for entry in &decoded.author_keys {
-            record_author_key_material(layout, &entry.key_id, entry.public_key, &active_lock)?;
-            recorded_author_key_count =
-                recorded_author_key_count.checked_add(1).ok_or_else(|| {
-                    PrikkError::Integrity(
-                        "exchange accept recorded-author-key count overflow".to_string(),
-                    )
-                })?;
-        }
+    for entry in &decoded.author_keys {
+        record_author_key_material(layout, &entry.key_id, entry.public_key, &active_lock)?;
+        recorded_author_key_count = recorded_author_key_count.checked_add(1).ok_or_else(|| {
+            PrikkError::Integrity("exchange accept recorded-author-key count overflow".to_string())
+        })?;
     }
 
-    // Claims and tags are written last, only after item 11 has fully succeeded. Design §8.1 names
-    // claims separately from ordinary objects -- "no key material, and no claim, may be recorded
-    // from an exchange that failed" -- unlike patches and blobs, which §8.1 explicitly allows to
-    // survive a failed exchange (content-addressed and harmless). Writing them earlier, alongside
-    // patches and blobs, would leave one behind if the author-key record step above failed after an
-    // earlier write -- caught in review (`RFC-115-stage-3-exchange-artifact-review-v1.md` §2) as
-    // reachable, if narrow: a concurrent writer between Phase B's read-only conflict check and this
-    // lock, or an I/O error during `record_author_key_material`. RFC 117 stage 3 §5 row 6 puts a Tag
-    // object on the same terms explicitly: **a refused exchange records no tag.**
+    // Claims and tags last, still under the lock: "no key material, and no claim, may be recorded
+    // from an exchange that failed" (design §8.1), and RFC 117 stage 3 §5 row 6 puts a Tag on the
+    // same terms -- **a refused exchange records no tag.**
     for envelope in decoded.claims.iter().chain(decoded.tags.iter()) {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
@@ -337,6 +365,7 @@ pub fn accept_exchange_artifact(
         }
         object_store.write_object(envelope)?;
     }
+    drop(active_lock);
 
     Ok(AcceptReport {
         patch_count: decoded.patches.len(),
@@ -368,6 +397,20 @@ fn referenced_blob_ids(kind: &DecodedOperationKind) -> Vec<ObjectId> {
         } => vec![*old_blob_id],
         _ => Vec::new(),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_ACCEPT_WRITES: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam, unreachable from production: run `change` once, after every read-only check and before
+/// `accept_exchange_artifact` takes its lock and writes — where a concurrent writer could record an
+/// author key the early read-only check did not see.
+#[cfg(test)]
+pub(crate) fn before_accept_writes_for_test(change: impl FnOnce() + 'static) {
+    BEFORE_ACCEPT_WRITES.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 #[cfg(test)]
