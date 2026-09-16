@@ -465,3 +465,27 @@ comparison commit uses to author the accompanying `edit-text` or mode operation,
 **Scheduling:** after RFC 136 increment 3's review; **0.43.0 does not cut without it**, because stikk
 re-baselines on 0.43.0 and the advice today strands a user. Handoff:
 `rfcs/handoffs/147-refusal-visibility/declarations-say-what-commit-does-handoff-v1.md`.
+
+**DELIVERED 2026-09-16** (`ee86aebe`, `e1f7a412`; reviewed
+`.git-exclude/reviewed/declarations-say-what-commit-does-review-v1.md`). One classifier,
+`crates/prikk-store/src/declaration_resolution.rs`, is called by both `commit` and `worktree-status`;
+each declaration carries `resolution`, `refusal`, `content_changed` and `mode_changed`, and the report
+carries `refused_declaration_count`. Additive within `worktree-status-report-v1`, confirmed by diffing a
+pre-round binary's document against this one on the same repository: keys added, none removed or renamed,
+no shared value changed. Verified by the architect on a binary of `e1f7a412`: every state of §2f's table,
+each refusal byte-equal to commit's own message, every route each refusal names run in the state that
+produced it (five routes, each leaving no refusal standing and a file with the content), the two-node swap
+resolving as two renames, and `clean: true` alongside a refused declaration.
+
+**The round's own control caught a message that named `prikk mv <new> <old>` where `prikk mv` refuses
+(both paths present)** — the class of error this ruling exists to prevent, caught by the required control
+rather than by a reader.
+
+**Three questions ruled at review:**
+1. **`worktree-status`'s exit code is unchanged.** It means "the worktree differs from its baseline"; a
+   refused declaration is not a difference (the undone-move state matches the baseline byte for byte).
+   Overloading it would break cleanliness checks, and both output formats now carry the fact.
+2. **Parity rows for `never-tracked` and `deletion-ignored`** — measured correct at review, uncontrolled on
+   the status side — **go into the 0.43.0 prep round** as regression protection.
+3. **`prikk mv --drop-declaration`** is a candidate for the owner's scheduling, not this round's work; the
+   refusal explains the manual route.
