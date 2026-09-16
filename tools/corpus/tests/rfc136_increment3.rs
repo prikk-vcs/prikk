@@ -47,6 +47,15 @@ const CHECKPOINT_BLOCKS: [u64; 4] = [1, 65, 129, 193];
 /// Commits per side of the merge-evidence divergence, as `two_measurements.rs`.
 const DIVERGENCE_SIZE: u64 = 5;
 
+/// What one checkpoint's manifest holds: its Blob's stored bytes, its entry count, and the content bytes
+/// its entries name. `None` when the block carries no snapshot (every block of a pre-writer build).
+type ManifestFacts = Option<(usize, usize, u64)>;
+/// One checkpoint: the block it falls on, and its manifest.
+type CheckpointManifest = (u64, ManifestFacts);
+/// One depth's samples: the depth, the materialized tree's file count, and per command the
+/// (before, after) cells.
+type DepthResult = (u64, u64, Vec<(Cell, Cell)>);
+
 fn self_profile() -> Profile {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -132,7 +141,7 @@ fn grow(
 
 /// `(checkpoint block, manifest Blob bytes, entries, content bytes named)` for every checkpoint so far,
 /// or `None` where the block carries no snapshot.
-fn manifests(repo: &Path, depth: u64) -> Vec<(u64, Option<(usize, usize, u64)>)> {
+fn manifests(repo: &Path, depth: u64) -> Vec<CheckpointManifest> {
     let layout = RepositoryLayout::open(repo.to_path_buf()).expect("open");
     CHECKPOINT_BLOCKS
         .iter()
@@ -160,7 +169,7 @@ struct StorageRow {
     depth: u64,
     prikk_bytes: u64,
     objects: Option<u64>,
-    manifests: Vec<(u64, Option<(usize, usize, u64)>)>,
+    manifests: Vec<CheckpointManifest>,
 }
 
 fn storage_row(verify_binary: &Path, repo: &Path, depth: u64) -> StorageRow {
@@ -573,7 +582,7 @@ fn cost_memory_storage_and_the_gate() {
     let mut trusted = false;
     let mut storage = Vec::new();
     // results[depth index][command index] = (before cell, after cell, tree files)
-    let mut results: Vec<(u64, u64, Vec<(Cell, Cell)>)> = Vec::new();
+    let mut results: Vec<DepthResult> = Vec::new();
     let mut gate_rows: Vec<(&str, Cell)> = Vec::new();
 
     for (index, commit) in manifest.commits.iter().enumerate() {
