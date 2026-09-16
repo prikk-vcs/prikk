@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.44.0 — 2026-09-16
+
+### Fixed — a refused `bundle import` or `sync accept` now changes nothing
+
+`bundle import` refused a bundle carrying an author key id the repository already binds to a different key — but
+only after writing the bundle's objects, so a repository that had been healthy failed `prikk verify` from then on.
+Every check that can refuse an import or an exchange now runs before the first write, under the lock that records
+author keys, and `sync accept` follows the same order. A refused import or exchange leaves the repository byte for
+byte as it was. A bundle or exchange artifact carrying one object id twice with different envelopes is now refused
+as malformed, by `bundle verify` too. Affected: 0.23.0 through 0.43.0. A repository already affected keeps those
+objects; nothing was lost and no ref moved.
 
 ### Fixed — `worktree-status` hung when a declared move's destination was a FIFO
 
