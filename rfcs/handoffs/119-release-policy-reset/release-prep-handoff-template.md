@@ -17,6 +17,19 @@ handoff filled in, and the team delivers the prep commit for review like any oth
 | verify the shipped asset (checksum, build-info, `--version`, smoke of every shipped feature) | architect, with the team's smoke script from the sweep |
 | crates.io publication — needs the owner's own word, every release | owner → architect |
 
+## 0. Before the sweep: CI is green (dev team, first thing)
+
+**Added 2026-09-16, after 0.43.0's prep found the Windows mutation suite had been red for twelve
+consecutive runs — two days — while eleven architect pushes went by unnoticed.** The local gate set runs
+cross-target *clippy*, which compiles other platforms and never runs their tests; `ci.yml` is the only
+place the macOS and Windows suites execute.
+
+Before anything else, check that the latest `ci.yml` run on `main` is green — every job, not the overall
+badge (`gh run list --workflow ci.yml --limit 5`, then `gh run view <id>` for the job list). **If any job
+is red, stop and report it instead of sweeping**: a release does not cut while its own CI is red on a
+supported platform. Name the first red run and the commit that introduced it; `gh run list` and a bisect
+over the runs give both in minutes.
+
 ## 1. Readiness sweep (dev team)
 
 1. **`--help` versus the release's surface.** Every flag added since the last tag appears in its own
