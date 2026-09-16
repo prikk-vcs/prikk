@@ -481,7 +481,8 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                     mode: base.mode,
                 })
         },
-        |path| worktree.contains_key(path),
+        &crate::ignore::IgnoreRules::load(layout).map_err(AuthorError::Store)?,
+        &tracked_paths,
     )
     .map_err(AuthorError::Store)?;
     for outcome in &outcomes {
@@ -503,6 +504,13 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                     old_path: outcome.old_path.clone(),
                     new_path: outcome.new_path.clone(),
                     resolution: DeclarationDisclosureReason::DestinationDeleted,
+                });
+            }
+            crate::declaration_resolution::DeclarationResolution::DeletionDirectory => {
+                declaration_disclosures.push(DeclarationDisclosure {
+                    old_path: outcome.old_path.clone(),
+                    new_path: outcome.new_path.clone(),
+                    resolution: DeclarationDisclosureReason::DestinationIsDirectory,
                 });
             }
             crate::declaration_resolution::DeclarationResolution::DeletionIgnored => {

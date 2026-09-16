@@ -17,7 +17,9 @@ use std::collections::BTreeSet;
 use prikk_error::Result;
 use prikk_object::{NodeId, NodeKind, ObjectId};
 
+use crate::foundation::fsutil::{EntryKind, inspect_entry, read_file_if_exists};
 use crate::foundation::layout::RepositoryLayout;
+use crate::ignore::{IgnoreRules, should_skip_discovery};
 use crate::path::{RepoPath, join_repo_path_to_root};
 use crate::rename_declaration::RenameDeclaration;
 
@@ -29,13 +31,20 @@ pub enum DeclarationResolution {
     /// differs from the source node's baseline, which commit authors as an accompanying `EditText`
     /// (or `ReplaceBinary`) and `ChangePerm`.
     Rename {
-        /// The destination's bytes differ from the baseline node's content.
-        content_changed: bool,
-        /// The destination's mode differs from the baseline node's mode.
-        mode_changed: bool,
+        /// The destination's bytes differ from the baseline node's content. `None` when the destination
+        /// is not a regular file (a symlink, FIFO or socket): it is never opened, so there is no
+        /// difference to report (RFC 147 §2h), and `commit` refuses over that path anyway.
+        content_changed: Option<bool>,
+        /// The destination's mode differs from the baseline node's mode. `None` exactly when
+        /// `content_changed` is.
+        mode_changed: Option<bool>,
     },
     /// The destination is gone, so the source is authored as a deletion instead.
     Deletion,
+    /// A directory stands at the destination, so the source is authored as a deletion. Reported as
+    /// `deletion`, like [`Self::Deletion`] (RFC 147 §2g ruling 4: no new report value in a patch
+    /// release); distinguished here only so `commit` can name the real cause.
+    DeletionDirectory,
     /// The destination exists on disk but `.prikkignore` excludes it, so the source is authored as a
     /// deletion. Distinguished from [`Self::Deletion`] because the cause, and the fix, differ.
     DeletionIgnored,
@@ -51,7 +60,7 @@ impl DeclarationResolution {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Rename { .. } => "rename",
-            Self::Deletion => "deletion",
+            Self::Deletion | Self::DeletionDirectory => "deletion",
             Self::DeletionIgnored => "deletion-ignored",
             Self::NeverTracked => "never-tracked",
             Self::Refused(_) => "refused",
@@ -91,14 +100,16 @@ pub(crate) struct DeclaredSource {
 
 /// Resolve every live declaration, in store order.
 ///
-/// `baseline` answers what tracked node a path holds; `worktree_has` answers whether a path is present
-/// in the worktree as the caller's own walk sees it (ignore rules included). Both callers pass their
-/// existing views, so neither re-derives the other's.
+/// `baseline` answers what tracked node a path holds; `rules` and `tracked` are the ignore rules and
+/// tracked paths commit's own worktree walk skips by. **Presence is decided here, by one predicate**
+/// ([`entry_at`]), never by a caller: RFC 147 §2f let each caller pass its own view, and they disagreed
+/// about a directory (§2g).
 pub(crate) fn resolve_declarations(
     layout: &RepositoryLayout,
     declarations: &[RenameDeclaration],
     baseline: impl Fn(&str) -> Option<DeclaredSource>,
-    worktree_has: impl Fn(&str) -> bool,
+    rules: &IgnoreRules,
+    tracked: &BTreeSet<String>,
 ) -> Result<Vec<DeclarationOutcome>> {
     let declared_old_paths: BTreeSet<&str> = declarations
         .iter()
@@ -118,7 +129,7 @@ pub(crate) fn resolve_declarations(
             old_path,
             new_path,
             &baseline,
-            &worktree_has,
+            &|path| entry_at(layout, rules, tracked, path),
             &declared_old_paths,
             &declared_new_paths,
         )?;
@@ -131,12 +142,56 @@ pub(crate) fn resolve_declarations(
     Ok(outcomes)
 }
 
+/// What stands at a declared path, in the terms commit's worktree walk
+/// (`node_authoring/worktree_files.rs::walk_dir`) sorts every entry into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeclaredEntry {
+    /// Excluded by `.prikkignore`, exactly as the walk skips it (`should_skip_discovery`).
+    Ignored,
+    /// Nothing there.
+    Absent,
+    /// A directory: the walk descends into it, so it is never a file at this path.
+    Directory,
+    /// A regular file: the walk records it.
+    RegularFile,
+    /// A symlink, FIFO, socket or anything else: the walk refuses the whole commit over this path.
+    NotAFile,
+}
+
+impl DeclaredEntry {
+    /// Something the walk sees as an entry at this path — recorded, or refused over.
+    fn is_present(self) -> bool {
+        matches!(self, Self::RegularFile | Self::NotAFile)
+    }
+}
+
+/// The one presence predicate (RFC 147 §2g ruling 1). The ignore rules first, as the walk checks them
+/// before dispatching on kind; then one **non-following** stat for the kind. Nothing is opened here.
+fn entry_at(
+    layout: &RepositoryLayout,
+    rules: &IgnoreRules,
+    tracked: &BTreeSet<String>,
+    path: &str,
+) -> Result<DeclaredEntry> {
+    if should_skip_discovery(rules, tracked, path) {
+        return Ok(DeclaredEntry::Ignored);
+    }
+    Ok(
+        match inspect_entry(layout.worktree_mutation_root(), std::path::Path::new(path))? {
+            None => DeclaredEntry::Absent,
+            Some(EntryKind::Directory) => DeclaredEntry::Directory,
+            Some(EntryKind::Regular) => DeclaredEntry::RegularFile,
+            Some(EntryKind::Symlink | EntryKind::Other) => DeclaredEntry::NotAFile,
+        },
+    )
+}
+
 fn resolve_one(
     layout: &RepositoryLayout,
     old_path: &str,
     new_path: &str,
     baseline: &impl Fn(&str) -> Option<DeclaredSource>,
-    worktree_has: &impl Fn(&str) -> bool,
+    entry: &impl Fn(&str) -> Result<DeclaredEntry>,
     declared_old_paths: &BTreeSet<&str>,
     declared_new_paths: &BTreeSet<&str>,
 ) -> Result<DeclarationResolution> {
@@ -145,26 +200,25 @@ fn resolve_one(
         return Ok(DeclarationResolution::NeverTracked);
     };
 
+    let destination = entry(new_path)?;
+
     // The worktree contradicts the declaration: the source is back, and no other live declaration
     // claims to have landed there (which is what a two-node swap looks like).
-    if worktree_has(old_path) && !declared_new_paths.contains(old_path) {
+    if entry(old_path)?.is_present() && !declared_new_paths.contains(old_path) {
         return Ok(DeclarationResolution::Refused(contradicted_message(
             old_path,
             new_path,
-            worktree_has(new_path),
+            destination.is_present(),
         )));
     }
 
-    if !worktree_has(new_path) {
-        // Two causes share this branch: the destination was deleted, or it is on disk and
-        // `.prikkignore` excludes it. A direct, ignore-independent look decides which.
-        let repo_path = RepoPath::parse(new_path)?;
-        let on_disk = join_repo_path_to_root(&repo_path, layout.root());
-        return Ok(if std::fs::symlink_metadata(&on_disk).is_ok() {
-            DeclarationResolution::DeletionIgnored
-        } else {
-            DeclarationResolution::Deletion
-        });
+    match destination {
+        // §2g ruling 3: decided from the ignore rules, never inferred from "on disk but not seen".
+        DeclaredEntry::Ignored => return Ok(DeclarationResolution::DeletionIgnored),
+        DeclaredEntry::Absent => return Ok(DeclarationResolution::Deletion),
+        // §2g ruling 2: a directory is not a file at this path; commit records the deletion.
+        DeclaredEntry::Directory => return Ok(DeclarationResolution::DeletionDirectory),
+        DeclaredEntry::RegularFile | DeclaredEntry::NotAFile => {}
     }
 
     // The destination is another tracked node this commit does not also move: authoring the rename
@@ -177,7 +231,14 @@ fn resolve_one(
         }
     }
 
-    let (content_changed, mode_changed) = destination_differences(layout, new_path, &source)?;
+    // §2h: a destination that is not a regular file is never opened — a FIFO would block the read
+    // forever — and reports no difference, because there is none to measure.
+    let (content_changed, mode_changed) = if destination == DeclaredEntry::RegularFile {
+        let (content, mode) = destination_differences(layout, new_path, &source)?;
+        (Some(content), Some(mode))
+    } else {
+        (None, None)
+    };
     Ok(DeclarationResolution::Rename {
         content_changed,
         mode_changed,
@@ -195,8 +256,15 @@ fn destination_differences(
 ) -> Result<(bool, bool)> {
     let repo_path = RepoPath::parse(new_path)?;
     let on_disk = join_repo_path_to_root(&repo_path, layout.root());
-    let Ok(bytes) = std::fs::read(&on_disk) else {
-        // Present to the caller's walk but unreadable here: report no difference rather than guess.
+    // Commit's own anchored read: opened non-blocking and without following a link, and refused unless
+    // it is still a regular file — so a destination swapped for a FIFO between the classification above
+    // and this read cannot block it either.
+    let Some(bytes) = read_file_if_exists(
+        layout.worktree_mutation_root(),
+        std::path::Path::new(new_path),
+    )?
+    else {
+        // Gone since it was classified: nothing to compare.
         return Ok((false, false));
     };
     let content_changed = match source.kind {

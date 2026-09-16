@@ -144,10 +144,10 @@ fn a_placeholder_reason_is_not_a_recorded_decision() {
 /// Control 3: **a `#[cfg(test)]` module inside a production file is not counted.**
 ///
 /// Asserted against the real file rather than a fixture, because the fixture that matters is the
-/// one that exists: `node_authoring.rs` is 1,358 physical lines with a 49-line `mode_change_tests`
-/// module at the end, and the gate must see 1,309 (RFC 136 increment 1b removed the E3 refusal;
+/// one that exists: `node_authoring.rs` is 1,366 physical lines with a 49-line `mode_change_tests`
+/// module at the end, and the gate must see 1,317 (RFC 136 increment 1b removed the E3 refusal;
 /// increment 2a added the two-line derivation gate; the checkout-refusal round's dirty-marker refusal
-/// grew by two lines). Counting the test module would not change this
+/// grew by two lines; RFC 147 §2g's directory disclosure and ignore-rules argument added eight). Counting the test module would not change this
 /// file's verdict — it is declared either way — but it would change `layout.rs`'s the moment
 /// someone put tests beside it, which is the shape of the mistake.
 #[test]
@@ -159,7 +159,7 @@ fn an_inline_test_module_is_not_production() {
         .lines()
         .count();
     assert_eq!(
-        physical, 1358,
+        physical, 1366,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -169,7 +169,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1309);
+    assert_eq!(counted.production_lines, 1317);
     assert_eq!(
         physical - counted.production_lines,
         49,

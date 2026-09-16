@@ -59,9 +59,14 @@ top-level `refused_declaration_count`. See
 
 - **Confirmed** (old path absent, new path present): authors a `RenamePath`. Any simultaneous content
   or mode change on the same node is authored alongside it in the same patch.
-- **Nets to deletion**: if the declared destination is itself gone before the commit — deleted, or
-  excluded by `.prikkignore` — the declaration is dropped and a plain deletion is authored instead,
-  never a rename to nowhere.
+- **Nets to deletion**: if the declared destination is no longer a file at commit time — deleted,
+  **replaced by a directory**, or excluded by `.prikkignore` — the declaration is dropped and a plain
+  deletion is authored instead, never a rename to nowhere. The disclosure names which:
+  `destination is gone`, `destination is a directory`, or `destination is ignored`. A directory is only
+  ever reported as ignored when `.prikkignore` really excludes it.
+- **Not a regular file**: a symlink, FIFO or socket at the destination still resolves `rename` — and
+  `commit` refuses over that path, as it does for any such entry in the worktree. `worktree-status`
+  never opens it, so `content_changed` and `mode_changed` are `null` for it.
 - **Never tracked**: if the declared source was never a sealed node (an untracked file, moved with
   `prikk mv` before its first commit), there is no node to rename.
 - **Contradicted**: if the worktree disagrees with the declaration (the source path is back on disk),

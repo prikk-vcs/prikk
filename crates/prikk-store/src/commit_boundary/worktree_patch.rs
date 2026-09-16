@@ -81,6 +81,9 @@ pub struct DeclarationDisclosure {
 }
 
 /// Why a live declaration did not author the rename it asserted.
+///
+/// `#[non_exhaustive]` from RFC 147 §2g, which added a reason: the next one is then not a break.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclarationDisclosureReason {
     /// `old_path` was never a tracked baseline node -- there was no node to rename.
@@ -88,6 +91,10 @@ pub enum DeclarationDisclosureReason {
     /// The destination is absent from the worktree because it was deleted -- recorded as a plain
     /// deletion of `old_path`, not a rename.
     DestinationDeleted,
+    /// A directory stands at the destination, so it is not a file at that path -- recorded as a plain
+    /// deletion of `old_path` (RFC 147 §2g ruling 2). Its own reason so the disclosure names the real
+    /// cause rather than calling the directory ignored.
+    DestinationIsDirectory,
     /// The destination is absent from `commit`'s own worktree view because `.prikkignore` excludes
     /// it -- recorded as a plain deletion of `old_path`, the same as an outright deletion, since the
     /// node left the tracked set either way.
@@ -101,6 +108,9 @@ impl DeclarationDisclosureReason {
         match self {
             Self::NeverTracked => "source was never a tracked node; there was no node to rename",
             Self::DestinationDeleted => "destination is gone; recorded as a deletion, not a rename",
+            Self::DestinationIsDirectory => {
+                "destination is a directory; recorded as a deletion, not a rename"
+            }
             Self::DestinationIgnored => {
                 "destination is ignored; recorded as a deletion, not a rename"
             }

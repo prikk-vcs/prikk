@@ -201,7 +201,11 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
     let mut unchanged_files = 0_usize;
     let mut tracked_files = 0_usize;
 
+    // Every tracked path commit's walk tests `.prikkignore` against, symlink nodes included — the
+    // declaration classifier's ignore decision must use the same set commit passes (RFC 147 §2g).
+    let mut tracked_paths: BTreeSet<String> = BTreeSet::new();
     for (node_id, node) in resolved.state.live_nodes() {
+        tracked_paths.insert(node.path.as_str().to_string());
         // Symlink nodes carry no file-content blob to compare (`ensure_blob_matches_node_kind`
         // refuses one outright) — no current authoring path creates one anyway (module doc: "symlink
         // authoring fails closed"), and the snapshot-manifest baseline this replaced never carried
@@ -296,20 +300,14 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
     });
 
     let live_declarations = read_rename_declarations(layout)?;
-    // RFC 147 §2f: what commit will do with each one, decided by commit's own classifier. Presence is
-    // the same question commit asks: on disk (non-following, so a dangling symlink counts) and not
-    // excluded by the `.prikkignore` rules this command already loaded.
+    // RFC 147 §2f/§2g: what commit will do with each one, decided by commit's own classifier — which
+    // also decides presence itself, from the same ignore rules and tracked set commit's walk uses.
     let declarations = resolve_declarations(
         layout,
         &live_declarations,
         |path| baseline_nodes.get(path).copied(),
-        |path| {
-            RepoPath::parse(path).is_ok_and(|repo_path| {
-                !rules.is_ignored(path)
-                    && fs::symlink_metadata(join_repo_path_to_root(&repo_path, layout.root()))
-                        .is_ok()
-            })
-        },
+        &rules,
+        &tracked_paths,
     )?;
 
     Ok(WorktreeStatusReport {

@@ -565,3 +565,301 @@ fn the_report_is_additive_for_a_0_42_consumer() {
     assert_eq!(declaration.get("new_path").as_str(), "b.txt");
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+// RFC 147 §2g/§2h: the destination's *kind* — the parity §2f never tested. Every row runs `worktree-status`
+// and `commit` under a timeout, because the defect §2h fixed was a hang, and a hang must fail a test
+// rather than stall the suite.
+
+/// Run `args` in `repo`, killing the process and failing if it has not exited within `seconds`.
+fn run_bounded(repo: &Path, args: &[&str], seconds: u64) -> Output {
+    let mut child = support::prikk(repo)
+        .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "`prikk {}` did not return within {seconds} s",
+                args.join(" ")
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// `a.txt` and `keep.txt` sealed (with `ignore` as the `.prikkignore`, if any), then `prikk mv a.txt b.txt`.
+fn declared_repo_ignoring(tag: &str, ignore: Option<&str>) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
+    std::fs::write(repo.join("keep.txt"), b"keep\n").unwrap();
+    if let Some(rule) = ignore {
+        std::fs::write(repo.join(".prikkignore"), format!("{rule}\n")).unwrap();
+    }
+    support::ok(
+        &support::commit(&repo, "heads/main", "genesis"),
+        "genesis commit",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "genesis seal");
+    support::ok(&run(&repo, &["mv", "a.txt", "b.txt"]), "mv a.txt b.txt");
+    repo
+}
+
+/// What `commit` then does, for one row.
+enum CommitDoes {
+    Renames,
+    RecordsDeletion(&'static str),
+    // Every row that reaches it is a symlink, FIFO or socket, so none exists off Unix.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    RefusesOverThePath(&'static str),
+}
+
+/// One destination kind: how to put it there, what status must report, and what commit then does.
+struct KindRow {
+    tag: &'static str,
+    ignore: Option<&'static str>,
+    reach: fn(&Path),
+    resolution: &'static str,
+    /// Whether `content_changed`/`mode_changed` are booleans (`true`) or `null` (`false`).
+    compared: bool,
+    commit: CommitDoes,
+}
+
+fn replace_destination_with_directory(repo: &Path) {
+    std::fs::remove_file(repo.join("b.txt")).unwrap();
+    std::fs::create_dir(repo.join("b.txt")).unwrap();
+}
+
+fn kind_rows() -> Vec<KindRow> {
+    // Extended below on Unix only.
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut rows = vec![
+        KindRow {
+            tag: "regular-file",
+            ignore: None,
+            reach: |_repo| {},
+            resolution: "rename",
+            compared: true,
+            commit: CommitDoes::Renames,
+        },
+        KindRow {
+            tag: "empty-directory",
+            ignore: None,
+            reach: replace_destination_with_directory,
+            resolution: "deletion",
+            compared: false,
+            commit: CommitDoes::RecordsDeletion("destination is a directory"),
+        },
+        KindRow {
+            tag: "directory-holding-a-file",
+            ignore: None,
+            reach: |repo| {
+                replace_destination_with_directory(repo);
+                std::fs::write(repo.join("b.txt/q.txt"), b"q\n").unwrap();
+            },
+            resolution: "deletion",
+            compared: false,
+            commit: CommitDoes::RecordsDeletion("destination is a directory"),
+        },
+        KindRow {
+            tag: "ignored-file",
+            ignore: Some("b.txt"),
+            reach: |_repo| {},
+            resolution: "deletion-ignored",
+            compared: false,
+            commit: CommitDoes::RecordsDeletion("destination is ignored"),
+        },
+        KindRow {
+            tag: "ignored-directory",
+            ignore: Some("b.txt/"),
+            reach: |repo| {
+                replace_destination_with_directory(repo);
+                std::fs::write(repo.join("b.txt/q.txt"), b"q\n").unwrap();
+            },
+            resolution: "deletion-ignored",
+            compared: false,
+            commit: CommitDoes::RecordsDeletion("destination is ignored"),
+        },
+    ];
+    #[cfg(unix)]
+    rows.extend([
+        KindRow {
+            tag: "symlink-to-a-file",
+            ignore: None,
+            reach: |repo| {
+                std::fs::remove_file(repo.join("b.txt")).unwrap();
+                std::os::unix::fs::symlink("keep.txt", repo.join("b.txt")).unwrap();
+            },
+            resolution: "rename",
+            compared: false,
+            commit: CommitDoes::RefusesOverThePath("worktree symlink authoring is out of scope"),
+        },
+        KindRow {
+            tag: "dangling-symlink",
+            ignore: None,
+            reach: |repo| {
+                std::fs::remove_file(repo.join("b.txt")).unwrap();
+                std::os::unix::fs::symlink("nowhere", repo.join("b.txt")).unwrap();
+            },
+            resolution: "rename",
+            compared: false,
+            commit: CommitDoes::RefusesOverThePath("worktree symlink authoring is out of scope"),
+        },
+    ]);
+    #[cfg(target_os = "linux")]
+    rows.extend([
+        KindRow {
+            tag: "fifo",
+            ignore: None,
+            reach: make_fifo_destination,
+            resolution: "rename",
+            compared: false,
+            commit: CommitDoes::RefusesOverThePath("worktree entry is not a regular file"),
+        },
+        KindRow {
+            tag: "socket",
+            ignore: None,
+            reach: |repo| {
+                std::fs::remove_file(repo.join("b.txt")).unwrap();
+                drop(std::os::unix::net::UnixListener::bind(repo.join("b.txt")).unwrap());
+            },
+            resolution: "rename",
+            compared: false,
+            commit: CommitDoes::RefusesOverThePath("worktree entry is not a regular file"),
+        },
+    ]);
+    rows
+}
+
+#[cfg(target_os = "linux")]
+fn make_fifo_destination(repo: &Path) {
+    std::fs::remove_file(repo.join("b.txt")).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(repo.join("b.txt"))
+        .status()
+        .unwrap();
+    assert!(made.success(), "mkfifo");
+}
+
+/// §2g control 1 and §2h: for every kind of entry at the destination, `worktree-status` reports what
+/// `commit` then does, and neither command hangs.
+#[test]
+fn every_destination_kind_resolves_as_commit_then_acts() {
+    for row in kind_rows() {
+        let repo = declared_repo_ignoring(&format!("rfc147-kind-{}", row.tag), row.ignore);
+        (row.reach)(&repo);
+        let tag = row.tag;
+
+        let status = run_bounded(&repo, &["worktree-status", "--format", "json"], 20);
+        let report = json::parse(&stdout(&status));
+        let declaration = only_declaration(&report);
+        assert_eq!(
+            declaration.get("resolution").as_str(),
+            row.resolution,
+            "{tag}: reported resolution"
+        );
+        for field in ["content_changed", "mode_changed"] {
+            assert_eq!(
+                !declaration.get(field).is_null(),
+                row.compared,
+                "{tag}: {field} is a boolean only for a regular-file destination"
+            );
+        }
+
+        let committed = run_bounded(&repo, &["commit", "--ref", "heads/main", "-m", tag], 20);
+        match row.commit {
+            CommitDoes::Renames => {
+                support::ok(&committed, tag);
+                assert!(
+                    stdout(&committed).contains("rename-path a.txt -> b.txt"),
+                    "{tag}: {}",
+                    stdout(&committed)
+                );
+            }
+            CommitDoes::RecordsDeletion(cause) => {
+                support::ok(&committed, tag);
+                let text = stdout(&committed);
+                assert!(text.contains("delete-file a.txt"), "{tag}: {text}");
+                assert!(
+                    text.contains(&format!("declaration a.txt -> b.txt: {cause};")),
+                    "{tag}: the disclosure names the cause: {text}"
+                );
+                assert!(!text.contains("rename-path"), "{tag}: {text}");
+            }
+            CommitDoes::RefusesOverThePath(reason) => {
+                assert!(!committed.status.success(), "{tag}: commit must refuse");
+                assert!(
+                    stderr(&committed).contains(&format!("b.txt: {reason}")),
+                    "{tag}: {}",
+                    stderr(&committed)
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+}
+
+/// §2g control 2: a directory at the destination is disclosed as a directory, and the word "ignored"
+/// — which is what 0.43.0 printed — appears nowhere in the commit's output.
+#[test]
+fn a_directory_at_the_destination_is_not_called_ignored() {
+    let repo = declared_repo_ignoring("rfc147-directory-disclosure", None);
+    replace_destination_with_directory(&repo);
+    let committed = run_bounded(&repo, &["commit", "--ref", "heads/main", "-m", "dir"], 20);
+    support::ok(&committed, "commit");
+    let text = stdout(&committed);
+    assert!(
+        text.contains(
+            "declaration a.txt -> b.txt: destination is a directory; recorded as a deletion, not a rename"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("ignored"), "{text}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// §2h: the 0.43.0 hang. `worktree-status` opened a FIFO at the destination to compare its bytes and
+/// blocked forever; it must now return promptly, having never opened it.
+#[cfg(target_os = "linux")]
+#[test]
+fn worktree_status_returns_with_a_fifo_at_the_destination() {
+    let repo = declared_repo_ignoring("rfc147-fifo-hang", None);
+    make_fifo_destination(&repo);
+    let status = run_bounded(&repo, &["worktree-status", "--format", "json"], 10);
+    let report = json::parse(&stdout(&status));
+    let declaration = only_declaration(&report);
+    assert_eq!(declaration.get("resolution").as_str(), "rename");
+    assert!(declaration.get("content_changed").is_null());
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// §2h: a symlink at the destination is never followed to compare content — `content_changed` is `null`,
+/// where 0.43.0 compared the link's target.
+#[cfg(unix)]
+#[test]
+fn a_symlink_at_the_destination_reports_no_content_comparison() {
+    let repo = declared_repo_ignoring("rfc147-symlink-null", None);
+    std::fs::remove_file(repo.join("b.txt")).unwrap();
+    // Point it at different content, so a followed comparison would have said `true`.
+    std::os::unix::fs::symlink("keep.txt", repo.join("b.txt")).unwrap();
+    let report = status(&repo);
+    let declaration = only_declaration(&report);
+    assert!(
+        declaration.get("content_changed").is_null(),
+        "{declaration:?}"
+    );
+    assert!(declaration.get("mode_changed").is_null(), "{declaration:?}");
+    let _ = std::fs::remove_dir_all(&repo);
+}

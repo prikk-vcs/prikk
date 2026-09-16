@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — `worktree-status` hung when a declared move's destination was a FIFO
+
+Since 0.43.0, `worktree-status` compared a declared destination's content with the moved file's by reading
+it, whatever kind of entry stood there. A FIFO at the destination made that read wait for a writer that
+never came, so the command never returned. A destination that is not a regular file is now never opened.
+`commit` was not affected: it refuses over such a path before resolving any declaration.
+
+### Fixed — a directory at a declared destination read as a rename, then as ignored (stikk letter 014)
+
+After `prikk mv a.txt b.txt`, replacing `b.txt` with a directory made `worktree-status` report `rename`,
+while `commit` recorded a deletion and said *"destination is ignored"* — about a directory no
+`.prikkignore` rule excluded. Both commands now decide presence by the one classification `commit`'s
+worktree walk uses: a directory at the destination resolves `deletion`, and `commit` says *"destination is
+a directory; recorded as a deletion, not a rename"*. `deletion-ignored` is reported only when `.prikkignore`
+actually excludes the destination. What `commit` authors is unchanged. Reported by the stikk project in
+letter 014.
+
+### Changed — `content_changed` and `mode_changed` are `null` for a destination that is not a file
+
+For a declaration that resolves `rename`, `worktree-status --format json` now reports `content_changed`
+and `mode_changed` as `null` when the destination is a symlink, FIFO or socket, where it reported `false`
+(or, for a symlink, compared the link's target). Such a destination is never opened, and `commit` refuses
+over that path. `deletion` now also covers a directory standing at the destination; no new resolution
+value was added.
+
+### Changed — breaking once for Rust callers: declaration resolutions
+
+- `DeclarationResolution::Rename`'s `content_changed` and `mode_changed` are `Option<bool>`, `None` for a
+  destination that is not a regular file.
+- `DeclarationResolution` gains `DeletionDirectory` (reported as `deletion`); it was already
+  `#[non_exhaustive]`.
+- `DeclarationDisclosureReason` gains `DestinationIsDirectory` and is now `#[non_exhaustive]`, so the next
+  reason is not a break.
+
 ## 0.43.0 — 2026-09-16
 
 ### Added — sealed snapshots: a checkpoint every 64 blocks makes deep history cheaper to check out

@@ -65,18 +65,26 @@ refused declarations: 1
 ```
 
 The resolution is one of `rename` (authored as a rename, and the line says whether content or mode
-also changed), `deletion` (the destination is gone, so the source is authored as a deletion),
-`deletion-ignored` (the destination is on disk but `.prikkignore` excludes it), `never-tracked` (the
+also changed), `deletion` (the destination is gone, **or a directory stands there** — either way it is
+no longer a file, so the source is authored as a deletion), `deletion-ignored` (`.prikkignore` excludes
+the destination — decided from the rules, whatever kind of entry is there), `never-tracked` (the
 source was never a node, so the declaration is dropped), or `refused` (the whole commit is refused,
 with that message). A `rename` line also says `(content also changes)` or `(mode also changes)` when
 the destination differs from the source node's baseline, because `commit` authors those beside the
 rename.
 
 In `--format json` each declaration carries `resolution`, `refusal`, `content_changed` and
-`mode_changed` (the last two are `null` when the resolution is not a rename), and the top level
+`mode_changed`, and the top level
 carries `refused_declaration_count`. These are additions within `worktree-status-report-v1`: against
 0.42.0's output for the same repository, the only differences are the new keys — no field was
 removed, renamed, or given a different value.
+
+**`content_changed` and `mode_changed` are booleans only when the destination is a regular file.** They
+are `null` when the resolution is not a rename, **and when the destination is a symlink, a FIFO or a
+socket**: such a destination is never opened — reading a FIFO would wait forever — so there is no
+difference to report, and `prikk commit` refuses over that path anyway (`worktree symlink authoring is
+out of scope`, or `worktree entry is not a regular file`). A symlink is not followed to compare its
+target.
 
 **`refused_count` and `refused_declaration_count` are separate on purpose, and `clean` can be true
 while a declaration is refused.** A worktree whose declared move was undone with a shell `mv` matches

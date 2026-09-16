@@ -223,8 +223,10 @@ fn push_current_branch_field(json: &mut String, current_branch: Option<&str>) {
 
 /// RFC 147 §2f: additive within `worktree-status-report-v1`. `resolution` is always present so a
 /// consumer branches on a field rather than on a field's absence; `refusal` is `null` unless commit
-/// refuses this declaration; `content_changed`/`mode_changed` are `null` for every resolution but
-/// `"rename"`, where they say whether commit also authors an edit or a mode change beside it.
+/// refuses this declaration; `content_changed`/`mode_changed` say whether commit also authors an edit
+/// or a mode change beside a `"rename"`, and are `null` for every other resolution **and** for a rename
+/// whose destination is not a regular file (a symlink, FIFO or socket), which is never opened (RFC 147
+/// §2h).
 fn push_declaration(json: &mut String, outcome: &DeclarationOutcome) {
     json.push_str("{\"old_path\": ");
     json.push_str(&escape_json_string(&outcome.old_path));
@@ -243,12 +245,22 @@ fn push_declaration(json: &mut String, outcome: &DeclarationOutcome) {
             mode_changed,
         } => {
             json.push_str(&format!(
-                ", \"content_changed\": {content_changed}, \"mode_changed\": {mode_changed}"
+                ", \"content_changed\": {}, \"mode_changed\": {}",
+                json_optional_bool(*content_changed),
+                json_optional_bool(*mode_changed)
             ));
         }
         _ => json.push_str(", \"content_changed\": null, \"mode_changed\": null"),
     }
     json.push('}');
+}
+
+fn json_optional_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    }
 }
 
 /// What a `"rename"` line adds in prose: whether commit also authors an edit or a mode change.
@@ -258,10 +270,11 @@ fn rename_detail(resolution: &DeclarationResolution) -> String {
             content_changed,
             mode_changed,
         } => match (content_changed, mode_changed) {
-            (true, true) => " (content and mode also change)".to_string(),
-            (true, false) => " (content also changes)".to_string(),
-            (false, true) => " (mode also changes)".to_string(),
-            (false, false) => String::new(),
+            (Some(true), Some(true)) => " (content and mode also change)".to_string(),
+            (Some(true), _) => " (content also changes)".to_string(),
+            (_, Some(true)) => " (mode also changes)".to_string(),
+            // Unchanged, or a destination that is not a regular file and so was never compared.
+            _ => String::new(),
         },
         _ => String::new(),
     }
