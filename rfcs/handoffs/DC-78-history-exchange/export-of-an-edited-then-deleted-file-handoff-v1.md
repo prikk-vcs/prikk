@@ -1,5 +1,10 @@
 # `bundle export` and `sync build` fail on any history that deletes a file it edited earlier
 
+> **Superseded 2026-09-16 by `export-of-an-edited-then-deleted-file-handoff-v2.md`.** Items 3 (the import
+> note) and 4 (the percentage labels) were delivered at `ac5e530d`. Item 1's ruled shape — omit the
+> preimage — was stopped by this handoff's own §2 clause and then refused: every released prikk requires
+> that Blob. v2 rules the exporter to derive and carry it instead.
+
 **Live 2026-09-16**, found by RFC 136 increment 3's measurement, reported and held; reproduced
 independently by the architect. Review:
 `.git-exclude/reviewed/rfc136-increment-3-review-v1.md`.

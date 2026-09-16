@@ -610,7 +610,7 @@ this file's prose. **A row exists only for what is handed off; everything else l
 
 | item | handoff |
 |---|---|
-| `bundle export`/`sync build` fail on a history that deletes a previously edited text file (found by RFC 136 increment 3's measurement, broken since 2026-08-10) — first, before the declarations round | `DC-78-…/export-of-an-edited-then-deleted-file-handoff-v1.md` |
+| A deletion of a previously edited text file has no stored preimage Blob, so `bundle export`, `sync build` **and sealing the inverse of that deletion** all refuse (broken since 2026-08-10; the rollback symptom found at review 2026-09-16). v1's items 3-4 delivered (`ac5e530d`); v1's item 1 refused — omitting the Blob breaks every released receiver — and **re-ruled in v2: the exporter derives the content by replay and carries it; the rollback seal derives and stores it**. First, before the declarations round | `DC-78-…/export-of-an-edited-then-deleted-file-handoff-v2.md` |
 | A declaration reports what `commit` will do with it; refusal advice names commands that work (RFC 147 §2f, stikk 013) — after RFC 136 increment 3, before the 0.43.0 cut | `147-…/declarations-say-what-commit-does-handoff-v1.md` |
 | `prikk setup` refuses on an existing repository before touching anything | `135-…/setup-existing-repository-handoff-v1.md` |
 | RFC 146 §8e — three listing synopses advertise `[--format json]` | `146-…/help-synopsis-handoff-v1.md` |
