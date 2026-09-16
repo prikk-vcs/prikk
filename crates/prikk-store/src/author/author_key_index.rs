@@ -462,48 +462,67 @@ pub(crate) fn verify_author_signature(
     layout: &RepositoryLayout,
     envelope: &ObjectEnvelope,
 ) -> Result<Option<(String, bool)>> {
-    let Some(signature) = envelope
-        .signatures
-        .iter()
-        .find(|signature| signature.signer_role == SignerRole::Author)
-    else {
-        return Ok(None);
-    };
-    let entries = lookup_author_key_entries(layout, &signature.key_id)?;
-    verify_author_signature_against_material(envelope, &entries)
+    verify_author_signatures_with(envelope, |key_id| lookup_author_key_entries(layout, key_id))
 }
 
-/// The verification core, extracted so there is exactly one definition of *how* an AUTHOR signature
-/// is checked, with two key sources (RFC 115 Stage 3 handoff §4.2 item 7): `verify_author_signature`
-/// above passes this repository's own recorded entries for the signature's `key_id`;
-/// the exchange accept path passes the union of the artifact's own transported material and this
-/// repository's already-recorded material for that `key_id` -- neither source alone is complete at
-/// the accept path's own verification phase, since recording the artifact's material happens later,
-/// under lock, and only if the whole exchange succeeds (§4.1: nothing may be recorded from an
-/// exchange that fails). Same shape `check_author_key_conflict` was extracted into, for the same
-/// reason: one policy, parameterized by material source, never a second parallel copy of it.
+/// **Every** AUTHOR signature on `envelope`, each checked against the material `material_for`
+/// returns for that signature's own key id (RFC 156 Stage 1). An envelope may carry several AUTHOR
+/// signatures; checking only the first let a second, invalid one pass unseen.
 ///
-/// `candidate_entries` must already be scoped to the signature's own `key_id` -- this function does
-/// not filter by `key_id` itself, matching `lookup_author_key_entries`'s own output shape, which is
-/// what `verify_author_signature` passes directly.
-pub(crate) fn verify_author_signature_against_material(
+/// Any signature that fails — not Ed25519, conflicting recorded material, or not verifying against
+/// recorded material — fails the whole envelope (`Err`), exactly as a single failing signature always
+/// has. Otherwise the answer keeps its one-signer shape until attribution reports every signer (RFC 156
+/// Stage 4): `(key id, true)` when **every** AUTHOR signature is sound, naming the first in canonical
+/// order; `(key id, false)` naming the first signature with no recorded material, when any has none.
+/// `None` when there is no AUTHOR signature at all.
+///
+/// `material_for` is the one parameter the two callers differ in: `verify` passes this repository's
+/// recorded entries; the exchange accept path passes those plus the artifact's transported entries.
+pub(crate) fn verify_author_signatures_with(
     envelope: &ObjectEnvelope,
-    candidate_entries: &[AuthorKeyEntry],
+    mut material_for: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
 ) -> Result<Option<(String, bool)>> {
-    let Some(signature) = envelope
+    let mut first_sound: Option<String> = None;
+    let mut first_unverifiable: Option<String> = None;
+    for signature in envelope
         .signatures
         .iter()
-        .find(|signature| signature.signer_role == SignerRole::Author)
-    else {
-        return Ok(None);
-    };
+        .filter(|signature| signature.signer_role == SignerRole::Author)
+    {
+        let entries = material_for(&signature.key_id)?;
+        let (key_id, sound) = verify_one_author_signature(envelope, signature, &entries)?;
+        let slot = if sound {
+            &mut first_sound
+        } else {
+            &mut first_unverifiable
+        };
+        if slot.is_none() {
+            *slot = Some(key_id);
+        }
+    }
+    Ok(match (first_unverifiable, first_sound) {
+        (Some(key_id), _) => Some((key_id, false)),
+        (None, Some(key_id)) => Some((key_id, true)),
+        (None, None) => None,
+    })
+}
+
+/// One AUTHOR signature against the entries recorded for its key id. `candidate_entries` must already
+/// be scoped to `signature.key_id`. Returns `(key id, sound)`: `false` when no material is recorded
+/// (D3's second row, **not** a failure); `Err` for D3's third row (material recorded, signature does not
+/// verify) and fourth (DC-53 Stage 2, D8: more than one distinct key recorded for the id).
+fn verify_one_author_signature(
+    envelope: &ObjectEnvelope,
+    signature: &Signature,
+    candidate_entries: &[AuthorKeyEntry],
+) -> Result<(String, bool)> {
     if signature.algorithm != SignatureAlgorithm::Ed25519 {
         return Err(PrikkError::InvalidSignature(
             "AUTHOR signature is not Ed25519".to_string(),
         ));
     }
     if candidate_entries.is_empty() {
-        return Ok(Some((signature.key_id.clone(), false)));
+        return Ok((signature.key_id.clone(), false));
     }
     // DC-53 Stage 2, D8, D3's fourth row: one key_id binds to one public key. A key_id whose
     // recorded material already disagrees with itself is structurally unsound regardless of whether
@@ -539,7 +558,7 @@ pub(crate) fn verify_author_signature_against_material(
             signature.key_id
         )));
     }
-    Ok(Some((signature.key_id.clone(), true)))
+    Ok((signature.key_id.clone(), true))
 }
 
 #[cfg(test)]

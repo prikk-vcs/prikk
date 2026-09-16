@@ -69,54 +69,63 @@ pub(crate) fn verify_tag_signature(
     trust_policy: &MaintainerTrustPolicy,
 ) -> Result<TagSignatureVerification> {
     let tag_id = envelope.object_id();
-    let Some(signature) = envelope
+    // RFC 156 Stage 1: every MAINTAINER signature, not only the first. Any that is not Ed25519, or
+    // that names an adopted key and does not verify against it, refuses; the answer names the first
+    // adopted signer that verified, or — when none is adopted — the first signer.
+    let mut first_key_id: Option<String> = None;
+    let mut first_sound: Option<String> = None;
+    for signature in envelope
         .signatures
         .iter()
-        .find(|signature| signature.signer_role == SignerRole::Maintainer)
-    else {
+        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
+    {
+        if first_key_id.is_none() {
+            first_key_id = Some(signature.key_id.clone());
+        }
+        if signature.algorithm != SignatureAlgorithm::Ed25519 {
+            return Err(PrikkError::InvalidSignature(format!(
+                "tag {tag_id} MAINTAINER signature is not Ed25519"
+            )));
+        }
+        let Some(adopted) = trust_policy
+            .keys
+            .iter()
+            .find(|adopted| adopted.key_id == signature.key_id)
+        else {
+            continue;
+        };
+        let preimage = Signature::signed_bytes(
+            SignatureAlgorithm::Ed25519,
+            envelope.object_type,
+            tag_id,
+            SignerRole::Maintainer,
+            &signature.key_id,
+        )?;
+        if prikk_crypto::verify_ed25519(&adopted.public_key, &preimage, &signature.signature_bytes)
+            .is_err()
+        {
+            return Err(PrikkError::InvalidSignature(format!(
+                "tag {tag_id} MAINTAINER signature does not verify against \
+                 adopted key {}",
+                signature.key_id
+            )));
+        }
+        if first_sound.is_none() {
+            first_sound = Some(signature.key_id.clone());
+        }
+    }
+    let Some(first_key_id) = first_key_id else {
         return Err(PrikkError::Integrity(format!(
             "tag {tag_id} carries no MAINTAINER signature -- a tag is, by definition, signed by \
              its author's maintainer key"
         )));
     };
-    if signature.algorithm != SignatureAlgorithm::Ed25519 {
-        return Err(PrikkError::InvalidSignature(format!(
-            "tag {tag_id} MAINTAINER signature is not Ed25519"
-        )));
-    }
-    match trust_policy
-        .keys
-        .iter()
-        .find(|adopted| adopted.key_id == signature.key_id)
-    {
-        None => Ok(TagSignatureVerification::Unverifiable {
-            key_id: signature.key_id.clone(),
-        }),
-        Some(adopted) => {
-            let preimage = Signature::signed_bytes(
-                SignatureAlgorithm::Ed25519,
-                envelope.object_type,
-                tag_id,
-                SignerRole::Maintainer,
-                &signature.key_id,
-            )?;
-            if prikk_crypto::verify_ed25519(
-                &adopted.public_key,
-                &preimage,
-                &signature.signature_bytes,
-            )
-            .is_err()
-            {
-                return Err(PrikkError::InvalidSignature(format!(
-                    "tag {tag_id} MAINTAINER signature does not verify against adopted key {}",
-                    signature.key_id
-                )));
-            }
-            Ok(TagSignatureVerification::Sound {
-                key_id: signature.key_id.clone(),
-            })
-        }
-    }
+    Ok(match first_sound {
+        Some(key_id) => TagSignatureVerification::Sound { key_id },
+        None => TagSignatureVerification::Unverifiable {
+            key_id: first_key_id,
+        },
+    })
 }
 
 /// Every `Tag` object present in this repository that no local `tags/*` ref currently targets --

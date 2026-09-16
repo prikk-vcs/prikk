@@ -212,54 +212,65 @@ fn rollback_author_key_id(envelope: &ObjectEnvelope) -> Result<String> {
     )
 }
 
+/// The rollback draft's AUTHOR signature, checked structurally — **every** AUTHOR signature on the
+/// envelope must pass (RFC 156 Stage 1), and the first in canonical order is returned for attribution.
 fn require_rollback_author_signature<'a>(
     envelope: &'a ObjectEnvelope,
     context: &str,
 ) -> Result<&'a Signature> {
-    envelope
+    let mut authors = envelope
         .signatures
         .iter()
-        .find(|signature| signature.signer_role == SignerRole::Author)
-        .ok_or_else(|| {
-            PrikkError::InvalidSignature(
-                "rollback draft Patch must carry an AUTHOR signature".to_string(),
-            )
-        })
-        .and_then(|signature| {
-            if signature.algorithm != SignatureAlgorithm::Ed25519 {
-                return Err(PrikkError::InvalidSignature(format!(
-                    "{context} rollback draft AUTHOR signature must use Ed25519"
-                )));
-            }
-            if signature.key_id == LEGACY_ROLLBACK_MARKER_KEY_ID {
-                return Err(PrikkError::InvalidSignature(format!(
-                    "{context} uses legacy rollback marker key id"
-                )));
-            }
-            // RFC 103, following DC-95 Stage 1 round 11's own finding: this arm was already reachable
-            // end to end only under format-1 -- `Wal::replay()` calls `validate_read_schema` on every
-            // record before this function ever runs, and under `RepositoryFormat::CurrentV6` that
-            // call already hard-errors on a malformed-length signature via `envelope.validate_strict()`.
-            // With formats 1 through 4 all retired (RFC 102 Stages 3-5), `CurrentV6` is the only
-            // format left, so this arm is now provably unreachable through `verify_repository`'s
-            // pipeline, not merely untested. Kept, per round
-            // 6's ruling on unreachable checks: unreachable today is not unreachable by design, and the
-            // unit-level coverage (`rollback_purpose_with_short_ed25519_author_signature_is_rejected`)
-            // still proves the function's own logic is correct in isolation.
-            if signature.signature_bytes.len() != ED25519_SIGNATURE_LEN {
-                return Err(PrikkError::InvalidSignature(format!(
-                    "{context} rollback draft AUTHOR signature must be {ED25519_SIGNATURE_LEN} bytes"
-                )));
-            }
-            let _preimage = Signature::signed_bytes(
-                signature.algorithm,
-                ObjectType::Patch,
-                envelope.object_id(),
-                SignerRole::Author,
-                &signature.key_id,
-            )?;
-            Ok(signature)
-        })
+        .filter(|signature| signature.signer_role == SignerRole::Author);
+    let first = authors.next().ok_or_else(|| {
+        PrikkError::InvalidSignature(
+            "rollback draft Patch must carry an AUTHOR signature".to_string(),
+        )
+    })?;
+    for signature in std::iter::once(first).chain(authors) {
+        check_rollback_author_signature(envelope, signature, context)?;
+    }
+    Ok(first)
+}
+
+fn check_rollback_author_signature(
+    envelope: &ObjectEnvelope,
+    signature: &Signature,
+    context: &str,
+) -> Result<()> {
+    if signature.algorithm != SignatureAlgorithm::Ed25519 {
+        return Err(PrikkError::InvalidSignature(format!(
+            "{context} rollback draft AUTHOR signature must use Ed25519"
+        )));
+    }
+    if signature.key_id == LEGACY_ROLLBACK_MARKER_KEY_ID {
+        return Err(PrikkError::InvalidSignature(format!(
+            "{context} uses legacy rollback marker key id"
+        )));
+    }
+    // RFC 103, following DC-95 Stage 1 round 11's own finding: this arm was already reachable
+    // end to end only under format-1 -- `Wal::replay()` calls `validate_read_schema` on every
+    // record before this function ever runs, and under `RepositoryFormat::CurrentV6` that
+    // call already hard-errors on a malformed-length signature via `envelope.validate_strict()`.
+    // With formats 1 through 4 all retired (RFC 102 Stages 3-5), `CurrentV6` is the only
+    // format left, so this arm is now provably unreachable through `verify_repository`'s
+    // pipeline, not merely untested. Kept, per round
+    // 6's ruling on unreachable checks: unreachable today is not unreachable by design, and the
+    // unit-level coverage (`rollback_purpose_with_short_ed25519_author_signature_is_rejected`)
+    // still proves the function's own logic is correct in isolation.
+    if signature.signature_bytes.len() != ED25519_SIGNATURE_LEN {
+        return Err(PrikkError::InvalidSignature(format!(
+            "{context} rollback draft AUTHOR signature must be {ED25519_SIGNATURE_LEN} bytes"
+        )));
+    }
+    let _preimage = Signature::signed_bytes(
+        signature.algorithm,
+        ObjectType::Patch,
+        envelope.object_id(),
+        SignerRole::Author,
+        &signature.key_id,
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

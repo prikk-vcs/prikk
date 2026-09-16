@@ -7,11 +7,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RecognitionClaimPayload, SignerRole};
+use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RecognitionClaimPayload};
 
 use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
-    verify_author_signature_against_material,
+    verify_author_signatures_with,
 };
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
@@ -220,24 +220,19 @@ pub fn accept_exchange_artifact(
     // repository's already-recorded material and the artifact's own transported material for that
     // `key_id` -- the shared core the handoff's §4.2 item 7 rules must be reused, not duplicated.
     let mut author_signature_outcomes = Vec::with_capacity(decoded.patches.len());
+    // RFC 156 Stage 1: every AUTHOR signature on each patch, not only the first.
     for envelope in &decoded.patches {
-        let Some(signature) = envelope
-            .signatures
-            .iter()
-            .find(|signature| signature.signer_role == SignerRole::Author)
-        else {
-            continue;
-        };
-        let mut candidates = lookup_author_key_entries(layout, &signature.key_id)?;
-        candidates.extend(
-            decoded
-                .author_keys
-                .iter()
-                .filter(|entry| entry.key_id == signature.key_id)
-                .cloned(),
-        );
-        let Some((key_id, verifies)) =
-            verify_author_signature_against_material(envelope, &candidates)?
+        let Some((key_id, verifies)) = verify_author_signatures_with(envelope, |key_id| {
+            let mut candidates = lookup_author_key_entries(layout, key_id)?;
+            candidates.extend(
+                decoded
+                    .author_keys
+                    .iter()
+                    .filter(|entry| entry.key_id == key_id)
+                    .cloned(),
+            );
+            Ok(candidates)
+        })?
         else {
             continue;
         };

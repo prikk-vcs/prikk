@@ -84,7 +84,8 @@ fn removing_a_declaration_names_its_file() {
     );
     assert!(
         // RFC 136 increment 2b: verify records the blocks it replay-verified, 1,680 -> 1,689 lines.
-        detail.contains("1689"),
+        // RFC 156 Stage 1: the new publication-trust code's row in the module doc, 1,689 -> 1,690.
+        detail.contains("1690"),
         "the line count is in the message: {detail}"
     );
     assert!(

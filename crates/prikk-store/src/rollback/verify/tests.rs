@@ -365,3 +365,40 @@ fn signed_patch_from_payload(
     envelope.add_signature(signature)?;
     Ok(envelope)
 }
+
+/// RFC 156 Stage 1: every AUTHOR signature on a rollback draft passes the structural check, not only the
+/// first. The draft's own signature stays first in canonical order; a second one of the wrong length
+/// refuses.
+#[test]
+fn rollback_purpose_with_an_invalid_second_author_signature_is_rejected() {
+    let mut envelope = rollback_patch_envelope();
+    let Some(first_key_id) = envelope
+        .signatures
+        .iter()
+        .find(|signature| signature.signer_role == SignerRole::Author)
+        .map(|signature| signature.key_id.clone())
+    else {
+        panic!("the fixture carries an AUTHOR signature");
+    };
+    assert!(
+        super::verify_rollback_patch_envelope(&envelope, "test rollback patch").is_ok(),
+        "the fixture verifies before the second signature"
+    );
+    let second = Signature {
+        algorithm: SignatureAlgorithm::Ed25519,
+        key_id: "zzz-second-author".to_string(),
+        signature_bytes: vec![7],
+        created_at: 1,
+        signer_role: SignerRole::Author,
+    };
+    assert!(
+        second.key_id.as_bytes() > first_key_id.as_bytes(),
+        "the second key id must sort after the fixture's, so it is genuinely the second signature"
+    );
+    envelope.signatures.push(second);
+    envelope
+        .signatures
+        .sort_by(|left, right| left.canonical_cmp(right));
+    let verified = super::verify_rollback_patch_envelope(&envelope, "test rollback patch");
+    assert!(verified.is_err(), "{verified:?}");
+}

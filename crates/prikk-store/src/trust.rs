@@ -340,30 +340,55 @@ pub fn verify_signer_trusted(
 }
 
 /// Verify a publication envelope against the current repository-local trust policy. Returns the
-/// adopted key id whose signature matched (DC-78 §D3): the sealer's identity already lives inside
-/// the envelope's own signature, non-strippably — this is reporting that fact, not new state.
+/// adopted key id whose signature matched (DC-78 §D3), the first in canonical order: the sealer's
+/// identity already lives inside the envelope's own signature, non-strippably — this is reporting that
+/// fact, not new state.
+///
+/// **Every** MAINTAINER signature made by an adopted key is checked (RFC 156 Stage 1): one that does not
+/// verify is `PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`, even when another adopted signature does. A
+/// signature by a key this repository has not adopted cannot be checked here and is not, by itself, an
+/// issue — adoption is local, and a key can be removed after it signed.
 pub fn verify_trusted_publication_envelope(
     policy: &MaintainerTrustPolicy,
     envelope: &ObjectEnvelope,
 ) -> std::result::Result<String, PublicationTrustIssue> {
     let object_id = envelope.object_id();
-    envelope
+    let mut trusted: Option<String> = None;
+    for signature in envelope
         .signatures
         .iter()
-        .find_map(|signature| {
-            verify_trusted_signature(policy, envelope, signature, object_id)
-                .ok()
-                .map(|()| signature.key_id.clone())
-        })
-        .ok_or_else(|| {
-            PublicationTrustIssue::new(
-                "PRIKK-TRUST-PUBLICATION-UNTRUSTED",
-                format!(
-                    "{} {} has no trusted MAINTAINER signature",
-                    envelope.object_type, object_id
-                ),
-            )
-        })
+        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
+    {
+        if policy.find(&signature.key_id).is_none() {
+            continue;
+        }
+        match verify_trusted_signature(policy, envelope, signature, object_id) {
+            Ok(()) => {
+                if trusted.is_none() {
+                    trusted = Some(signature.key_id.clone());
+                }
+            }
+            Err(err) => {
+                return Err(PublicationTrustIssue::new(
+                    "PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE",
+                    format!(
+                        "{} {} carries a MAINTAINER signature by adopted key {} that does not \
+                         verify: {err}",
+                        envelope.object_type, object_id, signature.key_id
+                    ),
+                ));
+            }
+        }
+    }
+    trusted.ok_or_else(|| {
+        PublicationTrustIssue::new(
+            "PRIKK-TRUST-PUBLICATION-UNTRUSTED",
+            format!(
+                "{} {} has no trusted MAINTAINER signature",
+                envelope.object_type, object_id
+            ),
+        )
+    })
 }
 
 fn verify_trusted_signature(

@@ -777,3 +777,48 @@ fn a_key_recorded_concurrently_after_the_early_check_refuses_with_nothing_writte
     let _ = std::fs::remove_dir_all(receiver.root());
     Ok(())
 }
+
+/// RFC 156 Stage 1: a carried patch whose **second** AUTHOR signature does not verify refuses the
+/// exchange, with nothing written. Its first signature is valid, so a check reading only the first
+/// accepts it; the second signer's key is recorded on the receiver, so the signature is checkable.
+#[test]
+fn a_patch_whose_second_author_signature_is_invalid_refuses_the_exchange() -> Result<()> {
+    let first = author_signer(0x51)?;
+    // Key ids sort by bytes, and the fixture signer's id must sort before this one.
+    let second = crate::Ed25519AuthorSigner::from_seed("zz-second-author", &[0x52; 32])?;
+    let (bytes, patch_id) =
+        build_single_patch_artifact("pexch-accept-second-author-sender", &first, true)?;
+    let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000)?;
+    let mut patch = decoded.patches[0].clone();
+    let mut signature = crate::author_signature(&second, patch_id)?;
+    signature.signature_bytes[0] ^= 0x01;
+    patch.add_signature(signature)?;
+    assert_eq!(
+        patch
+            .signatures
+            .iter()
+            .position(|signature| signature.key_id == "zz-second-author"),
+        Some(1),
+        "the corrupted signature must be the second in canonical order"
+    );
+    let tampered = reencode_artifact(&bytes, Some(vec![patch]), None, None, None)?;
+
+    let receiver = fresh_repo("pexch-accept-second-author-receiver")?;
+    let lock = ActiveLock::acquire(&receiver, DEFAULT_ACTIVE_NAME)?;
+    record_author_key_material(&receiver, second.key_id(), second.public_key_bytes(), &lock)?;
+    drop(lock);
+    let before = crate::test_gates::test_support::repository_bytes(&receiver)?;
+
+    let result = accept_exchange_artifact(&receiver, &tampered, &AcceptOptions::default_limits());
+    assert!(
+        matches!(result, Err(prikk_error::PrikkError::InvalidSignature(ref message)) if message.contains("zz-second-author")),
+        "{result:?}"
+    );
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&receiver)?,
+        before,
+        "a refused exchange writes nothing"
+    );
+    let _ = std::fs::remove_dir_all(receiver.root());
+    Ok(())
+}

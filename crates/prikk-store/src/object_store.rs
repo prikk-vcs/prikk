@@ -172,7 +172,8 @@ fn append_object_under_lock(
 /// an id already stored. It builds the state RFC 156's union rule will write (a superseding record whose
 /// signatures are the stored ones plus more) so released binaries can be measured against it before the
 /// rule exists. Never compiled into a shipped build.
-#[cfg(any(test, feature = "test-support"))]
+/// Gated on the feature alone: its only callers are other crates' tests, which build with it.
+#[cfg(feature = "test-support")]
 pub fn append_superseding_record_for_test_support(
     layout: &RepositoryLayout,
     envelope: &ObjectEnvelope,

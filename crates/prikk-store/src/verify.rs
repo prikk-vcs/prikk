@@ -269,6 +269,7 @@
 //! |---|---|
 //! | `PRIKK-TRUST-POLICY-INVALID` (missing/malformed policy) | Load-bearing |
 //! | `PRIKK-TRUST-PUBLICATION-UNTRUSTED` | Load-bearing |
+//! | `PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE` (RFC 156 Stage 1) | Load-bearing |
 //!
 //! ## `commit_index.rs` (DC-56) / `lifecycle_cache/incremental.rs` (DC-64) (`crates/prikk-cli/tests/dc64_baseline_cache.rs`)
 //!

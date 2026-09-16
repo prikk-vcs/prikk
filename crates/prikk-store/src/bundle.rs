@@ -730,13 +730,15 @@ pub fn export_bundle(
         if envelope.object_type != ObjectType::Patch {
             continue;
         }
-        if let Some(signature) = envelope
-            .signatures
-            .iter()
-            .find(|signature| signature.signer_role == SignerRole::Author)
-        {
-            author_key_ids.insert(signature.key_id.clone());
-        }
+        // RFC 156 Stage 1: every AUTHOR signer's material, so a receiver can check every signature —
+        // carrying only the first signer's would leave the others unverifiable on arrival.
+        author_key_ids.extend(
+            envelope
+                .signatures
+                .iter()
+                .filter(|signature| signature.signer_role == SignerRole::Author)
+                .map(|signature| signature.key_id.clone()),
+        );
     }
     let mut author_keys: Vec<AuthorKeyEntry> = Vec::with_capacity(author_key_ids.len());
     for key_id in &author_key_ids {
