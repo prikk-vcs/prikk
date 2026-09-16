@@ -219,8 +219,10 @@ verification, so `bundle import` and `sync accept` refuse — the whole operatio
 object they would store, new or already held, carrying more than **4** counted signatures
 (`MAX_COUNTED_SIGNATURES_PER_OBJECT`). Every signature counts except a MAINTAINER signature by a key this
 repository has adopted that verifies; for a new object that includes non-adopted MAINTAINER, CI and AUDIT
-signatures, which are still stored as carried so a later adoption can trust them. The refusal names the
-object, its count and the limit. Local writers (`commit`, `seal`, `sync seal`, rollback drafts, tags)
+signatures, which are still stored as carried so a later adoption can trust them. Counting stops at the
+first signature past the limit, so for an object carrying many forged signatures the check runs at most five
+verifications before it is refused; the refusal names the object, the count reached when counting stopped
+(not the object's total) and the limit. Local writers (`commit`, `seal`, `sync seal`, rollback drafts, tags)
 never check the limit and are never refused. Whether a signature arrived through an import is not
 recorded, so the count is read from the object as stored, under the lock every importer takes.
 

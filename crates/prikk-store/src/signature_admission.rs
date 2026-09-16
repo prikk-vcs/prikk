@@ -20,7 +20,8 @@
 //!
 //! **The bound (RFC 156 §7.4).** Every envelope an import or exchange would store — new or already held,
 //! as it would be stored after the rules above — may carry at most [`MAX_COUNTED_SIGNATURES_PER_OBJECT`]
-//! counted signatures, or the whole operation is refused with nothing written. Every signature counts
+//! counted signatures, or the whole operation is refused with nothing written. Counting stops at the
+//! first signature past the limit, so the refusal names the count reached, not a total. Every signature counts
 //! except a MAINTAINER signature by an adopted key that verifies. Whether a signature arrived through an
 //! import is not stored state, so a local writer's own signatures count too; local writers never check,
 //! and are never refused.
@@ -35,21 +36,46 @@ use crate::trust::{MaintainerTrustPolicy, verify_trusted_signature};
 /// (RFC 156 §7.4): every signature except a MAINTAINER signature by an adopted key that verifies.
 pub const MAX_COUNTED_SIGNATURES_PER_OBJECT: usize = 4;
 
-/// The signatures of `envelope` that count toward [`MAX_COUNTED_SIGNATURES_PER_OBJECT`].
-pub(crate) fn counted_signature_count(
+/// The signatures of `envelope` that count toward [`MAX_COUNTED_SIGNATURES_PER_OBJECT`], counted in
+/// stored order and **stopping as soon as the count exceeds the limit**: deciding whether an adopted-key
+/// MAINTAINER signature counts costs a verification, so an object carrying many forged ones pays at most
+/// limit + 1 of them before it is refused. The result is the exact count when it is within the limit, and
+/// `MAX_COUNTED_SIGNATURES_PER_OBJECT + 1` otherwise.
+pub(crate) fn counted_signature_count_up_to_limit(
     envelope: &ObjectEnvelope,
     policy: &MaintainerTrustPolicy,
 ) -> usize {
     let object_id = envelope.object_id();
-    envelope
-        .signatures
-        .iter()
-        .filter(|signature| {
-            !(signature.signer_role == SignerRole::Maintainer
-                && policy.find(&signature.key_id).is_some()
-                && verify_trusted_signature(policy, envelope, signature, object_id).is_ok())
-        })
-        .count()
+    let mut counted = 0_usize;
+    for signature in &envelope.signatures {
+        let uncounted = signature.signer_role == SignerRole::Maintainer
+            && policy.find(&signature.key_id).is_some()
+            && {
+                #[cfg(test)]
+                MAINTAINER_VERIFICATIONS.with(|count| count.set(count.get().saturating_add(1)));
+                verify_trusted_signature(policy, envelope, signature, object_id).is_ok()
+            };
+        if !uncounted {
+            counted = counted.saturating_add(1);
+            if counted > MAX_COUNTED_SIGNATURES_PER_OBJECT {
+                break;
+            }
+        }
+    }
+    counted
+}
+
+#[cfg(test)]
+thread_local! {
+    static MAINTAINER_VERIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Test instrument, unreachable from production: how many adopted-key MAINTAINER verifications the bound
+/// has run on this thread since the last call, which resets it. Gated like its only consumer, the
+/// Linux-only `bundle` tests.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn take_bound_maintainer_verifications_for_test() -> usize {
+    MAINTAINER_VERIFICATIONS.with(|count| count.replace(0))
 }
 
 /// Refuse `envelope` if storing it would put more than [`MAX_COUNTED_SIGNATURES_PER_OBJECT`] counted
@@ -58,10 +84,10 @@ pub(crate) fn require_within_signature_bound(
     envelope: &ObjectEnvelope,
     policy: &MaintainerTrustPolicy,
 ) -> Result<()> {
-    let counted = counted_signature_count(envelope, policy);
+    let counted = counted_signature_count_up_to_limit(envelope, policy);
     if counted > MAX_COUNTED_SIGNATURES_PER_OBJECT {
         return Err(PrikkError::Precondition(format!(
-            "{} {} would carry {counted} counted signatures, above the limit of {} per object -- its \
+            "{} {} would carry at least {counted} counted signatures, above the limit of {} per object -- its \
              signer set is full (a MAINTAINER signature by an adopted key is not counted); refusing \
              the whole operation, nothing was written",
             envelope.object_type,

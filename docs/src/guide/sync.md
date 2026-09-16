@@ -95,7 +95,8 @@ under the usual trust-on-first-use rules. Nothing arrives pre-trusted.
 
 **An object carries at most 4 counted signatures when an import or exchange would store it.** Every
 signature counts except a MAINTAINER signature by an adopted key that verifies; above the limit the whole
-import or exchange refuses, naming the object, its count and `limit of 4`, and writes nothing. It applies
+import or exchange refuses, naming the object, `at least 5 counted signatures` and `limit of 4`, and writes
+nothing — counting stops there, so the number is not the object's total. It applies
 to new objects and merges alike. Local commands never check it and are never refused. `seal` signs with
 an adopted maintainer key, which does not count; your own AUTHOR signatures do, so on an object whose set
 they helped fill, another signer's copy is refused. See

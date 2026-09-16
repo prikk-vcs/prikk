@@ -3076,3 +3076,55 @@ fn an_import_filling_the_set_before_the_lock_is_seen_by_the_racing_import()
     let _ = std::fs::remove_dir_all(target.root());
     Ok(())
 }
+
+/// Stage 3 follow-up (review F1): a new object carrying 64 forged MAINTAINER signatures under an adopted
+/// key id is refused after at most limit + 1 verifications — counted on the verification call, not timed.
+#[test]
+fn the_bound_stops_verifying_once_the_count_passes_the_limit() -> prikk_error::Result<()> {
+    let maintainer = Ed25519MaintainerSigner::from_seed("bound-forged-maintainer", &[0x7b; 32])?;
+    let target = target_knowing("bound-forged", &[])?;
+    crate::trust::add_trusted_maintainer(
+        &target,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    let (bytes, patch_id) = bundle_with_patch_signers("bound-forged-source", &[], None)?;
+    let (ref_name, mut objects, author_keys, _) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let patch = objects
+        .iter_mut()
+        .find(|envelope| envelope.object_id() == patch_id)
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("no patch".to_string()))?;
+    let genuine =
+        crate::maintainer_signing::maintainer_signature(&maintainer, ObjectType::Patch, patch_id)?;
+    for forgery in 0_u8..64 {
+        let mut forged = genuine.clone();
+        forged.signature_bytes = vec![forgery; 64];
+        patch.add_signature(forged)?;
+    }
+    let forged_bundle = encode_bundle(&ref_name, &objects, &author_keys, &test_manifest())?;
+
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let _ = crate::signature_admission::take_bound_maintainer_verifications_for_test();
+    let refused = import_bundle(
+        &target,
+        &forged_bundle,
+        &BundleImportOptions::default_limits(),
+    );
+    let verifications = crate::signature_admission::take_bound_maintainer_verifications_for_test();
+    assert!(
+        matches!(&refused, Err(prikk_error::PrikkError::Precondition(message))
+            if message.contains(&format!("patch {patch_id}")) && message.contains("limit of 4")),
+        "{refused:?}"
+    );
+    assert!(
+        (1..=crate::MAX_COUNTED_SIGNATURES_PER_OBJECT + 1).contains(&verifications),
+        "the bound ran {verifications} verifications for 64 forged signatures"
+    );
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before
+    );
+    let _ = std::fs::remove_dir_all(target.root());
+    Ok(())
+}
