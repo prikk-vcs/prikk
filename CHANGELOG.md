@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.43.0 — 2026-09-16
 
 ### Added — sealed snapshots: a checkpoint every 64 blocks makes deep history cheaper to check out
 
