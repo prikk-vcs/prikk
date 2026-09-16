@@ -120,6 +120,13 @@ and no command turns a received ref into a local branch today. The note now name
 the received history at `remotes/<ref>`, readable with `prikk log --ref remotes/<ref>` and `prikk show`,
 and checked by `prikk verify` once the sealing key is trusted.
 
+### Changed — breaking once for Rust callers: the snapshot manifest is v2
+
+`SnapshotManifest` now carries `entries: Vec<StateRootEntry>` — the Block's own state entries, exactly as
+its state root hashes them — where it carried `files: Vec<SnapshotEntry>`, and `SnapshotEntry` is gone.
+Repositories are unaffected: no released version ever wrote a snapshot Blob, so no `PRIKK-SNAPSHOT-MANIFEST-v1`
+exists to read. This affects only Rust callers of `prikk-store`.
+
 ### Changed — breaking once for Rust callers: `SnapshotMaterializationReport` is `#[non_exhaustive]`
 
 `prikk_store::SnapshotMaterializationReport`, which gained `provisional` in this release, is now

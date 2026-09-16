@@ -208,7 +208,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk checkout --plan-only [path] [--ref REF]      Show a safe checkout plan",
             "  prikk checkout --snapshot-plan [path] [--ref REF]  Validate snapshot manifest paths",
-            "  prikk checkout --snapshot-materialize [path] [--ref REF]  Safely write snapshot files",
+            "  prikk checkout --snapshot-materialize [path] [--ref REF]  Safely write snapshot files; the worktree is provisional until `prikk verify`, unless the block is already replay-verified",
             "  prikk checkout --patch-plan [path] [--ref REF]  Replay supported file-level patches",
             "  prikk checkout --patch-plan --format json --content-path <path> [--ref REF]  Report replayed content for the named paths (repeatable)",
             "  prikk checkout --patch-materialize [path] [--ref REF]  Safely write patch replay files",

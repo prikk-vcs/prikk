@@ -168,6 +168,28 @@ When verify finds nothing about objects, the WAL, refs or block state, it prints
 replay-verified; marker cleared` and the commands work again. If it prints `provisional worktree: kept`,
 fix what verify reported first. See [snapshot materialization](checkout/snapshot-materialization.md).
 
+## `error: precondition not met: <old> -> <new>: the source is present in the worktree again, …`
+
+A `prikk mv` declaration says `<old>` became `<new>`, and the worktree says otherwise — most often
+because the move was undone with a shell `mv` rather than with `prikk mv`. The commit refuses rather
+than guess which one is the tracked node, and **the worktree still reads `clean`**: nothing is
+missing, modified or untracked, so `worktree-status` reports it as `refused declarations: 1` instead.
+
+The refusal names the way out for the state you are actually in, and each command was measured:
+
+```sh
+prikk mv <new> <old>    # drop the declaration: it nets to no move and is removed
+prikk mv <old> <new>    # or make the move again, and commit authors the rename
+```
+
+A shell `mv` back is not one of them: it recreates the state that produced this refusal.
+
+If **both paths exist**, `prikk mv` refuses in either direction until one copy is set aside — delete
+`<old>` and commit to author the rename, or delete `<new>` and then run `prikk mv <new> <old>`. If the
+destination is **another tracked node** this commit does not also move or delete, `prikk mv <new> <old>`
+drops the declaration; `<old>` keeps its content and `<new>` stays deleted, so the commit authors that
+deletion. See [Declared Moves](patches/declared-move.md) and [Worktree Status](worktree-status.md).
+
 ## `warning: the snapshot of Block <block> failed validation (…); this report replayed the whole history instead -- run `prikk verify``
 
 `checkout --patch-plan`, `--patch-delete-plan` or `bundle preview` tried to start at a snapshot, and the
