@@ -222,3 +222,20 @@ there cites it.
 
 **Report:** `.git-exclude/review-request/one-object-several-signers-stage3-report-v1.md`. After Stage 3, 0.45.0
 item 0 is complete.
+
+## Addendum 4 2026-09-17 — Stage 3 accepted; stop counting at the limit
+
+**Accepted** (review `one-object-several-signers-stage3-review-v1`): `a744759c`. All four readings in the report's §4
+are confirmed.
+
+**One follow-up (F1).** `counted_signature_count` verifies every adopted-key MAINTAINER signature before comparing with
+the limit, so a forged object pays one Ed25519 verification per signature before it is refused. Change the check to
+**stop as soon as the count exceeds `MAX_COUNTED_SIGNATURES_PER_OBJECT`**. The refusal text is unchanged except for the
+count: it may name the count reached at the stop, and the docs must not promise a total.
+- **Control:** a new object carrying many forged MAINTAINER signatures under an adopted key id, for example 64, is
+  refused after at most limit + 1 verifications. Measure through a test-only counter or seam on the verification
+  call, not by timing.
+- **Perturbation:** count every signature before comparing.
+
+The existing seven controls must still pass unchanged. **Report:**
+`.git-exclude/review-request/one-object-several-signers-stage3-follow-up-report-v1.md`.
