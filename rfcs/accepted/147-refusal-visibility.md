@@ -514,3 +514,40 @@ architect's miss.**
 
 A parity matrix across entry kinds becomes the control. Handoff:
 `rfcs/handoffs/147-refusal-visibility/declaration-presence-is-one-definition-handoff-v1.md`. Ships in 0.43.1.
+
+## 2h. RULED 2026-09-16 — a destination that is not a regular file is never read, and reports no difference
+
+The §2g round stopped at its own rule 5, correctly. Measured on the 0.43.0 code with a declared move whose
+destination was replaced:
+
+- **by a FIFO: `worktree-status` never returns.** `destination_differences` computed `content_changed` with
+  `std::fs::read`, which opens the FIFO and waits for a writer that never comes. Commit, meanwhile, refuses
+  cleanly (`worktree entry is not a regular file`). **Shipped in 0.43.0, from §2f's round** — the architect
+  ruled that field and reviewed it with a regular file at every destination.
+- **by a Unix socket:** `rename` with `content_changed: false` — the read failed and was reported as "no
+  difference".
+- **by a symlink:** `rename`, with `content_changed` computed through the link, while commit refuses over the
+  path.
+
+Commit's own walk sorts every non-directory, non-regular entry — symlink, FIFO, socket — into "refuse the whole
+commit over that path", before any declaration is resolved.
+
+**RULED — option (A):**
+1. **A FIFO or socket at the destination resolves like a symlink:** `rename`, with commit refusing over the path,
+   and that refusal carried by the path's own entry, as §2e already reports it. **Not** `deletion`: commit does
+   not record a deletion there, and a report saying so would be §2f's disagreement in a new shape.
+2. **`content_changed` and `mode_changed` are `null` whenever the destination is not a regular file** —
+   symlinks included, so a symlink's value changes from a comparison through the link to `null`. Commit never
+   authors through a symlink, so a value computed through one described nothing commit does. The documented rule
+   becomes: `null` unless the resolution is `rename` **and** the destination is a regular file.
+3. **A destination that is not a regular file is never opened.** Presence and kind come from one non-following
+   stat; bytes are read only for a regular file. That is the hang's fix, and it holds for every caller.
+4. **§2g's rules 1–4 stand unchanged**: presence decided once, by commit's own classification; a directory
+   resolves `deletion` with its own disclosure; `deletion-ignored` only from the ignore rules; no new
+   resolution value.
+
+The parity matrix gains FIFO and socket rows, each run under a timeout so a regression fails instead of hanging
+the suite. **CHANGELOG `### Fixed`:** `worktree-status` hung on a FIFO at a declared destination (0.43.0), and a
+directory there was reported as a rename. **`### Changed`:** `content_changed`/`mode_changed` are `null` for a
+destination that is not a regular file, symlinks included.
+

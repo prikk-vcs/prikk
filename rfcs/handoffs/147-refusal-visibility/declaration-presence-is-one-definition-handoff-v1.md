@@ -67,3 +67,23 @@ the architect's miss, recorded in §2g.
   destination, and commit called it ignored.
 - **Discipline:** the full gate set on the final commit; never push.
 - **Report:** `.git-exclude/review-request/declaration-presence-report-v1.md`.
+
+## 5. Rule 5, ruled — RFC 147 §2h (2026-09-16)
+
+Your stop was right. **Option (A)**, with your recommendation taken whole:
+- **FIFO and socket like a symlink:** `rename`, and commit refuses over the path.
+- **`content_changed`/`mode_changed` are `null` whenever the destination is not a regular file**, symlinks
+  included. Say so in the docs, the CHANGELOG `### Changed`, and the JSON field description.
+- **Never open a non-regular destination.** One non-following stat decides presence and kind, and bytes are
+  read only for a regular file.
+- **§2g rules 1–4 unchanged.**
+
+**Controls, added to §3:**
+- FIFO and socket rows in the parity matrix, each under a timeout, so a regression **fails** rather than hangs.
+- A control that the hang is gone: `worktree-status` on a FIFO destination returns within the timeout. Perturb by
+  restoring the unconditional read, and it must fail by timeout.
+- The symlink row's `content_changed` is asserted `null`.
+
+**CHANGELOG `### Fixed`** also carries the hang, as a 0.43.0 defect. This round ships in 0.43.1, **on top of the
+round you have already committed**. Nothing is pushed until the architect cuts 0.43.1.
+
