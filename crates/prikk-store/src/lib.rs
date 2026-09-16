@@ -32,6 +32,7 @@ mod compact;
 mod declaration_resolution;
 mod doctor;
 mod format_upgrade;
+mod signature_admission;
 // RFC 131 §2 / RFC 130 §2.3's "foundation" grouping: layout, fsutil, byte_cursor, file_codec,
 // frame_resync, container, index, generation -- a wide, one-directional base, grouped by role.
 mod format;
@@ -228,6 +229,7 @@ pub use show::{
     ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent, ShowPatch,
     ShowPathResolution, show,
 };
+pub use signature_admission::{DroppedSignature, DroppedSignatureReason};
 pub use signature_diagnostics::{SignatureEnvelopeIssue, SignatureEnvelopeSource};
 pub use snapshot::SnapshotManifest;
 pub use state_root::{

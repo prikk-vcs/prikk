@@ -511,7 +511,7 @@ pub(crate) fn verify_author_signatures_with(
 /// be scoped to `signature.key_id`. Returns `(key id, sound)`: `false` when no material is recorded
 /// (D3's second row, **not** a failure); `Err` for D3's third row (material recorded, signature does not
 /// verify) and fourth (DC-53 Stage 2, D8: more than one distinct key recorded for the id).
-fn verify_one_author_signature(
+pub(crate) fn verify_one_author_signature(
     envelope: &ObjectEnvelope,
     signature: &Signature,
     candidate_entries: &[AuthorKeyEntry],

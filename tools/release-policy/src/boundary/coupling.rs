@@ -94,7 +94,7 @@ const UPPER_LAYER: [&str; 22] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 31] = [
+const LOWER_LAYER: [&str; 32] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -128,6 +128,9 @@ const LOWER_LAYER: [&str; 31] = [
     // `worktree_status` so a report cannot contradict the commit it describes. It depends only on
     // `foundation`, `path`, `blob_access` and `rename_declaration`, and both callers sit above it.
     "declaration_resolution",
+    // RFC 156 §4: which carried signatures may join a stored object. Depends only on `author` and
+    // `trust`; its callers, `bundle` and `patch_exchange`, sit above it.
+    "signature_admission",
     // Surfaces by census, store by nature (RFC 149 §6b, §6d). Each is reached from lower-layer code
     // or lower-layer tests -- `worktree.rs` names `checkout` in production -- so putting any of them
     // upper would create exactly the crossing this rule forbids.

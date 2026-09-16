@@ -156,7 +156,8 @@ fn write_session_rewriting_the_same_object_is_a_no_op() -> prikk_error::Result<(
 #[test]
 fn write_session_rejects_a_same_id_rewrite_with_different_bytes() -> prikk_error::Result<()> {
     let root = unique_temp_dir("write-session-conflict");
-    let layout = RepositoryLayout::init(root.clone())?;
+    // Format 6's rule: one record per id (RFC 156 §5b). Format 7 merges instead.
+    let layout = crate::test_gates::test_support::init_format_6_repository(root.clone())?;
     let mut first = ObjectEnvelope::unsigned(ObjectType::Blob, 1, b"conflict".to_vec());
     first.add_signature(dummy_signature())?;
 
@@ -629,6 +630,57 @@ fn an_append_meeting_a_held_object_store_lock_is_refused() -> prikk_error::Resul
     drop(held);
     assert!(store.write_object(&object).is_ok(), "and succeed once free");
 
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 156 Stage 2b control 5: two merges into one id, interleaved so the second writer stores its copy
+/// after the first decided outside the lock but before it took the lock. The first writer re-reads
+/// under the lock, so the stored record keeps both writers' signatures.
+#[test]
+fn two_merges_interleaved_before_the_lock_keep_both_writers_signatures() -> prikk_error::Result<()>
+{
+    let root = unique_temp_dir("object-store-interleaved-merge");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let base = crate::test_gates::test_support::signed_patch_envelope();
+    FileObjectStore::new(layout.clone()).write_object(&base)?;
+
+    let mut first_writer = base.clone();
+    first_writer.signatures.clear();
+    first_writer.add_signature(dummy_signature())?;
+    let mut second_writer = base.clone();
+    second_writer.signatures.clear();
+    second_writer.add_signature({
+        let mut other = crate::test_gates::test_support::dummy_signature();
+        other.key_id = "zzz-another-signer".to_string();
+        other
+    })?;
+
+    let concurrent_layout = layout.clone();
+    let concurrent = second_writer.clone();
+    crate::object_store::before_object_store_lock_for_test(move || {
+        let stored = ObjectWriteSession::open(&concurrent_layout)
+            .and_then(|mut session| session.write_object(&concurrent));
+        assert!(stored.is_ok(), "the interleaved writer stores: {stored:?}");
+    });
+    let mut session = ObjectWriteSession::open(&layout)?;
+    session.write_object(&first_writer)?;
+
+    let stored = FileObjectStore::new(layout.clone())
+        .read_object(base.object_id())?
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("not stored".to_string()))?;
+    for signature in base
+        .signatures
+        .iter()
+        .chain(&first_writer.signatures)
+        .chain(&second_writer.signatures)
+    {
+        assert!(
+            stored.signatures.contains(signature),
+            "{} is missing from the stored record",
+            signature.key_id
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

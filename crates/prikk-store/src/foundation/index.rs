@@ -433,12 +433,16 @@ pub(crate) fn read_object_envelope_at(
 /// any) -- wherever that location came from: a fresh decode (`FileObjectStore`) or an in-memory
 /// snapshot (`ObjectWriteSession`). The decision logic itself does not care which, so it exists once
 /// (RFC 111 §6.1 addendum, C2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WriteDecision {
     /// No existing entry names this object id: append it.
     New,
-    /// An existing entry already names this exact object (same id, same bytes): no-op.
+    /// An existing entry already names this object, and the candidate adds no signature to it: no-op.
     AlreadyPresent(ObjectId),
+    /// RFC 156 §5b, format 7 only: the candidate carries signatures the stored record does not. Append
+    /// this envelope — the stored record's signatures and the candidate's, in canonical order — as the
+    /// id's superseding record.
+    Merge(ObjectEnvelope),
 }
 
 /// RFC 102 Stage 3 preserves `publish_immutable_file`'s exact idempotency contract (the loose-file
@@ -463,22 +467,46 @@ pub(crate) fn decide_write_outcome(
         )));
     }
     let existing_envelope = read_object_envelope_at(layout, existing)?;
-    if existing_envelope != *envelope {
-        // RFC 156 §5b: a format-6 repository keeps one record per id, so another envelope for a stored
-        // id — the same payload under other signatures, since the id covers the payload — is refused
-        // as it always was, now naming the explicit way out.
-        if layout.format() == RepositoryFormat::CurrentV6 {
-            return Err(PrikkError::Integrity(format!(
-                "existing container record for {object_id} differs from candidate -- this \
-                 repository is format 6, which holds one record per object id; `prikk format \
-                 upgrade` moves it to format 7"
-            )));
-        }
+    if existing_envelope == *envelope {
+        return Ok(WriteDecision::AlreadyPresent(object_id));
+    }
+    // The id covers the object's type, schema and payload, so a difference in any of them under one id
+    // is not another signer's copy — it is corruption, and stays a refusal in every format.
+    if existing_envelope.object_type != envelope.object_type
+        || existing_envelope.schema_version != envelope.schema_version
+        || existing_envelope.canonical_payload != envelope.canonical_payload
+    {
         return Err(PrikkError::Integrity(format!(
-            "existing container record for {object_id} differs from candidate"
+            "existing container record for {object_id} differs from candidate in its payload, not \
+             only its signatures -- refusing"
         )));
     }
-    Ok(WriteDecision::AlreadyPresent(object_id))
+    // RFC 156 §5b: a format-6 repository keeps one record per id, so another envelope for a stored id —
+    // the same payload under other signatures — is refused as it always was, naming the way out.
+    if layout.format() == RepositoryFormat::CurrentV6 {
+        return Err(PrikkError::Integrity(format!(
+            "existing container record for {object_id} differs from candidate -- this repository \
+             is format 6, which holds one record per object id; `prikk format upgrade` moves it to \
+             format 7, where another signer's copy merges"
+        )));
+    }
+    // Format 7: the union. Signatures the stored record already carries are skipped; if the candidate
+    // adds none, there is nothing to write.
+    let mut union = existing_envelope;
+    let before = union.signatures.len();
+    for signature in &envelope.signatures {
+        if union
+            .signatures
+            .binary_search_by(|stored| stored.canonical_cmp(signature))
+            .is_err()
+        {
+            union.add_signature(signature.clone())?;
+        }
+    }
+    if union.signatures.len() == before {
+        return Ok(WriteDecision::AlreadyPresent(object_id));
+    }
+    Ok(WriteDecision::Merge(union))
 }
 
 /// The write protocol (design §5, handoff §3): append the object record to its container and make

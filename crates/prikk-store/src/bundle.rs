@@ -249,6 +249,9 @@ pub struct BundleVerifyReport {
 }
 
 /// Summary of a bundle import.
+///
+/// `#[non_exhaustive]` from RFC 156, which added two fields: the next one is then not a break.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleImportReport {
     /// The local received-namespace name the import was recorded under (`remotes/<origin ref name>`).
@@ -259,6 +262,12 @@ pub struct BundleImportReport {
     pub object_count: usize,
     /// Objects that did not already exist in this repository's object store before this import.
     pub written_object_count: usize,
+    /// RFC 156, format 7: objects this repository already held that gained at least one signature from
+    /// the bundle's copy, written as a superseding record.
+    pub merged_object_count: usize,
+    /// RFC 156 §4: signatures the bundle carried for objects already held here that were not stored —
+    /// a maintainer key not adopted here, or an author key with no material to verify against.
+    pub dropped_signatures: Vec<crate::DroppedSignature>,
     /// DC-53 Stage 2, D7: AUTHOR key entries the bundle carried and this import recorded locally.
     /// Continuity only, not a trust decision -- unlike a trusted maintainer key, recording this
     /// grants no admission judgement, only lets `verify` distinguish Sound from Unverifiable for the
@@ -829,17 +838,34 @@ pub fn import_bundle(
     for (key_id, public_key) in &contents.bundle_key_ids {
         check_author_key_conflict(layout, key_id, *public_key)?;
     }
-    // The store's own write decision for every object, before any of them is written: an envelope the
-    // format rejects, or an id this repository already holds under different envelope bytes.
     let mut object_store = ObjectWriteSession::open(layout)?;
-    for envelope in &contents.objects {
+
+    // RFC 156 §4 rules 1–3, format 7: for every carried object this repository already holds, which of
+    // its signatures may join the stored record. Verified here, before anything is written; an invalid
+    // one refuses the whole import. A format-6 repository keeps one record per id, so its store refuses
+    // the second envelope below instead.
+    let admission = admit_carried_signatures(layout, &object_store, &contents.objects, |key_id| {
+        let mut entries = lookup_author_key_entries(layout, key_id)?;
+        entries.extend(
+            contents
+                .author_keys
+                .iter()
+                .filter(|entry| entry.key_id == key_id)
+                .cloned(),
+        );
+        Ok(entries)
+    })?;
+
+    // The store's own write decision for every object, before any of them is written: an envelope the
+    // format rejects, or — in format 6 — an id this repository already holds under other envelope bytes.
+    for envelope in &admission.envelopes {
         object_store.check_write(envelope)?;
     }
 
     // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
     // can stop the import -- never a decision about the bundle's content.
     let mut written_object_count = 0_usize;
-    for envelope in &contents.objects {
+    for envelope in &admission.envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
@@ -872,8 +898,62 @@ pub fn import_bundle(
         ref_state_id: contents.ref_state_id,
         object_count: contents.objects.len(),
         written_object_count,
+        merged_object_count: admission.merged_object_count,
+        dropped_signatures: admission.dropped,
         recorded_author_key_count,
     })
+}
+
+/// Every carried envelope as it will be handed to the store, after RFC 156 §4's admission.
+pub(crate) struct CarriedAdmission {
+    /// One per carried object, in order: unchanged for an object this repository does not hold (or in
+    /// format 6); the stored record plus every admitted signature for one it does.
+    pub(crate) envelopes: Vec<ObjectEnvelope>,
+    /// Objects this repository held that gained at least one signature.
+    pub(crate) merged_object_count: usize,
+    /// Signatures carried for held objects and not stored.
+    pub(crate) dropped: Vec<crate::DroppedSignature>,
+}
+
+/// RFC 156 §4 rules 1–3 over a batch of carried objects — `bundle import` and `sync accept` both. Reads
+/// only; the caller writes `envelopes` afterwards.
+pub(crate) fn admit_carried_signatures(
+    layout: &RepositoryLayout,
+    stored_objects: &impl ObjectReader,
+    carried: &[ObjectEnvelope],
+    mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
+) -> Result<CarriedAdmission> {
+    let mut admission = CarriedAdmission {
+        envelopes: Vec::with_capacity(carried.len()),
+        merged_object_count: 0,
+        dropped: Vec::new(),
+    };
+    if !layout.format().holds_several_records_per_id() {
+        admission.envelopes = carried.to_vec();
+        return Ok(admission);
+    }
+    let policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
+    for envelope in carried {
+        let Some(stored) = stored_objects.read_object(envelope.object_id())? else {
+            admission.envelopes.push(envelope.clone());
+            continue;
+        };
+        let decided = crate::signature_admission::admit_signatures(
+            &stored,
+            envelope,
+            &policy,
+            &mut author_material,
+        )?;
+        if decided.adds_signatures {
+            admission.merged_object_count = admission
+                .merged_object_count
+                .checked_add(1)
+                .ok_or_else(|| PrikkError::Integrity("merged-object count overflow".to_string()))?;
+        }
+        admission.dropped.extend(decided.dropped);
+        admission.envelopes.push(decided.envelope);
+    }
+    Ok(admission)
 }
 
 #[cfg(all(test, target_os = "linux"))]

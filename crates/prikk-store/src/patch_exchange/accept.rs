@@ -71,6 +71,9 @@ impl AcceptOptions {
 }
 
 /// Summary of an exchange-artifact accept.
+///
+/// `#[non_exhaustive]` from RFC 156, which added two fields: the next one is then not a break.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptReport {
     /// Patches the artifact carried.
@@ -84,6 +87,11 @@ pub struct AcceptReport {
     /// Patch, blob, claim, and tag objects that did not already exist in this repository's object store
     /// before this accept -- content-addressed, so a replayed accept (§4.3) reports zero here.
     pub written_object_count: usize,
+    /// RFC 156, format 7: objects already held here that gained at least one signature from the
+    /// artifact's copy, written as a superseding record.
+    pub merged_object_count: usize,
+    /// RFC 156 §4: signatures the artifact carried for objects already held here that were not stored.
+    pub dropped_signatures: Vec<crate::DroppedSignature>,
     /// AUTHOR key entries the artifact carried and this accept recorded locally. Zero on a replayed
     /// accept, the same continuity-only semantics `BundleImportReport::recorded_author_key_count`
     /// already has.
@@ -319,8 +327,36 @@ pub fn accept_exchange_artifact(
                 carried.insert(id, envelope);
             }
         }
+    }
+
+    // RFC 156 §4 rules 1–3, format 7: which signatures carried for objects already held here may join
+    // their stored records — verified before anything is written, the same admission `bundle import`
+    // runs. The admitted envelopes keep the artifact's order: patches, blobs, claims, tags.
+    let ordered: Vec<ObjectEnvelope> = decoded
+        .patches
+        .iter()
+        .chain(decoded.blobs.iter())
+        .chain(decoded.claims.iter())
+        .chain(decoded.tags.iter())
+        .cloned()
+        .collect();
+    let admission =
+        crate::bundle::admit_carried_signatures(layout, &object_store, &ordered, |key_id| {
+            let mut entries = lookup_author_key_entries(layout, key_id)?;
+            entries.extend(
+                decoded
+                    .author_keys
+                    .iter()
+                    .filter(|entry| entry.key_id == key_id)
+                    .cloned(),
+            );
+            Ok(entries)
+        })?;
+    for envelope in &admission.envelopes {
         object_store.check_write(envelope)?;
     }
+    let content_count = decoded.patches.len() + decoded.blobs.len();
+    let (content_envelopes, publication_envelopes) = admission.envelopes.split_at(content_count);
 
     // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
     // can stop the exchange — never a decision about what it carries.
@@ -328,7 +364,7 @@ pub fn accept_exchange_artifact(
     // Item 10: patches and blobs. Content-addressed and idempotent -- a replayed accept (§4.3) writes
     // nothing new here.
     let mut written_object_count = 0_usize;
-    for envelope in decoded.patches.iter().chain(decoded.blobs.iter()) {
+    for envelope in content_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
@@ -351,7 +387,7 @@ pub fn accept_exchange_artifact(
     // Claims and tags last, still under the lock: "no key material, and no claim, may be recorded
     // from an exchange that failed" (design §8.1), and RFC 117 stage 3 §5 row 6 puts a Tag on the
     // same terms -- **a refused exchange records no tag.**
-    for envelope in decoded.claims.iter().chain(decoded.tags.iter()) {
+    for envelope in publication_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
@@ -368,6 +404,8 @@ pub fn accept_exchange_artifact(
         claim_count: decoded.claims.len(),
         tag_count: decoded.tags.len(),
         written_object_count,
+        merged_object_count: admission.merged_object_count,
+        dropped_signatures: admission.dropped,
         recorded_author_key_count,
         author_signature_outcomes,
         claim_signature_outcomes,

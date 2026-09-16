@@ -107,6 +107,20 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     println!("RefState: {}", report.ref_state_id);
     println!("objects: {}", report.object_count);
     println!("new objects: {}", report.written_object_count);
+    // RFC 156: shown only when it happened, so an ordinary import reads exactly as before.
+    if report.merged_object_count > 0 {
+        println!("objects gaining signatures: {}", report.merged_object_count);
+    }
+    for dropped in &report.dropped_signatures {
+        println!(
+            "signature not stored: {:?} {} on {} {} -- {}",
+            dropped.signer_role,
+            dropped.key_id,
+            dropped.object_type,
+            dropped.object_id,
+            dropped.reason.describe()
+        );
+    }
     println!(
         "author key material: {} recorded (continuity only, not a trust decision)",
         report.recorded_author_key_count

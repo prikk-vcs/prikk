@@ -4,14 +4,13 @@ use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, signed_ref_update_envelope,
     unique_temp_dir,
 };
-use crate::{
-    FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
-};
+use crate::{FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore};
 
 #[test]
 fn ref_publication_does_not_advance_after_existing_object_mismatch() -> prikk_error::Result<()> {
     let root = unique_temp_dir("ref-object-mismatch");
-    let layout = RepositoryLayout::init(root.clone())?;
+    // The one-record-per-id rule this refusal rests on is format 6's (RFC 156 §5b).
+    let layout = crate::test_gates::test_support::init_format_6_repository(root.clone())?;
     let mut objects = FileObjectStore::new(layout.clone());
     let target = objects.write_object(&signed_empty_block_envelope())?;
     let ref_state = signed_ref_state_envelope("heads/main", None, target, 1);

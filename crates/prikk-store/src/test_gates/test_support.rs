@@ -293,6 +293,17 @@ pub(crate) fn repository_bytes(
     Ok(files)
 }
 
+/// A new repository at **format 6** (RFC 156 §5b). New repositories are format 7; a test of a format-6
+/// rule — one record per object id — states the format it tests. A freshly initialized repository holds
+/// nothing a format-6 repository could not, so setting the marker makes a genuine one.
+pub(crate) fn init_format_6_repository(
+    root: std::path::PathBuf,
+) -> prikk_error::Result<crate::RepositoryLayout> {
+    crate::RepositoryLayout::init(root.clone())?;
+    std::fs::write(root.join(".prikk").join("FORMAT"), b"6\n")?;
+    crate::RepositoryLayout::open(root)
+}
+
 /// DC-84: routed through `unique_suffix()` below, which is the only part that actually guarantees
 /// collision-freedom under thread contention.
 pub(crate) fn unique_temp_dir(name: &str) -> std::path::PathBuf {

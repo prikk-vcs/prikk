@@ -1778,7 +1778,7 @@ fn publish_tag(
     let mut tag_envelope =
         ObjectEnvelope::unsigned(ObjectType::Tag, 1, tag_payload.to_canonical_bytes()?);
     let tag_object_id = tag_envelope.object_id();
-    tag_envelope.add_signature(crate::maintainer_signature(
+    tag_envelope.add_signature(crate::maintainer_signing::maintainer_signature(
         maintainer,
         ObjectType::Tag,
         tag_object_id,
@@ -1800,7 +1800,7 @@ fn publish_tag(
         ref_state_payload.to_canonical_bytes()?,
     );
     let ref_state_id = ref_state_envelope.object_id();
-    ref_state_envelope.add_signature(crate::maintainer_signature(
+    ref_state_envelope.add_signature(crate::maintainer_signing::maintainer_signature(
         maintainer,
         ObjectType::RefState,
         ref_state_id,
@@ -1821,7 +1821,7 @@ fn publish_tag(
         ref_update_payload.to_canonical_bytes()?,
     );
     let ref_update_id = ref_update_envelope.object_id();
-    ref_update_envelope.add_signature(crate::maintainer_signature(
+    ref_update_envelope.add_signature(crate::maintainer_signing::maintainer_signature(
         maintainer,
         ObjectType::RefUpdate,
         ref_update_id,
@@ -2623,8 +2623,10 @@ fn the_import_holds_the_active_lock_across_its_object_writes() -> prikk_error::R
 #[test]
 fn an_import_meeting_a_stored_id_with_other_envelope_bytes_writes_nothing()
 -> prikk_error::Result<()> {
-    let (source_root, target_root, target, bytes) =
+    let (source_root, target_root, _, bytes) =
         conflicting_import_fixture("import-stored-id-conflict")?;
+    // The refusal this control proves is format 6's (RFC 156 §5b): a format-7 target merges instead.
+    let target = crate::test_gates::test_support::init_format_6_repository(target_root.clone())?;
     let (_, objects, _, _) = decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
     // The last object, so every object ahead of it would have been written under the old order.
     let last = objects.last().cloned().ok_or_else(|| {
@@ -2685,5 +2687,178 @@ fn a_bundle_carrying_one_id_twice_with_different_envelopes_is_refused_before_wri
 
     let _ = std::fs::remove_dir_all(source_root);
     let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+// RFC 156 Stage 2b: the signature union, format 7. Two sources seal the same deterministic history
+// (`seal_two_block_history_with_author`'s fixed node id and blob), each signing the one patch with its own
+// author key — so both bundles carry the same patch id under different signatures.
+
+/// Two bundles of one history whose patch is signed by two different authors, and the patch's id.
+fn two_authored_bundles(tag: &str) -> prikk_error::Result<(Vec<u8>, Vec<u8>, ObjectId)> {
+    let mut bundles = Vec::new();
+    for (index, discriminant) in [0xa1_u8, 0xb2].into_iter().enumerate() {
+        let root = unique_temp_dir(&format!("{tag}-source-{index}"));
+        let source = RepositoryLayout::init(root.clone())?;
+        let signer = transport_test_signer(discriminant)?;
+        seal_two_block_history_with_author(&source, &signer, true)?;
+        let (_, bytes) = export_bundle(&source, "heads/main")?;
+        bundles.push(bytes);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    let patch_id = |bytes: &[u8]| -> prikk_error::Result<ObjectId> {
+        let (_, objects, _, _) = decode_bundle(bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+        objects
+            .iter()
+            .find(|envelope| envelope.object_type == ObjectType::Patch)
+            .map(ObjectEnvelope::object_id)
+            .ok_or_else(|| prikk_error::PrikkError::Integrity("no patch".to_string()))
+    };
+    let [first, second]: [Vec<u8>; 2] = bundles
+        .try_into()
+        .map_err(|_| prikk_error::PrikkError::Integrity("two bundles".to_string()))?;
+    let id = patch_id(&first)?;
+    assert_eq!(
+        patch_id(&second)?,
+        id,
+        "both sources must carry the same patch id for these controls to prove anything"
+    );
+    Ok((first, second, id))
+}
+
+fn stored(layout: &RepositoryLayout, id: ObjectId) -> prikk_error::Result<ObjectEnvelope> {
+    FileObjectStore::new(layout.clone())
+        .read_object(id)?
+        .ok_or_else(|| prikk_error::PrikkError::Integrity(format!("{id} is not stored")))
+}
+
+/// Controls 1 and 2: imported in either order, the stored patch is byte-identical and carries both
+/// authors' signatures — a copy arriving first can no longer keep the other from being stored.
+#[test]
+fn a_patch_imported_under_two_signers_merges_identically_in_either_order() -> prikk_error::Result<()>
+{
+    let (bundle_a, bundle_b, patch_id) = two_authored_bundles("union-order")?;
+    let options = BundleImportOptions::default_limits();
+
+    let root_ab = unique_temp_dir("union-order-ab");
+    let ab = RepositoryLayout::init(root_ab.clone())?;
+    import_bundle(&ab, &bundle_a, &options)?;
+    let second_ab = import_bundle(&ab, &bundle_b, &options)?;
+    assert_eq!(
+        second_ab.merged_object_count, 1,
+        "the patch gains a signature"
+    );
+    assert!(second_ab.dropped_signatures.is_empty());
+
+    let root_ba = unique_temp_dir("union-order-ba");
+    let ba = RepositoryLayout::init(root_ba.clone())?;
+    import_bundle(&ba, &bundle_b, &options)?;
+    import_bundle(&ba, &bundle_a, &options)?;
+
+    let from_ab = stored(&ab, patch_id)?;
+    let from_ba = stored(&ba, patch_id)?;
+    assert_eq!(from_ab, from_ba, "order must not change what is stored");
+    let signers: Vec<&str> = from_ab
+        .signatures
+        .iter()
+        .map(|signature| signature.key_id.as_str())
+        .collect();
+    assert_eq!(
+        signers,
+        vec!["dc53-stage2-transport-161", "dc53-stage2-transport-178"],
+        "both authors, in canonical order"
+    );
+    assert!(
+        crate::author::author_key_index::verify_author_signature(&ab, &from_ab)?
+            .is_some_and(|(_, sound)| sound),
+        "every stored signature verifies"
+    );
+
+    let _ = std::fs::remove_dir_all(root_ab);
+    let _ = std::fs::remove_dir_all(root_ba);
+    Ok(())
+}
+
+/// Control 3: an invalid incoming signature refuses the whole import, with nothing written.
+#[test]
+fn an_invalid_signature_for_a_held_object_refuses_the_import_with_nothing_written()
+-> prikk_error::Result<()> {
+    let (bundle_a, bundle_b, patch_id) = two_authored_bundles("union-invalid")?;
+    let (ref_name, mut objects, author_keys, _) =
+        decode_bundle(&bundle_b, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    for envelope in &mut objects {
+        if envelope.object_id() == patch_id {
+            for signature in &mut envelope.signatures {
+                if let Some(byte) = signature.signature_bytes.first_mut() {
+                    *byte ^= 0x01;
+                }
+            }
+        }
+    }
+    let tampered = encode_bundle(&ref_name, &objects, &author_keys, &test_manifest())?;
+
+    let root = unique_temp_dir("union-invalid-target");
+    let target = RepositoryLayout::init(root.clone())?;
+    import_bundle(&target, &bundle_a, &BundleImportOptions::default_limits())?;
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let refused = import_bundle(&target, &tampered, &BundleImportOptions::default_limits());
+    assert!(
+        matches!(refused, Err(prikk_error::PrikkError::InvalidSignature(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before,
+        "a refused import writes nothing"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Control 4: a MAINTAINER signature by a key this repository has not adopted is not stored, and the
+/// import reports it.
+#[test]
+fn a_non_adopted_maintainer_signature_for_a_held_object_is_dropped_and_reported()
+-> prikk_error::Result<()> {
+    let (bundle_a, _, _) = two_authored_bundles("union-maintainer")?;
+    let (ref_name, mut objects, author_keys, _) =
+        decode_bundle(&bundle_a, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let stranger = Ed25519MaintainerSigner::from_seed("stranger-maintainer", &[0x77; 32])?;
+    let block = objects
+        .iter_mut()
+        .find(|envelope| envelope.object_type == ObjectType::Block)
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("no block".to_string()))?;
+    let block_id = block.object_id();
+    block.add_signature(crate::maintainer_signing::maintainer_signature(
+        &stranger,
+        ObjectType::Block,
+        block_id,
+    )?)?;
+    let extended = encode_bundle(&ref_name, &objects, &author_keys, &test_manifest())?;
+
+    let root = unique_temp_dir("union-maintainer-target");
+    let target = RepositoryLayout::init(root.clone())?;
+    import_bundle(&target, &bundle_a, &BundleImportOptions::default_limits())?;
+    let stored_before = stored(&target, block_id)?;
+    let report = import_bundle(&target, &extended, &BundleImportOptions::default_limits())?;
+    assert_eq!(report.merged_object_count, 0);
+    assert_eq!(report.dropped_signatures.len(), 1, "{report:?}");
+    let [dropped] = report.dropped_signatures.as_slice() else {
+        return Err(prikk_error::PrikkError::Integrity(format!(
+            "expected one dropped signature: {report:?}"
+        )));
+    };
+    assert_eq!(dropped.object_id, block_id);
+    assert_eq!(dropped.key_id, "stranger-maintainer");
+    assert_eq!(
+        dropped.reason,
+        crate::DroppedSignatureReason::MaintainerKeyNotAdopted
+    );
+    assert_eq!(
+        stored(&target, block_id)?,
+        stored_before,
+        "the block is unchanged"
+    );
+    let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

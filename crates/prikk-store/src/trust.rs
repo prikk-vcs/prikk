@@ -68,7 +68,7 @@ pub struct MaintainerTrustPolicy {
 }
 
 impl MaintainerTrustPolicy {
-    fn find(&self, key_id: &str) -> Option<&AdoptedMaintainerKey> {
+    pub(crate) fn find(&self, key_id: &str) -> Option<&AdoptedMaintainerKey> {
         self.keys.iter().find(|key| key.key_id == key_id)
     }
 }
@@ -391,7 +391,7 @@ pub fn verify_trusted_publication_envelope(
     })
 }
 
-fn verify_trusted_signature(
+pub(crate) fn verify_trusted_signature(
     policy: &MaintainerTrustPolicy,
     envelope: &ObjectEnvelope,
     signature: &Signature,

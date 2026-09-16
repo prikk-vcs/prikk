@@ -33,6 +33,9 @@ fn write_object_to_container_for_test(
         WriteDecision::New => {
             append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)
         }
+        WriteDecision::Merge(union) => {
+            append_object_to_container(layout, object_type, &union).map(|entry| entry.object_id)
+        }
     }
 }
 
@@ -223,7 +226,8 @@ fn crash_between_container_and_index_append_leaves_the_object_unindexed_and_reco
 #[test]
 fn decide_write_outcome_rejects_a_same_id_rewrite_with_different_signatures() -> Result<()> {
     let root = crate::test_gates::test_support::unique_temp_dir("index-conflicting-rewrite");
-    let layout = RepositoryLayout::init(root.clone())?;
+    // Format 6's rule: one record per id (RFC 156 §5b). Format 7 merges instead.
+    let layout = crate::test_gates::test_support::init_format_6_repository(root.clone())?;
     let first = signed_patch_envelope();
     write_object_to_container_for_test(&layout, ObjectType::Patch, &first)?;
     let existing = lookup_object_location(&layout, first.object_id())?;
@@ -293,6 +297,76 @@ fn a_damaged_index_entry_blocks_lookup_as_a_reported_defect() -> Result<()> {
     std::fs::write(&index_path, &bytes)?;
 
     assert!(lookup_object_location(&layout, envelope.object_id()).is_err());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 156 Stage 2b control 7: an envelope whose payload differs from the stored record it is decided
+/// against is not another signer's copy — it refuses as Integrity in format 7 too, never merges.
+#[test]
+fn a_payload_mismatch_under_one_id_refuses_as_integrity_in_format_7() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-payload-mismatch");
+    let layout = RepositoryLayout::init(root.clone())?;
+    assert_eq!(
+        layout.format(),
+        crate::foundation::layout::RepositoryFormat::V7
+    );
+    let first = signed_patch_envelope();
+    write_object_to_container_for_test(&layout, ObjectType::Patch, &first)?;
+    let existing = lookup_object_location(&layout, first.object_id())?;
+
+    // The store is asked about `first`'s record for a candidate carrying other payload bytes — the state
+    // a corrupted index entry or a hash collision would present.
+    let mut other = first.clone();
+    other.canonical_payload.push(0x00);
+    let refused = decide_write_outcome(&layout, ObjectType::Patch, &other, existing.as_ref());
+    assert!(
+        matches!(refused, Err(prikk_error::PrikkError::Integrity(ref message))
+            if message.contains("in its payload")),
+        "{refused:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 156 Stage 2b: in format 7 the same payload under another signature merges into the union, and a
+/// candidate adding no signature is already present.
+#[test]
+fn a_format_7_repository_merges_another_signers_copy() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-format-7-merge");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let first = signed_patch_envelope();
+    write_object_to_container_for_test(&layout, ObjectType::Patch, &first)?;
+    let existing = lookup_object_location(&layout, first.object_id())?;
+    let mut second = first.clone();
+    second.signatures.clear();
+    second.add_signature({
+        let mut other = crate::test_gates::test_support::dummy_signature();
+        other.key_id = "zzz-another-signer".to_string();
+        other
+    })?;
+
+    let decision = decide_write_outcome(&layout, ObjectType::Patch, &second, existing.as_ref())?;
+    let WriteDecision::Merge(union) = decision else {
+        return Err(prikk_error::PrikkError::Integrity(format!(
+            "expected a merge, got {decision:?}"
+        )));
+    };
+    assert_eq!(union.signatures.len(), first.signatures.len() + 1);
+    assert!(
+        first
+            .signatures
+            .iter()
+            .chain(&second.signatures)
+            .all(|signature| union.signatures.contains(signature))
+    );
+    let subset = first.clone();
+    assert!(matches!(
+        decide_write_outcome(&layout, ObjectType::Patch, &subset, existing.as_ref())?,
+        WriteDecision::AlreadyPresent(_)
+    ));
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

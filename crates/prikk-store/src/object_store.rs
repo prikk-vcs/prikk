@@ -115,19 +115,13 @@ impl ObjectWriter for FileObjectStore {
         // `ObjectWriteSession` below -- only where its `existing` lookup comes from differs: this
         // type always re-decodes the whole index (unchanged cost, a safe default for any call site
         // not migrated to a snapshot-backed type).
-        let existing = lookup_object_location(&self.layout, envelope.object_id())?;
-        match decide_write_outcome(
-            &self.layout,
-            envelope.object_type,
-            envelope,
-            existing.as_ref(),
-        )? {
-            WriteDecision::AlreadyPresent(id) => Ok(id),
-            WriteDecision::New => {
-                append_object_under_lock(&self.layout, envelope.object_type, envelope)
-                    .map(|entry| entry.object_id)
-            }
-        }
+        // RFC 156 Stage 2b: the decision is made under the object-store lock, against the index as it
+        // is then, so a concurrent writer's record for the same id is seen and merged, never lost.
+        let layout = &self.layout;
+        append_object_under_lock(layout, envelope.object_type, || {
+            let existing = lookup_object_location(layout, envelope.object_id())?;
+            locked_write(layout, envelope, existing.as_ref())
+        })
     }
 }
 
@@ -158,13 +152,59 @@ impl ObjectWriter for FileObjectStore {
 /// The nesting is one-directional and no inversion is expressible. It is fail-fast like every other
 /// lock here, so two overlapping object appends now produce one visible `lock conflict` instead of a
 /// silently wrong index.
-fn append_object_under_lock(
+///
+/// **RFC 156 Stage 2b: the write decision is made inside this hold, not before it.** `choose` runs with
+/// the lock held and reads the index as it is *now*, so two writers merging signatures into one id each
+/// see the other's record — decide-then-lock would let the second append a union that omits the first's
+/// signature. `choose` only reads; it acquires nothing, so the lock stays a leaf.
+fn append_object_under_lock<'a>(
     layout: &RepositoryLayout,
     object_type: ObjectType,
-    envelope: &ObjectEnvelope,
-) -> Result<IndexEntry> {
+    choose: impl FnOnce() -> Result<LockedWrite<'a>>,
+) -> Result<ObjectId> {
     let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
-    append_object_to_container(layout, object_type, envelope)
+    let appended = match choose()? {
+        LockedWrite::AlreadyPresent(id) => return Ok(id),
+        LockedWrite::Append(envelope) => envelope,
+    };
+    let envelope: &ObjectEnvelope = &appended;
+    append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)
+}
+
+/// What a writer does once it holds the object-store lock.
+enum LockedWrite<'a> {
+    /// The id already holds everything the candidate carries.
+    AlreadyPresent(ObjectId),
+    /// Append this record: the candidate itself, or the union of it and the stored record.
+    Append(std::borrow::Cow<'a, ObjectEnvelope>),
+}
+
+/// The shared decision, as a locked write: `New` appends the candidate, `Merge` appends the union.
+fn locked_write<'a>(
+    layout: &RepositoryLayout,
+    candidate: &'a ObjectEnvelope,
+    existing: Option<&IndexEntry>,
+) -> Result<LockedWrite<'a>> {
+    Ok(
+        match decide_write_outcome(layout, candidate.object_type, candidate, existing)? {
+            WriteDecision::AlreadyPresent(id) => LockedWrite::AlreadyPresent(id),
+            WriteDecision::New => LockedWrite::Append(std::borrow::Cow::Borrowed(candidate)),
+            WriteDecision::Merge(union) => LockedWrite::Append(std::borrow::Cow::Owned(union)),
+        },
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_OBJECT_STORE_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam, unreachable from production: run `change` once, after a write session's lock-free check
+/// and before it takes the object-store lock — the window in which another writer can store the same id.
+#[cfg(test)]
+pub(crate) fn before_object_store_lock_for_test(change: impl FnOnce() + 'static) {
+    BEFORE_OBJECT_STORE_LOCK.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 /// Test-support only (RFC 156 Stage 0): append `envelope` as a **new record** for its id — to its
@@ -180,7 +220,10 @@ pub fn append_superseding_record_for_test_support(
 ) -> Result<()> {
     layout.validate_format()?;
     crate::format::validate_object_envelope(layout.format(), envelope)?;
-    append_object_under_lock(layout, envelope.object_type, envelope).map(|_| ())
+    append_object_under_lock(layout, envelope.object_type, || {
+        Ok(LockedWrite::Append(std::borrow::Cow::Borrowed(envelope)))
+    })
+    .map(|_| ())
 }
 
 /// Read validation shared by every reader below (`FileObjectStore`, `ObjectReadSnapshot`,
@@ -405,11 +448,24 @@ impl ObjectWriteSession {
 
 impl ObjectWriter for ObjectWriteSession {
     fn write_object(&mut self, envelope: &ObjectEnvelope) -> Result<ObjectId> {
+        // Every refusal first, outside the lock (the same decision `check_write` makes)...
         match self.decide_write(envelope)? {
             WriteDecision::AlreadyPresent(id) => Ok(id),
-            WriteDecision::New => {
-                let object_id = envelope.object_id();
-                append_object_under_lock(&self.layout, envelope.object_type, envelope)?;
+            WriteDecision::New | WriteDecision::Merge(_) => {
+                // ...then decided again under the lock, against the index as it is now (RFC 156
+                // Stage 2b): a concurrent writer may have stored this id since.
+                #[cfg(test)]
+                if let Some(change) = BEFORE_OBJECT_STORE_LOCK.with(|slot| slot.borrow_mut().take())
+                {
+                    change();
+                }
+                let layout = &self.layout;
+                let snapshot = &mut self.snapshot;
+                let object_id = append_object_under_lock(layout, envelope.object_type, || {
+                    snapshot.ensure_current(layout)?;
+                    let existing = snapshot.lookup(envelope.object_id()).copied();
+                    locked_write(layout, envelope, existing.as_ref())
+                })?;
                 // Do not trust the append's own return value for what changed (RFC 111 Stage 1
                 // review v1, B1): re-derive by re-checking freshness through the same primitive
                 // every other read decision uses. `ensure_current`'s tail-decode is frame-aligned
