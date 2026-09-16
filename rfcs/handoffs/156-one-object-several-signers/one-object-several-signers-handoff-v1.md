@@ -146,3 +146,44 @@ makes RFC 156 a repository-format change as specified (RFC 156 §5a).
 
 Report for Stage 1 alone: `.git-exclude/review-request/one-object-several-signers-stage1-report-v1.md`.
 
+## Addendum 2 2026-09-16 — the owner chose a superset format 7
+
+RFC 156 §5b is ruled: **format 7 = format 6 plus "an id may hold several records; the last is authoritative"**, reached
+by an explicit `prikk format upgrade`. RFC 114 §5.2a records that this satisfies the carry-forward rule. **Stages 2–5
+are released**, in this order:
+
+**Stage 1 — unchanged, already live.**
+
+**Stage 2a — format 7 foundations, with no union writes yet.**
+1. **Every verification pass and reader resolves by id, last record authoritative.** Audit every pass that walks
+   container records, including `block_state.rs` (the topological pass, `:615`, `:668`), `verify/objects.rs:198`,
+   `verify.rs:1174`, `:1663`, `refs/verify/scan.rs:313`, `refs/publication.rs:267` and `refs/container.rs:447`, and
+   classify each: **object records** (must resolve by id), **ref or log records** (a different container, and say why
+   they are unaffected), or **WAL records**. A pass counting object records where it means objects is a defect.
+2. **`FORMAT` 7 accepted** beside 6; **new repositories are created at 7**. Refusals name the version they read.
+3. **`prikk format upgrade`**: writer lock, full verification that must pass, an atomic and durable marker write,
+   idempotent on 7, never automatic. There is no downgrade verb. It appears in `--help` and `commands.md`.
+4. **A format-6 repository keeps today's refusal** of a second envelope; the refusal names `prikk format upgrade`.
+
+**Stage 2b — the union rule, format 7 only.** The original Stage 2, unchanged except that superseding records are
+written only when the repository is format 7.
+
+**Stages 3, 4, 5 — as written.** Stage 5 adds:
+- `release-compatibility.md` § Repository Format Transitions rewritten for 6→7: older repositories stay openable,
+  upgrade in place, never hand-edit `FORMAT`;
+- `repository-layout.md` for the several-records rule;
+- **CHANGELOG `### Changed — repository format 7`**, breaking once: a 0.44.0 or older binary refuses a format-7
+  repository at open, and the upgrade is explicit.
+
+**Controls added for 2a (each must be able to fail):**
+1. **A format-7 repository with a superseding Block record verifies clean** with the new binary. Perturb: the
+   topological pass counting records.
+2. **A format-6 repository, new binary:** a second envelope still refuses, naming the upgrade.
+3. **Upgrade refuses on a repository that fails verification**, and writes nothing.
+4. **Upgrade is idempotent** on format 7, and is refused while another writer holds the lock.
+5. **The released 0.44.0 binary refuses an upgraded repository at open** — Stage 0's instrument extended.
+6. **A new binary names the version** in a format refusal (for example a `FORMAT` of 8).
+
+**Reports:** Stage 1 as in the first addendum; Stages 2a–5 in
+`.git-exclude/review-request/one-object-several-signers-report-v1.md`.
+

@@ -123,6 +123,12 @@ across, and it must exist before the change ships, not after.**
 history at `remotes/heads/main`, not `heads/main`, and every other branch and tag is left behind.
 **Whatever carries a repository forward must actually carry a repository.**
 
+**5.2a — Ruled by the owner 2026-09-16 (RFC 156 §5b): an explicit, tested, in-place upgrade to a superset format
+satisfies §5.2.** Format 7 is format 6 plus "an id may hold several records; the last is authoritative", so every
+format-6 repository is already a valid format-7 repository, and `prikk format upgrade` (verify first, then an atomic,
+durable marker change) carries the whole repository across because nothing moves. A format change that is *not* a
+superset still needs a carry-forward that actually carries a repository, as §5.2 says.
+
 **5.3 — Formats 1-5. Ruled by the owner: not supported.** prikk has never been in production; there is
 nothing to protect.
 

@@ -113,6 +113,40 @@ Against the released 0.44.0 asset (reproduced by the architect):
 reached by an explicit in-place upgrade, a Patch/Block split, or waiting for RFC 155 goes to the owner — together
 with whether an in-place upgrade satisfies RFC 114 §5.2. Review: `.git-exclude/reviewed/one-object-several-signers-stage0-review-v1.md`.
 
+### 5b. RULED 2026-09-16 by the owner — a superset format 7, reached by an explicit upgrade
+
+**The owner chose option 1 of the Stage 0 review:** *"Superset format 7, explicit upgrade."* That choice carried the
+reading it required, recorded here: **an explicit, tested, in-place upgrade to a format that is a superset of format 6
+satisfies RFC 114 §5.2.** It carries a repository — the whole of it — because nothing has to move.
+
+**What format 7 is.** Format 6, plus one rule: **an object id may have several container records, and the last one is
+authoritative.** Every format-6 repository is therefore already a valid format-7 repository.
+
+**Rules, the architect's under that direction:**
+1. **Every reader and every verification pass resolves objects by id, taking the last record** — the Block topological
+   pass (`block_state.rs:668`) and every other pass that walks container records. A pass that counts records where it
+   means objects is a defect in format 7.
+2. **Superseding records are written only in a format-7 repository.** In a format-6 repository a new binary keeps
+   today's rule: a second envelope for an id is refused. Its message names `prikk format upgrade` as the way to merge.
+3. **`prikk format upgrade`** changes a format-6 repository to format 7:
+   - it holds the repository's writer lock, runs full verification, and **refuses unless it passes**;
+   - it then writes `FORMAT` atomically and durably;
+   - on a repository already at format 7 it is a no-op that says so.
+
+   It is never automatic.
+4. **No downgrade.** A format-7 repository with a superseding record cannot be represented in format 6, and a downgrade
+   that works only sometimes is worse than none. Bundles remain the way to hand history to an older version.
+5. **New repositories are created at format 7.** A fresh repository has no older reader to protect.
+6. **Format refusals name the version found.** 0.44.0 answers `unsupported format version: 0` for a `FORMAT` of 7;
+   current binaries must name what they read.
+7. **Transport is unchanged.** A union envelope travels whole. A receiver that does not hold the id stores it as its one
+   record, which 0.44.0 verifies (measured). A format-6 receiver that already holds the id refuses, pointing at the
+   upgrade.
+
+**Docs owe a correction of their own:** `release-compatibility.md` § Repository Format Transitions says every bump
+makes older repositories unopenable and that there is no in-place migration. 6→7 is the first transition to which
+neither applies.
+
 ## 6. What this changes elsewhere
 
 - **RFC 155 R6** becomes "an id already held is merged under §4's rules, never silently replaced".
