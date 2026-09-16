@@ -73,6 +73,12 @@ prose and `"queued": true` on the patch in JSON (`false` for everything read fro
 An id found in neither place is a precondition (exit `1`) that names both places and where each kind
 of id is listed; it is not reported as damage.
 
+**A rename names every signer.** A patch may carry several AUTHOR signatures (format 7: another
+signer's copy of the same patch merges in). A rename reports every one: prose lists them all on its
+`asserted by` line, and JSON carries `author_key_ids`, every signer in canonical order (key id bytes).
+`author_key_id` keeps its meaning — the first signer in that order — so a patch with one signer reports
+exactly as before.
+
 `--format json` carries the same content as the prose form, as `show-report-v1`. It settles the
 format for `show` and nothing else.
 

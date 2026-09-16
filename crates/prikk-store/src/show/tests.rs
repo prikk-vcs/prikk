@@ -563,7 +563,8 @@ fn show_renders_a_mixed_block_with_its_own_content_and_paths() {
     assert_eq!(
         rename_op.content,
         ShowOperationContent::RenamePath {
-            author_key_id: "show-author".to_string()
+            author_key_id: "show-author".to_string(),
+            author_key_ids: vec!["show-author".to_string()],
         }
     );
 

@@ -84,10 +84,16 @@ sealing one accepted claim under its own maintainer key got the sender's block a
 ids. A sender's tag and the receiver's adopted tag are different objects: `adopt-tag` writes a tag object
 and `RefState` of its own, naming the same target block.
 
-**A repository holds one signed copy of each id.** So it cannot hold the same history under two signers:
-after the receiver has sealed the sender's patches as above, importing the sender's bundle of that ref
-refuses with `existing container record for <id> differs from candidate`. Nothing arrives pre-trusted;
-that is working as intended.
+**One id, several signers, in format 7.** After the receiver has sealed the sender's patches as above,
+importing the sender's bundle of that ref merges: each shared object keeps one stored copy carrying both
+maintainers' signatures, and the import reports `objects gaining signatures: N`. The same happens in the
+other order, when the receiver imports first and seals afterwards. What may join a stored object is
+checked first: every incoming signature must verify, or the whole import or exchange is refused with
+nothing written; a MAINTAINER signature is kept only if this repository has adopted its key, and is
+otherwise dropped and named on a `signature not stored:` line; an AUTHOR signature needs key material
+under the usual trust-on-first-use rules. Nothing arrives pre-trusted. A format-6 repository — one
+created by 0.44.0 or earlier and not yet upgraded — still holds one signed copy per id and refuses with
+`existing container record for <id> differs from candidate`, naming `prikk format upgrade`.
 
 **Divergence is reported, not treated as damage.** If an accepted patch does not apply to the
 receiver's current tip, that means the two histories have moved differently since they last agreed —

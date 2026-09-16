@@ -69,6 +69,15 @@ pub fn author_signature(signer: &impl AuthorSigner, object_id: ObjectId) -> Resu
 /// verification status are a separate, local question (`AuthorSignatureVerification` in
 /// `verify.rs`), and this helper exists only to recover *who asserted* the rename, not whether
 /// they should be believed.
+pub(crate) fn author_key_ids(envelope: &ObjectEnvelope) -> Vec<String> {
+    envelope
+        .signatures
+        .iter()
+        .filter(|signature| signature.signer_role == SignerRole::Author)
+        .map(|signature| signature.key_id.clone())
+        .collect()
+}
+
 pub(crate) fn require_author_key_id(envelope: &ObjectEnvelope) -> Result<String> {
     envelope
         .signatures

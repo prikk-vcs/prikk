@@ -13,7 +13,7 @@ use prikk_object::{
 };
 
 use crate::RepositoryLayout;
-use crate::author::author_signing::require_author_key_id;
+use crate::author::author_signing::{author_key_ids, require_author_key_id};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::merge::evidence::lifecycle_state_at;
 use crate::node::node_lifecycle::NodeLifecycleState;
@@ -129,8 +129,11 @@ pub enum ShowOperationContent {
     RenamePath {
         /// The patch's AUTHOR signature key id -- the signer who asserted this rename. Not a
         /// trust or verification judgement (that is a separate, local question); carries identity
-        /// only.
+        /// only. **The first AUTHOR signer in canonical order** (key id bytes) when the patch carries
+        /// several (RFC 156): its meaning is unchanged, and `author_key_ids` names every signer.
         author_key_id: String,
+        /// Every AUTHOR signer's key id, in canonical order; `author_key_id` is its first entry.
+        author_key_ids: Vec<String>,
     },
     /// A mode change.
     ChangePerm {
@@ -341,6 +344,7 @@ fn show_operation(
             ],
             content: ShowOperationContent::RenamePath {
                 author_key_id: require_author_key_id(envelope)?,
+                author_key_ids: author_key_ids(envelope),
             },
         },
         DecodedOperationKind::ChangePerm {

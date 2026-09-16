@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+### Changed — repository format 7; breaking once, and the upgrade is explicit
+
+New repositories are created at **format 7**: format 6 plus one rule, that an object id may hold several
+records, the last authoritative. A repository created by 0.44.0 or earlier stays at format 6, opens and
+works as before, and moves to format 7 in place with the new `prikk format upgrade` — which refuses,
+changing nothing, unless `prikk verify` would pass, and rewrites only the `FORMAT` marker. **prikk 0.44.0
+and earlier refuse a format-7 repository at open**, so upgrade only once every prikk that opens the
+repository is newer. There is no downgrade. A format refusal now names the version it read (0.44.0 said
+`unsupported format version: 0` for any marker it did not know).
+
+### Changed — one object may carry several signers
+
+Signatures are not part of an object's id, so two signers of the same content produce the same id. Until
+now a repository held one signed copy of each id, and the first copy to arrive kept every other signer's
+from being stored — the limitation advisory GHSA-px5q-233r-6hq5 names. In a format-7 repository another
+signer's copy now merges: the stored object keeps one superseding record carrying both signature sets, in
+either order of arrival. This is the collaboration case `docs/src/guide/sync.md` documented as a refusal:
+a receiver that seals a sender's patches and then imports the sender's bundle of that ref (or imports
+first and seals afterwards) now holds one block carrying both maintainers' signatures.
+
+What joins a stored object is checked first. `bundle import` and `sync accept` verify every incoming
+signature, and refuse the whole import or exchange — writing nothing — if one fails. A MAINTAINER
+signature is kept only when this repository has adopted its key; otherwise it is dropped and named on a
+`signature not stored:` line. An AUTHOR signature needs recorded or carried key material, under unchanged
+trust-on-first-use binding. Both commands print `objects gaining signatures: N` when any merged. A copy
+whose payload differs under the same id is still refused as corruption, and a format-6 repository still
+refuses any second copy, naming `prikk format upgrade`.
+
+### Fixed — `verify` checked only the first signature of a role
+
+`verify` checked a patch's first AUTHOR signature and a publication object's first adopted MAINTAINER
+signature, so a second one that did not verify went unnoticed. Every signature of the role is now checked,
+and so are those `sync accept`, recognition claims, received tags and rollback drafts read. A MAINTAINER
+signature by an adopted key that does not verify is reported as
+`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`. `bundle export` and `sync build` now carry every AUTHOR
+signer's key material, not only the first signer's.
+
+### Added — `prikk format upgrade` and `author_key_ids`
+
+- `prikk format upgrade [path]` moves a format-6 repository to format 7, as above.
+- `prikk show --format json` reports `author_key_ids` on a rename — every AUTHOR signer, in canonical
+  order (key id bytes) — additive within `show-report-v1`. `author_key_id` keeps its meaning, the first
+  signer in that order. Prose names every signer when there are several.
+
+### Changed — breaking once for Rust callers: several signers
+
+- `RepositoryFormat` gains `V7`.
+- `BundleImportReport` and `AcceptReport` are now `#[non_exhaustive]` and gain `merged_object_count` and
+  `dropped_signatures` (`DroppedSignature`, `DroppedSignatureReason`, both new).
+- `ShowOperationContent::RenamePath` gains `author_key_ids`.
+- New: `upgrade_repository_format` and `FormatUpgradeOutcome`.
+
 ## 0.44.0 — 2026-09-16
 
 ### Fixed — a refused `bundle import` or `sync accept` now changes nothing

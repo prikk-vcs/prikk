@@ -200,6 +200,12 @@ author key material: 1 recorded (continuity only, not a trust decision)
 note: no local ref was created or advanced, and no MAINTAINER key was trusted; this repository now holds the received history at remotes/heads/main, which `prikk log --ref remotes/heads/main` and `prikk show` read, and `prikk verify` checks once `trust maintainer add` trusts the sealing key
 ```
 
+**Restoring into a repository that already holds some of the history** stores nothing twice. An object
+it already holds under the same signatures is counted but not written; the same object under an
+additional signature — a copy another maintainer sealed — merges into the stored one in a format-7
+repository, reported as `objects gaining signatures: N`, and is refused in a format-6 one (see
+[Sync](sync.md)).
+
 **Import records material; it does not create trust.** The imported history lands as
 `remotes/heads/main`, not `heads/main` — no local ref moved, and the maintainer key that sealed it
 is not yet trusted here. Trust it explicitly, the same key id and public key

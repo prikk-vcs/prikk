@@ -89,11 +89,13 @@ and nothing validates their presence at open, so a repository initialized before
 harmlessly and a newly initialized one simply lacks them. One dormant diagnostic still reads the
 `objects/` tree if present — see [Object Store](#object-store) below.
 
-New repositories contain `6` in `FORMAT`. **Formats 1 through 5 are rejected at open**, with an error
-naming the format found and directing migration through `prikk bundle export` on a version that still
-supports it. There is no dual-layout bridge and no in-place migration: the format marker is a gate, and
-a repository whose on-disk shape does not match what the code expects is refused rather than opened and
-left to fail later.
+New repositories contain `7` in `FORMAT`; a repository created by 0.44.0 or earlier contains `6`, still
+opens, and moves to 7 in place with `prikk format upgrade` (see
+[Release Compatibility](release-compatibility.md#repository-format-transitions)). **Formats 1 through 5
+are rejected at open**, with an error naming the format found and directing migration through
+`prikk bundle export` on a version that still supports it; so is any number this build does not know.
+The format marker is a gate: a repository whose on-disk shape does not match what the code expects is
+refused rather than opened and left to fail later.
 
 `cache/` holds rebuildable, non-authoritative state — a corrupt or absent cache file is never an error,
 and any operation's result is identical whether the cache is warm, cold, or missing.
@@ -136,8 +138,15 @@ requested id.
 — recoverable by rebuilding the index from a container scan. The reverse ordering would let a reader see
 a valid index entry pointing at bytes that are not there, so the ordering is load-bearing.
 
-**Nothing supersedes or deletes an object.** Writing an id that already exists with identical bytes is a
-no-op; writing one with different bytes is an error. Containers therefore only ever grow.
+**Nothing deletes an object, and nothing is rewritten.** Writing an id that already exists with
+identical bytes is a no-op. In format 7 an id may hold several records, and **the last one is
+authoritative**: another signer's copy of a stored object — the same type, schema and payload under other
+signatures — is written as one superseding record carrying the union of both signature sets, and the
+index's last entry for the id points at it. Every reader resolves an id to that last record, in every
+pass. The union is decided under the object-store lock against the record as stored at that moment, so
+two writers merging into one id keep both signature sets. A copy whose payload differs under the same id
+is corruption and is refused in every format; in format 6, any different copy is refused. Containers
+therefore only ever grow.
 
 **`objects/` and its six type subdirectories are a retired one-file-per-object layout**, replaced by the
 containers above; nothing in a format-3 repository writes into it, and `init` no longer creates it. A
@@ -332,7 +341,7 @@ full cross-platform filesystem validation.
 | Claim | Source anchors |
 |---|---|
 | Repository initialization creates the listed directories and writes `.prikk/FORMAT`. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/layout.rs), [DC-31](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-31-REPOSITORY-LAYOUT-AUTHORITY-REFERENCE.md) |
-| `.prikk/FORMAT` selects current format 6; formats 1-5 are rejected at open. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/layout.rs), [DC-40](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-40-STATE-MERKLE-FORMAT-TRANSITION.md) |
+| `.prikk/FORMAT` selects format 7 for new repositories; format 6 still opens and upgrades in place; formats 1-5 are rejected at open. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/layout.rs), [DC-40](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-40-STATE-MERKLE-FORMAT-TRANSITION.md) |
 | Persistent objects are checksum-framed records appended into per-type containers allocated at `init`. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/layout.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs) |
 | Six object types currently have initialized persistent object directories; `RefUpdate` is inline-only in ref logs. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/layout.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs), [`refs/container.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/container.rs) |
 | Ref storage keys are SHA-256 hex digests of human-readable ref names, shared by the pointer index, the log container, and per-ref lock files. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/layout.rs), [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs) |

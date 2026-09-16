@@ -82,14 +82,25 @@ fn print_operation(index: usize, operation: &ShowOperation) {
             print_blob_content("old", old);
             print_blob_content("new", new);
         }
-        ShowOperationContent::RenamePath { author_key_id } => {
+        ShowOperationContent::RenamePath {
+            author_key_id,
+            author_key_ids,
+        } => {
             let [old_path, new_path] = operation.paths.as_slice() else {
                 println!("    (expected exactly two paths)");
                 return;
             };
             print_path("old path", old_path);
             print_path("new path", new_path);
-            println!("    asserted by (AUTHOR key id): {author_key_id}");
+            // RFC 156 Stage 4: one signer keeps the line it always had; several are all named.
+            if author_key_ids.len() > 1 {
+                println!(
+                    "    asserted by (AUTHOR key ids): {}",
+                    author_key_ids.join(", ")
+                );
+            } else {
+                println!("    asserted by (AUTHOR key id): {author_key_id}");
+            }
         }
         ShowOperationContent::ChangePerm { old_mode, new_mode } => {
             let [path] = operation.paths.as_slice() else {
@@ -216,10 +227,21 @@ fn push_operation(json: &mut String, operation: &ShowOperation) {
             push_blob_content(json, new);
             json.push('}');
         }
-        ShowOperationContent::RenamePath { author_key_id } => {
+        ShowOperationContent::RenamePath {
+            author_key_id,
+            author_key_ids,
+        } => {
             json.push_str("{\"kind\": \"rename-path\", \"author_key_id\": ");
             json.push_str(&escape_json_string(author_key_id));
-            json.push('}');
+            // RFC 156 Stage 4: additive within `show-report-v1`.
+            json.push_str(", \"author_key_ids\": [");
+            for (index, key_id) in author_key_ids.iter().enumerate() {
+                if index > 0 {
+                    json.push_str(", ");
+                }
+                json.push_str(&escape_json_string(key_id));
+            }
+            json.push_str("]}");
         }
         ShowOperationContent::ChangePerm { old_mode, new_mode } => {
             json.push_str(&format!(
