@@ -801,7 +801,8 @@ pub fn import_bundle(
     let received_ref_name = format!("remotes/{}", contents.origin_ref_name);
     crate::received::validate_received_ref(&received_ref_name)?;
 
-    #[cfg(test)]
+    // Gated like its only caller: `bundle`'s tests are Linux-only.
+    #[cfg(all(test, target_os = "linux"))]
     if let Some(change) = BEFORE_IMPORT_LOCK.with(|slot| slot.borrow_mut().take()) {
         change();
     }
@@ -846,7 +847,7 @@ pub fn import_bundle(
         object_store.write_object(envelope)?;
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     if let Some(change) = DURING_IMPORT_WRITES.with(|slot| slot.borrow_mut().take()) {
         change();
     }
@@ -873,7 +874,7 @@ pub fn import_bundle(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 thread_local! {
     static BEFORE_IMPORT_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
@@ -883,14 +884,14 @@ thread_local! {
 
 /// Test seam, unreachable from production: run `change` once, after the bundle is validated and before
 /// `import_bundle` takes its locks — where a concurrent writer could record an author key.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn before_import_lock_for_test(change: impl FnOnce() + 'static) {
     BEFORE_IMPORT_LOCK.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 /// Test seam, unreachable from production: run `change` once, after `import_bundle`'s object writes
 /// and before it records author keys — while it still holds `ActiveLock`.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn during_import_writes_for_test(change: impl FnOnce() + 'static) {
     DURING_IMPORT_WRITES.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
