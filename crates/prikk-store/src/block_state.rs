@@ -412,13 +412,17 @@ fn store_derived_content_for_candidate(
             &envelope.canonical_payload,
             envelope.schema_version,
         )? {
-            if let crate::patch_replay::decode::DecodedOperationKind::CreateFile { blob_id, .. } =
-                operation.kind
-                && object_store
+            // Nested rather than a let-chain: the MSRV floor (1.85) rejects one here.
+            if let crate::patch_replay::decode::DecodedOperationKind::CreateFile {
+                blob_id, ..
+            } = operation.kind
+            {
+                if object_store
                     .read_typed(blob_id, ObjectType::Blob)?
                     .is_none()
-            {
-                wanted.insert(blob_id);
+                {
+                    wanted.insert(blob_id);
+                }
             }
         }
     }
