@@ -825,3 +825,40 @@ fn sealing_from_an_accepted_claim_records_the_sealed_block() -> Result<()> {
     cleanup(&fixture.layout);
     Ok(())
 }
+
+/// RFC 156 §5b: a claim held as several records — a superseding record adding a second MAINTAINER
+/// signature — is enumerated **once**, so it cannot enter a `sync seal` batch twice.
+#[test]
+fn a_claim_held_as_several_records_is_enumerated_once() -> Result<()> {
+    let layout = fresh_repo("seal-from-accepted-claim-superseded")?;
+    let first = maintainer_signer(0x61)?;
+    let second = maintainer_signer(0x62)?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let claim_id = write_claim(
+        &mut objects,
+        &first,
+        ObjectId::from_bytes([0x5c; 32]),
+        vec![ObjectId::from_bytes([0x5d; 32])],
+    )?;
+    let mut superseding = crate::ObjectReader::read_object(&objects, claim_id)?
+        .ok_or_else(|| PrikkError::Integrity("claim written".to_string()))?;
+    superseding.add_signature(maintainer_signature(
+        &second,
+        ObjectType::RecognitionClaim,
+        claim_id,
+    )?)?;
+    crate::foundation::index::append_object_to_container(
+        &layout,
+        ObjectType::RecognitionClaim,
+        &superseding,
+    )?;
+
+    let claims = super::enumerate_stored_claims(&layout)?;
+    assert_eq!(
+        claims.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![claim_id],
+        "one claim, two records"
+    );
+    let _ = std::fs::remove_dir_all(layout.root());
+    Ok(())
+}

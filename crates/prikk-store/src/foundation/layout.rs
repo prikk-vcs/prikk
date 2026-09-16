@@ -22,15 +22,19 @@ const LEGACY_FORMAT_2_VERSION: &[u8] = b"2\n";
 const LEGACY_FORMAT_3_VERSION: &[u8] = b"3\n";
 const LEGACY_FORMAT_4_VERSION: &[u8] = b"4\n";
 const LEGACY_FORMAT_5_VERSION: &[u8] = b"5\n";
-/// Visible at `pub(crate)` so `format_stability_gate.rs`'s pinning test can assert this byte form
-/// and `CURRENT_FORMAT_VERSION_NUMERIC` against literal expected values side by side.
-pub(crate) const CURRENT_FORMAT_VERSION: &[u8] = b"6\n";
+/// Format 6: still read and written (RFC 156 §5b) — a format-6 repository stays format 6 until
+/// `prikk format upgrade` changes its marker.
+pub(crate) const FORMAT_6_VERSION: &[u8] = b"6\n";
+/// The format new repositories are created at. Visible at `pub(crate)` so `format_stability_gate.rs`'s
+/// pinning test can assert this byte form and `CURRENT_FORMAT_VERSION_NUMERIC` against literal expected
+/// values side by side.
+pub(crate) const CURRENT_FORMAT_VERSION: &[u8] = b"7\n";
 /// Numeric companion to `CURRENT_FORMAT_VERSION`, for `format_stability_gate.rs`'s own range
 /// arithmetic (RFC 114 §4, Gate B layer 1). Kept as an independent literal, not parsed from
 /// `CURRENT_FORMAT_VERSION` at compile or test time -- see
 /// `format_stability_gate::current_format_version_byte_and_numeric_forms_agree` for why.
 #[cfg(test)]
-pub(crate) const CURRENT_FORMAT_VERSION_NUMERIC: u32 = 6;
+pub(crate) const CURRENT_FORMAT_VERSION_NUMERIC: u32 = 7;
 
 /// Repository format selected by the authoritative `.prikk/FORMAT` marker.
 ///
@@ -54,10 +58,32 @@ pub(crate) const CURRENT_FORMAT_VERSION_NUMERIC: u32 = 6;
 /// explicitly unchanged).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepositoryFormat {
-    /// Current format 6: RFC 102 Stage 6 Step 1's generation-aware index containers (ref pointer
-    /// index, received-ref index, trust policy container), layered on every prior stage's container
-    /// work, still writable under the unchanged DC-40 schema and state-root rules.
+    /// Format 6: RFC 102 Stage 6 Step 1's generation-aware index containers (ref pointer index,
+    /// received-ref index, trust policy container), layered on every prior stage's container work,
+    /// still writable under the unchanged DC-40 schema and state-root rules. **One record per object
+    /// id.** (The name predates format 7; it is format 6, and is still read and written.)
     CurrentV6,
+    /// Format 7 (RFC 156 §5b): format 6 plus **"an id may hold several records; the last is
+    /// authoritative"**. Nothing else differs, so every format-6 repository is already a valid format-7
+    /// repository, and `prikk format upgrade` changes only the marker. Older binaries refuse it at open.
+    V7,
+}
+
+impl RepositoryFormat {
+    /// The number the `FORMAT` marker holds.
+    #[must_use]
+    pub const fn number(self) -> u32 {
+        match self {
+            Self::CurrentV6 => 6,
+            Self::V7 => 7,
+        }
+    }
+
+    /// Whether this format permits several records for one object id (RFC 156 §5b).
+    #[must_use]
+    pub const fn holds_several_records_per_id(self) -> bool {
+        matches!(self, Self::V7)
+    }
 }
 
 /// One container's pre-allocated alternate slot (RFC's §3.2 compaction requirement: a fixed A/B pair
@@ -196,8 +222,11 @@ impl RepositoryLayout {
         let prikk_dir = root.join(REPO_DIR);
         let worktree_mutation = MutationRoot::open(&root)?;
         let repository_mutation = worktree_mutation.ensure_root(Path::new(REPO_DIR))?;
-        if let Some(version) = read_file_if_exists(&repository_mutation, Path::new("FORMAT"))? {
-            if version != CURRENT_FORMAT_VERSION {
+        let existing = read_file_if_exists(&repository_mutation, Path::new("FORMAT"))?;
+        if let Some(version) = &existing {
+            if version.as_slice() != CURRENT_FORMAT_VERSION
+                && version.as_slice() != FORMAT_6_VERSION
+            {
                 // RFC 102 Stage 3, design-v1.md §12.1: this refusal inherited the format-2 -> 3 bump;
                 // Stage 4 carried it forward for format-3 -> 4, Stage 5 did the same for format-4 ->
                 // 5, and Stage 6 does it again for format-5 -> 6 (design-v1.md §15.6). Audited, not
@@ -206,18 +235,26 @@ impl RepositoryLayout {
                 // repository of some other format, so it stays terse and points at `open` (any other
                 // command) for the detailed migration message rather than duplicating it here.
                 return Err(PrikkError::Integrity(
-                    "refusing to initialize an existing non-format-6 Prikk repository (open it \
-                     with any other command for a detailed unsupported-format message)"
+                    "refusing to initialize an existing Prikk repository that is neither format 6 \
+                     nor format 7 (open it with any other command for a detailed unsupported-format \
+                     message)"
                         .to_string(),
                 ));
             }
         }
+        // An existing repository keeps its own format — re-running `init` never upgrades one (RFC 156
+        // §5b: the upgrade is explicit). A new one is created at format 7.
+        let format = if existing.as_deref() == Some(FORMAT_6_VERSION) {
+            RepositoryFormat::CurrentV6
+        } else {
+            RepositoryFormat::V7
+        };
         let layout = Self {
             root,
             prikk_dir,
             worktree_mutation,
             repository_mutation,
-            format: RepositoryFormat::CurrentV6,
+            format,
         };
         for dir in layout.required_repository_directories()? {
             ensure_directory_required(layout.repository_mutation_root(), &dir)?;
@@ -358,18 +395,21 @@ impl RepositoryLayout {
     pub(crate) fn validate_format(&self) -> Result<()> {
         let format = read_repository_format(self.repository_mutation_root())?;
         if format != self.format {
-            return Err(PrikkError::UnsupportedFormatVersion(0));
+            // The marker changed under an open layout — `prikk format upgrade` ran meanwhile. Name
+            // both versions rather than a placeholder number (RFC 156 §5b).
+            return Err(PrikkError::Precondition(format!(
+                "the repository format changed from {} to {} while this command ran; run it again",
+                self.format.number(),
+                format.number()
+            )));
         }
         Ok(())
     }
 
-    /// Refuse ordinary repository/worktree mutation in legacy format 1.
+    /// Refuse mutation unless the marker still names the format this layout opened with. Formats 6 and
+    /// 7 are both current (RFC 156 §5b); every older format is already refused at open.
     pub fn require_current_format(&self) -> Result<()> {
-        self.validate_format()?;
-        if self.format == RepositoryFormat::CurrentV6 {
-            return Ok(());
-        }
-        Err(PrikkError::UnsupportedFormatVersion(1))
+        self.validate_format()
     }
 
     /// Return the working tree root.
@@ -770,7 +810,7 @@ impl RepositoryLayout {
             })
     }
 
-    fn required_repository_directories(&self) -> Result<Vec<PathBuf>> {
+    pub(crate) fn required_repository_directories(&self) -> Result<Vec<PathBuf>> {
         self.required_directories()
             .into_iter()
             .map(|path| self.repository_relative(&path))
@@ -970,7 +1010,7 @@ fn read_repository_format(root: &MutationRoot) -> Result<RepositoryFormat> {
         // message must not claim otherwise; it states withdrawal, not absence.
         LEGACY_FORMAT_VERSION => Err(PrikkError::Integrity(
             "this repository uses format 1, which prikk no longer supports (this version \
-             requires format 6). format-1 support was removed after 0.19.0; migration from \
+             requires format 6 or 7). format-1 support was removed after 0.19.0; migration from \
              format 1 is not supported."
                 .to_string(),
         )),
@@ -983,7 +1023,7 @@ fn read_repository_format(root: &MutationRoot) -> Result<RepositoryFormat> {
         // the release record), so this states withdrawal, not absence of a reader.
         LEGACY_FORMAT_2_VERSION => Err(PrikkError::Integrity(
             "this repository uses format 2, which prikk no longer supports (this version \
-             requires format 6). format-2 support was removed after 0.19.0; migration from \
+             requires format 6 or 7). format-2 support was removed after 0.19.0; migration from \
              format 2 is not supported."
                 .to_string(),
         )),
@@ -998,7 +1038,7 @@ fn read_repository_format(root: &MutationRoot) -> Result<RepositoryFormat> {
         // says so plainly rather than offering a step the product cannot honour.
         LEGACY_FORMAT_3_VERSION => Err(PrikkError::Integrity(
             "this repository uses format 3, which prikk no longer supports (this version \
-             requires format 6). format 3 was never used in a released prikk version; there is \
+             requires format 6 or 7). format 3 was never used in a released prikk version; there is \
              no supported migration path."
                 .to_string(),
         )),
@@ -1011,7 +1051,7 @@ fn read_repository_format(root: &MutationRoot) -> Result<RepositoryFormat> {
         // RFC 114 §5.3: same as format 3's arm -- format 4 never shipped in a released version either.
         LEGACY_FORMAT_4_VERSION => Err(PrikkError::Integrity(
             "this repository uses format 4, which prikk no longer supports (this version \
-             requires format 6). format 4 was never used in a released prikk version; there is \
+             requires format 6 or 7). format 4 was never used in a released prikk version; there is \
              no supported migration path."
                 .to_string(),
         )),
@@ -1023,12 +1063,28 @@ fn read_repository_format(root: &MutationRoot) -> Result<RepositoryFormat> {
         // RFC 114 §5.3: same as formats 3-4's arms -- format 5 never shipped in a released version.
         LEGACY_FORMAT_5_VERSION => Err(PrikkError::Integrity(
             "this repository uses format 5, which prikk no longer supports (this version \
-             requires format 6). format 5 was never used in a released prikk version; there is \
+             requires format 6 or 7). format 5 was never used in a released prikk version; there is \
              no supported migration path."
                 .to_string(),
         )),
-        CURRENT_FORMAT_VERSION => Ok(RepositoryFormat::CurrentV6),
-        _ => Err(PrikkError::UnsupportedFormatVersion(0)),
+        FORMAT_6_VERSION => Ok(RepositoryFormat::CurrentV6),
+        CURRENT_FORMAT_VERSION => Ok(RepositoryFormat::V7),
+        other => Err(unsupported_format_marker(other)),
+    }
+}
+
+/// A `FORMAT` marker this binary does not read, **naming what it holds** (RFC 156 §5b): a number is
+/// reported as that version, anything else is quoted. 0.44.0 and earlier said `unsupported format
+/// version: 0` whatever the marker held.
+fn unsupported_format_marker(marker: &[u8]) -> PrikkError {
+    let text = String::from_utf8_lossy(marker);
+    let trimmed = text.trim_end_matches('\n');
+    match trimmed.parse::<u32>() {
+        Ok(version) => PrikkError::UnsupportedFormatVersion(version),
+        Err(_) => PrikkError::Integrity(format!(
+            "the repository format marker .prikk/FORMAT holds {trimmed:?}, which is not a format \
+             number this version reads (it reads formats 6 and 7)"
+        )),
     }
 }
 

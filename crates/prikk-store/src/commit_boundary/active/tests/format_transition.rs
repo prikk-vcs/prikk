@@ -14,9 +14,11 @@ fn changed_or_missing_retained_format_marker_blocks_active_and_wal_mutation() {
         ("legacy-v3", Some(b"3\n".as_slice())),
         ("legacy-v4", Some(b"4\n".as_slice())),
         ("legacy-v5", Some(b"5\n".as_slice())),
-        // RFC 102 Stage 6: format 6 is now current, so "unknown" needs a value past it to still be
+        // RFC 156 §5b: formats 6 and 7 are both read, so "unknown" needs a value past them to stay
         // genuinely unrecognized rather than accidentally matching.
-        ("unknown", Some(b"7\n".as_slice())),
+        ("unknown", Some(b"8\n".as_slice())),
+        // A layout opened at format 7 whose marker now reads 6 is a *changed* marker, and blocks too.
+        ("changed-to-6", Some(b"6\n".as_slice())),
         ("malformed", Some(b"2".as_slice())),
         ("missing", None),
     ] {

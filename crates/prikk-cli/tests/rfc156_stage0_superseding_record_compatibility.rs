@@ -106,6 +106,8 @@ fn read_envelope(repo: &Path, id: ObjectId) -> prikk_object::ObjectEnvelope {
 fn patch_case(current: &Path, supersede: bool) -> (PathBuf, ObjectId) {
     let repo = support::unique_repo("rfc156-stage0-patch");
     ok(&run(current, &repo, &["init"]), "init");
+    // Stage 0 measures a *format-6* repository, as 0.44.0 created them; this tree creates format 7.
+    std::fs::write(repo.join(".prikk").join("FORMAT"), b"6\n").unwrap();
     support::trust_maintainer(&repo);
     std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
     let first = run(
@@ -168,6 +170,8 @@ fn patch_case(current: &Path, supersede: bool) -> (PathBuf, ObjectId) {
 fn block_case(current: &Path, supersede: bool, identical: bool) -> (PathBuf, ObjectId) {
     let repo = support::unique_repo("rfc156-stage0-block");
     ok(&run(current, &repo, &["init"]), "init");
+    // Stage 0 measures a *format-6* repository, as 0.44.0 created them; this tree creates format 7.
+    std::fs::write(repo.join(".prikk").join("FORMAT"), b"6\n").unwrap();
     support::trust_maintainer(&repo);
     std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
     ok(
@@ -242,6 +246,8 @@ fn block_case(current: &Path, supersede: bool, identical: bool) -> (PathBuf, Obj
 fn rename_case(current: &Path) -> (PathBuf, ObjectId) {
     let repo = support::unique_repo("rfc156-stage0-rename");
     ok(&run(current, &repo, &["init"]), "init");
+    // Stage 0 measures a *format-6* repository, as 0.44.0 created them; this tree creates format 7.
+    std::fs::write(repo.join(".prikk").join("FORMAT"), b"6\n").unwrap();
     support::trust_maintainer(&repo);
     std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
     ok(
@@ -318,6 +324,44 @@ fn rename_case(current: &Path) -> (PathBuf, ObjectId) {
             .collect::<Vec<_>>()
     );
     (repo, patch_id)
+}
+
+/// RFC 156 §5b, Stage 2a control 5: a format-6 repository upgraded to format 7 by this tree. The released
+/// binary must refuse it at open — never misread it.
+fn upgraded_case(current: &Path) -> (PathBuf, ObjectId) {
+    let repo = support::unique_repo("rfc156-stage2a-upgraded");
+    ok(&run(current, &repo, &["init"]), "init");
+    // Stage 0 measures a *format-6* repository, as 0.44.0 created them; this tree creates format 7.
+    std::fs::write(repo.join(".prikk").join("FORMAT"), b"6\n").unwrap();
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
+    ok(
+        &run(
+            current,
+            &repo,
+            &["commit", "--ref", "heads/main", "-m", "a"],
+        ),
+        "commit",
+    );
+    ok(
+        &run(
+            current,
+            &repo,
+            &["seal", "--allow-no-audit", "--ref", "heads/main"],
+        ),
+        "seal",
+    );
+    let block_id = tip_block_id(current, &repo);
+    ok(
+        &run(current, &repo, &["format", "upgrade"]),
+        "format upgrade",
+    );
+    println!(
+        "upgraded case: {} is format {}",
+        repo.display(),
+        String::from_utf8_lossy(&std::fs::read(repo.join(".prikk").join("FORMAT")).unwrap()).trim()
+    );
+    (repo, block_id)
 }
 
 /// Every command the handoff names, against a copy of `source` so both binaries see the same state.
@@ -426,6 +470,7 @@ fn rfc156_stage0_superseding_record_compatibility() {
     let (block_control, block_control_id) = block_case(&current, false, false);
     let (block_identical, block_identical_id) = block_case(&current, true, true);
     let (rename_repo, rename_id) = rename_case(&current);
+    let (upgraded_repo, upgraded_id) = upgraded_case(&current);
 
     for (name, binary) in [("released", &released), ("current", &current)] {
         measure(&format!("patch-{name}"), binary, &patch_repo, patch_id);
@@ -449,6 +494,12 @@ fn rfc156_stage0_superseding_record_compatibility() {
             block_identical_id,
         );
         measure(&format!("rename-{name}"), binary, &rename_repo, rename_id);
+        measure(
+            &format!("upgraded-{name}"),
+            binary,
+            &upgraded_repo,
+            upgraded_id,
+        );
         let prose = run(binary, &rename_repo, &["show", &rename_id.to_string()]);
         println!(
             "\n===== rename-{name} :: prikk show <id> (prose) :: exit {:?} =====\n{}",

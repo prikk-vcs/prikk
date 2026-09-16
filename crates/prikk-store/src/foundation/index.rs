@@ -30,7 +30,9 @@ use crate::foundation::frame_resync::resync_to_next_magic;
 use crate::foundation::fsutil::{
     append_file_required, len_to_u64, read_file_if_exists, write_file_atomically,
 };
-use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
+use crate::foundation::layout::{
+    ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
+};
 use prikk_hash::sha256;
 use std::collections::BTreeMap;
 
@@ -462,6 +464,16 @@ pub(crate) fn decide_write_outcome(
     }
     let existing_envelope = read_object_envelope_at(layout, existing)?;
     if existing_envelope != *envelope {
+        // RFC 156 §5b: a format-6 repository keeps one record per id, so another envelope for a stored
+        // id — the same payload under other signatures, since the id covers the payload — is refused
+        // as it always was, now naming the explicit way out.
+        if layout.format() == RepositoryFormat::CurrentV6 {
+            return Err(PrikkError::Integrity(format!(
+                "existing container record for {object_id} differs from candidate -- this \
+                 repository is format 6, which holds one record per object id; `prikk format \
+                 upgrade` moves it to format 7"
+            )));
+        }
         return Err(PrikkError::Integrity(format!(
             "existing container record for {object_id} differs from candidate"
         )));

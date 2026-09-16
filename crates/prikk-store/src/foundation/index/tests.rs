@@ -247,6 +247,38 @@ fn decide_write_outcome_rejects_a_same_id_rewrite_with_different_signatures() ->
     Ok(())
 }
 
+/// RFC 156 §5b, Stage 2a control 2: a **format-6** repository keeps refusing a second envelope for a
+/// stored id — and the refusal names `prikk format upgrade`.
+#[test]
+fn a_format_6_repository_refuses_a_second_envelope_naming_the_upgrade() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-format-6-rewrite");
+    RepositoryLayout::init(root.clone())?;
+    std::fs::write(root.join(".prikk").join("FORMAT"), b"6\n")?;
+    let layout = RepositoryLayout::open(root.clone())?;
+    assert_eq!(
+        layout.format(),
+        crate::foundation::layout::RepositoryFormat::CurrentV6
+    );
+    let first = signed_patch_envelope();
+    write_object_to_container_for_test(&layout, ObjectType::Patch, &first)?;
+    let existing = lookup_object_location(&layout, first.object_id())?;
+    let mut second = first.clone();
+    second.signatures.clear();
+    let mut signature = crate::test_gates::test_support::rollback_author_signature();
+    signature.signature_bytes[0] ^= 0x01;
+    second.add_signature(signature)?;
+
+    let refused = decide_write_outcome(&layout, ObjectType::Patch, &second, existing.as_ref());
+    assert!(
+        matches!(refused, Err(prikk_error::PrikkError::Integrity(ref message))
+            if message.contains("differs from candidate") && message.contains("prikk format upgrade")),
+        "{refused:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 #[test]
 fn a_damaged_index_entry_blocks_lookup_as_a_reported_defect() -> Result<()> {
     let root = crate::test_gates::test_support::unique_temp_dir("index-damaged-entry");

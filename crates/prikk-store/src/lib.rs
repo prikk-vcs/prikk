@@ -31,6 +31,7 @@ mod compact;
 // RFC 147 §2f: what commit will do with each live rename declaration, shared with worktree-status.
 mod declaration_resolution;
 mod doctor;
+mod format_upgrade;
 // RFC 131 §2 / RFC 130 §2.3's "foundation" grouping: layout, fsutil, byte_cursor, file_codec,
 // frame_resync, container, index, generation -- a wide, one-directional base, grouped by role.
 mod format;
@@ -139,6 +140,7 @@ pub use doctor::{
     DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,
     repair_repository,
 };
+pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;
 pub use foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,

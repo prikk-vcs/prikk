@@ -445,13 +445,21 @@ fn enumerate_stored_claims(
     );
     let container_path = layout.container_slot_path(ObjectType::RecognitionClaim, ContainerSlot::A);
     let relative = layout.repository_relative(&container_path)?;
-    let mut claims = Vec::new();
+    let mut claims: Vec<(ObjectId, RecognitionClaimPayload)> = Vec::new();
+    // RFC 156 §5b: one entry per claim **id**, not per record — a format-7 repository may hold several
+    // records for one claim, and a claim listed twice would enter a `sync seal` batch twice. Records of
+    // one id carry the same payload (it is what the id hashes), so the first position is kept.
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
     if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
         let replay = decode_container_records(ObjectType::RecognitionClaim, &bytes)?;
         for record in replay.records {
+            let claim_id = record.envelope.object_id();
+            if !seen.insert(claim_id) {
+                continue;
+            }
             let payload =
                 RecognitionClaimPayload::decode_canonical(&record.envelope.canonical_payload)?;
-            claims.push((record.envelope.object_id(), payload));
+            claims.push((claim_id, payload));
         }
     }
     Ok(claims)

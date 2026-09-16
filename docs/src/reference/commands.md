@@ -67,6 +67,7 @@ prikk doctor [path]
 prikk doctor [path] --repair-wal-tail
 prikk doctor [path] --repair-index
 prikk doctor [path] --repair-main-ref
+prikk format upgrade [path]
 prikk unlock
 prikk unlock --lock <path> [--yes|--force]
 prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]
@@ -79,6 +80,14 @@ branch ref names its Block directly, and a tag ref is dereferenced through its t
 block id or a **branch** ref, and **refuses a tag ref** — a tag of a tag is outside the model (ref →
 tag object → block, one hop), and resolving it silently would make `--target tags/v1` and `--target`
 that tag's own block indistinguishable in history. The refusal names both accepted forms.
+
+**`format upgrade` is explicit, verified and one-way.** A repository created by 0.44.0 or earlier is
+format 6; new repositories are format 7, which is format 6 plus "an object id may hold several records,
+the last authoritative". `prikk format upgrade` takes the writer lock, runs the same verification as
+`prikk verify` and refuses — changing nothing — unless it would exit 0, then rewrites the one-line
+`.prikk/FORMAT` marker atomically. Nothing stored is rewritten. It is idempotent on a format-7
+repository, never runs by itself, and has no inverse: prikk 0.44.0 and earlier refuse a format-7
+repository at open. See [Release Compatibility](release-compatibility.md).
 
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an

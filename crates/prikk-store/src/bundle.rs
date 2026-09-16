@@ -1235,6 +1235,9 @@ fn validate_bundle_contents(
 const fn repository_format_number(format: RepositoryFormat) -> u32 {
     match format {
         RepositoryFormat::CurrentV6 => 6,
+        // RFC 156 §5b. Informational in the manifest — no receiver refuses on it — so a format-7
+        // sender's bundle still imports into an older receiver.
+        RepositoryFormat::V7 => 7,
     }
 }
 

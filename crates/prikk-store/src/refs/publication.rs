@@ -74,7 +74,7 @@ fn publish_locked(
     // an append-only record has no candidate value to stage, the append *is* the publish. `refs/tmp/`
     // is never written by this function again.
     match store.layout.format() {
-        RepositoryFormat::CurrentV6 => {
+        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 => {
             object_store.write_object(&publication.ref_state)?;
         }
     }

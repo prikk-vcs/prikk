@@ -295,6 +295,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "format",
+        run: crate::run_format,
+        help_lines: &[
+            "  prikk format upgrade [path]               Verify, then move a format-6 repository to format 7 in place (explicit; no downgrade)",
+        ],
+    },
+    Command {
         name: "unlock",
         run: crate::run_unlock,
         help_lines: &[

@@ -85,7 +85,8 @@ fn removing_a_declaration_names_its_file() {
     assert!(
         // RFC 136 increment 2b: verify records the blocks it replay-verified, 1,680 -> 1,689 lines.
         // RFC 156 Stage 1: the new publication-trust code's row in the module doc, 1,689 -> 1,690.
-        detail.contains("1690"),
+        // RFC 156 §5b: its format-6 match accepts format 7 too, 1,690 -> 1,691.
+        detail.contains("1691"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -204,8 +205,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 151 increment 2 added `branch_switch.rs`, the store's one new production file: 131 -> 132.
     // The DC-75 two-edits fix added `patch_algebra/fold.rs`: 132 -> 133. RFC 136 increment 2a added
     // `patch_replay/anchor.rs`: 133 -> 134. RFC 136 increment 2b added `verified_blocks.rs`: 134 -> 135.
-    // RFC 147 §2f added `declaration_resolution.rs`: 135 -> 136.
-    assert_eq!(store.production_files, 136);
+    // RFC 147 §2f added `declaration_resolution.rs`: 135 -> 136. RFC 156 §5b added `format_upgrade.rs`:
+    // 136 -> 137.
+    assert_eq!(store.production_files, 137);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

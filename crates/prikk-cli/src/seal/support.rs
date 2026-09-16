@@ -92,7 +92,10 @@ pub(super) fn current_ref_state(
             ));
         }
         if !log.records.is_empty()
-            && (layout.format() == RepositoryFormat::CurrentV6 || log.records.len() > 1)
+            && (matches!(
+                layout.format(),
+                RepositoryFormat::CurrentV6 | RepositoryFormat::V7
+            ) || log.records.len() > 1)
         {
             return Err(format!(
                 "ref {ref_name} pointer/log state does not match the expected publication \

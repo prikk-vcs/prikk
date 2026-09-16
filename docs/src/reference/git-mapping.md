@@ -48,6 +48,7 @@ which is a design for the import *contract*, and nothing implements it yet.
 | `.gitignore` | [`.prikkignore`](../guide/ignore.md) | **Diverged, and narrower on purpose.** Literal repository-relative path prefixes only — no globbing, no negation, no per-directory files, and it binds only at `commit`'s worktree walk and `worktree-status`'s scan, never at replay or verification. |
 | `git remote add` / remote tracking | — | **Missing.** No remote registry or URLs of any kind — see [File-based distribution](#file-based-distribution-instead-of-remotes) below. |
 | N/A — no counterpart | [`prikk doctor`](../guide/troubleshooting.md) | Health diagnostics with two real repairs (`--repair-wal-tail`, `--repair-index`); `--repair-main-ref` is recognized and always refused — there is no implemented repair behind it. |
+| N/A — no counterpart | [`prikk format upgrade`](release-compatibility.md) | Moves a format-6 repository to format 7 in place, after the same verification `prikk verify` runs. Git's own `extensions.*` config changes are the nearest idea, but prikk's upgrade is one explicit verb, verified first, with no downgrade. |
 | N/A — no counterpart | [`prikk unlock`](../guide/backup-restore.md) | Lists or clears a held file lock. Nothing in Git needs this because Git has no equivalent lock. |
 | N/A — no counterpart | [`prikk trust maintainer add/remove`](../guide/security-setup.md) | Manages the local MAINTAINER trust set. Git has no signer-trust concept at this layer; the closest analogue is a GPG keyring, and it is not the same model. |
 

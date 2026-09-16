@@ -294,6 +294,55 @@ fn run_unlock(args: Vec<String>) -> std::result::Result<(), CliError> {
     Ok(())
 }
 
+/// `prikk format upgrade [path]` (RFC 156 §5b): move a format-6 repository to format 7 in place.
+fn run_format(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let mut args = args.into_iter();
+    if args.next().as_deref() != Some("upgrade") {
+        return Err(CliError::Usage(
+            "format requires a subcommand: `prikk format upgrade [path]`".to_string(),
+        ));
+    }
+    let mut path = None;
+    for arg in args {
+        if arg.starts_with('-') {
+            return Err(unknown_argument("format upgrade", &arg));
+        }
+        if path.replace(arg).is_some() {
+            return Err(CliError::Usage(
+                "format upgrade accepts at most one path".to_string(),
+            ));
+        }
+    }
+    let root = match path {
+        Some(path) => PathBuf::from(path),
+        None => current_dir()?,
+    };
+    let layout = open_repository(root)?;
+    // The verdict is `prikk verify`'s own declaration, so an upgrade passes exactly when `prikk verify`
+    // would exit 0 — not a second, hand-written reading of the report.
+    let outcome = prikk_store::upgrade_repository_format(&layout, |report| {
+        match verify_verdict::first_true_condition(report) {
+            Some(condition) => Err(condition.id.to_string()),
+            None => Ok(()),
+        }
+    })
+    .map_err(|err| err.to_string())?;
+    match outcome {
+        prikk_store::FormatUpgradeOutcome::Upgraded { from, to } => {
+            println!("repository format: upgraded from {from} to {to}");
+            println!(
+                "note: nothing stored was rewritten; prikk 0.44.0 and earlier refuse a format-{to} \
+                 repository at open, and there is no downgrade"
+            );
+        }
+        prikk_store::FormatUpgradeOutcome::AlreadyCurrent { format } => {
+            println!("repository format: already {format}; nothing changed");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn run_compact(args: Vec<String>) -> std::result::Result<(), CliError> {
     let root = current_dir()?;
     compact::run_compact(root, args)?;

@@ -2,6 +2,8 @@
 name        = "prikk-store"
 description = "Repository storage engine for Prikk -- layout, object storage, WAL durability, verification, and patch replay. Internal to the prikk CLI; its API may change without notice before 1.0."
 readme      = "README.md"
+# RFC 114 Gate B's committed repository fixtures are test evidence, not library content.
+exclude     = ["tests/fixtures"]
 documentation = "https://docs.rs/prikk-store"
 version.workspace       = true
 edition.workspace       = true

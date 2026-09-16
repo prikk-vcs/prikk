@@ -126,7 +126,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // 131 -> 132. RFC 136 increment 2a added `patch_replay::anchor`, anchored replay for read-only
     // reports: 132 -> 133. RFC 136 increment 2b added `verified_blocks`, the replay-verified block
     // record: 133 -> 134.
-    assert_eq!(modules.len(), 135, "modules: {modules:?}");
+    // RFC 156 §5b added `format_upgrade`: 135 -> 136.
+    assert_eq!(modules.len(), 136, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

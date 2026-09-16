@@ -1584,12 +1584,13 @@ fn verify_block_payload(
         // names only present content Blobs). `verify` never reads a snapshot in place of replay.
         crate::snapshot::validate_snapshot_manifest(object_store, block_id, &payload)?;
     }
-    let merge_baseline_divergence = if format == RepositoryFormat::CurrentV6 {
-        verify_merge_baseline(object_store, block_id, &payload)?
-    } else {
-        None
-    };
-    if format == RepositoryFormat::CurrentV6 {
+    let merge_baseline_divergence =
+        if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) {
+            verify_merge_baseline(object_store, block_id, &payload)?
+        } else {
+            None
+        };
+    if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) {
         pending_v3_blocks.push((block_id, payload));
     }
     Ok((rollback_patch_count, merge_baseline_divergence))

@@ -63,11 +63,13 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 21] = [
+const UPPER_LAYER: [&str; 22] = [
     "branch_switch",
     "bundle",
     "compact",
     "doctor",
+    // RFC 156 §5b: runs `verify` and takes `ActiveLock` before changing the format marker.
+    "format_upgrade",
     "history",
     "merge",
     "patch_algebra",

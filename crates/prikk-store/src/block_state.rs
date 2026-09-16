@@ -534,6 +534,30 @@ pub(crate) struct TopologicalVerification {
     pub(crate) peak_memo_entries: usize,
 }
 
+/// One entry per Block id, in the order each id first appears, holding its **last** record's payload —
+/// "last record authoritative" (RFC 156 §5b). Records of one id carry equal payloads, so the choice
+/// changes nothing but the count; taking the last keeps the rule the index already applies.
+fn resolve_block_records_by_id(
+    blocks: &[(ObjectId, BlockPayload)],
+) -> Vec<(ObjectId, BlockPayload)> {
+    let mut position: BTreeMap<ObjectId, usize> = BTreeMap::new();
+    let mut resolved: Vec<(ObjectId, BlockPayload)> = Vec::with_capacity(blocks.len());
+    for (id, payload) in blocks {
+        match position.get(id) {
+            Some(&index) => {
+                if let Some(slot) = resolved.get_mut(index) {
+                    slot.1 = payload.clone();
+                }
+            }
+            None => {
+                position.insert(*id, resolved.len());
+                resolved.push((*id, payload.clone()));
+            }
+        }
+    }
+    resolved
+}
+
 /// Verify every format-2 Block in `blocks` — `verify`'s own outer loop's batch, collected in
 /// ObjectId scan order by its Phase A pass — in **state-dependency order** rather than that scan
 /// order (DC-92 §4.2). `state_derivation_parent` reduces every block, including `Merge` (mainline
@@ -581,6 +605,13 @@ pub(crate) fn verify_blocks_topological(
     blocks: &[(ObjectId, BlockPayload)],
     memo: &mut LineageStateMemo,
 ) -> Result<TopologicalVerification> {
+    // RFC 156 §5b: a format-7 repository may hold several records for one Block id, the last
+    // authoritative — and every record of one id carries the same payload, since the payload is what
+    // the id hashes. This pass means *Blocks*, not records, so it resolves them by id first. Counting
+    // records here is what made a superseding record read as "an inconsistent cycle count" (RFC 156
+    // Stage 0), even when the second record was byte-identical.
+    let resolved_by_id = resolve_block_records_by_id(blocks);
+    let blocks = resolved_by_id.as_slice();
     let by_id: BTreeMap<ObjectId, &BlockPayload> =
         blocks.iter().map(|(id, payload)| (*id, payload)).collect();
 
