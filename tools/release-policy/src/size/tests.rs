@@ -144,8 +144,8 @@ fn a_placeholder_reason_is_not_a_recorded_decision() {
 /// Control 3: **a `#[cfg(test)]` module inside a production file is not counted.**
 ///
 /// Asserted against the real file rather than a fixture, because the fixture that matters is the
-/// one that exists: `node_authoring.rs` is 1,376 physical lines with a 49-line `mode_change_tests`
-/// module at the end, and the gate must see 1,327 (RFC 136 increment 1b removed the E3 refusal;
+/// one that exists: `node_authoring.rs` is 1,358 physical lines with a 49-line `mode_change_tests`
+/// module at the end, and the gate must see 1,309 (RFC 136 increment 1b removed the E3 refusal;
 /// increment 2a added the two-line derivation gate; the checkout-refusal round's dirty-marker refusal
 /// grew by two lines). Counting the test module would not change this
 /// file's verdict — it is declared either way — but it would change `layout.rs`'s the moment
@@ -159,7 +159,7 @@ fn an_inline_test_module_is_not_production() {
         .lines()
         .count();
     assert_eq!(
-        physical, 1376,
+        physical, 1358,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -169,7 +169,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1327);
+    assert_eq!(counted.production_lines, 1309);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -203,7 +203,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 151 increment 2 added `branch_switch.rs`, the store's one new production file: 131 -> 132.
     // The DC-75 two-edits fix added `patch_algebra/fold.rs`: 132 -> 133. RFC 136 increment 2a added
     // `patch_replay/anchor.rs`: 133 -> 134. RFC 136 increment 2b added `verified_blocks.rs`: 134 -> 135.
-    assert_eq!(store.production_files, 135);
+    // RFC 147 §2f added `declaration_resolution.rs`: 135 -> 136.
+    assert_eq!(store.production_files, 136);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

@@ -1,0 +1,463 @@
+//! RFC 147 §2f, through the compiled binary: a declaration reports what `commit` will do with it, and
+//! a refusal names a route that works.
+//!
+//! From stikk's letter 013. `worktree-status` used to list a declaration with no verdict, so a
+//! front-end could show "rename" while `commit` was going to refuse — and in one state the worktree
+//! reads `clean` and the commit still refuses. The resolution now comes from the one classifier
+//! `commit` itself obeys, and every refusal is run here as written.
+
+#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
+
+mod support;
+
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use support::json::{self, Value};
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn run(repo: &Path, args: &[&str]) -> Output {
+    support::prikk(repo)
+        .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// `worktree-status` exits 1 whenever the worktree has changes, so these controls read the document
+/// it printed rather than its exit status.
+fn status(repo: &Path) -> Value {
+    let output = run(repo, &["worktree-status", "--format", "json"]);
+    let text = stdout(&output);
+    assert!(
+        text.starts_with('{'),
+        "worktree-status printed no document: {}",
+        stderr(&output)
+    );
+    json::parse(&text)
+}
+
+/// The shared parser keeps numbers as their source text; these counts are read as written.
+fn count(report: &Value, key: &str) -> String {
+    match report.get(key) {
+        Value::Number(text) => text.clone(),
+        other => panic!("{key} must be a number, got {other:?}"),
+    }
+}
+
+fn declarations(report: &Value) -> &[Value] {
+    report.get("declarations").as_array()
+}
+
+fn only_declaration(report: &Value) -> &Value {
+    let all = declarations(report);
+    assert_eq!(all.len(), 1, "expected one declaration, got {all:?}");
+    &all[0]
+}
+
+/// `a.txt` = `alpha` and `keep.txt`, sealed on `heads/main`, then `prikk mv a.txt b.txt`.
+fn declared_repo(tag: &str) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("a.txt"), b"alpha\n").unwrap();
+    std::fs::write(repo.join("keep.txt"), b"keep\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "genesis"),
+        "genesis commit",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "genesis seal");
+    support::ok(&run(&repo, &["mv", "a.txt", "b.txt"]), "mv a.txt b.txt");
+    repo
+}
+
+/// One row of the handoff's table: a name, the step that reaches the state, and what `commit` does.
+struct State {
+    tag: &'static str,
+    reach: fn(&Path),
+    resolution: &'static str,
+}
+
+/// The six worktree states of that table, each as a step applied to `declared_repo`.
+fn states() -> Vec<State> {
+    fn state(tag: &'static str, reach: fn(&Path), resolution: &'static str) -> State {
+        State {
+            tag,
+            reach,
+            resolution,
+        }
+    }
+    vec![
+        state("untouched", |_repo| {}, "rename"),
+        state(
+            "destination-edited",
+            |repo| std::fs::write(repo.join("b.txt"), b"alpha, edited\n").unwrap(),
+            "rename",
+        ),
+        state(
+            "destination-deleted",
+            |repo| std::fs::remove_file(repo.join("b.txt")).unwrap(),
+            "deletion",
+        ),
+        state(
+            "destination-moved-by-shell",
+            |repo| std::fs::rename(repo.join("b.txt"), repo.join("c.txt")).unwrap(),
+            "deletion",
+        ),
+        state(
+            "source-recreated",
+            |repo| std::fs::write(repo.join("a.txt"), b"resurrected\n").unwrap(),
+            "refused",
+        ),
+        state(
+            "moved-back-by-shell",
+            |repo| std::fs::rename(repo.join("b.txt"), repo.join("a.txt")).unwrap(),
+            "refused",
+        ),
+    ]
+}
+
+/// Control 1 (§3.1): for every state in the table, the reported resolution is what `commit` then
+/// does, and a refusal's `refusal` is commit's own message byte for byte.
+#[test]
+fn every_resolution_matches_what_commit_then_does() {
+    for State {
+        tag,
+        reach,
+        resolution: expected,
+    } in states()
+    {
+        let repo = declared_repo(&format!("rfc147-parity-{tag}"));
+        reach(&repo);
+        let report = status(&repo);
+        let declaration = only_declaration(&report);
+        assert_eq!(
+            declaration.get("resolution").as_str(),
+            expected,
+            "{tag}: reported resolution"
+        );
+
+        let committed = run(&repo, &["commit", "--ref", "heads/main", "-m", tag]);
+        match expected {
+            "refused" => {
+                assert!(
+                    !committed.status.success(),
+                    "{tag}: commit must refuse when the report says refused: {}",
+                    stdout(&committed)
+                );
+                let message = stderr(&committed)
+                    .trim()
+                    .strip_prefix("error: precondition not met: ")
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| panic!("{tag}: unexpected refusal: {}", stderr(&committed)));
+                assert_eq!(
+                    declaration.get("refusal").as_str(),
+                    message,
+                    "{tag}: the reported refusal must be commit's own message"
+                );
+            }
+            "rename" => {
+                support::ok(&committed, "commit");
+                assert!(
+                    stdout(&committed).contains("rename-path a.txt -> b.txt"),
+                    "{tag}: commit must author the rename: {}",
+                    stdout(&committed)
+                );
+                assert!(
+                    declaration.get("refusal").is_null(),
+                    "{tag}: a rename carries no refusal"
+                );
+            }
+            _ => {
+                support::ok(&committed, "commit");
+                assert!(
+                    stdout(&committed).contains("declaration a.txt -> b.txt:"),
+                    "{tag}: commit must disclose what the declaration became: {}",
+                    stdout(&committed)
+                );
+                assert!(
+                    !stdout(&committed).contains("rename-path"),
+                    "{tag}: and must not author a rename: {}",
+                    stdout(&committed)
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+}
+
+/// One way out, as the refusal states it: the files it says to delete, then either a backticked
+/// `prikk mv` or `commit`.
+#[derive(Debug)]
+struct Route {
+    deletes: Vec<String>,
+    command: Option<Vec<String>>,
+}
+
+/// Read the routes out of a refusal exactly as written. Clauses are separated by `, or `; within a
+/// clause, `delete <path>` is a step and a backticked `prikk mv …` is the command.
+fn routes(refusal: &str) -> Vec<Route> {
+    refusal
+        .split(", or ")
+        .filter_map(|clause| {
+            let words: Vec<&str> = clause.split_whitespace().collect();
+            let deletes: Vec<String> = words
+                .windows(2)
+                .filter(|pair| pair[0] == "delete")
+                .map(|pair| pair[1].to_owned())
+                .collect();
+            let command = clause
+                .split('`')
+                .find(|part| part.starts_with("prikk mv "))
+                .map(|part| part.split_whitespace().skip(1).map(str::to_owned).collect());
+            let commits = clause.contains("commit to author");
+            (command.is_some() || commits).then_some(Route { deletes, command })
+        })
+        .collect()
+}
+
+/// Control 2 (§3.2): every route a refusal names is run, in the state that produced it, and must end
+/// with a commit that goes through and a file still holding the content.
+///
+/// This is the control the old advice fails: "move the destination back to the source" produced
+/// exactly the state whose refusal said it again, which is the loop stikk reported. It also caught
+/// the first version of the both-paths-exist message, which named a `prikk mv` that `mv` itself
+/// refuses while both paths are there.
+#[test]
+fn every_route_a_refusal_names_works_in_that_state() {
+    for State {
+        tag,
+        reach,
+        resolution: expected,
+    } in states()
+    {
+        if expected != "refused" {
+            continue;
+        }
+        let probe = declared_repo(&format!("rfc147-routes-{tag}"));
+        reach(&probe);
+        let refusal = only_declaration(&status(&probe))
+            .get("refusal")
+            .as_str()
+            .to_owned();
+        let _ = std::fs::remove_dir_all(&probe);
+        let routes = routes(&refusal);
+        assert!(
+            !routes.is_empty(),
+            "{tag}: the refusal must name at least one way out: {refusal}"
+        );
+
+        for (index, route) in routes.iter().enumerate() {
+            let repo = declared_repo(&format!("rfc147-route-{tag}-{index}"));
+            reach(&repo);
+            for path in &route.deletes {
+                std::fs::remove_file(repo.join(path)).unwrap_or_else(|err| {
+                    panic!("{tag}: the refusal says to delete {path}: {err}")
+                });
+            }
+            if let Some(command) = &route.command {
+                let args: Vec<&str> = command.iter().map(String::as_str).collect();
+                support::ok(
+                    &run(&repo, &args),
+                    &format!("{tag}: the named command `prikk {}`", args.join(" ")),
+                );
+            }
+
+            let report = status(&repo);
+            assert_eq!(
+                count(&report, "refused_declaration_count"),
+                "0",
+                "{tag} route {index}: no refusal may survive the route it named: {refusal}"
+            );
+            // A route that drops the declaration can leave the worktree matching its baseline
+            // exactly -- `prikk mv b.txt a.txt` in the moved-back state nets to no move -- and
+            // "nothing to commit" is that route working, not failing. Anything else is not.
+            let committed = run(
+                &repo,
+                &["commit", "--ref", "heads/main", "-m", "after the route"],
+            );
+            assert!(
+                committed.status.success()
+                    || stderr(&committed)
+                        .contains("worktree has no node-addressed changes to commit"),
+                "{tag} route {index}: the commit after `{refusal}` failed: {}",
+                stderr(&committed)
+            );
+            let kept = std::fs::read(repo.join("a.txt"))
+                .or_else(|_| std::fs::read(repo.join("b.txt")))
+                .unwrap_or_else(|err| panic!("{tag} route {index}: the file is gone: {err}"));
+            assert!(!kept.is_empty(), "{tag} route {index}: the file is empty");
+            let _ = std::fs::remove_dir_all(&repo);
+        }
+    }
+}
+
+/// Control 3 (§3.3): a two-node swap resolves `rename` for both declarations, with no false refusal —
+/// each source is back in the worktree, but as the other declaration's destination.
+#[test]
+fn a_two_node_swap_resolves_as_two_renames() {
+    let repo = support::unique_repo("rfc147-swap");
+    support::init(&repo);
+    support::trust_maintainer(&repo);
+    std::fs::write(repo.join("x.txt"), b"ex\n").unwrap();
+    std::fs::write(repo.join("y.txt"), b"why\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "genesis"),
+        "genesis commit",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "genesis seal");
+
+    support::ok(&run(&repo, &["mv", "x.txt", "tmp.txt"]), "mv x.txt tmp.txt");
+    support::ok(&run(&repo, &["mv", "y.txt", "x.txt"]), "mv y.txt x.txt");
+    support::ok(&run(&repo, &["mv", "tmp.txt", "y.txt"]), "mv tmp.txt y.txt");
+
+    let report = status(&repo);
+    let resolutions: Vec<&str> = declarations(&report)
+        .iter()
+        .map(|entry| entry.get("resolution").as_str())
+        .collect();
+    assert_eq!(
+        resolutions,
+        vec!["rename", "rename"],
+        "a swap is two renames, not a refusal"
+    );
+    assert_eq!(count(&report, "refused_declaration_count"), "0");
+
+    let committed = run(&repo, &["commit", "--ref", "heads/main", "-m", "swap"]);
+    support::ok(&committed, "commit the swap");
+    assert_eq!(
+        stdout(&committed).matches("rename-path").count(),
+        2,
+        "commit authors both renames: {}",
+        stdout(&committed)
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Control 4 (§3.4): the state stikk measured — a shell move back leaves the worktree `clean` while
+/// `commit` refuses. Both truths are in the one document now.
+#[test]
+fn a_refused_declaration_can_sit_in_a_clean_worktree() {
+    let repo = declared_repo("rfc147-clean-refusal");
+    std::fs::rename(repo.join("b.txt"), repo.join("a.txt")).unwrap();
+    let report = status(&repo);
+    assert!(report.get("clean").as_bool(), "the worktree is clean");
+    assert_eq!(count(&report, "refused_count"), "0");
+    assert_eq!(count(&report, "refused_declaration_count"), "1");
+    assert_eq!(
+        only_declaration(&report).get("resolution").as_str(),
+        "refused"
+    );
+    assert_eq!(
+        run(&repo, &["commit", "--ref", "heads/main", "-m", "refused"])
+            .status
+            .code(),
+        Some(1),
+        "commit refuses in exactly this state"
+    );
+    // The prose form says the same thing, in the §2e style.
+    let prose = stdout(&run(&repo, &["worktree-status"]));
+    assert!(prose.contains("refused declarations: 1"), "{prose}");
+    assert!(prose.contains("[refused:"), "{prose}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Control 5 (§3.5): a rename says whether content or mode also changed — the question stikk asked,
+/// because a rename and a rename-plus-edit read identically before.
+#[test]
+fn a_rename_says_whether_content_or_mode_also_changed() {
+    let plain = declared_repo("rfc147-rename-plain");
+    let report = status(&plain);
+    let declaration = only_declaration(&report);
+    assert!(!declaration.get("content_changed").as_bool());
+    assert!(!declaration.get("mode_changed").as_bool());
+    let _ = std::fs::remove_dir_all(&plain);
+
+    let edited = declared_repo("rfc147-rename-edited");
+    std::fs::write(edited.join("b.txt"), b"alpha, edited\n").unwrap();
+    let report = status(&edited);
+    assert!(only_declaration(&report).get("content_changed").as_bool());
+    let committed = run(
+        &edited,
+        &["commit", "--ref", "heads/main", "-m", "rename and edit"],
+    );
+    support::ok(&committed, "commit");
+    assert!(
+        stdout(&committed).contains("rename-path") && stdout(&committed).contains("edit-text"),
+        "commit authors both, which is what content_changed reports: {}",
+        stdout(&committed)
+    );
+    let _ = std::fs::remove_dir_all(&edited);
+}
+
+/// Control 5, the mode half: Linux-gated, because it needs an observable POSIX mode.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_rename_reports_a_mode_change() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = declared_repo("rfc147-rename-chmod");
+    let mut permissions = std::fs::metadata(repo.join("b.txt")).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(repo.join("b.txt"), permissions).unwrap();
+    let report = status(&repo);
+    let declaration = only_declaration(&report);
+    assert!(declaration.get("mode_changed").as_bool());
+    assert!(!declaration.get("content_changed").as_bool());
+    let committed = run(
+        &repo,
+        &["commit", "--ref", "heads/main", "-m", "rename and chmod"],
+    );
+    support::ok(&committed, "commit");
+    assert!(
+        stdout(&committed).contains("change-perm"),
+        "commit authors the mode change: {}",
+        stdout(&committed)
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Control 6 (§3.6): additive. A consumer written against the 0.42.0 field set reads this document
+/// unchanged — every field it knew is still there, with the same shape.
+#[test]
+fn the_report_is_additive_for_a_0_42_consumer() {
+    let repo = declared_repo("rfc147-additive");
+    let report = status(&repo);
+    assert_eq!(
+        report.get("schema_version").as_str(),
+        "worktree-status-report-v1",
+        "an additive change keeps the schema version"
+    );
+    for field in [
+        "ref",
+        "tracked_files",
+        "unchanged_files",
+        "clean",
+        "refused_count",
+        "queued_elsewhere",
+        "changes",
+        "declarations",
+    ] {
+        let _ = report.get(field);
+    }
+    let declaration = only_declaration(&report);
+    assert_eq!(declaration.get("old_path").as_str(), "a.txt");
+    assert_eq!(declaration.get("new_path").as_str(), "b.txt");
+    let _ = std::fs::remove_dir_all(&repo);
+}

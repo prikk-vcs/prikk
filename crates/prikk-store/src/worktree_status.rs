@@ -22,6 +22,9 @@ use crate::commit_boundary::worktree_patch::{WorktreeEntryShape, authoring_refus
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::ignore::{IgnoreRules, should_skip_discovery};
 use crate::lifecycle_cache::replay::TextCache;
+use std::collections::BTreeMap;
+
+use crate::declaration_resolution::{DeclarationOutcome, DeclaredSource, resolve_declarations};
 use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
 use crate::object_store::ObjectReadSnapshot;
 use crate::patch_replay::decode::{
@@ -31,7 +34,7 @@ use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::{RepoPath, join_repo_path_to_root};
 use crate::rename_declaration::read_rename_declarations;
 use crate::wal::Wal;
-use crate::{ActiveRefMetadata, RenameDeclaration, read_active_ref_metadata};
+use crate::{ActiveRefMetadata, read_active_ref_metadata};
 
 /// Read-only worktree status report against the replay baseline.
 ///
@@ -60,7 +63,10 @@ pub struct WorktreeStatusReport {
     /// Live rename declarations (RFC 144 §4o.3): `prikk mv`'s durable intent, not yet consumed by a
     /// commit. A declaration made and forgotten becomes permanent history at the next commit, so it
     /// must be visible in the command whose job is *what will this commit do*.
-    pub declarations: Vec<RenameDeclaration>,
+    ///
+    /// RFC 147 §2f: each carries what the next `commit` will do with it, from the classifier commit
+    /// itself obeys (`declaration_resolution`) — never a second reading of the same rules.
+    pub declarations: Vec<DeclarationOutcome>,
 }
 
 impl WorktreeStatusReport {
@@ -87,6 +93,17 @@ impl WorktreeStatusReport {
         self.changes
             .iter()
             .filter(|change| change.refusal.is_some())
+            .count()
+    }
+
+    /// RFC 147 §2f: how many live declarations the next `commit` refuses. A refused declaration can
+    /// sit in a worktree this report calls `clean` -- `clean` is about paths, and a declaration is not
+    /// one. That is exactly the state stikk's letter 013 measured.
+    #[must_use]
+    pub fn refused_declaration_count(&self) -> usize {
+        self.declarations
+            .iter()
+            .filter(|outcome| outcome.resolution.refusal().is_some())
             .count()
     }
 }
@@ -177,13 +194,14 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
         &mut text_cache,
     )?;
 
+    let mut baseline_nodes: BTreeMap<String, DeclaredSource> = BTreeMap::new();
     let mut baseline_paths = BTreeSet::new();
     let mut seen_paths = BTreeSet::new();
     let mut changes = Vec::new();
     let mut unchanged_files = 0_usize;
     let mut tracked_files = 0_usize;
 
-    for (_, node) in resolved.state.live_nodes() {
+    for (node_id, node) in resolved.state.live_nodes() {
         // Symlink nodes carry no file-content blob to compare (`ensure_blob_matches_node_kind`
         // refuses one outright) — no current authoring path creates one anyway (module doc: "symlink
         // authoring fails closed"), and the snapshot-manifest baseline this replaced never carried
@@ -193,6 +211,19 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
         };
         tracked_files += 1;
         let path_text = node.path.as_str().to_string();
+        // RFC 147 §2f: the same baseline view the declaration classifier needs, built from the walk
+        // this command already performs rather than resolved a second time.
+        if let NodeContent::File { blob_id, mode } = &node.content {
+            baseline_nodes.insert(
+                path_text.clone(),
+                DeclaredSource {
+                    node_id: *node_id,
+                    kind: node.kind,
+                    blob_id: *blob_id,
+                    mode: *mode,
+                },
+            );
+        }
         baseline_paths.insert(path_text.clone());
         seen_paths.insert(path_text.clone());
         let target = join_repo_path_to_root(&node.path, layout.root());
@@ -264,7 +295,22 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
             .then(left.kind.as_str().cmp(right.kind.as_str()))
     });
 
-    let declarations = read_rename_declarations(layout)?;
+    let live_declarations = read_rename_declarations(layout)?;
+    // RFC 147 §2f: what commit will do with each one, decided by commit's own classifier. Presence is
+    // the same question commit asks: on disk (non-following, so a dangling symlink counts) and not
+    // excluded by the `.prikkignore` rules this command already loaded.
+    let declarations = resolve_declarations(
+        layout,
+        &live_declarations,
+        |path| baseline_nodes.get(path).copied(),
+        |path| {
+            RepoPath::parse(path).is_ok_and(|repo_path| {
+                !rules.is_ignored(path)
+                    && fs::symlink_metadata(join_repo_path_to_root(&repo_path, layout.root()))
+                        .is_ok()
+            })
+        },
+    )?;
 
     Ok(WorktreeStatusReport {
         ref_name: ref_name.to_string(),

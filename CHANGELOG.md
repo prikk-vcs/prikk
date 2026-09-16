@@ -47,6 +47,43 @@ materialized from the snapshot of Block <block> on <ref> and is not replay-verif
 and write nothing. `checkout --snapshot-materialize` also now takes the active lock, so it refuses with
 `lock conflict` while another writer holds it.
 
+### Fixed — a contradicted rename declaration named advice that looped (stikk letter 013)
+
+When `prikk mv` had declared a move and the worktree was then put back with a shell `mv`, `commit`
+refused with *"Run `prikk mv` again, or move `<new>` back to `<old>` to clear the declaration"* — and
+moving it back with a shell `mv` is the state the worktree was already in, so following that half of the
+advice produced the same refusal again. Each refusal now names commands that were measured
+to work from the state the worktree is actually in: `prikk mv <new> <old>` to drop the declaration, or
+`prikk mv <old> <new>` to make the move again. Where both paths exist, `prikk mv` itself refuses until
+one copy is set aside, and the message says so and which copy to remove for each outcome. A test runs
+every command each refusal names, in the state that produced it. Reported by the stikk project in
+letter 013.
+
+### Added — every live rename declaration says what the commit will do with it (stikk letter 013)
+
+`worktree-status` listed live declarations with no verdict, so a front-end could show a pending rename
+while `commit` was going to refuse. Each declaration now carries its resolution, from the same
+classifier `commit` obeys:
+
+- prose: `  old.txt -> new.txt [rename] (content also changes)`, or `[refused: <commit's own message>]`,
+  plus a `refused declarations: N` line;
+- `--format json`: `resolution` (`rename`, `deletion`, `deletion-ignored`, `never-tracked`, `refused`),
+  `refusal`, `content_changed` and `mode_changed` on each declaration, and a top-level
+  `refused_declaration_count`.
+
+`refused_count` still counts paths only. **A refused declaration can sit in a `clean` worktree** — a
+declared move undone with a shell `mv` matches the baseline byte for byte while `commit` refuses — and
+`refused_declaration_count` is where that is now visible. The fields are additive within
+`worktree-status-report-v1`: against 0.42.0's document for the same repository, the only differences are
+the new keys.
+
+### Changed — breaking once for Rust callers: `WorktreeStatusReport.declarations`
+
+`declarations` is now `Vec<DeclarationOutcome>` rather than `Vec<RenameDeclaration>`; each element keeps
+`old_path` and `new_path` and adds `resolution`. `DeclarationOutcome` and `DeclarationResolution` are
+exported from `prikk-store`, and `WorktreeStatusReport::refused_declaration_count()` is new. The CLI
+output is additive; this affects only Rust callers reading the report type.
+
 ### Fixed — a refused checkout writes nothing and no longer blocks `commit` (stikk letter 012)
 
 `checkout --patch-materialize`, `--patch-materialize-delete` and `--snapshot-materialize` now check every

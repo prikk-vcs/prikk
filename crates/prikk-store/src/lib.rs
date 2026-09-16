@@ -28,6 +28,8 @@ mod checkout;
 mod commit_boundary;
 mod commit_index;
 mod compact;
+// RFC 147 §2f: what commit will do with each live rename declaration, shared with worktree-status.
+mod declaration_resolution;
 mod doctor;
 // RFC 131 §2 / RFC 130 §2.3's "foundation" grouping: layout, fsutil, byte_cursor, file_codec,
 // frame_resync, container, index, generation -- a wide, one-directional base, grouped by role.
@@ -131,6 +133,7 @@ pub use compact::{
     CompactionReport, compact_received_index, compact_ref_pointer_index, compact_trust_policy,
     plan_compact_received_index, plan_compact_ref_pointer_index, plan_compact_trust_policy,
 };
+pub use declaration_resolution::{DeclarationOutcome, DeclarationResolution};
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
     DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,

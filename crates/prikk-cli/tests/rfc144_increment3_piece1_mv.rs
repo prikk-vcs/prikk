@@ -241,9 +241,15 @@ fn control5_worktree_contradicting_declaration_refuses_commit() {
         stderr.contains("a.txt") && stderr.contains("b.txt"),
         "the declaration must be named in the refusal: {stderr}"
     );
+    // RFC 147 §2f ruling 2: with both paths present, the refusal says so and names a command measured
+    // to work in that state -- it no longer advises a shell move, which is what looped.
     assert!(
-        stderr.contains("present in the worktree again"),
+        stderr.contains("both paths exist in the worktree"),
         "expected the contradiction to be named as such: {stderr}"
+    );
+    assert!(
+        stderr.contains("prikk mv b.txt a.txt"),
+        "and to name the command that clears it: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(&repo);

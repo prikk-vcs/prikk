@@ -41,8 +41,17 @@ prikk worktree-status
 
 ```text
 live rename declarations: 1
-  old-name.txt -> new-name.txt
+  old-name.txt -> new-name.txt [rename]
+refused declarations: 0
 ```
+
+**Each line says what the next commit will do with that declaration**, from the same classifier
+`commit` obeys — `rename`, `deletion`, `deletion-ignored`, `never-tracked`, or `refused` with
+commit's own message. A `rename` also says when content or mode changes alongside it
+(`[rename] (content also changes)`), because `commit` authors those in the same patch. In
+`--format json` the fields are `resolution`, `refusal`, `content_changed` and `mode_changed`, plus a
+top-level `refused_declaration_count`. See
+[Worktree Status](../worktree-status.md).
 
 ## What a commit does with a live declaration
 
@@ -56,7 +65,18 @@ live rename declarations: 1
 - **Never tracked**: if the declared source was never a sealed node (an untracked file, moved with
   `prikk mv` before its first commit), there is no node to rename.
 - **Contradicted**: if the worktree disagrees with the declaration (the source path is back on disk),
-  the whole commit is refused, naming the declaration. Nothing is silently dropped.
+  the whole commit is refused, naming the declaration. Nothing is silently dropped. The refusal names
+  the way out for the state the worktree is actually in, and every route it names was measured:
+  - **the source is back and the destination is gone** (a shell `mv` undid the move):
+    `prikk mv <new> <old>` nets the declaration to no move and drops it, or `prikk mv <old> <new>`
+    makes the move again. Undoing it with a *shell* `mv` is what produced this state, so repeating
+    that is the one thing that does not help.
+  - **both paths exist**: `prikk mv` itself refuses while both are there, so set one copy aside
+    first — delete the old path and commit to author the rename, or delete the new path and then run
+    `prikk mv <new> <old>` to drop the declaration.
+  - **the destination is another tracked node** this commit does not also move: `prikk mv <new>
+    <old>` drops the declaration; the old path keeps its content and the destination stays deleted in
+    the worktree, so the commit authors that deletion.
 
 Every one of these outcomes is correct on its own — a deletion really is the honest record for a file
 moved into an ignored directory, for instance. What would be wrong is doing this silently: a user who

@@ -54,12 +54,37 @@ except `unsupported-path`, where it is the file's OS name relative to the worktr
 lossily** (an invalid byte becomes `U+FFFD`): no repository path exists for it, and the absolute path
 on this machine does not belong in a repository-scoped report.
 
-**One refusal is not yet reported here.** A worktree that contradicts a live `prikk mv` declaration
-— the declared source back on disk, or the destination already occupied — is refused by
-`prikk commit` but is not a property of any single path's entry, so it does not appear as a refused
-path. The `live rename declarations:` lines in the same output are where that case is visible — see
-[Declared Moves](patches/declared-move.md). So `refused paths: 0` means "no path's own entry is
-unauthorable", not "the next commit will certainly succeed".
+**Every live declaration says what the commit will do with it.** A `prikk mv` declaration is not a
+property of any single path's entry, so it is reported on its own line, with the resolution the next
+`prikk commit` will reach:
+
+```text
+live rename declarations: 1
+  notes.md -> docs/notes.md [refused: notes.md -> docs/notes.md: the source is present in the worktree again, so the declared move is not what the worktree holds. Run `prikk mv docs/notes.md notes.md` to drop the declaration, or `prikk mv notes.md docs/notes.md` to make the move again]
+refused declarations: 1
+```
+
+The resolution is one of `rename` (authored as a rename, and the line says whether content or mode
+also changed), `deletion` (the destination is gone, so the source is authored as a deletion),
+`deletion-ignored` (the destination is on disk but `.prikkignore` excludes it), `never-tracked` (the
+source was never a node, so the declaration is dropped), or `refused` (the whole commit is refused,
+with that message). A `rename` line also says `(content also changes)` or `(mode also changes)` when
+the destination differs from the source node's baseline, because `commit` authors those beside the
+rename.
+
+In `--format json` each declaration carries `resolution`, `refusal`, `content_changed` and
+`mode_changed` (the last two are `null` when the resolution is not a rename), and the top level
+carries `refused_declaration_count`. These are additions within `worktree-status-report-v1`: against
+0.42.0's output for the same repository, the only differences are the new keys — no field was
+removed, renamed, or given a different value.
+
+**`refused_count` and `refused_declaration_count` are separate on purpose, and `clean` can be true
+while a declaration is refused.** A worktree whose declared move was undone with a shell `mv` matches
+its baseline byte for byte — nothing is missing, modified or untracked — and `prikk commit` still
+refuses, because the declaration contradicts what the worktree holds. So read the commit's prospects
+as "`refused paths: 0` **and** `refused declarations: 0`"; either one alone is only half the answer.
+The resolution comes from the same classifier `prikk commit` obeys, so the two commands cannot
+disagree about a declaration — see [Declared Moves](patches/declared-move.md).
 
 The scanner is intentionally conservative:
 
@@ -80,9 +105,10 @@ the repository root never appears in the untracked list at all — see
 | `worktree-status` compares the worktree against the replay-derived baseline `commit` shares — the sealed lineage with any already-queued patches folded on top — not a stored snapshot Blob. | [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs), [`patch_replay.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_replay.rs) |
 | It writes nothing and reports missing, modified, untracked, and unsupported-path changes. | [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs) |
 | Each entry's `authoring` verdict and `refusal` reason come from the same classifier `prikk commit` refuses with, so the two commands cannot disagree about a path. | [`node_authoring.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/worktree_patch/node_authoring.rs), [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs) |
-| A contradicted rename declaration is refused by `commit` but is not reported as a refused path. | [`rfc147_authoring_refusal_field.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_authoring_refusal_field.rs) |
+| A contradicted rename declaration is refused by `commit` and is reported as a refused *declaration*, not a refused path — and can sit in a `clean` worktree. | [`rfc147_authoring_refusal_field.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_authoring_refusal_field.rs), [`rfc147_declaration_resolution.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_declaration_resolution.rs) |
+| Each declaration's `resolution` is what `commit` then does, and a refusal's text is commit's own message; every `prikk mv` a refusal names is run in the state that produced it. | [`declaration_resolution.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/declaration_resolution.rs), [`rfc147_declaration_resolution.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_declaration_resolution.rs) |
 
 ## Provenance
 
-This guide covers RFC 122's rewire onto the replay baseline and RFC 147 §2e's per-entry authoring
-verdict. It does not change repository state, signing, trust, or the bundle/sync formats.
+This guide covers RFC 122's rewire onto the replay baseline, RFC 147 §2e's per-entry authoring
+verdict, and RFC 147 §2f's per-declaration resolution. It does not change repository state, signing, trust, or the bundle/sync formats.

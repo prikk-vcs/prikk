@@ -47,7 +47,7 @@ use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
 use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::object_store::{ObjectReader, ObjectWriteSession, ObjectWriter};
 use crate::patch_replay::resolve_folded_worktree_baseline;
-use crate::path::{RepoPath, join_repo_path_to_root};
+use crate::path::RepoPath;
 use crate::rename_declaration::{clear_rename_declarations, read_rename_declarations};
 use crate::text_span;
 use crate::wal::Wal;
@@ -459,82 +459,64 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // checked) -- exactly the two-node case increments 1 and 2 built `rename_nodes_checked_batch`'s
     // own same-batch tolerance for.
     let live_declarations = read_rename_declarations(layout).map_err(AuthorError::Store)?;
-    let declared_old_paths: BTreeSet<&str> = live_declarations
-        .iter()
-        .map(|declaration| declaration.old_path.as_str())
-        .collect();
-    let declared_new_paths: BTreeSet<&str> = live_declarations
-        .iter()
-        .map(|declaration| declaration.new_path.as_str())
-        .collect();
     let mut renamed_away: BTreeSet<String> = BTreeSet::new();
     let mut confirmed_renames: Vec<(String, String)> = Vec::new();
-    // RFC 144 §4p.2: every declaration below that resolves to something other than the rename it
-    // asserted gets one disclosure entry here -- the outcome is unchanged by this (still correct;
-    // was correct before this round too), only the silence about it is what this round closes.
+    // RFC 144 §4p.2: every declaration that resolves to something other than the rename it asserted
+    // gets one disclosure entry -- the outcome was always correct, the silence about it was the gap.
     let mut declaration_disclosures: Vec<DeclarationDisclosure> = Vec::new();
-    for declaration in &live_declarations {
-        let old_path = &declaration.old_path;
-        let new_path = &declaration.new_path;
-        // A declaration whose old_path was never a tracked baseline node (e.g. declared against a
-        // path that was itself never committed) is vacuous. Judgment call, not RFC-specified -- the
-        // six required controls do not exercise this: drop silently, letting the ordinary loops
-        // below handle whatever the worktree actually holds at old_path/new_path.
-        let Some(base) = baseline_files.get(old_path) else {
-            declaration_disclosures.push(DeclarationDisclosure {
-                old_path: old_path.clone(),
-                new_path: new_path.clone(),
-                resolution: DeclarationDisclosureReason::NeverTracked,
-            });
-            continue;
-        };
-        if worktree.contains_key(old_path.as_str())
-            && !declared_new_paths.contains(old_path.as_str())
-        {
-            // The worktree contradicts a live declaration -- source is back, and no other live
-            // declaration claims to have landed here (the swap's own tolerance above does not apply).
+
+    // RFC 147 §2f: one classifier, obeyed here and reported by `worktree-status`, so a report can
+    // never say "rename" about a declaration this commit refuses. The whole batch is evaluated
+    // together (the two-node swap tolerance lives inside it), and this loop only acts on the answers.
+    let outcomes = crate::declaration_resolution::resolve_declarations(
+        layout,
+        &live_declarations,
+        |path| {
+            baseline_files
+                .get(path)
+                .map(|base| crate::declaration_resolution::DeclaredSource {
+                    node_id: base.node_id,
+                    kind: base.kind,
+                    blob_id: base.blob_id,
+                    mode: base.mode,
+                })
+        },
+        |path| worktree.contains_key(path),
+    )
+    .map_err(AuthorError::Store)?;
+    for outcome in &outcomes {
+        match &outcome.resolution {
             // §3: refuse the whole commit, naming the declaration, rather than silently dropping a
-            // human assertion.
-            return Err(AuthorError::DeclarationContradicted(format!(
-                "{old_path} -> {new_path}: the source is present in the worktree again; the \
-                 declared move was not completed on disk. Run `prikk mv` again, or move {new_path} \
-                 back to {old_path} to clear the declaration before committing"
-            )));
-        }
-        if !worktree.contains_key(new_path.as_str()) {
-            // Nets to deletion (§3 corollary 2): the ordinary deletion loop below already authors a
-            // plain DeleteNode for old_path unassisted; nothing to claim here. Two distinct real
-            // causes share this branch -- the destination was deleted, or it exists on disk but
-            // `.prikkignore` excluded it from `worktree` -- and §4p.2 requires saying which, so a
-            // direct filesystem check (independent of the ignore-filtered `worktree` map) decides.
-            let new_repo_path = RepoPath::parse(new_path).map_err(AuthorError::Store)?;
-            let new_disk_path = join_repo_path_to_root(&new_repo_path, layout.root());
-            let destination_ignored = std::fs::symlink_metadata(&new_disk_path).is_ok();
-            declaration_disclosures.push(DeclarationDisclosure {
-                old_path: old_path.clone(),
-                new_path: new_path.clone(),
-                resolution: if destination_ignored {
-                    DeclarationDisclosureReason::DestinationIgnored
-                } else {
-                    DeclarationDisclosureReason::DestinationDeleted
-                },
-            });
-            continue;
-        }
-        // Confirmed: old_path is a baseline node, and its declared destination is present. Refuse a
-        // destination already occupied by a different, untouched tracked node that this same batch
-        // does not also vacate -- authoring must not emit what `rename_nodes_checked_batch` would
-        // refuse at seal time (§3's own principle, applied to a collision as much as to a chain).
-        if let Some(occupant) = baseline_files.get(new_path) {
-            if occupant.node_id != base.node_id && !declared_old_paths.contains(new_path.as_str()) {
-                return Err(AuthorError::DeclarationContradicted(format!(
-                    "{old_path} -> {new_path}: the destination is already occupied by a different \
-                     tracked node that this commit does not also move or delete"
-                )));
+            // human assertion. The first refusal in store order is the one reported, verbatim.
+            crate::declaration_resolution::DeclarationResolution::Refused(message) => {
+                return Err(AuthorError::DeclarationContradicted(message.clone()));
+            }
+            crate::declaration_resolution::DeclarationResolution::NeverTracked => {
+                declaration_disclosures.push(DeclarationDisclosure {
+                    old_path: outcome.old_path.clone(),
+                    new_path: outcome.new_path.clone(),
+                    resolution: DeclarationDisclosureReason::NeverTracked,
+                });
+            }
+            crate::declaration_resolution::DeclarationResolution::Deletion => {
+                declaration_disclosures.push(DeclarationDisclosure {
+                    old_path: outcome.old_path.clone(),
+                    new_path: outcome.new_path.clone(),
+                    resolution: DeclarationDisclosureReason::DestinationDeleted,
+                });
+            }
+            crate::declaration_resolution::DeclarationResolution::DeletionIgnored => {
+                declaration_disclosures.push(DeclarationDisclosure {
+                    old_path: outcome.old_path.clone(),
+                    new_path: outcome.new_path.clone(),
+                    resolution: DeclarationDisclosureReason::DestinationIgnored,
+                });
+            }
+            crate::declaration_resolution::DeclarationResolution::Rename { .. } => {
+                renamed_away.insert(outcome.old_path.clone());
+                confirmed_renames.push((outcome.old_path.clone(), outcome.new_path.clone()));
             }
         }
-        renamed_away.insert(old_path.clone());
-        confirmed_renames.push((old_path.clone(), new_path.clone()));
     }
     let rename_targets: BTreeSet<String> = confirmed_renames
         .iter()

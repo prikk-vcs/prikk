@@ -1,8 +1,8 @@
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::stdout::println;
 use prikk_store::{
-    HistoryEntry, RefHistory, RenameDeclaration, RepositoryLayout, WorktreeChangeKind,
-    WorktreeStatusReport,
+    DeclarationOutcome, DeclarationResolution, HistoryEntry, RefHistory, RepositoryLayout,
+    WorktreeChangeKind, WorktreeStatusReport,
 };
 
 use super::verification::escape_json_string;
@@ -75,13 +75,33 @@ pub(crate) fn print_worktree_status(
         println!("live rename declarations: 0");
     } else {
         println!("live rename declarations: {}", report.declarations.len());
-        for declaration in &report.declarations {
-            println!("  {} -> {}", declaration.old_path, declaration.new_path);
+        // RFC 147 §2f: each line says what the next commit will do with that declaration, and a
+        // refused one carries commit's own message in the §2e `[refused: …]` style.
+        for outcome in &report.declarations {
+            let resolution = outcome.resolution.as_str();
+            match outcome.resolution.refusal() {
+                // `[refused: …]` alone, exactly as a refused change entry reads: the resolution
+                // name is the word inside the bracket, and printing it twice says nothing more.
+                Some(refusal) => println!(
+                    "  {} -> {} [refused: {refusal}]",
+                    outcome.old_path, outcome.new_path
+                ),
+                None => println!(
+                    "  {} -> {} [{resolution}]{}",
+                    outcome.old_path,
+                    outcome.new_path,
+                    rename_detail(&outcome.resolution)
+                ),
+            }
         }
         println!(
-            "note: each declaration above is authored into the next `prikk commit` as a \
-             RenamePath -- run `prikk mv` again to change it, or move the destination back to the \
-             source to clear it"
+            "refused declarations: {}",
+            report.refused_declaration_count()
+        );
+        println!(
+            "note: each declaration above is authored into the next `prikk commit` as its \
+             resolution says; a refused one names, in its own message, the commands that clear it \
+             from the state the worktree is actually in"
         );
     }
     if let Some(other_ref) = &report.queued_elsewhere {
@@ -132,6 +152,12 @@ pub(crate) fn print_worktree_status_json(
     json.push_str(&format!(
         "  \"refused_count\": {},\n",
         report.refused_count()
+    ));
+    // RFC 147 §2f: additive, and counted separately from `refused_count` -- a declaration is not a
+    // path, so a refused declaration can sit in a `clean` worktree.
+    json.push_str(&format!(
+        "  \"refused_declaration_count\": {},\n",
+        report.refused_declaration_count()
     ));
     match &report.queued_elsewhere {
         Some(other_ref) => json.push_str(&format!(
@@ -195,12 +221,50 @@ fn push_current_branch_field(json: &mut String, current_branch: Option<&str>) {
     }
 }
 
-fn push_declaration(json: &mut String, declaration: &RenameDeclaration) {
+/// RFC 147 §2f: additive within `worktree-status-report-v1`. `resolution` is always present so a
+/// consumer branches on a field rather than on a field's absence; `refusal` is `null` unless commit
+/// refuses this declaration; `content_changed`/`mode_changed` are `null` for every resolution but
+/// `"rename"`, where they say whether commit also authors an edit or a mode change beside it.
+fn push_declaration(json: &mut String, outcome: &DeclarationOutcome) {
     json.push_str("{\"old_path\": ");
-    json.push_str(&escape_json_string(&declaration.old_path));
+    json.push_str(&escape_json_string(&outcome.old_path));
     json.push_str(", \"new_path\": ");
-    json.push_str(&escape_json_string(&declaration.new_path));
+    json.push_str(&escape_json_string(&outcome.new_path));
+    json.push_str(", \"resolution\": ");
+    json.push_str(&escape_json_string(outcome.resolution.as_str()));
+    json.push_str(", \"refusal\": ");
+    match outcome.resolution.refusal() {
+        Some(refusal) => json.push_str(&escape_json_string(refusal)),
+        None => json.push_str("null"),
+    }
+    match &outcome.resolution {
+        DeclarationResolution::Rename {
+            content_changed,
+            mode_changed,
+        } => {
+            json.push_str(&format!(
+                ", \"content_changed\": {content_changed}, \"mode_changed\": {mode_changed}"
+            ));
+        }
+        _ => json.push_str(", \"content_changed\": null, \"mode_changed\": null"),
+    }
     json.push('}');
+}
+
+/// What a `"rename"` line adds in prose: whether commit also authors an edit or a mode change.
+fn rename_detail(resolution: &DeclarationResolution) -> String {
+    match resolution {
+        DeclarationResolution::Rename {
+            content_changed,
+            mode_changed,
+        } => match (content_changed, mode_changed) {
+            (true, true) => " (content and mode also change)".to_string(),
+            (true, false) => " (content also changes)".to_string(),
+            (false, true) => " (mode also changes)".to_string(),
+            (false, false) => String::new(),
+        },
+        _ => String::new(),
+    }
 }
 
 /// Print ref history.
