@@ -131,3 +131,18 @@ The store stops refusing a second envelope for an id; it merges.
 
 **Reports:** Stage 0 as above. Stages 1–5:
 `.git-exclude/review-request/one-object-several-signers-report-v1.md`.
+
+## Addendum 2026-09-16 — after Stage 0
+
+**Stage 0 is accepted** (`65920210`). It measured that a second record for a Block breaks 0.44.0's `verify`, which
+makes RFC 156 a repository-format change as specified (RFC 156 §5a).
+
+- **Stage 1 proceeds now**: `verify` checks every signature of every role, with the ten-site audit. It is correct
+  under every option before the owner.
+- **Stages 2–5 wait** for the owner's ruling between a superset format 7 reached by an explicit in-place upgrade, a
+  Patch/Block split, and waiting for RFC 155.
+- **One more item for whichever option wins:** current binaries' format refusal should name the version found. 0.44.0
+  says `unsupported format version: 0` for a `FORMAT` of 7.
+
+Report for Stage 1 alone: `.git-exclude/review-request/one-object-several-signers-stage1-report-v1.md`.
+

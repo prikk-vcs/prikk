@@ -97,6 +97,22 @@ first signature only, and whether its container scan tolerates two records for o
 travels without a format change. An older receiver meeting a union envelope refuses it exactly as it refuses a
 different copy today; a newer receiver merges it. Both behaviours are measured and stated.
 
+### 5a. MEASURED 2026-09-16 (Stage 0) — the gate fails for Blocks
+
+Against the released 0.44.0 asset (reproduced by the architect):
+- **a second record for a Block id** — a union, or byte-identical — makes `verify` fail its objects stage
+  (`format-2 topological pass detected an inconsistent cycle count`; `block_state.rs:668` compares a set of ids with
+  a count of records), and `doctor` exits 1;
+- **a second record for a Patch id** passes every command;
+- **a merged rename is misattributed**: 0.44.0 reports the first AUTHOR signature in canonical order, not the
+  committer;
+- **0.44.0 refuses a repository marked format 7 at open**, with every command exiting 1, though its message says
+  `unsupported format version: 0`.
+
+**By this section's rule, B as specified is a repository-format change.** The choice between a superset format 7
+reached by an explicit in-place upgrade, a Patch/Block split, or waiting for RFC 155 goes to the owner — together
+with whether an in-place upgrade satisfies RFC 114 §5.2. Review: `.git-exclude/reviewed/one-object-several-signers-stage0-review-v1.md`.
+
 ## 6. What this changes elsewhere
 
 - **RFC 155 R6** becomes "an id already held is merged under §4's rules, never silently replaced".
