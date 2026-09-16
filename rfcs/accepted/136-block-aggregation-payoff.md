@@ -746,12 +746,16 @@ that root; only replay proves that (§6).
   `checkout --ref remotes/…` refuse). When a repository-complete or relay artifact changes that, the
   lying-anchor control must be extended to received refs before it ships.
 
-**Order:**
-1. the checkout-refusal fix (stikk letter 012);
-2. increment 3: measurement, docs, CHANGELOG, done;
-3. the 0.43.0 prep.
+**Order, as it stands 2026-09-16:**
+1. ~~the checkout-refusal fix (stikk letter 012)~~ — DONE `47fb6def`;
+2. ~~increment 3: measurement, docs, CHANGELOG~~ — DONE `cacaeb73`;
+3. the export/sync fix increment 3's measurement found
+   (`DC-78-history-exchange/export-of-an-edited-then-deleted-file-handoff-v1.md`);
+4. the declarations round (RFC 147 §2f, stikk letter 013);
+5. the 0.43.0 prep, at which cut this RFC moves to `done/`.
 
-**2c follows 0.43.0** unless increment 3's measurement shows baseline reconstruction needs it.
+**2c follows 0.43.0**, now on measurement rather than assumption — see §10.5 increment 3: `merge-evidence`
+and cold-cache `commit` are untouched by anchoring and still superlinear.
 
 **Increment 2 is split.** §10.5's increment 2 becomes:
 - **2a:** the marker and derivation gate (§10.3b.1–3), plus anchored **read-only** reports (ruling 1)
@@ -795,8 +799,34 @@ writes under `.git-exclude/measurements/` (RFC 133's rule).
    **Before increment 2 (2026-09-15):** the pre-existing merge defect found at 1b's review — two edits of
    one file on a side after the baseline refuse a confluent merge as an integrity error —
    `handoffs/DC-75-merge-block-lineage/merge-refuses-a-side-that-edits-a-file-twice-handoff-v1.md`.
-3. **Measurement, docs, CHANGELOG** (`### Added — sealed snapshots`; `### Changed` for the gate's new
-   refusal), and RFC 136 moves to `done/`.
+3. **Measurement, docs, CHANGELOG — DONE 2026-09-16** (`fef13536`, `cacaeb73`; reviewed
+   `.git-exclude/reviewed/rfc136-increment-3-review-v1.md`). RFC 136 moves to `done/` **at the 0.43.0
+   cut**, which is the architect's. What the measurement settled, all on RFC 139's corpus, three
+   interleaved samples per cell, with every command's output identical between the two binaries at every
+   depth (§10.3a ruling 1 holds, no hard stop fired):
+   - **Anchoring works where it reaches.** At depth 256, `checkout --patch-materialize` 13.4 s → 4.0 s and
+     `branch switch` 13.7 s → 4.0 s, growth exponent 1.33 → 0.48, flat past depth 128.
+   - **Peak memory:** 2a's +12 % on `--patch-plan` is gone (1.00); 2b's +19 % on `--patch-materialize`
+     stands at 1.19× and does not grow with the tree. The 1.5× stop was never approached.
+   - **The derivation gate, end to end at depth 256:** materialize 48 ms, refused commit 31 ms, `verify`
+     32 s, commit 9.5 s, each outcome asserted.
+   - **Storage:** one checkpoint costs 1,458 bytes at depth 64 (0.2 %, against a 10 % stop). **Open
+     cadence question, recorded not acted on:** by depth 256 four checkpoints are 1,356,017 bytes — 30.6 %
+     of the repository with them, 44.2 % of the one without — almost all of it content Blobs for text
+     whose content only ever arrived as edits. A repository whose files are mostly edited pays close to a
+     full copy of its text per checkpoint. §9.3.3 leaves cadence open; five points are direction, not a
+     curve. Revisit when a real repository measures it, or before any cadence change.
+   - **2c is scheduled after 0.43.0**, now on measurement rather than assumption: `merge-evidence` and
+     cold-cache `commit` are ~1.35 before and after and cost ~13.4 s at depth 256, where anchored paths are
+     ~4 s. They are §9.3.2's second chain walk. The unexplained warm-cache behaviour joins 2c's scope; the
+     warm column is not evidence of anything yet.
+   - **An architect error the round caught:** the increment 3 handoff called `26e8c528` *"which has no
+     anchoring"*. It contains 2a (`2d96196b` is its ancestor), so the `--patch-plan` comparison is
+     anchored against anchored and means *no regression since 2a*. The anchored-versus-genesis figure
+     stays 2a's own 0.28×; no re-measurement was ordered.
+   - **A product defect found by the measurement and held:** `bundle export` and `sync build` fail on any
+     history that deletes a previously edited text file. Ruled and handed off —
+     `rfcs/handoffs/DC-78-history-exchange/export-of-an-edited-then-deleted-file-handoff-v1.md`.
    **Handoff (2026-09-16):** `136-block-aggregation-payoff/sealed-snapshots-increment-3-handoff-v1.md`.
    Its measurements decide 2c and answer the 2a and 2b memory questions. The architect moves this RFC to
    `done/` at the 0.43.0 cut.
