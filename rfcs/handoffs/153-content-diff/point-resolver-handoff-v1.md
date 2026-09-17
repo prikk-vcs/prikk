@@ -148,3 +148,16 @@ damage. Measured on `2ecba551`: `merge-evidence --baseline-block 000…0` answer
 
 **Report:** `.git-exclude/review-request/baseline-block-report-v1.md`. **The `tree` and `cat` round starts after it
 is reviewed.**
+
+## Addendum 3 2026-09-17 — the resolver round is complete
+
+**Accepted** (review `baseline-block-review-v1`): `565716b2`.
+- One block check, `require_block_given`, is shared by `resolve_point`'s block arm and by `--baseline-block` in
+  `merge-evidence`, `merge-plan` and `merge`.
+- A block reached by walking history stays `Integrity`, held by its own control.
+- `merge` makes the check inside `prepare_merge_evidence`, before it seals, and a refused `merge` leaves its tip where
+  it was (checked by the architect on the binary).
+- **Report §7 (`show`):** no change. `show` takes a block or a patch id, and "no object <id> in the object store or
+  the active WAL" answers its own question. `show` is not a point in RFC 153/157's sense.
+
+**Next: `157-reading-a-point/tree-and-cat-handoff-v1.md`.**
