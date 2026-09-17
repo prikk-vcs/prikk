@@ -47,42 +47,17 @@ pub(crate) fn classify_pair_with_text_resolver<R: PatchAlgebraEvidence>(
 
     let left_deferred = deferred_reason(&left_facts.action);
     let right_deferred = deferred_reason(&right_facts.action);
-    let symlink_deferred = matches!(left_deferred, Some(UnknownReason::SymlinkDeferred))
-        || matches!(right_deferred, Some(UnknownReason::SymlinkDeferred));
-
+    // Only symlinks are deferred (merge with renames, design §2.1): a rename is classified and replayed
+    // like any other operation.
     if left_deferred.is_none() && right_deferred.is_none() {
-        // Neither operand is deferred -- unchanged from before this round.
         if let Some(class) = classify_path_relation(baseline, &left_facts, &right_facts) {
-            return Ok(class);
-        }
-    } else if !symlink_deferred {
-        // RFC 144 §4o.5: a `RenamePath`'s own destination is now recoverable (`Action::RenamePath`
-        // carries it), so a pair deferred only for `RenameDeferred` -- never `SymlinkDeferred`,
-        // which keeps deferring immediately below exactly as before this round -- gets a chance at
-        // two path-relation-based resolutions before giving up: the thirteenth conflict witness
-        // (same node, disjoint destinations), and `SamePathCreate`'s own existing dual (a rename
-        // destination colliding with a path someone else already claims). Deliberately **not**
-        // the other two `classify_path_relation` checks (the `freed`/`required_free`
-        // intersections gating `LiveStateMismatch`/ordering): those assume `DeleteFile`/
-        // `CreateFile` preimage semantics (`is_delete_preimage_valid`/`is_create_after_delete_valid`
-        // are typed to exactly those two actions) that do not describe what a `RenamePath`'s own
-        // preimage even means, and reaching them here risks a confidently wrong conflict for a
-        // cross-node rename interaction this round is not scoped to resolve (§6: "do not add a
-        // resolution mechanism").
-        if let Some(class) =
-            classify_rename_destination_conflict(baseline, &left_facts, &right_facts)
-        {
-            return Ok(class);
-        }
-        if let Some(class) = classify_same_path_create(baseline, &left_facts, &right_facts) {
             return Ok(class);
         }
     }
 
     if let Some(reason) = left_deferred.or(right_deferred) {
-        // Prefer the pairwise-shared path (correct when both operands act on the same node --
-        // e.g. `RenamePath` paired with a `ChangePerm` on the same node id, where the rename
-        // itself carries no path but the shared node's live path does). Only when that is
+        // Prefer the pairwise-shared path (correct when both operands act on the same node, where
+        // the shared node's live path names it). Only when that is
         // ambiguous or absent -- an unrelated peer, e.g. `CreateSymlink` paired with some other
         // node's `CreateFile` -- fall back to the deferred operand's own path, so an unrelated
         // peer's disagreement never discards a path the deferred operand genuinely has.
@@ -117,9 +92,8 @@ pub(crate) fn classify_pair_with_text_resolver<R: PatchAlgebraEvidence>(
 /// RFC 144 §4o.5, §4i.2's dual: "two nodes, one path -- pick the node." Fires whenever the two
 /// operands' own destinations collide, regardless of which operation kinds produced them --
 /// `CreateFile`/`CreateSymlink` land here the same as it always has, and a `RenamePath` reaches it
-/// for the first time now that its destination is recoverable (`classify_pair_with_text_resolver`'s
-/// own rename-only-deferred branch is what makes that reachable; this function's own logic and
-/// label are unchanged from before this round).
+/// through `classify_path_relation` like any other operation (merge with renames, design §2.1); this
+/// function's own logic and label are unchanged.
 fn classify_same_path_create(
     baseline: &NodeLifecycleState,
     left: &OperationFacts,
@@ -143,9 +117,9 @@ fn classify_same_path_create(
 
 /// RFC 144 §4o.5 (the thirteenth), §4i.2's dual: "one node, two paths -- pick the path." Fires
 /// only when both operands are a `RenamePath` for the *same* node with *different* destinations.
-/// The same-destination case (§4o.5 §4, a third shape §4i.2 does not rule on) is deliberately left
-/// unresolved here -- returning `None` lets it fall through to `classify_same_path_create` above,
-/// whose `newly_occupied` intersection already fires `SamePathCreate` for it, unchanged.
+/// The same-destination case (§4o.5 §4) is deliberately left to `classify_same_path_create`, which runs
+/// next and fires `SamePathCreate` for it: identical renames on both sides stay a conflict (merge with
+/// renames, ruling 3).
 fn classify_rename_destination_conflict(
     baseline: &NodeLifecycleState,
     left: &OperationFacts,
@@ -155,10 +129,12 @@ fn classify_rename_destination_conflict(
         Action::RenamePath {
             node_id: left_node,
             new_path: left_new,
+            ..
         },
         Action::RenamePath {
             node_id: right_node,
             new_path: right_new,
+            ..
         },
     ) = (&left.action, &right.action)
     else {
@@ -181,8 +157,36 @@ fn classify_path_relation(
     left: &OperationFacts,
     right: &OperationFacts,
 ) -> Option<PairClass> {
+    // RFC 144 §4o.5, the thirteenth: first, so a same-node rename to two destinations is named for what
+    // it is rather than for the source path both free (merge with renames, design row 15).
+    if let Some(class) = classify_rename_destination_conflict(baseline, left, right) {
+        return Some(class);
+    }
     if let Some(class) = classify_same_path_create(baseline, left, right) {
         return Some(class);
+    }
+
+    // Merge with renames, ruling 2: the `freed`/`required_free` checks below assume `DeleteFile`/
+    // `CreateFile` preimage semantics (`is_delete_preimage_valid`/`is_create_after_delete_valid` are
+    // typed to exactly those), so a pair with a rename skips them. What they would catch -- an
+    // operation that cannot replay against the baseline -- the flat-sequence check reports, and every
+    // `Independent` verdict on a rename pair is proven by replay (`commutation::prove_pair_replay`).
+    let has_rename = |facts: &OperationFacts| matches!(facts.action, Action::RenamePath { .. });
+    if has_rename(left) || has_rename(right) {
+        if !left
+            .path_effects
+            .freed
+            .is_disjoint(&right.path_effects.freed)
+        {
+            return Some(conflict(
+                ConflictWitnessKind::DeleteMutationConflict,
+                left,
+                right,
+                common_node(left, right),
+                derive_path(baseline, left, right),
+            ));
+        }
+        return None;
     }
 
     if !left
@@ -327,6 +331,17 @@ fn classify_same_node<R: PatchAlgebraEvidence>(
                 ))
             }
         }
+        // Merge with renames, design §1 and §2.1 item 3: a rename moves the path index and nothing else,
+        // and these three address the node by id alone -- they commute by construction. The verdict is
+        // still proven by replay (`commutation::prove_pair_replay`), as every `Independent` is.
+        (
+            Action::RenamePath { .. },
+            Action::EditText { .. } | Action::ChangePerm { .. } | Action::ReplaceBinary { .. },
+        )
+        | (
+            Action::EditText { .. } | Action::ChangePerm { .. } | Action::ReplaceBinary { .. },
+            Action::RenamePath { .. },
+        ) => Ok(PairClass::Independent),
         (Action::ChangePerm { old_mode, .. }, edit @ Action::EditText { .. })
         | (edit @ Action::EditText { .. }, Action::ChangePerm { old_mode, .. }) => {
             classify_mode_and_text_edit(

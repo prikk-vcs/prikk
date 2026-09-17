@@ -45,9 +45,21 @@ permission changes and binary replacements, optionally ending in a delete, and a
 by edits. A no-op run (a change and its undo) is set aside only when the other side does not touch that
 file; the merge replays each side's original patches onto the other side's tip, so the proof never
 claims what that replay could not do. Some ordinary histories still refuse:
-- **A side containing a rename** (`prikk mv`) is not merged yet, whether or not the renamed file was
-  also edited. The proof cannot replay a rename, so it refuses as `unsupported_operation` (RFC 144's
-  designed deferral) rather than guess how a rename commutes with the other side.
+- **Renames that meet.** A rename (`prikk mv`) merges like any other change, whether or not either side
+  edits the renamed file: an edit, a permission change or a binary replacement names the file by its
+  identity, not its path, so it lands on the renamed file. What refuses, as a conflict:
+  - **the same rename on both sides** — both sides changing the same thing is a conflict, as it is for
+    the same edit on both sides;
+  - **one file renamed to two different paths**, or **two files renamed onto one path**;
+  - **a rename on one side and a delete of that file on the other**;
+  - **a rename onto a path the other side frees, or a swap or chain split across the two sides.** Each
+    side's rename was made against that side's history, so one side's rename cannot rely on a path only
+    the other side vacated.
+
+  A swap of two files made in one commit merges; the same two renames in separate commits do not, because
+  between them both files would hold one path.
+- **A side containing a symlink** (created or deleted) is not merged yet. The proof cannot replay a
+  symlink, so it refuses as `unsupported_operation` rather than guess.
 - **A side that creates a file and then deletes it, or changes its mode**, and **a side that deletes a
   file and creates another at the same path**, refuse as `sequence_internal_dependency_deferred`. A file
   created and deleted on one side held its path for part of that side's history, so treating it as

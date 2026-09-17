@@ -335,6 +335,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
             blob_id: never_written_a,
             mode: 0o100_644,
         },
+        patch_id: None,
     };
     let shown = super::show_operation(&store, &dummy_envelope(), &create_file, None).unwrap();
     match shown.content {
@@ -356,6 +357,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
                 old_mode: 0o100_644,
             },
         },
+        patch_id: None,
     };
     let shown = super::show_operation(&store, &dummy_envelope(), &delete_node, None).unwrap();
     match shown.content {
@@ -372,6 +374,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
             old_blob_id: never_written_a,
             new_blob_id: never_written_b,
         },
+        patch_id: None,
     };
     let shown = super::show_operation(&store, &dummy_envelope(), &replace_binary, None).unwrap();
     match shown.content {
@@ -409,6 +412,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
             blob_id: wrong_type_id,
             mode: 0o100_644,
         },
+        patch_id: None,
     };
     assert!(
         super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
@@ -427,6 +431,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
             blob_id: malformed_id,
             mode: 0o100_644,
         },
+        patch_id: None,
     };
     assert!(
         super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
@@ -455,6 +460,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
             blob_id: snapshot_id,
             mode: 0o100_644,
         },
+        patch_id: None,
     };
     assert!(
         super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),

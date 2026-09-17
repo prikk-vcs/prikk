@@ -63,6 +63,7 @@ pub(super) fn create_file(
             blob_id,
             mode,
         },
+        patch_id: None,
     }
 }
 
@@ -85,6 +86,7 @@ pub(super) fn delete_file(
                 old_mode,
             },
         },
+        patch_id: None,
     }
 }
 
@@ -101,6 +103,7 @@ pub(super) fn change_perm(
             old_mode,
             new_mode,
         },
+        patch_id: None,
     }
 }
 
@@ -117,6 +120,7 @@ pub(super) fn replace_binary(
             old_blob_id,
             new_blob_id,
         },
+        patch_id: None,
     }
 }
 
@@ -133,6 +137,7 @@ pub(super) fn rename_path(
             old_path: old_path.to_string(),
             new_path: new_path.to_string(),
         },
+        patch_id: None,
     }
 }
 
@@ -149,6 +154,7 @@ pub(super) fn create_symlink(
             node_id,
             target: target.to_string(),
         },
+        patch_id: None,
     }
 }
 
@@ -178,6 +184,7 @@ pub(super) fn edit_text(
             left_anchor_len: None,
             right_anchor_len: None,
         },
+        patch_id: None,
     }
 }
 

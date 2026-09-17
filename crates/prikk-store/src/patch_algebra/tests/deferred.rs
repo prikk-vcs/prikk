@@ -1,15 +1,17 @@
 use super::*;
 
+/// Merge with renames: a rename is no longer deferred. Renaming a node and changing its mode commute by
+/// node identity (design §1), so the pair is `Independent`; only symlinks stay deferred (below).
 #[test]
-fn rename_is_unknown_not_independent() {
+fn rename_and_mode_change_of_one_node_are_independent() {
     let mut baseline = NodeLifecycleState::new();
     seed_binary(&mut baseline, node(1), "old.bin", blob(1), MODE_REGULAR);
     let left = rename_path(1, node(1), "old.bin", "new.bin");
     let right = change_perm(2, node(1), MODE_REGULAR, MODE_EXECUTABLE);
 
-    assert_unknown(
+    assert_eq!(
         classify_pair(&baseline, &left, &right),
-        UnknownReason::RenameDeferred,
+        PairClass::Independent
     );
 }
 

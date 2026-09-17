@@ -33,6 +33,11 @@ use tlv::TlvCursor;
 pub(crate) struct DecodedPatchOperation {
     pub(crate) op_seq: u32,
     pub(crate) kind: DecodedOperationKind,
+    /// The patch this operation was read from, when a caller declares it: merge evidence's
+    /// `candidate_sequence` does, so the patch-algebra replay oracle can batch a patch's consecutive
+    /// renames exactly as the lifecycle fold does (a swap is one batch). `None` everywhere else, where
+    /// no oracle batches. A declared boundary, never inferred from `op_seq`.
+    pub(crate) patch_id: Option<prikk_object::ObjectId>,
 }
 
 /// The decoded body of every FDD-03 §9.3 operation kind.
@@ -415,7 +420,11 @@ fn decode_operation(
             )));
         }
     }?;
-    Ok(DecodedPatchOperation { op_seq, kind })
+    Ok(DecodedPatchOperation {
+        op_seq,
+        kind,
+        patch_id: None,
+    })
 }
 
 fn unsupported_operation(name: &str) -> PrikkError {

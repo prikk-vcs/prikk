@@ -52,10 +52,81 @@ where
         lifecycle: baseline.clone(),
         texts: BTreeMap::new(),
     };
-    for operation in operations {
+    let mut operations = operations.into_iter().peekable();
+    while let Some(operation) = operations.next() {
+        if let DecodedOperationKind::RenamePath { .. } = operation.kind {
+            // A patch's consecutive renames are one batch, resolved together (a swap), exactly as the
+            // lifecycle fold applies them (`lifecycle_cache::replay::effect::collect_rename_run`). Only
+            // a declared patch boundary joins renames; an operation with no declared patch is its own
+            // batch.
+            let mut batch = vec![rename_triple(candidate_scope, operation)?];
+            while let Some(next) = operations.next_if(|next| same_rename_batch(operation, next)) {
+                batch.push(rename_triple(candidate_scope, next)?);
+            }
+            // The one rename semantics of the algebra: the lifecycle state's own batch rename.
+            oracle
+                .lifecycle
+                .rename_nodes_checked_batch(&batch)
+                .map_err(|_| OracleFailure::Replay)?;
+            continue;
+        }
         apply_operation(&mut oracle, baseline, evidence, candidate_scope, operation)?;
     }
     Ok(oracle)
+}
+
+/// Whether two operations adjacent in a sequence belong to one rename batch: both renames, from the same
+/// declared patch. The one grouping rule, shared by [`replay_operations`] and [`replay_unit`].
+fn same_rename_batch(first: &DecodedPatchOperation, second: &DecodedPatchOperation) -> bool {
+    matches!(first.kind, DecodedOperationKind::RenamePath { .. })
+        && matches!(second.kind, DecodedOperationKind::RenamePath { .. })
+        && first.patch_id.is_some()
+        && first.patch_id == second.patch_id
+}
+
+/// The operations `sequence[index]` must replay together with to replay at all: the declared patch's run
+/// of consecutive renames it belongs to (a swap resolves only as one batch), or the operation alone. The
+/// same grouping `replay_operations` applies, so replaying this unit is replaying that operation.
+pub(super) fn replay_unit(
+    sequence: &[DecodedPatchOperation],
+    index: usize,
+) -> &[DecodedPatchOperation] {
+    let joins = same_rename_batch;
+    let Some(subject) = sequence.get(index) else {
+        return &[];
+    };
+    let mut start = index;
+    while start > 0
+        && sequence
+            .get(start - 1)
+            .is_some_and(|prior| joins(prior, subject))
+    {
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while sequence.get(end).is_some_and(|next| joins(subject, next)) {
+        end += 1;
+    }
+    sequence.get(start..end).unwrap_or(&[])
+}
+
+fn rename_triple(
+    candidate_scope: EvidenceScope,
+    operation: &DecodedPatchOperation,
+) -> Result<(NodeId, RepoPath, RepoPath), OracleFailure> {
+    let DecodedOperationKind::RenamePath {
+        node_id,
+        old_path,
+        new_path,
+    } = &operation.kind
+    else {
+        return Err(OracleFailure::Replay);
+    };
+    Ok((
+        *node_id,
+        parse_repo_path(candidate_scope, old_path)?,
+        parse_repo_path(candidate_scope, new_path)?,
+    ))
 }
 
 fn apply_operation<R: PatchAlgebraEvidence>(
@@ -121,8 +192,9 @@ fn apply_operation<R: PatchAlgebraEvidence>(
         DecodedOperationKind::EditText { .. } => {
             apply_text_edit(oracle, baseline, evidence, candidate_scope, operation)
         }
-        DecodedOperationKind::RenamePath { .. }
-        | DecodedOperationKind::CreateSymlink { .. }
+        // Renames are applied in batches by `replay_operations`, never one at a time here.
+        DecodedOperationKind::RenamePath { .. } => Err(OracleFailure::Replay),
+        DecodedOperationKind::CreateSymlink { .. }
         | DecodedOperationKind::DeleteNode {
             preimage: DecodedDeletePreimage::Symlink { .. },
             ..

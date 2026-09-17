@@ -190,7 +190,23 @@ fn validate_preimage<R: PatchAlgebraEvidence>(
                 }),
             }
         }
-        Action::RenamePath { .. } | Action::CreateSymlink { .. } | Action::DeleteSymlink { .. } => {
+        // Merge with renames, design §2.1 item 2: a rename asserts its node is live at `old_path`.
+        Action::RenamePath {
+            node_id, old_path, ..
+        } => match baseline.live_node(node_id) {
+            Some(live) if live.path == *old_path => Ok(PreimageStatus::Valid),
+            Some(live) => Ok(PreimageStatus::Conflict {
+                kind: ConflictWitnessKind::LiveStateMismatch,
+                node_id: Some(*node_id),
+                path: Some(live.path.clone()),
+            }),
+            None => Ok(PreimageStatus::Conflict {
+                kind: ConflictWitnessKind::LiveStateMismatch,
+                node_id: Some(*node_id),
+                path: Some(old_path.clone()),
+            }),
+        },
+        Action::CreateSymlink { .. } | Action::DeleteSymlink { .. } => {
             Ok(PreimageStatus::Unknown {
                 reason: deferred_reason(&facts.action).unwrap_or(UnknownReason::UnknownRelation),
                 node_id: facts.node_id,

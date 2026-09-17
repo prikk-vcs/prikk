@@ -1,7 +1,7 @@
 use super::classify::classify_pair_with_text_resolver;
 use super::evidence_types::{EvidenceError, EvidenceFact, EvidenceScope, PatchAlgebraEvidence};
 use super::facts::{deferred_reason, operation_facts};
-use super::replay_oracle::{OracleFailure, OracleState, replay_operations};
+use super::replay_oracle::{OracleFailure, OracleState, replay_operations, replay_unit};
 use super::types::{
     CommutationAnalysisResult, CommutationProof, CommutationResult, ConfluenceAnalysisResult,
     ConfluenceProof, ConfluenceResult, ConfluenceWitness, ConfluenceWitnessKind, PairClass,
@@ -80,8 +80,8 @@ pub(crate) fn check_confluence<R: PatchAlgebraEvidence>(
             }
         }
     }
-    // RFC 144 §4r.1: an individually-deferred operation (`FlatSequenceCheck::deferred` --
-    // `RenameDeferred`/`SymlinkDeferred`) no longer pre-empts the pairwise loop above -- every pair
+    // RFC 144 §4r.1: an individually-deferred operation (`FlatSequenceCheck::deferred` -- today only
+    // `SymlinkDeferred`; renames replay since merge with renames) no longer pre-empts the pairwise loop above -- every pair
     // it takes part in was just classified for real, and any pair that stayed genuinely
     // unresolvable already returned `Unknown` from inside that loop (`classify_pair_with_text_
     // resolver`'s own deferred fallback still applies; this round did not change it). Reaching this
@@ -160,7 +160,7 @@ struct FlatSequenceCheck {
     /// be proven that has nothing to do with pairwise relation. Pre-empts pairwise classification,
     /// exactly as this whole check did before this round.
     hard: Option<ConfluenceResult>,
-    /// An individually-deferred operation's own reason (`RenameDeferred`/`SymlinkDeferred` --
+    /// An individually-deferred operation's own reason (`SymlinkDeferred` --
     /// whether the replay oracle can even attempt this operation *alone*, not a relation to any
     /// peer). No longer pre-empts pairwise classification; a caller consults this only as a
     /// fallback, after the pairwise loop finds no conflict for any pair the operation takes part
@@ -189,7 +189,14 @@ fn ensure_flat_sequence<R: PatchAlgebraEvidence>(
                 continue;
             }
         }
-        match replay_operations(baseline, evidence, candidate_scope, [operation]) {
+        // An operation replays alone, or with the batch it cannot be separated from (a declared
+        // patch's consecutive renames, as the lifecycle fold applies them).
+        match replay_operations(
+            baseline,
+            evidence,
+            candidate_scope,
+            replay_unit(sequence, index),
+        ) {
             Ok(_) => {}
             Err(OracleFailure::Evidence(error)) => return Err(error),
             Err(OracleFailure::Unknown(reason)) => {

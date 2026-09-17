@@ -325,6 +325,7 @@ fn expected_decoded(op: &Operation) -> DecodedPatchOperation {
     DecodedPatchOperation {
         op_seq: op.op_seq,
         kind,
+        patch_id: None,
     }
 }
 

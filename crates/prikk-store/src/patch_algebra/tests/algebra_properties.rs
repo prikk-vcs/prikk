@@ -382,6 +382,7 @@ fn build_operation(
                     old_target: SYMLINK_D_TARGET.to_string(),
                 },
             },
+            patch_id: None,
         },
         OpChoice::RenameTextA => {
             rename_path(op_seq, node(TEXT_A_NODE), TEXT_A_PATH, TEXT_A_RENAMED_PATH)
@@ -460,7 +461,6 @@ fn unknown_reason_bucket(reason: UnknownReason) -> &'static str {
     match reason {
         UnknownReason::MalformedOperation => "unknown:malformed-operation",
         UnknownReason::SameNodeTextCommutationDeferred => "unknown:same-node-text-deferred",
-        UnknownReason::RenameDeferred => "unknown:rename-deferred",
         UnknownReason::SymlinkDeferred => "unknown:symlink-deferred",
         #[cfg(test)]
         UnknownReason::FuturePreconditionDeferred => "unknown:future-precondition-deferred",
@@ -471,13 +471,12 @@ fn unknown_reason_bucket(reason: UnknownReason) -> &'static str {
 }
 
 /// Buckets whose members are *deliberate* conservatism, named with the reason (handoff §2): the
-/// oracle either cannot evaluate the pair at all (`RenameDeferred`/`SymlinkDeferred` -- the oracle
-/// refuses to replay these kinds unconditionally) or genuinely may find the two orders equal
+/// oracle either cannot evaluate the pair at all (`SymlinkDeferred` -- the oracle refuses to replay
+/// symlinks unconditionally; renames replay since merge with renames) or genuinely may find the two orders equal
 /// (`same-node-text-deferred` -- disjoint-span same-node edits are a real, common case where two
 /// orders produce identical text). A hit landing anywhere else is the finding this increment exists
 /// to surface, not something to allowlist away.
 const EXPECTED_HIT_BUCKETS: &[&str] = &[
-    "unknown:rename-deferred",
     "unknown:symlink-deferred",
     "unknown:same-node-text-deferred",
 ];

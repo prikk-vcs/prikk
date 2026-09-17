@@ -274,6 +274,7 @@ fn create_then_edits<R: PatchAlgebraEvidence>(
             blob_id: content_id,
             mode: *mode,
         },
+        patch_id: None,
     };
     Some((create, content_id, BlobKind::Text))
 }
@@ -305,7 +306,11 @@ fn net_effect<R: PatchAlgebraEvidence>(
                 | DecodedOperationKind::ReplaceBinary { .. }
         )
     };
-    let operation = |kind| DecodedPatchOperation { op_seq, kind };
+    let operation = |kind| DecodedPatchOperation {
+        op_seq,
+        kind,
+        patch_id: None,
+    };
 
     if let DecodedOperationKind::DeleteNode {
         path,

@@ -99,12 +99,13 @@ pub(super) fn operation_facts(
             let old_path = parse_path(old_path)?;
             let new_path = parse_path(new_path)?;
             effects.occupied_before.insert(old_path.clone());
-            effects.freed.insert(old_path);
+            effects.freed.insert(old_path.clone());
             effects.required_free.insert(new_path.clone());
             effects.occupied_after.insert(new_path.clone());
             effects.newly_occupied.insert(new_path.clone());
             Action::RenamePath {
                 node_id: *node_id,
+                old_path,
                 new_path,
             }
         }
@@ -147,7 +148,6 @@ fn parse_path(path: &str) -> Result<RepoPath, UnknownReason> {
 
 pub(super) fn deferred_reason(action: &Action) -> Option<UnknownReason> {
     match action {
-        Action::RenamePath { .. } => Some(UnknownReason::RenameDeferred),
         Action::CreateSymlink { .. } | Action::DeleteSymlink { .. } => {
             Some(UnknownReason::SymlinkDeferred)
         }

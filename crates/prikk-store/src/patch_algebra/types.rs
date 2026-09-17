@@ -152,7 +152,6 @@ conflict_witness_kinds! {
 pub(crate) enum UnknownReason {
     MalformedOperation,
     SameNodeTextCommutationDeferred,
-    RenameDeferred,
     SymlinkDeferred,
     #[cfg(test)]
     FuturePreconditionDeferred,
@@ -215,6 +214,9 @@ pub(super) enum Action {
     },
     RenamePath {
         node_id: NodeId,
+        /// The path the rename asserts the node is live at (merge with renames, design §2.1 item 1): its
+        /// preimage, checked against the baseline.
+        old_path: RepoPath,
         /// RFC 144 §4o.5: the destination is load-bearing for classification, not just an
         /// authoring detail -- the thirteenth conflict witness (two renames of one node to
         /// disjoint destinations) cannot be computed without it, since `PathEffects` alone

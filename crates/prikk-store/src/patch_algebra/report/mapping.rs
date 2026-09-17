@@ -28,9 +28,7 @@ pub(super) fn unknown_report(
             MergeEvidenceProofPhase::Flatness,
             MergeEvidenceReasonCode::SequenceInternalDependencyDeferred,
         ),
-        UnknownReason::RenameDeferred
-        | UnknownReason::SymlinkDeferred
-        | UnknownReason::UnknownRelation => (
+        UnknownReason::SymlinkDeferred | UnknownReason::UnknownRelation => (
             MergeEvidenceOutcome::Unsupported,
             MergeEvidenceProofPhase::Classification,
             MergeEvidenceReasonCode::UnsupportedOperation,

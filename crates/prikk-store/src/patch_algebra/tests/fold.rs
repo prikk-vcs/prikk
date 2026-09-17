@@ -51,6 +51,7 @@ fn edit_text_v2(op_seq: u32, node_id: NodeId, old: &[u8], new: &[u8]) -> Decoded
             left_anchor_len: Some(plan.left_anchor_len),
             right_anchor_len: Some(plan.right_anchor_len),
         },
+        patch_id: None,
     }
 }
 
@@ -571,4 +572,30 @@ fn the_created_content_fallback_refuses_a_non_text_blob() {
             EvidenceError::WrongBlobKind { .. }
         ))
     ));
+}
+
+/// Merge with renames (design §3): a side containing a rename is folded too. Before, `fold` bailed at
+/// its first `replay_operations`, which could not replay a rename, so a rename anywhere in a side left
+/// that side's two edits of another node unfolded. The rename itself is never folded.
+#[test]
+fn a_side_with_a_rename_still_folds_its_other_nodes() {
+    let (mut baseline, evidence) = text_baseline();
+    seed_binary(&mut baseline, node(3), "x.bin", blob(3), MODE_REGULAR);
+    let t1: &[u8] = b"alpha BETA gamma";
+    let left = [
+        rename_path(1, node(3), "x.bin", "y.bin"),
+        edit_text_v2(2, node(1), T0, t1),
+        edit_text_v2(3, node(1), t1, b"alpha BETA GAMMA"),
+    ];
+    let right = [create_g(4)];
+
+    let folded = fold_side(&baseline, &evidence, SCOPE, &left, &right);
+    assert_eq!(folded.operations.len(), 2, "the rename and one folded edit");
+    assert_confluent(judge(&baseline, &evidence, &left, &right), 2, 1);
+    let report = report(&baseline, &evidence, &left, &right);
+    assert_eq!(report.outcome, MergeEvidenceOutcome::Confluent);
+    assert_eq!(
+        report.left_sequence.folded_through,
+        BTreeMap::from([(1, 2)])
+    );
 }

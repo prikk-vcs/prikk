@@ -1,6 +1,6 @@
 //! RFC 144 §4r.1 — `check_confluence`'s per-operation deferral no longer pre-empts pairwise
 //! classification. Not rename-specific: `ensure_flat_sequence`'s `deferred_reason` check (covering
-//! both `RenameDeferred` and `SymlinkDeferred`) now only decides *after* the pairwise loop has had
+//! `SymlinkDeferred`; before merge with renames also `RenameDeferred`) now only decides *after* the pairwise loop has had
 //! its chance, and only as a fallback for the case that loop cannot resolve on its own (one side's
 //! sequence is empty). A genuine replay/evidence/prefix-dependency problem
 //! (`FlatSequenceCheck::hard`) still pre-empts everything, unchanged.
@@ -94,8 +94,10 @@ fn control2_same_path_create_for_a_rename_reaches_analyze_merge_evidence() {
 /// (or genuinely defers) every pair a deferred operation takes part in -- the *only* way it can
 /// escape the loop's own detection is an empty peer sequence, which is exactly what these two
 /// cases construct, one for each deferred reason the shared gate covers.
+/// Merge with renames: a rename is no longer deferred, so a rename against an empty peer sequence (the
+/// shape of S2) is confluent. The symlink case below still holds the deferral property.
 #[test]
-fn control3_rename_deferred_survives_an_empty_peer_sequence() {
+fn control3_a_rename_with_an_empty_peer_sequence_is_confluent() {
     let mut baseline = NodeLifecycleState::new();
     seed_binary(&mut baseline, node(1), "a.bin", blob(1), MODE_REGULAR);
     let left = [rename_path(1, node(1), "a.bin", "b.bin")];
@@ -111,11 +113,7 @@ fn control3_rename_deferred_survives_an_empty_peer_sequence() {
         &right,
     );
 
-    assert_eq!(report.outcome, MergeEvidenceOutcome::Unsupported);
-    assert_eq!(
-        first_item(&report.items).reason_code,
-        MergeEvidenceReasonCode::UnsupportedOperation
-    );
+    assert_eq!(report.outcome, MergeEvidenceOutcome::Confluent);
 }
 
 #[test]
@@ -261,14 +259,12 @@ fn control4_regression_sweep_other_kinds_unchanged_through_analyze_merge_evidenc
         );
     }
 
-    // before: unsupported_operation_report_does_not_expose_unknown -> Unsupported (RenameDeferred,
-    // paired against an unrelated peer -- still Unsupported after this round, same as before it,
-    // since the pairwise loop itself resolves it to Unknown{RenameDeferred} the same way).
+    // before: unsupported_operation_report_does_not_expose_unknown -> Unsupported. Since merge with
+    // renames the unsupported operand is a symlink, the one kind still deferred.
     {
         let mut baseline = NodeLifecycleState::new();
-        seed_binary(&mut baseline, node(1), "left.bin", blob(1), MODE_REGULAR);
         seed_binary(&mut baseline, node(2), "right.bin", blob(2), MODE_REGULAR);
-        let left = [rename_path(1, node(1), "left.bin", "moved.bin")];
+        let left = [create_symlink(1, "link", node(1), "target")];
         let right = [replace_binary(2, node(2), blob(2), blob(3))];
         let evidence =
             TestTextResolver::empty().with_blob(blob(3), BlobKind::Binary, b"new".to_vec());

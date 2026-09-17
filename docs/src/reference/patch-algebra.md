@@ -105,7 +105,7 @@ Current public reason-code names include:
 | `proven_confluent` | The selected pair or sequence passed the current confluence proof. |
 | `pair_conflict` | A cross-side pair produced a conflict witness. |
 | `ordered_dependency` | A cross-side pair requires a specific order. |
-| `unsupported_operation` | The operation or relation is outside the current supported subset. |
+| `unsupported_operation` | The operation or relation is outside the current supported subset: a symlink create or delete, the one operation kind the proof does not replay, or (rarely) a pair classified independent whose replay does not agree. Before 0.45.0 it also stood for any rename. |
 | `same_node_text_transform_deferred` | Same-node text operational transforms are intentionally deferred. |
 | `sequence_internal_dependency_deferred` | A sequence-internal dependency blocks flat confluence analysis: an operation does not replay alone against the baseline, and an earlier operation on its side either orders before it or acts on the same file. |
 | `pair_replay_failed` | An operation on one side does not replay against the baseline, and nothing earlier on its side explains why. No history `commit` can author is known to reach it: it signals a patch not authored against its side's history (crafted or damaged input) or a proof-engine fault. |

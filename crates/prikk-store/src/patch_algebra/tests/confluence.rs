@@ -107,8 +107,10 @@ fn sequence_internal_dependency_is_deferred_before_cross_pair_checks() {
     }
 }
 
+/// Merge with renames: a rename and an unrelated binary replace, which were deferred before, are
+/// confluent -- classified `Independent` and proven by replay.
 #[test]
-fn unsupported_cross_sequence_relation_is_unknown() {
+fn a_rename_and_an_unrelated_replace_are_confluent() {
     let mut baseline = NodeLifecycleState::new();
     seed_binary(&mut baseline, node(1), "left.bin", blob(1), MODE_REGULAR);
     seed_binary(&mut baseline, node(2), "right.bin", blob(2), MODE_REGULAR);
@@ -125,8 +127,8 @@ fn unsupported_cross_sequence_relation_is_unknown() {
     )
     .expect("confluence evidence")
     {
-        ConfluenceResult::Unknown { reason } => assert_eq!(reason, UnknownReason::RenameDeferred),
-        other => panic!("expected rename deferral, got {other:?}"),
+        ConfluenceResult::Confluent { .. } => {}
+        other => panic!("expected confluent, got {other:?}"),
     }
 }
 

@@ -398,6 +398,10 @@ fn candidate_sequence(
                     }
                     _ => None,
                 };
+                // Merge-with-renames ruling (a): the patch boundary is declared here, so the replay
+                // oracle batches this patch's consecutive renames as the lifecycle fold does.
+                let mut operation = operation;
+                operation.patch_id = Some(patch_id);
                 operations.push(operation);
                 author_key_ids.push(author_key_id);
             }

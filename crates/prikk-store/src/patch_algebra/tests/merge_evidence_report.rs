@@ -108,12 +108,12 @@ fn ordered_dependency_report_has_dedicated_outcome() {
     );
 }
 
+/// Since merge with renames the unsupported operand is a symlink, the one kind still deferred.
 #[test]
 fn unsupported_operation_report_does_not_expose_unknown() {
     let mut baseline = NodeLifecycleState::new();
-    seed_binary(&mut baseline, node(1), "left.bin", blob(1), MODE_REGULAR);
     seed_binary(&mut baseline, node(2), "right.bin", blob(2), MODE_REGULAR);
-    let left = [rename_path(1, node(1), "left.bin", "moved.bin")];
+    let left = [create_symlink(1, "link", node(1), "target")];
     let right = [replace_binary(2, node(2), blob(2), blob(3))];
     let evidence = TestTextResolver::empty().with_blob(blob(3), BlobKind::Binary, b"new".to_vec());
 

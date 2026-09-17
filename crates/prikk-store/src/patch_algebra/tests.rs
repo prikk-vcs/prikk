@@ -17,6 +17,7 @@ mod merge_evidence_report_privacy;
 mod oracle;
 mod ordering;
 mod rename_destination_conflict;
+mod rename_pairs;
 mod replacement_evidence;
 mod same_node;
 mod support;

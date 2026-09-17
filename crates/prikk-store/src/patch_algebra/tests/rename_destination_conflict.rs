@@ -72,8 +72,8 @@ fn control2_rename_onto_occupied_path_fires_same_path_create() {
 }
 
 /// Control 3a: a one-sided rename (paired with an unrelated operation on a different node, no
-/// path overlap) fires nothing -- stays `Unknown { RenameDeferred }`, unchanged from before this
-/// round. The thirteenth must not over-fire: a spurious conflict blocks a merge that should
+/// path overlap) fires nothing: since merge with renames it is `Independent` (it was
+/// `Unknown { RenameDeferred }` before). The thirteenth must not over-fire: a spurious conflict blocks a merge that should
 /// proceed.
 #[test]
 fn control3a_one_sided_rename_fires_nothing() {
@@ -84,7 +84,7 @@ fn control3a_one_sided_rename_fires_nothing() {
     let right = replace_binary(2, node(2), blob(2), blob(3));
 
     let class = classify_pair(&baseline, &left, &right);
-    assert_unknown(class.clone(), UnknownReason::RenameDeferred);
+    assert_eq!(class, PairClass::Independent);
     assert_ne!(
         witness_kind_of(&class),
         Some(ConflictWitnessKind::RenameDestinationConflict)
@@ -102,7 +102,7 @@ fn control3b_renames_of_different_nodes_fire_nothing() {
     let right = rename_path(2, node(2), "b.bin", "b-renamed.bin");
 
     let class = classify_pair(&baseline, &left, &right);
-    assert_unknown(class.clone(), UnknownReason::RenameDeferred);
+    assert_eq!(class, PairClass::Independent);
     assert_ne!(
         witness_kind_of(&class),
         Some(ConflictWitnessKind::RenameDestinationConflict)

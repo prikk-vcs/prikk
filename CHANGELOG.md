@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — merge accepts branches containing renames
+
+`prikk merge`, `merge-evidence` and `merge-plan` now judge a side containing a rename (`prikk mv`) instead of
+refusing it as `unsupported_operation`. A rename merges beside other changes, including an edit of the renamed
+file on the other side, which lands on the renamed file; merging in either direction gives the same tree. A
+swap of two files made in one commit merges.
+
+Still refused, as a conflict: the same rename on both sides, one file renamed to two paths, two files renamed
+onto one path, and a rename on one side against a delete of that file on the other. A rename onto a path only
+the other side frees, and a swap or chain split across sides or commits, cannot be replayed and is refused.
+
+**For consumers reading the reason code:** `unsupported_operation` no longer means "a rename is present". It
+now names a symlink create or delete, or, rarely, a pair classified independent whose replay disagrees.
+Symlinks are still not merged.
+
 ### Changed — new keys get distinct default key ids; existing keys keep theirs
 
 A key made by `prikk setup` or `prikk key generate --out` now has its own key id: `ed25519-` and the first
