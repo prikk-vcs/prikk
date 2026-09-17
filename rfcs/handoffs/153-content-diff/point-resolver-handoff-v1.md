@@ -87,3 +87,39 @@ Nothing of `diff`, `tree` or `cat` is built here.
 
 `.git-exclude/review-request/point-resolver-report-v1.md`. **Stop and report before implementing** if one replay
 cannot serve both entries without changing ref-addressed output, or if anchoring is not reachable from a bare block.
+
+## Addendum 1 2026-09-17 — accepted; three follow-ups in this round
+
+**Accepted** (review `point-resolver-review-v1`): `aaa5ed43`, `ae903a51`, `6ac5b570`.
+
+**Readings confirmed:**
+- a block id's existence is decided only in `resolve_point`, and `require_existing_ref`'s other callers keep 0.45.0's
+  answers;
+- a `--ref` value that is neither a ref name nor a bare block id is a usage error, with exit 2, in every checkout mode
+  (CHANGELOG'd);
+- `ref-state: <none>` for a bare block in `--plan-only`;
+- the lower-layer `point` module, and moving `run_checkout` out of `main.rs`;
+- P2 cannot fail control 2, by RFC 136's contract; control 3 holds anchoring.
+
+**Follow-ups:**
+1. **A damaged ref (report §6.1): option (a), keep the new answers.** A missing pointer with history is damage, and
+   `Integrity` is its class (RFC 132). The old `--plan-only` exit 0 reported damage as a clean "not published" plan,
+   and the old `--snapshot-plan` named a route that fails. Required:
+   - a `### Changed` CHANGELOG line naming `--plan-only`'s exit 0 → 1 and `--snapshot-plan`'s new message for a
+     damaged ref;
+   - a control pinning all four read-only modes on that damage state (the report's probe, committed).
+2. **`merge-evidence` and `merge-plan` move to `resolve_point`** (report §6.2). RFC 153 §7.1 says one resolver, and
+   `merge/evidence.rs::resolve_target` is a second one deciding block existence. Route both its `Block` and `Ref`
+   arms through `resolve_point`, with `ReceivedRefs::Read`, keeping DC-85's received-ref reading. Required:
+   - a block id not held answers "block <id> is not in this repository" (was `integrity error`), and a patch id
+     names its type; both in the CHANGELOG under `### Changed`;
+   - every existing merge, merge-evidence and merge-plan control passes unchanged;
+   - **perturb the sharing:** give `resolve_target` its own block check back, and a control fails.
+3. **Control 4 must be able to catch a snapshot write.** The architect removed the refusal from
+   `materialize_snapshot_checkout` alone. Control 4 failed only on the answer, because its block id is not a
+   checkpoint: the snapshot path then refuses "not a checkpoint" and could never write. Use a **checkpoint** block id
+   for `--snapshot-materialize` (the genesis block is one), so an accepted write would change the tree and the tree
+   comparison can fail. Show it failing under that same perturbation.
+
+**Report:** `.git-exclude/review-request/point-resolver-follow-up-report-v1.md`. **The `tree` and `cat` round starts
+after it is reviewed.**
