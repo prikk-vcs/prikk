@@ -161,3 +161,18 @@ refuses naming both paths, which is the existing refusal.
 - **Perturbation:** the old text.
 
 **Report:** `.git-exclude/review-request/distinct-default-key-ids-follow-up-report-v1.md`. Items 3 and 4 follow it.
+
+## Addendum 3 2026-09-17 — follow-ups accepted, one control missing
+
+**Accepted** (review `distinct-default-key-ids-follow-up-review-v1`): `c0d96cc8`. F2 and F3 behave as specified, on the
+binary and in their controls.
+
+**One control is missing.** `write_new_key` runs `prepare()` before the key-id file, so a seed write that *refuses*
+leaves no stray key-id file. **No test holds that order.** With `prepare()` moved after `write_key_id_file`, the whole
+`prikk` package passes, 473 tests. Add a control:
+- `key generate --out` to a path inside `.prikk/` refuses, and **neither** `<path>` nor `<path>.key-id` exists after.
+- A **retry to a valid path** then succeeds, with no leftover to refuse over.
+- **Perturbation:** `prepare()` after the key-id write.
+
+No behaviour change. **Report:** `.git-exclude/review-request/distinct-default-key-ids-control-report-v1.md`. Item 3
+(merge with renames, design round) may start in parallel: it is report-only and touches no code this control does.
