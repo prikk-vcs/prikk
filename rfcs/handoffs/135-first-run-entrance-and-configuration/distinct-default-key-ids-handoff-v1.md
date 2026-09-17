@@ -91,3 +91,42 @@ CI.
 
 `.git-exclude/review-request/distinct-default-key-ids-report-v1.md`. **Stop and report** instead of proceeding if
 anything in §1 does not reproduce, or if rule 3 turns out to change any existing installation's id.
+
+## Addendum 1 2026-09-17 — the derived id is role-neutral
+
+The stop report (`distinct-default-key-ids-stop-report-v1.md`) is right. `key generate --out <path>` outside the key
+directory does not know the role, and today's route and `security-setup.md` let one seed serve either role. A
+role-prefixed id checked strictly would refuse an honest use; checked loosely, it would sign a maintainer's blocks as
+`author-…`. The fix is in rule 1, which was the architect's to get right.
+
+**Rule 1, amended:** the derived id is **`ed25519-<first 16 lowercase hex characters of the public key>`**, for
+example `ed25519-296c6e77232ffa57` (24 bytes). It carries **no role word**. One seed has one id, whichever role uses
+it. `key status` and `trust maintainer list` already show the role beside the id.
+
+Consequences:
+- **Rule 4 stays strict and becomes simple.** The key-id file's content must equal the id derived from the seed in
+  use, byte for byte, for either role.
+- **Rule 5 unchanged.** `setup` (when it creates a seed) and `key generate --out` both write the file. Nothing needs
+  to know the role, so no `--role` flag is added. The report's options A–D are all superseded.
+- Control 1's "distinct author and maintainer ids" holds because `setup` makes two different seeds. Control 5 is
+  unchanged.
+
+**The two smaller points: both readings confirmed.**
+1. `setup` stops printing `export PRIKK_<ROLE>_KEY_ID=…` for a seed it created, and prints the id itself. An
+   exported id would win under rule 3(a) and bypass rule 4.
+2. With a key-id file present and the seed unusable, `key status` reports the file's id with source `key-file` and
+   the seed's own `reason`. The mismatch check runs only when the seed decodes.
+
+**§3 readings, confirmed with one addition:**
+- **One resolution.** `key_material::key_id` goes; the signers (`main.rs:1109`, `:1118`) and `setup` read the same
+  function. `setup` passes the path it just wrote.
+- **A stale file.** Before writing, check the seed path and the key-id path. Refuse if either exists, naming both
+  paths, and write neither.
+- **Rule 8's author refusal says plainly that history already signed under `author` cannot be imported** into a
+  repository where `author` is bound to another key. The route that runs: the other installation signs new history
+  under a distinct id (a key made by this version, or `PRIKK_AUTHOR_KEY_ID`), and that history imports.
+- **Addition, from the report's §1:** the same conflict is reached by **`commit`** after an import bound `author` to
+  the other installation's key. Rule 8's author refusal covers `commit` as well as import, accept and verify, and
+  control 6 runs `commit`'s route too: sign under a distinct id, then commit succeeds.
+
+Proceed with the handoff as amended. Report: `.git-exclude/review-request/distinct-default-key-ids-report-v1.md`.
