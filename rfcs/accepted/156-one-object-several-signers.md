@@ -10,7 +10,11 @@ configured signing keys" is implemented as **signatures written by this reposito
 every AUTHOR signature arriving through `bundle import` or `sync accept` counts. An import never has to read secret key
 material to recognise a local key, and no outsider can reach a local writer, so the property is the same.
 *(Amended 2026-09-17, §7.4: that reading cannot be derived from stored state. Local writers are never refused, but
-their signatures now count. The bound also covers new objects. The owner confirms before 0.45.0.)*
+their signatures now count. The bound also covers new objects. **§7.4 confirmed by the owner 2026-09-17:** *"Confirmed.
+Accepted."* The architect's reading, stated so it can be corrected: the owner accepts §7.4 as written — every
+signature except a verified adopted-maintainer signature counts, new objects included, limit 4, local writers never
+refused — and chooses it over persisted provenance (option B). That confirmation clears RFC 156 for 0.45.0; it is not
+an authorization of the 0.45.0 cut, which the owner gives separately.)*
 Handoff: `rfcs/handoffs/156-one-object-several-signers/one-object-several-signers-handoff-v1.md`.
 
 Author-review independence: the architect proposes and would review; §9's
@@ -201,7 +205,7 @@ imports can create.
 **Residual, stated in the docs:** a signer that neither this repository's operator configured nor adopted can be
 refused on an object whose set other such signers have already filled.
 
-### 7.4 Deriving the count — ruled by the architect 2026-09-17, for the owner to confirm before 0.45.0
+### 7.4 Deriving the count — ruled by the architect 2026-09-17, confirmed by the owner 2026-09-17
 
 **Measured by the dev team (Stage 3 stop), checked at source by the architect:** "arrived through an import" is not
 stored state.
