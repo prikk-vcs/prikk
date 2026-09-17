@@ -139,13 +139,21 @@ prikk key generate
 ```
 seed: ...
 note: this seed is now in your terminal scrollback -- treat it as a secret
+key id: ed25519-2d353d98420bc75c
 public key: ...
 
 next steps:
-  prikk trust maintainer add --key-id maintainer --public-key ...
-  save this seed as /home/you/.config/prikk/maintainer.seed (mode 0600), or re-run with --out <path>
-note: the same seed works as an AUTHOR key instead -- name it author.seed and skip the trust step
+  recommended: re-run with --out <path>, which writes the seed and its key-id file
+  prikk trust maintainer add --key-id ed25519-2d353d98420bc75c --public-key ...
+  or save by hand -- both files, mode 0600:
+    /home/you/.config/prikk/maintainer.seed  (the seed above and a newline)
+    /home/you/.config/prikk/maintainer.key-id  (exactly ed25519-2d353d98420bc75c and a newline)
+note: a seed saved without its key-id file signs under the shared legacy id `maintainer`, which other installations may also use
+note: the same seed works as an AUTHOR key instead -- name the files author.seed and author.key-id and skip the trust step
 ```
+
+**Saving by hand needs both files.** The key id travels with the seed only through its key-id file; a
+seed saved alone signs under the legacy id every installation made before 0.45.0 shares.
 
 **`--out <path>` writes the seed instead of printing it — and then it is never printed at all**, only
 the public key and the next steps are:

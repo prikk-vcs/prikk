@@ -53,10 +53,16 @@ fn run_generate(args: Vec<String>) -> std::result::Result<(), CliError> {
 
     match out {
         Some(path) => {
-            crate::key_material::require_new_key_paths(&path)?;
-            write_seed_to_path(&seed, &path)?;
             let key_id = crate::key_material::derived_key_id(&seed);
-            let key_id_file = crate::key_material::write_key_id_file(&path, &key_id)?;
+            let key_id_file = crate::key_material::write_new_key(
+                &seed,
+                &path,
+                || {
+                    prepare_seed_path(&path)?;
+                    Ok(())
+                },
+                || write_seed_to_path(&seed, &path),
+            )?;
             println!("wrote seed to {} (mode 0600)", path.display());
             println!("key id: {key_id} (in {})", key_id_file.display());
             println!("public key: {public_key_hex}");
@@ -96,26 +102,48 @@ fn run_generate(args: Vec<String>) -> std::result::Result<(), CliError> {
         }
         None => {
             let seed_hex = prikk_hash::to_hex(&seed);
+            let key_id = crate::key_material::derived_key_id(&seed);
             println!("seed: {seed_hex}");
             println!("note: this seed is now in your terminal scrollback -- treat it as a secret");
+            println!("key id: {key_id}");
             println!("public key: {public_key_hex}");
             println!();
             println!("next steps:");
+            // Distinct default key ids, addendum 2 (F3): `--out` writes the seed and its key-id file
+            // together, so it is the route to recommend. Saving by hand needs both files; a seed saved
+            // alone signs under the legacy id every installation made before 0.45.0 shares.
             println!(
-                "  prikk trust maintainer add --key-id maintainer --public-key {public_key_hex}"
+                "  recommended: re-run with --out <path>, which writes the seed and its key-id file"
             );
-            // RFC 148: there is no longer a variable to paste this into. Save it to a file -- the
-            // key directory's own name if you want prikk to find it without being told.
+            println!(
+                "  prikk trust maintainer add --key-id {key_id} --public-key {public_key_hex}"
+            );
             match crate::key_material::default_key_dir() {
-                Ok(dir) => println!(
-                    "  save this seed as {} (mode 0600), or re-run with --out <path>",
-                    dir.join("maintainer.seed").display()
-                ),
-                Err(_) => println!("  save this seed to a file (mode 0600), or re-run with --out"),
+                Ok(dir) => {
+                    println!("  or save by hand -- both files, mode 0600:");
+                    println!(
+                        "    {}  (the seed above and a newline)",
+                        dir.join(Role::Maintainer.seed_file_name()).display()
+                    );
+                    println!(
+                        "    {}  (exactly {key_id} and a newline)",
+                        dir.join(Role::Maintainer.key_id_file_name()).display()
+                    );
+                }
+                Err(_) => {
+                    println!(
+                        "  or save by hand -- both files, mode 0600: the seed in a file, and beside \
+                         it <that file>.key-id holding exactly {key_id} and a newline"
+                    );
+                }
             }
             println!(
-                "note: the same seed works as an AUTHOR key instead -- name it author.seed and \
-                 skip the trust step"
+                "note: a seed saved without its key-id file signs under the shared legacy id \
+                 `maintainer`, which other installations may also use"
+            );
+            println!(
+                "note: the same seed works as an AUTHOR key instead -- name the files author.seed and \
+                 author.key-id and skip the trust step"
             );
         }
     }
@@ -181,6 +209,14 @@ pub(crate) fn write_seed_to_path(
     seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
     path: &Path,
 ) -> std::result::Result<(), CliError> {
+    prepare_seed_path(path)?;
+    write_seed_to_path_platform(seed, path)
+}
+
+/// Every refusal [`write_seed_to_path`] can make before it writes: a `.prikk` component, and on Windows the
+/// outright refusal. Also creates the key directory when `path` is inside it. Run first by
+/// `key_material::write_new_key`, so that a refused seed never leaves its key-id file behind.
+pub(crate) fn prepare_seed_path(path: &Path) -> std::result::Result<(), CliError> {
     if path.components().any(|c| c.as_os_str() == ".prikk") {
         return Err(CliError::Usage(
             "the seed output path must not be inside .prikk/ -- prikk never manages a secret's \
@@ -198,7 +234,28 @@ pub(crate) fn write_seed_to_path(
             crate::key_material::ensure_key_dir()?;
         }
     }
-    write_seed_to_path_platform(seed, path)
+    windows_seed_path_refusal()
+}
+
+#[cfg(windows)]
+fn windows_seed_path_refusal() -> std::result::Result<(), CliError> {
+    Err(windows_seed_file_refusal())
+}
+
+#[cfg(windows)]
+fn windows_seed_file_refusal() -> CliError {
+    CliError::Failure(
+        "writing a seed to a file is not yet supported on Windows -- Unix file permissions \
+         (mode 0600) have no portable equivalent here without unsafe code or a new dependency, \
+         and this project refuses to write a secret at inherited permissions silently. Run \
+         `prikk key generate` without --out, then save the printed seed yourself."
+            .to_string(),
+    )
+}
+
+#[cfg(not(windows))]
+fn windows_seed_path_refusal() -> std::result::Result<(), CliError> {
+    Ok(())
 }
 
 /// Which role a path names, when it is inside the key directory — `author.seed` or
@@ -280,13 +337,7 @@ fn write_seed_to_path_platform(
     _seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
     _path: &Path,
 ) -> std::result::Result<(), CliError> {
-    Err(CliError::Failure(
-        "writing a seed to a file is not yet supported on Windows -- Unix file permissions \
-         (mode 0600) have no portable equivalent here without unsafe code or a new dependency, \
-         and this project refuses to write a secret at inherited permissions silently. Run \
-         `prikk key generate` without --out, then save the printed seed yourself."
-            .to_string(),
-    ))
+    Err(windows_seed_file_refusal())
 }
 
 #[cfg(unix)]

@@ -354,7 +354,12 @@ fn write_role_seed(
 ) -> std::result::Result<(SeedOutput, String), CliError> {
     let output = match user_named {
         Some(path) => {
-            write_seed_to_path(seed, &path)?;
+            crate::key_material::write_new_key(
+                seed,
+                &path,
+                || crate::key::prepare_seed_path(&path),
+                || write_seed_to_path(seed, &path),
+            )?;
             SeedOutput::UserNamed(path)
         }
         None => {
@@ -362,14 +367,15 @@ fn write_role_seed(
                 CliError::Failure("internal: no key directory for a default seed".to_string())
             })?;
             let path = dir.join(role.seed_file_name());
-            crate::key::write_seed_to_key_dir(seed, &path)?;
+            crate::key_material::write_new_key(
+                seed,
+                &path,
+                || Ok(()),
+                || crate::key::write_seed_to_key_dir(seed, &path),
+            )?;
             SeedOutput::DefaultDirectory(path)
         }
     };
-    crate::key_material::write_key_id_file(
-        output.path(),
-        &crate::key_material::derived_key_id(seed),
-    )?;
     let (key_id, _, mismatch) =
         crate::key_material::resolve_key_id(role, output.path(), &Ok(*seed))?;
     if let Some(mismatch) = mismatch {

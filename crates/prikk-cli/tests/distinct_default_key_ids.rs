@@ -739,3 +739,81 @@ fn control7_key_status_reports_the_id_commit_signs_under() {
         reported
     );
 }
+
+/// Addendum 2, F3: `key generate` without `--out` prints instructions that, followed literally, give a key
+/// on its own id — both files saved as printed, `key status` reports `key-file` with the printed id, and a
+/// seal adopted under the printed id verifies.
+#[test]
+fn f3_key_generate_without_out_prints_instructions_that_keep_the_distinct_id() {
+    let installation = Installation::new("keyids-f3");
+    let dir = support::unique_repo("keyids-f3-dir");
+    let out = installation.run(&dir, &["key", "generate"]);
+    support::ok(&out, "key generate");
+    let printed = text(&out);
+    let field = |prefix: &str| -> String {
+        printed
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("no {prefix:?} in {printed}"))
+            .trim()
+            .to_string()
+    };
+    let seed_hex = field("seed: ");
+    let key_id = field("key id: ");
+    assert!(is_derived(&key_id), "{printed}");
+    assert!(
+        printed.contains("recommended: re-run with --out <path>"),
+        "{printed}"
+    );
+    assert!(!printed.contains("--key-id maintainer "), "{printed}");
+    let trust_line = field("prikk trust maintainer add ");
+
+    // The two hand-saved files, exactly as printed.
+    let mut saved = Vec::new();
+    for line in printed.lines() {
+        let line = line.trim();
+        if let Some((path, what)) = line.split_once("  (") {
+            if what.starts_with("the seed above") {
+                saved.push((PathBuf::from(path), format!("{seed_hex}\n")));
+            } else if what.starts_with(&format!("exactly {key_id}")) {
+                saved.push((PathBuf::from(path), format!("{key_id}\n")));
+            }
+        }
+    }
+    assert_eq!(saved.len(), 2, "both files are named: {printed}");
+    std::fs::create_dir_all(installation.key_dir()).unwrap();
+    for (path, contents) in &saved {
+        write_private(path, contents);
+    }
+    // The AUTHOR note, followed literally: the same two files under author.* names.
+    for (path, contents) in &saved {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let author = path.with_file_name(name.replacen("maintainer", "author", 1));
+        write_private(&author, contents);
+    }
+
+    assert_eq!(
+        installation.status_field(&dir, &[], "maintainer", "key_id_source"),
+        "key-file"
+    );
+    assert_eq!(
+        installation.status_field(&dir, &[], "maintainer", "key_id"),
+        key_id
+    );
+    assert_eq!(
+        installation.status_field(&dir, &[], "maintainer", "usable"),
+        "true"
+    );
+
+    let repo = support::unique_repo("keyids-f3-repo");
+    support::ok(&installation.run(&repo, &["init"]), "init");
+    let mut trust_args = vec!["trust", "maintainer", "add"];
+    trust_args.extend(trust_line.split_whitespace());
+    support::ok(
+        &installation.run(&repo, &trust_args),
+        "the printed trust line",
+    );
+    installation.commit_seal_export(&repo, &[], "f3.txt");
+    let verify = installation.run(&repo, &["verify"]);
+    assert_eq!(verify.status.code(), Some(0), "{}", text(&verify));
+}

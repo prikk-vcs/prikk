@@ -24,6 +24,10 @@ public key.
 - **`key generate --out`** prints the id and uses it in its next steps.
 - **Refusal before writing:** both write paths refuse if either the seed or its key-id file already exists,
   writing neither.
+- **The key-id file is written before the seed**, so an interrupted write leaves a key-id file with no seed.
+  That state refuses to sign ("no seed at …") rather than leaving a seed silently on the legacy id.
+- **`key generate` without `--out`** prints the derived id and uses it in its trust line. It recommends
+  `--out`, and says that saving by hand needs both the seed and its `<role>.key-id` file.
 
 ### Fixed — `setup` ignored `PRIKK_MAINTAINER_KEY_ID`
 

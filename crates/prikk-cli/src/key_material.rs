@@ -330,6 +330,42 @@ pub(crate) fn require_new_key_paths(seed_path: &Path) -> std::result::Result<(),
     Ok(())
 }
 
+/// Create a new key on disk: the key-id file **first**, then the seed (distinct default key ids, addendum
+/// 2, F2). `prepare` runs every refusal the seed write can make before anything is written; both paths
+/// must be absent. A crash between the two writes then leaves a key-id file with no seed — loud: signing
+/// refuses with "no seed at …", and a retry refuses naming both paths. The other order would leave a seed
+/// with no file, which silently signs under the colliding legacy id. Returns the key-id file's path.
+pub(crate) fn write_new_key(
+    seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
+    seed_path: &Path,
+    prepare: impl FnOnce() -> std::result::Result<(), CliError>,
+    write_seed: impl FnOnce() -> std::result::Result<(), CliError>,
+) -> std::result::Result<PathBuf, CliError> {
+    prepare()?;
+    require_new_key_paths(seed_path)?;
+    let key_id_file = write_key_id_file(seed_path, &derived_key_id(seed))?;
+    #[cfg(test)]
+    if FAIL_SEED_WRITE.with(|fail| fail.replace(false)) {
+        return Err(CliError::Failure(
+            "test seam: the seed write failed".to_string(),
+        ));
+    }
+    write_seed()?;
+    Ok(key_id_file)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_SEED_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test seam, unreachable from production: make the next [`write_new_key`] on this thread fail at the seed
+/// write, after the key-id file is written — the state a crash between the two writes leaves.
+#[cfg(test)]
+pub(crate) fn fail_next_seed_write_for_test() {
+    FAIL_SEED_WRITE.with(|fail| fail.set(true));
+}
+
 /// Write the key-id file for a seed just created: the id and one trailing newline, `0600` on Unix (the
 /// key directory's ACL on Windows), never overwriting.
 pub(crate) fn write_key_id_file(
@@ -370,6 +406,15 @@ pub(crate) fn status(role: Role) -> std::result::Result<KeyStatus, CliError> {
             default_key_dir()?.join(role.seed_file_name()),
         ),
     };
+    status_at(role, source, path)
+}
+
+/// [`status`] for a seed path already resolved.
+fn status_at(
+    role: Role,
+    source: SeedSource,
+    path: PathBuf,
+) -> std::result::Result<KeyStatus, CliError> {
     let seed = read_seed_at(&path, source);
     let (key_id, key_id_source, mismatch) = resolve_key_id(role, &path, &seed)?;
     let seed = match mismatch {
@@ -510,3 +555,6 @@ fn set_key_dir_mode(dir: &Path) -> std::result::Result<(), CliError> {
 fn set_key_dir_mode(_dir: &Path) -> std::result::Result<(), CliError> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
