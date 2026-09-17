@@ -1,6 +1,12 @@
 # RFC 157 — Reading a point of history: a tree listing, and a file's bytes
 
-**Status.** **PROPOSED 2026-09-17 by the architect** for **0.46.0 "comparing"**, beside RFC 153 (`prikk diff`). It is the
+**Status.** **ACCEPTED by the project owner 2026-09-17** (*"Yes. Both accepted. Write them."*). **The architect's
+reading, stated so it can be corrected:** §2–§7 are accepted as written, including the verb names `tree` and `cat`,
+the full-mode `mode` field (not planeter's `420`), `content_id` for binary files only, and the refusal of binary content
+to a terminal. Handoff: `rfcs/handoffs/157-reading-a-point/tree-and-cat-handoff-v1.md`, after the shared resolver
+(`rfcs/handoffs/153-content-diff/point-resolver-handoff-v1.md`).
+
+*History:* **PROPOSED 2026-09-17 by the architect** for **0.46.0 "comparing"**, beside RFC 153 (`prikk diff`). It is the
 design owed to planeter's read-path letters of 2026-09-16:
 - A1, a machine-readable tree listing;
 - A2, a file's bytes, text and binary.

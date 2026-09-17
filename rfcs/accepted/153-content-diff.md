@@ -1,6 +1,12 @@
 # RFC 153 — `prikk diff`: two points of history, or the worktree against its baseline
 
-**Status.** **PROPOSED 2026-09-13 by the architect**, on the owner's word (*"Approved"*) to the
+**Status.** **ACCEPTED by the project owner 2026-09-17** (*"Yes. Both accepted. Write them."*), as amended by §7, for
+**0.46.0 "comparing"**. **The architect's reading, stated so it can be corrected:** the direction of §2–§6 is
+accepted together with every §7 amendment, including dropping the `untracked` section and the fresh-repository rule. The
+resolver is shared with RFC 157 and is handed off first. Handoffs:
+`rfcs/handoffs/153-content-diff/point-resolver-handoff-v1.md`, then `diff-handoff-v1.md`.
+
+*History:* **PROPOSED 2026-09-13 by the architect**, on the owner's word (*"Approved"*) to the
 assessment in `.git-exclude/reviewed/git-mapping-currency-review-2026-09-13.md`. Scheduling is the
 owner's: the architect proposes it as the theme after 0.43 (RFC 136). Author-review independence: the
 architect designs and will review the implementation; the gap is compensated by the controls of §6,
