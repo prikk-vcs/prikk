@@ -68,3 +68,43 @@ renames, so any branch that renames a file is unmergeable.
 
 `.git-exclude/review-request/merge-with-renames-design-report-v1.md`. **Stop there.** Include what you measured on
 the binary, including anything in §1 that does not reproduce.
+
+## Addendum 1 2026-09-17 — design accepted; implement
+
+**The design report is accepted** (`merge-with-renames-design-report-v1.md`, review `merge-with-renames-design-review-v1`).
+Its four-piece design (§2.1) and its pair table (§2) are the specification. The architect checked its citations at
+source: `rename_nodes_checked_batch`, the flattening `candidate_sequence`, the fold's `replay_operations(…).ok()?` bail,
+the missing preimage rename arm, and the saved "today" measurement.
+
+**Rulings on §7:**
+1. **Patch boundaries: (a).** `candidate_sequence` carries each operation's patch index, and the oracle batches
+   consecutive renames sharing an index through `rename_nodes_checked_batch`. A boundary is declared, never inferred
+   from `op_seq`.
+2. **`classify_path_relation`: skip the create/delete-typed helpers for renames**, as recommended, on one condition:
+   **every `Independent` verdict on a pair containing a rename must be proven by `prove_pair_replay`**, with no path
+   around it. Control: perturb the proof to be skipped for rename pairs, and a row-8/10/12-style test must fail.
+3. **Identical renames on both sides stay `Conflict`** (rows 14, 23). Changing the identical-operation policy is a
+   whole-policy question, not this round's. It is recorded as a ROADMAP candidate.
+4. **Row 5 keeps `DeleteMutationConflict`.** A rename is a mutation of the node the other side deletes. No new witness
+   kind.
+
+**One correction to the increment plan.** §6 says increment 1 has "no CLI behaviour yet reachable except via
+evidence". That is not so: `merge` runs the same confluence check (S1's refusal came from `merge` itself). So
+**increments 1, 2 and 3 are one round**, and the reviewed state must never be a commit where `merge` accepts renames
+without its CLI controls. Commits inside the round may be split; the report is one.
+
+**Constraints still in force** (handoff §2):
+- nothing in `commutation.rs` branches on a deferred reason, and every symlink control passes unchanged;
+- one rename semantics in the algebra (`rename_nodes_checked_batch`), and no third implementation;
+- no format change.
+
+**Controls:** the report's §6 lists for increments 1 and 2, plus rule 2's proof control above.
+
+**Docs and CHANGELOG** (increment 3):
+- `guide/merge.md` drops the "not merged yet" rename paragraph and describes what refuses (identical renames, rename
+  versus delete of the same node, cross-side chains and swaps);
+- `merge-evidence`'s `unsupported_operation` now means symlinks only;
+- CHANGELOG `### Added — merge accepts branches containing renames`, naming that change of meaning for consumers who
+  read the reason.
+
+**Report:** `.git-exclude/review-request/merge-with-renames-report-v1.md`.
