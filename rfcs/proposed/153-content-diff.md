@@ -101,3 +101,41 @@ path-aware history (`log` filtering is a separate gap).
    stikk: their content-at-a-point dependency gains a two-point form.
 
 Handoffs are written when the owner schedules the theme.
+
+## 7. Amended 2026-09-17, for 0.46.0 — what 0.43.0 to 0.45.0 changed under this design
+
+Proposed again for **0.46.0 "comparing"**, beside RFC 157 (a tree listing and a file's bytes at a point), which
+shares its resolver. Acceptance and scheduling remain the owner's. Checked against the released 0.45.0 asset.
+
+1. **One resolver, extended rather than added (§2).** 0.45.0 shipped `require_existing_ref`, the refusal sweep's
+   shared absent-ref check. The ref-or-block resolver **extends that function**, and RFC 157 uses the same one.
+   - An absent ref refuses with 0.45.0's wording, "ref <name> does not exist in this repository".
+   - A block id the store does not hold refuses with "block <id> is not in this repository".
+   - A received ref is **read**, as `log` and `merge-plan` read one since 0.45.0.
+2. **No `untracked` section (§3). This corrects a contradiction in this RFC.** prikk has no index: `commit` authors
+   every worktree file `.prikkignore` does not exclude. A new file is therefore **`added`, with its content**, which
+   is exactly what §2's "what `commit` would author" means. §6.2's control ("commit, then diff is empty") holds only
+   this way.
+   - `untracked[]` is dropped from `diff-report-v1`.
+   - Ignored paths are not shown.
+   - `worktree-status` calls these same new files "untracked" (its scan, `guide/ignore.md`). `diff`'s guide page
+     says that an untracked file there is an `added` entry here, because `commit` authors it (measured on 0.45.0:
+     a new file is authored by a plain `commit -m`).
+   - RFC 147 §3f's unsupported paths keep their section.
+3. **A fresh repository (§2).** With no `--from`, the left side is the current branch's tip. When that branch is
+   unpublished (a fresh repository), the left side is the **empty state**: bare `prikk diff` shows every file
+   `commit` would author as `added`, with exit 0. That is the implicit-branch rule of the refusal sweep. An
+   explicit `--from` naming an absent ref refuses.
+4. **Statuses that history can now produce (§3).**
+   - **`renamed`** arises across merges since 0.45.0 merges renames.
+   - **`symlink` remains unreachable from history:** replay does not apply symlink operations, so a chain holding
+     one fails the call (§4). On the worktree side a symlink is an unsupported path. The status stays in the
+     schema for when replay supports symlinks.
+5. **Cost (§5).** Anchors landed in 0.43.0: each side is O(tree + at most 63 patches), not depth^1.45. The RFC 133
+   instrument gains a `diff` row.
+6. **Bytes (§5).** "Binary bytes are never printed" stays true **of `diff`**. RFC 157's `prikk cat` is the one
+   bounded command whose job is bytes. `diff` shows a binary entry's ids and sizes, and names `cat` as the way to
+   read either side.
+
+**Increments are unchanged**, except that the resolver is its own first increment, shared with RFC 157. §6.2's
+controls gain: a fresh repository's bare `diff` lists every file as `added`, and an ignored file never appears.
