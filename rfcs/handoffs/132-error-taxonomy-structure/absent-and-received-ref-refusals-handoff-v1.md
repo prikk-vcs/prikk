@@ -174,12 +174,19 @@ Rule:
   the raw path. The real JSON escapes each backslash, so `C:\Users…` appears as `C:\\Users…`.
 
 **Fix before anything else:**
-1. **Derive every expected path the way the product does.** Canonicalize the fixture root (`std::fs::canonicalize`)
-   before formatting any expected path. For JSON, parse the output and compare fields, or escape with the JSON
-   encoder; never format JSON by hand. Use the helper existing tests use, if there is one.
+1. **Never compare an absolute path as text.** The product prints different path forms per platform: the resolved
+   `/private/var/…` on macOS, but the unresolved `C:\Users\RUNNER~1\…` on Windows. There, `std::fs::canonicalize`
+   gives yet another form, `\\?\C:\Users\…`. So "canonicalize the expected path" alone would fix macOS and break
+   Windows. Instead:
+   - **split the output at the path**, and compare the path part by *identity*: `std::fs::canonicalize` applied to
+     **both** the printed path and the fixture path, then compared;
+   - compare the rest byte for byte;
+   - for JSON, **parse** the output, compare every non-path field, and compare the path field by identity. Never
+     format expected JSON by hand.
+
+   Use one shared helper for this in `tests/support`, so the next round inherits it.
 2. **Check `63f4fc41`'s control** (`addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository`), which
-   embeds a path into a byte-for-byte expectation. It has the same exposure: substitute the canonical path, and on
-   Windows the path in the form the prose prints.
+   embeds a path into a byte-for-byte expectation. It has the same exposure: compare the path by identity, per item 1.
 3. **Sweep this round's test file** for every other expectation built from a path.
 4. **Local gates cannot catch this** (Linux only, and cross-target clippy runs no tests). The report must say which
    platforms each fixed assertion was reasoned for, and the architect reads the Windows and macOS jobs after the push.
