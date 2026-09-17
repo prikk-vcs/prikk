@@ -1,8 +1,9 @@
 # Release 0.45.0 preparation — the dev team's part
 
-**Drafted 2026-09-17. NOT LIVE until the owner authorizes the cut.** When authorized, this line is replaced by the
-owner's words and the architect's reading of them. Follow `release-prep-handoff-template.md`; this file fills in the
-blanks. crates.io publication needs the owner's own word, separately, as every release.
+**Issued 2026-09-17. The owner authorized the cut:** *"Yes. Authorized."* **The architect's reading, stated so it
+can be corrected:** the 0.45.0 cut is authorized, with the version, theme and scope below; crates.io publication is
+not yet, and needs the owner's own word, as every release. Follow `release-prep-handoff-template.md`; this file fills
+in the blanks.
 
 | | |
 |---|---|
