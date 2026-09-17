@@ -130,3 +130,34 @@ Consequences:
   control 6 runs `commit`'s route too: sign under a distinct id, then commit succeeds.
 
 Proceed with the handoff as amended. Report: `.git-exclude/review-request/distinct-default-key-ids-report-v1.md`.
+
+## Addendum 2 2026-09-17 — accepted, two follow-ups
+
+**Accepted** (review `distinct-default-key-ids-review-v1`): `0ad74c6d`. Finding 1 (the collision fixtures now share
+`PRIKK_AUTHOR_KEY_ID` deliberately) is accepted. Two findings become required follow-ups in this round, because each
+leaves a new key silently on the colliding legacy id.
+
+**F2 — write the key-id file first, then the seed.** Today a crash between the two writes leaves a seed with no file,
+which reads as the legacy id: silently colliding again. Reverse the order in `setup` and in `key generate --out`:
+- derive the id from the seed in memory;
+- write the key-id file (`create_new`);
+- then write the seed (`create_new`).
+
+A crash then leaves a key-id file with no seed. That state is loud: signing refuses with "no seed at …", and a retry
+refuses naming both paths, which is the existing refusal.
+- **Control:** a test-only seam fails the second write; the key-id file exists, no seed exists, `key status` reports
+  the seed missing (not `key_id_source: "default"`), and a retry refuses naming both paths.
+- **Perturbation:** the seed first.
+
+**F3 — `key generate` without `--out` must not recommend a colliding id.** Today it prints
+`prikk trust maintainer add --key-id maintainer …` and "save this seed as …/maintainer.seed". Change it to:
+- print the derived id;
+- print `--key-id <that id>` in the trust line;
+- say that saving by hand needs both files: the seed, and `<role>.key-id` holding exactly that id and a newline.
+  A seed saved alone keeps the legacy id.
+- Keep "or re-run with --out <path>" and put it first, as the recommended route.
+- **Control:** follow the printed instructions literally (save both files as printed); `key status` then reports
+  `key_id_source: "key-file"` with the printed id, usable; a seal adopted under the printed id verifies.
+- **Perturbation:** the old text.
+
+**Report:** `.git-exclude/review-request/distinct-default-key-ids-follow-up-report-v1.md`. Items 3 and 4 follow it.
