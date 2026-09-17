@@ -40,6 +40,7 @@ mod setup;
 mod stdout;
 mod sync;
 mod tag;
+mod tree;
 mod unlock;
 mod verify_verdict;
 

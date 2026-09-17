@@ -235,6 +235,28 @@ pub fn prepare_patch_plan_content_report_at_point_reporting_anchor(
     Ok((content_report_from(snapshot, requested_paths), fallback))
 }
 
+/// How a replayed entry's content is classified: **the one classification** `checkout --patch-plan`'s
+/// content report and RFC 157's `tree`/`cat` share, so they cannot disagree on whether a file is text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManifestEncoding {
+    /// A text node: its bytes are the reconstructed content.
+    Text,
+    /// A binary node, with the blob that stores its current content.
+    Binary(ObjectId),
+    /// Neither: a kind replay did not track. Nothing produces it since RFC 136 §10.1a (see
+    /// [`ReplayManifestEntry::kind`]).
+    Opaque,
+}
+
+/// Classify one replayed entry (RFC 143 §5; RFC 157 §3's `encoding`).
+pub(crate) fn classify_manifest_entry(entry: &ReplayManifestEntry) -> ManifestEncoding {
+    match (entry.kind, entry.blob_id) {
+        (Some(NodeKind::BinaryFile), Some(blob_id)) => ManifestEncoding::Binary(blob_id),
+        (Some(NodeKind::TextFile), _) => ManifestEncoding::Text,
+        _ => ManifestEncoding::Opaque,
+    }
+}
+
 fn content_report_from(
     snapshot: PatchReplaySnapshot,
     requested_paths: &[String],
@@ -250,15 +272,11 @@ fn content_report_from(
     for requested in requested_paths {
         match by_path.get(requested.as_str()) {
             Some(entry) => {
-                let content = match (entry.kind, entry.blob_id) {
-                    (Some(NodeKind::BinaryFile), Some(blob_id)) => PatchPlanContent::Binary {
-                        blob_id,
-                        size: entry.bytes.len() as u64,
-                    },
-                    (Some(NodeKind::TextFile), _) => PatchPlanContent::Text(entry.bytes.clone()),
-                    _ => PatchPlanContent::Opaque {
-                        size: entry.bytes.len() as u64,
-                    },
+                let size = entry.bytes.len() as u64;
+                let content = match classify_manifest_entry(entry) {
+                    ManifestEncoding::Binary(blob_id) => PatchPlanContent::Binary { blob_id, size },
+                    ManifestEncoding::Text => PatchPlanContent::Text(entry.bytes.clone()),
+                    ManifestEncoding::Opaque => PatchPlanContent::Opaque { size },
                 };
                 entries.push(PatchPlanContentEntry {
                     path: requested.clone(),

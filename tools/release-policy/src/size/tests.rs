@@ -208,7 +208,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 147 §2f added `declaration_resolution.rs`: 135 -> 136. RFC 156 §5b added `format_upgrade.rs`:
     // 136 -> 137. RFC 156 §4 added `signature_admission.rs`: 137 -> 138. The RFC 132 refusal sweep added
     // `ref_resolution.rs`: 138 -> 139. RFC 153's point resolver added `point.rs`: 139 -> 140.
-    assert_eq!(store.production_files, 140);
+    // RFC 157 added `point_reading.rs`: 140 -> 141.
+    assert_eq!(store.production_files, 141);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

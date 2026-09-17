@@ -62,6 +62,7 @@ mod patch_set_digest;
 mod path;
 // RFC 131 §2.2a ruling (b): the `received` name family (received, received_index).
 mod point;
+mod point_reading;
 mod received;
 mod recognition_claim;
 mod ref_resolution;
@@ -211,6 +212,10 @@ pub use patch_set_digest::{
 pub use path::{RepoPath, validate_no_path_collisions, validate_repo_path};
 pub use point::{
     Point, PointKind, is_bare_block_id, is_point_name, refuse_block_point_for_worktree_write,
+};
+pub use point_reading::{
+    PointEntry, PointEntryEncoding, PointEntryKind, TreeListing,
+    list_tree_at_point_reporting_anchor, parse_tree_prefix, unpublished_branch_tree_listing,
 };
 pub use received::{
     ReceivedPointer, list_received_pointers, read_received_pointer, validate_received_ref,

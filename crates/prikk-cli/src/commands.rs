@@ -217,6 +217,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "tree",
+        run: crate::tree::run_tree,
+        help_lines: &[
+            "  prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]  List the files at a point, with mode, size and encoding; --prefix filters by whole path components, and the replay is whole-tree either way",
+        ],
+    },
+    Command {
         name: "show",
         run: crate::run_show,
         help_lines: &[
