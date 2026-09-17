@@ -56,8 +56,10 @@ claims what that replay could not do. Some ordinary histories still refuse:
     side's rename was made against that side's history, so one side's rename cannot rely on a path only
     the other side vacated.
 
-  A swap of two files made in one commit merges; the same two renames in separate commits do not, because
-  between them both files would hold one path.
+  A swap of two files made in one commit merges **only when the other side changes nothing**. Beside any
+  change on the other side it is refused as `unsupported_operation`: the proof compares the two sides one
+  operation at a time, and half of a swap cannot be replayed alone. The same two renames in separate
+  commits never merge, because between them both files would hold one path.
 - **A side containing a symlink** (created or deleted) is not merged yet. The proof cannot replay a
   symlink, so it refuses as `unsupported_operation` rather than guess.
 - **A side that creates a file and then deletes it, or changes its mode**, and **a side that deletes a

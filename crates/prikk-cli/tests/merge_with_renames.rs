@@ -224,3 +224,71 @@ fn a_merge_on_a_checkpoint_block_snapshots_the_renamed_path() {
     assert!(merged.contains(r#""path": "b.txt""#), "{merged}");
     assert!(merged.contains(r#""not_found": ["a.txt"]"#), "{merged}");
 }
+
+/// Addendum 2: a swap of two files made in one commit merges only when the other side changes nothing.
+/// Beside an unrelated change on the other side it is refused as `unsupported_operation`, the documented
+/// limit: the proof compares the sides one operation at a time, and half a swap does not replay alone.
+#[test]
+fn a_one_commit_swap_merges_alone_and_is_refused_beside_another_change() {
+    let repo = support::unique_repo("renames-swap");
+    ok(&repo, &["setup", "."]);
+    std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    std::fs::write(repo.join("c.txt"), "gamma\n").unwrap();
+    std::fs::write(repo.join("d.txt"), "delta\n").unwrap();
+    commit_and_seal(&repo, "base");
+    let base = ok(&repo, &["log", "--limit", "1"])
+        .lines()
+        .find_map(|line| line.strip_prefix("block "))
+        .expect("log names the block")
+        .trim()
+        .to_string();
+    ok(
+        &repo,
+        &["branch", "create", "heads/feature", "--from", "heads/main"],
+    );
+    ok(&repo, &["branch", "switch", "heads/feature"]);
+    ok(&repo, &["mv", "a.txt", "tmp.txt"]);
+    ok(&repo, &["mv", "c.txt", "a.txt"]);
+    ok(&repo, &["mv", "tmp.txt", "c.txt"]);
+    let swap = ok(&repo, &["commit", "-m", "swap a and c"]);
+    assert!(
+        swap.contains("rename-path a.txt -> c.txt") && swap.contains("rename-path c.txt -> a.txt"),
+        "one commit holds the swap: {swap}"
+    );
+    ok(&repo, &["seal", "--allow-no-audit"]);
+    ok(&repo, &["branch", "switch", "heads/main"]);
+
+    // The other side unchanged: the swap merges.
+    ok(
+        &repo,
+        &[
+            "branch",
+            "create",
+            "heads/untouched",
+            "--from",
+            "heads/main",
+        ],
+    );
+    support::ok(
+        &merge(&repo, &base, "heads/untouched", "heads/feature"),
+        "the swap into an unchanged side",
+    );
+    let swapped = tree(&repo, "heads/untouched", &["a.txt", "c.txt"]);
+    assert!(
+        swapped.contains(
+            r#"{"path": "a.txt", "mode": 33188, "content": {"kind": "text", "text": "gamma\n"}}"#
+        ),
+        "{swapped}"
+    );
+
+    // An unrelated change on the other side: refused, with the documented reason.
+    std::fs::write(repo.join("d.txt"), "delta2\n").unwrap();
+    commit_and_seal(&repo, "edit d");
+    let refused = merge(&repo, &base, "heads/main", "heads/feature");
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("outcome: Unsupported, reason: unsupported_operation"),
+        "{}",
+        text(&refused)
+    );
+}

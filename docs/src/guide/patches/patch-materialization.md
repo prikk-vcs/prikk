@@ -25,6 +25,8 @@ Supported operation subset:
 - deterministic arbitrary-span `EditText`
 - `ReplaceBinary` (DC-73)
 - `ChangePerm` (DC-73) — the mode bit is written, not only the content
+- `RenamePath` (RFC 144 increment 1) — the node's content is written at its new path; a rename in one
+  patch that swaps two files is applied as one step
 
 Safety boundaries:
 
@@ -36,9 +38,10 @@ Safety boundaries:
 - Deletion is refused unless the current worktree bytes still match the old Blob precondition.
 - Extra untracked files are never deleted.
 - Symlinked parents, symlink targets, non-file targets, and `.prikk/` metadata paths remain refused.
-- Renames, symlinks, merge conflicts, and full patch algebra remain later increments — not a node-model
-  gap for either: `commit` never authors `RenamePath` (renames become delete+create) or `CreateSymlink`
-  (refused outright), so there is nothing in ordinary history for materialization to act on (DC-73).
+- Neither mode removes a renamed file's *old* path from the worktree: `--patch-materialize` never deletes,
+  and `--patch-materialize-delete` removes only files a `DeleteFile` removed.
+- Symlinks, merge conflicts, and full patch algebra remain later increments. `commit` refuses a symlink
+  outright, so there is nothing in ordinary history for materialization to act on (DC-73).
 
 This command is useful for exercising the current Prikk object/WAL/ref/block pipeline end-to-end,
 but it is not yet a complete checkout implementation. For the shared write-safety boundary and its

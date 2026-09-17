@@ -7,7 +7,8 @@
 `prikk merge`, `merge-evidence` and `merge-plan` now judge a side containing a rename (`prikk mv`) instead of
 refusing it as `unsupported_operation`. A rename merges beside other changes, including an edit of the renamed
 file on the other side, which lands on the renamed file; merging in either direction gives the same tree. A
-swap of two files made in one commit merges.
+swap of two files made in one commit merges only when the other side changes nothing; beside any change on the
+other side it is refused as `unsupported_operation`.
 
 Still refused, as a conflict: the same rename on both sides, one file renamed to two paths, two files renamed
 onto one path, and a rename on one side against a delete of that file on the other. A rename onto a path only

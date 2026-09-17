@@ -22,7 +22,9 @@ Safety boundaries:
 - Modified deleted files are refused.
 - Symlink targets and non-file targets are refused.
 - General checkout pruning remains deferred.
-- Text edits, renames, chmod, symlinks, merge conflicts, inverse logic, and full patch algebra remain later increments.
+- The replay this plan reads applies text edits, renames and mode changes, as `--patch-materialize` does,
+  but only a `DeleteFile` makes a file eligible for deletion: a renamed file's old path is never deleted.
+- Symlinks, merge conflicts, inverse logic, and full patch algebra remain later increments.
 
 For exact deletion and materialization safety boundaries, see
 [path and worktree safety](../../reference/path-safety.md).
