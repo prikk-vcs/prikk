@@ -16,6 +16,11 @@ serde_json = "1"
 toml = "1.1"
 prikk-hash = { workspace = true }
 prikk-store = { workspace = true }
+[dev-dependencies]
+# The warm-cache instrument reads the DC-64 cache header and the baseline rung (test-support only; the
+# `prikk` binary the corpus times is built separately and never carries it).
+prikk-store = { workspace = true, features = ["test-support"] }
+
 [[bin]]
 name = "extract-profile"
 path = "src/bin/extract_profile.rs"

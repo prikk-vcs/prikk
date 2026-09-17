@@ -432,3 +432,117 @@ fn decode_node_record(
 
 #[cfg(test)]
 mod tests;
+
+// Test-support instrument (warm-cache `commit` anomaly measurement, RFC 136): read-only, never in a
+// shipped build. It reports what the persisted cache holds, and which rung `resolve_baseline_state`
+// would take for a baseline and why. The decision is reproduced step for step from
+// `resolve_baseline_state` and `try_incremental_step` above, through the same `load`, `read_block` and
+// `apply_one_block`, with nothing persisted. A caller cross-checks it against the rung the real binary
+// took, read from the cache header before and after the command. The ref-resolving entry point is
+// `patch_replay::baseline_cache_rung_for_test_support`.
+
+/// The persisted cache's header.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleCacheHeader {
+    /// The block the cached state represents.
+    pub baseline_block_id: ObjectId,
+    /// The lineage genesis it was derived under.
+    pub horizon_id: ObjectId,
+    /// Incremental steps since the last full replay.
+    pub steps_since_reanchor: u32,
+}
+
+/// The rung `resolve_baseline_state` takes, and the exact reason on a miss.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaselineCacheRung {
+    /// The ref is unpublished: no baseline, the cache is not consulted.
+    Genesis,
+    /// Incremental step from the cached predecessor.
+    Incremental,
+    /// Full replay: no cache file, or it failed to load (checksum, decode, schema).
+    FullReplayNoUsableCache,
+    /// Full replay: the cache was derived under another lineage genesis.
+    FullReplayHorizonMismatch,
+    /// Full replay forced: the reanchor bound was reached.
+    FullReplayReanchorDue {
+        /// The cached step count.
+        steps_since_reanchor: u32,
+    },
+    /// Full replay: the baseline block could not be read.
+    FullReplayBlockUnreadable,
+    /// Full replay: the baseline block's parents are not exactly the cached block.
+    FullReplayParentMismatch {
+        /// What the cache represents.
+        cached_baseline_block_id: ObjectId,
+        /// The baseline block's parents.
+        parent_block_ids: Vec<ObjectId>,
+    },
+    /// Full replay: the baseline block needs a text file's materialized content that a one-block step
+    /// cannot supply (DC-65).
+    FullReplayMissingBlobForLifecycleEffect {
+        /// The replay error, as displayed.
+        detail: String,
+    },
+    /// The step failed with another replay error; the real path propagates it.
+    StepError {
+        /// The replay error, as displayed.
+        detail: String,
+    },
+}
+
+/// The persisted cache header, if the cache loads.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn lifecycle_cache_header_for_test_support(
+    layout: &RepositoryLayout,
+) -> Option<LifecycleCacheHeader> {
+    load(layout).map(|cache| LifecycleCacheHeader {
+        baseline_block_id: cache.baseline_block_id,
+        horizon_id: cache.horizon_id,
+        steps_since_reanchor: cache.steps_since_reanchor,
+    })
+}
+
+/// Which rung `resolve_baseline_state` would take for `baseline_block_id`/`horizon_id` now, and why.
+#[cfg(feature = "test-support")]
+pub(crate) fn baseline_cache_rung_at_for_test_support(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    baseline_block_id: ObjectId,
+    horizon_id: ObjectId,
+) -> BaselineCacheRung {
+    let Some(cached) = load(layout) else {
+        return BaselineCacheRung::FullReplayNoUsableCache;
+    };
+    if cached.horizon_id != horizon_id {
+        return BaselineCacheRung::FullReplayHorizonMismatch;
+    }
+    if cached.steps_since_reanchor >= CHECKPOINT_CADENCE {
+        return BaselineCacheRung::FullReplayReanchorDue {
+            steps_since_reanchor: cached.steps_since_reanchor,
+        };
+    }
+    let Ok(block) = replay::read_block(reader, baseline_block_id) else {
+        return BaselineCacheRung::FullReplayBlockUnreadable;
+    };
+    if block.parent_block_ids.as_slice() != [cached.baseline_block_id] {
+        return BaselineCacheRung::FullReplayParentMismatch {
+            cached_baseline_block_id: cached.baseline_block_id,
+            parent_block_ids: block.parent_block_ids.clone(),
+        };
+    }
+    let mut state = cached.state.clone();
+    match replay::apply_one_block(reader, &block, &mut state, false) {
+        Ok(()) => BaselineCacheRung::Incremental,
+        Err(err @ replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. }) => {
+            BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
+                detail: format!("{err}"),
+            }
+        }
+        Err(err) => BaselineCacheRung::StepError {
+            detail: format!("{err}"),
+        },
+    }
+}

@@ -632,6 +632,36 @@ pub(crate) fn resolve_worktree_baseline(
     Ok(WorktreeBaseline::Genesis)
 }
 
+/// Test-support instrument (warm-cache `commit` anomaly measurement, RFC 136): which rung `commit` on
+/// `ref_name` would take to its baseline state now, and why — the ref resolved exactly as
+/// [`resolve_folded_worktree_baseline`] resolves it. Read-only; never in a shipped build.
+///
+/// # Errors
+///
+/// Resolving the ref's baseline, or opening a read snapshot, fails.
+#[cfg(feature = "test-support")]
+pub fn baseline_cache_rung_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<crate::lifecycle_cache::incremental::BaselineCacheRung> {
+    let WorktreeBaseline::Published {
+        baseline_block,
+        horizon,
+    } = resolve_worktree_baseline(layout, ref_name)?
+    else {
+        return Ok(crate::lifecycle_cache::incremental::BaselineCacheRung::Genesis);
+    };
+    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
+    Ok(
+        crate::lifecycle_cache::incremental::baseline_cache_rung_at_for_test_support(
+            layout,
+            &reader,
+            baseline_block,
+            horizon,
+        ),
+    )
+}
+
 /// The baseline lifecycle state a worktree operation should compare or author against: the sealed
 /// baseline (or an empty genesis state), with any already-queued (unsealed) patches for this ref
 /// folded on top (DC-66) exactly as `commit` folds them.

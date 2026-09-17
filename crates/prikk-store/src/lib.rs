@@ -150,6 +150,10 @@ pub use history::{
     DEFAULT_HISTORY_LIMIT, HistoryEntry, RefHistory, load_received_ref_history, load_ref_history,
 };
 pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
+#[cfg(feature = "test-support")]
+pub use lifecycle_cache::incremental::{
+    BaselineCacheRung, LifecycleCacheHeader, lifecycle_cache_header_for_test_support,
+};
 pub use lock::{ActiveLock, ContainerLockGuard, RefLock, acquire_container_locks};
 pub use maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner, maintainer_signature};
 pub use memory_store::MemoryObjectStore;
@@ -182,6 +186,8 @@ pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,
     prepare_patch_inverse_plan,
 };
+#[cfg(feature = "test-support")]
+pub use patch_replay::baseline_cache_rung_for_test_support;
 pub use patch_replay::{
     PatchPlanContent, PatchPlanContentEntry, PatchPlanContentReport, PatchPlanCoverage,
     PatchReplayPlan, SnapshotAnchorFallback, prepare_patch_plan_content_report,
