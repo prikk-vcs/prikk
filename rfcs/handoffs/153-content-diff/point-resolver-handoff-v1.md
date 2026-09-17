@@ -123,3 +123,28 @@ cannot serve both entries without changing ref-addressed output, or if anchoring
 
 **Report:** `.git-exclude/review-request/point-resolver-follow-up-report-v1.md`. **The `tree` and `cat` round starts
 after it is reviewed.**
+
+## Addendum 2 2026-09-17 — follow-ups accepted; `--baseline-block` moves too
+
+**Accepted** (review `point-resolver-follow-up-review-v1`): `2ecba551`.
+- **Follow-up 3's cause was the architect's error, and the report is right.** Control 4 already used the genesis
+  block, a checkpoint. What stops a snapshot write for a bare id is `load_snapshot_checkout`'s ref-name lookup, not the
+  block. Q4 (the refusal removed and the snapshot plan resolving a bare id) is the perturbation that makes a write
+  possible, and it fails the control on the tree. The asserted checkpoint premise stays.
+- **Kept, checked at source:** `resolve_point`'s local-ref path runs through `read_current_ref_tip_block`
+  (`refs.rs:140`), which keeps the RefState name-mismatch `Integrity` check `resolve_target` used to make by hand.
+
+**One more follow-up (report §5.1): `--baseline-block` goes through the resolver's block check** in `merge-evidence`,
+`merge-plan` and `merge`. It is a block id the user types, so a missing or mistyped one is a caller precondition, not
+damage. Measured on `2ecba551`: `merge-evidence --baseline-block 000…0` answers `integrity error: missing Block <id>`.
+- Use `resolve_point`'s block arm, or one function it calls, **not** a third existence check. A block not held answers
+  "block <id> is not in this repository", and another type names its type.
+- `lineage_horizon` keeps its own reading of a block it reaches **by walking history**. A missing parent found during
+  the walk is damage, and stays `Integrity`. Only the id the user passed moves.
+- **Controls:** a missing and a wrong-type `--baseline-block` for each of the three commands; a real baseline
+  unchanged; every existing merge control passes. **Perturb the sharing:** give the baseline its own check back.
+- CHANGELOG: extend the `### Changed — merge-evidence and merge-plan resolve a block the way checkout does` entry to
+  `--baseline-block` and `merge`, with the measured "was" texts.
+
+**Report:** `.git-exclude/review-request/baseline-block-report-v1.md`. **The `tree` and `cat` round starts after it
+is reviewed.**
