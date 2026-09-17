@@ -163,3 +163,26 @@ Rule:
   (`63d0dcee`), and `checkout --plan-only --ref heads/nope` refuses. *Perturbation:* gate the implicit ref.
 
 **Report:** `.git-exclude/review-request/absent-and-received-ref-refusals-follow-up-report-v1.md`.
+
+## Addendum 4 2026-09-17 — URGENT: `main` is red on macOS and Windows
+
+**CI on `cb1951d5` (run 35175704741) failed two jobs.** Both failures are in this round's tests, not in the product.
+- **macOS mutation test suite:** `control4_…` and `control5_…` fail. The temp directory `/var/folders/…` is a symlink
+  to `/private/var/…`, and `prikk` reports the resolved `/private/var/…` path. The tests build the expected text from
+  the unresolved path.
+- **Windows mutation test suite:** `control4_…` fails. The expected `log --format json` is a hand-built string holding
+  the raw path. The real JSON escapes each backslash, so `C:\Users…` appears as `C:\\Users…`.
+
+**Fix before anything else:**
+1. **Derive every expected path the way the product does.** Canonicalize the fixture root (`std::fs::canonicalize`)
+   before formatting any expected path. For JSON, parse the output and compare fields, or escape with the JSON
+   encoder; never format JSON by hand. Use the helper existing tests use, if there is one.
+2. **Check `63f4fc41`'s control** (`addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository`), which
+   embeds a path into a byte-for-byte expectation. It has the same exposure: substitute the canonical path, and on
+   Windows the path in the form the prose prints.
+3. **Sweep this round's test file** for every other expectation built from a path.
+4. **Local gates cannot catch this** (Linux only, and cross-target clippy runs no tests). The report must say which
+   platforms each fixed assertion was reasoned for, and the architect reads the Windows and macOS jobs after the push.
+
+One commit on top of `63f4fc41`. **Report:** `.git-exclude/review-request/absent-and-received-ref-refusals-ci-fix-report-v1.md`.
+The follow-up `63f4fc41` stays unpushed until this fix lands with it.
