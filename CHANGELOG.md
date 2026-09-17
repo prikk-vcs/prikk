@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Changed — new keys get distinct default key ids; existing keys keep theirs
+
+A key made by `prikk setup` or `prikk key generate --out` now has its own key id: `ed25519-` and the first
+16 hex characters of its public key, for example `ed25519-296c6e77232ffa57`. The id is written beside the
+seed, as `author.key-id` / `maintainer.key-id` in the key directory or `<seed path>.key-id`. It is
+role-neutral: one seed has one id, whichever role uses it. Until now every installation signed as `author`
+and sealed as `maintainer`, so two installations could not exchange history at all: one key id binds to one
+public key.
+
+- **Existing keys keep their ids.** A seed with no key-id file still signs as `author` / `maintainer`, and
+  its repositories keep committing, sealing and verifying. `setup` reusing such a key prints a note saying
+  the id is the shared legacy default, and how to use a distinct one.
+- **One resolution everywhere.** `PRIKK_<ROLE>_KEY_ID` if set, else the key-id file, else the legacy role
+  word, for `commit`, `seal`, every other signer, `setup` and `key status`.
+- **A key-id file must belong to its seed.** One that does not hold the id derived from the seed in use is
+  refused for signing. `key status` reports `usable: false` with `reason: key-id-file-mismatch`, naming the
+  file and both ids.
+- **`key status`:** `key_id_source` gains the value `key-file`, additive within `key-status-v1`.
+- **`setup`** prints each key's id instead of `export PRIKK_<ROLE>_KEY_ID=...` for a seed it created.
+- **`key generate --out`** prints the id and uses it in its next steps.
+- **Refusal before writing:** both write paths refuse if either the seed or its key-id file already exists,
+  writing neither.
+
+### Fixed — `setup` ignored `PRIKK_MAINTAINER_KEY_ID`
+
+`setup` always adopted the maintainer key under `maintainer`, whatever the variable said. It now adopts
+under the id every signer resolves, and prints it.
+
+### Fixed — two key-id refusals gave advice that could not work
+
+- **`trust maintainer add` on an id already adopted with another key** said to adopt the new key under a
+  different id. That matches none of that maintainer's blocks, because the id travels in every signature.
+  It now says the other maintainer must sign under a distinct id, from a key made by
+  `prikk key generate --out` or with `PRIKK_MAINTAINER_KEY_ID`, and names the `trust maintainer add` that
+  follows.
+- **The AUTHOR key conflict under the legacy id `author`**, at `commit`, `bundle import` and `sync
+  accept`, and `verify`'s conflicting-material finding, called it a key-rotation attempt. It now says both
+  installations use the legacy default, that history already signed under `author` by the other key
+  cannot enter the repository, and that new history signed under a distinct id commits and imports. Any
+  other id keeps the rotation wording.
+
 ### Changed — repository format 7; breaking once, and the upgrade is explicit
 
 New repositories are created at **format 7**: format 6 plus one rule, that an object id may hold several

@@ -122,15 +122,23 @@ fn print_prose(statuses: &[(KeyStatus, Option<Binding>)]) {
         if let Err(reason) = &status.seed {
             println!("reason: {}", reason.code());
         }
-        println!(
-            "key id: {} ({})",
-            status.key_id,
-            if status.key_id_from_environment {
-                "environment"
-            } else {
-                "default"
+        match &status.key_id_source {
+            crate::key_material::KeyIdSource::KeyFile(path) => {
+                println!("key id: {} (key-file {})", status.key_id, path.display())
             }
-        );
+            other => println!("key id: {} ({})", status.key_id, other.as_str()),
+        }
+        if let Err(crate::key_material::Unusable::KeyIdFileMismatch {
+            path,
+            file_id,
+            derived_id,
+        }) = &status.seed
+        {
+            println!(
+                "key id file: {} holds {file_id}, but this seed derives {derived_id}",
+                path.display()
+            );
+        }
         if let Some(public_key) = status.public_key_hex() {
             println!("public key: {public_key}");
         }
@@ -179,11 +187,7 @@ fn print_json(statuses: &[(KeyStatus, Option<Binding>)]) {
         ));
         json.push_str(&format!(
             "      \"key_id_source\": {},\n",
-            escape_json_string(if status.key_id_from_environment {
-                "environment"
-            } else {
-                "default"
-            })
+            escape_json_string(status.key_id_source.as_str())
         ));
         match status.public_key_hex() {
             Some(hex) => json.push_str(&format!(

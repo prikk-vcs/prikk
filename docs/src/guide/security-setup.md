@@ -27,10 +27,15 @@ paths, see [repository layout and authority](../reference/repository-layout.md).
   repository has already recorded, with different key material, is refused:
 
   ```
-  error: integrity error: author key_id author already has a different recorded public key (…); one
+  error: integrity error: author key_id alice already has a different recorded public key (…); one
   key_id binds to one public key -- this looks like a key-rotation attempt, which is not supported and
   is indistinguishable from impersonation
   ```
+
+  When the id is the legacy default `author`, which every installation made before 0.45.0 shares, the
+  refusal says that instead. It explains that history signed under `author` by another key cannot enter
+  this repository, and names the route: sign new history under a distinct id, from a key made by
+  `prikk key generate --out` or with `PRIKK_AUTHOR_KEY_ID`.
 
   That is an impersonation guard, not a trust decision: it stops one identity being silently reused by
   a different key, and says nothing about whether that identity is *trusted*. `verify` reports
@@ -62,8 +67,15 @@ The CLI reads each role's **seed from a file**, in exactly two places and no thi
 2. otherwise `<key directory>/author.seed` / `<key directory>/maintainer.seed`.
 
 The key directory is `$XDG_CONFIG_HOME/prikk` (else `$HOME/.config/prikk`) on Unix and
-`%APPDATA%\prikk` on Windows. `PRIKK_AUTHOR_KEY_ID` / `PRIKK_MAINTAINER_KEY_ID` name the key id
-recorded in signatures and default to `author` / `maintainer`.
+`%APPDATA%\prikk` on Windows. The key id recorded in signatures is resolved in one place, in this
+order:
+1. `PRIKK_AUTHOR_KEY_ID` / `PRIKK_MAINTAINER_KEY_ID`, if set;
+2. the key-id file beside the seed: `author.key-id` / `maintainer.key-id` in the key directory, or
+   `<seed path>.key-id`, which `prikk setup` and `prikk key generate --out` write when they create a
+   seed (the id is `ed25519-` and the first 16 hex characters of the public key);
+3. otherwise the legacy role word, `author` / `maintainer`, for a seed made before 0.45.0.
+
+A key-id file must hold the id derived from its seed; otherwise signing is refused.
 
 **A seed never travels through the environment.** `PRIKK_AUTHOR_SEED` and `PRIKK_MAINTAINER_SEED`
 carried one until prikk 0.40. An environment variable is readable by every child process, survives in
@@ -94,7 +106,9 @@ prikk key status [path] [--role author|maintainer] [--format json]
 
 It reports, per role, which of the two inputs above is in effect (`source`), the file it resolves to,
 whether that file is usable and if not why (`reason` — missing, an override that names a file which is
-not there, readable by group or others, or undecodable), the key id, and how that key id relates to
+not there, readable by group or others, undecodable, or `key-id-file-mismatch` for a key-id file that
+does not belong to its seed, with the file and both ids named), the key id and where it came from
+(`key_id_source`: `environment`, `key-file` or `default`), and how that key id relates to
 what this repository has already recorded (`binding`): `unrecorded`, `matches`, `mismatch`, or — for
 MAINTAINER — `not-adopted`.
 
@@ -119,7 +133,10 @@ prikk trust maintainer add --key-id ID --public-key HEX
 prikk trust maintainer remove --key-id ID
 ```
 
-`ID` must match the MAINTAINER key id used by `PRIKK_MAINTAINER_KEY_ID`. `HEX` must be the lowercase
+`ID` must be the key id the MAINTAINER signer signs under, which `prikk key status --role maintainer`
+reports. If `ID` is already adopted with a different public key, `add` is refused. Adopting under
+another local id would not help, because the id travels in every signature: the other maintainer must
+sign under a distinct id. `HEX` must be the lowercase
 64-hex-character Ed25519 public key that matches the MAINTAINER seed file.
 
 `add` writes the trusted public key and adds it to the repository's adopted-key set, with `required = 1`

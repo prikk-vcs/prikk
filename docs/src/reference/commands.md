@@ -81,6 +81,16 @@ block id or a **branch** ref, and **refuses a tag ref** — a tag of a tag is ou
 tag object → block, one hop), and resolving it silently would make `--target tags/v1` and `--target`
 that tag's own block indistinguishable in history. The refusal names both accepted forms.
 
+**Key ids.**
+- `setup` (when it creates a seed) and `key generate --out` write the new key's id,
+  `ed25519-<first 16 hex of the public key>`, beside the seed, as `<role>.key-id` in the key directory or
+  `<seed path>.key-id`.
+- Every signer, `setup` and `key status` resolve the id the same way: `PRIKK_<ROLE>_KEY_ID`, else that
+  file, else the legacy role word.
+- `setup` adopts the maintainer key under the resolved id and prints it.
+- `key status` reports `key_id_source` as `environment`, `key-file` or `default`, and a key-id file that
+  does not hold its seed's id as `reason: key-id-file-mismatch`, which refuses signing.
+
 **`format upgrade` is explicit, verified and one-way.** A repository created by 0.44.0 or earlier is
 format 6; new repositories are format 7, which is format 6 plus "an object id may hold several records,
 the last authoritative". `prikk format upgrade` takes the writer lock, runs the same verification as

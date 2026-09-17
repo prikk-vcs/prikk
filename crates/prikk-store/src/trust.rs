@@ -119,9 +119,12 @@ pub fn add_trusted_maintainer(
         // lands here: fresh material every run, under the fixed key id `maintainer`.
         Some(_) => {
             return Err(PrikkError::Precondition(format!(
-                "maintainer key id {key_id} is already adopted with a different public key; adopt \
-                 the new key under a different id, or export the seed already adopted under this \
-                 one"
+                "maintainer key id {key_id} is already adopted with a different public key. A \
+                 key id travels in every signature, so adopting this key under another local id \
+                 would match none of its blocks: its maintainer must sign under a distinct id -- a \
+                 key made by `prikk key generate --out <path>` has one (point \
+                 PRIKK_MAINTAINER_SEED_FILE at it), or set PRIKK_MAINTAINER_KEY_ID -- and you adopt it under that id with `prikk trust \
+                 maintainer add --key-id <that id> --public-key <its public key>`"
             )));
         }
         None => {

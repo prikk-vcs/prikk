@@ -21,7 +21,7 @@ prikk setup ./my-repo
 
 ```
 initialized Prikk repository at ./my-repo/.prikk
-trusted maintainer key: maintainer
+trusted maintainer key: ed25519-cd1bc694acba34fe
 adopted maintainer keys: 1
 
 your keys are in /home/you/.config/prikk
@@ -42,6 +42,13 @@ echo "hello prikk" > ./my-repo/readme.txt
 (cd ./my-repo && prikk seal --allow-no-audit)
 ```
 
+**Each new key gets its own key id.** A key id is the name a signature carries.
+`setup` names each key it creates `ed25519-` followed by the first 16 hex characters of its public key,
+and writes that id beside the seed. Your keys' ids are therefore yours alone: two people who each ran
+`setup` can exchange history, and each adopts the other's maintainer key under its own id. The id is a
+name, not a proof. What makes it an identity is that a repository binds one id to one public key.
+`prikk key status` shows the id in effect and where it came from.
+
 Neither command names a branch. Every command that takes `--ref` defaults to the branch named in
 `.prikk/current-branch`, which `init` and `setup` set to `heads/main`; `--ref` given explicitly
 always wins.
@@ -55,7 +62,12 @@ One directory, per platform, and prikk resolves it itself:
 | Linux, macOS, BSD | `$XDG_CONFIG_HOME/prikk`, or `$HOME/.config/prikk` when `XDG_CONFIG_HOME` is unset |
 | Windows | `%APPDATA%\prikk` |
 
-It holds `author.seed` and `maintainer.seed`, and nothing else. On Unix the directory is mode `0700`
+It holds `author.seed` and `maintainer.seed`, plus `author.key-id` and `maintainer.key-id`, each
+holding the id of the seed beside it. **A key-id file must belong to its seed.** If the file does not
+hold the id derived from the seed in use (a replaced seed, a copied file, or hand-edited content),
+signing is refused, and `prikk key status` reports the key unusable, naming the file and both ids.
+To sign under an id of your choosing, set `PRIKK_AUTHOR_KEY_ID` / `PRIKK_MAINTAINER_KEY_ID`; never edit
+the file. On Unix the directory is mode `0700`
 and each file `0600`; **prikk refuses to read a seed file that group or others can read**, naming the
 mode and the `chmod` that fixes it. On Windows there are no mode bits: the directory relies on
 `%APPDATA%` being per-user by platform ACL, which is stated here rather than assumed — it is the one
@@ -64,14 +76,16 @@ known.
 
 **`--author-seed-out <path>` / `--maintainer-seed-out <path>` override the location.** A seed written
 somewhere else is not found automatically, so `setup` prints the `PRIKK_AUTHOR_SEED_FILE` /
-`PRIKK_MAINTAINER_SEED_FILE` line that points at it.
+`PRIKK_MAINTAINER_SEED_FILE` line that points at it, and the key id. The id lives in `<path>.key-id`,
+beside the seed, and is found from there. It is printed, not exported: an exported
+`PRIKK_*_KEY_ID` would override the file.
 
 **The seeds are not recoverable.** There is no copy in the repository, no keyring, no escrow. Lose
 the AUTHOR seed and you can no longer sign patches with that identity; lose the MAINTAINER seed and
 you can no longer seal to a repository that already trusts it. Back up the key directory the way you
 back up anything else you cannot regenerate.
 
-**The trust decision is always shown, never performed silently.** `trusted maintainer key: maintainer`
+**The trust decision is always shown, never performed silently.** `trusted maintainer key: <id>`
 is the same line `prikk trust maintainer add` itself prints — registering a maintainer key is a trust
 act, and composing the steps removes the *typing*, never the *seeing*.
 
@@ -142,11 +156,13 @@ prikk key generate --out ./maintainer.seed
 
 ```
 wrote seed to ./maintainer.seed (mode 0600)
+key id: ed25519-2d353d98420bc75c (in ./maintainer.seed.key-id)
 public key: ...
 ...
 ```
 
-`--out` refuses to overwrite an existing file, and refuses any path with a `.prikk` component — prikk
+`--out` also writes the key's id to `<path>.key-id`, and the id is found there whichever role uses the
+seed. `--out` refuses to overwrite an existing file (the seed or its key-id file), and refuses any path with a `.prikk` component — prikk
 never invents a secret's location and never manages its lifecycle (writing it once, where you asked,
 is the entire commitment). **On Windows, `--out` currently refuses outright**: Unix file permissions
 (mode `0600`) have no portable equivalent here without unsafe code or a new dependency, and writing a
@@ -178,7 +194,7 @@ longer an environment variable to name.
 ### `prikk trust maintainer add` — the trust act itself
 
 ```sh
-prikk trust maintainer add --key-id maintainer --public-key <the hex key generate printed>
+prikk trust maintainer add --key-id <the key id key generate printed> --public-key <the hex key generate printed>
 ```
 
 Registering a maintainer key is what lets `prikk seal` publish — see
@@ -210,7 +226,7 @@ prikk setup ./second-project
 
 ```
 initialized Prikk repository at ./second-project/.prikk
-trusted maintainer key: maintainer
+trusted maintainer key: ed25519-cd1bc694acba34fe
 adopted maintainer keys: 1
 
 using your keys in /home/you/.config/prikk
@@ -248,7 +264,8 @@ prikk setup ./second-project \
 ```sh
 cd ./second-project
 prikk init .
-prikk trust maintainer add --key-id maintainer --public-key "$(prikk key public --role maintainer)"
+prikk key status --role maintainer        # the key id line names the id to adopt
+prikk trust maintainer add --key-id <that key id> --public-key "$(prikk key public --role maintainer | sed 's/^public key: //')"
 ```
 
 `prikk commit` needs nothing extra — an AUTHOR key is registered nowhere, so it needs nothing from
@@ -270,18 +287,40 @@ public key: 27b081593fa86489f9356ef4bc0cbf5f4a5a5b708aa1a10f1a8187fd56a34801
 ```
 
 ```sh
-prikk trust maintainer add --key-id maintainer --public-key 27b081593fa86489f9356ef4bc0cbf5f4a5a5b708aa1a10f1a8187fd56a34801
+prikk trust maintainer add --key-id ed25519-27b081593fa86489 --public-key 27b081593fa86489f9356ef4bc0cbf5f4a5a5b708aa1a10f1a8187fd56a34801
 prikk seal --allow-no-audit
 ```
 
 ```
-trusted maintainer key: maintainer
+trusted maintainer key: ed25519-27b081593fa86489
 adopted maintainer keys: 1
 sealed active WAL into block
 ```
 
-The `--key-id` must match the `PRIKK_MAINTAINER_KEY_ID` you export; `seal` checks the exported
-signer against what this repository trusts under that id.
+The `--key-id` must be the id `seal` signs under, which `prikk key status --role maintainer` reports;
+`seal` checks the signer against what this repository trusts under that id.
+
+## Keys made before 0.45.0
+
+A seed with no key-id file beside it signs under the **legacy** id: `author` or `maintainer`, the role
+word. Keys made by `setup` before 0.45.0 look like that, and keep that id. Nothing about an existing
+installation changes, and its repositories keep committing, sealing and verifying. `setup` reusing such
+a key says so:
+
+```
+note: your author key uses the shared legacy key id `author`, which other installations may also use; for a distinct one, set PRIKK_AUTHOR_KEY_ID and adopt the key under that id in each repository
+```
+
+**Every such installation shares those ids, so two of them collide.** One key id binds to one public
+key in a repository, so:
+- history one installation signed under `author` cannot be imported into a repository where `author`
+  is already bound to the other's key;
+- a maintainer key cannot be adopted under `maintainer` beside a different one.
+
+Both refusals name the route that works: sign **new** history under a distinct id, either a key made by
+`prikk key generate --out <path>` (pointed at by `PRIKK_*_SEED_FILE`) or an id set with
+`PRIKK_*_KEY_ID`, and adopt the maintainer key under that id. History already signed under the shared
+id keeps it; there is no command that re-signs it.
 
 ## Claim-to-Source Anchors
 

@@ -1,8 +1,9 @@
 //! A refused `bundle import` or `sync accept` leaves the receiving repository exactly as it was.
 //!
 //! Driven through the compiled binary with two real installations, each made by `prikk setup` in its
-//! own key directory, so both AUTHOR key ids are the default and the keys differ — the collision two
-//! ordinary users get without trying.
+//! own key directory. The collision controls sign both installations' patches under one shared
+//! `PRIKK_AUTHOR_KEY_ID` with different keys. Before 0.45.0 two default installations collided on
+//! `author` without trying; new keys now get distinct ids, so the collision is made deliberately.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
@@ -10,6 +11,9 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
+
+/// One author key id both collision installations sign under, with different keys.
+const SHARED_AUTHOR_ID: &str = "shared-author";
 
 fn run(repo: &Path, args: &[&str]) -> Output {
     support::prikk(repo).args(args).output().unwrap()
@@ -23,12 +27,20 @@ fn text(output: &Output) -> String {
     )
 }
 
-/// `prikk setup`, one file committed and sealed on `heads/main`.
-fn installation(tag: &str, file: &str) -> PathBuf {
+/// `prikk setup`, one file committed and sealed on `heads/main`, the commit signed under `author_id`
+/// when given.
+fn installation(tag: &str, file: &str, author_id: Option<&str>) -> PathBuf {
     let repo = support::unique_repo(tag);
     support::ok(&run(&repo, &["setup", "."]), "setup");
     std::fs::write(repo.join(file), format!("{file}\n")).unwrap();
-    support::ok(&run(&repo, &["commit", "-m", file]), "commit");
+    let mut commit = support::prikk(&repo);
+    if let Some(author_id) = author_id {
+        commit.env("PRIKK_AUTHOR_KEY_ID", author_id);
+    }
+    support::ok(
+        &commit.args(["commit", "-m", file]).output().unwrap(),
+        "commit",
+    );
     support::ok(&run(&repo, &["seal", "--allow-no-audit"]), "seal");
     repo
 }
@@ -72,8 +84,16 @@ fn store_bytes(repo: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
 /// object count doubled; now the refusal changes nothing, byte for byte.
 #[test]
 fn a_bundle_import_refused_for_a_colliding_author_id_changes_nothing() {
-    let receiver = installation("import-collision-receiver", "mine.txt");
-    let sender = installation("import-collision-sender", "theirs.txt");
+    let receiver = installation(
+        "import-collision-receiver",
+        "mine.txt",
+        Some(SHARED_AUTHOR_ID),
+    );
+    let sender = installation(
+        "import-collision-sender",
+        "theirs.txt",
+        Some(SHARED_AUTHOR_ID),
+    );
     let bundle = sender.join("theirs.bundle");
     support::ok(
         &run(
@@ -117,8 +137,16 @@ fn a_bundle_import_refused_for_a_colliding_author_id_changes_nothing() {
 /// Control 3: `sync accept` under the same collision writes nothing either.
 #[test]
 fn a_sync_accept_refused_for_a_colliding_author_id_changes_nothing() {
-    let receiver = installation("accept-collision-receiver", "mine.txt");
-    let sender = installation("accept-collision-sender", "theirs.txt");
+    let receiver = installation(
+        "accept-collision-receiver",
+        "mine.txt",
+        Some(SHARED_AUTHOR_ID),
+    );
+    let sender = installation(
+        "accept-collision-sender",
+        "theirs.txt",
+        Some(SHARED_AUTHOR_ID),
+    );
     let have = receiver.join("have.bin");
     let artifact = sender.join("exchange.bin");
     support::ok(
@@ -170,7 +198,7 @@ fn a_sync_accept_refused_for_a_colliding_author_id_changes_nothing() {
 /// same key id with the same key — no conflict — and succeeds and verifies.
 #[test]
 fn an_import_carrying_an_already_recorded_key_still_imports_and_verifies() {
-    let sender = installation("import-honest-sender", "one.txt");
+    let sender = installation("import-honest-sender", "one.txt", None);
     let receiver = support::unique_repo("import-honest-receiver");
     support::ok(&run(&receiver, &["init"]), "init the receiver");
     let export = |name: &str| -> PathBuf {
@@ -212,6 +240,13 @@ fn an_import_carrying_an_already_recorded_key_still_imports_and_verifies() {
     support::ok(&imported, "second import, same author key");
 
     // Trust the sender's sealing key so `verify` can check the received history, then verify.
+    let status = text(&run(&sender, &["key", "status", "--role", "maintainer"]));
+    let maintainer_id = status
+        .lines()
+        .find_map(|line| line.strip_prefix("key id: "))
+        .and_then(|rest| rest.split(' ').next())
+        .expect("key status prints the key id")
+        .to_string();
     let public = text(&run(&sender, &["key", "public", "--role", "maintainer"]));
     let hex = public
         .lines()
@@ -227,7 +262,7 @@ fn an_import_carrying_an_already_recorded_key_still_imports_and_verifies() {
                 "maintainer",
                 "add",
                 "--key-id",
-                "maintainer",
+                &maintainer_id,
                 "--public-key",
                 &hex,
             ],

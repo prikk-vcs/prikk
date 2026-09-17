@@ -37,10 +37,17 @@ impl Role {
         }
     }
 
-    /// The default key id when `PRIKK_<ROLE>_KEY_ID` is unset — the same word as the role, which is
-    /// what `prikk setup` has always written.
-    pub(crate) const fn default_key_id(self) -> &'static str {
+    /// The **legacy** default key id: the role word, used when `PRIKK_<ROLE>_KEY_ID` is unset and no
+    /// key-id file sits beside the seed — a seed made before 0.45.0. Every such installation shares it.
+    pub(crate) const fn legacy_key_id(self) -> &'static str {
         self.label()
+    }
+
+    pub(crate) const fn key_id_file_name(self) -> &'static str {
+        match self {
+            Role::Author => "author.key-id",
+            Role::Maintainer => "maintainer.key-id",
+        }
     }
 
     pub(crate) const fn key_id_var(self) -> &'static str {
@@ -161,6 +168,13 @@ pub(crate) enum Unusable {
     ReadableByOthers { mode: u32 },
     /// Present and private, but not 64 hex characters.
     Undecodable { detail: String },
+    /// The key-id file beside the seed does not hold the id derived from this seed: a replaced seed, a
+    /// copied file, or hand-edited content. A custom id is `PRIKK_<ROLE>_KEY_ID`'s job, never the file's.
+    KeyIdFileMismatch {
+        path: PathBuf,
+        file_id: String,
+        derived_id: String,
+    },
 }
 
 impl Unusable {
@@ -171,6 +185,7 @@ impl Unusable {
             Unusable::OverrideMissing => "override-missing".to_string(),
             Unusable::ReadableByOthers { mode } => format!("readable-by-others (mode {mode:04o})"),
             Unusable::Undecodable { .. } => "undecodable".to_string(),
+            Unusable::KeyIdFileMismatch { .. } => "key-id-file-mismatch".to_string(),
         }
     }
 }
@@ -186,8 +201,8 @@ pub(crate) struct KeyStatus {
     pub(crate) source: SeedSource,
     pub(crate) path: PathBuf,
     pub(crate) key_id: String,
-    /// `true` when `PRIKK_<ROLE>_KEY_ID` supplied it, `false` when it defaulted to the role's name.
-    pub(crate) key_id_from_environment: bool,
+    /// Where `key_id` came from.
+    pub(crate) key_id_source: KeyIdSource,
     /// `Ok` with the seed when usable; `Err` with the reason when not.
     pub(crate) seed: std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], Unusable>,
 }
@@ -202,6 +217,142 @@ impl KeyStatus {
             prikk_hash::to_hex(&prikk_crypto::Ed25519KeyPair::from_seed(seed).public_key_bytes())
         })
     }
+}
+
+/// Where a key id came from (RFC 135 addendum, distinct default key ids, rule 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyIdSource {
+    /// `PRIKK_<ROLE>_KEY_ID`.
+    Environment,
+    /// The key-id file beside the seed, at this path.
+    KeyFile(PathBuf),
+    /// No variable and no file: the legacy role word.
+    LegacyDefault,
+}
+
+impl KeyIdSource {
+    /// `key-status-v1`'s `key_id_source` value.
+    pub(crate) const fn as_str(&self) -> &'static str {
+        match self {
+            KeyIdSource::Environment => "environment",
+            KeyIdSource::KeyFile(_) => "key-file",
+            KeyIdSource::LegacyDefault => "default",
+        }
+    }
+}
+
+/// The default id of a new key: `ed25519-` and the first 16 lowercase hex characters of its public key.
+/// Role-neutral: one seed has one id, whichever role uses it. A name, not a security property — binding
+/// one id to one public key is what enforces identity.
+pub(crate) fn derived_key_id(seed: &[u8; prikk_crypto::ED25519_KEY_LEN]) -> String {
+    let public_key = prikk_crypto::Ed25519KeyPair::from_seed(seed).public_key_bytes();
+    let hex = prikk_hash::to_hex(&public_key);
+    format!("ed25519-{}", hex.get(..16).unwrap_or(&hex))
+}
+
+/// The key-id file that belongs to the seed at `seed_path`: `<role>.key-id` for the key directory's own
+/// `<role>.seed`, otherwise `<seed path>.key-id`.
+pub(crate) fn key_id_path(seed_path: &Path) -> PathBuf {
+    if let (Ok(key_dir), Some(name)) = (default_key_dir(), seed_path.file_name()) {
+        if seed_path.parent() == Some(key_dir.as_path()) {
+            for role in [Role::Author, Role::Maintainer] {
+                if name == role.seed_file_name() {
+                    return key_dir.join(role.key_id_file_name());
+                }
+            }
+        }
+    }
+    let mut name = seed_path.as_os_str().to_owned();
+    name.push(".key-id");
+    PathBuf::from(name)
+}
+
+/// **The one key id resolution** (rule 3), used by every signer, by `setup` and by `key status`:
+/// `PRIKK_<ROLE>_KEY_ID` if set; otherwise the key-id file beside `seed_path`; otherwise the legacy role
+/// word. Returns the id, its source, and — when the file exists and the seed decodes — a mismatch if the
+/// file does not hold the id derived from that seed (rule 4).
+pub(crate) fn resolve_key_id(
+    role: Role,
+    seed_path: &Path,
+    seed: &std::result::Result<[u8; prikk_crypto::ED25519_KEY_LEN], Unusable>,
+) -> std::result::Result<(String, KeyIdSource, Option<Unusable>), CliError> {
+    match std::env::var(role.key_id_var()) {
+        Ok(value) if value.trim().is_empty() => {
+            return Err(CliError::Usage(format!(
+                "{} must not be empty",
+                role.key_id_var()
+            )));
+        }
+        Ok(value) => return Ok((value, KeyIdSource::Environment, None)),
+        Err(_) => {}
+    }
+    let file = key_id_path(seed_path);
+    match std::fs::read_to_string(&file) {
+        Ok(contents) => {
+            let file_id = contents.strip_suffix('\n').unwrap_or(&contents).to_string();
+            let mismatch = match seed {
+                Ok(seed) => {
+                    let derived_id = derived_key_id(seed);
+                    (file_id != derived_id).then(|| Unusable::KeyIdFileMismatch {
+                        path: file.clone(),
+                        file_id: file_id.clone(),
+                        derived_id,
+                    })
+                }
+                Err(_) => None,
+            };
+            Ok((file_id, KeyIdSource::KeyFile(file), mismatch))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok((
+            role.legacy_key_id().to_string(),
+            KeyIdSource::LegacyDefault,
+            None,
+        )),
+        Err(err) => Err(CliError::Failure(format!(
+            "cannot read {}: {err}",
+            file.display()
+        ))),
+    }
+}
+
+/// Refuse to create a seed at `seed_path` if it, or the key-id file that would belong to it, already
+/// exists — naming both paths, and before either is written. A leftover key-id file beside a new seed
+/// would otherwise be refused at the first signature.
+pub(crate) fn require_new_key_paths(seed_path: &Path) -> std::result::Result<(), CliError> {
+    let key_id_file = key_id_path(seed_path);
+    if seed_path.exists() || key_id_file.exists() {
+        return Err(CliError::Failure(format!(
+            "refusing to overwrite an existing file: a new seed needs both {} and {} to be absent",
+            seed_path.display(),
+            key_id_file.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Write the key-id file for a seed just created: the id and one trailing newline, `0600` on Unix (the
+/// key directory's ACL on Windows), never overwriting.
+pub(crate) fn write_key_id_file(
+    seed_path: &Path,
+    key_id: &str,
+) -> std::result::Result<PathBuf, CliError> {
+    use std::io::Write;
+
+    let path = key_id_path(seed_path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|err| CliError::Failure(format!("failed to create {}: {err}", path.display())))?;
+    file.write_all(key_id.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|err| CliError::Failure(format!("failed to write {}: {err}", path.display())))?;
+    Ok(path)
 }
 
 /// Answer "what key material does this role have, and can it sign?" — reading, never refusing.
@@ -219,24 +370,18 @@ pub(crate) fn status(role: Role) -> std::result::Result<KeyStatus, CliError> {
             default_key_dir()?.join(role.seed_file_name()),
         ),
     };
-    let (key_id, key_id_from_environment) = match std::env::var(role.key_id_var()) {
-        Ok(value) if value.trim().is_empty() => {
-            return Err(CliError::Usage(format!(
-                "{} must not be empty",
-                role.key_id_var()
-            )));
-        }
-        Ok(value) => (value, true),
-        Err(_) => (role.default_key_id().to_string(), false),
-    };
-
     let seed = read_seed_at(&path, source);
+    let (key_id, key_id_source, mismatch) = resolve_key_id(role, &path, &seed)?;
+    let seed = match mismatch {
+        Some(mismatch) => Err(mismatch),
+        None => seed,
+    };
     Ok(KeyStatus {
         role,
         source,
         path,
         key_id,
-        key_id_from_environment,
+        key_id_source,
         seed,
     })
 }
@@ -310,18 +455,30 @@ fn refusal_for(status: &KeyStatus, reason: &Unusable) -> CliError {
             "{shown} is readable by group or other (mode {mode:04o}); run `chmod 600 {shown}`"
         )),
         Unusable::Undecodable { detail } => CliError::Failure(detail.clone()),
+        Unusable::KeyIdFileMismatch {
+            path,
+            file_id,
+            derived_id,
+        } => CliError::Failure(format!(
+            "{} signing refused: {} holds key id {file_id}, but the seed at {shown} derives \
+             {derived_id} -- the file does not belong to this seed. Restore the seed it belongs to, \
+             or remove the file; a custom key id is set with {}, never by editing the file",
+            status.role.label(),
+            path.display(),
+            status.role.key_id_var()
+        )),
     }
 }
 
-/// This role's key id: the environment variable if set and non-empty, otherwise the role's own name.
-pub(crate) fn key_id(role: Role) -> std::result::Result<String, CliError> {
-    match std::env::var(role.key_id_var()) {
-        Ok(value) if value.trim().is_empty() => Err(CliError::Usage(format!(
-            "{} must not be empty",
-            role.key_id_var()
-        ))),
-        Ok(value) => Ok(value),
-        Err(_) => Ok(role.default_key_id().to_string()),
+/// This role's key id and seed for **signing**, from one [`status`] answer — so the id a signature
+/// carries is the id `key status` reports.
+pub(crate) fn signing_key(
+    role: Role,
+) -> std::result::Result<(String, [u8; prikk_crypto::ED25519_KEY_LEN]), CliError> {
+    let status = status(role)?;
+    match &status.seed {
+        Ok(seed) => Ok((status.key_id.clone(), *seed)),
+        Err(reason) => Err(refusal_for(&status, reason)),
     }
 }
 

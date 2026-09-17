@@ -53,8 +53,12 @@ fn run_generate(args: Vec<String>) -> std::result::Result<(), CliError> {
 
     match out {
         Some(path) => {
+            crate::key_material::require_new_key_paths(&path)?;
             write_seed_to_path(&seed, &path)?;
+            let key_id = crate::key_material::derived_key_id(&seed);
+            let key_id_file = crate::key_material::write_key_id_file(&path, &key_id)?;
             println!("wrote seed to {} (mode 0600)", path.display());
+            println!("key id: {key_id} (in {})", key_id_file.display());
             println!("public key: {public_key_hex}");
             println!();
             println!("next steps:");
@@ -71,8 +75,7 @@ fn run_generate(args: Vec<String>) -> std::result::Result<(), CliError> {
                 }
                 Some(crate::key_material::Role::Maintainer) => {
                     println!(
-                        "  prikk trust maintainer add --key-id maintainer --public-key \
-                         {public_key_hex}"
+                        "  prikk trust maintainer add --key-id {key_id} --public-key {public_key_hex}"
                     );
                     println!(
                         "note: prikk finds this seed automatically; the step above adopts it in one \
@@ -81,8 +84,7 @@ fn run_generate(args: Vec<String>) -> std::result::Result<(), CliError> {
                 }
                 None => {
                     println!(
-                        "  prikk trust maintainer add --key-id maintainer --public-key \
-                         {public_key_hex}"
+                        "  prikk trust maintainer add --key-id {key_id} --public-key {public_key_hex}"
                     );
                     println!("  export PRIKK_MAINTAINER_SEED_FILE=\"{}\"", path.display());
                     println!(

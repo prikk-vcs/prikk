@@ -349,6 +349,10 @@ pub fn author_key_binding(
     Ok(AuthorKeyBinding::Mismatch)
 }
 
+/// The key id every installation made before 0.45.0 signs AUTHOR patches under when nothing else names
+/// one: two such installations collide on it, and a refusal about it says so rather than "rotation".
+const LEGACY_AUTHOR_KEY_ID: &str = "author";
+
 pub(crate) fn check_author_key_conflict(
     layout: &RepositoryLayout,
     key_id: &str,
@@ -364,6 +368,17 @@ pub(crate) fn check_author_key_conflict(
         AuthorKeyBinding::Mismatch => {}
     }
     if let Some(conflicting) = existing.first() {
+        if key_id == LEGACY_AUTHOR_KEY_ID {
+            return Err(PrikkError::Integrity(format!(
+                "author key_id {key_id} already has a different recorded public key ({}): both \
+                 installations use the legacy default key id `{LEGACY_AUTHOR_KEY_ID}`, and one \
+                 key_id binds to one public key. History already signed under \
+                 `{LEGACY_AUTHOR_KEY_ID}` by the other key cannot enter this repository. Sign under \
+                 a distinct id instead -- a key made by `prikk key generate --out <path>` has one \
+                 (point PRIKK_AUTHOR_SEED_FILE at it), or set PRIKK_AUTHOR_KEY_ID -- and new history signed that way commits and imports",
+                prikk_hash::to_hex(&conflicting.public_key)
+            )));
+        }
         return Err(PrikkError::Integrity(format!(
             "author key_id {key_id} already has a different recorded public key ({}); one key_id \
              binds to one public key -- this looks like a key-rotation attempt, which is not \
@@ -536,8 +551,17 @@ pub(crate) fn verify_one_author_signature(
     {
         return Err(PrikkError::Integrity(format!(
             "author key_id {} has more than one distinct recorded public key -- authorship \
-             integrity for this key_id cannot be established",
-            signature.key_id
+             integrity for this key_id cannot be established{}",
+            signature.key_id,
+            if signature.key_id == LEGACY_AUTHOR_KEY_ID {
+                format!(
+                    " (`{LEGACY_AUTHOR_KEY_ID}` is the legacy default key id every installation \
+                     made before 0.45.0 shares; sign under a distinct id -- a key made by `prikk \
+                     key generate --out <path>`, or PRIKK_AUTHOR_KEY_ID)"
+                )
+            } else {
+                String::new()
+            }
         )));
     }
     let preimage = Signature::signed_bytes(

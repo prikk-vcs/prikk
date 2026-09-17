@@ -24,9 +24,6 @@ use crate::key::write_seed_to_path;
 use crate::stdout::println;
 use prikk_crypto::Ed25519KeyPair;
 
-const AUTHOR_KEY_ID: &str = "author";
-const MAINTAINER_KEY_ID: &str = "maintainer";
-
 /// One generated seed's disposition. RFC 148 removed the third case that used to exist — printing
 /// the hex — because there is no longer an environment variable to paste it into. A seed is written
 /// to a file, always; the only question is which file.
@@ -110,6 +107,14 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     // Deciding here, before `create_dir_all`, is what makes the refusal arm honest: a missing
     // counterpart seed stops the command with nothing written and nothing printed.
     let existing_keys = classify_existing_keys(&author_seed_out, &maintainer_seed_out)?;
+    // A seed this run creates, and the key-id file that will belong to it, must both be new -- checked
+    // here, before anything is created, so a refusal leaves nothing behind.
+    if !existing_keys.author_is_reused {
+        require_new_role_paths(&author_seed_out, crate::key_material::Role::Author)?;
+    }
+    if !existing_keys.maintainer_is_reused {
+        require_new_role_paths(&maintainer_seed_out, crate::key_material::Role::Maintainer)?;
+    }
 
     // Property 1: one command reaches a working repository, without the user running anything
     // else first -- `RepositoryLayout::init` itself does not create a missing leading directory
@@ -132,44 +137,54 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
         _ => Some(crate::key_material::ensure_key_dir()?),
     };
 
-    let author_output = match existing_keys.author_is_reused {
+    let author_output: SeedOutput;
+    let author_key_id: String;
+    match existing_keys.author_is_reused {
         // RFC 148 §2c: a second project reuses the keys you already have. Nothing is generated and
         // nothing is written -- `setup` here is `init` plus the trust act, which is the only step a
         // new repository actually needs when the keys already exist.
-        true => SeedOutput::DefaultDirectory(crate::key_material::seed_path(
-            crate::key_material::Role::Author,
-        )?),
+        true => {
+            let status = crate::key_material::status(crate::key_material::Role::Author)?;
+            note_legacy_key_id(&status);
+            author_key_id = status.key_id;
+            author_output = SeedOutput::DefaultDirectory(status.path);
+        }
         false => {
             let seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
-            write_role_seed(
+            let (output, key_id) = write_role_seed(
                 &seed,
                 author_seed_out,
                 key_dir.as_deref(),
                 crate::key_material::Role::Author,
-            )?
+            )?;
+            author_output = output;
+            author_key_id = key_id;
         }
-    };
+    }
 
-    let (maintainer_output, maintainer_public_key_hex) =
+    let (maintainer_output, maintainer_public_key_hex, maintainer_key_id) =
         match &existing_keys.maintainer_public_key_hex {
             // Already derived, and already mode-checked, during classification above.
-            Some(hex) => (
-                SeedOutput::DefaultDirectory(crate::key_material::seed_path(
-                    crate::key_material::Role::Maintainer,
-                )?),
-                hex.clone(),
-            ),
+            Some(hex) => {
+                let status = crate::key_material::status(crate::key_material::Role::Maintainer)?;
+                note_legacy_key_id(&status);
+                (
+                    SeedOutput::DefaultDirectory(status.path.clone()),
+                    hex.clone(),
+                    status.key_id,
+                )
+            }
             None => {
                 let seed = Ed25519KeyPair::generate_seed().map_err(|err| err.to_string())?;
                 let public_key = Ed25519KeyPair::from_seed(&seed).public_key_bytes();
                 let hex = prikk_hash::to_hex(&public_key);
-                let output = write_role_seed(
+                let (output, key_id) = write_role_seed(
                     &seed,
                     maintainer_seed_out,
                     key_dir.as_deref(),
                     crate::key_material::Role::Maintainer,
                 )?;
-                (output, hex)
+                (output, hex, key_id)
             }
         };
 
@@ -177,7 +192,7 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     // the composed sequence that is a trust act, and `setup` must print it exactly as `trust
     // maintainer add` itself would, not fold it silently into "repository ready."
     let (adopted, _newly_added) =
-        add_trusted_maintainer(&layout, MAINTAINER_KEY_ID, &maintainer_public_key_hex)
+        add_trusted_maintainer(&layout, &maintainer_key_id, &maintainer_public_key_hex)
             .map_err(|err| err.to_string())?;
     println!("trusted maintainer key: {}", adopted.key_id);
     // RFC 138 §4.2 carried-defects B: a derived count, not the `policy: required=1` literal that
@@ -207,12 +222,12 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
             print_seed_file_line(
                 crate::key_material::Role::Author,
                 &author_output,
-                AUTHOR_KEY_ID,
+                &author_key_id,
             );
             print_seed_file_line(
                 crate::key_material::Role::Maintainer,
                 &maintainer_output,
-                MAINTAINER_KEY_ID,
+                &maintainer_key_id,
             );
         }
     }
@@ -316,17 +331,31 @@ fn classify_existing_keys(
     })
 }
 
-/// Write one role's seed to the path the user named, or to the default key directory.
+/// Refuse before anything is created when a seed this run would write, or its key-id file, exists.
+fn require_new_role_paths(
+    user_named: &Option<PathBuf>,
+    role: crate::key_material::Role,
+) -> std::result::Result<(), CliError> {
+    let seed_path = match user_named {
+        Some(path) => path.clone(),
+        None => crate::key_material::default_key_dir()?.join(role.seed_file_name()),
+    };
+    crate::key_material::require_new_key_paths(&seed_path)
+}
+
+/// Write one role's seed to the path the user named, or to the default key directory, then the key-id
+/// file beside it; returns where it went and the key id this role now signs under — resolved by the one
+/// resolution every signer uses, against the path just written.
 fn write_role_seed(
     seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
     user_named: Option<PathBuf>,
     key_dir: Option<&Path>,
     role: crate::key_material::Role,
-) -> std::result::Result<SeedOutput, CliError> {
-    match user_named {
+) -> std::result::Result<(SeedOutput, String), CliError> {
+    let output = match user_named {
         Some(path) => {
             write_seed_to_path(seed, &path)?;
-            Ok(SeedOutput::UserNamed(path))
+            SeedOutput::UserNamed(path)
         }
         None => {
             let dir = key_dir.ok_or_else(|| {
@@ -334,14 +363,44 @@ fn write_role_seed(
             })?;
             let path = dir.join(role.seed_file_name());
             crate::key::write_seed_to_key_dir(seed, &path)?;
-            Ok(SeedOutput::DefaultDirectory(path))
+            SeedOutput::DefaultDirectory(path)
         }
+    };
+    crate::key_material::write_key_id_file(
+        output.path(),
+        &crate::key_material::derived_key_id(seed),
+    )?;
+    let (key_id, _, mismatch) =
+        crate::key_material::resolve_key_id(role, output.path(), &Ok(*seed))?;
+    if let Some(mismatch) = mismatch {
+        return Err(CliError::Failure(format!(
+            "internal: the key-id file just written does not match its seed ({})",
+            mismatch.code()
+        )));
+    }
+    Ok((output, key_id))
+}
+
+/// A reused seed with no key-id file signs under the legacy role word, which every installation made
+/// before 0.45.0 shares. Say so once, and how to use a distinct id.
+fn note_legacy_key_id(status: &crate::key_material::KeyStatus) {
+    if status.key_id_source == crate::key_material::KeyIdSource::LegacyDefault {
+        println!(
+            "note: your {role} key uses the shared legacy key id `{id}`, which other installations \
+             may also use; for a distinct one, set {var} and adopt the key under that id in each \
+             repository",
+            role = status.role.label(),
+            id = status.key_id,
+            var = status.role.key_id_var()
+        );
     }
 }
 
-/// Print the `PRIKK_*_SEED_FILE` line for a seed prikk will not find on its own.
+/// Print the `PRIKK_*_SEED_FILE` line for a seed prikk will not find on its own, and the key id it signs
+/// under. The id is printed, never exported: an exported `PRIKK_<ROLE>_KEY_ID` would win over the key-id
+/// file beside the seed and skip the check that the file belongs to it.
 fn print_seed_file_line(role: crate::key_material::Role, output: &SeedOutput, key_id: &str) {
-    println!("  export {}=\"{key_id}\"", role.key_id_var());
+    println!("  # {} key id: {key_id}", role.label());
     match output {
         // A default-directory seed needs no variable at all; saying so beside a sibling that does
         // is clearer than silence.

@@ -1106,8 +1106,7 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
 /// refusal it turns into; this function only assembles the signer, so the two roles below cannot
 /// drift apart in where they look.
 fn author_signer_from_env() -> std::result::Result<Ed25519AuthorSigner, CliError> {
-    let key_id = key_material::key_id(key_material::Role::Author)?;
-    let seed = key_material::read_seed(key_material::Role::Author)?;
+    let (key_id, seed) = key_material::signing_key(key_material::Role::Author)?;
     Ed25519AuthorSigner::from_seed(key_id, &seed).map_err(|err| CliError::Failure(err.to_string()))
 }
 
@@ -1115,8 +1114,7 @@ fn author_signer_from_env() -> std::result::Result<Ed25519AuthorSigner, CliError
 /// same refusals; see [`author_signer_from_env`].
 pub(crate) fn maintainer_signer_from_env() -> std::result::Result<Ed25519MaintainerSigner, CliError>
 {
-    let key_id = key_material::key_id(key_material::Role::Maintainer)?;
-    let seed = key_material::read_seed(key_material::Role::Maintainer)?;
+    let (key_id, seed) = key_material::signing_key(key_material::Role::Maintainer)?;
     Ed25519MaintainerSigner::from_seed(key_id, &seed)
         .map_err(|err| CliError::Failure(err.to_string()))
 }

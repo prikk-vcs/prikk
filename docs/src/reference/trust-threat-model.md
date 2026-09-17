@@ -150,8 +150,17 @@ never creates one to begin with.
 ## Key Input and Local Trust Store
 
 Current key input is intentionally minimal. The CLI reads AUTHOR key material from
-`PRIKK_AUTHOR_KEY_ID` and a seed **file** (`PRIKK_AUTHOR_SEED_FILE`, else the key directory's
-`author.seed`), and MAINTAINER key material the same way. A seed never travels through the
+a seed **file** (`PRIKK_AUTHOR_SEED_FILE`, else the key directory's `author.seed`) and a key id
+(`PRIKK_AUTHOR_KEY_ID`, else the key-id file beside the seed, else the legacy `author`), and MAINTAINER
+key material the same way.
+
+**A key id is a name, not an identity.** A new key's default id is `ed25519-` and the first 16 hex
+characters of its public key, so two installations do not collide by default. Nothing makes an id
+unforgeable: anyone can sign under any id. What enforces identity is binding: a repository binds one key
+id to one public key (trust-on-first-use for AUTHOR material, explicit adoption for MAINTAINER keys), and
+refuses a different key under a bound id. Installations made before 0.45.0 share the legacy ids `author`
+and `maintainer`, so they collide under that binding. The refusals say so, and name the route: new
+history signed under a distinct id. A seed never travels through the
 environment. The seed values are caller-provided 32-byte
 Ed25519 secret seeds encoded as 64 hex characters. **Prikk does not provide local secret storage**,
 but it does provide key generation and public-key derivation: `prikk key generate` draws a fresh
