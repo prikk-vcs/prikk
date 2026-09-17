@@ -259,27 +259,32 @@ fn control4_refusals_and_write_modes() {
         );
     }
 
-    // A different worktree, so a write would show.
-    std::fs::write(repo.join("a.txt"), "local edit\n").unwrap();
+    // A worktree a write would change without meeting a conflict: the file is missing, so any mode that
+    // accepted the block would write it back.
+    std::fs::remove_file(repo.join("a.txt")).unwrap();
     for mode in [
         "--patch-materialize",
         "--snapshot-materialize",
         "--patch-materialize-delete",
     ] {
         let before = tree_bytes(&repo);
-        refuses(
-            &repo,
-            &["checkout", mode, "--ref", &points[0].0],
-            1,
-            &format!(
-                "error: precondition not met: checkout {mode} writes the worktree, which needs a \
-                 branch: the next `commit` authors against one, and a block id names no branch"
-            ),
-        );
+        let output = run(&repo, &["checkout", mode, "--ref", &points[0].0]);
+        // What was written is checked first, so a write shows even when the answer is also wrong.
         assert_eq!(
             before,
             tree_bytes(&repo),
-            "{mode} with a block id wrote something"
+            "{mode} with a block id wrote something: {}",
+            text(&output)
+        );
+        assert_eq!(output.status.code(), Some(1), "{mode}: {}", text(&output));
+        let expected = format!(
+            "error: precondition not met: checkout {mode} writes the worktree, which needs a branch: \
+             the next `commit` authors against one, and a block id names no branch"
+        );
+        assert!(
+            text(&output).contains(&expected),
+            "{mode}: {}",
+            text(&output)
         );
     }
     let _ = std::fs::remove_dir_all(&repo);
