@@ -9,7 +9,7 @@ use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayloa
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
-use crate::ref_resolution::{Point, PointKind};
+use crate::point::{Point, PointKind};
 use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::snapshot::{SnapshotFile, load_block_snapshot};
 

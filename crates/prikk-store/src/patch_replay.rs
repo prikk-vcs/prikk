@@ -36,7 +36,7 @@ use crate::foundation::layout::RepositoryLayout;
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::path::RepoPath;
-use crate::ref_resolution::Point;
+use crate::point::Point;
 use crate::refs::RefStore;
 use crate::validate_local_branch_ref;
 use crate::wal::WalReplay;

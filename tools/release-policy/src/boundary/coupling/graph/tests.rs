@@ -128,7 +128,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // record: 133 -> 134.
     // RFC 156 §5b added `format_upgrade`: 135 -> 136. RFC 156 §4 added `signature_admission`: 136 -> 137.
     // The RFC 132 refusal sweep added `ref_resolution`, the one resolver for a consumed ref: 137 -> 138.
-    assert_eq!(modules.len(), 138, "modules: {modules:?}");
+    // RFC 153's point resolver added `point`, a point's lower-layer shape: 138 -> 139.
+    assert_eq!(modules.len(), 139, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

@@ -102,10 +102,7 @@ pub fn materialize_patch_checkout_reporting_anchor(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
-    crate::ref_resolution::refuse_block_point_for_worktree_write(
-        ref_name,
-        "checkout --patch-materialize",
-    )?;
+    crate::point::refuse_block_point_for_worktree_write(ref_name, "checkout --patch-materialize")?;
     layout.require_current_format()?;
     materialize_patch_checkout_inner(layout, ref_name, false)
 }
@@ -128,7 +125,7 @@ pub fn materialize_patch_checkout_with_deletions_reporting_anchor(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
-    crate::ref_resolution::refuse_block_point_for_worktree_write(
+    crate::point::refuse_block_point_for_worktree_write(
         ref_name,
         "checkout --patch-materialize-delete",
     )?;
@@ -144,7 +141,7 @@ pub fn materialize_patch_checkout_with_deletions_reporting_anchor(
 /// The replay, or reading the worktree, fails.
 pub fn plan_patch_checkout_deletions_at_point_reporting_anchor(
     layout: &RepositoryLayout,
-    point: &crate::ref_resolution::Point,
+    point: &crate::point::Point,
 ) -> Result<(PatchDeletionPlan, Option<SnapshotAnchorFallback>)> {
     let (snapshot, fallback) =
         crate::patch_replay::replay_point_for_read_only_report(layout, point)?;

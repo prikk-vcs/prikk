@@ -61,6 +61,7 @@ mod patch_replay;
 mod patch_set_digest;
 mod path;
 // RFC 131 §2.2a ruling (b): the `received` name family (received, received_index).
+mod point;
 mod received;
 mod recognition_claim;
 mod ref_resolution;
@@ -208,16 +209,16 @@ pub use patch_set_digest::{
     resolve_patch_set_digest,
 };
 pub use path::{RepoPath, validate_no_path_collisions, validate_repo_path};
+pub use point::{
+    Point, PointKind, is_bare_block_id, is_point_name, refuse_block_point_for_worktree_write,
+};
 pub use received::{
     ReceivedPointer, list_received_pointers, read_received_pointer, validate_received_ref,
 };
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
 };
-pub use ref_resolution::{
-    Point, PointKind, ReceivedRefs, is_bare_block_id, is_point_name,
-    refuse_block_point_for_worktree_write, require_existing_ref, resolve_point,
-};
+pub use ref_resolution::{ReceivedRefs, require_existing_ref, resolve_point};
 pub use refs::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord, RefLogReplay,
     RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate, RefStore,

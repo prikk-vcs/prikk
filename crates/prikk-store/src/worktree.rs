@@ -59,7 +59,7 @@ pub fn materialize_snapshot_checkout(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<SnapshotMaterializationReport> {
-    crate::ref_resolution::refuse_block_point_for_worktree_write(
+    crate::point::refuse_block_point_for_worktree_write(
         ref_name,
         "checkout --snapshot-materialize",
     )?;

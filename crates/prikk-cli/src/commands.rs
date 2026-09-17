@@ -204,7 +204,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "checkout",
-        run: crate::run_checkout,
+        run: crate::checkout::run_checkout,
         help_lines: &[
             "  prikk checkout --plan-only [path] [--ref <ref|block-id>]  Show a safe checkout plan",
             "  prikk checkout --snapshot-plan [path] [--ref <ref|block-id>]  Validate snapshot manifest paths",
