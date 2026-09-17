@@ -108,3 +108,7 @@ without its CLI controls. Commits inside the round may be split; the report is o
   read the reason.
 
 **Report:** `.git-exclude/review-request/merge-with-renames-report-v1.md`.
+
+**Order (2026-09-17):** this implementation comes **before** the refusal sweep
+(`132-error-taxonomy-structure/absent-and-received-ref-refusals-handoff-v1.md`). Both touch `merge`, so they run one
+after the other, never in parallel.

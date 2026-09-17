@@ -85,3 +85,10 @@ Run these on every CI platform. Do not Linux-gate unless a fixture needs it, and
 `.git-exclude/review-request/absent-and-received-ref-refusals-report-v1.md`, including the rule-2 inventory table.
 **Stop and report before implementing** if the inventory shows a command where rule 2 would stop something that works
 today.
+
+## Addendum 1 2026-09-17 — order
+
+This round starts **after** the merge-with-renames implementation
+(`144-two-point-comparison/merge-with-renames-design-handoff-v1.md`, Addendum 1) has been reviewed. Both change
+`merge`: this round its ref resolution (`merge/execute.rs:153`, `merge/evidence.rs:118`), that round its confluence
+algebra. Measure §1 again on the binary at that point before implementing.
