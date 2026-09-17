@@ -580,6 +580,11 @@ pub fn export_bundle(
     // decoded index snapshot here instead of paying a fresh decode per `read_required` call below --
     // and there can be many, one per object in the whole exported closure.
     let object_store = ObjectReadSnapshot::open(layout)?;
+    crate::ref_resolution::require_existing_ref(
+        layout,
+        ref_name,
+        crate::ref_resolution::ReceivedRefs::Refused,
+    )?;
     let Some(ref_state_id) = ref_store.read_current_ref_state_id(ref_name)? else {
         return Err(PrikkError::Integrity(format!(
             "ref {ref_name} does not exist, nothing to export"

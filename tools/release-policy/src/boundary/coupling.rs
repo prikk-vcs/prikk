@@ -63,7 +63,7 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 22] = [
+const UPPER_LAYER: [&str; 23] = [
     "branch_switch",
     "bundle",
     "compact",
@@ -79,6 +79,8 @@ const UPPER_LAYER: [&str; 22] = [
     "patch_set_digest",
     "received",
     "recognition_claim",
+    // RFC 132 refusal sweep: the one resolver for a consumed ref reads both `refs` and `received`.
+    "ref_resolution",
     "rollback",
     "seal_from_accepted",
     "show",

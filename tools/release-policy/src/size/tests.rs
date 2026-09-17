@@ -206,8 +206,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // The DC-75 two-edits fix added `patch_algebra/fold.rs`: 132 -> 133. RFC 136 increment 2a added
     // `patch_replay/anchor.rs`: 133 -> 134. RFC 136 increment 2b added `verified_blocks.rs`: 134 -> 135.
     // RFC 147 §2f added `declaration_resolution.rs`: 135 -> 136. RFC 156 §5b added `format_upgrade.rs`:
-    // 136 -> 137. RFC 156 §4 added `signature_admission.rs`: 137 -> 138.
-    assert_eq!(store.production_files, 138);
+    // 136 -> 137. RFC 156 §4 added `signature_admission.rs`: 137 -> 138. The RFC 132 refusal sweep added
+    // `ref_resolution.rs`: 138 -> 139.
+    assert_eq!(store.production_files, 139);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

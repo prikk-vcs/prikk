@@ -55,6 +55,12 @@ pub fn verify_active_rollback_draft(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<RollbackDraftVerification> {
+    // RFC 132 refusal sweep, rule 2 of Addendum 2: the ref is resolved before the WAL is judged.
+    crate::ref_resolution::require_existing_ref(
+        layout,
+        ref_name,
+        crate::ref_resolution::ReceivedRefs::LeftToNameValidation,
+    )?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay()?;
     if replay.trailing_partial_bytes != 0 {

@@ -341,6 +341,13 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
     let canonical = validate_local_branch_ref(&name).map_err(|err| err.to_string())?;
     let ref_store = RefStore::new(layout.clone());
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
+    // RFC 132 refusal sweep, rule 1.
+    prikk_store::require_existing_ref(
+        &layout,
+        &canonical,
+        prikk_store::ReceivedRefs::LeftToNameValidation,
+    )
+    .map_err(|err| err.to_string())?;
 
     let Some(current_ref_state_id) = ref_store
         .read_current_ref_state_id(&canonical)
@@ -464,6 +471,13 @@ fn resolve_published_target(
     object_store: &impl ObjectReader,
     from_ref: &str,
 ) -> std::result::Result<ObjectId, String> {
+    // RFC 132 refusal sweep, rules 1, 2 and 6: absent and received names are refused by the one resolver.
+    prikk_store::require_existing_ref(
+        ref_store.layout(),
+        from_ref,
+        prikk_store::ReceivedRefs::Refused,
+    )
+    .map_err(|err| err.to_string())?;
     let from_ref_state_id = ref_store
         .read_current_ref_state_id(from_ref)
         .map_err(|err| err.to_string())?

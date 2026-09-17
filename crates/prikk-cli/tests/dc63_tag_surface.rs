@@ -479,8 +479,11 @@ fn tag_create_fails_closed_on_unresolvable_target() {
     let out = tag_create(&repo, &["tags/v1", "--target", "heads/does-not-exist"]);
     fail(&out, "tag create with unresolvable --target");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // RFC 132 refusal sweep, rule 6: the one absent-ref refusal, class and wording.
     assert!(
-        stderr.contains("does not resolve to a published ref"),
+        stderr.contains(
+            "precondition not met: ref heads/does-not-exist does not exist in this repository"
+        ),
         "unexpected stderr: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&repo);

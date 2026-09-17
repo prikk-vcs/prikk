@@ -127,7 +127,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // reports: 132 -> 133. RFC 136 increment 2b added `verified_blocks`, the replay-verified block
     // record: 133 -> 134.
     // RFC 156 §5b added `format_upgrade`: 135 -> 136. RFC 156 §4 added `signature_admission`: 136 -> 137.
-    assert_eq!(modules.len(), 137, "modules: {modules:?}");
+    // The RFC 132 refusal sweep added `ref_resolution`, the one resolver for a consumed ref: 137 -> 138.
+    assert_eq!(modules.len(), 138, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

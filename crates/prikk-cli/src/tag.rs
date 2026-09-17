@@ -179,6 +179,13 @@ fn resolve_target_block(
             .map(|_| block_id)
             .ok_or_else(|| format!("--target block {block_id} does not exist"));
     }
+    // RFC 132 refusal sweep, rules 1, 2 and 6: absent and received names are refused by the one resolver.
+    prikk_store::require_existing_ref(
+        ref_store.layout(),
+        target,
+        prikk_store::ReceivedRefs::Refused,
+    )
+    .map_err(|err| err.to_string())?;
     let target_ref_state_id = ref_store
         .read_current_ref_state_id(target)
         .map_err(|err| err.to_string())?

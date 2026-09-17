@@ -204,6 +204,17 @@ impl RepositoryLayout {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         let prikk_dir = root.join(REPO_DIR);
+        // RFC 132 refusal sweep, rule 5: a path holding no repository is a precondition, decided here,
+        // once, for every command that opens one. Only a missing `.prikk` (or a missing root) is this;
+        // any other I/O failure below stays `Io`.
+        if let Err(err) = std::fs::symlink_metadata(&prikk_dir) {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                return Err(PrikkError::Precondition(format!(
+                    "no prikk repository at {}",
+                    root.display()
+                )));
+            }
+        }
         let worktree_mutation = MutationRoot::open(&root)?;
         let repository_mutation = worktree_mutation.open_root(Path::new(REPO_DIR))?;
         let format = read_repository_format(&repository_mutation)?;

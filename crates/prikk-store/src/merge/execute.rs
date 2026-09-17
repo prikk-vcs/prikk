@@ -148,6 +148,11 @@ pub fn execute_merge(
     }
 
     let ref_store = RefStore::new(layout.clone());
+    crate::ref_resolution::require_existing_ref(
+        layout,
+        &into_ref,
+        crate::ref_resolution::ReceivedRefs::LeftToNameValidation,
+    )?;
     let into_ref_state_id = ref_store
         .read_current_ref_state_id(&into_ref)?
         .ok_or_else(|| PrikkError::Integrity(format!("ref {into_ref} is not published")))?;

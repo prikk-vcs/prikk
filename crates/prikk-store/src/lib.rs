@@ -63,6 +63,7 @@ mod path;
 // RFC 131 §2.2a ruling (b): the `received` name family (received, received_index).
 mod received;
 mod recognition_claim;
+mod ref_resolution;
 mod refs;
 mod rename_declaration;
 mod rfc111_seal_simulation;
@@ -207,6 +208,7 @@ pub use received::{
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
 };
+pub use ref_resolution::{ReceivedRefs, require_existing_ref};
 pub use refs::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord, RefLogReplay,
     RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate, RefStore,

@@ -112,6 +112,11 @@ fn resolve_target(
         }
         MergeEvidenceTarget::Ref(ref_name) => {
             let ref_name = validate_local_branch_ref(&ref_name)?;
+            crate::ref_resolution::require_existing_ref(
+                layout,
+                &ref_name,
+                crate::ref_resolution::ReceivedRefs::Read,
+            )?;
             let ref_store = RefStore::new(layout.clone());
             let ref_state_id = ref_store
                 .read_current_ref_state_id(&ref_name)?
@@ -138,6 +143,11 @@ fn resolve_target(
             })
         }
         MergeEvidenceTarget::ReceivedRef(ref_name) => {
+            crate::ref_resolution::require_existing_ref(
+                layout,
+                &ref_name,
+                crate::ref_resolution::ReceivedRefs::Read,
+            )?;
             let pointer = read_received_pointer(layout, &ref_name)?.ok_or_else(|| {
                 PrikkError::Integrity(format!("received ref {ref_name} does not exist"))
             })?;

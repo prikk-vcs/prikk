@@ -99,6 +99,25 @@ the last authoritative". `prikk format upgrade` takes the writer lock, runs the 
 repository, never runs by itself, and has no inverse: prikk 0.44.0 and earlier refuse a format-7
 repository at open. See [Release Compatibility](release-compatibility.md).
 
+**Refusals about refs and repositories.**
+- **A ref that does not exist.** A command that reads an existing ref's state refuses an absent name
+  before anything else with `precondition not met: ref <name> does not exist in this repository` (exit
+  `1`), adding a sentence when `remotes/<name>` exists. That covers `log` and `worktree-status` given
+  `--ref`, every `checkout` mode, `inverse-plan`, `rollback-preview`, `rollback-draft`,
+  `rollback-draft-verify`, `merge-evidence`, `merge-plan`, `merge --into`/`--from`, `bundle export`,
+  `branch create --from`, `tag create --target`, `branch close` and `branch switch`, which keeps its own
+  route sentence.
+- **Not refused:** `sync have`, `sync build` and `bundle preview` answer an absent ref as a state ("none
+  of it"), and `commit --ref`, `seal --ref` and `branch create` create the ref. In a fresh repository,
+  `log` and `worktree-status` without `--ref` still report the unpublished current branch.
+- **A received ref given to a command that cannot use one** (`checkout`, `inverse-plan`,
+  `rollback-preview`, `bundle export`, `branch create --from`, `tag create --target`) refuses with
+  `precondition not met: <name> is a received ref`, naming the commands that read received refs (`log`,
+  `merge-evidence`, `merge-plan`, `bundle preview`) and the one that takes it into a local branch
+  (`merge --from`).
+- **A path with no repository** refuses as a precondition naming that path ("no prikk repository at
+  <path>"), decided when the repository is opened, in every command that opens one.
+
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an
 unknown argument, a missing required flag, a duplicate flag. Graded verification results are in

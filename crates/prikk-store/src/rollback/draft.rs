@@ -212,6 +212,11 @@ pub fn append_rollback_draft(
 }
 
 fn read_target_tip(layout: &RepositoryLayout, ref_name: &str) -> Result<RollbackTargetTip> {
+    crate::ref_resolution::require_existing_ref(
+        layout,
+        ref_name,
+        crate::ref_resolution::ReceivedRefs::LeftToNameValidation,
+    )?;
     let ref_store = RefStore::new(layout.clone());
     let ref_state_id = ref_store
         .read_current_ref_state_id(ref_name)?

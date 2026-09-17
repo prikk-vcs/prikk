@@ -240,8 +240,11 @@ fn branch_create_fails_closed_on_unresolvable_from() {
     let out = branch_create(&repo, &["heads/topic", "--from", "heads/does-not-exist"]);
     fail(&out, "branch create with unresolvable --from");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // RFC 132 refusal sweep, rule 6: the one absent-ref refusal, class and wording.
     assert!(
-        stderr.contains("does not resolve to a published ref"),
+        stderr.contains(
+            "precondition not met: ref heads/does-not-exist does not exist in this repository"
+        ),
         "unexpected stderr: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&repo);

@@ -96,6 +96,12 @@ pub fn prepare_patch_inverse_plan(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchInversePlan> {
+    // RFC 132 refusal sweep, rules 1-2 (`rollback-preview` starts here too).
+    crate::ref_resolution::require_existing_ref(
+        layout,
+        ref_name,
+        crate::ref_resolution::ReceivedRefs::Refused,
+    )?;
     let object_store = ObjectReadSnapshot::open(layout)?;
     let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
     let block_ids = single_parent_chain(&object_store, target_block_id)?;

@@ -254,11 +254,12 @@ it is; import's own report is not a substitute for running it.
   every object and names the key that sealed each block. With no maintainer key trusted, `verify` reports
   publication-trust issues and exits non-zero; after `trust maintainer add` for the sealing key, it passes.
 - **It does not give a working branch.** None of these turn the received ref into your own `heads/main`
-  today: `prikk branch create heads/main --from remotes/heads/main` refuses (`--from ref
-  remotes/heads/main does not resolve to a published ref`); `prikk checkout --patch-plan` and
-  `--patch-materialize --ref remotes/heads/main` refuse (`ref remotes/heads/main is not published`), so
-  no worktree is written; and `prikk merge --into heads/main --from remotes/heads/main` refuses in a fresh
-  repository (`ref heads/main is not published`), even with the sealing key trusted.
+  today: `prikk branch create heads/main --from remotes/heads/main` and `prikk checkout --patch-plan` or
+  `--patch-materialize --ref remotes/heads/main` refuse (`remotes/heads/main is a received ref, and this
+  command does not accept received refs`), so no worktree is written; and `prikk merge --into heads/main
+  --from remotes/heads/main` refuses in a fresh repository (`ref heads/main does not exist in this
+  repository`), even with the sealing key trusted. The refusal names what does read a received ref: `log`,
+  `merge-evidence`, `merge-plan` and `bundle preview`.
 - **It cannot be passed on.** `prikk bundle export --ref remotes/heads/main` refuses, so a restored copy
   is not itself a backup source.
 
@@ -279,7 +280,8 @@ implemented.
   id the deletion names. Before 0.43.0, exporting such a history refused outright.
   **Rolling that deletion back is a separate matter:** `rollback-preview` and `inverse-plan` work on a
   published local ref, and an imported history lands at `remotes/…`, so both refuse there
-  (`ref remotes/heads/main is not published`). The content is present for when the history is local.
+  (`remotes/heads/main is a received ref, and this command does not accept received refs`). The content is
+  present for when the history is local.
 - **`bundle verify` answers "is this file intact" without a repository or a restore.** Nothing is
   written; nothing needs to exist first.
 - **`verify_repository` after import is what turns a restored copy into a checked one** — the same

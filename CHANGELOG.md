@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Changed — refusal classes for absent and received refs, and a path with no repository
+
+Refusals about a ref that is not there, or is received, now say so, in one class and one wording.
+
+- **An absent ref given to a command that reads it** is `precondition not met: ref <name> does not exist in
+  this repository`, exit 1, plus a sentence naming `remotes/<name>` when it exists. Before, the same fact was
+  `integrity error: ref <name> is not published` (`checkout`, `inverse-plan`, `rollback-preview`,
+  `merge-evidence`, `merge-plan`, `merge`), `invalid name: ref <name> is not published` (`rollback-draft`),
+  `integrity error: ref <name> does not exist, nothing to export` (`bundle export`), `--from/--target ref
+  <name> does not resolve to a published ref` (`branch create`, `tag create`), `branch <name> does not
+  exist` (`branch close`), and for `checkout --snapshot-plan`/`--snapshot-materialize` a false "not a
+  checkpoint".
+- **`log --ref <absent>` and `worktree-status --ref <absent>` now refuse (exit 1)**, prose and JSON. `log`
+  reported an empty history with exit 0, and `worktree-status` reported changes. Without `--ref`, a fresh
+  repository's unpublished current branch answers exactly as before.
+- **A received ref given to `checkout`, `inverse-plan`, `rollback-preview`, `bundle export`, `branch create
+  --from` or `tag create --target`** is `precondition not met: <name> is a received ref, and this command
+  does not accept received refs`, naming the commands that read one. Before, it was "not published", "does
+  not exist", or "not a checkpoint".
+- **`rollback-draft-verify`** resolves the ref before judging the active WAL.
+- **A path with no repository** is `precondition not met: no prikk repository at <path>` in every command,
+  where it was `i/o error: No such file or directory (os error 2)`. A real I/O failure inside a repository is
+  still `i/o error:`.
+- **Unchanged:** `sync have`, `sync build` and `bundle preview` on an absent ref; `log`, `merge --from`,
+  `merge-evidence`, `merge-plan` and `bundle preview` on a received ref; and every `invalid name: ref
+  namespace is reserved` refusal.
+
+**For consumers matching on text:** the `integrity error:` and `invalid name:` prefixes above become
+`precondition not met:`.
+
+**For Rust callers:** `prikk_store::require_existing_ref` and `ReceivedRefs` are new.
+
 ### Added — merge accepts branches containing renames
 
 `prikk merge`, `merge-evidence` and `merge-plan` now judge a side containing a rename (`prikk mv`) instead of

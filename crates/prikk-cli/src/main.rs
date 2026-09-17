@@ -720,6 +720,12 @@ fn parse_active_patch_threshold_env(
 fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_log_args(args)?;
     let layout = open_repository(args.root)?;
+    // RFC 132 refusal sweep, rule 4: an explicit absent ref refuses; the implicit current branch of a
+    // fresh repository keeps its empty history.
+    if let Some(explicit) = &args.ref_name {
+        prikk_store::require_existing_ref(&layout, explicit, prikk_store::ReceivedRefs::Read)
+            .map_err(|err| err.to_string())?;
+    }
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     // Received refs (DC-78 ruling 4) live in their own container (RFC 102 Stage 5:
     // received_index.rs, formerly refs/received/), not the local-ref pointer index, and their
@@ -744,6 +750,10 @@ fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_checkout_args(args)?;
     let layout = open_repository(args.root)?;
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    // RFC 132 refusal sweep, rules 1-3: every checkout mode refuses an absent or received target first,
+    // before any question of what the target holds (the snapshot modes' "not a checkpoint").
+    prikk_store::require_existing_ref(&layout, &ref_name, prikk_store::ReceivedRefs::Refused)
+        .map_err(|err| err.to_string())?;
     match args.mode {
         CheckoutMode::PlanOnly => {
             let plan = prepare_checkout_plan(&layout, &ref_name).map_err(|err| err.to_string())?;
@@ -912,6 +922,16 @@ fn run_rollback_draft_verify(args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_worktree_status(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_worktree_status_args(args)?;
     let layout = open_repository(args.root)?;
+    // RFC 132 refusal sweep, rule 4: an explicit absent ref refuses; the implicit current branch of a
+    // fresh repository keeps its answer.
+    if let Some(explicit) = &args.ref_name {
+        prikk_store::require_existing_ref(
+            &layout,
+            explicit,
+            prikk_store::ReceivedRefs::LeftToNameValidation,
+        )
+        .map_err(|err| err.to_string())?;
+    }
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     let report = worktree_status(&layout, &ref_name).map_err(|err| err.to_string())?;
     // RFC 144 §4o.3: `--format json` is an alternate rendering of the same report, not a different
