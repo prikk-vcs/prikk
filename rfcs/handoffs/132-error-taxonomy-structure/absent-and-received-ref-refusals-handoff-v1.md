@@ -142,3 +142,24 @@ consumers of received refs that work today.
 have-list with exit 0, and `bundle preview --ref <absent>` still reports `no-local-history`.
 
 **Report:** `.git-exclude/review-request/absent-and-received-ref-refusals-report-v2.md`.
+
+## Addendum 3 2026-09-17 — accepted; one follow-up
+
+**Accepted** (review `absent-and-received-ref-refusals-review-v1`): `bbdbcb71`.
+- **Deviation 1 is confirmed.** `sync build` is not a consumer. RFC 116 §4 makes a ref the sender lacks "already in
+  sync", the same "none of it" state as `sync have`. Ruling 1 listed it in error, and ruling 2 does not apply to it.
+- **Finding 2** (`rollback-draft-verify --ref remotes/…` answers with its WAL check) is recorded as a candidate.
+
+**Follow-up: the implicit current branch in `checkout`.** The gate in `run_checkout` also runs with no `--ref`. In a
+fresh repository, `checkout --plan-only` used to exit 0 with `ref-state: <not published>` and the note "publish a ref
+before checkout can target a block". It now refuses. This contradicts ruling 4's principle (the implicit current
+branch of a fresh repository is a legitimate state) and the CHANGELOG's own sentence ("answers exactly as before").
+Rule:
+- **`checkout --plan-only` without `--ref`** keeps its previous answer, byte-for-byte, exit code included.
+- **Every other checkout mode without `--ref`** keeps the new rule-1 wording. It was already a refusal (`integrity
+  error: … is not published`), so this is the intended class fix; name it in the CHANGELOG.
+- **With `--ref`**, nothing changes from this round.
+- **Control:** in a fresh repository, `checkout --plan-only` (no `--ref`) is byte-identical to the pre-sweep binary
+  (`63d0dcee`), and `checkout --plan-only --ref heads/nope` refuses. *Perturbation:* gate the implicit ref.
+
+**Report:** `.git-exclude/review-request/absent-and-received-ref-refusals-follow-up-report-v1.md`.
