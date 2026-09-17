@@ -237,7 +237,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
-- [`153-content-diff.md`](rfcs/proposed/153-content-diff.md) — `prikk diff`: two points of history or the worktree against its baseline; owner approved the direction 2026-09-13; proposed as the theme after 0.43
+- [`153-content-diff.md`](rfcs/proposed/153-content-diff.md) — `prikk diff`: two points of history or the worktree against its baseline; owner approved the direction 2026-09-13; amended 2026-09-17 for 0.46.0 (§7)
+- [`157-reading-a-point.md`](rfcs/proposed/157-reading-a-point.md) — `prikk tree` and `prikk cat`: a tree listing and a file's bytes at a point (planeter A1/A2); proposed 2026-09-17 for 0.46.0, sharing RFC 153's resolver
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here
