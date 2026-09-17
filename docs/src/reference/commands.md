@@ -25,12 +25,12 @@ prikk mv <old> <new>
 prikk seal --allow-no-audit [--ref heads/<branch>]
 prikk status [--format json]
 prikk log [path] [--limit N] [--ref REF] [--format json]
-prikk checkout --plan-only [path] [--ref REF]
-prikk checkout --snapshot-plan [path] [--ref REF]
+prikk checkout --plan-only [path] [--ref <ref|block-id>]
+prikk checkout --snapshot-plan [path] [--ref <ref|block-id>]
 prikk checkout --snapshot-materialize [path] [--ref REF]
-prikk checkout --patch-plan [path] [--ref REF] [--format json [--content-path <path>]...]
+prikk checkout --patch-plan [path] [--ref <ref|block-id>] [--format json [--content-path <path>]...]
 prikk checkout --patch-materialize [path] [--ref REF]
-prikk checkout --patch-delete-plan [path] [--ref REF]
+prikk checkout --patch-delete-plan [path] [--ref <ref|block-id>]
 prikk checkout --patch-materialize-delete [path] [--ref REF]
 prikk show <block-id|patch-id> [--format json]
 prikk merge-evidence --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
@@ -117,6 +117,21 @@ repository at open. See [Release Compatibility](release-compatibility.md).
   (`merge --from`).
 - **A path with no repository** refuses as a precondition naming that path ("no prikk repository at
   <path>"), decided when the repository is opened, in every command that opens one.
+
+**A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
+`--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
+bare block id, 64 lowercase hex characters, resolved by one resolver.
+- A block the repository holds resolves whether or not any ref reaches it: an older block on a branch,
+  or a block only received history holds. Reading it adopts nothing.
+- `block <id> is not in this repository` and `object <id> is a patch, not a block` (naming the type it
+  is) refuse as preconditions, exit `1`. A `--ref` value that is neither a ref name (`heads/…`,
+  `tags/…`, `remotes/…`) nor 64 lowercase hex is a usage error, exit `2`.
+- The modes that write the worktree (`--snapshot-materialize`, `--patch-materialize`,
+  `--patch-materialize-delete`) refuse a block id: writing the worktree needs a branch, because the
+  next `commit` authors against one.
+- The prose header reads `block: <id>` for a block id and `ref: <name>` otherwise; `--plan-only` prints
+  `ref-state: <none>` for a block id. `patch-plan-content-v1`'s `ref` holds the value as given, now
+  possibly a block id; its schema version is unchanged.
 
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an

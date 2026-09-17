@@ -118,7 +118,8 @@ pub use bundle::{
 };
 pub use checkout::{
     CheckoutMaterialization, CheckoutPlan, DEFAULT_CHECKOUT_REF, SnapshotCheckoutPlan,
-    prepare_checkout_plan, prepare_snapshot_checkout_plan,
+    prepare_checkout_plan, prepare_checkout_plan_at_point, prepare_snapshot_checkout_plan,
+    prepare_snapshot_checkout_plan_at_point,
 };
 pub use commit_boundary::active::{
     ActiveCommitResult, ActiveRefMetadata, ActiveRefOwnership, ActiveSession, active_ref_ownership,
@@ -175,6 +176,7 @@ pub use patch_checkout::{
     materialize_patch_checkout, materialize_patch_checkout_reporting_anchor,
     materialize_patch_checkout_with_deletions,
     materialize_patch_checkout_with_deletions_reporting_anchor, plan_patch_checkout_deletions,
+    plan_patch_checkout_deletions_at_point_reporting_anchor,
     plan_patch_checkout_deletions_reporting_anchor,
 };
 pub use patch_exchange::{
@@ -187,13 +189,17 @@ pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,
     prepare_patch_inverse_plan,
 };
-#[cfg(feature = "test-support")]
-pub use patch_replay::baseline_cache_rung_for_test_support;
 pub use patch_replay::{
     PatchPlanContent, PatchPlanContentEntry, PatchPlanContentReport, PatchPlanCoverage,
     PatchReplayPlan, SnapshotAnchorFallback, prepare_patch_plan_content_report,
+    prepare_patch_plan_content_report_at_point_reporting_anchor,
     prepare_patch_plan_content_report_reporting_anchor, prepare_patch_replay_plan,
+    prepare_patch_replay_plan_at_point_reporting_anchor,
     prepare_patch_replay_plan_reporting_anchor,
+};
+#[cfg(feature = "test-support")]
+pub use patch_replay::{
+    baseline_cache_rung_for_test_support, replayed_block_count_at_point_for_test_support,
 };
 pub use patch_set_digest::{
     PatchSetDigest, PatchSetResolution, compute_patch_set_digest,
@@ -208,7 +214,10 @@ pub use received::{
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
 };
-pub use ref_resolution::{ReceivedRefs, require_existing_ref};
+pub use ref_resolution::{
+    Point, PointKind, ReceivedRefs, is_bare_block_id, is_point_name,
+    refuse_block_point_for_worktree_write, require_existing_ref, resolve_point,
+};
 pub use refs::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord, RefLogReplay,
     RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate, RefStore,

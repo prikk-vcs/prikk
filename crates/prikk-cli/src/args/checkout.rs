@@ -76,6 +76,13 @@ pub(crate) fn parse_checkout_args(
                         "checkout --ref must not be empty".to_string(),
                     ));
                 }
+                // RFC 153 §2: a point is a ref name or a bare block id, and nothing else.
+                if !prikk_store::is_point_name(&value) {
+                    return Err(CliError::Usage(format!(
+                        "checkout --ref {value:?} is neither a ref name (heads/…, tags/… or remotes/…) \
+                         nor a block id (64 lowercase hex characters)"
+                    )));
+                }
                 ref_name.set_once("--ref", value)?;
             }
             "--format" => {

@@ -5,7 +5,7 @@ PR-017 keeps a read-only snapshot checkout planning path.
 The command:
 
 ```sh
-prikk checkout --snapshot-plan [path] [--ref REF]
+prikk checkout --snapshot-plan [path] [--ref <ref|block-id>]
 ```
 
 validates the current ref, target block, snapshot Blob object, and snapshot manifest paths. It does

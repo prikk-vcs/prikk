@@ -36,6 +36,7 @@ use crate::foundation::layout::RepositoryLayout;
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::path::RepoPath;
+use crate::ref_resolution::Point;
 use crate::refs::RefStore;
 use crate::validate_local_branch_ref;
 use crate::wal::WalReplay;
@@ -80,25 +81,40 @@ pub fn prepare_patch_replay_plan_reporting_anchor(
     ref_name: &str,
 ) -> Result<(PatchReplayPlan, Option<SnapshotAnchorFallback>)> {
     let (snapshot, fallback) = replay_for_read_only_report(layout, ref_name)?;
+    Ok((patch_replay_plan_from(snapshot), fallback))
+}
+
+/// [`prepare_patch_replay_plan_reporting_anchor`] at a resolved [`Point`] -- a ref, or a bare block id
+/// (RFC 153 §7.1). `ref_name` in the plan is the point's name as given.
+///
+/// # Errors
+///
+/// The replay fails.
+pub fn prepare_patch_replay_plan_at_point_reporting_anchor(
+    layout: &RepositoryLayout,
+    point: &Point,
+) -> Result<(PatchReplayPlan, Option<SnapshotAnchorFallback>)> {
+    let (snapshot, fallback) = replay_point_for_read_only_report(layout, point)?;
+    Ok((patch_replay_plan_from(snapshot), fallback))
+}
+
+fn patch_replay_plan_from(snapshot: PatchReplaySnapshot) -> PatchReplayPlan {
     let paths = snapshot
         .manifest
         .files
         .iter()
         .map(|entry| entry.path.as_str().to_string())
         .collect();
-    Ok((
-        PatchReplayPlan {
-            ref_name: snapshot.ref_name,
-            target_block_id: snapshot.target_block_id,
-            block_count: snapshot.block_count,
-            patch_count: snapshot.patch_count,
-            applied_operation_count: snapshot.applied_operation_count,
-            file_count: snapshot.manifest.files.len(),
-            total_content_bytes: snapshot.manifest.total_content_bytes(),
-            paths,
-        },
-        fallback,
-    ))
+    PatchReplayPlan {
+        ref_name: snapshot.ref_name,
+        target_block_id: snapshot.target_block_id,
+        block_count: snapshot.block_count,
+        patch_count: snapshot.patch_count,
+        applied_operation_count: snapshot.applied_operation_count,
+        file_count: snapshot.manifest.files.len(),
+        total_content_bytes: snapshot.manifest.total_content_bytes(),
+        paths,
+    }
 }
 
 /// RFC 143 §6: the replay's own structural coverage, exposed so a consumer can tell "the complete
@@ -201,6 +217,28 @@ pub fn prepare_patch_plan_content_report_reporting_anchor(
     requested_paths: &[String],
 ) -> Result<(PatchPlanContentReport, Option<SnapshotAnchorFallback>)> {
     let (snapshot, fallback) = replay_for_read_only_report(layout, ref_name)?;
+    Ok((content_report_from(snapshot, requested_paths), fallback))
+}
+
+/// [`prepare_patch_plan_content_report_reporting_anchor`] at a resolved [`Point`] -- a ref, or a bare
+/// block id (RFC 153 §7.1). `ref_name` in the report is the point's name as given.
+///
+/// # Errors
+///
+/// The replay fails, including on an unsupported operation anywhere in the walked chain.
+pub fn prepare_patch_plan_content_report_at_point_reporting_anchor(
+    layout: &RepositoryLayout,
+    point: &Point,
+    requested_paths: &[String],
+) -> Result<(PatchPlanContentReport, Option<SnapshotAnchorFallback>)> {
+    let (snapshot, fallback) = replay_point_for_read_only_report(layout, point)?;
+    Ok((content_report_from(snapshot, requested_paths), fallback))
+}
+
+fn content_report_from(
+    snapshot: PatchReplaySnapshot,
+    requested_paths: &[String],
+) -> PatchPlanContentReport {
     let by_path: BTreeMap<&str, &ReplayManifestEntry> = snapshot
         .manifest
         .files
@@ -231,19 +269,16 @@ pub fn prepare_patch_plan_content_report_reporting_anchor(
             None => not_found.push(requested.clone()),
         }
     }
-    Ok((
-        PatchPlanContentReport {
-            ref_name: snapshot.ref_name,
-            target_block_id: snapshot.target_block_id,
-            coverage: PatchPlanCoverage {
-                applied_operation_kinds: snapshot.applied_operation_kinds.into_iter().collect(),
-                walk: "single-parent",
-            },
-            entries,
-            not_found,
+    PatchPlanContentReport {
+        ref_name: snapshot.ref_name,
+        target_block_id: snapshot.target_block_id,
+        coverage: PatchPlanCoverage {
+            applied_operation_kinds: snapshot.applied_operation_kinds.into_iter().collect(),
+            walk: "single-parent",
         },
-        fallback,
-    ))
+        entries,
+        not_found,
+    }
 }
 
 /// One file entry in a replay-derived manifest, carrying the mode bits `CreateFile`/`ChangePerm`
@@ -312,6 +347,8 @@ pub(crate) struct PatchReplaySnapshot {
     pub(crate) manifest: ReplayManifest,
     /// Files explicitly removed by replayed patches and still absent in the final manifest.
     pub(crate) deleted_files: Vec<PatchReplayDeletedFile>,
+    /// Blocks applied operation by operation, after any anchor (RFC 136).
+    pub(crate) replayed_block_count: usize,
 }
 
 /// A file explicitly deleted while replaying the supported patch subset.
@@ -493,6 +530,38 @@ pub(crate) fn replay_for_read_only_report(
     replay_ref_chain(layout, ref_name, anchor::Anchoring::ReadOnlyReport)
 }
 
+/// [`replay_for_read_only_report`] at a resolved [`Point`]: a ref or a bare block id, through the same
+/// [`replay_block_chain`].
+pub(crate) fn replay_point_for_read_only_report(
+    layout: &RepositoryLayout,
+    point: &Point,
+) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    replay_block_chain(
+        &object_store,
+        &point.name,
+        point.block_id,
+        anchor::Anchoring::ReadOnlyReport,
+    )
+}
+
+/// Test-support instrument (RFC 153 point-resolver handoff §3.3): how many blocks the read-only replay of
+/// `point` applied operation by operation -- the whole chain, or only those after its anchor. The same
+/// replay `checkout --patch-plan` runs. Never in a shipped build.
+///
+/// # Errors
+///
+/// The replay fails.
+#[cfg(feature = "test-support")]
+pub fn replayed_block_count_at_point_for_test_support(
+    layout: &RepositoryLayout,
+    point: &Point,
+) -> Result<usize> {
+    Ok(replay_point_for_read_only_report(layout, point)?
+        .0
+        .replayed_block_count)
+}
+
 /// The replay for a **worktree write** (RFC 136 §10.3c ruling 2): it may start only at a snapshot whose
 /// Block is in this repository's replay-verified record and that passes the loader; otherwise it
 /// replays from genesis. A missing or damaged record is the empty set, so the replay runs in full.
@@ -519,11 +588,24 @@ fn replay_ref_chain(
     // after this function returns (Stage 1 review v1 §4) before assuming this stays safe.
     let object_store = ObjectReadSnapshot::open(layout)?;
     let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
-    let block_ids = single_parent_chain(&object_store, target_block_id)?;
-    let chain = anchor::replay_chain(&object_store, &block_ids, anchoring)?;
+    replay_block_chain(&object_store, ref_name, target_block_id, anchoring)
+}
+
+/// **The one replay of a point** (RFC 153 point-resolver handoff §2.3): the state at `target_block_id`,
+/// by the single-parent walk from it and the same anchoring every caller uses (RFC 136). The ref-addressed
+/// [`replay_ref_chain`] reads its ref's tip and calls this; a bare block id comes here directly.
+/// `point_name` is carried into the result as given.
+fn replay_block_chain(
+    object_store: &impl ObjectReader,
+    point_name: &str,
+    target_block_id: ObjectId,
+    anchoring: anchor::Anchoring<'_>,
+) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
+    let block_ids = single_parent_chain(object_store, target_block_id)?;
+    let chain = anchor::replay_chain(object_store, &block_ids, anchoring)?;
     Ok((
         PatchReplaySnapshot {
-            ref_name: ref_name.to_string(),
+            ref_name: point_name.to_string(),
             target_block_id,
             block_count: block_ids.len(),
             patch_count: chain.patch_count,
@@ -531,6 +613,7 @@ fn replay_ref_chain(
             applied_operation_kinds: chain.applied_operation_kinds,
             manifest: files_to_replay_manifest(chain.files, &chain.live_nodes)?,
             deleted_files: chain.deleted_files.into_values().collect(),
+            replayed_block_count: chain.replayed_block_count,
         },
         chain.fallback,
     ))

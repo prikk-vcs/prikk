@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added — a point can be a bare block id in checkout's read-only modes
+
+`checkout --plan-only`, `--snapshot-plan`, `--patch-plan` (with and without `--content-path`, prose and JSON)
+and `--patch-delete-plan` accept `--ref <block-id>`: a bare block id, 64 lowercase hex characters, as `log`
+prints it. Any block the repository holds resolves, whether or not a ref reaches it, including an older block
+on a branch, so two blocks on one ref can now be compared. A block id replays exactly as a ref naming the same
+block, from the same checkpoint.
+
+- **Refusals.** A block id the repository does not hold is `precondition not met: block <id> is not in this
+  repository`; an id naming another object type is `precondition not met: object <id> is a patch, not a
+  block` (naming the type), both exit 1. The modes that write the worktree (`--snapshot-materialize`,
+  `--patch-materialize`, `--patch-materialize-delete`) refuse a block id with `precondition not met:
+  checkout <mode> writes the worktree, which needs a branch: …`, writing nothing.
+- **A `--ref` value that is neither a ref name (`heads/…`, `tags/…`, `remotes/…`) nor a block id is now a
+  usage error, exit 2**, in every `checkout` mode. Before, `--ref main` or a truncated id answered `integrity
+  error: ref <value> is not published`, exit 1.
+- **For consumers reading JSON:** `patch-plan-content-v1`'s `ref` holds the value exactly as given, which may
+  now be a block id; `target_block_id` is unchanged. **No new schema version**: the value space of `ref`
+  widens.
+- **For consumers reading prose:** the header line is `block: <id>` for a block id, and `ref: <name>`
+  otherwise, unchanged. `--plan-only` prints `ref-state: <none>` for a block id.
+- **For Rust callers:** new `resolve_point`, `Point`, `PointKind`, `is_bare_block_id`, `is_point_name`,
+  `refuse_block_point_for_worktree_write`, and point-taking `prepare_checkout_plan_at_point`,
+  `prepare_snapshot_checkout_plan_at_point`, `prepare_patch_replay_plan_at_point_reporting_anchor`,
+  `prepare_patch_plan_content_report_at_point_reporting_anchor` and
+  `plan_patch_checkout_deletions_at_point_reporting_anchor`. `materialize_patch_checkout*` and
+  `materialize_snapshot_checkout` refuse a bare block id as a `Precondition` before anything else.
+
 ## 0.45.0 — 2026-09-17
 
 ### Changed — repository format 7; breaking once, and the upgrade is explicit

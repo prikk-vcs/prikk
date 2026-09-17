@@ -7,11 +7,18 @@
 //! which answer "none of it" as a state, and the creators (`commit --ref`, `seal --ref`, `branch create`'s
 //! own name).
 //!
+//! **Points** (RFC 153 §2 and §7.1, RFC 157 §2): a read that takes a point -- a ref or a bare block id --
+//! calls [`resolve_point`], which decides a ref's existence through the same function
+//! [`require_existing_ref`] is, and a block id's through [`resolve_point`]'s own block arm. Reading a
+//! block is not adopting it: a block the store holds resolves whether or not any ref reaches it.
+//!
 //! An upper-layer module (RFC 149): it reads both the local ref store and the received-ref index.
 
 use prikk_error::{PrikkError, Result};
+use prikk_object::{ObjectId, ObjectType, RefStatePayload};
 
 use crate::foundation::layout::RepositoryLayout;
+use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::refs::{RefStore, validate_local_branch_ref, validate_local_tag_ref};
 
 /// How a command treats a received ref (`remotes/…`) it is given (RFC 132 refusal sweep, Addendum 2).
@@ -51,11 +58,31 @@ pub fn require_existing_ref(
     ref_name: &str,
     received_refs: ReceivedRefs,
 ) -> Result<()> {
+    decide_ref_existence(layout, ref_name, received_refs).map(|_| ())
+}
+
+/// What [`decide_ref_existence`] found for a name that did not refuse.
+enum RefExistence {
+    /// The name exists as this kind of ref (or, for a local name, its log holds history: damage the
+    /// reader reports).
+    Exists(PointKind),
+    /// Left to the caller: a received name under [`ReceivedRefs::LeftToNameValidation`], or a name no
+    /// validator accepts.
+    LeftToCaller,
+}
+
+/// **The one decision on whether a named ref exists** -- [`require_existing_ref`] and [`resolve_point`]
+/// both call it.
+fn decide_ref_existence(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    received_refs: ReceivedRefs,
+) -> Result<RefExistence> {
     if ref_name.starts_with("remotes/") {
         if received_refs == ReceivedRefs::LeftToNameValidation
             || crate::received::validate_received_ref(ref_name).is_err()
         {
-            return Ok(());
+            return Ok(RefExistence::LeftToCaller);
         }
         let exists = crate::received::read_received_pointer(layout, ref_name)?.is_some();
         return match (exists, received_refs) {
@@ -66,19 +93,23 @@ pub fn require_existing_ref(
                 "{ref_name} is a received ref, and this command does not accept received refs; \
                  {RECEIVED_REF_READERS}"
             ))),
-            (true, _) => Ok(()),
+            (true, _) => Ok(RefExistence::Exists(PointKind::ReceivedRef)),
         };
     }
-    if validate_local_branch_ref(ref_name).is_err() && validate_local_tag_ref(ref_name).is_err() {
-        return Ok(());
-    }
+    let kind = if validate_local_branch_ref(ref_name).is_ok() {
+        PointKind::LocalBranch
+    } else if validate_local_tag_ref(ref_name).is_ok() {
+        PointKind::Tag
+    } else {
+        return Ok(RefExistence::LeftToCaller);
+    };
     let ref_store = RefStore::new(layout.clone());
     if ref_store.read_current_ref_state_id(ref_name)?.is_some() {
-        return Ok(());
+        return Ok(RefExistence::Exists(kind));
     }
     let log = ref_store.replay_log(ref_name)?;
     if !log.records.is_empty() || log.trailing_partial_bytes != 0 || log.has_item_failure() {
-        return Ok(());
+        return Ok(RefExistence::Exists(kind));
     }
     let received = format!("remotes/{ref_name}");
     let received_note = if crate::received::read_received_pointer(layout, &received)?.is_some() {
@@ -89,4 +120,154 @@ pub fn require_existing_ref(
     Err(PrikkError::Precondition(format!(
         "ref {ref_name} does not exist in this repository{received_note}"
     )))
+}
+
+/// How a [`Point`] was named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointKind {
+    /// A local branch, `heads/…`.
+    LocalBranch,
+    /// A local tag, `tags/…`, resolved through its Tag object to the Block it names.
+    Tag,
+    /// A received ref, `remotes/…`.
+    ReceivedRef,
+    /// A bare block id: 64 lowercase hex characters.
+    Block,
+}
+
+/// A point in history a read names (RFC 153 §2, RFC 157 §2): a ref, or a bare block id, resolved to the
+/// Block whose state the read is of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Point {
+    /// The name exactly as given: a ref name, or the block id.
+    pub name: String,
+    /// How it was named.
+    pub kind: PointKind,
+    /// The Block the point resolves to.
+    pub block_id: ObjectId,
+}
+
+/// Whether `name` is spelled as a bare block id: exactly 64 lowercase hex characters. A ref name never
+/// is one -- every ref name starts `heads/`, `tags/` or `remotes/` -- so the two cannot collide.
+#[must_use]
+pub fn is_bare_block_id(name: &str) -> bool {
+    name.len() == 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Whether `name` has the shape of a point at all: a ref name (`heads/…`, `tags/…`, `remotes/…`) or a
+/// bare block id. A command refuses anything else as a usage error before resolving it.
+#[must_use]
+pub fn is_point_name(name: &str) -> bool {
+    ["heads/", "tags/", "remotes/"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || is_bare_block_id(name)
+}
+
+/// **Resolve a point** (RFC 153 §7.1): a ref name to the Block its tip names, or a bare block id to that
+/// Block, whether or not any ref reaches it.
+///
+/// - A ref's existence is decided exactly as [`require_existing_ref`] decides it, with the same
+///   refusals; its tip is then read as every ref-addressed reader reads it.
+/// - A block id the store does not hold: `Precondition`, "block <id> is not in this repository".
+/// - A block id the store holds as another type: `Precondition`, "object <id> is a patch, not a block".
+///
+/// # Errors
+///
+/// `Precondition` for an absent ref, a received ref under [`ReceivedRefs::Refused`], or a block id that
+/// names no block; `InvalidName` for a name that is not a point, or a received name left to name
+/// validation; `Integrity` for a ref whose publication does not resolve; any read error.
+pub fn resolve_point(
+    layout: &RepositoryLayout,
+    name: &str,
+    received_refs: ReceivedRefs,
+) -> Result<Point> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    if is_bare_block_id(name) {
+        let block_id: ObjectId = name.parse()?;
+        return match object_store.read_object(block_id)? {
+            None => Err(PrikkError::Precondition(format!(
+                "block {block_id} is not in this repository"
+            ))),
+            Some(envelope) if envelope.object_type != ObjectType::Block => {
+                let type_name = envelope.object_type.name();
+                let article = if type_name.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                    "an"
+                } else {
+                    "a"
+                };
+                Err(PrikkError::Precondition(format!(
+                    "object {block_id} is {article} {type_name}, not a block"
+                )))
+            }
+            Some(_) => Ok(Point {
+                name: name.to_string(),
+                kind: PointKind::Block,
+                block_id,
+            }),
+        };
+    }
+    let kind = match decide_ref_existence(layout, name, received_refs)? {
+        RefExistence::Exists(kind) => kind,
+        RefExistence::LeftToCaller => {
+            return Err(PrikkError::InvalidName(format!(
+                "{name} is not a point this command reads: expected a ref name (heads/…, tags/… or \
+                 remotes/…) or a block id (64 lowercase hex characters)"
+            )));
+        }
+    };
+    let block_id = if kind == PointKind::ReceivedRef {
+        received_tip_block(layout, &object_store, name)?
+    } else {
+        crate::refs::read_current_ref_tip_block(layout, &object_store, name)?
+    };
+    Ok(Point {
+        name: name.to_string(),
+        kind,
+        block_id,
+    })
+}
+
+/// The Block a received ref's tip names. A received RefState carries the origin's own name, so there is
+/// no name check here (DC-85 §3A), unlike a local ref's.
+fn received_tip_block(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    name: &str,
+) -> Result<ObjectId> {
+    let pointer = crate::received::read_received_pointer(layout, name)?.ok_or_else(|| {
+        PrikkError::Precondition(format!("ref {name} does not exist in this repository"))
+    })?;
+    let envelope = object_store
+        .read_typed(pointer.ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "received ref {name} points to missing RefState {}",
+                pointer.ref_state_id
+            ))
+        })?;
+    let ref_state =
+        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
+    Ok(crate::refs::resolve_ref_tip_block(object_store, &ref_state)?.0)
+}
+
+/// Refuse a bare block id given to a command that writes the worktree: the next `commit` authors against
+/// a branch, and a block id names none (RFC 153 point-resolver handoff §2.4).
+///
+/// # Errors
+///
+/// `Precondition` when `name` is a bare block id.
+pub fn refuse_block_point_for_worktree_write(name: &str, command: &str) -> Result<()> {
+    if is_bare_block_id(name) {
+        return Err(PrikkError::Precondition(format!(
+            "{command} writes the worktree, which needs a branch: the next `commit` authors against \
+             one, and a block id names no branch"
+        )));
+    }
+    Ok(())
 }

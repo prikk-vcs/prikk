@@ -13,6 +13,21 @@ snapshot materialization or patch application.
 Block that object names, so `--ref tags/v1` plans against the tagged Block rather than the branch
 tip. That applies to `--patch-plan` and its `--content-path` reporting too.
 
+The read-only modes — `--plan-only`, `--snapshot-plan`, `--patch-plan` (with or without
+`--content-path`) and `--patch-delete-plan` — also take a **bare block id**, as `log` prints it. Any
+block the repository holds resolves, including an older block on a branch, so two blocks on one ref
+can be read side by side:
+
+```sh
+prikk checkout --patch-plan --format json --content-path a.txt --ref <block-id>
+```
+
+A block id replays exactly as a ref naming the same block does, from the same checkpoint. The prose
+header then reads `block: <id>` instead of `ref: <name>`. An id the repository does not hold refuses
+with `block <id> is not in this repository`; an id naming another kind of object refuses naming its
+type, for example `object <id> is a patch, not a block`. The modes that write the worktree refuse a
+block id, because the next `commit` authors against a branch and a block id names none.
+
 For snapshot-backed blocks, first validate the snapshot manifest:
 
 ```sh

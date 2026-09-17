@@ -40,12 +40,20 @@ pub(crate) use worktree::{
     print_history, print_history_json, print_worktree_status, print_worktree_status_json,
 };
 
-/// Print a checkout plan.
-pub(crate) fn print_checkout_plan(layout: &RepositoryLayout, plan: &CheckoutPlan) {
+/// The prose header's label for a point (RFC 153 point-resolver handoff §2.6): `block` for a bare block
+/// id, `ref` for everything else, so ref output stays byte-identical.
+pub(crate) const fn point_label(block: bool) -> &'static str {
+    if block { "block" } else { "ref" }
+}
+
+/// Print a checkout plan. `label` is [`point_label`]'s.
+pub(crate) fn print_checkout_plan(layout: &RepositoryLayout, plan: &CheckoutPlan, label: &str) {
     println!("checkout plan repository: {}", layout.prikk_dir().display());
-    println!("ref: {}", plan.ref_name);
+    println!("{label}: {}", plan.ref_name);
     match plan.ref_state_id {
         Some(id) => println!("ref-state: {id}"),
+        // A block id names no ref, so there is no RefState to be unpublished.
+        None if plan.block_id.is_some() => println!("ref-state: <none>"),
         None => println!("ref-state: <not published>"),
     }
     match plan.block_id {
@@ -83,12 +91,16 @@ pub(crate) fn print_checkout_plan(layout: &RepositoryLayout, plan: &CheckoutPlan
 }
 
 /// Print a snapshot checkout plan.
-pub(crate) fn print_snapshot_checkout_plan(layout: &RepositoryLayout, plan: &SnapshotCheckoutPlan) {
+pub(crate) fn print_snapshot_checkout_plan(
+    layout: &RepositoryLayout,
+    plan: &SnapshotCheckoutPlan,
+    label: &str,
+) {
     println!(
         "snapshot checkout plan repository: {}",
         layout.prikk_dir().display()
     );
-    print_checkout_plan(layout, &plan.checkout);
+    print_checkout_plan(layout, &plan.checkout, label);
     println!("snapshot blob: {}", plan.snapshot_blob_id);
     println!("snapshot files: {}", plan.file_count);
     println!("snapshot content bytes: {}", plan.total_content_bytes);
@@ -99,12 +111,16 @@ pub(crate) fn print_snapshot_checkout_plan(layout: &RepositoryLayout, plan: &Sna
 }
 
 /// Print a supported patch replay plan.
-pub(crate) fn print_patch_replay_plan(layout: &RepositoryLayout, plan: &PatchReplayPlan) {
+pub(crate) fn print_patch_replay_plan(
+    layout: &RepositoryLayout,
+    plan: &PatchReplayPlan,
+    label: &str,
+) {
     println!(
         "patch replay plan repository: {}",
         layout.prikk_dir().display()
     );
-    println!("ref: {}", plan.ref_name);
+    println!("{label}: {}", plan.ref_name);
     println!("target block: {}", plan.target_block_id);
     println!("blocks replayed: {}", plan.block_count);
     println!("patches replayed: {}", plan.patch_count);
@@ -121,12 +137,16 @@ pub(crate) fn print_patch_replay_plan(layout: &RepositoryLayout, plan: &PatchRep
 }
 
 /// Print a patch checkout deletion plan.
-pub(crate) fn print_patch_deletion_plan(layout: &RepositoryLayout, plan: &PatchDeletionPlan) {
+pub(crate) fn print_patch_deletion_plan(
+    layout: &RepositoryLayout,
+    plan: &PatchDeletionPlan,
+    label: &str,
+) {
     println!(
         "patch deletion plan repository: {}",
         layout.prikk_dir().display()
     );
-    println!("ref: {}", plan.ref_name);
+    println!("{label}: {}", plan.ref_name);
     println!("planned deletions: {}", plan.planned_deletions);
     println!("deletable files: {}", plan.deletable_files);
     println!("already absent files: {}", plan.already_absent_files);

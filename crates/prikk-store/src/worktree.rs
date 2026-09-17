@@ -59,6 +59,10 @@ pub fn materialize_snapshot_checkout(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<SnapshotMaterializationReport> {
+    crate::ref_resolution::refuse_block_point_for_worktree_write(
+        ref_name,
+        "checkout --snapshot-materialize",
+    )?;
     layout.require_current_format()?;
     // RFC 136 §10.1a: the snapshot is the target block's own state. Each file is written from its
     // Blob with the mode its state entry records, through the same mode-aware materializer patch

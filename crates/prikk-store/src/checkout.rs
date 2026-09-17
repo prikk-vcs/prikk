@@ -9,6 +9,7 @@ use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayloa
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
+use crate::ref_resolution::{Point, PointKind};
 use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::snapshot::{SnapshotFile, load_block_snapshot};
 
@@ -101,6 +102,28 @@ pub(crate) fn load_snapshot_checkout(
     ref_name: &str,
 ) -> Result<(SnapshotCheckoutPlan, Vec<SnapshotFile>)> {
     let checkout = prepare_checkout_plan(layout, ref_name)?;
+    load_snapshot_for_plan(layout, checkout)
+}
+
+/// [`prepare_snapshot_checkout_plan`] at a resolved [`Point`] -- a ref, or a bare block id (RFC 153
+/// §7.1). Read-only.
+///
+/// # Errors
+///
+/// The point's block is not a checkpoint (`Precondition`), or its snapshot does not load (`Integrity`).
+pub fn prepare_snapshot_checkout_plan_at_point(
+    layout: &RepositoryLayout,
+    point: &Point,
+) -> Result<SnapshotCheckoutPlan> {
+    let checkout = prepare_checkout_plan_at_point(layout, point)?;
+    Ok(load_snapshot_for_plan(layout, checkout)?.0)
+}
+
+fn load_snapshot_for_plan(
+    layout: &RepositoryLayout,
+    checkout: CheckoutPlan,
+) -> Result<(SnapshotCheckoutPlan, Vec<SnapshotFile>)> {
+    let ref_name = checkout.ref_name.as_str();
     // RFC 132 per-site: a block with **no** snapshot reference is by design, not damage. Only a
     // checkpoint carries one (RFC 136 §10.2: a ref's first block and every 64 blocks after), so most
     // blocks are in this state -- reporting the normal case as `integrity error:` would tell a user
@@ -133,6 +156,36 @@ pub(crate) fn load_snapshot_checkout(
         paths: files.iter().map(|file| file.path.clone()).collect(),
     };
     Ok((plan, files))
+}
+
+/// [`prepare_checkout_plan`] at a resolved [`Point`] (RFC 153 §7.1). A ref point is planned exactly as
+/// its name is; a bare block id has no RefState, so `ref_state_id` is `None` and the block is the one the
+/// id names, validated the same way.
+///
+/// # Errors
+///
+/// The block, or an object it references, is missing or does not decode.
+pub fn prepare_checkout_plan_at_point(
+    layout: &RepositoryLayout,
+    point: &Point,
+) -> Result<CheckoutPlan> {
+    if point.kind != PointKind::Block {
+        return prepare_checkout_plan(layout, &point.name);
+    }
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let block = load_block(&object_store, point.block_id)?;
+    validate_block_references(&object_store, &block)?;
+    let materialization = materialization_status(&block);
+    Ok(CheckoutPlan {
+        ref_name: point.name.clone(),
+        ref_state_id: None,
+        block_id: Some(point.block_id),
+        block_kind: Some(block.kind),
+        parent_count: block.parent_block_ids.len(),
+        patch_count: block.patch_ids.len(),
+        snapshot_blob_ref: block.snapshot_blob_ref,
+        materialization,
+    })
 }
 
 /// Prepare a checkout plan for a ref without modifying the worktree.

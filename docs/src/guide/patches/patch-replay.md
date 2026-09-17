@@ -6,7 +6,7 @@ arbitrary-span text edits.
 The command is:
 
 ```sh
-prikk checkout --patch-plan [path] [--ref REF]
+prikk checkout --patch-plan [path] [--ref <ref|block-id>]
 ```
 
 It walks the single-parent block chain from oldest to newest, loads any snapshot Blob attached to a
@@ -36,7 +36,7 @@ The replay above already reconstructs every file's bytes internally, then discar
 plan is proven. `--format json` exposes those bytes instead, for exactly the paths you name:
 
 ```sh
-prikk checkout --patch-plan --format json --content-path <repo-relative path> [--ref REF]
+prikk checkout --patch-plan --format json --content-path <repo-relative path> [--ref <ref|block-id>]
 ```
 
 `--content-path` is repeatable and required for `--format json` to report anything — there is no

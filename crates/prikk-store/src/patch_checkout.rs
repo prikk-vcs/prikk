@@ -102,6 +102,10 @@ pub fn materialize_patch_checkout_reporting_anchor(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
+    crate::ref_resolution::refuse_block_point_for_worktree_write(
+        ref_name,
+        "checkout --patch-materialize",
+    )?;
     layout.require_current_format()?;
     materialize_patch_checkout_inner(layout, ref_name, false)
 }
@@ -124,8 +128,27 @@ pub fn materialize_patch_checkout_with_deletions_reporting_anchor(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<(PatchMaterializationReport, Option<SnapshotAnchorFallback>)> {
+    crate::ref_resolution::refuse_block_point_for_worktree_write(
+        ref_name,
+        "checkout --patch-materialize-delete",
+    )?;
     layout.require_current_format()?;
     materialize_patch_checkout_inner(layout, ref_name, true)
+}
+
+/// [`plan_patch_checkout_deletions_reporting_anchor`] at a resolved [`Point`] -- a ref, or a bare block id
+/// (RFC 153 §7.1). It writes nothing.
+///
+/// # Errors
+///
+/// The replay, or reading the worktree, fails.
+pub fn plan_patch_checkout_deletions_at_point_reporting_anchor(
+    layout: &RepositoryLayout,
+    point: &crate::ref_resolution::Point,
+) -> Result<(PatchDeletionPlan, Option<SnapshotAnchorFallback>)> {
+    let (snapshot, fallback) =
+        crate::patch_replay::replay_point_for_read_only_report(layout, point)?;
+    Ok((deletion_plan_from(layout, &snapshot)?, fallback))
 }
 
 /// Prepare a read-only deletion plan for explicit patch-deleted files.
@@ -146,22 +169,26 @@ pub fn plan_patch_checkout_deletions_reporting_anchor(
     Option<crate::patch_replay::SnapshotAnchorFallback>,
 )> {
     let (snapshot, fallback) = crate::patch_replay::replay_for_read_only_report(layout, ref_name)?;
+    Ok((deletion_plan_from(layout, &snapshot)?, fallback))
+}
+
+fn deletion_plan_from(
+    layout: &RepositoryLayout,
+    snapshot: &crate::patch_replay::PatchReplaySnapshot,
+) -> Result<PatchDeletionPlan> {
     let analysis = analyze_deletions(layout, &snapshot.deleted_files)?;
-    Ok((
-        PatchDeletionPlan {
-            ref_name: snapshot.ref_name,
-            planned_deletions: snapshot.deleted_files.len(),
-            deletable_files: analysis.deletable.len(),
-            already_absent_files: analysis.already_absent,
-            conflicts: analysis.conflicts,
-            deletable_paths: analysis
-                .deletable
-                .iter()
-                .map(|entry| entry.path.path.as_str().to_string())
-                .collect(),
-        },
-        fallback,
-    ))
+    Ok(PatchDeletionPlan {
+        ref_name: snapshot.ref_name.clone(),
+        planned_deletions: snapshot.deleted_files.len(),
+        deletable_files: analysis.deletable.len(),
+        already_absent_files: analysis.already_absent,
+        conflicts: analysis.conflicts,
+        deletable_paths: analysis
+            .deletable
+            .iter()
+            .map(|entry| entry.path.path.as_str().to_string())
+            .collect(),
+    })
 }
 
 fn materialize_patch_checkout_inner(

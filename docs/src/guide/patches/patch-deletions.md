@@ -3,7 +3,7 @@
 PR-022 adds an explicit deletion plan for the supported patch replay result:
 
 ```sh
-prikk checkout --patch-delete-plan [path] [--ref REF]
+prikk checkout --patch-delete-plan [path] [--ref <ref|block-id>]
 ```
 
 It also adds an opt-in materialization mode that removes eligible files:

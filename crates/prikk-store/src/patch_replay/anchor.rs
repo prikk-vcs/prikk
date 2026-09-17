@@ -78,6 +78,9 @@ pub(crate) struct ChainReplay {
     pub(crate) applied_operation_count: usize,
     pub(crate) applied_operation_kinds: BTreeSet<&'static str>,
     pub(crate) fallback: Option<SnapshotAnchorFallback>,
+    /// Blocks whose patches were applied operation by operation: the whole chain from genesis, or only
+    /// those after the anchor. What an anchor saves, counted.
+    pub(crate) replayed_block_count: usize,
     /// DC-78 v2: the content of deleted files whose preimage Blob a caller asked for. Empty unless
     /// [`replay_chain_capturing`] was given ids, and never filled for blocks an anchor skipped --
     /// their bytes were never replayed. [`super::derive_deleted_content`] handles that.
@@ -113,6 +116,7 @@ pub(crate) fn replay_chain_capturing(
         applied_operation_count: 0,
         applied_operation_kinds: BTreeSet::new(),
         fallback: None,
+        replayed_block_count: 0,
         capture,
     };
     let (anchor, fallback) = match anchoring {
@@ -134,7 +138,9 @@ pub(crate) fn replay_chain_capturing(
         }
         None => 0,
     };
-    for block_id in block_ids.get(replay_from..).unwrap_or_default() {
+    let replayed = block_ids.get(replay_from..).unwrap_or_default();
+    chain.replayed_block_count = replayed.len();
+    for block_id in replayed {
         let block = read_block(reader, *block_id)?;
         for patch_id in block.patch_ids {
             let patch = read_patch(reader, patch_id)?;
