@@ -49,6 +49,31 @@ fn block_targets_report_confluent_for_independent_create_sequences() -> Result<(
     Ok(())
 }
 
+/// Point-resolver Addendum 2: only the baseline id the caller gave moves to the resolver's block check. A block
+/// the baseline's lineage walk reaches by following a parent, and does not find, is damage and stays `Integrity`.
+#[test]
+fn a_parent_missing_below_the_baseline_stays_an_integrity_error() -> Result<()> {
+    let root = unique_temp_dir("merge-evidence-missing-parent");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let absent_parent = ObjectId::from_bytes([0x5a; 32]);
+    let baseline = write_block(&layout, BlockKind::Normal, vec![absent_parent], Vec::new())?;
+    let result = prepare_merge_evidence(
+        &layout,
+        baseline,
+        MergeEvidenceTarget::Block(baseline),
+        MergeEvidenceTarget::Block(baseline),
+    );
+    let Err(err) = result else {
+        panic!("a parent missing from history must be refused");
+    };
+    assert_eq!(
+        err.to_string(),
+        format!("integrity error: missing Block {absent_parent}")
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 #[test]
 fn ref_target_reports_selector_and_resolved_block() -> Result<()> {
     let root = unique_temp_dir("merge-evidence-ref-target");

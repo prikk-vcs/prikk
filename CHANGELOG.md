@@ -39,13 +39,15 @@ target `is not a checkpoint` and named a `--patch-plan` route that fails on that
 `--patch-delete-plan` already answered this way. A ref that was never published is unchanged: `ref <ref> does not
 exist in this repository`.
 
-### Changed — merge-evidence and merge-plan resolve a block the way checkout does
+### Changed — merge-evidence, merge-plan and merge resolve a block the way checkout does
 
 `merge-evidence` and `merge-plan` resolve `--left-block` and `--right-block`, and their `--left-ref`/`--right-ref`,
-through the same resolver as `checkout`. A block id the repository does not hold is now `precondition not met: block
-<id> is not in this repository` (was `integrity error: missing Block <id>`), and an id naming another object is
-`precondition not met: object <id> is a patch, not a block`, naming its type (was `object type mismatch: expected block, got patch`). Both
-exit 1, as before. `--baseline-block` is unchanged.
+through the same resolver as `checkout`, and `merge-evidence`, `merge-plan` and `merge` check `--baseline-block`
+with its block check. A block id the repository does not hold is now `precondition not met: block <id> is not in this
+repository` (was `integrity error: missing Block <id>`), and an id naming another object is `precondition not met:
+object <id> is a patch, not a block`, naming its type (was `object type mismatch: expected block, got patch`). Both
+exit 1, as before. A block missing from history *below* the baseline, found by walking its parents, is damage and
+still reports `integrity error`.
 
 ## 0.45.0 — 2026-09-17
 

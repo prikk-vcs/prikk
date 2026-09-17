@@ -144,27 +144,12 @@ pub fn resolve_point(
     let object_store = ObjectReadSnapshot::open(layout)?;
     if is_bare_block_id(name) {
         let block_id: ObjectId = name.parse()?;
-        return match object_store.read_object(block_id)? {
-            None => Err(PrikkError::Precondition(format!(
-                "block {block_id} is not in this repository"
-            ))),
-            Some(envelope) if envelope.object_type != ObjectType::Block => {
-                let type_name = envelope.object_type.name();
-                let article = if type_name.starts_with(['a', 'e', 'i', 'o', 'u']) {
-                    "an"
-                } else {
-                    "a"
-                };
-                Err(PrikkError::Precondition(format!(
-                    "object {block_id} is {article} {type_name}, not a block"
-                )))
-            }
-            Some(_) => Ok(Point {
-                name: name.to_string(),
-                kind: PointKind::Block,
-                block_id,
-            }),
-        };
+        require_block_given(&object_store, block_id)?;
+        return Ok(Point {
+            name: name.to_string(),
+            kind: PointKind::Block,
+            block_id,
+        });
     }
     let kind = match decide_ref_existence(layout, name, received_refs)? {
         RefExistence::Exists(kind) => kind,
@@ -185,6 +170,38 @@ pub fn resolve_point(
         kind,
         block_id,
     })
+}
+
+/// **The one decision on whether a block id a caller gave names a block** -- [`resolve_point`]'s block arm,
+/// and `merge-evidence`/`merge-plan`/`merge`'s `--baseline-block` (RFC 153 point-resolver handoff, Addendum 2).
+/// A block id the user typed that names nothing is a caller precondition, not damage. A block reached **by
+/// walking history** is not this: a missing parent found there stays the walker's own `Integrity`.
+///
+/// # Errors
+///
+/// `Precondition` when the store holds no object with this id, or holds one of another type; any read
+/// error.
+pub(crate) fn require_block_given(
+    object_store: &impl ObjectReader,
+    block_id: ObjectId,
+) -> Result<()> {
+    match object_store.read_object(block_id)? {
+        None => Err(PrikkError::Precondition(format!(
+            "block {block_id} is not in this repository"
+        ))),
+        Some(envelope) if envelope.object_type != ObjectType::Block => {
+            let type_name = envelope.object_type.name();
+            let article = if type_name.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                "an"
+            } else {
+                "a"
+            };
+            Err(PrikkError::Precondition(format!(
+                "object {block_id} is {article} {type_name}, not a block"
+            )))
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 /// The Block a received ref's tip names. A received RefState carries the origin's own name, so there is

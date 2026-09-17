@@ -429,3 +429,77 @@ fn merge_evidence_and_merge_plan_resolve_their_blocks_through_the_one_resolver()
     }
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// Addendum 2: `--baseline-block` goes through the resolver's block check in `merge-evidence`, `merge-plan` and
+/// `merge` -- a block id the user typed that names no block is a precondition -- and a real baseline is unchanged.
+#[test]
+fn baseline_block_is_resolved_by_the_one_block_check_in_every_merge_command() {
+    let (repo, points) = edit_revert_edit("rfc153-point-baseline-block");
+    ok(
+        &repo,
+        &["branch", "create", "heads/side", "--from", "heads/main"],
+    );
+    let genesis = points[0].0.clone();
+    let tip = points.last().unwrap().0.clone();
+    let unknown = "0".repeat(64);
+    let patch = ok(&repo, &["log", "--ref", "heads/main", "--limit", "1"])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("patch "))
+        .and_then(|rest| rest.split(':').next())
+        .expect("log names the tip's patch")
+        .to_string();
+    let command = |name: &str, baseline: &str| -> Vec<String> {
+        let mut args = vec![
+            name.to_string(),
+            "--baseline-block".to_string(),
+            baseline.to_string(),
+        ];
+        if name == "merge" {
+            args.extend(
+                [
+                    "--allow-no-audit",
+                    "--into",
+                    "heads/main",
+                    "--from",
+                    "heads/side",
+                ]
+                .map(String::from),
+            );
+        } else {
+            args.extend(
+                ["--left-ref", "heads/main", "--right-ref", "heads/side"].map(String::from),
+            );
+        }
+        args
+    };
+    for name in ["merge-evidence", "merge-plan", "merge"] {
+        refuses(
+            &repo,
+            &as_refs(&command(name, &unknown)),
+            1,
+            &format!("error: precondition not met: block {unknown} is not in this repository"),
+        );
+        refuses(
+            &repo,
+            &as_refs(&command(name, &patch)),
+            1,
+            &format!("error: precondition not met: object {patch} is a patch, not a block"),
+        );
+        // A refused merge moved nothing.
+        assert_eq!(
+            blocks(&repo, "heads/main")[0],
+            tip,
+            "{name} moved heads/main"
+        );
+    }
+    // A real baseline answers as it did: evidence for the two refs, from the block given.
+    for name in ["merge-evidence", "merge-plan"] {
+        let answer = ok(&repo, &as_refs(&command(name, &genesis)));
+        assert!(answer.contains("outcome: "), "{name}: {answer}");
+        assert!(
+            answer.contains(&genesis),
+            "{name} names its baseline: {answer}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&repo);
+}

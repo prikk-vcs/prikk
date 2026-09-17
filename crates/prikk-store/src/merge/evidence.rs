@@ -49,6 +49,9 @@ pub fn prepare_merge_evidence(
     // see `merge_execute.rs`), so it takes one decoded index snapshot here instead of paying a fresh
     // decode per object read.
     let object_store = ObjectReadSnapshot::open(layout)?;
+    // Addendum 2: the baseline id the caller gave goes through the resolver's block check; blocks the walk
+    // below reaches by following parents keep `lineage_horizon`'s own `Integrity` reading.
+    crate::ref_resolution::require_block_given(&object_store, baseline_block_id)?;
     let baseline_horizon = lineage_horizon(&object_store, baseline_block_id)?;
     let replay = replay_derived_state(&object_store, baseline_block_id, baseline_horizon)?;
     let evidence =
