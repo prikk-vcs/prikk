@@ -30,6 +30,23 @@ block, from the same checkpoint.
   `plan_patch_checkout_deletions_at_point_reporting_anchor`. `materialize_patch_checkout*` and
   `materialize_snapshot_checkout` refuse a bare block id as a `Precondition` before anything else.
 
+### Changed — a damaged ref is an integrity error in every checkout read-only mode
+
+A local ref whose pointer is missing while its log still holds history is damage. `checkout --plan-only --ref <ref>`
+on one now exits 1 with `integrity error: ref <ref> is not published`, where it exited 0 with a plan reading
+`ref-state: <not published>`. `checkout --snapshot-plan --ref <ref>` now says the same, where it said the ref's
+target `is not a checkpoint` and named a `--patch-plan` route that fails on that ref too. `--patch-plan` and
+`--patch-delete-plan` already answered this way. A ref that was never published is unchanged: `ref <ref> does not
+exist in this repository`.
+
+### Changed — merge-evidence and merge-plan resolve a block the way checkout does
+
+`merge-evidence` and `merge-plan` resolve `--left-block` and `--right-block`, and their `--left-ref`/`--right-ref`,
+through the same resolver as `checkout`. A block id the repository does not hold is now `precondition not met: block
+<id> is not in this repository` (was `integrity error: missing Block <id>`), and an id naming another object is
+`precondition not met: object <id> is a patch, not a block`, naming its type (was `object type mismatch: expected block, got patch`). Both
+exit 1, as before. `--baseline-block` is unchanged.
+
 ## 0.45.0 — 2026-09-17
 
 ### Changed — repository format 7; breaking once, and the upgrade is explicit

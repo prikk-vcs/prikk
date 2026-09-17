@@ -259,6 +259,15 @@ fn control4_refusals_and_write_modes() {
         );
     }
 
+    // The block the write modes are given is the genesis block, which is a checkpoint: a snapshot write that
+    // accepted it would have a snapshot to write (addendum 1, follow-up 3). Pinned, so the premise cannot
+    // drift under the control.
+    let genesis_plan = ok(&repo, &["checkout", "--plan-only", "--ref", &points[0].0]);
+    assert!(
+        genesis_plan.contains("\nsnapshot blob: ")
+            && !genesis_plan.contains("\nsnapshot blob: <none>"),
+        "the write modes' block must be a checkpoint: {genesis_plan}"
+    );
     // A worktree a write would change without meeting a conflict: the file is missing, so any mode that
     // accepted the block would write it back.
     std::fs::remove_file(repo.join("a.txt")).unwrap();
@@ -345,4 +354,78 @@ fn read_only_modes_take_a_block_id_including_one_only_received_history_reaches()
     );
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dst);
+}
+
+/// Addendum 1, follow-up 1: a local ref whose pointer is gone while its log still holds history is damage,
+/// and every read-only mode reports it as `Integrity` -- `--plan-only` included, which answered a clean
+/// "not published" plan with exit 0 before this round.
+#[test]
+fn a_damaged_ref_is_an_integrity_error_in_every_read_only_mode() {
+    let (repo, _) = edit_revert_edit("rfc153-point-damaged-ref");
+    let layout = RepositoryLayout::open(repo.clone()).unwrap();
+    prikk_store::remove_ref_pointer_entry_for_test_support(&layout, "heads/main").unwrap();
+    for mode in [
+        "--plan-only",
+        "--snapshot-plan",
+        "--patch-plan",
+        "--patch-delete-plan",
+    ] {
+        refuses(
+            &repo,
+            &["checkout", mode, "--ref", "heads/main"],
+            1,
+            "error: integrity error: ref heads/main is not published",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+fn as_refs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
+/// Addendum 1, follow-up 2: `merge-evidence` and `merge-plan` resolve `--left-block`/`--right-block` through
+/// the one resolver, so a block id that names no block answers as `checkout` does.
+#[test]
+fn merge_evidence_and_merge_plan_resolve_their_blocks_through_the_one_resolver() {
+    let (repo, points) = edit_revert_edit("rfc153-point-merge-blocks");
+    let baseline = points[0].0.clone();
+    let tip = points.last().unwrap().0.clone();
+    let unknown = "0".repeat(64);
+    let patch = ok(&repo, &["log", "--ref", "heads/main", "--limit", "1"])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("patch "))
+        .and_then(|rest| rest.split(':').next())
+        .expect("log names the tip's patch")
+        .to_string();
+    for command in ["merge-evidence", "merge-plan"] {
+        let args = |left: &str, right: &str| {
+            vec![
+                command.to_string(),
+                "--baseline-block".to_string(),
+                baseline.clone(),
+                "--left-block".to_string(),
+                left.to_string(),
+                "--right-block".to_string(),
+                right.to_string(),
+            ]
+        };
+        let found = args(&tip, &tip);
+        ok(&repo, &as_refs(&found));
+        let absent = args(&unknown, &tip);
+        refuses(
+            &repo,
+            &as_refs(&absent),
+            1,
+            &format!("error: precondition not met: block {unknown} is not in this repository"),
+        );
+        let wrong_type = args(&tip, &patch);
+        refuses(
+            &repo,
+            &as_refs(&wrong_type),
+            1,
+            &format!("error: precondition not met: object {patch} is a patch, not a block"),
+        );
+    }
+    let _ = std::fs::remove_dir_all(&repo);
 }

@@ -6,7 +6,7 @@ mod merge_plan;
 use std::collections::BTreeSet;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayload};
+use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType};
 
 pub use display::{
     MergeEvidenceDisplay, MergeEvidenceDisplayFoldedThrough, MergeEvidenceDisplayItem,
@@ -22,8 +22,6 @@ use crate::patch_algebra::{EvidenceScope, StorePatchAlgebraEvidence, analyze_mer
 use crate::patch_replay::decode::{
     DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
-use crate::received::read_received_pointer;
-use crate::refs::RefStore;
 use crate::trust::{MaintainerTrustPolicy, verify_trusted_publication_envelope};
 use crate::{RepositoryLayout, validate_local_branch_ref};
 
@@ -102,78 +100,31 @@ fn resolve_target(
     object_store: &impl ObjectReader,
     target: MergeEvidenceTarget,
 ) -> Result<MergeEvidenceDisplaySelector> {
-    match target {
-        MergeEvidenceTarget::Block(block_id) => {
-            read_block(object_store, block_id)?;
-            Ok(MergeEvidenceDisplaySelector {
-                selector: format!("block {block_id}"),
-                target_block_id: block_id,
-            })
-        }
+    // RFC 153 §7.1: one resolver decides whether a named ref or a block id exists and which Block it names.
+    // Each arm keeps its own selector text and its own name rule (`--left-ref` names a local branch; a
+    // received ref is read, DC-85, with no name check on its RefState).
+    let (name, selector) = match target {
+        MergeEvidenceTarget::Block(block_id) => (block_id.to_string(), format!("block {block_id}")),
         MergeEvidenceTarget::Ref(ref_name) => {
             let ref_name = validate_local_branch_ref(&ref_name)?;
-            crate::ref_resolution::require_existing_ref(
-                layout,
-                &ref_name,
-                crate::ref_resolution::ReceivedRefs::Read,
-            )?;
-            let ref_store = RefStore::new(layout.clone());
-            let ref_state_id = ref_store
-                .read_current_ref_state_id(&ref_name)?
-                .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
-            let envelope = object_store
-                .read_typed(ref_state_id, ObjectType::RefState)?
-                .ok_or_else(|| {
-                    PrikkError::Integrity(format!("ref {ref_name} points to missing RefState"))
-                })?;
-            let ref_state = RefStatePayload::decode_canonical(
-                &envelope.canonical_payload,
-                envelope.schema_version,
-            )?;
-            if ref_state.ref_name != ref_name {
-                return Err(PrikkError::Integrity(format!(
-                    "RefState name mismatch: expected {ref_name}, got {}",
-                    ref_state.ref_name
-                )));
-            }
-            read_block(object_store, ref_state.target_object_id)?;
-            Ok(MergeEvidenceDisplaySelector {
-                selector: format!("ref {ref_name}"),
-                target_block_id: ref_state.target_object_id,
-            })
+            let selector = format!("ref {ref_name}");
+            (ref_name, selector)
         }
         MergeEvidenceTarget::ReceivedRef(ref_name) => {
-            crate::ref_resolution::require_existing_ref(
-                layout,
-                &ref_name,
-                crate::ref_resolution::ReceivedRefs::Read,
-            )?;
-            let pointer = read_received_pointer(layout, &ref_name)?.ok_or_else(|| {
-                PrikkError::Integrity(format!("received ref {ref_name} does not exist"))
-            })?;
-            let envelope = object_store
-                .read_typed(pointer.ref_state_id, ObjectType::RefState)?
-                .ok_or_else(|| {
-                    PrikkError::Integrity(format!(
-                        "received ref {ref_name} points to missing RefState"
-                    ))
-                })?;
-            let ref_state = RefStatePayload::decode_canonical(
-                &envelope.canonical_payload,
-                envelope.schema_version,
-            )?;
-            // Deliberately no name-equality check here (unlike the local-ref arm above): a received
-            // RefState's embedded `ref_name` is the *origin's* own name (e.g. "heads/main"), never
-            // the local "remotes/..." label — DC-85 §3A carries this asymmetry forward from DC-78's
-            // received-ref design, where it's why received refs cannot reuse `refs/by-id/`'s pointer
-            // format at all.
-            read_block(object_store, ref_state.target_object_id)?;
-            Ok(MergeEvidenceDisplaySelector {
-                selector: format!("received ref {ref_name}"),
-                target_block_id: ref_state.target_object_id,
-            })
+            let selector = format!("received ref {ref_name}");
+            (ref_name, selector)
         }
-    }
+    };
+    let point = crate::ref_resolution::resolve_point(
+        layout,
+        &name,
+        crate::ref_resolution::ReceivedRefs::Read,
+    )?;
+    read_block(object_store, point.block_id)?;
+    Ok(MergeEvidenceDisplaySelector {
+        selector,
+        target_block_id: point.block_id,
+    })
 }
 
 fn lineage_horizon(object_store: &impl ObjectReader, baseline: ObjectId) -> Result<ObjectId> {
