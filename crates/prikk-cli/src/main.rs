@@ -749,11 +749,16 @@ fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_checkout_args(args)?;
     let layout = open_repository(args.root)?;
+    let explicit_ref = args.ref_name.is_some();
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     // RFC 132 refusal sweep, rules 1-3: every checkout mode refuses an absent or received target first,
-    // before any question of what the target holds (the snapshot modes' "not a checkpoint").
-    prikk_store::require_existing_ref(&layout, &ref_name, prikk_store::ReceivedRefs::Refused)
-        .map_err(|err| err.to_string())?;
+    // before any question of what the target holds (the snapshot modes' "not a checkpoint"). Addendum 3:
+    // `--plan-only` on the implicit current branch keeps answering `<not published>` in a fresh
+    // repository -- a legitimate state, as for `log` and `worktree-status` (rule 4).
+    if explicit_ref || !matches!(args.mode, CheckoutMode::PlanOnly) {
+        prikk_store::require_existing_ref(&layout, &ref_name, prikk_store::ReceivedRefs::Refused)
+            .map_err(|err| err.to_string())?;
+    }
     match args.mode {
         CheckoutMode::PlanOnly => {
             let plan = prepare_checkout_plan(&layout, &ref_name).map_err(|err| err.to_string())?;

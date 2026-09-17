@@ -554,3 +554,38 @@ fn control6_received_readers_and_non_consumers_are_unchanged() {
         "{preview}"
     );
 }
+
+/// Addendum 3: `checkout --plan-only` on the implicit current branch of a fresh repository keeps its
+/// pre-sweep answer byte for byte, exit 0 (the expected text was captured from the `63d0dcee` binary), while
+/// an explicit absent `--ref` refuses and every other implicit mode gets the rule-1 wording.
+#[test]
+fn addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository() {
+    let fresh = support::unique_repo("refusals-a3-fresh");
+    ok(&fresh, &["init"]);
+    let prikk_dir = fresh.join(".prikk").display().to_string();
+    assert_eq!(
+        ok(&fresh, &["checkout", "--plan-only"]),
+        format!(
+            "checkout plan repository: {prikk_dir}\nref: heads/main\nref-state: <not published>\ntarget block: <none>\nblock kind: <none>\nparents: 0\npatches: 0\nsnapshot blob: <none>\nmaterialization: unpublished-ref\nnote: publish a ref before checkout can target a block\n"
+        )
+    );
+    assert_refusal(
+        &fresh,
+        &["checkout", "--plan-only", "--ref", "heads/nope"],
+        ABSENT,
+    );
+    for mode in [
+        "--snapshot-plan",
+        "--snapshot-materialize",
+        "--patch-plan",
+        "--patch-materialize",
+        "--patch-delete-plan",
+        "--patch-materialize-delete",
+    ] {
+        assert_refusal(
+            &fresh,
+            &["checkout", mode],
+            "precondition not met: ref heads/main does not exist in this repository",
+        );
+    }
+}

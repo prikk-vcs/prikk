@@ -16,7 +16,12 @@ Refusals about a ref that is not there, or is received, now say so, in one class
   checkpoint".
 - **`log --ref <absent>` and `worktree-status --ref <absent>` now refuse (exit 1)**, prose and JSON. `log`
   reported an empty history with exit 0, and `worktree-status` reported changes. Without `--ref`, a fresh
-  repository's unpublished current branch answers exactly as before.
+  repository's unpublished current branch answers exactly as before, in `log`, `worktree-status` and
+  `checkout --plan-only`.
+- **Every other `checkout` mode without `--ref` in a fresh repository** now says `ref heads/main does not exist
+  in this repository`. It already refused: `--patch-plan`, `--patch-materialize`, `--patch-delete-plan` and
+  `--patch-materialize-delete` with `integrity error: ref heads/main is not published`, and `--snapshot-plan`
+  and `--snapshot-materialize` with a false "not a checkpoint".
 - **A received ref given to `checkout`, `inverse-plan`, `rollback-preview`, `bundle export`, `branch create
   --from` or `tag create --target`** is `precondition not met: <name> is a received ref, and this command
   does not accept received refs`, naming the commands that read one. Before, it was "not published", "does
