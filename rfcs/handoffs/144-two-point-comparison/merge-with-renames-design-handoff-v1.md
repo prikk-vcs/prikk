@@ -112,3 +112,26 @@ without its CLI controls. Commits inside the round may be split; the report is o
 **Order (2026-09-17):** this implementation comes **before** the refusal sweep
 (`132-error-taxonomy-structure/absent-and-received-ref-refusals-handoff-v1.md`). Both touch `merge`, so they run one
 after the other, never in parallel.
+
+## Addendum 2 2026-09-17 — implementation accepted; one docs follow-up
+
+**Accepted** (review `merge-with-renames-review-v1`): `63917d77`.
+- **Finding 2 is confirmed as within constraint 1.** `ensure_flat_sequence` replaying a declared unit is a replay
+  grouping and does not branch on a deferred reason.
+- **Finding 3's limit is accepted as a conservative refusal**, and batch-aware pair proofs are recorded as a ROADMAP
+  candidate.
+- **Finding 4's wording is accepted.**
+
+**Follow-up (docs only, plus one control):**
+1. **The swap claim overstates.** `guide/merge.md` and the CHANGELOG say "a swap of two files made in one commit
+   merges". It merges **only when the other side changes nothing**. Beside any change on the other side it is refused
+   as `unsupported_operation` (measured by the architect: one-commit swap against an unrelated edit, `outcome:
+   Unsupported`). Say that, in both places.
+   - **Control:** a CLI test of that shape asserting the refusal and its reason, so the documented limit is held.
+2. **Stale rename text** (finding 5): `checkout --patch-plan`'s prose note ("renames … remain later increments"),
+   `docs/src/guide/patches/patch-materialization.md:39` and `patch-deletions.md:25`. Checkout has replayed renames
+   since RFC 144 increment 1. Correct all three. A note change in the prose output needs its existing test updated,
+   not a new one.
+
+**Report:** `.git-exclude/review-request/merge-with-renames-follow-up-report-v1.md`. The refusal sweep may start after
+this follow-up; the two touch different files, but the sweep re-measures §1 on the resulting binary.
