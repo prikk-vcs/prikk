@@ -92,3 +92,53 @@ This round starts **after** the merge-with-renames implementation
 (`144-two-point-comparison/merge-with-renames-design-handoff-v1.md`, Addendum 1) has been reviewed. Both change
 `merge`: this round its ref resolution (`merge/execute.rs:153`, `merge/evidence.rs:118`), that round its confluence
 algebra. Measure §1 again on the binary at that point before implementing.
+
+## Addendum 2 2026-09-17 — scope ruled; implement
+
+The stop was right (review `absent-and-received-ref-refusals-stop-review-v1`). Rule 1 read as "every ref-taking
+command" would break two documented flows: `sync have <ref>` on a ref the receiver lacks is the first step of a sync
+(`guide/sync.md:30`), and `bundle preview` answers `no-local-history` by design. The inventory also found three more
+consumers of received refs that work today.
+
+**Rulings on §4:**
+1. **Rule 1 applies to consumers only.** A consumer is a command whose operation reads an **existing** ref's state.
+   The list is the report's §4.1 list, **including `checkout --plan-only`**:
+   - `log`, `worktree-status`;
+   - `checkout` (all modes, including `--plan-only`), `inverse-plan`, `rollback-preview`, `rollback-draft`,
+     `rollback-draft-verify`;
+   - `merge-evidence`, `merge-plan`, `merge --into/--from`;
+   - `bundle export`, `branch create --from`, `tag create --target`, `branch close`, `branch switch`, `sync build`.
+
+   **Not consumers, unchanged:**
+   - `sync have` and `bundle preview`, which answer "none of it" as a state;
+   - the creators: `commit --ref`, `seal --ref`, and `branch create`'s own name.
+
+   `branch switch` already refuses with `Precondition` and names `branch create` as its route. It keeps its own route
+   sentence, and the control runs that route.
+2. **Existence before anything else, in every consumer.** `rollback-draft-verify` and `sync build` resolve the ref
+   before the WAL check and the have-list mismatch check.
+3. **Rule 2 applies where today's answer is false:**
+   - `checkout` (every mode), `inverse-plan`, `rollback-preview`;
+   - `bundle export` ("does not exist");
+   - `branch create --from`, `tag create --target` ("does not resolve").
+
+   The `invalid name: ref namespace is reserved` refusals stay as they are. They come from name validation
+   (`refs.rs:595`, `:725`): the name is refused as a target of that operation, which `InvalidName` states truly. Rule 7
+   holds. Their wording for readers (`worktree-status`, `sync have/build`) is recorded as a candidate, not changed
+   here.
+4. **Routes.** A refusal names a route only if the control can run it **from that refusing state in general**.
+   - For a received ref given to `checkout`, `inverse-plan`, `rollback-preview`, `bundle export`, `branch create
+     --from` or `tag create --target`: **name no route.** Say that received refs are read by `log`, `merge-evidence`,
+     `merge-plan` and `bundle preview`, and taken into a local branch by `merge --from`. That sentence is a factual
+     list, and the control runs `log --ref` and `merge-plan` on it.
+   - `branch create --from remotes/…` does not work today, so it is not named. `bundle export` of a received ref may
+     add "a whole repository will travel in one file under RFC 155" only as future tense in docs, never in the
+     refusal.
+
+**Rule 5 proceeds as written.** Include `log`, `doctor` and `worktree-status` among control 5's commands.
+
+**Control 6 grows** to the five received-ref consumers that work today (`log`, `merge --from`, `merge-evidence`,
+`merge-plan`, `bundle preview`). Add one control holding the non-consumers: `sync have <absent>` still writes an empty
+have-list with exit 0, and `bundle preview --ref <absent>` still reports `no-local-history`.
+
+**Report:** `.git-exclude/review-request/absent-and-received-ref-refusals-report-v2.md`.
