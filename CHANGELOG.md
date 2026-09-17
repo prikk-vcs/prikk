@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.45.0 — 2026-09-17
 
 ### Changed — repository format 7; breaking once, and the upgrade is explicit
 
