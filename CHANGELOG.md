@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added — `prikk tree`: the files at a point
+
+`prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]` lists every file present at a point
+— a ref, including a received one, or a bare block id — in canonical path order, with its mode, its exact size
+and whether it is text or binary, by the same classification `checkout --patch-plan --format json
+--content-path` reports (RFC 157 §3). No directory entries are listed.
+
+- **`--format json` is the new `tree-listing-v1`:** `point` as given, `target_block_id`, `prefix`, and per
+  entry `path`, `kind` (`file`), `encoding` (`text`/`binary`), `mode` (the full mode, `33188`), `size`, and
+  `content_id` for a binary file only.
+- `--prefix` matches whole path components; the replay is whole-tree either way.
+- Without `--ref`, the current branch; an unpublished current branch lists nothing with exit 0, and an
+  explicit absent ref refuses.
+- An operation replay does not support fails the whole call; there is no partial listing.
+- **For Rust callers:** new `list_tree_at_point_reporting_anchor`, `unpublished_branch_tree_listing`,
+  `parse_tree_prefix`, `TreeListing`, `PointEntry`, `PointEntryKind` and `PointEntryEncoding`.
+
 ### Added — a point can be a bare block id in checkout's read-only modes
 
 `checkout --plan-only`, `--snapshot-plan`, `--patch-plan` (with and without `--content-path`, prose and JSON)

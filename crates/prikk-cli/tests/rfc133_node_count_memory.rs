@@ -458,6 +458,17 @@ fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
     )
 }
 
+/// RFC 157: run one measured `prikk tree --ref <ref_name> --format json` against `root` and return its peak
+/// `RUSAGE_CHILDREN` RSS in KiB. Read-only; needs no key.
+fn measure_tree_rss_kib(root: &Path, ref_name: &str) -> i64 {
+    run_rusage_child(
+        root,
+        Path::new(env!("CARGO_BIN_EXE_prikk")),
+        &["tree", "--ref", ref_name, "--format", "json"],
+        &[],
+    )
+}
+
 /// Build a synthetic `NodeLifecycleState` with exactly `node_count` live text-file nodes, through
 /// the type's own public `create_node` API (`prikk_replay::node_lifecycle::mutation`) -- the same
 /// entry point real replay uses, not a second, ad hoc way to populate the structure. Content is
@@ -807,6 +818,7 @@ fn render_report(
     genesis: &[RssSeries],
     incremental_rss: &[RssSeries],
     incremental_cache: &[CacheSeries],
+    tree_rss: &[RssSeries],
 ) -> String {
     let mut out = String::new();
     out.push_str("# RFC 133 §6b.3 step 1 — node-count memory measurement, report v1\n\n");
@@ -833,6 +845,19 @@ fn render_report(
     out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS:\n\n");
     out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
     for series in incremental_rss {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            series.node_count,
+            series.min(),
+            series.median(),
+            series.max()
+        ));
+    }
+
+    out.push_str("\n## `prikk tree` series (RFC 157 §3)\n\n");
+    out.push_str("The incremental series' own repository, sealed at N nodes, listed with `prikk tree --ref heads/main --format json` in a fresh process: one anchored replay plus the exact text sizes. Peak RSS:\n\n");
+    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
+    for series in tree_rss {
         out.push_str(&format!(
             "| {} | {} | {} | {} |\n",
             series.node_count,
@@ -1018,9 +1043,11 @@ fn rfc133_node_count_memory() {
 
     let mut incremental_rss_series = Vec::new();
     let mut incremental_cache_series = Vec::new();
+    let mut tree_rss_series = Vec::new();
     for &node_count in &NODE_COUNTS {
         let mut peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
         let mut cache_bytes = Vec::with_capacity(SAMPLES_PER_POINT);
+        let mut tree_peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
         for sample_index in 0..SAMPLES_PER_POINT {
             let root = unique_dir(&format!("incremental-{node_count}-{sample_index}"));
             std::fs::create_dir_all(&root).unwrap();
@@ -1045,12 +1072,19 @@ fn rfc133_node_count_memory() {
                     "no lifecycle-state.v1 cache file after an incremental commit at N={node_count}"
                 )
             }));
+            // RFC 157's `tree` row: the same repository's sealed N-node tip, listed in a fresh process.
+            tree_peak_kib.push(measure_tree_rss_kib(&root, "heads/main"));
             let _ = std::fs::remove_dir_all(&root);
         }
         eprintln!("incremental N={node_count}: RSS {peak_kib:?} KiB, cache {cache_bytes:?} bytes");
+        eprintln!("tree N={node_count}: RSS {tree_peak_kib:?} KiB");
         incremental_rss_series.push(RssSeries {
             node_count,
             peak_kib,
+        });
+        tree_rss_series.push(RssSeries {
+            node_count,
+            peak_kib: tree_peak_kib,
         });
         incremental_cache_series.push(CacheSeries {
             node_count,
@@ -1063,6 +1097,7 @@ fn rfc133_node_count_memory() {
         &genesis_series,
         &incremental_rss_series,
         &incremental_cache_series,
+        &tree_rss_series,
     );
     revision.write_report("node-count-memory-measurement", &report);
 }

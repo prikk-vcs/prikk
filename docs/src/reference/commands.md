@@ -33,6 +33,7 @@ prikk checkout --patch-materialize [path] [--ref REF]
 prikk checkout --patch-delete-plan [path] [--ref <ref|block-id>]
 prikk checkout --patch-materialize-delete [path] [--ref REF]
 prikk show <block-id|patch-id> [--format json]
+prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]
 prikk merge-evidence --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
 prikk merge-plan --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
 prikk merge --allow-no-audit --baseline-block ID --into REF --from REF [path]
@@ -132,6 +133,13 @@ bare block id, 64 lowercase hex characters, resolved by one resolver.
 - The prose header reads `block: <id>` for a block id and `ref: <name>` otherwise; `--plan-only` prints
   `ref-state: <none>` for a block id. `patch-plan-content-v1`'s `ref` holds the value as given, now
   possibly a block id; its schema version is unchanged.
+
+**Reading a point: `tree`.** `tree` lists the files present at a point — a ref, or a bare block id — with
+each one's mode, exact size and whether it is text or binary, by the same classification `checkout
+--patch-plan --format json` reports. It reads received refs. Without `--ref` it lists the current branch,
+and an unpublished current branch lists nothing, exit `0`; an explicit absent ref refuses. `--prefix`
+filters by whole path components; the replay is whole-tree either way. `--format json` is
+`tree-listing-v1`. See [Reading a point](../guide/tree-and-cat.md).
 
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an
