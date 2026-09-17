@@ -59,9 +59,12 @@ Supported inverse operation subset:
 
 Deferred:
 
-- `RenamePath` and `CreateSymlink` inverse — not a node-model gap, an authoring one: `commit` never
-  produces `RenamePath` (renames become delete+create) and symlink authoring is refused outright, so
-  there is nothing in ordinary history for either inverse to act on (DC-73)
+- `RenamePath` inverse — `commit` authors `RenamePath` from a `prikk mv` declaration, but inverse
+  planning for it is not implemented: `rollback-preview` and `rollback-draft` on a ref whose tip patch
+  is a rename refuse with `error: unsupported object type: inverse planning for RenamePath awaits a
+  rename authoring path` (DC-73)
+- `CreateSymlink` inverse — not a node-model gap, an authoring one: symlink authoring is refused
+  outright, so there is nothing in ordinary history for it to act on (DC-73)
 - rollback-specific ref publication policy
 - authorization and audit policy for rollback
 - rollback branch/reflog semantics

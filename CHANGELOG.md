@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed — repository format 7; breaking once, and the upgrade is explicit
+
+New repositories are created at **format 7**: format 6 plus one rule, that an object id may hold several
+records, the last authoritative. A repository created by 0.44.0 or earlier stays at format 6, opens and
+works as before, and moves to format 7 in place with the new `prikk format upgrade` — which refuses,
+changing nothing, unless `prikk verify` would pass, and rewrites only the `FORMAT` marker. **prikk 0.44.0
+and earlier refuse a format-7 repository at open**, so upgrade only once every prikk that opens the
+repository is newer. There is no downgrade. A format refusal now names the version it read (0.44.0 said
+`unsupported format version: 0` for any marker it did not know).
+
 ### Changed — refusal classes for absent and received refs, and a path with no repository
 
 Refusals about a ref that is not there, or is received, now say so, in one class and one wording.
@@ -100,16 +110,6 @@ under the id every signer resolves, and prints it.
   cannot enter the repository, and that new history signed under a distinct id commits and imports. Any
   other id keeps the rotation wording.
 
-### Changed — repository format 7; breaking once, and the upgrade is explicit
-
-New repositories are created at **format 7**: format 6 plus one rule, that an object id may hold several
-records, the last authoritative. A repository created by 0.44.0 or earlier stays at format 6, opens and
-works as before, and moves to format 7 in place with the new `prikk format upgrade` — which refuses,
-changing nothing, unless `prikk verify` would pass, and rewrites only the `FORMAT` marker. **prikk 0.44.0
-and earlier refuse a format-7 repository at open**, so upgrade only once every prikk that opens the
-repository is newer. There is no downgrade. A format refusal now names the version it read (0.44.0 said
-`unsupported format version: 0` for any marker it did not know).
-
 ### Changed — one object may carry several signers
 
 Signatures are not part of an object's id, so two signers of the same content produce the same id. Until
@@ -149,13 +149,18 @@ signer's key material, not only the first signer's.
   order (key id bytes) — additive within `show-report-v1`. `author_key_id` keeps its meaning, the first
   signer in that order. Prose names every signer when there are several.
 
-### Changed — breaking once for Rust callers: several signers
+### Changed — breaking once for Rust callers
 
-- `RepositoryFormat` gains `V7`.
+- `RepositoryFormat` gains `V7`, and the methods `number` and `holds_several_records_per_id`.
 - `BundleImportReport` and `AcceptReport` are now `#[non_exhaustive]` and gain `merged_object_count` and
   `dropped_signatures` (`DroppedSignature`, `DroppedSignatureReason`, both new).
 - `ShowOperationContent::RenamePath` gains `author_key_ids`.
-- New: `upgrade_repository_format` and `FormatUpgradeOutcome`.
+- `RepositoryLayout::new` and `RepositoryLayout::open` on a path with no `.prikk` return
+  `PrikkError::Precondition` (`no prikk repository at <path>`), where they returned `PrikkError::Io`. The
+  absent-ref and received-ref refusals above change class the same way for library callers.
+- New: `upgrade_repository_format` and `FormatUpgradeOutcome`; `MAX_COUNTED_SIGNATURES_PER_OBJECT`;
+  `require_existing_ref` and `ReceivedRefs`.
+- Nothing is removed from the root exports.
 
 ## 0.44.0 — 2026-09-16
 

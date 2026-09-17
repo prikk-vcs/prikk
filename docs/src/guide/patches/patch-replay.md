@@ -19,10 +19,11 @@ Supported operations:
 - `EditText` for deterministic content-anchored arbitrary spans
 - `ReplaceBinary` (DC-73)
 - `ChangePerm` (DC-73)
+- `RenamePath`, authored by `commit` from a `prikk mv` declaration; one patch's consecutive renames
+  replay as one batch
 
 Unsupported operations still fail the plan clearly:
 
-- `RenamePath` — not a node-model gap: `commit` never authors it, renames become delete+create
 - `CreateSymlink` — not a node-model gap: symlink authoring is refused outright
 - merge/conflict algebra
 

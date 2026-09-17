@@ -55,8 +55,9 @@ the AUTHOR case above, with `maintainer.seed` in place of `author.seed`.
 ## `error: precondition not met: no maintainer key is adopted in this repository yet`
 
 Your maintainer key is configured but not yet trusted by this repository. Run
-`prikk trust maintainer add --key-id ID --public-key HEX` with the public half of your maintainer
-key, then seal again. This is a repository-local, trust-on-first-use step — every fresh repository
+`prikk trust maintainer add --key-id ID --public-key HEX` with your maintainer key's id and public half
+(`prikk key status --role maintainer` reports the id; `prikk key public --role maintainer` derives the
+public key), then seal again. This is a repository-local, trust-on-first-use step — every fresh repository
 needs it once, even with a key you have used elsewhere.
 
 The message's parenthetical names the one other way this refusal can be reached: a trust policy
@@ -113,8 +114,8 @@ it to do on a repository that already has adopted keys. It refuses before doing 
 `--maintainer-seed-out`.
 
 Two ways on, both named in the message: to work in the existing repository with keys you already
-hold, run `prikk trust maintainer add --key-id ID --public-key HEX` (use `prikk key public --role
-maintainer` to derive the public half); to start a new project, point `setup` at a different
+hold, run `prikk trust maintainer add --key-id ID --public-key HEX` (`prikk key status --role
+maintainer` reports the id, and `prikk key public --role maintainer` derives the public half); to start a new project, point `setup` at a different
 directory.
 
 Earlier releases got further before failing: they printed `initialized Prikk repository at …`, minted
@@ -140,18 +141,81 @@ This happened when two commands that both write objects ran at the same moment �
 refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
 exists for repositories damaged before that.
 
-## `error: precondition not met: checkout target for <ref> does not contain a snapshot blob`
+## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 
 The block you asked to check out has no snapshot, which is the normal state of most blocks: `seal`
-writes one only at a ref's first block and every 64 blocks after it. Use the patch-replay route instead,
-which does not need a snapshot:
+writes one only at a ref's first block and every 64 blocks after it. Use the patch-replay route the
+message names, which does not need a snapshot:
 
 ```sh
 prikk checkout --patch-plan --ref <ref>
 ```
 
-Earlier releases reported this as `error: integrity error: checkout target for <ref> does not contain
-a snapshot blob`, which read as damage. Nothing is damaged, and nothing was ever missing.
+Releases before 0.43 reported this as `checkout target for <ref> does not contain a snapshot blob`, and
+earlier ones still under `error: integrity error:`, which read as damage. Nothing is damaged, and nothing
+was ever missing.
+
+## error: precondition not met: no prikk repository at \<path\>
+
+The directory you ran the command in — or the path you passed — has no `.prikk` directory. Run the
+command inside a repository, pass the repository root as the path argument, or create one with
+`prikk setup <path>`.
+
+Before 0.45 this was `error: i/o error: No such file or directory (os error 2)`, which did not say which
+file, or that the repository itself was absent. A real I/O failure inside a repository is still
+`error: i/o error:`.
+
+## `error: precondition not met: ref <ref> does not exist in this repository`
+
+A command that reads or advances a ref was given one that is not there — usually a typo, or a branch not
+created yet (`prikk branch list` shows what exists). If the message goes on to say `remotes/<ref>
+exists`, the name you gave belongs to a *received* ref: pass it as `remotes/<ref>` to a command that
+reads received refs (`log`, `merge-evidence`, `merge-plan`, `bundle preview`), or take it into a local
+branch with `prikk merge --from remotes/<ref>`.
+
+Before 0.45, `prikk log --ref` on an absent ref reported an empty history with exit 0 and `prikk
+worktree-status --ref` reported changes; other commands said `ref <ref> is not published` (as `error:
+integrity error:` or `error: invalid name:`), `does not exist, nothing to export`, `does not resolve to a
+published ref`, or a false "not a checkpoint". Scripts that treated an empty `log` as "no history yet" now
+see exit 1. Without `--ref`, a fresh repository's unpublished current branch answers as before in `log`,
+`worktree-status` and `checkout --plan-only`.
+
+## `error: precondition not met: remotes/<ref> is a received ref, and this command does not accept received refs; …`
+
+Received refs (`remotes/…`, from `prikk bundle import` or `prikk sync accept`) are untrusted pointers:
+they can be read and merged from, but `checkout`, `inverse-plan`, `rollback-preview`, `bundle export`,
+`branch create --from` and `tag create --target` do not accept them. The rest of the message names the commands that do read them. To work on the received
+history, merge it into a local branch with `prikk merge --from remotes/<ref>`.
+
+## `error: integrity error: existing container record for <id> differs from candidate -- this repository is format 6, …`
+
+Someone sent you an object you already hold, carrying signatures yours does not — a second signer of the
+same patch or block. A format-6 repository holds one record per object, so it cannot keep both; format
+7 merges the signatures into one object. Check that every prikk that opens this repository is 0.45 or
+newer (older binaries refuse a format-7 repository at open), then:
+
+```sh
+prikk format upgrade
+```
+
+and repeat the import or accept. `format upgrade` verifies the repository first and changes only the
+`FORMAT` marker; running it on a format-7 repository changes nothing.
+
+## `error: precondition not met: <type> <id> would carry at least 5 counted signatures, above the limit of 4 per object …`
+
+An import or accept would put more than four counted signatures on one object. The operation is refused
+whole and nothing is written. A MAINTAINER signature by a key adopted in this repository is not counted,
+so the limit only bites on signatures this repository has no reason to trust. Ask the sender which
+signatures the object is meant to carry.
+
+## `error: author signing refused: <path> holds key id <id>, but the seed at <path> derives <other> …`
+
+The key-id file beside your seed (`author.key-id` or `maintainer.key-id`) names a different key than the
+seed derives: the seed was replaced, or the file was copied or edited. Restore the seed the file belongs
+to, or remove the file so the id is derived again. A custom key id is set with `PRIKK_AUTHOR_KEY_ID` or
+`PRIKK_MAINTAINER_KEY_ID`, never by editing the file. `prikk key status` reports this state as
+`reason: key-id-file-mismatch`; the same refusal reads `maintainer signing refused:` for the maintainer
+key.
 
 ## `error: precondition not met: the worktree was materialized from the snapshot of Block <block> on <ref> and is not replay-verified; run `prikk verify` …`
 
