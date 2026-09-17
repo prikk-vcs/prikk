@@ -379,24 +379,41 @@ fn control4_an_explicit_absent_ref_refuses_and_the_implicit_fresh_branch_does_no
     }
     let fresh = support::unique_repo("refusals-c4-fresh");
     ok(&fresh, &["init"]);
-    let prikk_dir = fresh.join(".prikk").display().to_string();
+    let prikk_dir = fresh.join(".prikk");
+    // Addendum 4: the printed repository path is compared by identity; everything else byte for byte.
+    let (log, printed) = support::split_line_path(&ok(&fresh, &["log"]), "history repository: ");
+    support::assert_same_path(&printed, &prikk_dir);
     assert_eq!(
-        ok(&fresh, &["log"]),
-        format!(
-            "history repository: {prikk_dir}\nref: heads/main\ncurrent branch: heads/main\nhistory: <empty>\n"
-        )
+        log,
+        "history repository: <PATH>\nref: heads/main\ncurrent branch: heads/main\nhistory: <empty>\n"
     );
+    let report = support::json::parse(&ok(&fresh, &["log", "--format", "json"]));
+    let support::json::Value::Object(fields) = &report else {
+        panic!("log --format json is an object: {report:?}");
+    };
     assert_eq!(
-        ok(&fresh, &["log", "--format", "json"]),
-        format!(
-            "{{\n  \"schema_version\": \"log-report-v1\",\n  \"repository\": \"{prikk_dir}\",\n  \"ref\": \"heads/main\",\n  \"current_branch\": \"heads/main\",\n  \"blocks\": []\n}}\n"
-        )
+        fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "blocks",
+            "current_branch",
+            "ref",
+            "repository",
+            "schema_version"
+        ]
     );
-    let status = ok(&fresh, &["worktree-status"]);
+    assert_eq!(report.get("schema_version").as_str(), "log-report-v1");
+    assert_eq!(report.get("ref").as_str(), "heads/main");
+    assert_eq!(report.get("current_branch").as_str(), "heads/main");
+    assert!(report.get("blocks").as_array().is_empty());
+    support::assert_same_path(report.get("repository").as_str(), &prikk_dir);
+    let (status, printed) = support::split_line_path(
+        &ok(&fresh, &["worktree-status"]),
+        "worktree-status repository: ",
+    );
+    support::assert_same_path(&printed, &prikk_dir);
     assert!(
-        status.starts_with(&format!(
-            "worktree-status repository: {prikk_dir}\nref: heads/main\n"
-        )) && status.contains("worktree: clean against baseline\n"),
+        status.starts_with("worktree-status repository: <PATH>\nref: heads/main\n")
+            && status.contains("worktree: clean against baseline\n"),
         "{status}"
     );
     let json = ok(&fresh, &["worktree-status", "--format", "json"]);
@@ -410,11 +427,9 @@ fn control4_an_explicit_absent_ref_refuses_and_the_implicit_fresh_branch_does_no
 /// I/O failure inside an existing repository stays `Io`.
 #[test]
 fn control5_a_path_with_no_repository_is_a_precondition() {
+    // Addendum 4: the message is compared up to the path, and the path by identity.
+    const NO_REPOSITORY: &str = "error: precondition not met: no prikk repository at ";
     let empty = support::unique_repo("refusals-c5-empty");
-    let expected = format!(
-        "precondition not met: no prikk repository at {}",
-        empty.display()
-    );
     for args in [
         vec!["verify"],
         vec!["format", "upgrade"],
@@ -423,18 +438,17 @@ fn control5_a_path_with_no_repository_is_a_precondition() {
         vec!["doctor"],
         vec!["worktree-status"],
     ] {
-        assert_refusal(&empty, &args, &expected);
+        let output = run(&empty, &args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {}", text(&output));
+        let (_, printed) = support::split_line_path(&text(&output), NO_REPOSITORY);
+        support::assert_same_path(&printed, &empty);
     }
     let parent = support::unique_repo("refusals-c5-parent");
     let missing = parent.join("missing");
-    assert_refusal(
-        &parent,
-        &["verify", missing.to_str().unwrap()],
-        &format!(
-            "precondition not met: no prikk repository at {}",
-            missing.display()
-        ),
-    );
+    let output = run(&parent, &["verify", missing.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let (_, printed) = support::split_line_path(&text(&output), NO_REPOSITORY);
+    support::assert_same_path(&printed, &missing);
 }
 
 /// Control 5, the other half (Unix: the fixture needs a permission bit): an I/O failure inside a real
@@ -562,12 +576,15 @@ fn control6_received_readers_and_non_consumers_are_unchanged() {
 fn addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository() {
     let fresh = support::unique_repo("refusals-a3-fresh");
     ok(&fresh, &["init"]);
-    let prikk_dir = fresh.join(".prikk").display().to_string();
+    // Addendum 4: byte for byte except the printed repository path, which is compared by identity.
+    let (plan, printed) = support::split_line_path(
+        &ok(&fresh, &["checkout", "--plan-only"]),
+        "checkout plan repository: ",
+    );
+    support::assert_same_path(&printed, &fresh.join(".prikk"));
     assert_eq!(
-        ok(&fresh, &["checkout", "--plan-only"]),
-        format!(
-            "checkout plan repository: {prikk_dir}\nref: heads/main\nref-state: <not published>\ntarget block: <none>\nblock kind: <none>\nparents: 0\npatches: 0\nsnapshot blob: <none>\nmaterialization: unpublished-ref\nnote: publish a ref before checkout can target a block\n"
-        )
+        plan,
+        "checkout plan repository: <PATH>\nref: heads/main\nref-state: <not published>\ntarget block: <none>\nblock kind: <none>\nparents: 0\npatches: 0\nsnapshot blob: <none>\nmaterialization: unpublished-ref\nnote: publish a ref before checkout can target a block\n"
     );
     assert_refusal(
         &fresh,

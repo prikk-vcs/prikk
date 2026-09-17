@@ -455,3 +455,55 @@ pub fn rebuild_from_sealed_history(repo: &Path, tag: &str) -> PathBuf {
     ok(&out, "checkout --patch-materialize");
     materialize_root
 }
+
+/// A path's identity for comparison, never its spelling (RFC 132 refusal sweep, Addendum 4). The product
+/// prints the form it resolved: on macOS a temp directory's `/var/…` is printed as `/private/var/…`; on
+/// Windows the unresolved `C:\Users\RUNNER~1\…` is printed, while `canonicalize` gives `\\?\C:\Users\…`.
+/// So both sides go through `canonicalize`. A path that does not exist is its parent's identity joined with
+/// its last component.
+pub fn path_identity(path: &Path) -> PathBuf {
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return resolved;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            path_identity(parent).join(name)
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Assert that a path the product printed names the same file-system entry as `expected`.
+pub fn assert_same_path(printed: &str, expected: &Path) {
+    assert_eq!(
+        path_identity(Path::new(printed)),
+        path_identity(expected),
+        "printed path {printed:?} is not {expected:?}"
+    );
+}
+
+/// Split `text` at the one line containing `prefix`: the rest of that line is a printed path. Returns the
+/// text with that path replaced by `<PATH>`, for a byte-for-byte comparison of everything else, and the
+/// path itself, for [`assert_same_path`]. Never compare an absolute path as text.
+pub fn split_line_path(text: &str, prefix: &str) -> (String, String) {
+    let mut path = None;
+    let mut rest = String::new();
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let ending = &line[body.len()..];
+        match body.find(prefix) {
+            Some(at) if path.is_none() => {
+                let cut = at + prefix.len();
+                path = Some(body[cut..].to_string());
+                rest.push_str(&body[..cut]);
+                rest.push_str("<PATH>");
+                rest.push_str(ending);
+            }
+            _ => rest.push_str(line),
+        }
+    }
+    (
+        rest,
+        path.unwrap_or_else(|| panic!("no line containing {prefix:?} in {text:?}")),
+    )
+}
