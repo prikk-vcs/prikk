@@ -817,3 +817,37 @@ fn f3_key_generate_without_out_prints_instructions_that_keep_the_distinct_id() {
     let verify = installation.run(&repo, &["verify"]);
     assert_eq!(verify.status.code(), Some(0), "{}", text(&verify));
 }
+
+/// Addendum 3: a seed write that refuses leaves no key-id file. `key generate --out` into `.prikk/` refuses,
+/// and neither the seed nor its key-id file exists after; a retry at a valid path then succeeds with nothing
+/// left over to refuse on. The `.prikk` directory exists, so a key-id file written before the refusal
+/// would really be there.
+#[test]
+fn addendum3_a_refused_seed_write_leaves_no_key_id_file() {
+    let installation = Installation::new("keyids-a3");
+    let dir = support::unique_repo("keyids-a3-dir");
+    std::fs::create_dir_all(dir.join(".prikk")).unwrap();
+    let refused_seed = dir.join(".prikk").join("inside.seed");
+    let refused = installation.run(
+        &dir,
+        &["key", "generate", "--out", refused_seed.to_str().unwrap()],
+    );
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused));
+    assert!(text(&refused).contains(".prikk"), "{}", text(&refused));
+    assert!(!refused_seed.exists(), "no seed");
+    assert!(
+        !dir.join(".prikk").join("inside.seed.key-id").exists(),
+        "no key-id file left by the refusal"
+    );
+
+    // Unix: `key generate --out` refuses outright on Windows, so the valid retry is Unix-only.
+    #[cfg(unix)]
+    {
+        let seed = dir.join("outside.seed");
+        support::ok(
+            &installation.run(&dir, &["key", "generate", "--out", seed.to_str().unwrap()]),
+            "retry at a valid path",
+        );
+        assert!(seed.exists() && dir.join("outside.seed.key-id").exists());
+    }
+}
