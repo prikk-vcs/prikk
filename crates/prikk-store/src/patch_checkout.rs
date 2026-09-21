@@ -133,7 +133,7 @@ pub fn materialize_patch_checkout_with_deletions_reporting_anchor(
     materialize_patch_checkout_inner(layout, ref_name, true)
 }
 
-/// [`plan_patch_checkout_deletions_reporting_anchor`] at a resolved [`Point`] -- a ref, or a bare block id
+/// [`plan_patch_checkout_deletions_reporting_anchor`] at a resolved [`crate::point::Point`] -- a ref, or a bare block id
 /// (RFC 153 §7.1). It writes nothing.
 ///
 /// # Errors

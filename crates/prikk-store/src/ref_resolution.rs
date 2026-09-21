@@ -128,8 +128,8 @@ fn decide_ref_existence(
 ///
 /// - A ref's existence is decided exactly as [`require_existing_ref`] decides it, with the same
 ///   refusals; its tip is then read as every ref-addressed reader reads it.
-/// - A block id the store does not hold: `Precondition`, "block <id> is not in this repository".
-/// - A block id the store holds as another type: `Precondition`, "object <id> is a patch, not a block".
+/// - A block id the store does not hold: `Precondition`, `block <id> is not in this repository`.
+/// - A block id the store holds as another type: `Precondition`, `object <id> is a patch, not a block`.
 ///
 /// # Errors
 ///

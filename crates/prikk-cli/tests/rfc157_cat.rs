@@ -11,7 +11,9 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+#[cfg(unix)]
+use std::process::Command;
+use std::process::Output;
 
 use support::json::Value;
 
@@ -223,7 +225,9 @@ fn control3_output_collision_and_the_prikk_directory() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Whether util-linux `script` is available to give a command a real pseudo-terminal.
+/// Whether util-linux `script` is available to give a command a real pseudo-terminal. Unix only: the
+/// terminal control itself is, and a Windows build would otherwise carry this as dead code.
+#[cfg(unix)]
 fn script_available() -> bool {
     Command::new("script")
         .arg("--version")

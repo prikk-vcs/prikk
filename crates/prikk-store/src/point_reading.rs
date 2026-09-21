@@ -175,7 +175,7 @@ pub struct PathContent {
     pub point: String,
     /// The Block read.
     pub target_block_id: ObjectId,
-    /// The path's own entry -- [`entry_of`]'s, the same one `tree` lists.
+    /// The path's own entry: the same description `tree` lists for this path, from the same code.
     pub entry: PointEntry,
     /// The content at the point: a text file's reconstructed bytes, or a binary file's stored bytes.
     pub bytes: Vec<u8>,
