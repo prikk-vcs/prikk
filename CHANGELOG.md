@@ -33,6 +33,9 @@ and whether it is text or binary, by the same classification `checkout --patch-p
 - **`--format json` is the new `tree-listing-v1`:** `point` as given, `target_block_id`, `prefix`, and per
   entry `path`, `kind` (`file`), `encoding` (`text`/`binary`), `mode` (the full mode, `33188`), `size`, and
   `content_id` for a binary file only.
+- **On Windows, files committed there read `mode` `33188` (`100644`)**: Windows has no executable bit, so prikk
+  records none. History committed on Linux or macOS keeps `33261` (`100755`) for its executables, and `tree`
+  shows every recorded mode on every platform.
 - `--prefix` matches whole path components; the replay is whole-tree either way.
 - Without `--ref`, the current branch; an unpublished current branch lists nothing with exit 0, and an
   explicit absent ref refuses.

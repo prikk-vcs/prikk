@@ -50,6 +50,35 @@ const FILES: &[(&str, &[u8], bool)] = &[
     ("run.sh", b"#!/bin/sh\necho hi\n", true),
 ];
 
+/// Whether the platform under test can give a file an executable bit **at all**. Unix can; Windows cannot
+/// (NTFS has no POSIX execute bit, `docs/src/reference/platform-support.md`), so a fixture file created there
+/// is non-executable whatever the fixture asks, and prikk records it as `100644`.
+///
+/// **One statement of the rule, used twice**: [`make_executable`] does what the platform allows, and
+/// [`expected_mode`] expects what that produces. Writing the expectation as "executable means `33261`"
+/// while the fixture only sets the bit on Unix is what turned `main` red on Windows -- an expectation shaped
+/// by the developer's platform contradicting its own fixture.
+const EXECUTABLE_BIT_IS_AVAILABLE: bool = cfg!(unix);
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Not Unix: there is no executable bit to set, and [`expected_mode`] expects that.
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) {}
+
+/// The full file mode `tree` must report for a fixture file written with `executable`, on this platform.
+fn expected_mode(executable: bool) -> u32 {
+    if executable && EXECUTABLE_BIT_IS_AVAILABLE {
+        0o100_755
+    } else {
+        0o100_644
+    }
+}
+
 fn fixture(tag: &str) -> PathBuf {
     let repo = support::unique_repo(tag);
     ok(&repo, &["setup", "."]);
@@ -57,13 +86,9 @@ fn fixture(tag: &str) -> PathBuf {
         let full = repo.join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(&full, bytes).unwrap();
-        #[cfg(unix)]
         if *executable {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&full, std::fs::Permissions::from_mode(0o755)).unwrap();
+            make_executable(&full);
         }
-        #[cfg(not(unix))]
-        let _ = executable;
     }
     ok(&repo, &["commit", "-m", "fixture"]);
     ok(&repo, &["seal", "--allow-no-audit"]);
@@ -127,11 +152,10 @@ fn control1_every_file_once_in_canonical_order_with_exact_sizes() {
             &Value::Number(on_disk.len().to_string()),
             "{path}: exact size"
         );
-        let mode = if *executable { "33261" } else { "33188" };
         assert_eq!(
             entry.get("mode"),
-            &Value::Number(mode.to_string()),
-            "{path}"
+            &Value::Number(expected_mode(*executable).to_string()),
+            "{path}: the full mode, as this platform's fixture wrote it"
         );
 
         let content = support::json::parse(&ok(

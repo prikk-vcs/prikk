@@ -38,6 +38,13 @@ the header reads `block: <id>` instead of `ref: <name>`.
   |---|---|---|
   | an ordinary file | `100644` | `33188` |
   | an executable | `100755` | `33261` |
+
+  **On Windows, expect `100644` for files committed there.** Windows has no executable bit, so prikk
+  cannot observe one: a file first committed on Windows is recorded `100644`, and committing on Windows
+  never changes a mode that history already records. That is a platform limit, not lost data. History
+  committed on Linux or macOS still carries `100755` for its executables, and `tree` shows every recorded
+  mode on every platform, so a Windows reader of that history sees `100755` where it was recorded. See
+  [Platform Support](../reference/platform-support.md).
 - **Size** is exact: a text file's content is reconstructed by replay, and its length is counted, not
   estimated.
 - **`--prefix <p>`** keeps the paths at or under `p`, by whole path components: `--prefix src/` (or `src`)

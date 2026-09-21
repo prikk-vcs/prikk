@@ -225,14 +225,33 @@ fn control3_output_collision_and_the_prikk_directory() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Whether util-linux `script` is available to give a command a real pseudo-terminal. Unix only: the
-/// terminal control itself is, and a Windows build would otherwise carry this as dead code.
+/// `Ok` when the `script` on `PATH` is **util-linux's** -- the only `script` this control drives, because
+/// its `-qec <command> /dev/null` synopsis is util-linux's own -- and otherwise the reason it cannot be
+/// used, worded from what was actually found.
+///
+/// **Identified positively, not assumed.** BSD `script` (macOS) takes `[-aeFkqr] [-t time] [file [command
+/// ...]]` and has no `-c`, and BusyBox's differs again, so "a `script` exists" says nothing about whether
+/// `-qec` means what this control needs. Unix only: the control itself is, and a Windows build would
+/// otherwise carry this as dead code.
 #[cfg(unix)]
-fn script_available() -> bool {
-    Command::new("script")
+fn util_linux_script() -> Result<(), String> {
+    let output = Command::new("script")
         .arg("--version")
         .output()
-        .is_ok_and(|output| output.status.success())
+        .map_err(|err| format!("`script` could not be run: {err}"))?;
+    let answer = String::from_utf8_lossy(&output.stdout);
+    if output.status.success() && answer.contains("util-linux") {
+        return Ok(());
+    }
+    Err(format!(
+        "the `script` on PATH is not util-linux's (`script --version` exited {:?}, stdout {:?}, stderr {:?})",
+        output.status.code(),
+        answer.lines().next().unwrap_or(""),
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .next()
+            .unwrap_or("")
+    ))
 }
 
 /// Run `prikk <args>` with **stdout on a real pseudo-terminal**, through `script -qec`.
@@ -257,16 +276,19 @@ fn on_a_terminal(repo: &Path, args: &[&str]) -> Output {
 /// Control 4: binary content refuses a **real** terminal, naming `--output`, and writes nothing; text goes
 /// to the same terminal as-is.
 ///
-/// **Coverage:** `script` is util-linux's, so this runs on Linux (and on macOS, whose BSD `script` takes
-/// `-q`/`-e`/`-c` compatibly; where the flags are refused the check below skips with a printed reason
-/// rather than passing silently). Windows has no pseudo-terminal of this shape and no `script`: there the
-/// decision is covered by the unit test in `src/cat/tests.rs`, which is what `IsTerminal` feeds.
+/// **Coverage, stated as what is known:** the control drives util-linux `script -qec`, so it runs wherever
+/// util-linux's `script` is on `PATH` -- Linux, including CI's -- and **skips with a printed reason
+/// everywhere else**. On macOS the `script` is BSD's, whose documented synopsis has no `-c`; the control
+/// therefore skips there, and that has been **reasoned from the documented synopsis, not observed**. Windows
+/// has no `script` and no pseudo-terminal of this shape, and the control is compiled out. **On macOS and
+/// Windows the terminal rule is covered by the unit test in `src/cat/tests.rs`**, which tests the one
+/// function `IsTerminal` feeds -- that is the whole of what those two platforms cover.
 #[cfg(unix)]
 #[test]
 fn control4_binary_refuses_a_real_terminal_and_text_is_written() {
     let repo = fixture("rfc157-cat-control4");
-    if !script_available() {
-        println!("skipping the pseudo-terminal control: `script` is not on PATH");
+    if let Err(reason) = util_linux_script() {
+        println!("skipping the pseudo-terminal control: {reason}");
         let _ = std::fs::remove_dir_all(&repo);
         return;
     }
@@ -274,13 +296,9 @@ fn control4_binary_refuses_a_real_terminal_and_text_is_written() {
     let piped = ok(&repo, &["cat", "--path", "src/big.bin"]);
     assert_eq!(piped.stdout, BINARY, "binary to a pipe is written");
 
+    // util-linux is positively identified above, so a refusal here is a real failure, not a skip.
     let binary = on_a_terminal(&repo, &["cat", "--path", "src/big.bin"]);
     let seen = text_of(&binary);
-    if seen.contains("invalid option") || seen.contains("usage:") {
-        println!("skipping the pseudo-terminal control: this `script` refuses -qec ({seen})");
-        let _ = std::fs::remove_dir_all(&repo);
-        return;
-    }
     assert_eq!(binary.status.code(), Some(1), "{seen}");
     assert!(
         seen.contains("is binary, and binary content is not written to a terminal"),
