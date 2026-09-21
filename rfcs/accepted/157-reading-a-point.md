@@ -94,7 +94,8 @@ to `--output`:
 - **All or nothing.** The content is fully resolved before one byte is written. A failure anywhere writes nothing.
 - **`--max-bytes <N>`:** content larger than N refuses with `Precondition`, naming the size and the bound, and writes
   nothing, not even a partial file.
-  - A binary blob's size is known from the store, before its bytes are read.
+  - A binary blob's size is known from the store, before its bytes are read. **Amended 2026-09-22 (§4a): that is
+    not what today's replay does.**
   - Text is compared after reconstruction; replay already holds it.
 - **`--output <file>`:**
   - refuses an existing file, unless `--force` (the `bundle export` convention);
@@ -117,6 +118,23 @@ fetching.
   bytes, it is bounded, and it refuses a terminal for binary.
 - **Not built:** bytes by blob id (planeter will not depend on it; a candidate); ranges; streaming without the full
   content in memory. The bound is `--max-bytes`, and the replay's own memory is already O(tree text).
+
+### 4a. Amended 2026-09-22 — what `--max-bytes` bounds, and what it does not
+
+The `cat` round measured (`cat-report-v1.md` §2) that the shared replay materializes every file's content, binary
+blobs included, while building its manifest. So by the time `cat` compares a size against `--max-bytes`, the bytes
+are already in memory. **§4's "known from the store, before its bytes are read" does not describe today's replay.**
+
+**Ruled, and this is what the flag promises:**
+- `--max-bytes` is **exact and all-or-nothing for what is written**: when it refuses, nothing reaches stdout and no
+  file is created or replaced. That is the guarantee §4 and §6 are about, and it is held by its controls.
+- It is **not a bound on peak memory**. Peak memory is the replay's own O(tree) cost, which
+  `checkout --patch-plan` already pays and this RFC does not change.
+- The documentation says both, so a caller bounding a hostile input knows which guarantee it has.
+
+**Making it a memory bound is RFC 158's Stage B** (streaming: chunk-wise reads, with the bound cutting before the
+content is resolved). It is not a `cat` change, and it must not be done by teaching replay to skip a file's content —
+the change §5a declined.
 
 ## 5. Failures
 

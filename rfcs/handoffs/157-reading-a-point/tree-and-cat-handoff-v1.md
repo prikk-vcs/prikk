@@ -129,3 +129,20 @@ platform**.
 
 **The architect pushed Stage 1 before its CI finished** — the push is allowed, the unread result was not. That is the
 architect's error, recorded in the review.
+
+## Addendum 3 2026-09-22 — the `cat` report's two questions, ruled
+
+Both answers are independent of Addendum 2's Windows fix; apply them in the same round.
+
+1. **§8.1, the bound.** Your measurement is right and the RFC's sentence was not. **RFC 157 gains §4a**:
+   `--max-bytes` is exact and all-or-nothing **for what is written**, and is **not** a memory bound; peak memory stays
+   the replay's own O(tree) cost. **No code change** — `cat` already does what §4a states.
+   - **Docs must say both**, in `guide/tree-and-cat.md` and the CHANGELOG entry: what the flag guarantees, and that it
+     does not bound memory. A caller bounding hostile input has to know which one it is getting.
+   - Making it a memory bound is **RFC 158 Stage B** (streaming), owner-accepted 2026-09-21 for 0.48.0. Not yours now.
+2. **§8.2, the implicit-branch parenthetical.** **Keep it.** "path `<p>` does not exist at heads/main (ref heads/main
+   does not exist in this repository)" names both the question asked and the reason, and a fresh repository is exactly
+   where a new user meets it. Add it to the control's asserted text so the wording is pinned.
+
+**Nothing else in the `cat` round is contested**; the architect's own verification of it runs on the commit that
+carries Addendum 2's fix, so that one gate run covers the whole round.
