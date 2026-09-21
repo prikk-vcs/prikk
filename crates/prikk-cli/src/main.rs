@@ -24,6 +24,7 @@ mod arg_scan;
 mod args;
 mod branch;
 mod bundle;
+mod cat;
 mod checkout;
 mod commands;
 mod compact;

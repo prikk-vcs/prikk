@@ -64,6 +64,13 @@ pub(crate) fn write_str(text: String) {
     write_and_handle(|stdout| write!(stdout, "{text}"));
 }
 
+/// Writes raw bytes to stdout, flushed (RFC 157 §4's `prikk cat`, the one command whose output is a
+/// file's own bytes rather than a rendered line). The same `BrokenPipe` behaviour as [`write_line`]:
+/// a reader that stopped reading is not this process's failure.
+pub(crate) fn write_bytes(bytes: &[u8]) {
+    write_and_handle(|stdout| stdout.write_all(bytes).and_then(|()| stdout.flush()));
+}
+
 fn write_and_handle(write: impl FnOnce(&mut io::StdoutLock<'_>) -> io::Result<()>) {
     let stdout = io::stdout();
     let mut lock = stdout.lock();

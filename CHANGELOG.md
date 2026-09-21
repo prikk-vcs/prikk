@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — `prikk cat`: one file's bytes at a point
+
+`prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes <N>] [--format json]` writes
+the bytes of one file at a point — text or binary — to stdout or to a file (RFC 157 §4). It is the one command whose
+job is content bytes.
+
+- **All or nothing:** the content is resolved in full before one byte is written, so any refusal writes nothing.
+- **`--max-bytes <N>`** refuses content larger than N, naming the size and the bound, with no file and no stdout
+  bytes.
+- **`--output`** refuses an existing file without `--force` and any path inside `.prikk/`; it writes a temporary
+  sibling and renames it into place, so a failed or interrupted write leaves the destination untouched.
+- **Binary content refuses a terminal**, naming `--output`, and writes nothing; text is written. Redirected or piped
+  stdout is not a terminal.
+- **A path absent at the point, or a directory prefix**, refuses with `path <p> does not exist at <point>`.
+- **`--format json` is the new `path-content-v1`:** `point`, `target_block_id`, and the same entry fields
+  `tree-listing-v1` carries (`path`, `kind`, `encoding`, `mode`, `size`, `content_id` for binary only) — **no bytes**,
+  computed by the same code as `tree`, so the two cannot disagree.
+- **A missing or non-recomputing blob fails the whole call**, for `cat` and `tree` alike: there is no entry-level
+  `unavailable` state and no partial listing (RFC 157 §5a).
+- **For Rust callers:** new `read_path_at_point_reporting_anchor` and `PathContent`.
+
 ### Added — `prikk tree`: the files at a point
 
 `prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]` lists every file present at a point

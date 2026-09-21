@@ -167,6 +167,68 @@ pub fn list_tree_at_point_reporting_anchor(
     ))
 }
 
+/// One file's content at a point (RFC 157 §4), with the same metadata one [`TreeListing`] entry carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PathContent {
+    /// The point exactly as named.
+    pub point: String,
+    /// The Block read.
+    pub target_block_id: ObjectId,
+    /// The path's own entry -- [`entry_of`]'s, the same one `tree` lists.
+    pub entry: PointEntry,
+    /// The content at the point: a text file's reconstructed bytes, or a binary file's stored bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// **Read one path's content at a point** (RFC 157 §4): one anchored replay, the path's own entry, and its
+/// bytes -- **fully resolved before the caller writes anything**.
+///
+/// `max_bytes` is the caller's all-or-nothing bound (§4): content above it refuses, naming the size and the
+/// bound, **before** any byte is handed back, so a caller that writes only what it receives cannot write a
+/// partial file. The size compared is the entry's own exact size, which for a binary file is its stored
+/// content's length and for a text file is the replay's reconstruction.
+///
+/// # Errors
+///
+/// `Precondition` when the path is not present at the point (a directory prefix is not a file, and is
+/// refused the same way) or exceeds `max_bytes`; the replay's own failures otherwise -- an unsupported
+/// operation, or a missing or non-recomputing blob, fails the whole call (RFC 157 §5a).
+pub fn read_path_at_point_reporting_anchor(
+    layout: &RepositoryLayout,
+    point: &Point,
+    path: &str,
+    max_bytes: Option<u64>,
+) -> Result<(PathContent, Option<SnapshotAnchorFallback>)> {
+    let (snapshot, fallback) = replay_point_for_read_only_report(layout, point)?;
+    let found = snapshot
+        .manifest
+        .files
+        .iter()
+        .find(|entry| entry.path.as_str() == path)
+        .ok_or_else(|| {
+            PrikkError::Precondition(format!("path {path} does not exist at {}", point.name))
+        })?;
+    let entry = entry_of(found)?;
+    if let Some(bound) = max_bytes {
+        if entry.size > bound {
+            return Err(PrikkError::Precondition(format!(
+                "{path} is {} bytes at {}, above the --max-bytes bound of {bound}; nothing was written",
+                entry.size, point.name
+            )));
+        }
+    }
+    Ok((
+        PathContent {
+            point: point.name.clone(),
+            target_block_id: snapshot.target_block_id,
+            bytes: found.bytes.clone(),
+            entry,
+        },
+        fallback,
+    ))
+}
+
 /// The listing of an **unpublished current branch** (RFC 157 §3: a fresh repository lists nothing, with
 /// exit 0 -- the refusal sweep's implicit-branch rule). An explicit absent ref refuses instead; that is
 /// the caller's decision, made through [`crate::ref_resolution::require_existing_ref`].

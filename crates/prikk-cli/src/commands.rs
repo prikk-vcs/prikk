@@ -217,6 +217,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "cat",
+        run: crate::cat::run_cat,
+        help_lines: &[
+            "  prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]  Write one file's bytes at a point, or its metadata with --format json; binary content refuses a terminal",
+        ],
+    },
+    Command {
         name: "tree",
         run: crate::tree::run_tree,
         help_lines: &[

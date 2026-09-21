@@ -72,6 +72,20 @@ pub(crate) fn write_new_file_durably(destination: &Path, bytes: &[u8]) -> Result
     }
     write_result?;
 
+    // RFC 157 §7.2's killed-process control needs a failure at exactly this point -- the temporary file
+    // complete on disk, the rename not yet done. The store's own failpoints cannot reach here: they are
+    // injected into the *anchored* writer, which by construction only writes inside a repository root, and
+    // this module exists precisely because `--output` names a path outside any repository (see the module
+    // doc). Test-only, and never compiled into the shipped binary.
+    #[cfg(test)]
+    if tests::take_failure_before_rename() {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!(
+            "failed to move the completed write into place at {}: simulated failure before the rename",
+            destination.display()
+        ));
+    }
+
     std::fs::rename(&temp_path, destination).map_err(|err| {
         let _ = std::fs::remove_file(&temp_path);
         format!(
