@@ -30,6 +30,7 @@ mod commit_index;
 mod compact;
 // RFC 147 §2f: what commit will do with each live rename declaration, shared with worktree-status.
 mod declaration_resolution;
+mod diff;
 mod doctor;
 mod format_upgrade;
 mod signature_admission;
@@ -40,6 +41,7 @@ mod foundation;
 mod history;
 mod ignore;
 mod lifecycle_cache;
+mod line_diff;
 mod lock;
 mod maintainer_signing;
 mod memory_store;
@@ -140,6 +142,7 @@ pub use compact::{
     plan_compact_received_index, plan_compact_ref_pointer_index, plan_compact_trust_policy,
 };
 pub use declaration_resolution::{DeclarationOutcome, DeclarationResolution};
+pub use diff::{DiffEntry, DiffPoint, DiffReport, DiffStatus, diff_points_reporting_anchor};
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
     DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,

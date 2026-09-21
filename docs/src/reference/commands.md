@@ -35,6 +35,7 @@ prikk checkout --patch-materialize-delete [path] [--ref REF]
 prikk show <block-id|patch-id> [--format json]
 prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]
 prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]
+prikk diff [path] --from <ref|block-id> --to <ref|block-id> [--path <p>]... [--format json]
 prikk merge-evidence --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
 prikk merge-plan --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
 prikk merge --allow-no-audit --baseline-block ID --into REF --from REF [path]
@@ -149,6 +150,16 @@ replay's own cost; `--output` refuses an existing file without `--force` and any
 and is written to a temporary sibling then renamed into place. **Binary content refuses a terminal**, naming
 `--output`; text is written. A path that is not a file at the point refuses with `path <p> does not exist at
 <point>`. `--format json` is `path-content-v1`: the same fields as one `tree-listing-v1` entry, and no bytes.
+
+**Comparing two points: `diff`.** `diff` shows what changed between two points, each a ref (a received ref is
+read, not adopted) or a bare block id. Both `--from` and `--to` are required for now; comparing with the
+worktree is the next increment. Each differing path has one status: `added`, `deleted`, `modified`, `renamed`,
+`mode` or `binary`. Text changes carry unified hunks with 3 lines of context, and a last line without a newline
+is marked as `diff -u` marks it. A rename is reported only when history **declares** one (`prikk mv`), never
+inferred from similar content. A binary file shows ids and sizes and never its bytes; `prikk cat` reads either
+side. `--path` (repeatable, exact) filters the output, and the replay is whole-tree either way. Two points that
+are the same state give `no differences` and exit `0`. An unsupported operation, or a blob that is missing or
+does not recompute, in either history fails the whole call. `--format json` is `diff-report-v1`.
 
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an

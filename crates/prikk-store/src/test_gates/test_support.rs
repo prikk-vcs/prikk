@@ -840,6 +840,7 @@ pub(crate) fn text_replay_manifest(
 ) -> prikk_error::Result<crate::patch_replay::ReplayManifest> {
     Ok(crate::patch_replay::ReplayManifest {
         files: vec![crate::patch_replay::ReplayManifestEntry {
+            node_id: prikk_object::NodeId::from_bytes([0x01; 32]),
             path: crate::RepoPath::parse(path)?,
             bytes: bytes.to_vec(),
             mode: 0o100644,

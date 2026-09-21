@@ -306,6 +306,10 @@ fn content_report_from(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct ReplayManifestEntry {
+    /// The node this path is, which **survives a rename**: the same node at a different path is a
+    /// declared `RenamePath`, and nothing else moves a node. `prikk diff` pairs a deleted path with an added
+    /// one by this id -- never by similarity of content (RFC 153 §3).
+    pub(crate) node_id: NodeId,
     /// Validated repository-relative path.
     pub(crate) path: RepoPath,
     /// File content bytes.
@@ -561,6 +565,27 @@ pub(crate) fn replay_point_for_read_only_report(
         point.block_id,
         anchor::Anchoring::ReadOnlyReport,
     )
+}
+
+/// **Two points, one read snapshot** (RFC 153 §2: "holds the same read snapshot both replays use"):
+/// [`replay_point_for_read_only_report`] for each of `left` and `right`, over a single
+/// [`ObjectReadSnapshot`], so both sides are read from one consistent view of the store and the index is
+/// decoded once. Each side keeps its own anchoring and its own fallback.
+pub(crate) fn replay_two_points_for_read_only_report(
+    layout: &RepositoryLayout,
+    left: &Point,
+    right: &Point,
+) -> Result<[(PatchReplaySnapshot, Option<SnapshotAnchorFallback>); 2]> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let replay = |point: &Point| {
+        replay_block_chain(
+            &object_store,
+            &point.name,
+            point.block_id,
+            anchor::Anchoring::ReadOnlyReport,
+        )
+    };
+    Ok([replay(left)?, replay(right)?])
 }
 
 /// Test-support instrument (RFC 153 point-resolver handoff §3.3): how many blocks the read-only replay of

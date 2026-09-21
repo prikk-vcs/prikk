@@ -29,6 +29,7 @@ mod checkout;
 mod commands;
 mod compact;
 mod current_branch;
+mod diff;
 mod durable_output;
 mod key;
 mod key_material;

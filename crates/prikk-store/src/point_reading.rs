@@ -91,7 +91,7 @@ pub struct TreeListing {
 }
 
 /// Describe one replayed file. The one place an entry's metadata is decided (module doc).
-fn entry_of(entry: &ReplayManifestEntry) -> Result<PointEntry> {
+pub(crate) fn entry_of(entry: &ReplayManifestEntry) -> Result<PointEntry> {
     let (encoding, content_id) = match classify_manifest_entry(entry) {
         ManifestEncoding::Text => (PointEntryEncoding::Text, None),
         ManifestEncoding::Binary(blob_id) => (PointEntryEncoding::Binary, Some(blob_id)),

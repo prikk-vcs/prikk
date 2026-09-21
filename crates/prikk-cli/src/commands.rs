@@ -217,6 +217,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "diff",
+        run: crate::diff::run_diff,
+        help_lines: &[
+            "  prikk diff [path] --from <ref|block-id> --to <ref|block-id> [--path <p>]... [--format json]  Show what changed between two points, with unified hunks for text; binary files show ids and sizes only, and `prikk cat` reads either side; --path filters the output, and the replay is whole-tree either way",
+        ],
+    },
+    Command {
         name: "cat",
         run: crate::cat::run_cat,
         help_lines: &[

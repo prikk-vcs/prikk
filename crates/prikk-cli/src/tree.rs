@@ -142,7 +142,15 @@ fn print_listing(
 pub(crate) fn push_entry_fields(json: &mut String, entry: &PointEntry) {
     json.push_str("\"path\": ");
     json.push_str(&escape_json_string(&entry.path));
-    json.push_str(", \"kind\": ");
+    json.push_str(", ");
+    push_entry_attributes(json, entry);
+}
+
+/// An entry's fields **without its path** -- `kind`, `encoding`, `mode`, `size`, and `content_id` for a binary
+/// file only -- in `tree-listing-v1`'s order. `diff-report-v1` puts the path at the entry level and gives each
+/// side these same attributes, from this same emitter, so a side of a diff cannot disagree with `tree`.
+pub(crate) fn push_entry_attributes(json: &mut String, entry: &PointEntry) {
+    json.push_str("\"kind\": ");
     json.push_str(&escape_json_string(entry.kind.as_str()));
     json.push_str(", \"encoding\": ");
     json.push_str(&escape_json_string(entry.encoding.as_str()));

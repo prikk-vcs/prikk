@@ -122,16 +122,17 @@ pub(crate) fn files_to_replay_manifest(
     files: BTreeMap<String, Vec<u8>>,
     live_nodes: &BTreeMap<NodeId, ReplayLiveNode>,
 ) -> Result<ReplayManifest> {
-    let live_by_path: BTreeMap<&str, &ReplayLiveNode> = live_nodes
-        .values()
-        .map(|node| (node.path.as_str(), node))
+    let live_by_path: BTreeMap<&str, (&NodeId, &ReplayLiveNode)> = live_nodes
+        .iter()
+        .map(|(node_id, node)| (node.path.as_str(), (node_id, node)))
         .collect();
     let mut entries = Vec::with_capacity(files.len());
     for (path, bytes) in files {
-        let live = live_by_path.get(path.as_str()).copied().ok_or_else(|| {
+        let (node_id, live) = live_by_path.get(path.as_str()).copied().ok_or_else(|| {
             PrikkError::Integrity(format!("replayed path {path} has no live node"))
         })?;
         entries.push(ReplayManifestEntry {
+            node_id: *node_id,
             path: RepoPath::parse(&path)?,
             bytes,
             mode: live.mode,

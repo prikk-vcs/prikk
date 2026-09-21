@@ -105,18 +105,51 @@ fn parse_literal(chars: &mut Peekable<Chars<'_>>, literal: &str) {
     }
 }
 
+/// Decode a JSON string, **escapes included**. This used to drop the backslash and keep the next character,
+/// so `\n` came back as the letter `n` and any text with a newline in it was silently corrupted -- which
+/// nothing noticed until `prikk diff` put whole unified hunks in a JSON string and the round-trip control
+/// had to apply them. `\uXXXX` is decoded too, because the binary writes every other control character below
+/// U+0020 that way (`escape_json_string`); surrogate pairs are decoded as the format allows, though the binary
+/// never emits one.
 fn parse_string(chars: &mut Peekable<Chars<'_>>) -> String {
     assert_eq!(chars.next(), Some('"'), "expected opening quote");
     let mut value = String::new();
     loop {
         match chars.next() {
             Some('"') => break,
-            Some('\\') => value.push(chars.next().expect("dangling escape at end of string")),
+            Some('\\') => match chars.next().expect("dangling escape at end of string") {
+                'n' => value.push('\n'),
+                'r' => value.push('\r'),
+                't' => value.push('\t'),
+                'b' => value.push('\u{8}'),
+                'f' => value.push('\u{c}'),
+                'u' => {
+                    let high = parse_hex4(chars);
+                    let code = if (0xD800..0xDC00).contains(&high) {
+                        assert_eq!(chars.next(), Some('\\'), "a high surrogate needs a low one");
+                        assert_eq!(chars.next(), Some('u'), "a high surrogate needs a low one");
+                        let low = parse_hex4(chars);
+                        0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
+                    } else {
+                        high
+                    };
+                    value.push(char::from_u32(code).expect("a valid Unicode scalar value"));
+                }
+                // `\"`, `\\`, `\/`: the character itself.
+                other => value.push(other),
+            },
             Some(other) => value.push(other),
             None => panic!("unterminated JSON string"),
         }
     }
     value
+}
+
+fn parse_hex4(chars: &mut Peekable<Chars<'_>>) -> u32 {
+    let digits: String = (0..4)
+        .map(|_| chars.next().expect("a \\u escape needs four hex digits"))
+        .collect();
+    u32::from_str_radix(&digits, 16).expect("four hex digits")
 }
 
 fn parse_number(chars: &mut Peekable<Chars<'_>>) -> String {

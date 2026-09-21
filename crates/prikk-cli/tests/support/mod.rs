@@ -507,3 +507,110 @@ pub fn split_line_path(text: &str, prefix: &str) -> (String, String) {
         path.unwrap_or_else(|| panic!("no line containing {prefix:?} in {text:?}")),
     )
 }
+
+/// Apply the unified hunks `prikk diff` renders to `left`, and return the result -- **the "renderer cannot
+/// lie" applier** (RFC 153 §6.1). It is deliberately a second, independent implementation of what `patch(1)`
+/// does, in plain `std`, so it runs on every platform whether or not a `patch` binary exists, and shares no
+/// code with the renderer it checks.
+///
+/// It is strict: a context or deleted line that is not really there at that place is an error, not a
+/// shrug. A hunk header's left range says where the hunk starts (an empty range names the line *before* it,
+/// as `diff -u` writes it), and `\ No newline at end of file` says the line just above it has no terminator.
+pub fn apply_unified_hunks(left: &str, hunks: &[String]) -> Result<String, String> {
+    let left_lines: Vec<&str> = left.split_inclusive('\n').collect();
+    let mut out = String::new();
+    let mut taken = 0usize;
+    for hunk in hunks {
+        let mut lines: Vec<&str> = hunk.split('\n').collect();
+        if lines.pop() != Some("") {
+            return Err(format!("a hunk must end with a newline: {hunk:?}"));
+        }
+        let header = lines.first().ok_or("an empty hunk")?;
+        let ranges = header
+            .strip_prefix("@@ -")
+            .and_then(|rest| rest.strip_suffix(" @@"))
+            .ok_or_else(|| format!("not a hunk header: {header:?}"))?;
+        let (left_range, right_range) = ranges
+            .split_once(" +")
+            .ok_or_else(|| format!("no right range in {header:?}"))?;
+        let parse_range = |range: &str| -> Result<(usize, usize), String> {
+            match range.split_once(',') {
+                Some((start, count)) => Ok((
+                    start.parse::<usize>().map_err(|e| e.to_string())?,
+                    count.parse::<usize>().map_err(|e| e.to_string())?,
+                )),
+                None => Ok((range.parse::<usize>().map_err(|e| e.to_string())?, 1)),
+            }
+        };
+        let (start, count) = parse_range(left_range)?;
+        let (right_start, right_count) = parse_range(right_range)?;
+        let before = if count == 0 { start } else { start - 1 };
+        while taken < before {
+            out.push_str(left_lines.get(taken).ok_or("a hunk starts past the end")?);
+            taken += 1;
+        }
+        // The header is a claim about the body and about where this hunk lands in the right side; `patch`
+        // checks both, so this applier does too -- a header that is off by one is a lie, not a cosmetic slip.
+        let written_before = out.split_inclusive('\n').count();
+        let expected_right_start = if right_count == 0 {
+            written_before
+        } else {
+            written_before + 1
+        };
+        if right_start != expected_right_start {
+            return Err(format!(
+                "{header:?}: the right side of this hunk starts at line {expected_right_start}, not {right_start}"
+            ));
+        }
+        let (mut seen_left, mut seen_right) = (0usize, 0usize);
+        let body = &lines[1..];
+        for (index, line) in body.iter().enumerate() {
+            if line.starts_with('\\') {
+                continue;
+            }
+            let unterminated = body
+                .get(index + 1)
+                .is_some_and(|next| next.starts_with("\\ No newline"));
+            let marker = line.chars().next().ok_or("a blank hunk line")?;
+            let text = &line[marker.len_utf8()..];
+            let content = if unterminated {
+                text.to_string()
+            } else {
+                format!("{text}\n")
+            };
+            match marker {
+                ' ' | '-' => {
+                    seen_left += 1;
+                    seen_right += usize::from(marker == ' ');
+                    let have = left_lines.get(taken).ok_or("a hunk reads past the end")?;
+                    if *have != content {
+                        return Err(format!(
+                            "left line {} is {have:?}, but the hunk says {content:?}",
+                            taken + 1
+                        ));
+                    }
+                    taken += 1;
+                    if marker == ' ' {
+                        out.push_str(&content);
+                    }
+                }
+                '+' => {
+                    seen_right += 1;
+                    out.push_str(&content);
+                }
+                other => return Err(format!("an unknown hunk marker {other:?}")),
+            }
+        }
+        if (seen_left, seen_right) != (count, right_count) {
+            return Err(format!(
+                "{header:?} counts {count} left and {right_count} right lines, but the body has \
+                 {seen_left} and {seen_right}"
+            ));
+        }
+    }
+    while let Some(line) = left_lines.get(taken) {
+        out.push_str(line);
+        taken += 1;
+    }
+    Ok(out)
+}

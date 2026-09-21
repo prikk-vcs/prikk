@@ -63,10 +63,13 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 24] = [
+const UPPER_LAYER: [&str; 25] = [
     "branch_switch",
     "bundle",
     "compact",
+    // RFC 153: `diff`, comparing two resolved points through the anchored replay. Built on `patch_replay`,
+    // `point_reading` and `line_diff`; reached only by the CLI.
+    "diff",
     "doctor",
     // RFC 156 §5b: runs `verify` and takes `ActiveLock` before changing the format marker.
     "format_upgrade",
@@ -99,7 +102,7 @@ const UPPER_LAYER: [&str; 24] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 33] = [
+const LOWER_LAYER: [&str; 34] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -113,6 +116,9 @@ const LOWER_LAYER: [&str; 33] = [
     "format",
     "foundation",
     "ignore",
+    // RFC 153: the shortest edit script over lines and its unified hunks. Pure text in, text out; it
+    // depends on no store module, and `diff` (upper) is its only caller.
+    "line_diff",
     "lock",
     "maintainer_signing",
     "node",
