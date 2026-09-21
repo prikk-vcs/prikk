@@ -108,6 +108,38 @@ path-aware history (`log` filtering is a separate gap).
 
 Handoffs are written when the owner schedules the theme.
 
+## 6a. Amended 2026-09-22 — the cost bound, and a missing blob
+
+**A. A missing or damaged blob fails the whole call** (the `diff` Stage 1 report §6.1). §4's "absence of a blob
+degrades that one entry to `unavailable`" is **withdrawn**: it is the same clause RFC 157 §5a already withdrew for
+`tree`, for the same measured reason, and `diff` shares that replay and that entry emitter. A per-entry state would
+have to be a replay-level change shared by every reader, which is a ROADMAP candidate and not this RFC's.
+
+**B. `content_id` is binary-only**, as RFC 157's shared emitter gives it. §3's "blob ids where they exist" is read
+that way: a text side carries its size and mode, not an id, because its content is the diff itself. Changing that
+would change `tree`'s schema too, and is not a `diff` option.
+
+**C. The line diff gets a deterministic work bound.** Measured (`diff-two-points-report-v1.md` §2, reproduced by the
+architect on a second machine): the two shapes this RFC's increment named finish in 8–16 ms, but two ordinary shapes
+do not — 32,768 shared lines in reverse order took 2.3 s and 5.0 s on the two machines, and two files drawn from a
+50-line alphabet took 14.5 s and 28.0 s. The cost is O((N+M)·D) and those inputs are not exotic.
+
+**Ruled:**
+1. **The bound counts work actually done** — search steps inside the middle-snake loop — not a wall-clock budget and
+   not the nominal `(N+M)·D`. Time is not reproducible across machines, and the nominal figure is wrong after the
+   prefix/suffix and unique-line reductions: it reads 4.4e10 for a case that finishes in 16 ms.
+2. **One named, documented constant**, calibrated so the worst case stays well under a second on the slower machine
+   measured (about 2.3 ns per step there). Its value is the increment's to propose with its own measurement.
+3. **Above the bound the search stops and emits a valid, non-minimal script** for the region it had not resolved
+   (delete the remaining left lines, insert the remaining right ones). **Correctness is unchanged**: applying the
+   hunks still reproduces the right side byte for byte, which is what the renderer promises.
+4. **The reader is told.** `diff-report-v1` carries a per-entry `minimal` boolean, and the prose says so on that
+   entry. A consumer must never have to guess whether it received the shortest script.
+5. **Determinism is the property that replaces minimality** when the bound engages: the same two inputs give the
+   same output on every machine and every run. That is a control, not a hope.
+6. **§6's "shortest edit script" wording** now reads: shortest within a documented work bound, and a valid script
+   beyond it.
+
 ## 7. Amended 2026-09-17, for 0.46.0 — what 0.43.0 to 0.45.0 changed under this design
 
 Proposed again for **0.46.0 "comparing"**, beside RFC 157 (a tree listing and a file's bytes at a point), which

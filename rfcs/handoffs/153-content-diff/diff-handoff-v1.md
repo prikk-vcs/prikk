@@ -87,3 +87,60 @@ Read both parts first.
 The letters to stikk and planeter are the architect's, at the 0.46.0 release.
 
 **Report for Stages 2 and 3:** `.git-exclude/review-request/diff-worktree-report-v1.md`.
+
+## Addendum 1 2026-09-22 — Stage 1 accepted; the cost bound ruled; Stage 2 proceeds
+
+**Accepted** (review `diff-two-points-review-v1`): `5457a931`. Gates 14/14 (2,226 / 0 / 30 per toolchain), confirmed
+by the architect on the same commit. **RFC 153 gains §6a**, which carries every ruling below.
+
+**The four defects your own controls and gates found in your work (§4.1–§4.5) are the round's best evidence.** The
+binary hint naming a movable ref, and an applier that ignored hunk headers so a header perturbation passed a
+20,000-case property test, are exactly the failures a green suite hides. Tightening the instrument until the
+perturbation bit is the rule working.
+
+### 1. The cost bound (report §2, RFC 153 §6a C) — ruled, and it is Stage 2's first item
+
+**Reproduced by the architect** on a second machine: reverse-order 32,768 lines **5.0 s** (yours 2.3 s), two files
+over a 50-line alphabet **28.0 s** (yours 14.5 s). Your reading is right: the two shapes the handoff named are cheap
+only because the unique-line reduction empties them, and that is not evidence about the algorithm.
+
+**None of your four options as written.** Option 2 is closest, but the bound must be shaped to survive measurement:
+
+1. **Count work actually done** — search steps inside the middle-snake loop — **never wall-clock, and never the
+   nominal `(N+M)·D`.** Time is not reproducible across machines (5.0 s here against 2.3 s there); the nominal figure
+   is wrong after your reductions, reading 4.4e10 for a case that finishes in 16 ms. A cap on it would refuse the
+   required shapes.
+2. **One named, documented constant.** Propose its value **with your own measurement**: the worst measured shape
+   should stay well under a second on the slower machine, using your ns-per-step figure. Say how you derived it.
+3. **Above the bound, stop searching and emit a valid non-minimal script** for the unresolved region (delete the
+   remaining left lines, insert the remaining right ones). Applying the hunks must still reproduce the right side
+   byte for byte — that promise does not bend.
+4. **Tell the reader:** a per-entry `minimal` boolean in `diff-report-v1`, always present, and a note in the prose on
+   that entry. A consumer must never guess whether it got the shortest script.
+5. **Determinism replaces minimality above the bound** and is a control: the same two inputs give the same output on
+   every run and every machine.
+
+**Controls (each shown failing):** a shape above the bound renders non-minimally, is marked, and still applies to
+give the right side; a shape below is still minimal (your property test, with its minimality assertion scoped to
+under-bound inputs); determinism across runs. *Perturbations:* make the bound time-based (determinism fails); let the
+fallback emit an invalid script (the applier control fails); drop the `minimal` marking (its own control fails).
+
+### 2. The other questions
+
+- **§6.1 — you implemented the right thing.** RFC 153 §4's `unavailable` clause is withdrawn in §6a A; the whole call
+  fails, as RFC 157 §5a already ruled for `tree`. No code change.
+- **§6.2 — confirmed** (§6a B): `content_id` is binary-only, from the shared emitter. A text side is its own content.
+- **§6.3 — correct.** Requiring both points in Stage 1 and refusing with "not built yet" is right; Stage 2 changes it.
+- **§6.4 — your readings are confirmed**, and two controls are owed in Stage 2: a multi-hop rename A → B → C (one
+  `renamed` entry, A paired with C), and a node deleted and recreated under a new node id (`deleted` + `added`, never
+  `renamed`). `--path` selecting a renamed entry by **either** path is confirmed and goes in the guide.
+- **§6.5 — not yours to have built.** The two-replay cost is Stage 3's RFC 133 `diff` row, as the handoff says.
+- **§7 — `unsupported_paths[]` stays in the schema, always empty until Stage 2 gives it a producer**, and Stage 3's
+  guide says so plainly rather than leaving a reader to wonder.
+
+### 3. Unchanged for Stage 2
+
+Everything in the original Stage 2 and Stage 3 lists, plus the cost bound (item 1) first, since the worktree side
+inherits the same call.
+
+**Report:** `.git-exclude/review-request/diff-worktree-report-v1.md`.
