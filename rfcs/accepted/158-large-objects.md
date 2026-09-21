@@ -1,6 +1,17 @@
 # RFC 158 — Large objects: bounded, streamed, chunked, and reclaimable
 
-**Status.** **PROPOSED 2026-09-21 by the architect**, on the owner's word after the measurement below: *"Record it to
+**Status.** **ACCEPTED by the project owner 2026-09-21** (*"Reviewed. All your recommendations are accepted."*).
+**The architect's reading of that acceptance, stated so it can be corrected — §8's three answers are:**
+1. **the bound lives in `prikk config`**, which this work builds (RFC 135 §9.1a's "first real adopter" trigger),
+   rather than an environment variable;
+2. **the reclamation verb is `prikk reclaim`**;
+3. **the schedule is §8.3's table**: 0.46.0 unchanged; **0.47.0** = RFC 136 increment 2c **plus Stage A**;
+   **0.48.0** = Stages B and C (format 8); **0.49.0** = Stage D, with RFC 155 then RFC 154 behind it.
+
+Acceptance is of the design and that order, not an authorization of any cut; each release still needs the owner's
+word. Handoffs are written when 0.47.0 opens.
+
+*History:* **PROPOSED 2026-09-21 by the architect**, on the owner's word after the measurement below: *"Record it to
 make schedule and manage release cycles. We will have to carefully design for 'finally clean, safe and secure, robust
 and sophisticated design'. Usability, function, data structure and life cycle are prioritized to initial cost."*
 
