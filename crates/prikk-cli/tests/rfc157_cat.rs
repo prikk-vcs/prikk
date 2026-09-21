@@ -115,38 +115,46 @@ fn control2_max_bytes_is_all_or_nothing() {
     let size = TEXT.len() as u64;
     let destination = repo.join("out.txt");
 
-    let output = refuses(
+    let below = (size - 1).to_string();
+    let output = run(
         &repo,
         &[
             "cat",
             "--path",
             "src/main.rs",
             "--max-bytes",
-            &(size - 1).to_string(),
+            &below,
             "--output",
             destination.to_str().unwrap(),
         ],
-        &format!(
-            "src/main.rs is {size} bytes at heads/main, above the --max-bytes bound of {}",
-            size - 1
-        ),
     );
-    assert!(text_of(&output).contains("nothing was written"));
+    // **What was written is checked first**, so a bound applied after the write fails here rather than on
+    // the wording of the refusal that follows it.
     assert!(
         !destination.exists(),
-        "the bound must refuse before anything is written"
+        "the bound must refuse before anything is written: {}",
+        text_of(&output)
     );
+    assert!(
+        output.stdout.is_empty(),
+        "no bytes to stdout either: {:?}",
+        output.stdout
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", text_of(&output));
+    assert!(
+        text_of(&output).contains(&format!(
+            "src/main.rs is {size} bytes at heads/main, above the --max-bytes bound of {}",
+            size - 1
+        )),
+        "{}",
+        text_of(&output)
+    );
+    assert!(text_of(&output).contains("nothing was written"));
 
     // To stdout, the same bound writes nothing at all.
     refuses(
         &repo,
-        &[
-            "cat",
-            "--path",
-            "src/main.rs",
-            "--max-bytes",
-            &(size - 1).to_string(),
-        ],
+        &["cat", "--path", "src/main.rs", "--max-bytes", &below],
         "above the --max-bytes bound",
     );
 
