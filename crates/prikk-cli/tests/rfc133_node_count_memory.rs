@@ -469,6 +469,30 @@ fn measure_tree_rss_kib(root: &Path, ref_name: &str) -> i64 {
     )
 }
 
+/// RFC 153: run one measured `prikk diff <args> --format json` against `root` and return its peak
+/// `RUSAGE_CHILDREN` RSS in KiB. Read-only; needs no key.
+fn measure_diff_rss_kib(root: &Path, args: &[&str]) -> i64 {
+    let mut full = vec!["diff"];
+    full.extend_from_slice(args);
+    full.extend_from_slice(&["--format", "json"]);
+    run_rusage_child(root, Path::new(env!("CARGO_BIN_EXE_prikk")), &full, &[])
+}
+
+/// The block id `prikk log --limit 1` prints for `root`'s current tip.
+fn tip_block_id(root: &Path) -> String {
+    let output = support::prikk(root)
+        .args(["log", "--limit", "1"])
+        .output()
+        .unwrap();
+    support::ok(&output, "log --limit 1");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("block "))
+        .expect("log names a block")
+        .trim()
+        .to_string()
+}
+
 /// Build a synthetic `NodeLifecycleState` with exactly `node_count` live text-file nodes, through
 /// the type's own public `create_node` API (`prikk_replay::node_lifecycle::mutation`) -- the same
 /// entry point real replay uses, not a second, ad hoc way to populate the structure. Content is
@@ -819,6 +843,8 @@ fn render_report(
     incremental_rss: &[RssSeries],
     incremental_cache: &[CacheSeries],
     tree_rss: &[RssSeries],
+    diff_worktree_rss: &[RssSeries],
+    diff_points_rss: &[RssSeries],
 ) -> String {
     let mut out = String::new();
     out.push_str("# RFC 133 §6b.3 step 1 — node-count memory measurement, report v1\n\n");
@@ -858,6 +884,31 @@ fn render_report(
     out.push_str("The incremental series' own repository, sealed at N nodes, listed with `prikk tree --ref heads/main --format json` in a fresh process: one anchored replay plus the exact text sizes. Peak RSS:\n\n");
     out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
     for series in tree_rss {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            series.node_count,
+            series.min(),
+            series.median(),
+            series.max()
+        ));
+    }
+
+    out.push_str("\n## `prikk diff` series (RFC 153 §5)\n\n");
+    out.push_str("Two rows, both in a fresh process on the incremental series' own repository (N nodes, one file changed).\n\n");
+    out.push_str("**Worktree** — a bare `prikk diff --format json` of the one-file change *before* it is committed: the folded baseline is read without refreshing the cache, every worktree file is read and compared by content hash, and only the changed file's baseline text is materialized. Peak RSS:\n\n");
+    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
+    for series in diff_worktree_rss {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            series.node_count,
+            series.min(),
+            series.median(),
+            series.max()
+        ));
+    }
+    out.push_str("\n**Two points** — the sealed baseline block against the sealed tip, `prikk diff --from <block> --to heads/main --format json`: two anchored replays over one read snapshot. Peak RSS:\n\n");
+    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
+    for series in diff_points_rss {
         out.push_str(&format!(
             "| {} | {} | {} | {} |\n",
             series.node_count,
@@ -1044,10 +1095,14 @@ fn rfc133_node_count_memory() {
     let mut incremental_rss_series = Vec::new();
     let mut incremental_cache_series = Vec::new();
     let mut tree_rss_series = Vec::new();
+    let mut diff_worktree_series = Vec::new();
+    let mut diff_points_series = Vec::new();
     for &node_count in &NODE_COUNTS {
         let mut peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
         let mut cache_bytes = Vec::with_capacity(SAMPLES_PER_POINT);
         let mut tree_peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+        let mut diff_worktree_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+        let mut diff_points_kib = Vec::with_capacity(SAMPLES_PER_POINT);
         for sample_index in 0..SAMPLES_PER_POINT {
             let root = unique_dir(&format!("incremental-{node_count}-{sample_index}"));
             std::fs::create_dir_all(&root).unwrap();
@@ -1064,6 +1119,10 @@ fn rfc133_node_count_memory() {
             );
             support::ok(&support::seal(&root, "heads/main"), "baseline seal");
             mutate_one_file(&root, &files, &mut rng);
+            let baseline_block = tip_block_id(&root);
+            // RFC 153's worktree row: a bare `prikk diff` of the same one-file change, before it is committed --
+            // the baseline read plus a read of every worktree file, in a fresh process.
+            diff_worktree_kib.push(measure_diff_rss_kib(&root, &[]));
 
             let kib = measure_commit_rss_kib(&root, "heads/main", "rfc133-bench: incremental");
             peak_kib.push(kib);
@@ -1074,10 +1133,19 @@ fn rfc133_node_count_memory() {
             }));
             // RFC 157's `tree` row: the same repository's sealed N-node tip, listed in a fresh process.
             tree_peak_kib.push(measure_tree_rss_kib(&root, "heads/main"));
+            // RFC 153's two-point row: seal the incremental commit, then diff the baseline block against the
+            // new tip -- two anchored replays over one read snapshot, in a fresh process.
+            support::ok(&support::seal(&root, "heads/main"), "incremental seal");
+            diff_points_kib.push(measure_diff_rss_kib(
+                &root,
+                &["--from", &baseline_block, "--to", "heads/main"],
+            ));
             let _ = std::fs::remove_dir_all(&root);
         }
         eprintln!("incremental N={node_count}: RSS {peak_kib:?} KiB, cache {cache_bytes:?} bytes");
         eprintln!("tree N={node_count}: RSS {tree_peak_kib:?} KiB");
+        eprintln!("diff (worktree) N={node_count}: RSS {diff_worktree_kib:?} KiB");
+        eprintln!("diff (two points) N={node_count}: RSS {diff_points_kib:?} KiB");
         incremental_rss_series.push(RssSeries {
             node_count,
             peak_kib,
@@ -1085,6 +1153,14 @@ fn rfc133_node_count_memory() {
         tree_rss_series.push(RssSeries {
             node_count,
             peak_kib: tree_peak_kib,
+        });
+        diff_worktree_series.push(RssSeries {
+            node_count,
+            peak_kib: diff_worktree_kib,
+        });
+        diff_points_series.push(RssSeries {
+            node_count,
+            peak_kib: diff_points_kib,
         });
         incremental_cache_series.push(CacheSeries {
             node_count,
@@ -1098,6 +1174,8 @@ fn rfc133_node_count_memory() {
         &incremental_rss_series,
         &incremental_cache_series,
         &tree_rss_series,
+        &diff_worktree_series,
+        &diff_points_series,
     );
     revision.write_report("node-count-memory-measurement", &report);
 }

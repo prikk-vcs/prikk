@@ -142,7 +142,10 @@ pub use compact::{
     plan_compact_received_index, plan_compact_ref_pointer_index, plan_compact_trust_policy,
 };
 pub use declaration_resolution::{DeclarationOutcome, DeclarationResolution};
-pub use diff::{DiffEntry, DiffPoint, DiffReport, DiffStatus, diff_points_reporting_anchor};
+pub use diff::{
+    DiffEntry, DiffPoint, DiffReport, DiffStatus, UnsupportedPath, WORKTREE_POINT,
+    diff_points_reporting_anchor, diff_worktree_reporting_anchor,
+};
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
     DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,

@@ -1,4 +1,5 @@
-//! A line diff (RFC 153 §3): a **minimal** edit script over lines, and the unified hunks that render it.
+//! A line diff (RFC 153 §3, §6a C): a shortest edit script over lines **within a documented work bound**, and the
+//! unified hunks that render it.
 //!
 //! **Pure and dependency-free.** It reads no repository, calls no external tool and pulls in no crate: two
 //! texts in, a script or rendered hunks out, and the same answer every time. It sits in the store's lower
@@ -14,10 +15,20 @@
 //!   aside and re-inserted as a deletion or an insertion afterwards. A file rewritten line by line shares no
 //!   line with its old self, and this turns that case from quadratic into linear.
 //!
-//! **What it does not bound.** The worst case is still O(N·D): two long files that share many lines in very
-//! different orders (a file reversed, say) take time proportional to their lines times their edit distance.
-//! This module deliberately has **no cap** -- an invented one would change answers. The report that shipped it
-//! measures that case and says what a bound would cost.
+//! **The work bound (RFC 153 §6a C).** The search is still O((N+M)·D) in the worst case: two long files that
+//! share many lines in very different orders (a file reversed, say) cost time proportional to their lines times
+//! their edit distance, and measured that reached 5 s to 28 s on ordinary shapes. So the search is given a budget,
+//! [`WORK_BOUND_STEPS`], and it is a count of **work actually done** -- diagonals visited plus matching lines
+//! followed inside the middle-snake loop -- never wall-clock (not reproducible across machines) and never the
+//! nominal `(N+M)·D` (wrong once the reductions below have run). One budget covers the whole script, spent in the
+//! deterministic order the recursion visits regions.
+//!
+//! Above the bound the search **stops and the region it had not resolved becomes a valid, non-minimal script**:
+//! delete the remaining left lines, insert the remaining right ones. Applying the hunks still reproduces the right
+//! side byte for byte -- that promise does not bend -- and the result says so through `minimal: false`, so a
+//! reader is never left to guess whether it got the shortest script. **Determinism replaces minimality above the
+//! bound**: the count depends only on the two inputs, so the same inputs give the same script on every run and
+//! every machine.
 //!
 //! **Line identity includes the terminator.** A line is compared with its own `\n` (or the lack of one), so
 //! a last line that gains a trailing newline is a change, exactly as `diff -u` treats it, and `patch(1)`
@@ -27,6 +38,50 @@ use std::collections::HashMap;
 
 /// Lines of unchanged context around each change (RFC 153 §3, handoff Stage 1).
 pub(crate) const CONTEXT_LINES: usize = 3;
+
+/// The work bound: **search steps** allowed to one edit script (RFC 153 §6a C). A step is one diagonal visited in
+/// the middle-snake loop plus one line followed along a snake, so it counts work done -- not time, and not the
+/// nominal `(N+M)·D`, which the reductions make wrong.
+///
+/// **How the value was chosen** (§6a C 2 leaves the derivation to the increment): the worst measured shape must
+/// stay well under a second on the *slower* of the two machines measured -- `5.0 s` there against `2.3 s` here for
+/// the same input, a factor of 2.17 (the second shape gave 1.93), taken as 2.2. The timing instrument
+/// (`worst_case_timing`, `--ignored`, release) ran each shape unbounded and measured **2.3 to 5.0 ns per step**
+/// here; the worst was two files over a 5-line alphabet, at 5.04 ns, because long snakes are cheap to count and
+/// costly to touch. On the slower machine that is 5.04 × 2.2 = **11.1 ns per step**, and half a second at that
+/// rate is 0.5 / 11.1e-9 = 45.1 million steps, so the constant is **45,000,000**. The same instrument, run at the
+/// bound, is what `report §2` cites for what it does to each shape.
+pub(crate) const WORK_BOUND_STEPS: u64 = 45_000_000;
+
+/// An edit script, and whether the search that produced it finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EditScript {
+    /// The steps, first line to last.
+    pub(crate) ops: Vec<LineOp>,
+    /// `true` when the script is a shortest one; `false` when the work bound engaged and some region of it is
+    /// the valid-but-larger "delete the rest, insert the rest" fallback.
+    pub(crate) minimal: bool,
+    /// Search steps spent, by the count [`WORK_BOUND_STEPS`] bounds. Never above the bound by more than the last
+    /// diagonal's snake, since the bound is checked after every diagonal.
+    pub(crate) steps: u64,
+}
+
+/// Unified hunks, and whether the script they render is a shortest one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnifiedHunks {
+    /// Each hunk as text starting at its `@@` line and ending with a newline.
+    pub(crate) hunks: Vec<String>,
+    /// See [`EditScript::minimal`].
+    pub(crate) minimal: bool,
+}
+
+/// Work spent and allowed, shared by every region one script's recursion searches.
+struct Budget {
+    spent: u64,
+    limit: u64,
+    /// Some region was left unresolved because the bound engaged.
+    exhausted: bool,
+}
 
 /// One step of an edit script over lines, in order from the first line to the last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,9 +146,10 @@ fn same(a: &[usize], x: isize, b: &[usize], y: isize) -> bool {
 /// `(x, y) .. (u, v)` in the middle of a shortest edit script, in forward coordinates. Both sequences are
 /// non-empty and share no first or last element, so the edit distance is at least 2 and both halves the
 /// caller recurses on are strictly smaller.
-fn middle_snake(a: &[usize], b: &[usize]) -> Option<(usize, usize, usize, usize)> {
-    let n = isize::try_from(a.len()).ok()?;
-    let m = isize::try_from(b.len()).ok()?;
+fn middle_snake(a: &[usize], b: &[usize], budget: &mut Budget) -> Snake {
+    let (Ok(n), Ok(m)) = (isize::try_from(a.len()), isize::try_from(b.len())) else {
+        return Snake::Unresolved;
+    };
     let delta = n - m;
     let odd = delta % 2 != 0;
     let max = (n + m + 1) / 2;
@@ -116,17 +172,18 @@ fn middle_snake(a: &[usize], b: &[usize]) -> Option<(usize, usize, usize, usize)
                 y += 1;
             }
             forward.set(k, x);
+            budget.spent = budget
+                .spent
+                .saturating_add(1 + u64::try_from(x - start_x).unwrap_or(0));
             if odd {
                 let reverse_k = delta - k;
                 if reverse_k > -d && reverse_k < d && forward.get(k) + backward.get(reverse_k) >= n
                 {
-                    return Some((
-                        usize::try_from(start_x).ok()?,
-                        usize::try_from(start_y).ok()?,
-                        usize::try_from(x).ok()?,
-                        usize::try_from(y).ok()?,
-                    ));
+                    return snake_from(start_x, start_y, x, y);
                 }
+            }
+            if budget.spent > budget.limit {
+                return Snake::Unresolved;
             }
             k += 2;
         }
@@ -144,24 +201,46 @@ fn middle_snake(a: &[usize], b: &[usize]) -> Option<(usize, usize, usize, usize)
                 y += 1;
             }
             backward.set(k, x);
+            budget.spent = budget
+                .spent
+                .saturating_add(1 + u64::try_from(x - start_x).unwrap_or(0));
             if !odd {
                 let forward_k = delta - k;
                 if forward_k >= -d
                     && forward_k <= d
                     && backward.get(k) + forward.get(forward_k) >= n
                 {
-                    return Some((
-                        usize::try_from(n - x).ok()?,
-                        usize::try_from(m - y).ok()?,
-                        usize::try_from(n - start_x).ok()?,
-                        usize::try_from(m - start_y).ok()?,
-                    ));
+                    return snake_from(n - x, m - y, n - start_x, m - start_y);
                 }
+            }
+            if budget.spent > budget.limit {
+                return Snake::Unresolved;
             }
             k += 2;
         }
     }
-    None
+    Snake::Unresolved
+}
+
+/// What one middle-snake search found.
+enum Snake {
+    /// The run of matches `(x, y) .. (u, v)` in the middle of a shortest script.
+    Found(usize, usize, usize, usize),
+    /// The search did not finish: the work bound engaged (or, which cannot happen, no snake was found). The
+    /// caller falls back to deleting and inserting the whole region.
+    Unresolved,
+}
+
+fn snake_from(x: isize, y: isize, u: isize, v: isize) -> Snake {
+    match (
+        usize::try_from(x),
+        usize::try_from(y),
+        usize::try_from(u),
+        usize::try_from(v),
+    ) {
+        (Ok(x), Ok(y), Ok(u), Ok(v)) => Snake::Found(x, y, u, v),
+        _ => Snake::Unresolved,
+    }
 }
 
 /// A longest common subsequence of `a` and `b`, as `(index in a, index in b)` pairs in increasing order,
@@ -171,6 +250,7 @@ fn common_pairs(
     b: &[usize],
     a_offset: usize,
     b_offset: usize,
+    budget: &mut Budget,
     out: &mut Vec<(usize, usize)>,
 ) {
     let mut prefix = 0;
@@ -191,24 +271,37 @@ fn common_pairs(
     let middle_a = a.get(prefix..a.len() - suffix).unwrap_or_default();
     let middle_b = b.get(prefix..b.len() - suffix).unwrap_or_default();
     if !middle_a.is_empty() && !middle_b.is_empty() {
-        if let Some((x, y, u, v)) = middle_snake(middle_a, middle_b) {
-            common_pairs(
-                middle_a.get(..x).unwrap_or_default(),
-                middle_b.get(..y).unwrap_or_default(),
-                a_offset + prefix,
-                b_offset + prefix,
-                out,
-            );
-            for step in 0..u.saturating_sub(x) {
-                out.push((a_offset + prefix + x + step, b_offset + prefix + y + step));
+        // A region with lines on both sides and no common ends needs a search. Once the bound has engaged
+        // nothing more is searched: the region stays unresolved, which the fallback renders as a plain
+        // delete-and-insert. That is decided by the count alone, so it is the same on every run.
+        let found = if budget.exhausted {
+            Snake::Unresolved
+        } else {
+            middle_snake(middle_a, middle_b, budget)
+        };
+        match found {
+            Snake::Found(x, y, u, v) => {
+                common_pairs(
+                    middle_a.get(..x).unwrap_or_default(),
+                    middle_b.get(..y).unwrap_or_default(),
+                    a_offset + prefix,
+                    b_offset + prefix,
+                    budget,
+                    out,
+                );
+                for step in 0..u.saturating_sub(x) {
+                    out.push((a_offset + prefix + x + step, b_offset + prefix + y + step));
+                }
+                common_pairs(
+                    middle_a.get(u..).unwrap_or_default(),
+                    middle_b.get(v..).unwrap_or_default(),
+                    a_offset + prefix + u,
+                    b_offset + prefix + v,
+                    budget,
+                    out,
+                );
             }
-            common_pairs(
-                middle_a.get(u..).unwrap_or_default(),
-                middle_b.get(v..).unwrap_or_default(),
-                a_offset + prefix + u,
-                b_offset + prefix + v,
-                out,
-            );
+            Snake::Unresolved => budget.exhausted = true,
         }
     }
     for step in 0..suffix {
@@ -219,10 +312,21 @@ fn common_pairs(
     }
 }
 
-/// A **minimal** edit script turning `left` into `right`: the fewest `Delete`s plus `Insert`s, and
-/// deterministic. Where a run of deletions and insertions sits between two equal lines, every deletion
-/// comes before every insertion, as `diff -u` prints them.
-pub(crate) fn edit_script<'a>(left: &[&'a str], right: &[&'a str]) -> Vec<LineOp> {
+/// An edit script turning `left` into `right` within [`WORK_BOUND_STEPS`]: the fewest `Delete`s plus `Insert`s
+/// while the search finishes (`minimal`), a valid larger one when it does not, and deterministic either way. Where
+/// a run of deletions and insertions sits between two equal lines, every deletion comes before every insertion,
+/// as `diff -u` prints them.
+#[cfg(test)]
+pub(crate) fn edit_script<'a>(left: &[&'a str], right: &[&'a str]) -> EditScript {
+    edit_script_within(left, right, WORK_BOUND_STEPS)
+}
+
+/// [`edit_script`] with an explicit `limit`, so a test can put a small input above the bound.
+pub(crate) fn edit_script_within<'a>(
+    left: &[&'a str],
+    right: &[&'a str],
+    limit: u64,
+) -> EditScript {
     let mut ids: HashMap<&'a str, usize> = HashMap::new();
     let mut intern = |line: &&'a str| {
         let next = ids.len();
@@ -283,7 +387,12 @@ pub(crate) fn edit_script<'a>(left: &[&'a str], right: &[&'a str]) -> Vec<LineOp
         .collect();
 
     let mut pairs = Vec::new();
-    common_pairs(&reduced_left, &reduced_right, 0, 0, &mut pairs);
+    let mut budget = Budget {
+        spent: 0,
+        limit,
+        exhausted: false,
+    };
+    common_pairs(&reduced_left, &reduced_right, 0, 0, &mut budget, &mut pairs);
 
     let mut ops = Vec::with_capacity(left.len() + right.len());
     ops.extend(std::iter::repeat_n(LineOp::Equal, prefix));
@@ -301,7 +410,11 @@ pub(crate) fn edit_script<'a>(left: &[&'a str], right: &[&'a str]) -> Vec<LineOp
     ops.extend(std::iter::repeat_n(LineOp::Delete, left_end - next_left));
     ops.extend(std::iter::repeat_n(LineOp::Insert, right_end - next_right));
     ops.extend(std::iter::repeat_n(LineOp::Equal, suffix));
-    ops
+    EditScript {
+        ops,
+        minimal: !budget.exhausted,
+        steps: budget.spent,
+    }
 }
 
 /// Where a hunk header says a range starts and how long it is, in `diff -u`'s convention: a count of one
@@ -326,11 +439,17 @@ fn push_line(body: &mut String, marker: char, line: &str) {
 
 /// The unified hunks that turn `left` into `right`, each rendered as text starting at its `@@` line and
 /// ending with a newline: **[`CONTEXT_LINES`] of context**, hunks merged when their context would touch,
-/// and no hunks at all when the texts are identical.
-pub(crate) fn unified_hunks(left: &str, right: &str) -> Vec<String> {
+/// and no hunks at all when the texts are identical. `minimal` says whether the script they render is a shortest
+/// one (see the module doc).
+pub(crate) fn unified_hunks(left: &str, right: &str) -> UnifiedHunks {
+    unified_hunks_within(left, right, WORK_BOUND_STEPS)
+}
+
+/// [`unified_hunks`] with an explicit work `limit` (see [`edit_script_within`]).
+pub(crate) fn unified_hunks_within(left: &str, right: &str, limit: u64) -> UnifiedHunks {
     let left_lines = split_lines(left);
     let right_lines = split_lines(right);
-    let ops = edit_script(&left_lines, &right_lines);
+    let EditScript { ops, minimal, .. } = edit_script_within(&left_lines, &right_lines, limit);
     let changes: Vec<usize> = ops
         .iter()
         .enumerate()
@@ -401,7 +520,7 @@ pub(crate) fn unified_hunks(left: &str, right: &str) -> Vec<String> {
             range(hunk_right_start, right_count)
         ));
     }
-    hunks
+    UnifiedHunks { hunks, minimal }
 }
 
 #[cfg(test)]

@@ -1,8 +1,16 @@
 //! The line diff against `diff -u`'s own conventions, an exhaustive reference, and its worst cases.
 
-#![allow(clippy::indexing_slicing)]
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
 
-use super::{LineOp, edit_script, split_lines, unified_hunks};
+use super::{
+    LineOp, WORK_BOUND_STEPS, edit_script, edit_script_within, split_lines, unified_hunks,
+    unified_hunks_within,
+};
+
+/// The hunks alone, for the tests that are about their text and not about the work bound.
+fn hunks_of(left: &str, right: &str) -> Vec<String> {
+    unified_hunks(left, right).hunks
+}
 
 /// SplitMix64: deterministic, dependency-free pseudo-randomness for the property test.
 struct Rng(u64);
@@ -177,9 +185,9 @@ fn apply_hunks(left: &str, hunks: &[String]) -> Result<String, String> {
 
 #[test]
 fn identical_texts_have_no_hunks() {
-    assert!(unified_hunks("", "").is_empty());
-    assert!(unified_hunks("a\nb\n", "a\nb\n").is_empty());
-    assert!(unified_hunks("a\nb", "a\nb").is_empty());
+    assert!(hunks_of("", "").is_empty());
+    assert!(hunks_of("a\nb\n", "a\nb\n").is_empty());
+    assert!(hunks_of("a\nb", "a\nb").is_empty());
 }
 
 #[test]
@@ -187,7 +195,7 @@ fn one_change_carries_three_lines_of_context_each_way() {
     let left: String = (1..=20).map(|n| format!("line {n}\n")).collect();
     let right = left.replace("line 10\n", "LINE TEN\n");
     assert_eq!(
-        unified_hunks(&left, &right),
+        hunks_of(&left, &right),
         [
             "@@ -7,7 +7,7 @@\n line 7\n line 8\n line 9\n-line 10\n+LINE TEN\n line 11\n line 12\n line 13\n"
                 .to_string()
@@ -198,11 +206,11 @@ fn one_change_carries_three_lines_of_context_each_way() {
 #[test]
 fn a_change_near_the_top_or_bottom_has_less_context() {
     assert_eq!(
-        unified_hunks("a\nb\nc\nd\ne\n", "X\nb\nc\nd\ne\n"),
+        hunks_of("a\nb\nc\nd\ne\n", "X\nb\nc\nd\ne\n"),
         ["@@ -1,4 +1,4 @@\n-a\n+X\n b\n c\n d\n".to_string()]
     );
     assert_eq!(
-        unified_hunks("a\nb\nc\nd\ne\n", "a\nb\nc\nd\nX\n"),
+        hunks_of("a\nb\nc\nd\ne\n", "a\nb\nc\nd\nX\n"),
         ["@@ -2,4 +2,4 @@\n b\n c\n d\n-e\n+X\n".to_string()]
     );
 }
@@ -224,27 +232,27 @@ fn changes_seven_lines_apart_are_two_hunks_and_six_apart_are_one() {
     };
     let left = numbered(&[]);
     // Lines 5 and 12: six unchanged lines between them (6..=11), so their contexts touch: one hunk.
-    assert_eq!(unified_hunks(&left, &numbered(&[5, 12])).len(), 1);
+    assert_eq!(hunks_of(&left, &numbered(&[5, 12])).len(), 1);
     // Lines 5 and 13: seven between them (6..=12), so their contexts do not touch: two hunks.
-    assert_eq!(unified_hunks(&left, &numbered(&[5, 13])).len(), 2);
+    assert_eq!(hunks_of(&left, &numbered(&[5, 13])).len(), 2);
 }
 
 #[test]
 fn a_whole_new_or_deleted_file_is_one_hunk_from_or_to_line_zero() {
     assert_eq!(
-        unified_hunks("", "x\ny\n"),
+        hunks_of("", "x\ny\n"),
         ["@@ -0,0 +1,2 @@\n+x\n+y\n".to_string()]
     );
     assert_eq!(
-        unified_hunks("x\ny\n", ""),
+        hunks_of("x\ny\n", ""),
         ["@@ -1,2 +0,0 @@\n-x\n-y\n".to_string()]
     );
     assert_eq!(
-        unified_hunks("", "only\n"),
+        hunks_of("", "only\n"),
         ["@@ -0,0 +1 @@\n+only\n".to_string()]
     );
     assert_eq!(
-        unified_hunks("only\n", ""),
+        hunks_of("only\n", ""),
         ["@@ -1 +0,0 @@\n-only\n".to_string()]
     );
 }
@@ -253,21 +261,21 @@ fn a_whole_new_or_deleted_file_is_one_hunk_from_or_to_line_zero() {
 fn a_last_line_without_a_newline_is_marked_as_diff_marks_it() {
     // Gaining a trailing newline is a change, and both forms say which side lacked it.
     assert_eq!(
-        unified_hunks("a\nb", "a\nb\n"),
+        hunks_of("a\nb", "a\nb\n"),
         ["@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\n".to_string()]
     );
     assert_eq!(
-        unified_hunks("a\nb\n", "a\nb"),
+        hunks_of("a\nb\n", "a\nb"),
         ["@@ -1,2 +1,2 @@\n a\n-b\n+b\n\\ No newline at end of file\n".to_string()]
     );
     assert_eq!(
-        unified_hunks("a\nb", "a\nc"),
+        hunks_of("a\nb", "a\nc"),
         ["@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
             .to_string()]
     );
     // An unchanged unterminated last line is context, and keeps its marker.
     assert_eq!(
-        unified_hunks("x\na\nb", "y\na\nb"),
+        hunks_of("x\na\nb", "y\na\nb"),
         ["@@ -1,3 +1,3 @@\n-x\n+y\n a\n b\n\\ No newline at end of file\n".to_string()]
     );
 }
@@ -275,7 +283,7 @@ fn a_last_line_without_a_newline_is_marked_as_diff_marks_it() {
 #[test]
 fn crlf_lines_keep_their_carriage_return() {
     assert_eq!(
-        unified_hunks("a\r\nb\r\n", "a\r\nB\r\n"),
+        hunks_of("a\r\nb\r\n", "a\r\nB\r\n"),
         ["@@ -1,2 +1,2 @@\n a\r\n-b\r\n+B\r\n".to_string()]
     );
 }
@@ -284,7 +292,7 @@ fn crlf_lines_keep_their_carriage_return() {
 fn a_moved_block_costs_the_minimum() {
     let left = split_lines("1\n2\n3\n4\n5\n6\n");
     let right = split_lines("4\n5\n6\n1\n2\n3\n");
-    let ops = edit_script(&left, &right);
+    let ops = edit_script(&left, &right).ops;
     let changes = ops.iter().filter(|op| **op != LineOp::Equal).count();
     assert_eq!(
         changes, 6,
@@ -317,7 +325,13 @@ fn random_inputs_give_minimal_valid_scripts_and_hunks_that_apply() {
         let left_lines = split_lines(&left);
         let right_lines = split_lines(&right);
 
-        let ops = edit_script(&left_lines, &right_lines);
+        let script = edit_script(&left_lines, &right_lines);
+        assert!(
+            script.minimal,
+            "case {case}: an input this small is far under the work bound ({} steps)",
+            script.steps
+        );
+        let ops = script.ops;
         let rebuilt = replay(&left_lines, &right_lines, &ops).unwrap_or_else(|why| {
             panic!("case {case}: invalid script for {left:?} -> {right:?}: {why}")
         });
@@ -331,7 +345,7 @@ fn random_inputs_give_minimal_valid_scripts_and_hunks_that_apply() {
             "case {case}: not minimal for {left:?} -> {right:?}"
         );
 
-        let hunks = unified_hunks(&left, &right);
+        let hunks = hunks_of(&left, &right);
         let applied = apply_hunks(&left, &hunks)
             .unwrap_or_else(|why| panic!("case {case}: {left:?} -> {right:?}: {why}\n{hunks:?}"));
         assert_eq!(applied, right, "case {case}: hunks {hunks:?}");
@@ -339,33 +353,225 @@ fn random_inputs_give_minimal_valid_scripts_and_hunks_that_apply() {
     }
 }
 
-/// Worst-case timing, in the shape the Stage 1 handoff asks for. **Ignored**: run it in a release build,
+/// A file of `n` numbered lines, and the same lines in reverse order: the shape whose minimal script needs the
+/// most search (every line is shared, and every one is out of place).
+fn reversed_pair(n: usize) -> (String, String) {
+    let left: String = (0..n).map(|i| format!("line {i}\n")).collect();
+    let right: String = (0..n).rev().map(|i| format!("line {i}\n")).collect();
+    (left, right)
+}
+
+fn edits(ops: &[LineOp]) -> usize {
+    ops.iter().filter(|op| **op != LineOp::Equal).count()
+}
+
+/// RFC 153 §6a C 3-4: **above the bound** the script is non-minimal, **marked** so, and still valid -- applying
+/// its hunks reproduces the right side byte for byte, which is the promise that does not bend.
+#[test]
+fn above_the_bound_the_script_is_larger_marked_and_still_applies() {
+    let (left, right) = reversed_pair(200);
+    let (left_lines, right_lines) = (split_lines(&left), split_lines(&right));
+    let bounded = edit_script_within(&left_lines, &right_lines, 1_000);
+    assert!(
+        !bounded.minimal,
+        "a 1,000-step budget cannot finish this search"
+    );
+    let rebuilt =
+        replay(&left_lines, &right_lines, &bounded.ops).expect("the fallback script is valid");
+    assert_eq!(rebuilt.concat(), right);
+    // Every line is out of place, so the fallback deletes all 200 and inserts all 200; the minimum is 398.
+    assert_eq!(edits(&bounded.ops), 400);
+
+    let rendered = unified_hunks_within(&left, &right, 1_000);
+    assert!(!rendered.minimal);
+    assert_eq!(
+        apply_hunks(&left, &rendered.hunks).expect("the fallback hunks apply"),
+        right
+    );
+}
+
+/// The same input **below** the bound is still minimal -- the property test's minimality assertion, scoped to
+/// the inputs that are under it.
+#[test]
+fn below_the_bound_the_script_is_still_minimal() {
+    let (left, right) = reversed_pair(200);
+    let (left_lines, right_lines) = (split_lines(&left), split_lines(&right));
+    let script = edit_script(&left_lines, &right_lines);
+    assert!(script.minimal);
+    assert_eq!(
+        edits(&script.ops),
+        398,
+        "two 199-line runs out of place is the minimum"
+    );
+    assert!(script.steps > 0 && script.steps < WORK_BOUND_STEPS);
+}
+
+/// More budget never makes a script worse: `minimal` is monotone in the limit, every script at every limit is
+/// valid, and the limit that finishes the search is the same one every time.
+#[test]
+fn a_larger_budget_never_loses_minimality_and_every_script_is_valid() {
+    let (left, right) = reversed_pair(60);
+    let (left_lines, right_lines) = (split_lines(&left), split_lines(&right));
+    let full = edit_script_within(&left_lines, &right_lines, u64::MAX);
+    assert!(full.minimal);
+    let mut seen_minimal = false;
+    for limit in [
+        0,
+        1,
+        10,
+        100,
+        500,
+        full.steps / 2,
+        full.steps,
+        full.steps + 1,
+        u64::MAX,
+    ] {
+        let script = edit_script_within(&left_lines, &right_lines, limit);
+        let rebuilt = replay(&left_lines, &right_lines, &script.ops).expect("valid at every limit");
+        assert_eq!(rebuilt.concat(), right, "limit {limit}");
+        if script.minimal {
+            seen_minimal = true;
+            assert_eq!(edits(&script.ops), edits(&full.ops), "limit {limit}");
+        } else {
+            assert!(
+                !seen_minimal,
+                "limit {limit}: minimality was lost by adding budget"
+            );
+        }
+    }
+    assert!(seen_minimal);
+}
+
+/// The property test, **above** the bound: on thousands of random small inputs with a budget too small for many
+/// of them, the script is always valid and its hunks always apply; and whenever it *claims* to be minimal it is
+/// (against the exhaustive program). The fallback must actually be exercised, or this proves nothing.
+#[test]
+fn random_inputs_above_a_small_bound_are_valid_and_honest_about_minimality() {
+    let mut rng = Rng(0x0000_B0D0);
+    let mut larger = 0;
+    for case in 0..20_000 {
+        let alphabet = 1 + rng.below(6);
+        let make = |rng: &mut Rng| -> String {
+            let lines = rng.below(28);
+            (0..lines)
+                .map(|_| format!("{}\n", rng.below(alphabet)))
+                .collect()
+        };
+        let (left, right) = (make(&mut rng), make(&mut rng));
+        let (left_lines, right_lines) = (split_lines(&left), split_lines(&right));
+        let limit = rng.below(40) as u64;
+        let script = edit_script_within(&left_lines, &right_lines, limit);
+        let rebuilt = replay(&left_lines, &right_lines, &script.ops)
+            .unwrap_or_else(|why| panic!("case {case}: invalid at limit {limit}: {why}"));
+        assert_eq!(rebuilt.concat(), right, "case {case}");
+        let minimum =
+            left_lines.len() + right_lines.len() - 2 * lcs_length(&left_lines, &right_lines);
+        if script.minimal {
+            assert_eq!(
+                edits(&script.ops),
+                minimum,
+                "case {case}: claimed minimal at limit {limit}"
+            );
+        } else {
+            assert!(edits(&script.ops) >= minimum, "case {case}");
+            larger += 1;
+        }
+        let rendered = unified_hunks_within(&left, &right, limit);
+        assert_eq!(rendered.minimal, script.minimal, "case {case}");
+        assert_eq!(
+            apply_hunks(&left, &rendered.hunks).unwrap_or_else(|why| panic!("case {case}: {why}")),
+            right,
+            "case {case}"
+        );
+    }
+    assert!(
+        larger > 500,
+        "only {larger} of 20,000 cases reached the fallback"
+    );
+}
+
+/// **Determinism replaces minimality above the bound** (RFC 153 §6a C 5): the same inputs give the same script
+/// and the same step count on every run -- and the count is **pinned**, so a bound that read the clock (whose
+/// steps would differ from run to run and machine to machine) or changed what a step is could not pass.
+#[test]
+fn the_bound_is_deterministic_and_counts_work_not_time() {
+    let (left, right) = reversed_pair(40);
+    let (left_lines, right_lines) = (split_lines(&left), split_lines(&right));
+    let first = edit_script_within(&left_lines, &right_lines, 300);
+    for _ in 0..20 {
+        assert_eq!(edit_script_within(&left_lines, &right_lines, 300), first);
+    }
+    // Pinned: reversing 40 lines needs this many steps to finish, and a budget of 300 stops the search at the
+    // first diagonal that passes it.
+    let full = edit_script_within(&left_lines, &right_lines, u64::MAX);
+    assert_eq!(
+        (full.steps, edits(&full.ops), full.minimal),
+        (1642, 78, true)
+    );
+    assert_eq!(
+        (first.steps, edits(&first.ops), first.minimal),
+        (301, 80, false)
+    );
+}
+
+/// The real bound, on a real input: a 7,000-line file reversed needs about 12 million steps *per level* of the
+/// search and more than 45 million in all, so [`WORK_BOUND_STEPS`] engages -- and the result is marked, valid and
+/// applies. (The unit tests above use a small explicit limit; this one uses the shipped constant.)
+#[test]
+fn the_shipped_bound_engages_on_a_file_reversed_and_the_result_still_applies() {
+    let (left, right) = reversed_pair(7_000);
+    let rendered = unified_hunks(&left, &right);
+    assert!(
+        !rendered.minimal,
+        "the shipped bound must engage on this input"
+    );
+    assert_eq!(
+        apply_hunks(&left, &rendered.hunks).expect("the fallback hunks apply"),
+        right
+    );
+    let again = unified_hunks(&left, &right);
+    assert_eq!(again, rendered, "and it is the same answer again");
+}
+
+/// Worst-case timing and step counts. **Ignored**: run it in a release build,
 /// `cargo test -p prikk-store --release --lib line_diff::tests::worst_case_timing -- --ignored --nocapture`.
 ///
-/// The two required cases are a 1 MiB text file rewritten line by line, and one with every other line
-/// changed. The rest are **not required** and are here so the report can say honestly where the algorithm's
-/// cost really is.
+/// Every shape is run **twice**: unbounded (`u64::MAX`), which says what the search really costs and how many
+/// steps that is, and at the real [`WORK_BOUND_STEPS`], which says what the bound does with it. The ns-per-step
+/// figure is the one the constant is derived from (its doc comment says how).
 #[test]
 #[ignore = "worst-case timing instrument; run in a release build with --ignored --nocapture"]
 fn worst_case_timing() {
     fn time(label: &str, left: &str, right: &str) {
         let (left_lines, right_lines) = (split_lines(left), split_lines(right));
         let start = std::time::Instant::now();
-        let hunks = unified_hunks(left, right);
-        let elapsed = start.elapsed();
-        // The edit distance D, from a second run outside the timed region: the cost model is O((N+M)·D).
-        let distance = edit_script(&left_lines, &right_lines)
-            .iter()
-            .filter(|op| **op != LineOp::Equal)
-            .count();
-        let work = (left_lines.len() + right_lines.len()) as f64 * distance as f64;
+        let full = edit_script_within(&left_lines, &right_lines, u64::MAX);
+        let full_elapsed = start.elapsed();
+        let start = std::time::Instant::now();
+        let bounded = edit_script(&left_lines, &right_lines);
+        let bounded_elapsed = start.elapsed();
+        let distance = full.ops.iter().filter(|op| **op != LineOp::Equal).count();
         eprintln!(
-            "{label}: {} lines vs {} lines, D = {distance}, (N+M)*D = {work:.2e}, {} hunks, {:.1} ms ({:.2} ns per unit)",
+            "{label}: {} vs {} lines, D = {distance}; unbounded {} steps in {:.1} ms ({:.2} ns/step); \
+             at the bound: {:.1} ms, {} steps, minimal = {}, {} edits",
             left_lines.len(),
             right_lines.len(),
-            hunks.len(),
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_secs_f64() * 1e9 / work.max(1.0)
+            full.steps,
+            full_elapsed.as_secs_f64() * 1000.0,
+            // Zero steps means the reductions emptied the problem: there is no per-step figure to print.
+            if full.steps == 0 {
+                f64::NAN
+            } else {
+                full_elapsed.as_secs_f64() * 1e9 / (full.steps as f64)
+            },
+            bounded_elapsed.as_secs_f64() * 1000.0,
+            bounded.steps,
+            bounded.minimal,
+            bounded
+                .ops
+                .iter()
+                .filter(|op| **op != LineOp::Equal)
+                .count(),
         );
     }
     const MIB: usize = 1024 * 1024;
@@ -426,6 +632,34 @@ fn worst_case_timing() {
         "EXTRA two random files drawn from 50 distinct lines",
         &a,
         &b,
+    );
+    for alphabet in [5usize, 500] {
+        let pool: Vec<String> = (0..alphabet)
+            .map(|n| format!("pool line {n:03}\n"))
+            .collect();
+        let mut rng = Rng(11 + alphabet as u64);
+        let mut random = |lines: usize| -> String {
+            (0..lines)
+                .map(|_| pool[rng.below(pool.len())].clone())
+                .collect()
+        };
+        let (a, b) = (random(30_000), random(30_000));
+        time(
+            &format!("EXTRA two random files drawn from {alphabet} distinct lines"),
+            &a,
+            &b,
+        );
+    }
+    let blocks: Vec<&str> = split_lines(&left);
+    let block_reversed: String = blocks
+        .chunks(200)
+        .rev()
+        .flat_map(|chunk| chunk.iter().copied())
+        .collect();
+    time(
+        "EXTRA blocks of 200 lines in reverse order",
+        &left,
+        &block_reversed,
     );
     let shifted: String = split_lines(&left)
         .iter()

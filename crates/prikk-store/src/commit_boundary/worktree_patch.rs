@@ -24,6 +24,10 @@ mod node_authoring;
 /// rendered, so no caller outside can reconstruct or diverge from the rule.
 pub(crate) use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
 
+/// The read-only view of what `commit` would author, for `prikk diff` (RFC 153 §6.2). Built from `commit`'s own
+/// parts inside `node_authoring`, so the private module stays private and what crosses is the result.
+pub(crate) use node_authoring::{Retain, read_worktree_for_diff};
+
 /// Result of authoring and appending a node-addressed patch from worktree changes.
 ///
 /// `#[non_exhaustive]` (RFC 147 §3c): a report type consumers read, never one they construct -- it is

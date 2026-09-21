@@ -783,19 +783,14 @@ fn control9_absent_points_and_bad_usage_refuse() {
         &format!("error: precondition not met: object {patch} is a patch, not a block"),
     );
     // Usage: exit 2.
-    refuses(
-        &f.repo,
-        &["diff", "--from", &f.base],
-        2,
-        "diff needs both --from",
-    );
+    // Stage 2 (RFC 153 §6.2): `--from` alone and a bare `diff` compare with the worktree, so they are no longer
+    // usage errors -- `rfc153_diff_worktree.rs` controls them. What stays refused is a lone `--to`.
     refuses(
         &f.repo,
         &["diff", "--to", &f.base],
         2,
-        "diff needs both --from",
+        "diff --to needs --from as well",
     );
-    refuses(&f.repo, &["diff"], 2, "diff needs both --from");
     refuses(
         &f.repo,
         &["diff", "--from", "main", "--to", &f.head],

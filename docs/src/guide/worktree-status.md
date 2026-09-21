@@ -10,7 +10,9 @@ prikk worktree-status [path] [--ref REF] [--format json]
 ```
 
 It reports missing, modified, untracked, and unsupported paths. It does not write the worktree.
-Patch generation is handled separately by `prikk commit --from-worktree`.
+Patch generation is handled separately by `prikk commit --from-worktree`. To see the **content** of what
+`commit` would author, use [`prikk diff`](diff.md): a file this command calls *untracked* is an `added`
+entry there.
 
 ## What the next commit would refuse
 

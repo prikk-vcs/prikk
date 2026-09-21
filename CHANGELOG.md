@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added — `prikk diff`: what changed, between two points or against the worktree
+
+`prikk diff [--from <ref|block-id>] [--to <ref|block-id>] [--path <p>]... [--format json]` shows what changed
+between two states, with the content of every text change as unified hunks (3 lines of context; a last line without
+a newline is marked as `diff -u` marks it, so `patch` applies the output). A state is a ref (a received ref is read,
+not adopted), a bare block id, or the worktree (RFC 153).
+
+- **Three shapes.** `--from A --to B` compares two points. A bare `prikk diff` compares the current branch's tip
+  with the worktree — **exactly what `commit` would author**, so `commit` then `diff` is empty again — and `--from
+  A` alone compares `A` with the worktree. A lone `--to` is a usage error.
+- **The worktree side is `commit`'s own view, and writes nothing.** A new file is `added`, with its content: there
+  is no `untracked` list (`worktree-status`'s *untracked* is `added` here). `.prikkignore`d paths never appear, and
+  an ignore rule cannot hide a tracked path. The left side of a bare diff carries the queued (unsealed) commits,
+  and the report says how many. A fresh repository's left side is the empty state, so every file is `added`, exit
+  `0`. A path `commit` refuses — a symlink, a name that is not a safe path, a text file that stopped being UTF-8 —
+  is named once under `unsupported_paths` with `commit`'s own refusal and no content. It takes no lock and writes
+  nothing under `.prikk/`, not even the rebuildable baseline cache; it works while another process holds the
+  active lock and while the worktree is provisional.
+- **Statuses:** `added`, `deleted`, `modified`, `renamed`, `mode`, `binary` (and `symlink`, in the schema and not
+  produced). A rename is reported **only where it is declared** (`prikk mv`, or history's `RenamePath`), never
+  inferred from similar content; a chain `a → b → c` is one `renamed` entry, and a file deleted and created again
+  is never `renamed`. `--path` (repeatable, exact) filters the output and selects a rename by either path.
+- **Binary content is never printed:** a binary entry shows sizes and ids, and names `prikk cat` (with the block
+  each side resolved to) for reading either side.
+- **The line diff is shortest within a work bound.** It is a shortest edit script over lines, deterministic, with
+  no dependency; above **45,000,000 search steps** per file — a count of work done, never time, so the same inputs
+  give the same output on every machine — it stops and shows the unresolved region as deleted and re-added. The
+  hunks are then larger, and they still apply byte for byte. **Every entry says which:** a `minimal` boolean in
+  JSON, and a note line in the prose.
+- **A missing or non-recomputing blob, or an unsupported operation, in either history fails the whole call**, as
+  for `tree` and `cat` (RFC 157 §5a).
+- **`--format json` is the new `diff-report-v1`:** `from` and `to` (`point` as named, `target_block_id` — the
+  block, `"worktree"`, or `null` for an unpublished branch — and `queued_patches` on a bare diff's left side),
+  `entries[]` (`path`, `status`, `from_path` for a rename, `from`/`to` sides as in `tree-listing-v1`, `minimal`,
+  `hunks[]`) and `unsupported_paths[]` (`path`, `refusal`; always empty between two points).
+- **For Rust callers:** new `diff_points_reporting_anchor`, `diff_worktree_reporting_anchor`, `DiffReport`,
+  `DiffEntry`, `DiffPoint`, `DiffStatus`, `UnsupportedPath` and `WORKTREE_POINT`.
+
 ### Added — `prikk cat`: one file's bytes at a point
 
 `prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes <N>] [--format json]` writes

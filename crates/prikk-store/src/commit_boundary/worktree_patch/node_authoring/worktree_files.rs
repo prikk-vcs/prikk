@@ -41,8 +41,43 @@ pub(super) fn enumerate_worktree_files(
 ) -> std::result::Result<BTreeMap<String, WorktreeFileMeta>, AuthorError> {
     let rules = IgnoreRules::load(layout).map_err(AuthorError::Store)?;
     let mut out = BTreeMap::new();
-    walk_dir(layout, Path::new(""), &rules, tracked, &mut out)?;
+    walk_dir(layout, Path::new(""), &rules, tracked, &mut out, None)?;
     Ok(out)
+}
+
+/// A worktree entry `commit` would refuse, **named instead of aborting the walk** (RFC 153 §7.2, RFC 147 §3f):
+/// the path as the worktree spells it, and the refusal text `commit` prints for it.
+pub(in crate::commit_boundary) struct RefusedEntry {
+    pub(in crate::commit_boundary) path: String,
+    pub(in crate::commit_boundary) refusal: String,
+}
+
+/// [`enumerate_worktree_files`] for a **read-only** caller: the same walk, the same ignore rules and tracked
+/// exception, the same refusal rule -- but where `commit` fails closed at the first entry it cannot author, this
+/// collects each one and carries on, so a report can name them all. It is one walk with one switch, not a second
+/// walk that agrees today.
+pub(super) fn enumerate_worktree_files_naming_refusals(
+    layout: &RepositoryLayout,
+    tracked: &BTreeSet<String>,
+) -> std::result::Result<(BTreeMap<String, WorktreeFileMeta>, Vec<RefusedEntry>), AuthorError> {
+    let rules = IgnoreRules::load(layout).map_err(AuthorError::Store)?;
+    let mut out = BTreeMap::new();
+    let mut refused = Vec::new();
+    walk_dir(
+        layout,
+        Path::new(""),
+        &rules,
+        tracked,
+        &mut out,
+        Some(&mut refused),
+    )?;
+    Ok((out, refused))
+}
+
+/// A refused entry's path as a person reads it: `/`-separated when it converts, the lossy OS spelling when it
+/// does not (an unrepresentable name has no repository-relative form, RFC 147 §3f).
+fn refused_path_text(path: &Path) -> String {
+    pathbuf_to_slash_string(path).unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
 fn walk_dir(
@@ -51,6 +86,7 @@ fn walk_dir(
     rules: &IgnoreRules,
     tracked: &BTreeSet<String>,
     out: &mut BTreeMap<String, WorktreeFileMeta>,
+    mut refused: Option<&mut Vec<RefusedEntry>>,
 ) -> std::result::Result<(), AuthorError> {
     let entries =
         list_directory(layout.worktree_mutation_root(), dir).map_err(AuthorError::Store)?;
@@ -79,7 +115,7 @@ fn walk_dir(
             }
         }
         if matches!(entry.kind, EntryKind::Directory) {
-            walk_dir(layout, &path, rules, tracked, out)?;
+            walk_dir(layout, &path, rules, tracked, out, refused.as_deref_mut())?;
             continue;
         }
         // RFC 147 §2e(a): the refusal comes from the one shared classifier, so `worktree-status`
@@ -92,7 +128,30 @@ fn walk_dir(
             None,
             WorktreeEntryShape::from_entry_kind(entry.kind),
         ) {
-            return Err(refusal);
+            match refused.as_deref_mut() {
+                Some(collected) => {
+                    collected.push(RefusedEntry {
+                        path: refused_path_text(&path),
+                        refusal: PrikkError::from(refusal).to_string(),
+                    });
+                    continue;
+                }
+                None => return Err(refusal),
+            }
+        }
+        // A name that is not a safe repository path is refused by `commit` with the error the conversion
+        // raises; naming it is the same decision. Only the *name* is judged here: a stat failure below is a
+        // real error and still propagates.
+        if let Some(collected) = refused.as_deref_mut() {
+            if let Err(err) =
+                pathbuf_to_slash_string(&path).and_then(|relative| RepoPath::parse(&relative))
+            {
+                collected.push(RefusedEntry {
+                    path: refused_path_text(&path),
+                    refusal: err.to_string(),
+                });
+                continue;
+            }
         }
         insert_regular_file(layout, &path, out)?;
     }

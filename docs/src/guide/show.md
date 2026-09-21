@@ -84,7 +84,7 @@ format for `show` and nothing else.
 
 Comparing two arbitrary points in history — not just one block or patch — means reconstructing both
 and comparing them, a materially more expensive operation `show`'s own cost model does not cover.
-That is a separate command: `prikk diff --from <ref|block-id> --to <ref|block-id>` replays both points
+That is a separate command: [`prikk diff`](diff.md) replays both points (or one point and the worktree)
 and shows the difference as unified hunks. `show` still answers "what did *this* block or patch change",
 from the patch's own record.
 
@@ -101,5 +101,5 @@ from the patch's own record.
 
 ## Provenance
 
-This guide covers RFC 142's `show` command. Comparing two arbitrary points in history is RFC 153's
-`prikk diff`, a separate command with a materially different cost.
+This guide covers RFC 142's `show` command. Comparing two arbitrary points in history, or a point with the
+worktree, is RFC 153's [`prikk diff`](diff.md), a separate command with a materially different cost.

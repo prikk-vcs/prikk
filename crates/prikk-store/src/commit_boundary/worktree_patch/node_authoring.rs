@@ -22,6 +22,11 @@ use std::fmt;
 use std::path::Path;
 
 mod worktree_files;
+mod worktree_read;
+
+// The read-only view `prikk diff` reads the worktree through (RFC 153 §6.2): built from the same parts
+// `author_inner` uses, and it writes nothing.
+pub(crate) use worktree_read::{Retain, read_worktree_for_diff};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -42,6 +47,7 @@ use crate::commit_boundary::worktree_patch::{
 use crate::commit_index::{self, CommitIndex, CommitIndexEntry};
 use crate::foundation::fsutil::{EntryKind, RootFileStat, read_file_if_exists};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::lifecycle_cache::replay::TextCache;
 use crate::lock::ActiveLock;
 use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
 use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
@@ -235,6 +241,34 @@ struct BaselineFile {
     mode: u32,
 }
 
+/// A baseline's live nodes as authoring sees them: files by path, and symlink nodes by path (tracked so a change
+/// touching one can fail closed). **The one split** `commit` and `prikk diff`'s worktree read both use.
+fn split_baseline(
+    state: &NodeLifecycleState,
+) -> (BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>) {
+    let mut files: BTreeMap<String, BaselineFile> = BTreeMap::new();
+    let mut symlinks: BTreeMap<String, NodeId> = BTreeMap::new();
+    for (node_id, node) in state.live_nodes() {
+        match &node.content {
+            NodeContent::File { blob_id, mode } => {
+                files.insert(
+                    node.path.as_str().to_string(),
+                    BaselineFile {
+                        node_id: *node_id,
+                        kind: node.kind,
+                        blob_id: *blob_id,
+                        mode: *mode,
+                    },
+                );
+            }
+            NodeContent::Symlink { .. } => {
+                symlinks.insert(node.path.as_str().to_string(), *node_id);
+            }
+        }
+    }
+    (files, symlinks)
+}
+
 /// A planned, fully-resolved operation prior to canonical ordering / `op_seq` assignment.
 struct PlannedOp {
     kind: OperationKind,
@@ -410,26 +444,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
 
     // Baseline file view: path -> (node_id, kind, blob_id, mode). Symlink nodes are tracked so a
     // change touching one can fail closed.
-    let mut baseline_files: BTreeMap<String, BaselineFile> = BTreeMap::new();
-    let mut baseline_symlinks: BTreeMap<String, NodeId> = BTreeMap::new();
-    for (node_id, node) in baseline_state.live_nodes() {
-        match &node.content {
-            NodeContent::File { blob_id, mode } => {
-                baseline_files.insert(
-                    node.path.as_str().to_string(),
-                    BaselineFile {
-                        node_id: *node_id,
-                        kind: node.kind,
-                        blob_id: *blob_id,
-                        mode: *mode,
-                    },
-                );
-            }
-            NodeContent::Symlink { .. } => {
-                baseline_symlinks.insert(node.path.as_str().to_string(), *node_id);
-            }
-        }
-    }
+    let (baseline_files, baseline_symlinks) = split_baseline(&baseline_state);
 
     // RFC 124 §4.4: every already-tracked path (files and symlinks together), so the ignore-aware
     // walk below can never hide one of them from `worktree` -- doing so would make the
@@ -1203,12 +1218,22 @@ fn read_existing_file_bytes(
     blob_kind: BlobKind,
 ) -> std::result::Result<Vec<u8>, AuthorError> {
     let bytes = read_worktree_file_bytes(layout, path)?;
-    if matches!(blob_kind, BlobKind::Text) && std::str::from_utf8(&bytes).is_err() {
-        return Err(AuthorError::UnsupportedKindTransition(format!(
+    match existing_content_refusal(path, blob_kind, &bytes) {
+        Some(refusal) => Err(refusal),
+        None => Ok(bytes),
+    }
+}
+
+/// **The existing-content rule, in one place**: an existing `TextFile` node must stay valid UTF-8 (E4, the
+/// node's kind is authoritative and never reclassified). `commit` refuses with this; `prikk diff` names the path
+/// with the same words instead of failing on it.
+fn existing_content_refusal(path: &str, blob_kind: BlobKind, bytes: &[u8]) -> Option<AuthorError> {
+    if matches!(blob_kind, BlobKind::Text) && std::str::from_utf8(bytes).is_err() {
+        return Some(AuthorError::UnsupportedKindTransition(format!(
             "{path}: existing TextFile cannot accept non-UTF-8 content"
         )));
     }
-    Ok(bytes)
+    None
 }
 
 /// Read a worktree regular file's current bytes.

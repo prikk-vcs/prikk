@@ -132,7 +132,7 @@ pub(crate) fn files_to_replay_manifest(
             PrikkError::Integrity(format!("replayed path {path} has no live node"))
         })?;
         entries.push(ReplayManifestEntry {
-            node_id: *node_id,
+            node_id: Some(*node_id),
             path: RepoPath::parse(&path)?,
             bytes,
             mode: live.mode,

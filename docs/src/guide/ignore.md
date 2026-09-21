@@ -21,9 +21,10 @@ attempt to.
 
 ## Where it binds
 
-`.prikkignore` is consulted in exactly two places: [`prikk commit`](patches/worktree-patch.md)'s
-worktree walk, and [`prikk worktree-status`](worktree-status.md)'s untracked-path scan. A rule
-that matches keeps a path out of discovery in both.
+`.prikkignore` is consulted in exactly three places: [`prikk commit`](patches/worktree-patch.md)'s
+worktree walk, [`prikk worktree-status`](worktree-status.md)'s untracked-path scan, and the worktree
+side of [`prikk diff`](diff.md), which reads the worktree the way `commit` does. A rule that matches
+keeps a path out of discovery in all three.
 
 **Nowhere else.** Applying a patch, replaying history, verifying a repository, and materializing a
 checkout all ignore `.prikkignore` entirely. This is deliberate: if those steps consulted it, two

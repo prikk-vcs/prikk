@@ -1,11 +1,14 @@
-//! `prikk diff` between two points (RFC 153 §2, §3): prose with unified hunks, or `diff-report-v1`.
+//! `prikk diff` (RFC 153 §2, §3, as amended by §6a and §7): prose with unified hunks, or `diff-report-v1`.
 //!
-//! **Stage 1 takes two points.** `--from` and `--to` are both required; comparing with the worktree (RFC 153
-//! §6.2) is the next increment and is refused here by name rather than guessed at.
+//! **Three shapes, one report.** `--from A --to B` compares two points; a bare `prikk diff` compares the current
+//! branch's tip (with its queued commits) against the worktree; `--from A` alone compares `A` against the
+//! worktree. Every shape prints through the same code, and the worktree side is a point named `worktree`.
+//! A lone `--to` is refused: RFC 153 §2 gives it a left side ("the current branch's tip") but does not say
+//! whether that tip carries its queued commits, and this does not guess.
 
 use std::path::PathBuf;
 
-use prikk_store::{DiffEntry, DiffPoint, DiffReport, DiffStatus, PointEntry};
+use prikk_store::{DiffEntry, DiffPoint, DiffReport, DiffStatus, PointEntry, WORKTREE_POINT};
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::args::optional_path_or_current;
@@ -13,12 +16,12 @@ use crate::commands::CliError;
 use crate::output::verification::escape_json_string;
 use crate::stdout::{print, println};
 use crate::tree::push_entry_attributes;
-use crate::{open_repository, warn_anchor_fallbacks};
+use crate::{current_branch, open_repository, warn_anchor_fallbacks};
 
 struct DiffArgs {
     root: PathBuf,
-    from: String,
-    to: String,
+    from: Option<String>,
+    to: Option<String>,
     paths: Vec<String>,
     format_json: bool,
 }
@@ -80,13 +83,14 @@ fn parse_diff_args(args: Vec<String>) -> std::result::Result<DiffArgs, CliError>
             }
         }
     }
-    let (Some(from), Some(to)) = (from, to) else {
+    if to.is_some() && from.is_none() {
         return Err(CliError::Usage(
-            "diff needs both --from <ref|block-id> and --to <ref|block-id>: comparing with the worktree is \
-             not built yet"
+            "diff --to needs --from as well: without --to the right side is the worktree, and a lone --to \
+             has no defined left side (compare two points with --from and --to, or a point with the \
+             worktree with --from alone)"
                 .to_string(),
         ));
-    };
+    }
     Ok(DiffArgs {
         root: optional_path_or_current(root)?,
         from,
@@ -96,7 +100,7 @@ fn parse_diff_args(args: Vec<String>) -> std::result::Result<DiffArgs, CliError>
     })
 }
 
-/// `prikk diff [path] --from <ref|block-id> --to <ref|block-id> [--path <p>]... [--format json]`.
+/// `prikk diff [path] [--from <ref|block-id>] [--to <ref|block-id>] [--path <p>]... [--format json]`.
 pub(crate) fn run_diff(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_diff_args(args)?;
     let layout = open_repository(args.root)?;
@@ -105,10 +109,30 @@ pub(crate) fn run_diff(args: Vec<String>) -> std::result::Result<(), CliError> {
         prikk_store::resolve_point(&layout, name, prikk_store::ReceivedRefs::Read)
             .map_err(|err| err.to_string())
     };
-    let (from, to) = (resolve(&args.from)?, resolve(&args.to)?);
-    let (report, fallbacks) =
-        prikk_store::diff_points_reporting_anchor(&layout, &from, &to, &args.paths)
-            .map_err(|err| err.to_string())?;
+    let (report, fallbacks) = match (&args.from, &args.to) {
+        (Some(from), Some(to)) => {
+            let (from, to) = (resolve(from)?, resolve(to)?);
+            prikk_store::diff_points_reporting_anchor(&layout, &from, &to, &args.paths)
+        }
+        (from, _) => {
+            // The worktree is the right side. It is read against the *current branch's* baseline -- what
+            // `commit` would author it against -- whichever point the left side is. An explicit `--from`
+            // naming an absent ref refuses through the resolver; the implicit left side of a fresh
+            // repository is the empty state (RFC 153 §7.3).
+            let branch = current_branch::resolve_ref(&layout, None)?;
+            let from = match from {
+                Some(name) => Some(resolve(name)?),
+                None => None,
+            };
+            prikk_store::diff_worktree_reporting_anchor(
+                &layout,
+                &branch,
+                from.as_ref(),
+                &args.paths,
+            )
+        }
+    }
+    .map_err(|err| err.to_string())?;
     warn_anchor_fallbacks(fallbacks.iter());
     if args.format_json {
         println!("{}", diff_report_json(&report));
@@ -118,12 +142,29 @@ pub(crate) fn run_diff(args: Vec<String>) -> std::result::Result<(), CliError> {
     Ok(())
 }
 
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
 fn describe_point(point: &DiffPoint) -> String {
-    let id = point.target_block_id.to_string();
-    if point.point == id {
-        format!("block {id}")
-    } else {
-        format!("{} (block {id})", point.point)
+    if point.worktree {
+        return WORKTREE_POINT.to_string();
+    }
+    let queued = match point.queued_patches {
+        Some(count) if count > 0 => Some(plural(count, "queued commit", "queued commits")),
+        _ => None,
+    };
+    match (point.target_block_id, queued) {
+        (Some(id), _) if point.point == id.to_string() => format!("block {id}"),
+        (Some(id), None) => format!("{} (block {id})", point.point),
+        (Some(id), Some(queued)) => {
+            format!("{} (block {id}, plus {queued} not yet sealed)", point.point)
+        }
+        (None, None) => format!("{} (not published: the empty state)", point.point),
+        (None, Some(queued)) => format!(
+            "{} (not published: the empty state, plus {queued} not yet sealed)",
+            point.point
+        ),
     }
 }
 
@@ -158,6 +199,13 @@ fn details(entry: &DiffEntry) -> String {
     }
 }
 
+/// The `prikk cat` argument that reads a side: the block it resolved to, never the name it was given, because a
+/// ref may move before the reader runs the command. **The worktree has no block:** a worktree side is read as
+/// the file itself, so the hint names only a sealed side.
+fn cat_ref(point: &DiffPoint) -> Option<String> {
+    point.target_block_id.map(|id| id.to_string())
+}
+
 fn print_entry(report: &DiffReport, entry: &DiffEntry) {
     let old_path = entry.from.as_ref().map(|side| side.path.as_str());
     let head = match (entry.status, old_path) {
@@ -165,6 +213,14 @@ fn print_entry(report: &DiffReport, entry: &DiffEntry) {
         (status, _) => format!("{} {}", status.as_str(), entry.path),
     };
     println!("{head}{}", details(entry));
+    if !entry.minimal {
+        // RFC 153 §6a C 4: a reader must never have to guess whether it got the shortest script. Printed
+        // **before** the `---` line, so it can never be mistaken for a line of the hunks.
+        println!(
+            "  note: not the shortest edit script: the search reached its work bound and stopped, so the \
+             region it had not resolved is shown as deleted and re-added; the hunks still apply"
+        );
+    }
     if !entry.hunks.is_empty() {
         // `patch(1)` reads these two lines to name the file; `/dev/null` says which side is empty.
         match (&entry.from, old_path) {
@@ -184,19 +240,17 @@ fn print_entry(report: &DiffReport, entry: &DiffEntry) {
         .any(|side| side.as_ref().is_some_and(|side| side.content_id.is_some()));
     if binary_sides {
         // §7.6: `diff` never prints binary bytes; `cat` is the bounded command whose job is bytes.
-        // The hint names the block each side resolved to, not the ref it was named by: a ref may move before
-        // the reader runs the command, and the hint has to reproduce the state this report describes.
         println!("  read a side with `prikk cat --path <p> --ref <block-id>`:");
-        if let Some(from) = &entry.from {
-            println!(
-                "    prikk cat --path {} --ref {}",
-                from.path, report.from.target_block_id
-            );
+        if let (Some(from), Some(block)) = (&entry.from, cat_ref(&report.from)) {
+            println!("    prikk cat --path {} --ref {block}", from.path);
         }
-        if let Some(to) = &entry.to {
+        if let (Some(to), Some(block)) = (&entry.to, cat_ref(&report.to)) {
+            println!("    prikk cat --path {} --ref {block}", to.path);
+        }
+        if report.to.worktree && entry.to.is_some() {
             println!(
-                "    prikk cat --path {} --ref {}",
-                to.path, report.to.target_block_id
+                "    (the worktree side is the file itself, at {})",
+                entry.path
             );
         }
     }
@@ -206,7 +260,7 @@ fn print_report(layout: &prikk_store::RepositoryLayout, report: &DiffReport) {
     println!("diff repository: {}", layout.prikk_dir().display());
     println!("from: {}", describe_point(&report.from));
     println!("to: {}", describe_point(&report.to));
-    if report.entries.is_empty() {
+    if report.entries.is_empty() && report.unsupported_paths.is_empty() {
         println!("no differences");
         return;
     }
@@ -214,13 +268,33 @@ fn print_report(layout: &prikk_store::RepositoryLayout, report: &DiffReport) {
     for entry in &report.entries {
         print_entry(report, entry);
     }
+    if !report.unsupported_paths.is_empty() {
+        // RFC 147 §3f: named with `commit`'s own refusal, and no content.
+        println!("unsupported paths: {}", report.unsupported_paths.len());
+        for unsupported in &report.unsupported_paths {
+            println!("  {}: {}", unsupported.path, unsupported.refusal);
+        }
+    }
 }
 
+/// `"target_block_id"`: the block id, the string `"worktree"` for the worktree (RFC 153 §3), or `null` for an
+/// unpublished branch. `queued_patches` appears only on the implicit left side of a bare diff.
 fn point_json(point: &DiffPoint) -> String {
+    let target = if point.worktree {
+        escape_json_string(WORKTREE_POINT)
+    } else {
+        match point.target_block_id {
+            Some(id) => escape_json_string(&id.to_string()),
+            None => "null".to_string(),
+        }
+    };
+    let queued = match point.queued_patches {
+        Some(count) => format!(", \"queued_patches\": {count}"),
+        None => String::new(),
+    };
     format!(
-        "{{\"point\": {}, \"target_block_id\": {}}}",
-        escape_json_string(&point.point),
-        escape_json_string(&point.target_block_id.to_string())
+        "{{\"point\": {}, \"target_block_id\": {target}{queued}}}",
+        escape_json_string(&point.point)
     )
 }
 
@@ -230,9 +304,9 @@ fn push_side(json: &mut String, key: &str, side: &PointEntry) {
     json.push('}');
 }
 
-/// `diff-report-v1` (RFC 153 §3, as amended by §7): the two points as named and as resolved, the entries
-/// in canonical path order, and `unsupported_paths`. There is no `untracked` bucket: a new worktree file is
-/// `added`, with its content (§7.2).
+/// `diff-report-v1` (RFC 153 §3, as amended by §6a and §7): the two points as named and as resolved, the entries
+/// in canonical path order (each with `minimal`, always present), and `unsupported_paths`. There is no `untracked`
+/// bucket: a new worktree file is `added`, with its content (§7.2).
 fn diff_report_json(report: &DiffReport) -> String {
     let mut json = String::new();
     json.push_str("{\n  \"schema_version\": \"diff-report-v1\",\n  \"from\": ");
@@ -260,6 +334,7 @@ fn diff_report_json(report: &DiffReport) -> String {
         if let Some(to) = &entry.to {
             push_side(&mut json, "to", to);
         }
+        json.push_str(&format!(",\n      \"minimal\": {}", entry.minimal));
         json.push_str(",\n      \"hunks\": [");
         for (hunk_index, hunk) in entry.hunks.iter().enumerate() {
             if hunk_index > 0 {
@@ -273,11 +348,15 @@ fn diff_report_json(report: &DiffReport) -> String {
         json.push_str("\n  ");
     }
     json.push_str("],\n  \"unsupported_paths\": [");
-    for (index, path) in report.unsupported_paths.iter().enumerate() {
+    for (index, unsupported) in report.unsupported_paths.iter().enumerate() {
         if index > 0 {
             json.push_str(", ");
         }
-        json.push_str(&escape_json_string(path));
+        json.push_str(&format!(
+            "{{\"path\": {}, \"refusal\": {}}}",
+            escape_json_string(&unsupported.path),
+            escape_json_string(&unsupported.refusal)
+        ));
     }
     json.push_str("]\n}");
     json

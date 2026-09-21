@@ -308,8 +308,9 @@ fn content_report_from(
 pub(crate) struct ReplayManifestEntry {
     /// The node this path is, which **survives a rename**: the same node at a different path is a
     /// declared `RenamePath`, and nothing else moves a node. `prikk diff` pairs a deleted path with an added
-    /// one by this id -- never by similarity of content (RFC 153 §3).
-    pub(crate) node_id: NodeId,
+    /// one by this id -- never by similarity of content (RFC 153 §3). Always `Some` in a replayed manifest;
+    /// `None` only for a **worktree** file no commit has authored yet, which has no node.
+    pub(crate) node_id: Option<NodeId>,
     /// Validated repository-relative path.
     pub(crate) path: RepoPath,
     /// File content bytes.
@@ -856,6 +857,44 @@ pub(crate) fn resolve_folded_worktree_baseline(
     active_replay: &WalReplay,
     text_cache: &mut crate::lifecycle_cache::replay::TextCache,
 ) -> Result<FoldedWorktreeBaseline> {
+    resolve_folded_worktree_baseline_with(
+        layout,
+        object_store,
+        ref_name,
+        active_replay,
+        text_cache,
+        crate::lifecycle_cache::incremental::CacheWrite::Refresh,
+    )
+}
+
+/// [`resolve_folded_worktree_baseline`] for a report that must **write nothing**: the same derivation, the same
+/// answer, and the rebuildable baseline cache is read when it helps and never refreshed (`prikk diff`, RFC 153
+/// §6.2).
+pub(crate) fn resolve_folded_worktree_baseline_without_cache_write(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+    active_replay: &WalReplay,
+    text_cache: &mut crate::lifecycle_cache::replay::TextCache,
+) -> Result<FoldedWorktreeBaseline> {
+    resolve_folded_worktree_baseline_with(
+        layout,
+        object_store,
+        ref_name,
+        active_replay,
+        text_cache,
+        crate::lifecycle_cache::incremental::CacheWrite::Never,
+    )
+}
+
+fn resolve_folded_worktree_baseline_with(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+    active_replay: &WalReplay,
+    text_cache: &mut crate::lifecycle_cache::replay::TextCache,
+    cache_write: crate::lifecycle_cache::incremental::CacheWrite,
+) -> Result<FoldedWorktreeBaseline> {
     let canonical_ref = validate_local_branch_ref(ref_name)?;
     let baseline = resolve_worktree_baseline(layout, &canonical_ref)?;
     let lineage = match &baseline {
@@ -869,11 +908,12 @@ pub(crate) fn resolve_folded_worktree_baseline(
         WorktreeBaseline::Published {
             baseline_block,
             horizon,
-        } => crate::lifecycle_cache::incremental::resolve_baseline_state(
+        } => crate::lifecycle_cache::incremental::resolve_baseline_state_with(
             layout,
             object_store,
             *baseline_block,
             *horizon,
+            cache_write,
         )?
         .state()
         .clone(),

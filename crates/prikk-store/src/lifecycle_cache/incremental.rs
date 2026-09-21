@@ -82,31 +82,67 @@ pub(crate) fn verify_divergence(
 
 /// Resolve the baseline lifecycle state for `baseline_block_id`/`horizon_id`, using an incremental
 /// step from a cached predecessor when eligible and falling back to an unmodified full replay
-/// otherwise. This is the sole entry point `node_authoring.rs` calls in place of
-/// `replay_derived_state` directly; the return contract is identical.
+/// otherwise, **refreshing the cache** -- what the tests below exercise. Production callers name the choice
+/// through [`resolve_baseline_state_with`]; the return contract is identical to `replay_derived_state`.
+#[cfg(test)]
 pub(crate) fn resolve_baseline_state(
     layout: &RepositoryLayout,
     reader: &impl ObjectReader,
     baseline_block_id: ObjectId,
     horizon_id: ObjectId,
 ) -> Result<ReplayDerivedLifecycleState> {
+    resolve_baseline_state_with(
+        layout,
+        reader,
+        baseline_block_id,
+        horizon_id,
+        CacheWrite::Refresh,
+    )
+}
+
+/// Whether resolving a baseline refreshes the rebuildable cache under `.prikk/cache/`.
+///
+/// **`Never` is for a report that must write nothing** (`prikk diff`, RFC 153 §6.2): the cache is best-effort and
+/// never authoritative, but a *read-only* command that rewrote it would still have written under `.prikk/`, which
+/// the increment's own control checks for byte by byte. A caller that skips the refresh loses only the
+/// acceleration of the next `commit`, exactly as a failed save would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheWrite {
+    /// Refresh the cache with the state just resolved (`commit`, `worktree-status`, branch switching).
+    Refresh,
+    /// Read the cache when it helps and never write it.
+    Never,
+}
+
+/// [`resolve_baseline_state`], with the choice of whether to refresh the cache.
+pub(crate) fn resolve_baseline_state_with(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    baseline_block_id: ObjectId,
+    horizon_id: ObjectId,
+    cache_write: CacheWrite,
+) -> Result<ReplayDerivedLifecycleState> {
     if let Some(cached) = load(layout) {
         if cached.horizon_id == horizon_id && cached.steps_since_reanchor < CHECKPOINT_CADENCE {
             if let Some(state) = try_incremental_step(reader, &cached, baseline_block_id)? {
                 let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
-                persist(
-                    layout,
-                    baseline_block_id,
-                    horizon_id,
-                    cached.steps_since_reanchor + 1,
-                    result.state(),
-                );
+                if cache_write == CacheWrite::Refresh {
+                    persist(
+                        layout,
+                        baseline_block_id,
+                        horizon_id,
+                        cached.steps_since_reanchor + 1,
+                        result.state(),
+                    );
+                }
                 return Ok(result);
             }
         }
     }
     let result = replay_derived_state(reader, baseline_block_id, horizon_id)?;
-    persist(layout, baseline_block_id, horizon_id, 0, result.state());
+    if cache_write == CacheWrite::Refresh {
+        persist(layout, baseline_block_id, horizon_id, 0, result.state());
+    }
     Ok(result)
 }
 

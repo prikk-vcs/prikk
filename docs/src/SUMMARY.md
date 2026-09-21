@@ -16,6 +16,7 @@
 - [Ignoring Worktree Paths](guide/ignore.md)
 - [Show](guide/show.md)
 - [Reading a Point](guide/tree-and-cat.md)
+- [Comparing](guide/diff.md)
 - [Checkout Planning](guide/checkout/checkout.md)
   - [Snapshot Checkout Planning](guide/checkout/snapshot-checkout.md)
   - [Snapshot Materialization](guide/checkout/snapshot-materialization.md)
