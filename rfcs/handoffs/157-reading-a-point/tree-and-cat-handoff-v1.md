@@ -146,3 +146,27 @@ Both answers are independent of Addendum 2's Windows fix; apply them in the same
 
 **Nothing else in the `cat` round is contested**; the architect's own verification of it runs on the commit that
 carries Addendum 2's fix, so that one gate run covers the whole round.
+
+## Addendum 4 2026-09-22 — the `tree`/`cat` round is accepted
+
+**Accepted** (review `cat-follow-up-review-v1`): `97143a4c`, `89972ac0`, `295fc57f`, `ffc83684`, `03bb9319`, with
+Stage 1 already on `main`. Gates 14/14 on `03bb9319` (2,205 / 0 / 29 per toolchain), and the architect's probes agree
+on bytes, the bound writing nothing, both `--output` guards, JSON/`tree` agreement, absence and the terminal rule.
+
+**Your correction of the architect's docs sentence is accepted and is the better one.** Addendum 2 asked for
+"Windows records no executable bit, so every file reads `100644` there". `platform-support.md:269-272` says worktree
+authoring on Windows never derives a mode from the filesystem, carries an existing recorded mode forward untouched,
+and defaults only a brand-new file to non-executable — so Linux-authored history still shows `100755` on Windows.
+The handoff's sentence would have told a Windows reader that prikk lost their mode. **Checking a docs claim against
+the reference page before writing it is exactly right.**
+
+**The `--help` line (§2.1) stays.** `--help` is where a caller first meets `--max-bytes`, and a bound that is not a
+memory bound is worth six words there.
+
+**The macOS statement (§4.3) is accepted as reasoned, not observed**, and is labelled that way in the report. The
+skip prints what it found, so a wrong assumption shows up as a printed reason rather than a silent pass.
+
+**After the push, the architect reads the Windows and macOS jobs by name.** The whole round rides on that run: the
+`cat` test file, the durable-output seam tests and the fixed mode expectation all execute there for the first time.
+
+**Next: `153-content-diff/diff-handoff-v1.md`**, the last round of 0.46.0.
