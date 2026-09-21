@@ -70,3 +70,31 @@ text.
 
 - **Stage 1**, and the cost stop if it fires: `.git-exclude/review-request/tree-report-v1.md`.
 - **Stage 2:** `.git-exclude/review-request/cat-report-v1.md`.
+
+## Addendum 1 2026-09-21 — Stage 1 accepted; both questions ruled; Stage 2 proceeds
+
+**Accepted** (review `tree-review-v1`): `490ab4fa`, `3f33c9f5`. The cost stop did not fire (1.00× at both depths), and
+the architect's probes agree with the report on sizes, modes, order, `content_id`, the component-wise prefix and
+block-id/ref identity.
+
+**Confirmed as built, not merely allowed:** the prose shape (octal `mode`, `100755`-style, beside the decimal `mode`
+in JSON, which RFC 157 §3 fixes). The guide must show both forms side by side, so a reader never takes the two
+numbers for a disagreement.
+
+**§5.1 — ruled (a), and RFC 157 §5 is amended (§5a).** A missing or non-recomputing blob **fails the whole call**.
+There is no entry-level `unavailable` in `tree`, and `cat` refuses. Do **not** change replay. Your reading that
+`show`'s rule does not transfer is right and is now written into the RFC.
+- A replay-level per-entry "unavailable" state, shared by `checkout`, `bundle export` and `merge`, is recorded as a
+  ROADMAP candidate. It is nobody's task this round.
+- **One control is owed in Stage 2**, since the RFC now states this: post-seal blob damage (the report's
+  `swap_two_equal_length_blob_frames` fixture) makes `tree`, `tree --format json` and `cat` each exit 1 and print
+  nothing on stdout. *Perturb: let the listing skip the damaged entry.*
+
+**§5.2 — your proposal is accepted.** Give `durable_output` a `#[cfg(test)]` seam that fails between the temporary
+write and the rename, and a unit test beside it asserting **the destination is absent and no temporary sibling is
+left**. Keep the existing `--force` controls. **Say in the report what a real SIGKILL would leave** (the temporary
+sibling, which nothing can clean up), rather than claiming more than the seam shows. The handoff's "use the existing
+failpoint mechanism" was written without checking that those failpoints are anchored-writer only: that was the
+architect's error, and your measurement of it is the right answer.
+
+**Stage 2 (`cat`) proceeds** on RFC 157 §4 as written, plus the two controls above.

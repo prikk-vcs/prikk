@@ -123,7 +123,25 @@ fetching.
 - The resolver's refusals (§2).
 - An unsupported operation anywhere in the chain fails the whole call (RFC 140 §7b). Never a partial listing.
 - Damage the store reports propagates as `Integrity`.
-- A missing blob for a binary entry: `tree` marks that entry `unavailable` (the `show` rule); `cat` refuses.
+- A missing blob for a binary entry: **the whole call fails** (§5a). `cat` refuses.
+
+### 5a. Amended 2026-09-21 — `unavailable` was unreachable, and the whole call fails
+
+§5 first said `tree` marks such an entry `unavailable`, "the `show` rule". **That was the architect's error**, measured
+by the dev team in `tree-report-v1.md` §5.1 and accepted:
+- replay reads every file's blob (`patch_replay/apply.rs` → `read_blob_bytes_with_kind`), so a missing blob fails the
+  replay before any entry exists to mark;
+- a history naming an unstored blob **cannot be sealed** in the first place (`lifecycle replay: blob <id> required for
+  a state effect is missing`);
+- post-seal damage surfaces as the index's own `Integrity`, and `checkout --patch-plan` fails the same way.
+
+**`show`'s rule does not transfer.** `show` renders one patch's own operand and can say `<unavailable blob …>` because
+it never replays a tree; `tree` and `cat` report a whole state, and a state with a hole is not a state.
+
+**Ruled:** a missing or non-recomputing blob **fails the whole call**, as an unsupported operation already does. No
+entry-level `unavailable`, and no partial listing. A per-entry "unavailable" would have to be a replay-level state
+shared by `checkout`, `bundle export` and `merge`, which is recorded as a candidate in the ROADMAP and is not this
+RFC's.
 - Usage errors (unknown flag, repeated `--format`, malformed block id) exit 2.
 
 ## 6. Security
