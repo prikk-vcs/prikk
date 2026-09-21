@@ -10,7 +10,10 @@ job is content bytes.
 
 - **All or nothing:** the content is resolved in full before one byte is written, so any refusal writes nothing.
 - **`--max-bytes <N>`** refuses content larger than N, naming the size and the bound, with no file and no stdout
-  bytes.
+  bytes. **It bounds what is written, exactly and all or nothing; it does not bound memory.** `cat` reads through
+  the same replay as `checkout --patch-plan`, which holds every file's content while it builds the tree, so peak
+  memory is that replay's own cost whatever the bound is. A caller bounding hostile input gets a bound on the
+  output, not on the process.
 - **`--output`** refuses an existing file without `--force` and any path inside `.prikk/`; it writes a temporary
   sibling and renames it into place, so a failed or interrupted write leaves the destination untouched.
 - **Binary content refuses a terminal**, naming `--output`, and writes nothing; text is written. Redirected or piped

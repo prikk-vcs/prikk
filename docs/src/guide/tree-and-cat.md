@@ -101,7 +101,16 @@ prikk cat --path src/main.rs --ref <block-id>     # at an older block
 - **All or nothing.** The content is resolved in full before one byte is written. A failure anywhere —
   an unsupported operation, damage, a bound — writes nothing at all.
 - **`--max-bytes <N>`** refuses content larger than N, naming the size and the bound, and writes nothing,
-  not even a partial file. Use it whenever the history is not yours.
+  not even a partial file. **Read exactly what it promises:**
+  - **It bounds what is written — exactly, and all or nothing.** When it refuses, nothing reaches stdout and
+    no file is created or replaced.
+  - **It does not bound memory.** `cat` reads the point through the same replay `checkout --patch-plan`
+    uses, which holds every file's content while it builds the tree, so a large file is already in memory
+    when the bound is compared. Peak memory is that replay's own cost, proportional to the size of the whole
+    tree at the point, and `--max-bytes` does not lower it. A caller bounding hostile input gets a bound on
+    the output, not on the process.
+  A memory bound would need the replay to stream, which is planned separately (RFC 158) and not something
+  `cat` can add on its own.
 - **`--output <file>`** refuses an existing file unless you pass `--force` (`bundle export`'s own rule), and
   refuses any path inside `.prikk/`. The write goes to a temporary file beside the destination and is
   renamed into place, so a failed or interrupted write leaves the destination untouched rather than half

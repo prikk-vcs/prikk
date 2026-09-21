@@ -144,7 +144,8 @@ filters by whole path components; the replay is whole-tree either way. `--format
 
 **Reading a point: `cat`.** `cat` writes one file's bytes at a point, text or binary, to stdout or to
 `--output`. The content is resolved in full before anything is written, so a refusal writes nothing.
-`--max-bytes` bounds it; `--output` refuses an existing file without `--force` and any path inside `.prikk/`,
+`--max-bytes` bounds what is written — exactly, and all or nothing — but **not memory**, which is the shared
+replay's own cost; `--output` refuses an existing file without `--force` and any path inside `.prikk/`,
 and is written to a temporary sibling then renamed into place. **Binary content refuses a terminal**, naming
 `--output`; text is written. A path that is not a file at the point refuses with `path <p> does not exist at
 <point>`. `--format json` is `path-content-v1`: the same fields as one `tree-listing-v1` entry, and no bytes.

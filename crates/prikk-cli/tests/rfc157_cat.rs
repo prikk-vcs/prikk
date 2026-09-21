@@ -390,12 +390,15 @@ fn control6_absent_path_and_directory_prefix_refuse() {
     assert_eq!(usage.status.code(), Some(2), "{}", text_of(&usage));
 
     // A fresh repository's unpublished current branch holds no content, and says so as an absent path.
+    // **The whole wording is pinned, parenthetical included** (Addendum 3): it names the question asked
+    // (the path) *and* the reason (the ref), and a fresh repository is exactly where a new user meets it.
     let fresh = support::unique_repo("rfc157-cat-control6-fresh");
     ok(&fresh, &["init", "."]);
     refuses(
         &fresh,
         &["cat", "--path", "src/main.rs"],
-        "path src/main.rs does not exist at heads/main",
+        "error: precondition not met: path src/main.rs does not exist at heads/main (ref heads/main does not \
+         exist in this repository)",
     );
     let _ = std::fs::remove_dir_all(&fresh);
     let _ = std::fs::remove_dir_all(&repo);

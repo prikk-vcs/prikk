@@ -220,7 +220,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "cat",
         run: crate::cat::run_cat,
         help_lines: &[
-            "  prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]  Write one file's bytes at a point, or its metadata with --format json; binary content refuses a terminal",
+            "  prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]  Write one file's bytes at a point, or its metadata with --format json; --max-bytes bounds what is written, not memory; binary content refuses a terminal",
         ],
     },
     Command {
