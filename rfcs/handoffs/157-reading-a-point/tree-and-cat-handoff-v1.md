@@ -98,3 +98,34 @@ failpoint mechanism" was written without checking that those failpoints are anch
 architect's error, and your measurement of it is the right answer.
 
 **Stage 2 (`cat`) proceeds** on RFC 157 §4 as written, plus the two controls above.
+
+## Addendum 2 2026-09-22 — URGENT: `main` is red on Windows, from Stage 1's mode expectation
+
+**CI on `64d253ed` (run 35562668263) failed the Windows mutation test suite**, 15 of 16 jobs green. The product is
+right; the control is platform-shaped.
+
+```
+rfc157_tree.rs:131 control1_every_file_once_in_canonical_order_with_exact_sizes
+assertion `left == right` failed: run.sh   left: Number("33188")  right: Number("33261")
+```
+
+**Cause, read at source:** the fixture sets `0o755` **only under `cfg(unix)`** (`rfc157_tree.rs:60-63`), while the
+expectation at `:130` is unconditional. On Windows there is no executable bit, prikk records `33188`, and the test
+contradicts its own fixture. The same class as the 0.45.0 path failures: **an expectation shaped by the developer's
+platform**.
+
+**Fix, in this round, before anything else:**
+1. **Derive the expected mode the way the fixture writes it**: executable **and** `cfg(unix)` → `33261`, otherwise
+   `33188`. Do not gate the whole control off on Windows: everything else in it (order, sizes, `encoding`,
+   `content_id`) must keep running there.
+2. **Sweep both new test files** (`rfc157_tree.rs`, `rfc157_cat.rs`) for every other expectation that could be
+   shaped by the platform — modes, line endings, path separators, and anything derived from `std::fs` metadata — and
+   say in the report what you checked, not only what you changed.
+3. **Say in the docs what a reader will see.** `guide/tree-and-cat.md` shows `100755`/`33261` in its example and mode
+   table; add the sentence that **Windows records no executable bit, so every file reads `100644` there**. A reader on
+   Windows must not think prikk lost their mode.
+4. Report it with the `cat` round (one report, `cat-report-v1.md` amended or a follow-up), since nothing is pushed
+   beyond `64d253ed`.
+
+**The architect pushed Stage 1 before its CI finished** — the push is allowed, the unread result was not. That is the
+architect's error, recorded in the review.
