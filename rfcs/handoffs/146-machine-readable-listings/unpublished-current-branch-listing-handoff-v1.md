@@ -68,3 +68,30 @@ keeps today's refusal unchanged, `branch create`'s own included.
   **`### Fixed`** for `branch switch`'s dead route, naming both messages.
 
 **Report:** `.git-exclude/review-request/unpublished-current-branch-listing-report-v1.md`.
+
+## Addendum 1 2026-09-22 — accepted, with one control owed
+
+**Accepted** (review `unpublished-current-branch-listing-review-v1`): `945fe817`. Gates 14/14 re-run by the
+architect — including the two cross-target clippy runs — 2,262 / 0 / 30 per toolchain. Probed on the built
+binary in both states, prose and JSON, including **the dirty-worktree case** (stikk's own reproduction has an
+untracked file, and the shortcut is guarded by `!worktree_is_dirty`), the pinned prose line byte for byte, and
+the property that no line of the fresh listing parses as `[*] <ref> <64 hex>`. The shortcut moved back behind
+the refusal reddens `branch_switch_to_the_current_branch_never_says_it_does_not_exist` and nothing else.
+
+**Owed, two assertions, fold into your next round:** moving the self-switch shortcut ahead of
+`require_open_branch` changes which refusals a self-target can still reach. Measured: a **closed** current
+branch still refuses (`heads/main is closed; switch to an open branch`) — but nothing pins it, and this
+reordering is exactly what could turn it into a silent no-op.
+
+- **Control:** with the current branch closed, `branch switch <that branch>` still refuses as closed.
+  *Perturb: let the shortcut fire for it — the control must go red.*
+- Assert the **behaviour**, not a mechanism: I did not pin whether it survives because the pointer no longer
+  resolves a closed branch as `from`, or because the worktree reads dirty there.
+
+**A note the architect owes you, not the other way round.** This handoff said "Live" at the top and "scheduled
+after the measurement round and RFC 158 Stage A" in its prose, and it was done first. **A live handoff is an
+instruction; ordering prose inside it loses to that, and the contradiction was mine to not write.** From here a
+handoff goes live when it is next, and waits in `.git-exclude/scratch/` until then — the way the measurement and
+release-prep handoffs already do. Nothing changes for you.
+
+**Next, in order: the measurement round** (`133-…/measurement-cost-handoff-v1.md`), then **RFC 158 Stage A**.
