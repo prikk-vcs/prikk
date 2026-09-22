@@ -103,6 +103,17 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     // RFC 151 §2.4: which listed branch is current. A pointer the default cannot resolve marks
     // none rather than refusing the listing -- `branch list` is how a user sees what to switch to.
     let current_branch = crate::current_branch::displayed_current_branch(&layout);
+    // RFC 146 §8f: the current branch, named, when it has never been sealed -- at most one can exist,
+    // it is always the current branch, and only before the first seal (§1's invariant).
+    let unpublished_current_branch = match &current_branch {
+        Some(name)
+            if prikk_store::is_unpublished_local_branch(&layout, name)
+                .map_err(|err| err.to_string())? =>
+        {
+            Some(name.clone())
+        }
+        _ => None,
+    };
     let entries = ref_store
         .list_ref_pointers()
         .map_err(|err| err.to_string())?;
@@ -153,7 +164,11 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             })
             .collect();
     if format_json {
-        crate::output::print_branch_list_json(&branches, &received);
+        crate::output::print_branch_list_json(
+            &branches,
+            &received,
+            unpublished_current_branch.as_deref(),
+        );
     } else {
         let mut printed_any = false;
         for branch in &branches {
@@ -175,6 +190,14 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
         }
         if !printed_any {
             println!("no branches");
+        }
+        // RFC 146 §8f: below the table (or `no branches`, the invariant's only real case) — never a
+        // row, and never parseable as one: no id column, so a reader keyed on `[*] <ref> <64 hex>`
+        // cannot mistake it for a branch.
+        if let Some(name) = &unpublished_current_branch {
+            println!(
+                "current branch {name} has no published history yet; the first `prikk seal` publishes it"
+            );
         }
     }
     Ok(())
@@ -303,7 +326,20 @@ fn run_switch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     // RFC 136 increment 2b: a replay-verified snapshot the switch could not anchor at is named on stderr.
     crate::warn_anchor_fallbacks(report.anchor_fallback.iter());
     if report.already_current {
-        println!("already on {}", report.to);
+        // RFC 147 §2j: the current branch is never "does not exist" here either, published or not --
+        // named plainly rather than through the ordinary "already on" line, which says nothing about
+        // publication and would otherwise be the only answer for a state worth calling out.
+        if prikk_store::is_unpublished_local_branch(&layout, &report.to)
+            .map_err(|err| err.to_string())?
+        {
+            println!(
+                "{} is already the current branch; it has no published history yet -- the first \
+                 `prikk seal` publishes it",
+                report.to
+            );
+        } else {
+            println!("already on {}", report.to);
+        }
         return Ok(());
     }
     match &report.from {

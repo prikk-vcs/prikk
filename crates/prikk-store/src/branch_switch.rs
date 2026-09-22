@@ -94,8 +94,10 @@ pub fn switch_branch(
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
 
-    // Refusal 1: an existing, open local branch.
-    require_open_branch(layout, &target)?;
+    // RFC 147 §2j: naming the branch already current is a no-op whether or not it has ever been
+    // sealed -- checked *before* refusal 1, which is about a target that names something else. The
+    // unpublished current branch is never "does not exist" here (RFC 147 §2i's own ruling), so this
+    // must not funnel through that refusal even by accident.
     if from == Some(target.as_str()) && !worktree_is_dirty(layout)? {
         return Ok(BranchSwitchReport {
             from: Some(target.clone()),
@@ -107,6 +109,9 @@ pub fn switch_branch(
             anchor_fallback: None,
         });
     }
+
+    // Refusal 1: an existing, open local branch.
+    require_open_branch(layout, &target)?;
 
     // Refusal 2: unsealed work belongs to the target or to nobody.
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);

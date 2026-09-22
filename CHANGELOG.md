@@ -13,6 +13,25 @@ consumer that resolves its own default and always passes it explicitly was affec
 commands. Every other absent ref, and the current branch named as one side of `diff --from … --to …`,
 still refuses exactly as before.
 
+### Added — `branch list` names an unpublished current branch
+
+Before its first `seal`, a repository's current branch had no published history and so was invisible
+in `branch list` — a fresh repository printed `no branches` with no way to tell which branch that
+silence was about. Prose now prints one additional line below the table (or `no branches`):
+`current branch heads/main has no published history yet; the first \`prikk seal\` publishes it` — not
+a row, and never parseable as one. `--format json` carries the same fact as a new, nullable,
+top-level `branch-list-v1` field, `"unpublished_current_branch"`: the branch's name, or `null` once it
+has been sealed. `branches[]` and `received[]` are unchanged — membership there still means "has a
+published `RefState`."
+
+### Fixed — `branch switch <the current branch>` falsely claimed it did not exist
+
+Before its first `seal`, switching to the branch you were already on refused with `heads/main does not
+exist; run \`prikk branch create heads/main\` first` — the same class of defect as the round above,
+in `branch switch`'s own separate refusal path rather than the shared resolver. It now says the branch
+is already current and, when unpublished, that the first `seal` publishes it; every other absent or
+closed target still refuses exactly as before.
+
 ### Changed — a queued patch's node-addressed operations now resolve their paths
 
 `prikk show <queued-patch-id>` previously reported `unresolved_node_id` for every `edit-text`,

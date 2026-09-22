@@ -32,7 +32,16 @@ pub(crate) struct ReceivedListEntry {
 /// Print `prikk branch list --format json`. `branches` must already reflect `--all`'s own
 /// filtering (a closed branch omitted unless `--all`) — this function renders what it is given,
 /// the same division of labor `print_branch_list`'s prose sibling in `branch.rs` uses.
-pub(crate) fn print_branch_list_json(branches: &[BranchListEntry], received: &[ReceivedListEntry]) {
+///
+/// `unpublished_current_branch` (RFC 146 §8f): the current branch when it has never been sealed,
+/// `None` otherwise. A top-level, nullable field, never a row in `branches[]` -- membership there
+/// keeps meaning *has a published `RefState`*, which a shipped consumer already decides "this branch
+/// has no history" from, so a row would silently invert that claim.
+pub(crate) fn print_branch_list_json(
+    branches: &[BranchListEntry],
+    received: &[ReceivedListEntry],
+    unpublished_current_branch: Option<&str>,
+) {
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"schema_version\": \"branch-list-v1\",\n");
@@ -68,7 +77,13 @@ pub(crate) fn print_branch_list_json(branches: &[BranchListEntry], received: &[R
     if !received.is_empty() {
         json.push_str("\n  ");
     }
-    json.push_str("]\n");
+    json.push_str("],\n");
+    json.push_str("  \"unpublished_current_branch\": ");
+    match unpublished_current_branch {
+        Some(name) => json.push_str(&escape_json_string(name)),
+        None => json.push_str("null"),
+    }
+    json.push('\n');
     json.push('}');
     println!("{json}");
 }

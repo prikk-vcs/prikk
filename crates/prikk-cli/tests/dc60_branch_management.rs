@@ -152,7 +152,14 @@ fn branch_list_reports_no_branches_before_genesis() {
 
     let out = branch_list(&repo);
     ok(&out, "branch list on empty repository");
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "no branches");
+    // RFC 146 §8f: the unpublished current branch is named on its own line below `no branches`,
+    // not folded into it and not a row -- see `rfc146_unpublished_current_branch_listing.rs` for
+    // the dedicated controls.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "no branches\ncurrent branch heads/main has no published history yet; the first `prikk seal` \
+         publishes it\n"
+    );
 
     let _ = std::fs::remove_dir_all(&repo);
 }

@@ -72,10 +72,16 @@ command that takes `--ref` defaults to it. `branch switch` changes the worktree 
 files and then moves the pointer. It refuses, and writes nothing, when the branch does not exist or is
 closed, when unsealed work belongs to another branch (`seal` first), or when the worktree has changes
 against the branch you are on (`prikk worktree-status` lists them). Untracked files are never
-touched; a file of the old branch is deleted only when it is unchanged.
+touched; a file of the old branch is deleted only when it is unchanged. Switching to the branch you
+are already on is always a no-op — including when it has never been sealed, which just says so rather
+than claiming the branch does not exist.
 
 An explicit `--ref` still works on every command without switching. `prikk branch list` shows what
-exists and marks the current branch with `*`.
+exists and marks the current branch with `*`. **A fresh repository's current branch, before its first
+`seal`, is not one of those rows** — it has no published history to list — but is still named: prose
+prints one line below `no branches` (`current branch heads/main has no published history yet; the
+first prikk seal publishes it`), and `--format json` carries it as a top-level
+`"unpublished_current_branch"` field, `null` once it has been sealed.
 
 ## Is my data safe in a Prikk repository right now?
 
