@@ -597,3 +597,30 @@ to stikk 015 and is **not** part of this fix.
 the handoff said "an explicitly named absent ref refuses" without ever asking what *absent* means for a branch
 that has never been sealed. The same unexamined word then went into RFC 157 §3 and RFC 153 §7.3, which is why the
 seam widened in 0.46.0 instead of being noticed.
+
+### 2i.1 — DELIVERED 2026-09-22
+
+`6dee6c4f` (the fix) and `7405ec3b` (its follow-up), reviewed as `unpublished-current-branch-review-v1` and
+`…-follow-up-review-v1`; gates 14/14 on each, re-run by the architect, and both rounds' choke points perturbed
+independently.
+
+**Three corrections the rounds made to the architect's own instructions, all right:**
+
+1. **The fix does not belong in the shared resolver.** `require_existing_ref` is called both by readers and by
+   `checkout`'s materialize modes as a **pre-write gate**; relaxing it would have made those stop refusing, and
+   the shared version read the current-branch pointer from `prikk-store`, which **RFC 151 §2.2 forbids**. Two
+   existing tests caught both. The shape that shipped is a store predicate that never reads the pointer
+   (`is_unpublished_local_branch`) plus one CLI function that does, through the single allowed reader —
+   `decide_ref_existence` is byte-for-byte unchanged, so no unlisted caller moved.
+2. **`--from <the unpublished current branch>` must not fold the queue.** "Byte-identical to the bare form" was
+   right only with an empty queue; with a queued commit it made `diff` say the point already held a file that
+   `tree` and `cat` said was not there. `--from` now compares against the point exactly, so it means one thing
+   on both sides of the first seal, and `WorktreeDiffFrom` gives the left side three named states instead of
+   overloading `None`.
+3. **`diff --format json` bare and explicit were never byte-identical**, even with an empty queue: the implicit
+   side always carries `queued_patches: 0` and an explicit point carries no such field. The exception is named
+   in the control and pinned by its own test rather than dropped from a list.
+
+**And `cat`'s parenthetical** now reads `(<branch> has no published history yet)`, caught by **variant** with
+the resolver's message discarded — so the false wording cannot be re-inherited by a later refactor. RFC 157
+Addendum 3 item 2's pinned string is superseded for this one case and unchanged for every other.
