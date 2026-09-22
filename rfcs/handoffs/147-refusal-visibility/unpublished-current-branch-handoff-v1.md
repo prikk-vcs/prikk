@@ -79,3 +79,67 @@ Say in the report which message it gives before and after.
 - The measurement-cost round (`133-…/measurement-cost-handoff-v1.md`) follows this one.
 
 **Report:** `.git-exclude/review-request/unpublished-current-branch-report-v1.md`.
+
+## Addendum 1 2026-09-22 — the round is accepted; two follow-ups, both from my wording
+
+**Accepted** (review `unpublished-current-branch-review-v1`): `6dee6c4f`. Gates 14/14 re-run by the architect —
+**including the two cross-target clippy runs, both green** — 2,252 / 0 / 30 per toolchain; every surface probed
+bare against explicit on the built binary; and the choke point perturbed independently, which turns
+`control1_…` and `cat_names_the_absent_path_not_the_ref` red.
+
+**§1's instruction was wrong and you were right to refuse it.** "One change at the resolver, not five at the
+call sites" would have leaked into `checkout`'s materialize modes and would have read the current-branch pointer
+from `prikk-store`, which RFC 151 §2.2 forbids. Two existing tests caught both. A store predicate that never
+reads the pointer, plus one CLI function that does through the single allowed reader, is the better shape, and
+leaving `decide_ref_existence` byte-for-byte unchanged is what keeps every unlisted caller still.
+
+Two follow-ups, in **one** round. Both are consequences of how I wrote the handoff, not of how you read it.
+
+### 1. `cat`'s parenthetical states what this round ruled false
+
+```text
+error: precondition not met: path a.txt does not exist at heads/main
+       (ref heads/main does not exist in this repository)
+```
+
+Both forms agree — and both now carry a reason RFC 147 §2i declares false. The wording is mine (RFC 157
+Addendum 3 item 2 pinned it, arguing it names "the reason"); the reason changed underneath it.
+
+**For the unpublished current branch, the parenthetical says the branch has no published history yet.** The
+outer clause is unchanged, and every other case — a genuinely absent ref above all — keeps today's pinned
+string. Update the pinned test with it.
+
+### 2. `--from <the unpublished current branch>` must not fold the queue
+
+Measured: unpublished `heads/main`, **one queued unsealed commit** holding `a.txt`, a new worktree file `b.txt`.
+
+```text
+tree --ref heads/main              → entries: 0
+cat --path a.txt --ref heads/main  → path a.txt does not exist at heads/main
+diff --from heads/main             → from: … the empty state, plus 1 queued commit not yet sealed
+                                     entries: 1 — added b.txt
+```
+
+`tree` and `cat` say the point holds nothing; `diff` says it already holds `a.txt`. And `guide/diff.md`
+contradicts itself two bullets apart — *"`--from <point>` compares against that point exactly, queue or no
+queue"*, then *"naming that same branch explicitly … answers exactly the same way"* as the folding bare form.
+
+**I caused this** by making "byte-identical to the bare form" the property without noticing it is right only
+when the queue is empty — the state stikk reported and the only one I probed.
+
+**Ruled: `--from <the unpublished current branch>` compares against that point exactly — the empty state — and
+does not fold the queue.** `--from` then means one thing on both sides of the first seal, the three read verbs
+agree about what a point holds, and the documented rule stays true. **The bare form does not change.**
+
+- the left side reads `from: heads/main (not published: the empty state)`, with **no** queued clause, and
+  `queued_patches` absent from its JSON side as for any other explicit point;
+- **control 1 stays as it is** — its fixture has no queue, so identity still holds there;
+- **a new control asserts the difference**: with one queued commit, bare folds and `--from <branch>` does not,
+  and the queued file appears as `added` in the explicit form;
+- `diff.md`'s two bullets are reconciled — the exception goes away rather than being written down.
+
+### 3. Then
+
+The measurement round (`133-…/measurement-cost-handoff-v1.md`) follows, then RFC 158 Stage A.
+
+**Report:** `.git-exclude/review-request/unpublished-current-branch-follow-up-report-v1.md`.
