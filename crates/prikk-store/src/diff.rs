@@ -406,13 +406,29 @@ pub fn diff_points_reporting_anchor(
     ))
 }
 
+/// The left side of a worktree diff (RFC 153 §2, §6.2, §7.2, §7.3, as amended by RFC 147 §2i Addendum 1).
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum WorktreeDiffFrom<'a> {
+    /// No `--from`: the current branch's tip, its queued commits folded on top -- the baseline `commit`
+    /// authors against, so that `commit` followed by this is empty again. An unpublished branch (a fresh
+    /// repository) has the empty state here, folded queue and all: every file `commit` would author is
+    /// `added`.
+    Implicit,
+    /// `--from` named the current branch while it has never been published. **The empty state, exactly --
+    /// no queue folding**, so `--from <branch>` means the same thing whether `branch` is published or not,
+    /// and agrees with what `tree`/`cat` say the point holds: nothing. A queued file therefore reads
+    /// `added` here where the implicit form would read it as already accounted for.
+    UnpublishedCurrentBranch,
+    /// `--from` resolved to a real point.
+    Point(&'a Point),
+}
+
 /// **Compare a point with the worktree** (RFC 153 §2, §6.2, §7.2, §7.3): what a bare `prikk diff` shows.
 ///
-/// `from` is a point to compare against, or `None` for the **current branch's tip with its queued commits
-/// folded on top** -- the baseline `commit` authors against, so that `commit` followed by this is empty again. An
-/// unpublished branch (a fresh repository) has the empty state on that side: every file `commit` would author is
-/// `added`. `branch` names the current branch either way: the worktree is read against *its* baseline (node
-/// identity, file kinds, live rename declarations), because that is what `commit` would author it against.
+/// `branch` names the current branch in every case: the worktree is read against *its* baseline (node
+/// identity, file kinds, live rename declarations), because that is what `commit` would author it against,
+/// whatever the left side is.
 ///
 /// **Read-only** (the worktree is read by `read_worktree_for_diff` in the commit boundary): no lock beyond the
 /// read snapshot, no write, and the dirty and provisional worktree markers, which gate history, do not gate a
@@ -426,11 +442,11 @@ pub fn diff_points_reporting_anchor(
 pub fn diff_worktree_reporting_anchor(
     layout: &RepositoryLayout,
     branch: &str,
-    from: Option<&Point>,
+    from: WorktreeDiffFrom<'_>,
     paths: &[String],
 ) -> Result<(DiffReport, Vec<SnapshotAnchorFallback>)> {
     let (left_point, entries, unsupported, fallback) = match from {
-        None => {
+        WorktreeDiffFrom::Implicit => {
             let read = read_worktree_for_diff(layout, branch, Retain::ChangedFromBaseline)?;
             let entries = diff_manifests(&read.baseline, &read.worktree, paths)?;
             let point = DiffPoint {
@@ -441,7 +457,18 @@ pub fn diff_worktree_reporting_anchor(
             };
             (point, entries, read.unsupported, None)
         }
-        Some(point) => {
+        WorktreeDiffFrom::UnpublishedCurrentBranch => {
+            let read = read_worktree_for_diff(layout, branch, Retain::Everything)?;
+            let entries = diff_manifests(&[], &read.worktree, paths)?;
+            let point = DiffPoint {
+                point: branch.to_string(),
+                target_block_id: None,
+                worktree: false,
+                queued_patches: None,
+            };
+            (point, entries, read.unsupported, None)
+        }
+        WorktreeDiffFrom::Point(point) => {
             let (snapshot, fallback) = replay_point_for_read_only_report(layout, point)?;
             let read = read_worktree_for_diff(layout, branch, Retain::Everything)?;
             let entries = diff_manifests(&snapshot.manifest.files, &read.worktree, paths)?;

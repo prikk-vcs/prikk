@@ -134,9 +134,13 @@ pub(crate) fn run_cat(args: Vec<String>) -> std::result::Result<(), CliError> {
     let unpublished_current_branch = current_branch::is_unpublished_current_branch(&layout, &name)?;
     let point = match prikk_store::resolve_point(&layout, &name, prikk_store::ReceivedRefs::Read) {
         Ok(point) => point,
-        Err(prikk_error::PrikkError::Precondition(message)) if unpublished_current_branch => {
+        // RFC 147 §2i Addendum 1: the resolver's own message ("does not exist") is what this whole round
+        // rules false for the current branch, so it is not reused here -- the accurate reason is that
+        // nothing has been published yet, not that the ref is absent.
+        Err(prikk_error::PrikkError::Precondition(_)) if unpublished_current_branch => {
             return Err(CliError::Failure(format!(
-                "precondition not met: path {} does not exist at {name} ({message})",
+                "precondition not met: path {} does not exist at {name} ({name} has no published \
+                 history yet)",
                 args.path
             )));
         }

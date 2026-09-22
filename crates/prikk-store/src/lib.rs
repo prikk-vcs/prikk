@@ -144,7 +144,7 @@ pub use compact::{
 pub use declaration_resolution::{DeclarationOutcome, DeclarationResolution};
 pub use diff::{
     DiffEntry, DiffPoint, DiffReport, DiffStatus, UnsupportedPath, WORKTREE_POINT,
-    diff_points_reporting_anchor, diff_worktree_reporting_anchor,
+    WorktreeDiffFrom, diff_points_reporting_anchor, diff_worktree_reporting_anchor,
 };
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,

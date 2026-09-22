@@ -38,9 +38,12 @@ That has consequences worth knowing:
   `queued_patches`. `--from <point>` compares against that point exactly, queue or no queue.
 - **A fresh repository** — a current branch that has never been sealed — has the **empty state** on the left:
   every file `commit` would author is `added`, and the exit code is `0`
-  (`from: heads/main (not published: the empty state)`). Naming that same branch explicitly with
-  `--from` answers exactly the same way — the current branch is never absent, published or not.
-  `--from` naming any *other* ref that does not exist refuses.
+  (`from: heads/main (not published: the empty state)`) — the current branch is never absent, published
+  or not, so naming it explicitly with `--from` refuses no more than leaving `--from` off does.
+  **A queued, unsealed commit is where the two forms part ways, by the same rule as the previous bullet:**
+  the bare left side folds the queue on top of the empty state (a queued file reads as already there,
+  unchanged); `--from heads/main` compares against the empty state *exactly*, queue or no queue, so a
+  queued file reads as `added` there instead. `--from` naming any *other* ref that does not exist refuses.
 - **It writes nothing.** No lock, no cache, no index, no marker: `prikk diff` reads. It works while another
   process holds the active lock, and while the worktree is provisional (materialized from a snapshot and not yet
   verified) or an interrupted materialization left its marker — states in which `commit` refuses. It does not

@@ -118,28 +118,26 @@ pub(crate) fn run_diff(args: Vec<String>) -> std::result::Result<(), CliError> {
             // The worktree is the right side. It is read against the *current branch's* baseline -- what
             // `commit` would author it against -- whichever point the left side is. An explicit `--from`
             // naming an absent ref refuses through the resolver; the implicit left side of a fresh
-            // repository is the empty state (RFC 153 §7.3). RFC 147 §2i: `--from` naming the current
-            // branch while it is unpublished answers exactly as leaving `--from` off does -- both take
-            // the folded baseline, queued commits and all -- rather than the resolver's ordinary,
-            // non-folding point read every other `--from` takes.
+            // repository is the empty state (RFC 153 §7.3). RFC 147 §2i Addendum 1: `--from` naming the
+            // current branch while it is unpublished is the empty state too, but **without** folding the
+            // queue -- `--from` means the same thing whether the branch is published or not, and only the
+            // implicit (no `--from`) left side folds.
             let branch = current_branch::resolve_ref(&layout, None)?;
-            let from = match from {
-                Some(name) if *name == branch => {
-                    if current_branch::is_unpublished_current_branch(&layout, &branch)? {
-                        None
-                    } else {
-                        Some(resolve(name)?)
-                    }
+            let resolved_point;
+            let from_kind = match from {
+                None => prikk_store::WorktreeDiffFrom::Implicit,
+                Some(name)
+                    if *name == branch
+                        && current_branch::is_unpublished_current_branch(&layout, &branch)? =>
+                {
+                    prikk_store::WorktreeDiffFrom::UnpublishedCurrentBranch
                 }
-                Some(name) => Some(resolve(name)?),
-                None => None,
+                Some(name) => {
+                    resolved_point = resolve(name)?;
+                    prikk_store::WorktreeDiffFrom::Point(&resolved_point)
+                }
             };
-            prikk_store::diff_worktree_reporting_anchor(
-                &layout,
-                &branch,
-                from.as_ref(),
-                &args.paths,
-            )
+            prikk_store::diff_worktree_reporting_anchor(&layout, &branch, from_kind, &args.paths)
         }
     }
     .map_err(|err| err.to_string())?;
