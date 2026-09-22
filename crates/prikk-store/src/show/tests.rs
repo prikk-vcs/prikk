@@ -111,7 +111,7 @@ fn dummy_envelope() -> ObjectEnvelope {
 /// (`validate_signer_backed_recovery`) -- cleared after every successful seal, so a raw append
 /// must re-establish it itself, real commits never need to (found the same way as this file's
 /// other raw-append gaps: by trying the append alone first and letting `seal` reject it).
-fn append_raw_patch(layout: &RepositoryLayout, operations: Vec<Operation>) {
+fn append_raw_patch(layout: &RepositoryLayout, operations: Vec<Operation>) -> ObjectId {
     crate::write_active_ref_metadata(layout, "heads/main").unwrap();
     let payload = PatchPayload {
         operations,
@@ -129,6 +129,7 @@ fn append_raw_patch(layout: &RepositoryLayout, operations: Vec<Operation>) {
     Wal::for_layout(layout, DEFAULT_ACTIVE_NAME)
         .append_patch(&envelope)
         .unwrap();
+    id
 }
 
 /// Write a Blob object directly, returning its id.
@@ -922,6 +923,280 @@ fn show_delete_node_symlink_preimage_needs_no_blob() {
                 old_target: "a.txt".to_string(),
             },
         }
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Handoff control 1 (the queued-patch-paths handoff, RFC 142): a queued patch's node-addressed
+/// operation resolves its path from the folded baseline, and the same patch renders identically
+/// once sealed -- `queued` the only difference.
+///
+/// *Perturb*: resolve against the sealed tip instead of the folded baseline (the pre-fix behavior)
+/// -- with nothing sealed since genesis, the tip alone has no live node here, so the queued
+/// assertion below goes red.
+#[test]
+fn show_resolves_a_queued_patchs_node_addressed_path_identically_before_and_after_seal() {
+    let root = unique_temp_dir("show-queued-resolve");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    generation(&layout, "a.txt", b"before\n", "genesis");
+
+    std::fs::write(root.join("a.txt"), b"after\n").unwrap();
+    commit(&layout, "edit a.txt"); // queued, not sealed
+
+    let replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+        .replay()
+        .unwrap();
+    let queued_id = replay.records.last().unwrap().envelope.object_id();
+
+    let queued = show(&layout, queued_id).unwrap();
+    let [queued_patch] = queued.as_slice() else {
+        panic!("expected exactly one patch, got {queued:?}");
+    };
+    assert!(queued_patch.queued);
+    let [queued_op] = queued_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", queued_patch.operations);
+    };
+    assert_eq!(queued_op.kind, "edit-text");
+    assert_eq!(
+        queued_op.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "a queued edit-text resolves its path from the folded baseline"
+    );
+
+    seal(&layout);
+    let block_id = current_block_id(&layout);
+    let sealed = show(&layout, block_id).unwrap();
+    let [sealed_patch] = sealed.as_slice() else {
+        panic!("expected exactly one patch, got {sealed:?}");
+    };
+    assert_eq!(sealed_patch.patch_id, queued_patch.patch_id);
+    assert!(!sealed_patch.queued);
+    assert_eq!(
+        sealed_patch.operations, queued_patch.operations,
+        "a patch renders identically before and after seal, apart from `queued`"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Handoff control 2: truncation matters. Two separate queued patches, the second renaming a node
+/// the first changed the mode of -- the first patch's own path must be what it was *at that patch*,
+/// before the later rename, not the queue's later state.
+///
+/// *Perturb*: fold the whole queue for every patch instead of truncating -- the assertion below
+/// goes red, reading `b.txt` instead of `a.txt`.
+#[test]
+fn show_truncates_the_folded_queue_at_the_patch_being_shown() {
+    let root = unique_temp_dir("show-queued-truncate");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0x96; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    let perm_patch_id = append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::RenamePath(RenamePath {
+                node_id,
+                old_path: "a.txt".to_string(),
+                new_path: "b.txt".to_string(),
+            }),
+        }],
+    );
+
+    let perm_shown = show(&layout, perm_patch_id).unwrap();
+    let [perm_patch] = perm_shown.as_slice() else {
+        panic!("expected exactly one patch, got {perm_shown:?}");
+    };
+    assert!(perm_patch.queued);
+    let [perm_op] = perm_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", perm_patch.operations);
+    };
+    assert_eq!(perm_op.kind, "change-perm");
+    assert_eq!(
+        perm_op.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "the earlier patch's path is what it was at that patch, before the later rename"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Handoff control 3: a node the same queued patch later deletes reports `unresolved_node_id` for
+/// its earlier operation -- the same mechanism the sealed-block case already has
+/// (`show_reports_unresolved_and_degrades_when_a_block_edits_and_deletes_the_same_node`), applied
+/// within one still-queued patch rather than across a sealed block's several patches: control 2's
+/// truncation means a *later, separate* queued patch's deletion cannot reach back into an earlier
+/// patch's own answer, so this needs both operations in the one patch being shown.
+#[test]
+fn show_reports_unresolved_when_a_queued_patch_both_changes_and_deletes_the_same_node() {
+    let root = unique_temp_dir("show-queued-unresolved");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0x97; 32]);
+    let blob_id = create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    let patch_id = append_raw_patch(
+        &layout,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::ChangePerm(ChangePerm {
+                    node_id,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_755,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::DeleteNode(DeleteNode {
+                    path: "a.txt".to_string(),
+                    node_id,
+                    old_node_kind: NodeKind::TextFile,
+                    preimage: DeleteNodePreimage::File {
+                        old_blob_id: blob_id,
+                        old_mode: 0o100_755,
+                    },
+                }),
+            },
+        ],
+    );
+
+    let shown = show(&layout, patch_id).unwrap();
+    let [patch] = shown.as_slice() else {
+        panic!("expected exactly one patch, got {shown:?}");
+    };
+    assert!(patch.queued);
+    let [perm_op, delete_op] = patch.operations.as_slice() else {
+        panic!("expected two operations, got {:?}", patch.operations);
+    };
+    assert_eq!(perm_op.kind, "change-perm");
+    let [perm_path] = perm_op.paths.as_slice() else {
+        panic!("expected one path, got {:?}", perm_op.paths);
+    };
+    match perm_path {
+        ShowPathResolution::Unresolved { .. } => {}
+        other => {
+            panic!("expected Unresolved for a node the same patch goes on to delete, got {other:?}")
+        }
+    }
+    assert_eq!(delete_op.kind, "delete-node");
+    assert_eq!(
+        delete_op.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "DeleteNode always carries its own path from the payload, never node resolution"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Handoff control 5: `show` on a queued patch derives its folded baseline read-only
+/// (`CacheWrite::Never`) and must leave the rebuildable lifecycle cache untouched, even when it is
+/// stale relative to the sealed tip.
+///
+/// Built so the cache is genuinely stale at the moment `show` runs -- unreachable through a real
+/// `commit`, which is itself a `CacheWrite::Refresh` caller and would leave the cache fresh again
+/// before a queued patch it created could ever be shown. Here the cache is primed at the *first*
+/// sealed block directly, a second block is sealed with no reader in between (sealing alone never
+/// touches this cache), and the queued patch is appended raw (see this file's own module doc), so
+/// nothing refreshes the cache on the way to `show`.
+#[test]
+fn show_on_a_queued_patch_leaves_a_stale_lifecycle_cache_untouched() {
+    let root = unique_temp_dir("show-queued-writes-nothing");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    generation(&layout, "a.txt", b"one\n", "block one");
+
+    let cache_path = layout.cache_dir().join("lifecycle-state.v1");
+    let prime_at = |block_id: ObjectId| {
+        let crate::patch_replay::WorktreeBaseline::Published {
+            baseline_block,
+            horizon,
+        } = crate::patch_replay::resolve_worktree_baseline(&layout, "heads/main").unwrap()
+        else {
+            panic!("heads/main is published by now");
+        };
+        assert_eq!(baseline_block, block_id, "the tip this call means to prime");
+        let object_store = crate::object_store::ObjectReadSnapshot::open(&layout).unwrap();
+        crate::lifecycle_cache::incremental::resolve_baseline_state_with(
+            &layout,
+            &object_store,
+            baseline_block,
+            horizon,
+            crate::lifecycle_cache::incremental::CacheWrite::Refresh,
+        )
+        .unwrap();
+    };
+    let block_one = current_block_id(&layout);
+    prime_at(block_one);
+    let primed = std::fs::read(&cache_path).unwrap();
+
+    // A second block, sealed with no reader call in between: sealing alone never touches this cache,
+    // so it still describes block one -- now stale.
+    generation(&layout, "b.txt", b"two\n", "block two");
+    let block_two = current_block_id(&layout);
+    assert_ne!(block_one, block_two);
+    assert_eq!(
+        std::fs::read(&cache_path).unwrap(),
+        primed,
+        "sealing a second block does not by itself touch the cache"
+    );
+
+    let node_id = NodeId::from_bytes([0x99; 32]);
+    let blob_id = write_blob(&layout, BlobKind::Text, b"three\n".to_vec());
+    let queued_id = append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "c.txt".to_string(),
+                node_id,
+                blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+    );
+
+    let shown = show(&layout, queued_id).unwrap();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(
+        std::fs::read(&cache_path).unwrap(),
+        primed,
+        "show on a queued patch must not refresh the (still stale) lifecycle cache"
+    );
+
+    // The contrast that makes the equality above a real test, not a vacuous one: refreshing against
+    // the now-current tip (block two) does change the cache's bytes.
+    prime_at(block_two);
+    assert_ne!(
+        std::fs::read(&cache_path).unwrap(),
+        primed,
+        "precondition: refreshing against the newer tip does change the cache, so the staleness \
+         above was real"
     );
 
     let _ = std::fs::remove_dir_all(root);

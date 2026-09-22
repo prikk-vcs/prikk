@@ -3,9 +3,11 @@
 //! Content comes straight from the patch payloads (RFC 142 §3 — no replay needed): `EditText`
 //! carries its own before/after span text, and every other kind carries its own path, mode, or
 //! blob reference inline. Only the three node-addressed kinds (`EditText`, `ChangePerm`,
-//! `ReplaceBinary`) carry no path and need resolving, and only at a sealed block, against that
-//! block's own lifecycle state (`merge_evidence::lifecycle_state_at`, RFC 142 §3/§4) — one replay
-//! per invocation, not one per operation.
+//! `ReplaceBinary`) carry no path and need resolving: at a sealed block, against that block's own
+//! lifecycle state (`merge_evidence::lifecycle_state_at`, RFC 142 §3/§4); at a queued patch, against
+//! the folded worktree baseline truncated at that patch (the queued-patch-paths handoff) -- one
+//! replay per invocation either way, not one per operation. Only a **bare sealed patch id**, with no
+//! block or queue to resolve against, reports every node-addressed operation unresolved.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -27,12 +29,13 @@ use crate::wal::Wal;
 /// applies unchanged (RFC 142 §3, control 3): an unresolved node id is reported, not an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShowPathResolution {
-    /// A repository-relative path, read from the payload or resolved against the target block's
-    /// lifecycle state.
+    /// A repository-relative path, read from the payload or resolved against the target block's or
+    /// queued patch's lifecycle state.
     Path(String),
     /// A node-addressed operation whose node id is not live at the target — hex-encoded, matching
-    /// `prikk_hash::to_hex` (RFC 140's own format). Reachable when a block both edits and deletes
-    /// the same node, and whenever the target is a bare patch with no block to resolve against.
+    /// `prikk_hash::to_hex` (RFC 140's own format). Reachable when the target both edits and deletes
+    /// the same node before the node is deleted for good, and whenever the target is a bare sealed
+    /// patch id with no block or queue to resolve against.
     Unresolved {
         /// Hex-encoded node id that failed to resolve.
         node_id: String,
@@ -178,11 +181,14 @@ pub struct ShowPatch {
 
 /// `prikk show <block-id|patch-id>` (RFC 142): read the target, decode its patch(es), resolve
 /// node-addressed paths against the target block's own lifecycle state when the target is a
-/// block. A block's output is the union of its patches in canonical (`patch_ids`) order (control
-/// 5). A bare patch has no block context to resolve node-addressed operations against — those are
-/// reported unresolved rather than fatal, the same mechanism §3 already requires for the
-/// edit-then-delete-in-one-block case, applied here for a different reason (no target block at
-/// all, not a node missing from one).
+/// block, or a queued patch's own truncated folded baseline when it is one (the queued-patch-paths
+/// handoff). A block's output is the union of its patches in canonical (`patch_ids`) order (control
+/// 5). **Only a bare sealed patch id** has no context to resolve node-addressed operations against
+/// -- those are reported unresolved rather than fatal, the same mechanism §3 already requires for
+/// the edit-then-delete-in-one-block case, applied here for a different reason (no target block at
+/// all, not a node missing from one). RFC 142 §1: a patch id alone carries no block context, and
+/// searching for a block that contains it would make the answer depend on what else happens to be
+/// sealed -- this is deliberate, not a gap the queued case's fix also closes.
 pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     let object_store = ObjectReadSnapshot::open(layout)?;
     let Some(envelope) = object_store.read_object(id)? else {
@@ -218,19 +224,23 @@ fn show_patch(
 
 /// RFC 142 §7a, on stikk's letter 011: an id the object store does not hold may be a patch that is
 /// committed but not yet sealed -- `status --format json` prints exactly those ids. Looked up in the
-/// same active-WAL records the queue enumeration reads, and rendered as it will render once sealed,
-/// bare-patch rules included (no block context, so node-addressed operations report unresolved).
+/// same active-WAL records the queue enumeration reads, and rendered as it will render once sealed.
 ///
 /// **An id found in neither place is `Precondition`**: a user-supplied id that resolves nowhere is
 /// caller-fixable, not damage (RFC 132; RFC 147 §2d). An object a *ref* names and the store lacks is a
 /// different path, `verify`'s, and stays `Integrity` there.
+///
+/// **Node-addressed operations resolve** (the queued-patch-paths handoff, RFC 142): against the folded
+/// baseline -- the sealed tip with the queue folded on top, exactly as `commit` and `worktree-status`
+/// derive it -- truncated after this patch, so the state is the one *at* this patch, not the queue's
+/// end. A patch therefore renders identically before and after `seal`, apart from `queued`.
 fn show_queued_patch(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     id: ObjectId,
 ) -> Result<Vec<ShowPatch>> {
     let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
-    let Some(record) = replay.records.iter().find(|record| {
+    let Some(index) = replay.records.iter().position(|record| {
         record.envelope.object_type == ObjectType::Patch && record.envelope.object_id() == id
     }) else {
         return Err(PrikkError::Precondition(format!(
@@ -238,13 +248,55 @@ fn show_queued_patch(
              lists queued patch ids, `prikk log` sealed ones"
         )));
     };
+    let lifecycle = queued_patch_lifecycle_state(layout, object_store, &replay, index)?;
+    let record = replay.records.get(index).ok_or_else(|| {
+        PrikkError::Integrity(format!(
+            "queued patch at index {index} vanished from the active WAL"
+        ))
+    })?;
     Ok(vec![patch_from_envelope(
         object_store,
         &record.envelope,
         id,
-        None,
+        Some(&lifecycle),
         true,
     )?])
+}
+
+/// The folded baseline state at one queued patch, for [`show_queued_patch`]. The active WAL holding
+/// this exact patch record is what makes `read_active_ref_metadata` meaningful here: a record found in
+/// it already means the WAL is non-empty, so `Missing`/`Invalid` ownership metadata at this point is
+/// the WAL's own damage, not a state this function degrades -- the same classification
+/// `resolve_folded_worktree_baseline_up_to_queued_patch` would give it internally, surfaced here before
+/// it, only to name the ref for the call.
+fn queued_patch_lifecycle_state(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    active_replay: &crate::wal::WalReplay,
+    patch_index: usize,
+) -> Result<NodeLifecycleState> {
+    let ref_name = match crate::read_active_ref_metadata(layout)? {
+        crate::ActiveRefMetadata::Valid(ref_name) => ref_name,
+        crate::ActiveRefMetadata::Missing => {
+            return Err(PrikkError::Integrity(
+                "active WAL has records but active ref metadata is missing".to_string(),
+            ));
+        }
+        crate::ActiveRefMetadata::Invalid(reason) => {
+            return Err(PrikkError::Integrity(format!(
+                "active WAL has records but active ref metadata is malformed: {reason}"
+            )));
+        }
+    };
+    let baseline =
+        crate::patch_replay::resolve_folded_worktree_baseline_up_to_queued_patch_with_own_cache(
+            layout,
+            object_store,
+            &ref_name,
+            active_replay,
+            patch_index,
+        )?;
+    Ok(baseline.state)
 }
 
 /// One patch's operations from its envelope, wherever the envelope was read from.

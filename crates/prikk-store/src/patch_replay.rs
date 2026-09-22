@@ -861,7 +861,7 @@ pub(crate) fn resolve_folded_worktree_baseline(
         layout,
         object_store,
         ref_name,
-        active_replay,
+        &active_replay.records,
         text_cache,
         crate::lifecycle_cache::incremental::CacheWrite::Refresh,
     )
@@ -881,9 +881,70 @@ pub(crate) fn resolve_folded_worktree_baseline_without_cache_write(
         layout,
         object_store,
         ref_name,
-        active_replay,
+        &active_replay.records,
         text_cache,
         crate::lifecycle_cache::incremental::CacheWrite::Never,
+    )
+}
+
+/// [`resolve_folded_worktree_baseline_without_cache_write`], truncated after one queued patch (RFC 142,
+/// the queued-patch-paths handoff): the sealed baseline with only the records **up to and including**
+/// `patch_index` folded on top -- the state *at* that patch, the same way `lifecycle_state_at` is the
+/// state at a sealed block, so a patch's own `show` renders identically before and after `seal` (apart
+/// from `queued`). Read-only (`CacheWrite::Never`), the same as the untruncated form: `show` must not
+/// become a writer any more than `diff` may.
+///
+/// # Errors
+///
+/// Whatever the untruncated form can: the sealed baseline cannot be derived, or the active WAL's queue
+/// does not belong to `ref_name` (`Integrity` -- a caller that found `patch_index` in this exact WAL
+/// already knows which ref that is, from the same read `read_active_ref_metadata` would give here).
+/// `Integrity` too when `patch_index` is out of range for `active_replay` -- a caller found it in this
+/// exact replay, so this is the replay changing under the caller, not a usage error.
+pub(crate) fn resolve_folded_worktree_baseline_up_to_queued_patch(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+    active_replay: &WalReplay,
+    text_cache: &mut crate::lifecycle_cache::replay::TextCache,
+    patch_index: usize,
+) -> Result<FoldedWorktreeBaseline> {
+    let records = active_replay.records.get(..=patch_index).ok_or_else(|| {
+        PrikkError::Integrity(format!(
+            "queued patch index {patch_index} is out of range for {} active WAL records",
+            active_replay.records.len()
+        ))
+    })?;
+    resolve_folded_worktree_baseline_with(
+        layout,
+        object_store,
+        ref_name,
+        records,
+        text_cache,
+        crate::lifecycle_cache::incremental::CacheWrite::Never,
+    )
+}
+
+/// [`resolve_folded_worktree_baseline_up_to_queued_patch`] with a text cache of its own, for `show`
+/// (`show.rs`), which has no later use for one -- the same reason
+/// [`resolve_folded_worktree_baseline_with_own_cache`] exists, so that `show` depends on this module
+/// alone rather than also reaching into `lifecycle_cache::replay` for the cache type (the coupling
+/// gate's own module-boundary rule).
+pub(crate) fn resolve_folded_worktree_baseline_up_to_queued_patch_with_own_cache(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+    active_replay: &WalReplay,
+    patch_index: usize,
+) -> Result<FoldedWorktreeBaseline> {
+    let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
+    resolve_folded_worktree_baseline_up_to_queued_patch(
+        layout,
+        object_store,
+        ref_name,
+        active_replay,
+        &mut text_cache,
+        patch_index,
     )
 }
 
@@ -891,7 +952,7 @@ fn resolve_folded_worktree_baseline_with(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     ref_name: &str,
-    active_replay: &WalReplay,
+    records: &[crate::wal::WalRecord],
     text_cache: &mut crate::lifecycle_cache::replay::TextCache,
     cache_write: crate::lifecycle_cache::incremental::CacheWrite,
 ) -> Result<FoldedWorktreeBaseline> {
@@ -921,12 +982,12 @@ fn resolve_folded_worktree_baseline_with(
     };
 
     let mut queued_on_other_ref = None;
-    if !active_replay.records.is_empty() {
+    if !records.is_empty() {
         match crate::read_active_ref_metadata(layout)? {
             crate::ActiveRefMetadata::Valid(actual) if actual == canonical_ref => {
                 crate::lifecycle_cache::replay::apply_queued_patch_envelopes(
                     object_store,
-                    &active_replay.records,
+                    records,
                     &mut state,
                     text_cache,
                     lineage,

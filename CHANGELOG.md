@@ -13,6 +13,17 @@ consumer that resolves its own default and always passes it explicitly was affec
 commands. Every other absent ref, and the current branch named as one side of `diff --from … --to …`,
 still refuses exactly as before.
 
+### Changed — a queued patch's node-addressed operations now resolve their paths
+
+`prikk show <queued-patch-id>` previously reported `unresolved_node_id` for every `edit-text`,
+`change-perm` and `replace-binary` operation, in prose and in `show-report-v1`, because a queued (not
+yet sealed) patch had no block to resolve against. It now resolves those paths from the folded
+baseline — the sealed tip with the queue folded on top, truncated at that patch — the same state
+`commit` and `worktree-status` already derive, so a patch renders identically before and after
+`seal`. A consumer that keyed on `unresolved_node_id`'s presence to tell a queued node-addressed
+operation apart from a resolved one needs to know: a block's own output, and a bare *sealed* patch
+id's, are unchanged.
+
 ## 0.46.0 — 2026-09-22
 
 ### Added — `prikk diff`: what changed, between two points or against the worktree

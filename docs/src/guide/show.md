@@ -19,16 +19,29 @@ rename without it, so a patch whose AUTHOR signature is missing fails the comman
 rendering a rename with no signer.
 
 Three operation kinds — `EditText`, `ChangePerm`, `ReplaceBinary` — are node-addressed rather than
-path-addressed, so finding *where* they apply needs one replay of the target block's own lifecycle
-state. `show` pays that cost once per invocation, not once per operation, and there is no flag to
-skip it: a surface that named a 32-byte node id where a path belongs would have failed at the one
-thing it exists to do. If a block edits a node and then deletes it in the same block, the edit's
-own path reports as unresolved rather than failing the command — every other operation in the block
-still renders.
+path-addressed, so finding *where* they apply needs one replay of some lifecycle state — which state
+depends on what the target is (below). `show` pays that cost once per invocation, not once per
+operation, and there is no flag to skip it: a surface that named a 32-byte node id where a path
+belongs would have failed at the one thing it exists to do. If the state a node-addressed operation
+resolves against no longer has that node live — a block that edits a node and then deletes it, or a
+queued patch that does both — the edit's own path reports as unresolved rather than failing the
+command; every other operation still renders.
 
-A block's output is the union of its patches, in the block's own canonical order. A bare patch id
-works too, but has no block to resolve node-addressed operations against, so those report
-unresolved.
+**Which forms resolve a node-addressed path:**
+
+| Target | Resolves against | Node-addressed paths resolve? |
+|---|---|---|
+| A sealed block id | that block's own lifecycle state | Yes |
+| A queued (committed, unsealed) patch id | the folded baseline — the sealed tip with the queue folded on top, **truncated at that patch** — exactly the state a `seal` right now would give it | Yes |
+| A bare *sealed* patch id | nothing — a patch id alone carries no block context, and searching for a block that happens to contain it would make the answer depend on what else is sealed | No — reports `unresolved_node_id` |
+
+A block's output is the union of its patches, in the block's own canonical order.
+
+**Truncation matters.** A queued patch resolves against the state *at that patch*, not the queue's
+own end: if a later queued patch renames a path an earlier one edited, the earlier patch's own
+`edit-text` still names the path it had at the time, not the later name. This is also why the answer
+is identical before and after `seal` — sealing does not change what came before a given patch in the
+queue, only what comes after it.
 
 `show` renders `EditText`'s own before/after span — it does not synthesize a unified diff. prikk's
 edits are content-anchored spans, not line ranges, and a line-oriented rendering would assert a
@@ -68,10 +81,11 @@ stay what they were.
 
 **A queued patch can be shown before it is sealed.** An id `prikk status --format json` lists under
 the queue — committed, not yet sealed — is looked up in the active WAL when the object store does not
-hold it, and renders exactly as it will once sealed (as a bare patch), plus a `queued: yes` line in
-prose and `"queued": true` on the patch in JSON (`false` for everything read from the object store).
-An id found in neither place is a precondition (exit `1`) that names both places and where each kind
-of id is listed; it is not reported as damage.
+hold it, and renders exactly as it will once sealed — node-addressed paths resolved, from the folded
+baseline truncated at that patch (the table above) — plus a `queued: yes` line in prose and
+`"queued": true` on the patch in JSON (`false` for everything read from the object store, block or
+sealed patch alike). An id found in neither place is a precondition (exit `1`) that names both places
+and where each kind of id is listed; it is not reported as damage.
 
 **A rename names every signer.** A patch may carry several AUTHOR signatures (format 7: another
 signer's copy of the same patch merges in). A rename reports every one: prose lists them all on its
@@ -92,8 +106,8 @@ from the patch's own record.
 
 | Claim | Source anchors |
 |---|---|
-| Content comes from the patch payload directly; only node-addressed operations need a replay, and it runs once per invocation against the target block's own lifecycle state. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
-| An unresolved node-addressed operation is reported, not fatal; every other operation in the block still renders. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
+| Content comes from the patch payload directly; only node-addressed operations need a replay, once per invocation, against the target block's own lifecycle state or (for a queued patch) the folded baseline truncated at that patch. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`patch_replay.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_replay.rs) |
+| An unresolved node-addressed operation is reported, not fatal; every other operation still renders. A bare *sealed* patch id resolves nothing; a queued patch id resolves against its own truncated folded baseline. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
 | `EditText` renders its own before/after span; `ReplaceBinary` and binary blobs report id and size only, never content. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`output/show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/output/show.rs) |
 | An absent blob reference degrades that one piece of content to a named "unavailable" state rather than failing the command; every other operation still renders and the command still exits `0`. A blob the object store reports as damaged (hash mismatch, type mismatch, malformed payload, or `SNAPSHOT`-kind) propagates instead — the command fails rather than rendering it unavailable. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs) |
 | Exit `0` whichever way the target resolves; a malformed or missing id is a usage error, exit `2`; a well-formed but nonexistent target id, or a referenced object the store reports as damaged, is a failure, exit `1`. | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`args.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/args.rs) |
