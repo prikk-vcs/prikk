@@ -204,3 +204,57 @@ letters, any push or tag.
 
 **Report:** `.git-exclude/review-request/diff-hint-and-bound-note-report-v1.md`. This closes RFC 153; the
 0.46.0 release prep follows, on the owner's word.
+
+## Addendum 3 2026-09-22 — URGENT: `main` is red on macOS, from W13's fixture; the F1 fix is accepted and held
+
+**The F1 fix and the doc comment are ACCEPTED** (review `diff-hint-and-bound-note-review-v1`): `2e0a3961`,
+gates 14/14 re-run by the architect (2,248 / 0 / 30 per toolchain, **including the two cross-target clippy runs
+this round did not run — both pass**), the hint verified against the built binary in the one-queued and
+two-queued cases and against a sealed left side. **Nothing is pushed yet**: `main` is red on macOS at
+`f2e0e200`, `2e0a3961` does not change that, and all three commits go up together so CI runs red once.
+
+### 1. The failure
+
+CI run 35679281773 on `f2e0e200`, 15 of 16 jobs green, **macOS mutation test suite red**:
+
+```text
+thread 'w13_a_content_or_name_commit_refuses_is_named_with_commits_words' panicked at
+crates/prikk-cli/tests/rfc153_diff_worktree.rs:738:47:
+called `Result::unwrap()` on an `Err` value:
+Os { code: 92, kind: Uncategorized, message: "Illegal byte sequence" }
+```
+
+`std::fs::write(repo.join(OsStr::from_bytes(b"bad\xffname")), b"x")` — **APFS refuses a filename that is not
+valid UTF-8**, so the fixture cannot be created on macOS at all. The product is right; the control assumes a
+filesystem capability. **`cfg(unix)` is a statement about the API surface, not about what the filesystem
+accepts** — that is the rule to carry forward, and it is the general form of the `tree` round's lesson about
+expectations shaped by the developer's platform.
+
+`rfc147_authoring_refusal_field.rs:113-115` already diagnosed and gated exactly this case. The architect's
+review of the previous round missed it too, and has recorded that.
+
+### 2. The fix, in this round, before anything else
+
+1. **Make the non-UTF-8-name half of W13 probe the capability rather than assume it.** Attempt the write; if it
+   fails, **print one line saying the filesystem rejected the name and skip that half**, and let the rest of W13
+   (the content refusal, the byte-for-byte comparison with `commit`) run everywhere as it does now. A printed
+   skip keeps the control honest wherever the capability exists — including on a Linux filesystem that also
+   rejects it — and a wrong assumption shows up as a printed reason rather than a silent pass. This is the shape
+   accepted for the `script -qec` terminal control in the `cat` round.
+   - Do **not** gate the whole control off on non-Linux, and do not change `rfc147_authoring_refusal_field.rs`:
+     its static `#[cfg(target_os = "linux")]` is correct and carries its reason. The inconsistency between the
+     two shapes is recorded, not yours to resolve now.
+2. **Sweep every test added in the `tree`, `cat` and `diff` rounds for the same class**: a `#[cfg(unix)]` (or
+   un-gated) block whose *fixture* needs a capability the platform may not have — non-UTF-8 names, FIFOs and
+   sockets, symlink creation privileges, permission bits, case-sensitive paths, hard links. **Say what you
+   checked, not only what you changed.** Symlinks and the executable bit are already known good on macOS in this
+   suite; name anything else you find rather than fixing it silently.
+3. Report as a follow-up: `.git-exclude/review-request/macos-non-utf8-name-fix-report-v1.md`. Gates as usual;
+   both cross-target runs are not required by CONTRIBUTING.md:60-63 for this change, but run them anyway — a
+   red `main` costs more than they do. **Note what they cannot do:** cross-target clippy compiles for macOS and
+   never runs a test there, so it could not have caught this. Only CI's macOS job does.
+
+### 3. Then
+
+The architect pushes `5609efc6`, `2e0a3961` and this fix together and reads every CI job by name. The 0.46.0
+release prep follows on the owner's word — **no cut while any supported platform is red.**
