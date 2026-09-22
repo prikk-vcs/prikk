@@ -25,7 +25,8 @@ not adopted), a bare block id, or the worktree (RFC 153).
   inferred from similar content; a chain `a → b → c` is one `renamed` entry, and a file deleted and created again
   is never `renamed`. `--path` (repeatable, exact) filters the output and selects a rename by either path.
 - **Binary content is never printed:** a binary entry shows sizes and ids, and names `prikk cat` (with the block
-  each side resolved to) for reading either side.
+  each side resolved to) for reading either side — except a bare diff's left side with unsealed commits queued,
+  which is a state no block names, so it names the queue instead of a command that would read the wrong bytes.
 - **The line diff is shortest within a work bound.** It is a shortest edit script over lines, deterministic, with
   no dependency; above **45,000,000 search steps** per file — a count of work done, never time, so the same inputs
   give the same output on every machine — it stops and shows the unresolved region as deleted and re-added. The

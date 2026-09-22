@@ -44,13 +44,15 @@ pub(crate) const CONTEXT_LINES: usize = 3;
 /// nominal `(N+M)·D`, which the reductions make wrong.
 ///
 /// **How the value was chosen** (§6a C 2 leaves the derivation to the increment): the worst measured shape must
-/// stay well under a second on the *slower* of the two machines measured -- `5.0 s` there against `2.3 s` here for
-/// the same input, a factor of 2.17 (the second shape gave 1.93), taken as 2.2. The timing instrument
-/// (`worst_case_timing`, `--ignored`, release) ran each shape unbounded and measured **2.3 to 5.0 ns per step**
-/// here; the worst was two files over a 5-line alphabet, at 5.04 ns, because long snakes are cheap to count and
-/// costly to touch. On the slower machine that is 5.04 × 2.2 = **11.1 ns per step**, and half a second at that
-/// rate is 0.5 / 11.1e-9 = 45.1 million steps, so the constant is **45,000,000**. The same instrument, run at the
-/// bound, is what `report §2` cites for what it does to each shape.
+/// stay well under a second. The timing instrument (`worst_case_timing`, `--ignored`, release) ran each shape
+/// unbounded on two machines and measured **2.3 to 5.0 ns per step** on both, agreeing within a couple of
+/// percent -- a first draft of this derivation read a 2.2x factor between them into the constant, but that
+/// factor was one machine's own load at the moment it was measured, not a hardware difference, and was
+/// withdrawn once both were measured idle. The worst shape was two files over a 5-line alphabet, at ~5 ns per
+/// step, because long snakes are cheap to count and costly to touch; **45,000,000** steps keeps that shape at
+/// about 220 ms on both machines measured -- comfortably under the half-second target, and about 2x more
+/// conservative than the target alone would require. The same instrument, run at the bound, is what `report §2`
+/// cites for what it does to each shape.
 pub(crate) const WORK_BOUND_STEPS: u64 = 45_000_000;
 
 /// An edit script, and whether the search that produced it finished.

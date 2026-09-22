@@ -199,11 +199,35 @@ fn details(entry: &DiffEntry) -> String {
     }
 }
 
-/// The `prikk cat` argument that reads a side: the block it resolved to, never the name it was given, because a
-/// ref may move before the reader runs the command. **The worktree has no block:** a worktree side is read as
-/// the file itself, so the hint names only a sealed side.
-fn cat_ref(point: &DiffPoint) -> Option<String> {
-    point.target_block_id.map(|id| id.to_string())
+/// One `prikk cat` hint line for one side of a binary entry, printed under the "read a side with…" header
+/// (RFC 153 §6b corollary, the round's F1). **A hint must reproduce the state its report describes, or it
+/// must not be printed** — the same rule Stage 1 applied to a hint that named a movable ref instead of the
+/// block it resolved to.
+///
+/// A worktree side is read as the file itself, never through `cat`. A left side that carries queued, unsealed
+/// commits is the sealed tip **plus** that queue — a state no block names — so no `--ref` line is printed for
+/// it; the reader is told why instead, so they are never handed a command that reads different bytes from the
+/// side the entry describes. Every other side names the block it resolved to.
+fn print_cat_hint(point: &DiffPoint, path: &str) {
+    if point.worktree {
+        println!("    (the worktree side is the file itself, at {path})");
+        return;
+    }
+    if let Some(count) = point.queued_patches {
+        if count > 0 {
+            println!(
+                "    the left side includes {} that no block names, so {path} can be read only after \
+                 `prikk seal`",
+                plural(count, "queued commit", "queued commits")
+            );
+            return;
+        }
+    }
+    if let Some(block) = point.target_block_id {
+        println!("    prikk cat --path {path} --ref {block}");
+    }
+    // `target_block_id: None` and no queue is an unpublished branch's empty left side, which has no entries
+    // to carry a binary hint for in the first place.
 }
 
 fn print_entry(report: &DiffReport, entry: &DiffEntry) {
@@ -241,17 +265,11 @@ fn print_entry(report: &DiffReport, entry: &DiffEntry) {
     if binary_sides {
         // §7.6: `diff` never prints binary bytes; `cat` is the bounded command whose job is bytes.
         println!("  read a side with `prikk cat --path <p> --ref <block-id>`:");
-        if let (Some(from), Some(block)) = (&entry.from, cat_ref(&report.from)) {
-            println!("    prikk cat --path {} --ref {block}", from.path);
+        if let Some(from) = &entry.from {
+            print_cat_hint(&report.from, &from.path);
         }
-        if let (Some(to), Some(block)) = (&entry.to, cat_ref(&report.to)) {
-            println!("    prikk cat --path {} --ref {block}", to.path);
-        }
-        if report.to.worktree && entry.to.is_some() {
-            println!(
-                "    (the worktree side is the file itself, at {})",
-                entry.path
-            );
+        if let Some(to) = &entry.to {
+            print_cat_hint(&report.to, &to.path);
         }
     }
 }

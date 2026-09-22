@@ -1004,3 +1004,58 @@ fn w12_above_the_bound_the_entry_says_so_and_still_applies() {
     );
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// Control W16 (RFC 153 §6b's corollary, the round's F1): the left side of a bare diff with **queued, unsealed
+/// commits** is the tip *plus* that queue -- a state no block names. A binary entry's `prikk cat` hint must not
+/// print a `--ref <block>` line for that side (it would read the sealed tip's bytes, not the side the entry
+/// describes); it names the queue instead. The right side's hint is unaffected.
+#[test]
+fn w16_the_cat_hint_names_the_queue_instead_of_a_block_it_would_lie_about() {
+    let w = worktree_fixture("rfc153-wt-w16");
+    // Queue one commit -- the worktree now matches the queue, so nothing is left to diff yet.
+    ok(&w.repo, &["commit", "-m", "queued"]);
+    assert!(entries(&report(&w.repo, &[])).is_empty());
+    // A fresh, uncommitted binary change on top of the queue: something for the entry list to show while
+    // `queued_patches` is still 1.
+    write(&w.repo, "img.bin", b"\xff\x00CCCCCCCC");
+
+    let r = report(&w.repo, &[]);
+    assert_eq!(
+        r.get("from").get("queued_patches"),
+        &Value::Number("1".to_string()),
+        "precondition of this control: the left side must carry the queue"
+    );
+    let entry = entries(&r)
+        .into_iter()
+        .find(|e| e.get("path").as_str() == "img.bin")
+        .expect("img.bin is a binary entry");
+    assert_eq!(entry.get("status").as_str(), "binary");
+
+    let prose = stdout_of(&w.repo, &["diff"]);
+    assert!(
+        prose.contains("the left side includes 1 queued commit that no block names"),
+        "{prose}"
+    );
+    assert!(
+        prose.contains("can be read only after `prikk seal`"),
+        "{prose}"
+    );
+    // No `--ref <block-id>` line printed for img.bin on the left side: scan the binary-hint block for a `--ref`
+    // that is not immediately followed by `worktree` (which would be the right side's line, absent here since
+    // the worktree has no block at all -- confirmed separately by control W2/W7's binary assertions).
+    let hint_block = prose
+        .split("read a side with")
+        .nth(1)
+        .expect("img.bin's binary hint block");
+    // Skip the fixed header line (`` `prikk cat --path <p> --ref <block-id>`: ``), which always contains the
+    // literal text `--ref`; check only the per-side lines under it.
+    let per_side_lines = hint_block
+        .split_once('\n')
+        .expect("lines under the header")
+        .1;
+    assert!(
+        !per_side_lines.contains("--ref "),
+        "no side of this entry should print a `--ref <block>` hint: {per_side_lines}"
+    );
+    let _ = std::fs::remove_dir_all(&w.repo);
+}

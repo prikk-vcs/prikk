@@ -111,9 +111,11 @@ baseline, so a rename is paired only where the two agree: across branches, read 
 
 A binary entry shows the size of each side and an **id** — and never a byte. The prose names `prikk cat` for
 reading a side, with the **block** each side resolved to rather than the name you gave (a ref may move before you
-run the command). The worktree side has no block: it is the file itself. For a binary file on the worktree side,
-the id is the one the file would have once committed. **`content_id` exists for binary files only**, exactly as it
-does in [`prikk tree`](tree-and-cat.md): a text file is its own content.
+run the command). The worktree side has no block: it is the file itself. **The left side of a bare `diff` with
+queued, unsealed commits has no block either** — it is the sealed tip *plus* that queue, a state no block names —
+so no `--ref` line is printed for it; the prose instead says the side "can be read only after `prikk seal`". For
+a binary file on the worktree side, the id is the one the file would have once committed. **`content_id` exists
+for binary files only**, exactly as it does in [`prikk tree`](tree-and-cat.md): a text file is its own content.
 
 ### Paths `commit` refuses
 
