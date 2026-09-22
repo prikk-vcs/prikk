@@ -735,29 +735,44 @@ fn w13_a_content_or_name_commit_refuses_is_named_with_commits_words() {
     {
         use std::os::unix::ffi::OsStrExt;
         let name = std::ffi::OsStr::from_bytes(b"bad\xffname");
-        std::fs::write(repo.join(name), b"x").unwrap();
-        let r = report(&repo, &[]);
-        assert_eq!(
-            r.get("unsupported_paths").as_array().len(),
-            2,
-            "the unrepresentable name is named too"
-        );
-        let named: Vec<String> = r
-            .get("unsupported_paths")
-            .as_array()
-            .iter()
-            .map(|u| u.get("refusal").as_str().to_string())
-            .collect();
-        let committed = run(&repo, &["commit", "-m", "refused"]);
-        let stderr = String::from_utf8_lossy(&committed.stderr)
-            .trim_end()
-            .to_string();
-        assert!(
-            named
-                .iter()
-                .any(|refusal| stderr == format!("error: {refusal}")),
-            "commit said {stderr:?}, diff named {named:?}"
-        );
+        // `cfg(unix)` is a statement about the **API surface** (`OsStr::from_bytes`, creating a file at
+        // all) -- never a promise that a given filesystem will accept a given name. APFS (macOS) refuses to
+        // create a non-UTF-8 name outright, so the write itself is the capability probe, not an assumption:
+        // on a filesystem that refuses it, this half is skipped with a printed reason rather than assumed
+        // to work everywhere `cfg(unix)` compiles. Where it does work (most Linux filesystems, including
+        // CI's), the assertions below still run.
+        match std::fs::write(repo.join(name), b"x") {
+            Ok(()) => {
+                let r = report(&repo, &[]);
+                assert_eq!(
+                    r.get("unsupported_paths").as_array().len(),
+                    2,
+                    "the unrepresentable name is named too"
+                );
+                let named: Vec<String> = r
+                    .get("unsupported_paths")
+                    .as_array()
+                    .iter()
+                    .map(|u| u.get("refusal").as_str().to_string())
+                    .collect();
+                let committed = run(&repo, &["commit", "-m", "refused"]);
+                let stderr = String::from_utf8_lossy(&committed.stderr)
+                    .trim_end()
+                    .to_string();
+                assert!(
+                    named
+                        .iter()
+                        .any(|refusal| stderr == format!("error: {refusal}")),
+                    "commit said {stderr:?}, diff named {named:?}"
+                );
+            }
+            Err(err) => {
+                println!(
+                    "skipping the non-UTF-8 name half of this control: the filesystem refused to create \
+                     the name ({err})"
+                );
+            }
+        }
     }
     let _ = std::fs::remove_dir_all(&repo);
 }
