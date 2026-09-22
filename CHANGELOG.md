@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.46.0 — 2026-09-22
 
 ### Added — `prikk diff`: what changed, between two points or against the worktree
 
