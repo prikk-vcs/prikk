@@ -767,6 +767,18 @@ fn w13_a_content_or_name_commit_refuses_is_named_with_commits_words() {
                 );
             }
             Err(err) => {
+                // CI runs `cargo test` without `--nocapture`: a skip line is invisible on a passing test, so a
+                // green `w13` here would be indistinguishable from zero assertions having run, with nothing in
+                // the log to say so. This half has teeth only on Linux -- most Linux filesystems accept a
+                // non-UTF-8 name and always have -- so a skip *there* is not a legitimate environment
+                // difference the way a missing tool is; it is this control silently losing its coverage.
+                // `#[cfg(target_os = "linux")]`, not a runtime `cfg!()` check, so the two arms are resolved
+                // once per compile target rather than asserted on a value clippy sees is already constant.
+                #[cfg(target_os = "linux")]
+                panic!(
+                    "this filesystem refused a non-UTF-8 name on Linux, where the control must run: {err}"
+                );
+                #[cfg(not(target_os = "linux"))]
                 println!(
                     "skipping the non-UTF-8 name half of this control: the filesystem refused to create \
                      the name ({err})"
