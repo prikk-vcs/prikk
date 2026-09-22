@@ -551,3 +551,49 @@ the suite. **CHANGELOG `### Fixed`:** `worktree-status` hung on a FIFO at a decl
 directory there was reported as a rename. **`### Changed`:** `content_changed`/`mode_changed` are `null` for a
 destination that is not a regular file, symlinks included.
 
+
+## 2i. RULED 2026-09-22 — an unpublished current branch is not an absent ref
+
+**From stikk's letter 015**, and **reproduced by the architect on the released 0.46.0 binary**, one fresh
+repository, one untracked file, nothing sealed:
+
+| invocation | 0.44.0 | 0.46.0 |
+|---|---|---|
+| `worktree-status` (no `--ref`) | the report, exit 0 | **the report, exit 0** |
+| `worktree-status --ref heads/main` | the report, exit 0 | **`precondition not met: ref heads/main does not exist in this repository`, exit 1** |
+| `log --ref heads/main` | empty history, exit 0 | the same refusal |
+| `tree --ref heads/main` | *(new in 0.46.0)* | the same refusal, while bare `tree` prints `target block: <not published>`, exit 0 |
+| `diff --from heads/main` | *(new in 0.46.0)* | the same refusal, while a bare `diff` compares against the empty state |
+| `status` | — | prints `heads/main RefState: <not published>` **and** `current branch: heads/main` |
+
+**The refusal is false.** `heads/main` is the repository's current branch: `status` names it, `commit` authors to
+it, and every reader answers for it when it is *not* named. Naming the same ref, in the same repository, at the
+same moment, cannot make it stop existing. The refusal sweep's `require_existing_ref` conflated **"has a published
+`RefState`"** with **"exists"**, and for the current branch those differ until the first `seal`.
+
+**Ruled:**
+
+1. **A named ref that is the repository's current branch is read, published or not**, and answers **exactly what
+   the implicit path answers** — the empty state, exit 0. The reports already say which it is
+   (`<not published>`), so nothing is hidden by reading it.
+2. **Every other ref with no `RefState` keeps the refusal.** A mistyped branch name is the case the sweep was
+   written for, and it is untouched. So is a received ref, and so is a damaged one (`integrity error: ref <ref>
+   is not published`, RFC 153's own change — note the collision of *words*: damage says "is not published" of a
+   ref whose pointer is gone, while an unpublished branch is simply new. The fix must not make those two answer
+   alike).
+3. **It applies to every reader that takes a ref or a point**, because the seam is the resolver, not the command:
+   `worktree-status`, `log`, `tree`, `cat`, `diff --from`, and `checkout`'s read-only modes. The parity to assert
+   is *implicit equals explicit*, per command, on a fresh repository.
+4. **RFC 157 §3 and RFC 153 §7.3 are corrected by this:** their "an explicit absent `--ref` refuses" stands only
+   for a ref that is genuinely absent. The current branch named explicitly is not that ref.
+
+**A third voice, recorded and not ruled:** in the same state `prikk branch list` prints `no branches` while
+`status` prints `current branch: heads/main`, and `branch create heads/side` refuses with *"ref heads/main does
+not exist in this repository"* — so a second branch cannot be made before the first seal. Whether `branch list`
+should name an unpublished current branch is a question for the consumer that parses it; it is asked in the reply
+to stikk 015 and is **not** part of this fix.
+
+**Why this is the architect's defect, not the sweep round's:** the sweep did exactly what its handoff said, and
+the handoff said "an explicitly named absent ref refuses" without ever asking what *absent* means for a branch
+that has never been sealed. The same unexamined word then went into RFC 157 §3 and RFC 153 §7.3, which is why the
+seam widened in 0.46.0 instead of being noticed.
