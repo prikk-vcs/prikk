@@ -140,6 +140,44 @@ do not — 32,768 shared lines in reverse order took 2.3 s and 5.0 s on the two 
 6. **§6's "shortest edit script" wording** now reads: shortest within a documented work bound, and a valid script
    beyond it.
 
+## 6b. Amended 2026-09-22 — the worktree side, as built and ruled
+
+The worktree round (`diff-worktree-report-v1.md`, review `diff-worktree-review-v1`) asked five questions §6.2 did
+not answer. Ruled, and this is what `diff-report-v1` means:
+
+1. **A lone `--to` is a usage error.** §2 gives it a left side in words — "the current branch's tip" — but not
+   whether that tip carries its queued commits, and a bare diff's does. Refusing decides nothing that would have
+   to be undone; granting it would settle the queue question by accident. Two shapes work: `--from` with `--to`,
+   and `--from` alone.
+2. **The left side of a bare diff is the tip with its queue folded on top, and the report says so.** `from`
+   carries `queued_patches`, and the prose says "plus N queued commits not yet sealed". A report that folded the
+   queue silently would contradict the commit it predicts. `target_block_id` is the **sealed** block, `null` for
+   an unpublished branch, and the string `"worktree"` on the right side.
+   - **Corollary (the round's F1):** the folded left side is a state **no block names**. Any place that hands a
+     reader a block for that side — the `prikk cat` hint on a binary entry, the guide, the CHANGELOG — must say
+     so instead of naming the sealed tip, whose content is not the side being described.
+3. **`unsupported_paths[]` elements are objects** — `{"path", "refusal"}` — because "named with `commit`'s
+   refusal" needs somewhere to put the refusal, and a bare string would make a consumer parse prose.
+4. **A live rename declaration `commit` refuses fails the whole call**, with `commit`'s own message and nothing on
+   stdout. *What `commit` would author* has no value when `commit` would refuse; showing the diff as if the
+   declaration were absent would describe a state no command can produce.
+5. **The dirty and provisional markers do not gate `diff`, and the report carries no note about them.** They gate
+   *history*, not a look. In an interrupted-materialization state a file the interrupted write never created reads
+   as `deleted`, which is what `commit` would have signed and the reason `commit` refuses. `worktree-status` is
+   silent in that state too and `worktree-status-report-v1` has no field for it, so a `diff`-only field would
+   split the two surfaces; **one shared field for both is a ROADMAP candidate**, not this RFC's.
+
+**The work bound of §6a C is per entry**, not per call. A per-call budget would be cheaper in the worst case and
+wrong in kind: one file's rendering would depend on which other files happened to change, so the same two contents
+would diff differently in different reports. Per entry keeps a file's answer a function of that file, and the cost
+of many pathological files in one diff is the documented consequence.
+
+**Read-only is a property of the derivation, not of the caller's intent.** The baseline derivation `commit`,
+`worktree-status` and `branch switch` share refreshes the rebuildable cache under `.prikk/cache/`; `diff` uses the
+same derivation with that refresh switched off, so it writes nothing at all. `worktree-status` keeps the refresh —
+it is deliberate and harmless — and its guide, which said "no writes are performed", is corrected rather than its
+behaviour.
+
 ## 7. Amended 2026-09-17, for 0.46.0 — what 0.43.0 to 0.45.0 changed under this design
 
 Proposed again for **0.46.0 "comparing"**, beside RFC 157 (a tree listing and a file's bytes at a point), which

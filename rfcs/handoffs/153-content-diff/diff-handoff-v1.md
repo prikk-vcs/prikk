@@ -144,3 +144,63 @@ Everything in the original Stage 2 and Stage 3 lists, plus the cost bound (item 
 inherits the same call.
 
 **Report:** `.git-exclude/review-request/diff-worktree-report-v1.md`.
+
+## Addendum 2 2026-09-22 — the round is accepted; one fix before the 0.46.0 cut
+
+**Accepted** (review `diff-worktree-review-v1`): `5609efc6`. Gates 14/14 confirmed by the architect on that
+commit (2,247 / 0 / 30 per toolchain), and the probes agree with the report on every status, the round trip, the
+fresh repository, ignore, the three refusal shapes (byte for byte against what `commit` prints), the refused
+declaration, read-only, and the bound's marking, determinism and `patch(1)` round trip. **RFC 153 gains §6b**,
+which carries the five rulings of your §8.
+
+**Two things the architect did in the record commit, so you do not:** `worktree-status.md`'s two false sentences
+(§7.1 — you were right not to touch them), and `guide/diff.md`'s line about `--from` on another branch pairing
+renames only where node ids agree.
+
+**Your own perturbation discipline is what made W10 visible.** A perturbation that goes green means *either* the
+control is weak *or* another layer is holding — and only reading the other layer says which. That is the
+generalisation worth keeping from this round.
+
+### 1. The one required fix — the `cat` hint can name a block that is not the side it describes
+
+On a bare `prikk diff` whose branch has queued, unsealed commits, the left side is the tip **plus** the queue,
+which **no block names**. The binary hint prints the sealed tip's block id, and running the command it prints
+returns different bytes from the side the entry describes. Measured by the architect:
+
+```text
+from: heads/main (block ae705d5f…, plus 1 queued commit not yet sealed)
+binary b.bin (binary: 8 bytes, id 7601f307… -> 10 bytes, id 58eca2c4…)
+    prikk cat --path b.bin --ref ae705d5f…   <- the sealed tip's 6 bytes, not the 8-byte side above
+```
+
+This is the class Stage 1 already caught once (a hint naming a movable ref): **a hint must reproduce the state its
+report describes, or it must not be printed.**
+
+- **Fix:** when the left side carries queued patches (`queued_patches` greater than zero), print no
+  `cat --ref <block>` line for it. Print instead one line saying the left side includes N queued commits that no
+  block names, so it can be read only after `seal`. The right-side and two-point hints are unchanged.
+- **Control:** a binary entry in that state prints no `--ref` line for the left side, and the line it prints
+  instead names the queue. *Perturb:* print the sealed tip's block anyway — the control must go red.
+- **The two sentences that promise it, in the same commit:** `guide/diff.md`'s "with the **block** each side
+  resolved to", and the CHANGELOG's "(with the block each side resolved to)".
+
+### 2. One sentence in `WORK_BOUND_STEPS`'s doc comment — the machine factor, withdrawn
+
+The architect re-ran your timing instrument in a release build on the second machine: **2,711 ms** for the
+reversal shape against your 2,730 ms, and **14,472 ms** against your 14,750 ms. The two machines are within a
+couple of percent, not 2.17× apart; the Stage 1 figures (5.0 s, 28.0 s) were taken while that machine was busy,
+and reading them as hardware was the architect's error. The worst shape costs **221 ms at the bound** there, so
+the constant is about twice as conservative as its derivation says.
+
+**Do not change the value.** Replace the 2.2× step of the derivation with what is now measured on both machines
+(~5 ns/step, worst shape ~220 ms at the bound on each), so the next person does not re-derive from a factor that
+is not there.
+
+### 3. Nothing else
+
+Stage 2 and Stage 3 are done, and `guide/diff.md`, `commands.md`, `git-mapping.md`, `show.md`, `ignore.md`, the
+CHANGELOG and the two RFC 133 rows are accepted. Not yours, as always: `rfcs/`, `ROADMAP.md`, `MILESTONES.md`, the
+letters, any push or tag.
+
+**Report:** `.git-exclude/review-request/diff-hint-and-bound-note-report-v1.md`. This closes RFC 153; the
+0.46.0 release prep follows, on the owner's word.

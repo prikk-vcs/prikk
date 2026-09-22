@@ -101,7 +101,10 @@ The scanner is intentionally conservative:
 - `.prikk/` metadata is ignored;
 - existing path-safety validation is reused;
 - non-ASCII paths remain unsupported until Unicode NFC normalization is implemented;
-- no writes are performed.
+- no writes are performed **in the worktree**. Under `.prikk/`, the baseline derivation this command shares
+  with `prikk commit` refreshes the rebuildable cache (`cache/lifecycle-state.v1`), which is best-effort and never
+  authoritative. [`prikk diff`](diff.md) uses the same derivation with that refresh switched off, and writes
+  nothing at all.
 
 For the exact repository path validator rules, see
 [path and worktree safety](../reference/path-safety.md). A path matched by a `.prikkignore` rule at
@@ -113,7 +116,7 @@ the repository root never appears in the untracked list at all — see
 | Claim | Source anchors |
 |---|---|
 | `worktree-status` compares the worktree against the replay-derived baseline `commit` shares — the sealed lineage with any already-queued patches folded on top — not a stored snapshot Blob. | [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs), [`patch_replay.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_replay.rs) |
-| It writes nothing and reports missing, modified, untracked, and unsupported-path changes. | [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs) |
+| It writes nothing in the worktree, may refresh the rebuildable baseline cache under `.prikk/cache/`, and reports missing, modified, untracked, and unsupported-path changes. | [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs) |
 | Each entry's `authoring` verdict and `refusal` reason come from the same classifier `prikk commit` refuses with, so the two commands cannot disagree about a path. | [`node_authoring.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/worktree_patch/node_authoring.rs), [`worktree_status.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_status.rs) |
 | A contradicted rename declaration is refused by `commit` and is reported as a refused *declaration*, not a refused path — and can sit in a `clean` worktree. | [`rfc147_authoring_refusal_field.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_authoring_refusal_field.rs), [`rfc147_declaration_resolution.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_declaration_resolution.rs) |
 | Each declaration's `resolution` is what `commit` then does, and a refusal's text is commit's own message; every `prikk mv` a refusal names is run in the state that produced it. | [`declaration_resolution.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/declaration_resolution.rs), [`rfc147_declaration_resolution.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/tests/rfc147_declaration_resolution.rs) |

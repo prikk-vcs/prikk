@@ -103,6 +103,10 @@ nothing here infers one from similar content. A rename is the same *file* at a n
 
 `--path` selects a renamed entry by **either** its old or its new path.
 
+With `--from <a point on another branch>`, the worktree side takes node identity from the **current** branch's
+baseline, so a rename is paired only where the two agree: across branches, read a `deleted` plus an `added` as
+"these two paths were not paired here", not as "no rename was declared".
+
 ### Binary files
 
 A binary entry shows the size of each side and an **id** — and never a byte. The prose names `prikk cat` for
