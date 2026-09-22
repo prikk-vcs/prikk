@@ -51,8 +51,9 @@ the header reads `block: <id>` instead of `ref: <name>`.
   lists `src/main.rs` and never `srcx/a.txt` or `src.rs`. The replay is whole-tree either way, so a prefix
   shortens the output, not the work.
 - **Without `--ref`** it lists the current branch. In a fresh repository whose branch has never been
-  sealed, that is an empty listing with exit `0`. An explicit `--ref` that does not exist refuses with
-  `ref <name> does not exist in this repository`.
+  sealed, that is an empty listing with exit `0` — and naming that same branch explicitly with `--ref`
+  answers exactly the same way, since the current branch is never absent, published or not. An explicit
+  `--ref` naming any *other* absent name refuses with `ref <name> does not exist in this repository`.
 - **A received ref** (`remotes/…`) lists like any other.
 - **Cost.** One replay of the point, anchored at its nearest checkpoint, like `checkout --patch-plan`.
 
@@ -139,8 +140,9 @@ consumer can decide between rendering inline and downloading — and show a size
 
 ## When `tree` and `cat` refuse
 
-- An absent ref, a block id the repository does not hold, or an id naming another kind of object: the
-  point resolver's preconditions, exit `1` — see [Commands](../reference/commands.md).
+- An absent ref (never the current branch, which is never absent, published or not), a block id the
+  repository does not hold, or an id naming another kind of object: the point resolver's preconditions,
+  exit `1` — see [Commands](../reference/commands.md).
 - A `--ref` value that is neither a ref name nor a block id, or a `--prefix` that is not a
   repository-relative path: usage, exit `2`.
 - An operation replay does not support, anywhere in the history: the whole call fails, and nothing is

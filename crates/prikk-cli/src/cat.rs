@@ -127,12 +127,14 @@ pub(crate) fn binary_to_terminal_refusal(
 pub(crate) fn run_cat(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_cat_args(args)?;
     let layout = open_repository(args.root)?;
-    let name = current_branch::resolve_ref(&layout, args.ref_name.clone())?;
-    // RFC 157 §2: a received ref is read; reading is not adopting. An explicit absent ref refuses here, and
-    // an unpublished current branch has no content at all, which the path refusal below says.
+    let name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    // RFC 157 §2, as amended by RFC 147 §2i: a received ref is read; reading is not adopting. An
+    // unpublished current branch has no content at all, which the path refusal below says -- named
+    // explicitly with `--ref` or not. Any other absent ref refuses here.
+    let unpublished_current_branch = current_branch::is_unpublished_current_branch(&layout, &name)?;
     let point = match prikk_store::resolve_point(&layout, &name, prikk_store::ReceivedRefs::Read) {
         Ok(point) => point,
-        Err(prikk_error::PrikkError::Precondition(message)) if args.ref_name.is_none() => {
+        Err(prikk_error::PrikkError::Precondition(message)) if unpublished_current_branch => {
             return Err(CliError::Failure(format!(
                 "precondition not met: path {} does not exist at {name} ({message})",
                 args.path

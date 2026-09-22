@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — an explicit `--ref`/`--from` naming the current branch, unpublished, falsely refused
+
+0.45.0 and 0.46.0 refused `ref heads/<branch> does not exist in this repository` when `--ref` (or
+`diff`'s `--from`, naming the worktree's baseline) named the repository's own current branch and it had
+never been sealed — the one state every *implicit* read already tolerated. `prikk worktree-status --ref`,
+`log --ref`, `tree --ref`, `cat --path … --ref`, `diff --from` and `checkout --plan-only --ref` all
+answer for the current branch exactly as leaving `--ref`/`--from` off does now, published or not; a
+consumer that resolves its own default and always passes it explicitly was affected on every one of these
+commands. Every other absent ref, and the current branch named as one side of `diff --from … --to …`,
+still refuses exactly as before.
+
 ## 0.46.0 — 2026-09-22
 
 ### Added — `prikk diff`: what changed, between two points or against the worktree

@@ -77,16 +77,11 @@ fn parse_tree_args(args: Vec<String>) -> std::result::Result<TreeArgs, CliError>
 pub(crate) fn run_tree(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_tree_args(args)?;
     let layout = open_repository(args.root)?;
-    let explicit = args.ref_name.is_some();
     let name = current_branch::resolve_ref(&layout, args.ref_name)?;
-    // RFC 157 §3: without `--ref`, an unpublished current branch lists nothing, with exit 0 (the refusal
-    // sweep's implicit-branch rule). An explicit absent ref refuses, through the resolver below.
-    if !explicit
-        && matches!(
-            prikk_store::require_existing_ref(&layout, &name, prikk_store::ReceivedRefs::Read),
-            Err(prikk_error::PrikkError::Precondition(_))
-        )
-    {
+    // RFC 157 §3, as amended by RFC 147 §2i: an unpublished current branch lists nothing, with exit 0
+    // -- naming it explicitly with `--ref` answers exactly as leaving `--ref` off does. Any other
+    // absent ref, named explicitly, refuses through the resolver below.
+    if current_branch::is_unpublished_current_branch(&layout, &name)? {
         let listing = prikk_store::unpublished_branch_tree_listing(&name, args.prefix.as_deref());
         print_listing(&layout, &listing, false, args.format_json);
         return Ok(());

@@ -18,7 +18,6 @@ use crate::{current_branch, open_repository, warn_anchor_fallbacks};
 pub(crate) fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_checkout_args(args)?;
     let layout = open_repository(args.root)?;
-    let explicit_ref = args.ref_name.is_some();
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     // RFC 132 refusal sweep, rules 1-3: every checkout mode refuses an absent or received target first,
     // before any question of what the target holds (the snapshot modes' "not a checkpoint").
@@ -34,9 +33,12 @@ pub(crate) fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliErro
             .map_err(|err| err.to_string())?;
             return run_checkout_write(&layout, args.mode, &ref_name);
         }
-        // Addendum 3: `--plan-only` on the implicit current branch keeps answering `<not published>` in a
-        // fresh repository -- a legitimate state, as for `log` and `worktree-status` (rule 4).
-        CheckoutMode::PlanOnly if !explicit_ref => {
+        // Addendum 3, as amended by RFC 147 §2i: `--plan-only` on the current branch keeps answering
+        // `<not published>` in a fresh repository -- a legitimate state, as for `log` and
+        // `worktree-status` (rule 4) -- whether the branch is named with `--ref` or left implicit.
+        CheckoutMode::PlanOnly
+            if current_branch::is_unpublished_current_branch(&layout, &ref_name)? =>
+        {
             let plan = prepare_checkout_plan(&layout, &ref_name).map_err(|err| err.to_string())?;
             print_checkout_plan(&layout, &plan, output::point_label(false));
             return Ok(());

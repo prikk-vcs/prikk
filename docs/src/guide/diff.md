@@ -38,8 +38,9 @@ That has consequences worth knowing:
   `queued_patches`. `--from <point>` compares against that point exactly, queue or no queue.
 - **A fresh repository** — a current branch that has never been sealed — has the **empty state** on the left:
   every file `commit` would author is `added`, and the exit code is `0`
-  (`from: heads/main (not published: the empty state)`). An explicit `--from` naming a ref that does not exist
-  refuses.
+  (`from: heads/main (not published: the empty state)`). Naming that same branch explicitly with
+  `--from` answers exactly the same way — the current branch is never absent, published or not.
+  `--from` naming any *other* ref that does not exist refuses.
 - **It writes nothing.** No lock, no cache, no index, no marker: `prikk diff` reads. It works while another
   process holds the active lock, and while the worktree is provisional (materialized from a snapshot and not yet
   verified) or an interrupted materialization left its marker — states in which `commit` refuses. It does not
@@ -193,7 +194,8 @@ that entry's header. The same two inputs give the same output on every run and e
 
 - **An absent ref, or a block id the repository does not hold** — precondition, exit `1`: `ref heads/x does not
   exist in this repository`, `block <id> is not in this repository`. An id naming a patch, not a block, refuses
-  too.
+  too. The current branch is never absent when it is the worktree's baseline (`--from` alone, or left off); named
+  as one side of two points with `--to`, it refuses exactly like any other unpublished ref.
 - **A value that is neither a ref name nor a block id, a `--path` that is not a repository-relative path, a lone
   `--to`, a repeated flag** — usage, exit `2`.
 - **An operation replay does not support, anywhere in either history** — the whole call fails, and nothing is

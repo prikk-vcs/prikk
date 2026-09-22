@@ -720,11 +720,13 @@ fn parse_active_patch_threshold_env(
 fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_log_args(args)?;
     let layout = open_repository(args.root)?;
-    // RFC 132 refusal sweep, rule 4: an explicit absent ref refuses; the implicit current branch of a
-    // fresh repository keeps its empty history.
+    // RFC 132 refusal sweep, rule 4, as amended by RFC 147 §2i: an explicit absent ref refuses; the
+    // current branch of a fresh repository keeps its empty history, named explicitly or left implicit.
     if let Some(explicit) = &args.ref_name {
-        prikk_store::require_existing_ref(&layout, explicit, prikk_store::ReceivedRefs::Read)
-            .map_err(|err| err.to_string())?;
+        if !current_branch::is_unpublished_current_branch(&layout, explicit)? {
+            prikk_store::require_existing_ref(&layout, explicit, prikk_store::ReceivedRefs::Read)
+                .map_err(|err| err.to_string())?;
+        }
     }
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     // Received refs (DC-78 ruling 4) live in their own container (RFC 102 Stage 5:
@@ -846,15 +848,17 @@ fn run_rollback_draft_verify(args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_worktree_status(args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_worktree_status_args(args)?;
     let layout = open_repository(args.root)?;
-    // RFC 132 refusal sweep, rule 4: an explicit absent ref refuses; the implicit current branch of a
-    // fresh repository keeps its answer.
+    // RFC 132 refusal sweep, rule 4, as amended by RFC 147 §2i: an explicit absent ref refuses; the
+    // current branch of a fresh repository keeps its answer, named explicitly or left implicit.
     if let Some(explicit) = &args.ref_name {
-        prikk_store::require_existing_ref(
-            &layout,
-            explicit,
-            prikk_store::ReceivedRefs::LeftToNameValidation,
-        )
-        .map_err(|err| err.to_string())?;
+        if !current_branch::is_unpublished_current_branch(&layout, explicit)? {
+            prikk_store::require_existing_ref(
+                &layout,
+                explicit,
+                prikk_store::ReceivedRefs::LeftToNameValidation,
+            )
+            .map_err(|err| err.to_string())?;
+        }
     }
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
     let report = worktree_status(&layout, &ref_name).map_err(|err| err.to_string())?;

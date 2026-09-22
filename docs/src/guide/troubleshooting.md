@@ -177,8 +177,15 @@ Before 0.45, `prikk log --ref` on an absent ref reported an empty history with e
 worktree-status --ref` reported changes; other commands said `ref <ref> is not published` (as `error:
 integrity error:` or `error: invalid name:`), `does not exist, nothing to export`, `does not resolve to a
 published ref`, or a false "not a checkpoint". Scripts that treated an empty `log` as "no history yet" now
-see exit 1. Without `--ref`, a fresh repository's unpublished current branch answers as before in `log`,
-`worktree-status` and `checkout --plan-only`.
+see exit 1.
+
+**This refusal never applies to the repository's own current branch** (`prikk status` names it),
+published or not: `log`, `worktree-status`, `tree`, `cat --path`, a bare `diff`/`diff --from` (the
+worktree's baseline), and `checkout --plan-only` answer for it exactly the same way whether it is named
+with `--ref`/`--from` or left off. 0.45.0 and 0.46.0 refused a fresh repository's own current branch when
+it was named explicitly — the one ref this message was never meant to name — which is fixed in 0.47.0;
+see the CHANGELOG. Every *other* name, published or not, still refuses exactly as this section describes
+— including the current branch named as one side of `diff --from … --to …`.
 
 ## `error: precondition not met: remotes/<ref> is a received ref, and this command does not accept received refs; …`
 

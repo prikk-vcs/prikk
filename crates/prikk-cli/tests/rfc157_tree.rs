@@ -300,13 +300,12 @@ fn control5_absent_ref_refuses_and_a_fresh_branch_lists_nothing() {
         "{prose}"
     );
     assert!(prose.contains("\nentries: 0\n"), "{prose}");
-    let output = run(&fresh, &["tree", "--ref", "heads/main"]);
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "an explicit absent ref refuses: {}",
-        text(&output)
-    );
+    // RFC 147 §2i: the current branch is never absent, published or not -- naming it explicitly with
+    // `--ref` answers exactly as leaving `--ref` off does, byte for byte.
+    let explicit_prose = ok(&fresh, &["tree", "--ref", "heads/main"]);
+    assert_eq!(explicit_prose, prose, "{explicit_prose}");
+    let explicit_value = listing(&fresh, &["--ref", "heads/main"]);
+    assert_eq!(explicit_value, value);
     let _ = std::fs::remove_dir_all(&repo);
     let _ = std::fs::remove_dir_all(&fresh);
 }

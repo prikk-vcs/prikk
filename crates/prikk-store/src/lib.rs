@@ -230,7 +230,9 @@ pub use received::{
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
 };
-pub use ref_resolution::{ReceivedRefs, require_existing_ref, resolve_point};
+pub use ref_resolution::{
+    ReceivedRefs, is_unpublished_local_branch, require_existing_ref, resolve_point,
+};
 pub use refs::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord, RefLogReplay,
     RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate, RefStore,

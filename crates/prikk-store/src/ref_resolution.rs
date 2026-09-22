@@ -123,6 +123,33 @@ fn decide_ref_existence(
     )))
 }
 
+/// Whether `ref_name` is a local branch that has never been published: no `RefState`, and a log that
+/// holds no history at all. **Never** true for a name that [`require_existing_ref`] would refuse (a
+/// typo, a tag, a received ref, a block id), and never true for a **damaged** branch -- a pointer gone
+/// while its log still holds real history, which stays `Integrity`, distinct from this.
+///
+/// This does **not** decide whether `ref_name` is the repository's current branch: RFC 151 §2.2 reserves
+/// reading that pointer to the CLI's own resolution module and `doctor`, so this store-layer function
+/// never touches it. A caller that already resolved the current branch through that one reader combines
+/// the two facts itself -- `ref_name == <the current branch>` and this -- to give an explicit `--ref`
+/// naming it the same answer its implicit (no `--ref`) path already gives (RFC 147 §2i), instead of the
+/// resolver's ordinary block-requiring path.
+///
+/// # Errors
+///
+/// Any read error.
+pub fn is_unpublished_local_branch(layout: &RepositoryLayout, ref_name: &str) -> Result<bool> {
+    if validate_local_branch_ref(ref_name).is_err() {
+        return Ok(false);
+    }
+    let ref_store = RefStore::new(layout.clone());
+    if ref_store.read_current_ref_state_id(ref_name)?.is_some() {
+        return Ok(false);
+    }
+    let log = ref_store.replay_log(ref_name)?;
+    Ok(log.records.is_empty() && log.trailing_partial_bytes == 0 && !log.has_item_failure())
+}
+
 /// **Resolve a point** (RFC 153 §7.1): a ref name to the Block its tip names, or a bare block id to that
 /// Block, whether or not any ref reaches it.
 ///
@@ -130,6 +157,11 @@ fn decide_ref_existence(
 ///   refusals; its tip is then read as every ref-addressed reader reads it.
 /// - A block id the store does not hold: `Precondition`, `block <id> is not in this repository`.
 /// - A block id the store holds as another type: `Precondition`, `object <id> is a patch, not a block`.
+///
+/// This never special-cases the current branch (RFC 147 §2i): a caller whose own answer for an
+/// unpublished current branch is not a refusal (a bare `tree`, `diff`'s worktree form, `checkout
+/// --plan-only`) checks [`is_unpublished_local_branch`] against the current branch first and never
+/// reaches this call for that name; every other caller keeps today's refusal for it unchanged.
 ///
 /// # Errors
 ///

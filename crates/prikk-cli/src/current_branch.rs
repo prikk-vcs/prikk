@@ -27,3 +27,18 @@ pub(crate) fn resolve_ref(
 pub(crate) fn displayed_current_branch(layout: &RepositoryLayout) -> Option<String> {
     current_branch(layout).ok()
 }
+
+/// Whether `name` is the repository's current branch, and it has never been published (RFC 147 §2i): an
+/// explicit `--ref` naming it must answer exactly as leaving `--ref` off does, instead of the resolver's
+/// ordinary refusal or block-requiring path. `false`, never an error, when the pointer cannot be
+/// resolved -- the same "display never refuses" rule as [`displayed_current_branch`], since `name` came
+/// from `--ref` either way and must not fail because a default it did not use is broken.
+pub(crate) fn is_unpublished_current_branch(
+    layout: &RepositoryLayout,
+    name: &str,
+) -> std::result::Result<bool, CliError> {
+    if current_branch(layout).ok().as_deref() != Some(name) {
+        return Ok(false);
+    }
+    prikk_store::is_unpublished_local_branch(layout, name).map_err(|err| err.to_string().into())
+}

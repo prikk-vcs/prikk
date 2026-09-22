@@ -118,9 +118,19 @@ pub(crate) fn run_diff(args: Vec<String>) -> std::result::Result<(), CliError> {
             // The worktree is the right side. It is read against the *current branch's* baseline -- what
             // `commit` would author it against -- whichever point the left side is. An explicit `--from`
             // naming an absent ref refuses through the resolver; the implicit left side of a fresh
-            // repository is the empty state (RFC 153 §7.3).
+            // repository is the empty state (RFC 153 §7.3). RFC 147 §2i: `--from` naming the current
+            // branch while it is unpublished answers exactly as leaving `--from` off does -- both take
+            // the folded baseline, queued commits and all -- rather than the resolver's ordinary,
+            // non-folding point read every other `--from` takes.
             let branch = current_branch::resolve_ref(&layout, None)?;
             let from = match from {
+                Some(name) if *name == branch => {
+                    if current_branch::is_unpublished_current_branch(&layout, &branch)? {
+                        None
+                    } else {
+                        Some(resolve(name)?)
+                    }
+                }
                 Some(name) => Some(resolve(name)?),
                 None => None,
             };
