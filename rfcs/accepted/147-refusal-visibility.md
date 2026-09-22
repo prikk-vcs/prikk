@@ -624,3 +624,28 @@ independently.
 **And `cat`'s parenthetical** now reads `(<branch> has no published history yet)`, caught by **variant** with
 the resolver's message discarded — so the false wording cannot be re-inherited by a later refactor. RFC 157
 Addendum 3 item 2's pinned string is superseded for this one case and unchanged for every other.
+
+## 2j. RULED 2026-09-22 — `branch switch` names a route that refuses
+
+Found by the architect while measuring stikk 017's `branch list` question. On a fresh repository, **on the
+released 0.46.0 binary and on `main` alike**:
+
+```text
+$ prikk branch switch heads/main
+error: precondition not met: heads/main does not exist; run `prikk branch create heads/main` first
+
+$ prikk branch create heads/main          # the route it just named
+error: precondition not met: ref heads/main does not exist in this repository
+```
+
+**The route the refusal names cannot work**, and the refusal is false twice over: `heads/main` is the current
+branch — `status` says so — and switching to it is not something the user needs to do at all.
+
+**Ruled:** `branch switch <the current branch>` says that it is already the current branch, and, when it has no
+published history, that the first `seal` publishes it. It does **not** name `branch create`. Every other absent
+target keeps today's refusal, `branch create` included — creating a second branch before the first seal is
+genuinely impossible, and that refusal is true.
+
+Same family as §2i and the same root: a state the product supports (a branch that exists and has never been
+sealed) described by code that only knew *published* and *absent*. Third face of one unexamined word — the
+readers (§2i), the listing (RFC 146 §8f), and now the one writer that points at a dead route.

@@ -225,3 +225,44 @@ directly rather than on the CLI, **the marginal value of these three drops** —
 needed them. **It does not go to zero**, because the CLI is prikk's stable surface and the library is
 explicitly not, but the case would weaken. **Recorded so that a later reader can see the argument's
 dependency rather than infer it.**
+
+## 8f. RULED 2026-09-22 — the unpublished current branch is named, in a field of its own
+
+**From stikk's letter 017**, answering the question our letter 018 asked them first. They read
+`branch list --all` as their whole picture of what refs exist, and **membership in `branches[]` is how they
+decide a ref has published history** — which drives the words their release leads with on a fresh repository
+(*"heads/main has no published history — every file is listed as untracked, and a commit would be its first"*).
+
+**Measured first, on the released 0.46.0 binary and on `main`:**
+
+| state | `branch list` | `branch list --all --format json` |
+|---|---|---|
+| fresh repository, nothing sealed | `no branches` | `{"branches": [], "received": []}` |
+| after the first `seal` | `* heads/main <id>` | one row, `ref_state_id` set, `current: true` |
+
+and **`branch create` refuses entirely before the first seal** (`ref heads/main does not exist in this
+repository`), while after a seal it **publishes the new branch immediately** (the created row carries a
+`ref_state_id`). So: **at most one unpublished branch can exist, it is always the current branch, and only
+before that repository's first seal.**
+
+**Ruled:**
+
+1. **`branches[]` and `received[]` do not change.** Membership keeps meaning *has a published `RefState`* —
+   adding a row for an unpublished branch would silently invert a claim a shipped consumer makes to its users,
+   and no count would break while doing it. This is the reason to ask a consumer before changing a listing.
+2. **`branch-list-v1` gains one nullable top-level field**, additive within the version:
+   `"unpublished_current_branch": "heads/main"` or `null`. **Not an array and not a row**: exactly one such
+   branch can exist, and an array would assert a plurality the binary cannot produce.
+3. **Prose gains one line that carries no id column**, so a strict id-column parser cannot mistake it for a
+   row — stikk's prose reader refuses a row whose id is not an id, and would degrade every ref read to an error
+   rather than merely misreport. Exact spelling, given to them in advance:
+   `current branch heads/main has no published history yet; the first `prikk seal` publishes it`
+4. **`status` is unchanged** — it already names the branch and its `<not published>` state, and is not the
+   surface a consumer enumerates refs from.
+
+**Why a field and not a separate array:** their letter offered either. A field says what is true (one branch,
+the current one); an array would invite a reader to handle a case the product cannot reach, and would have to be
+retired if it ever could.
+
+**This also helps them beyond not breaking**: their ref picker cannot currently offer a branch that exists and
+has never been sealed, which is the state every new repository is in.
