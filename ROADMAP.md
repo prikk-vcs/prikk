@@ -173,11 +173,15 @@ one), and semantic merge remains out of scope (a stated non-goal since DC-16).
 
 ### Editor, IDE, and file-manager integration — blocked on model gaps, not on API work
 
-Deferred, and the reasons are the point: **no current-branch pointer** (an IDE status bar has nothing to
-show — every command resolves `--ref` explicitly), and **there is no `diff` command**. A third reason
-this row once named — `worktree-status` could not run against any repository the CLI produces — is
-fixed (RFC 122) and is removed here; that does not unblock this theme, since the two reasons above are
-unchanged. An integration API today would expose those gaps as the product.
+Deferred — but **both reasons this row was deferred for are now gone, and the row is re-read rather than
+re-asserted (2026-09-22).** It once said: **no current-branch pointer** (an IDE status bar has nothing to show —
+every command resolves `--ref` explicitly), and **there is no `diff` command**. RFC 151 shipped the current
+branch in 0.42.0, and RFC 153 shipped `prikk diff` — worktree included — in 0.46.0, beside `tree` and `cat`
+(RFC 157). A third reason the row once named, that `worktree-status` could not run against any repository the
+CLI produces, was fixed by RFC 122 earlier. **So the model gaps this row blamed no longer block it**, and what
+remains is scope and priority, not capability: an integration surface is a product decision the owner has not
+scheduled, and the CLI is the committed contract (RFC 149's path B, stikk's own route). Re-opening it needs
+a design round, not a wait.
 
 `diff` itself, when scheduled: **first-party, reusing `text_span`'s authoring computation** — not a
 display-only crate. The spans `plan_authored_text_span` produces are identity-bearing and signed; a
@@ -508,6 +512,8 @@ stability all fall away. The architect's original answer did not separate the tw
 owner's follow-up is what forced the distinction.
 
 **What genuinely gates the instaweb shape is a different thing entirely: there is no content surface.**
+*(True when written, 2026-09-10; superseded — `show` shipped in 0.36.0, and `tree`, `cat` and `diff` in 0.46.0.
+The assessment below is kept as the reasoning of its own date, not as a present claim.)*
 `prikk` has no `show` and no `diff`, and nothing renders a line of what changed — confirmed against the
 full command inventory. A browse view built today could show history, block structure, changed paths,
 trust state and a verify verdict, and **could not show a single line of content**. That is exactly the
@@ -790,7 +796,8 @@ against the sparse index**, none yanked.
 **The release's whole subject is one command, and its cost was three rounds of review.** `show`
 renders what a block or patch changed from the patch payload itself; RFC 142 §3's finding is that a
 patch is self-describing, so no diff engine is needed and **`prikk diff` deliberately does not
-ship**. The two defects along the way were both mine: §3's table read a blob *id* as a readable blob,
+ship** *(as of 0.36.0; RFC 153 opened the separate question of comparing two arbitrary points and shipped
+`prikk diff` in 0.46.0 — the refusal was right for what `show` is, and did not survive a different question)*. The two defects along the way were both mine: §3's table read a blob *id* as a readable blob,
 and §6a's requirement 4 then licensed degrading every failure — which inverted the defect, from
 calling an intact repository damaged to calling a damaged one intact. **§6b settles it: absence is
 ambiguous, an error is not.**
