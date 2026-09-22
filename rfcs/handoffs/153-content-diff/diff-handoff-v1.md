@@ -258,3 +258,34 @@ review of the previous round missed it too, and has recorded that.
 
 The architect pushes `5609efc6`, `2e0a3961` and this fix together and reads every CI job by name. The 0.46.0
 release prep follows on the owner's word — **no cut while any supported platform is red.**
+
+## Addendum 4 2026-09-22 — G1 accepted and pushed; RFC 153 is closed
+
+**Accepted** (review `macos-non-utf8-name-fix-review-v1`): `787cab49`. Gates 14/14 re-run by the architect
+(2,248 / 0 / 30 per toolchain), and **both branches of the probe exercised here**: the shipped `\xff` name runs
+every assertion on this host, and a NUL-byte name — refused by every Unix filesystem, so it reaches the arm APFS
+will — prints the skip line and passes. The sweep is a real sweep: it says what was checked and dismissed, and
+it separates *tool* probes from *filesystem* ones, which is the distinction that hid this class.
+
+**Pushed together:** `5609efc6`, `2e0a3961`, `e3e37393`, `787cab49`. **RFC 153 is closed** — §6a, §6b and §7
+carry every ruling of the theme, and RFC 157 closed with `tree` and `cat`.
+
+**One small item, owed to the first round opened before the 0.46.0 cut** (two lines, no new control): CI runs
+`cargo test` without `--nocapture`, so a skip line is invisible on a passing test — which means a green `w13` is
+now compatible with **zero** assertions having run, with nothing in the log to say so. The half has teeth only
+on Linux, so make that explicit:
+
+```rust
+Err(err) => {
+    assert!(
+        !cfg!(target_os = "linux"),
+        "this filesystem refused a non-UTF-8 name on Linux, where the control must run: {err}"
+    );
+    println!("skipping the non-UTF-8 name half of this control: …");
+}
+```
+
+Do **not** extend it to `gnu_patch` or `util_linux_script`: a tool's absence is a legitimate environment
+difference anywhere, while this capability is one Linux has always had.
+
+**Next: the 0.46.0 release prep**, on the owner's word, with the item above as its first line.
