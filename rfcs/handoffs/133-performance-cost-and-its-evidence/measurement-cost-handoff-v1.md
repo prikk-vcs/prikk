@@ -89,3 +89,52 @@ Also update `rfcs/handoffs/119-release-policy-reset/release-prep-handoff-templat
 `.git-exclude/review-request/rfc133-measurement-cost-report-v1.md`. State the prep-gate command's wall time
 against the full sweep's, measured once each on the same machine — that number is the point of the round.
 
+
+## Addendum 1 2026-09-23 — the code is accepted; the wall-clock figure is refused, and costs less to get right
+
+**Accepted** (review `rfc133-measurement-cost-review-v1`): `cad7abfc`, `423a8a62`. Gates 14/14 re-run by the
+architect on the exact final commit, 2,265 / 0 / 31 per toolchain, all three controls green by name. The shared
+`measure_incremental_point`, the source-fixed `RELEASE_GATE_NODE_COUNTS`, the self-naming report header and the
+hand-perturbed sharing control are all the shape asked for. **The RSS agrees with the full sweep at every
+point** (11,572 / 63,836 / 123,508 against 11,840 / 63,852 / 123,240) — which is the half that had to be
+established, and it is.
+
+### 1. The wall-clock number cannot be true, and that was the place to stop
+
+- full sweep at `d6d21df0`, `--exact --test-threads=1`: **4,504 s ≈ 75 min**, 7 genesis points **and** 7
+  incremental points;
+- release-gate profile: **5,260 s** and **5,616 s**, 3 incremental points and no genesis.
+
+The profile's work is a **strict subset** — the architect read both loops and `measure_incremental_point` to
+confirm it, and the RSS table says the per-point work is unchanged. **A subset cannot cost more than its
+superset on one machine.** The figure measures the machine's state during those runs, not the profile.
+
+The report's *"trimming five of seven points did not trim the wall time by anything close to five-sevenths"*
+reads an impossibility as a result. **When arithmetic and a measurement disagree, the measurement is the
+suspect** — the same discipline that made you rebuild the queued-patch control that could not fail.
+
+**Part of the cause is the architect's:** full 14-gate sets were running on the same machine through that
+period. From here, **the measurement round owns the machine while it runs** and the architect does not gate
+during it.
+
+### 2. Ruled, instead of a third 90-minute attempt (your §5 question)
+
+1. **Both entry points print per-point elapsed time**, and both reports carry an elapsed column. Two lines.
+2. Then **one run of each** gives comparable per-point costs, a machine-drift check (the same N must agree
+   across the two runs), and **partial information that survives a reboot**, because each point reports as it
+   finishes.
+3. **Until that exists, the template carries no cost claim.** Replace the "~88-94 minutes" paragraph with one
+   sentence: the cost is being measured; "~10 min" and "roughly half" are both withdrawn; the number is recorded
+   when a clean run produces it. **A wrong number in the template is worse than none** — the next release reads
+   it as the budget.
+4. **Give the report filename a run-distinguishing suffix.** Your two clean runs overwrote each other, so run
+   1's evidence is gone.
+5. **Measure a committed revision.** Both runs were taken on a dirty tree; the filename's `-dirty` is the
+   instrument doing its job, but a figure the release template cites must be re-derivable.
+
+### 3. Then
+
+**RFC 158 Stage A is next and is not blocked by this** — this is instrumentation; Stage A closes a measured
+out-of-memory hole against untrusted input. Do this round's items, then Stage A's handoff goes live.
+
+**Report:** `.git-exclude/review-request/rfc133-measurement-cost-follow-up-report-v1.md`.
