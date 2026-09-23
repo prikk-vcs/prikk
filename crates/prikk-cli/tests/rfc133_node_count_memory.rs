@@ -800,6 +800,10 @@ struct RunRevision {
     /// `git status --porcelain` under `rfcs/` at the start, so the teardown can assert the run left it
     /// exactly as it found it -- whatever the operator's own uncommitted edits there were.
     rfcs_status: String,
+    /// Seconds since the Unix epoch at the start of the run -- the run-distinguishing filename suffix
+    /// (the measurement-cost handoff Addendum 1 §2.4): two clean runs of the same committed revision
+    /// used to write the same file name and silently overwrite each other's evidence.
+    started_at: u64,
 }
 
 impl RunRevision {
@@ -810,6 +814,10 @@ impl RunRevision {
                 .is_some_and(|status| !status.is_empty()),
             rfcs_status: git_output(&["status", "--porcelain", "--", ":(top)rfcs"])
                 .unwrap_or_default(),
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0),
         }
     }
 
@@ -836,7 +844,7 @@ impl RunRevision {
     fn file_name(&self, report: &str) -> String {
         let short: String = self.head.chars().take(12).collect();
         let suffix = if self.dirty { "-dirty" } else { "" };
-        format!("{report}-{short}{suffix}.md")
+        format!("{report}-{short}{suffix}-{}.md", self.started_at)
     }
 
     /// Write `content` as `<report>-<revision>.md` under [`measurements_dir`], print the path, and assert
@@ -860,10 +868,12 @@ impl RunRevision {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_report(
     revision: &str,
     genesis: &[RssSeries],
     incremental_rss: &[RssSeries],
+    incremental_elapsed_secs: &[f64],
     incremental_cache: &[CacheSeries],
     tree_rss: &[RssSeries],
     diff_worktree_rss: &[RssSeries],
@@ -891,11 +901,13 @@ fn render_report(
     }
 
     out.push_str("\n## Incremental series (the in-scope property — `NFR-PERF-01` bounds steady-state, not genesis)\n\n");
-    out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS:\n\n");
-    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
-    for series in incremental_rss {
+    out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS, and wall time for this point's own `SAMPLES_PER_POINT` samples across every series measured on the same repository (the measurement-cost handoff Addendum 1's per-point elapsed time):\n\n");
+    out.push_str(
+        "| N | min (KiB) | median (KiB) | max (KiB) | elapsed (s) |\n|---|---|---|---|---|\n",
+    );
+    for (series, elapsed_secs) in incremental_rss.iter().zip(incremental_elapsed_secs) {
         out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {elapsed_secs:.1} |\n",
             series.node_count,
             series.min(),
             series.median(),
@@ -1090,9 +1102,15 @@ struct IncrementalPoint {
     tree_rss: RssSeries,
     diff_worktree_rss: RssSeries,
     diff_points_rss: RssSeries,
+    /// Wall time for this whole point -- all [`SAMPLES_PER_POINT`] samples, every series, at this one
+    /// `N`. The measurement-cost handoff Addendum 1 §2.1's per-point elapsed time: the same `N` timed
+    /// in both entry points is a machine-drift check, and a point that finishes prints before the next
+    /// one starts, so a run interrupted mid-sweep still leaves usable numbers.
+    elapsed_secs: f64,
 }
 
 fn measure_incremental_point(node_count: usize) -> IncrementalPoint {
+    let started = std::time::Instant::now();
     let mut peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
     let mut cache_bytes = Vec::with_capacity(SAMPLES_PER_POINT);
     let mut tree_peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
@@ -1135,7 +1153,11 @@ fn measure_incremental_point(node_count: usize) -> IncrementalPoint {
         ));
         let _ = std::fs::remove_dir_all(&root);
     }
-    eprintln!("incremental N={node_count}: RSS {peak_kib:?} KiB, cache {cache_bytes:?} bytes");
+    let elapsed_secs = started.elapsed().as_secs_f64();
+    eprintln!(
+        "incremental N={node_count}: RSS {peak_kib:?} KiB, cache {cache_bytes:?} bytes, elapsed \
+         {elapsed_secs:.1}s"
+    );
     eprintln!("tree N={node_count}: RSS {tree_peak_kib:?} KiB");
     eprintln!("diff (worktree) N={node_count}: RSS {diff_worktree_kib:?} KiB");
     eprintln!("diff (two points) N={node_count}: RSS {diff_points_kib:?} KiB");
@@ -1160,6 +1182,7 @@ fn measure_incremental_point(node_count: usize) -> IncrementalPoint {
             node_count,
             peak_kib: diff_points_kib,
         },
+        elapsed_secs,
     }
 }
 
@@ -1204,6 +1227,7 @@ fn rfc133_node_count_memory() {
     }
 
     let mut incremental_rss_series = Vec::new();
+    let mut incremental_elapsed_secs = Vec::new();
     let mut incremental_cache_series = Vec::new();
     let mut tree_rss_series = Vec::new();
     let mut diff_worktree_series = Vec::new();
@@ -1211,6 +1235,7 @@ fn rfc133_node_count_memory() {
     for &node_count in &NODE_COUNTS {
         let point = measure_incremental_point(node_count);
         incremental_rss_series.push(point.rss);
+        incremental_elapsed_secs.push(point.elapsed_secs);
         tree_rss_series.push(point.tree_rss);
         diff_worktree_series.push(point.diff_worktree_rss);
         diff_points_series.push(point.diff_points_rss);
@@ -1221,6 +1246,7 @@ fn rfc133_node_count_memory() {
         &revision.stamp(),
         &genesis_series,
         &incremental_rss_series,
+        &incremental_elapsed_secs,
         &incremental_cache_series,
         &tree_rss_series,
         &diff_worktree_series,
@@ -1238,6 +1264,7 @@ fn rfc133_node_count_memory() {
 fn render_release_gate_report(
     revision: &str,
     incremental_rss: &[RssSeries],
+    incremental_elapsed_secs: &[f64],
     incremental_cache: &[CacheSeries],
     tree_rss: &[RssSeries],
     diff_worktree_rss: &[RssSeries],
@@ -1263,11 +1290,13 @@ fn render_release_gate_report(
     out.push_str(
         "\n## Incremental series (the gate: the peak-RSS ratio between the two largest N)\n\n",
     );
-    out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS:\n\n");
-    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
-    for series in incremental_rss {
+    out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS, and wall time for this point's own samples across every series measured on the same repository (the measurement-cost handoff Addendum 1's per-point elapsed time -- the same N in the full driver's own report is a machine-drift check):\n\n");
+    out.push_str(
+        "| N | min (KiB) | median (KiB) | max (KiB) | elapsed (s) |\n|---|---|---|---|---|\n",
+    );
+    for (series, elapsed_secs) in incremental_rss.iter().zip(incremental_elapsed_secs) {
         out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {elapsed_secs:.1} |\n",
             series.node_count,
             series.min(),
             series.median(),
@@ -1355,6 +1384,7 @@ fn rfc133_node_count_memory_release_gate() {
     }
 
     let mut incremental_rss_series = Vec::new();
+    let mut incremental_elapsed_secs = Vec::new();
     let mut incremental_cache_series = Vec::new();
     let mut tree_rss_series = Vec::new();
     let mut diff_worktree_series = Vec::new();
@@ -1362,6 +1392,7 @@ fn rfc133_node_count_memory_release_gate() {
     for &node_count in &RELEASE_GATE_NODE_COUNTS {
         let point = measure_incremental_point(node_count);
         incremental_rss_series.push(point.rss);
+        incremental_elapsed_secs.push(point.elapsed_secs);
         tree_rss_series.push(point.tree_rss);
         diff_worktree_series.push(point.diff_worktree_rss);
         diff_points_series.push(point.diff_points_rss);
@@ -1371,6 +1402,7 @@ fn rfc133_node_count_memory_release_gate() {
     let report = render_release_gate_report(
         &revision.stamp(),
         &incremental_rss_series,
+        &incremental_elapsed_secs,
         &incremental_cache_series,
         &tree_rss_series,
         &diff_worktree_series,
@@ -1709,6 +1741,7 @@ fn reports_are_written_under_git_exclude_and_never_under_rfcs() {
         head: "0123456789abcdef0123".to_string(),
         dirty: false,
         rfcs_status: String::new(),
+        started_at: 1_700_000_000,
     };
     let path = measurements_dir().join(clean.file_name("node-count-memory-measurement"));
     let text = path.to_string_lossy().replace('\\', "/");
@@ -1718,14 +1751,14 @@ fn reports_are_written_under_git_exclude_and_never_under_rfcs() {
     );
     assert!(!text.contains("/rfcs/"), "{text}");
     assert!(
-        text.ends_with("/node-count-memory-measurement-0123456789ab.md"),
+        text.ends_with("/node-count-memory-measurement-0123456789ab-1700000000.md"),
         "{text}"
     );
     let dirty = RunRevision {
         dirty: true,
         ..clean
     };
-    assert!(dirty.file_name("x").ends_with("-dirty.md"));
+    assert!(dirty.file_name("x").ends_with("-dirty-1700000000.md"));
     assert!(
         dirty
             .stamp()
@@ -1749,6 +1782,7 @@ fn a_run_whose_head_moved_refuses_to_write_its_report() {
         head: "aaaa".to_string(),
         dirty: false,
         rfcs_status: String::new(),
+        started_at: 1_700_000_000,
     };
     assert!(revision.unchanged_at("aaaa").is_ok());
     let refusal = revision.unchanged_at("bbbb").unwrap_err();
@@ -1779,9 +1813,11 @@ fn release_gate_report_names_itself_and_runs_exactly_its_own_node_counts() {
             bytes: vec![1, 2, 3],
         })
         .collect();
+    let elapsed_secs = vec![12.5; RELEASE_GATE_NODE_COUNTS.len()];
     let report = render_release_gate_report(
         "deadbeefcafe",
         &rss_series,
+        &elapsed_secs,
         &cache_series,
         &rss_series,
         &rss_series,
