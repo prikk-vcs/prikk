@@ -642,6 +642,115 @@ fn read_patch_operations(
     })
 }
 
+// Test-support instrument for RFC 136 increment 2c's design round (option (i): how much of a full
+// replay is text materialization, and how much is lifecycle bookkeeping). Never in a shipped build.
+// It runs the same fold as `replay_chain_with_appended_patches` -- the same `walk_lineage`,
+// `read_patch_operations`, `apply_state_effect` and rename-run functions, in the same order -- with a
+// clock around each step, and refuses to report unless the state it built equals `replay_lineage`'s.
+
+/// Where a full replay's time went. Every duration is wall time summed over the run.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Default)]
+pub struct ReplayTimeSplit {
+    /// Blocks in the lineage.
+    pub blocks: usize,
+    /// Patches applied.
+    pub patches: usize,
+    /// Operations applied (a rename run counts each operation).
+    pub operations: usize,
+    /// `EditText` operations.
+    pub edit_text_operations: usize,
+    /// `CreateFile` operations.
+    pub create_file_operations: usize,
+    /// Reading and decoding every lineage block (`walk_lineage`).
+    pub walk: std::time::Duration,
+    /// Reading and decoding every patch (`read_patch_operations`).
+    pub patch_read_decode: std::time::Duration,
+    /// `EditText` effects: first-touch content read, span localization, splice, content id.
+    pub edit_text_effect: std::time::Duration,
+    /// `CreateFile` effects: the blob-kind lookup (a read of the created blob) and the insert.
+    pub create_file_effect: std::time::Duration,
+    /// Every other effect, rename runs included.
+    pub other_effect: std::time::Duration,
+    /// `ReplayDerivedLifecycleState::from_replay`'s internal-consistency check.
+    pub consistency_check: std::time::Duration,
+    /// The whole split run, start to end.
+    pub total: std::time::Duration,
+    /// Nodes whose materialized text the run held at its end.
+    pub text_cache_nodes: usize,
+    /// Bytes of that text.
+    pub text_cache_bytes: usize,
+}
+
+/// Replay `baseline`..`horizon` with a clock around each step. `Err` if the state built differs from
+/// [`replay_lineage`]'s, so a split never describes a fold the product does not run.
+///
+/// # Errors
+///
+/// The lineage does not replay, or the timed fold disagrees with the product's.
+#[cfg(feature = "test-support")]
+pub(crate) fn replay_time_split_for_test_support(
+    reader: &impl ObjectReader,
+    baseline: ObjectId,
+    horizon: ObjectId,
+) -> prikk_error::Result<ReplayTimeSplit> {
+    use std::time::Instant;
+    let mut split = ReplayTimeSplit::default();
+    let run = Instant::now();
+    let stage = Instant::now();
+    let chain = walk_lineage(reader, baseline, horizon)?;
+    split.walk = stage.elapsed();
+    split.blocks = chain.len();
+    let blob_resolver = StoreBackedResolver::new(reader);
+    let mut state = NodeLifecycleState::new();
+    let mut text_cache = TextCache::new();
+    for (_block_id, block) in &chain {
+        for patch_id in &block.patch_ids {
+            let stage = Instant::now();
+            let operations = read_patch_operations(reader, *patch_id, false)?;
+            split.patch_read_decode += stage.elapsed();
+            split.patches += 1;
+            let mut iter = operations.iter().peekable();
+            while let Some(operation) = iter.next() {
+                let stage = Instant::now();
+                if matches!(operation.kind, DecodedOperationKind::RenamePath { .. }) {
+                    let renames = effect::collect_rename_run(&mut iter, operation)?;
+                    effect::apply_rename_run(&mut state, &renames)?;
+                    split.operations += renames.len();
+                    split.other_effect += stage.elapsed();
+                    continue;
+                }
+                apply_state_effect(&mut state, &mut text_cache, &operation.kind, &blob_resolver)?;
+                split.operations += 1;
+                let took = stage.elapsed();
+                match operation.kind {
+                    DecodedOperationKind::EditText { .. } => {
+                        split.edit_text_operations += 1;
+                        split.edit_text_effect += took;
+                    }
+                    DecodedOperationKind::CreateFile { .. } => {
+                        split.create_file_operations += 1;
+                        split.create_file_effect += took;
+                    }
+                    _ => split.other_effect += took,
+                }
+            }
+        }
+    }
+    let stage = Instant::now();
+    let derived = super::ReplayDerivedLifecycleState::from_replay(baseline, state)?;
+    split.consistency_check = stage.elapsed();
+    split.total = run.elapsed();
+    split.text_cache_nodes = text_cache.len();
+    split.text_cache_bytes = text_cache.values().map(Vec::len).sum();
+    if *derived.state() != replay_lineage(reader, baseline, horizon)? {
+        return Err(PrikkError::Integrity(
+            "the timed replay fold built a state different from replay_lineage's".to_string(),
+        ));
+    }
+    Ok(split)
+}
+
 mod effect;
 use effect::apply_state_effect;
 

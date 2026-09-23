@@ -582,3 +582,206 @@ pub(crate) fn baseline_cache_rung_at_for_test_support(
         },
     }
 }
+
+// Test-support instruments for RFC 136 increment 2c's design round. Read-only against the object
+// store, never in a shipped build. `ladder_walk_for_test_support` replays what a corpus build's
+// successive `commit`s do to the DC-64 cache -- each one resolves its baseline through
+// `resolve_baseline_state_with` over the cache the previous one persisted -- in one process, and
+// names, per tip, the rung it took (from the mirror above, read *before* the step), the header it
+// left, and whether the state it returned equals an independent full replay's in every field.
+
+/// One tip of [`ladder_walk_for_test_support`].
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone)]
+pub struct LadderTip {
+    /// The block resolved as a baseline.
+    pub block_id: ObjectId,
+    /// The rung the mirror reported for it, read before the step ran.
+    pub rung: BaselineCacheRung,
+    /// The persisted header's step count after the step, if a cache was persisted.
+    pub steps_after: Option<u32>,
+    /// The persisted header's baseline after the step.
+    pub baseline_after: Option<ObjectId>,
+    /// Wall time of `resolve_baseline_state_with` alone.
+    pub elapsed: std::time::Duration,
+    /// `Some(true)` when the resolved state equals full replay's, every field of it (live nodes, path
+    /// index, `latest_tombstone_by_id`, `seen_ids`); `None` when the comparison was not asked for.
+    pub identical: Option<bool>,
+    /// SHA-256 of the resolved state's `Debug` rendering (every map and set in it is ordered), and
+    /// full replay's, when compared. Equal digests are equal states; this is for the report.
+    pub digests: Option<(String, String)>,
+    /// Live nodes in the resolved state.
+    pub live_nodes: usize,
+    /// Tombstones in the resolved state.
+    pub tombstones: usize,
+}
+
+/// Resolve every block of `ref_name`'s lineage, oldest first, through the real ladder over a cache that
+/// starts absent and is refreshed after each step; `compare` also runs full replay at each tip and
+/// compares the whole state. **Writes the cache under `layout`** -- give it a copy.
+///
+/// # Errors
+///
+/// The ref does not resolve, or a step fails (the real path would propagate it too).
+#[cfg(feature = "test-support")]
+pub fn ladder_walk_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    compare: bool,
+) -> Result<Vec<LadderTip>> {
+    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
+    let tip = crate::refs::read_current_ref_tip_block(layout, &reader, ref_name)?;
+    let chain = crate::patch_replay::read::single_parent_chain(&reader, tip)?;
+    let horizon = *chain.first().ok_or_else(|| {
+        prikk_error::PrikkError::Integrity(format!("ref {ref_name} lineage is empty"))
+    })?;
+    let cache = cache_path(layout);
+    let _ = std::fs::remove_file(&cache);
+    let mut tips = Vec::with_capacity(chain.len());
+    for block_id in chain {
+        let rung = baseline_cache_rung_at_for_test_support(layout, &reader, block_id, horizon);
+        let start = std::time::Instant::now();
+        let resolved =
+            resolve_baseline_state_with(layout, &reader, block_id, horizon, CacheWrite::Refresh)?;
+        let elapsed = start.elapsed();
+        let header = load(layout);
+        let (identical, digests) = if compare {
+            let full = replay_derived_state(&reader, block_id, horizon)?;
+            let digest = |state: &NodeLifecycleState| {
+                prikk_hash::to_hex(&prikk_hash::sha256(format!("{state:?}").as_bytes()))
+            };
+            (
+                Some(full.state() == resolved.state()),
+                Some((digest(resolved.state()), digest(full.state()))),
+            )
+        } else {
+            (None, None)
+        };
+        tips.push(LadderTip {
+            block_id,
+            rung,
+            steps_after: header.as_ref().map(|cache| cache.steps_since_reanchor),
+            baseline_after: header.as_ref().map(|cache| cache.baseline_block_id),
+            elapsed,
+            identical,
+            digests,
+            live_nodes: resolved.state().live_nodes().count(),
+            tombstones: resolved.state().tombstones().count(),
+        });
+    }
+    Ok(tips)
+}
+
+/// What the history fields of one block's lifecycle state weigh, for RFC 136 2c option (ii) (store them
+/// with the anchor).
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleStateShape {
+    /// Live nodes: the leaf set of the block's state root, which a snapshot already carries.
+    pub live_nodes: usize,
+    /// Tombstones (`latest_tombstone_by_id`): what a snapshot does not carry.
+    pub tombstones: usize,
+    /// Bytes the cache codec spends on the live nodes' records (record framing included).
+    pub live_record_bytes: usize,
+    /// Bytes the cache codec spends on the tombstones' records (record framing included).
+    pub tombstone_record_bytes: usize,
+    /// The whole persisted cache file, for the same state.
+    pub cache_file_bytes: usize,
+}
+
+/// The block `block_number` (1 is the ref's first block) of `ref_name`'s lineage, with its horizon.
+#[cfg(feature = "test-support")]
+fn block_of_chain(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<(ObjectId, ObjectId)> {
+    let tip = crate::refs::read_current_ref_tip_block(layout, reader, ref_name)?;
+    let chain = crate::patch_replay::read::single_parent_chain(reader, tip)?;
+    let horizon = *chain.first().ok_or_else(|| {
+        prikk_error::PrikkError::Integrity(format!("ref {ref_name} lineage is empty"))
+    })?;
+    let block_id = *block_number
+        .checked_sub(1)
+        .and_then(|index| chain.get(index))
+        .ok_or_else(|| {
+            prikk_error::PrikkError::Integrity(format!(
+                "ref {ref_name} has {} blocks, not {block_number}",
+                chain.len()
+            ))
+        })?;
+    Ok((block_id, horizon))
+}
+
+/// The shape of block `block_number` of `ref_name`'s replay-derived lifecycle state, sized with the
+/// DC-64 codec.
+///
+/// # Errors
+///
+/// The store cannot be read, or the lineage does not replay.
+#[cfg(feature = "test-support")]
+pub fn lifecycle_state_shape_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<LifecycleStateShape> {
+    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
+    let (block_id, horizon) = block_of_chain(layout, &reader, ref_name, block_number)?;
+    let replayed = replay_derived_state(&reader, block_id, horizon)?;
+    let state = replayed.state();
+    // Field header of one record-list item: tag (2), wire (1), length (8).
+    const ITEM_OVERHEAD: usize = 11;
+    let mut live_record_bytes = 0;
+    for (node_id, node) in state.live_nodes() {
+        live_record_bytes += ITEM_OVERHEAD
+            + encode_node_record(node_id, &node.path, node.kind, &node.content)?.len();
+    }
+    let mut tombstone_record_bytes = 0;
+    for (node_id, tombstone) in state.tombstones() {
+        tombstone_record_bytes += ITEM_OVERHEAD
+            + encode_node_record(node_id, &tombstone.path, tombstone.kind, &tombstone.content)?
+                .len();
+    }
+    let file = encode(&IncrementalCache {
+        baseline_block_id: block_id,
+        horizon_id: horizon,
+        steps_since_reanchor: 0,
+        state: state.clone(),
+    });
+    Ok(LifecycleStateShape {
+        live_nodes: state.live_nodes().count(),
+        tombstones: state.tombstones().count(),
+        live_record_bytes,
+        tombstone_record_bytes,
+        cache_file_bytes: file.len(),
+    })
+}
+
+/// Where a full replay of block `block_number` of `ref_name` spends its time (RFC 136 2c option (i)).
+///
+/// # Errors
+///
+/// The store cannot be read, the lineage does not replay, or the timed fold disagrees with the
+/// product's.
+#[cfg(feature = "test-support")]
+pub fn replay_time_split_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<replay::ReplayTimeSplit> {
+    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
+    let (block_id, horizon) = block_of_chain(layout, &reader, ref_name, block_number)?;
+    replay::replay_time_split_for_test_support(&reader, block_id, horizon)
+}
+
+/// SHA-256 of the persisted cache's lifecycle state (`Debug` rendering; every map and set in it is
+/// ordered), or `None` when no cache loads. The header is not in it, so a cache written by a full replay
+/// and one written by an incremental step over the same tip compare equal exactly when their states do.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn lifecycle_cache_state_digest_for_test_support(layout: &RepositoryLayout) -> Option<String> {
+    load(layout).map(|cache| {
+        prikk_hash::to_hex(&prikk_hash::sha256(format!("{:?}", cache.state).as_bytes()))
+    })
+}
