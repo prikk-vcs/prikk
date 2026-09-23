@@ -200,3 +200,35 @@ default changes because of it.
 - §8's figures, samples and load, and anything running you could not stop;
 - anything in this handoff that turned out not to be true at source — as RFC 158 §1 did. Say it; do not work
   around it.
+
+## Addendum 1 — 2026-09-24: accepted, three small fixes owed
+
+**The round is ACCEPTED** (`82359ff4`, `033c6fcc`, `312cb031`; review `rfc158-incoming-bound-review-v1`; 14/14 gates
+re-run by the architect on `312cb031`). **This addendum is live, and it is next.** No design and no new surface:
+one round, with gates on its final commit.
+
+1. **`bound + 1` overflows.** In `read_bounded` (`crates/prikk-cli/src/bounded_read.rs:158`), a bound of
+   `u64::MAX` (for example `PRIKK_BUNDLE_MAX_BYTES=18446744073709551615`, which parses) panics in a debug build. In
+   a release build it wraps to `take(0)`, so every bundle is refused as `invalid bundle magic`. On 0.46.0 that
+   value meant "no practical limit". Use `saturating_add(1)`.
+   **Control:** with the variable at `usize::MAX`, a real bundle verifies. **Perturb** back to `+ 1`; the control
+   must go red.
+2. **Pin the per-object boundary.** Changing `declared_bytes > bound_bytes` to `>=` in `read_bounded_object_frame`
+   leaves every test green (the architect ran it: `prikk-store --lib` 1225/1225, `rfc158_incoming_bound` 22/22).
+   Control 5 uses bounds of 25,000 and 50, not "the largest frame and one less" as its own doc comment says.
+   - Add a store unit test on `read_bounded_object_frame`: a frame of exactly `bound` bytes reads, and one of
+     `bound + 1` refuses with `ObjectOverBound`.
+   - Either make control 5 do what its comment says, or correct the comment.
+   - **Perturb** `>` to `>=`; the new test must go red.
+3. **Docs.**
+   - `commands.md:199-201` must say plainly that **a file of exactly the bound refuses**, because of the header,
+     with the measured overhead *k*. Add a control pinning *k*: a blob of N bytes refuses under a bound of N and
+     imports under N + k.
+   - `commands.md:183`: four size bounds (one fixed) and three count bounds, six variables — not "six
+     total-artifact bounds".
+   - `backup-restore.md:317` and `sync.md:127`: the per-object bound is **equal** to the total by default, not
+     "smaller".
+   - One sentence in the `prikk config` paragraph: `set` rewrites the whole file and `unset` removes it, comments
+     included.
+
+**Next after this, in order:** RFC 136 increment 2c, then the gate plan.
