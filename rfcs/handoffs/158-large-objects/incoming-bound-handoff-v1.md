@@ -232,3 +232,8 @@ one round, with gates on its final commit.
      included.
 
 **Next after this, in order:** RFC 136 increment 2c, then the gate plan.
+
+**Addendum 1 ACCEPTED 2026-09-24** (`fcca52c6`; review `rfc158-incoming-bound-addendum-1-review-v1`; 14/14 gates
+re-run by the architect). **This handoff is closed.** One thing carries forward: the 69-byte frame overhead is a
+property of today's blob encoding, so the Stage C handoff must re-measure it and update the docs sentence and its
+control.
