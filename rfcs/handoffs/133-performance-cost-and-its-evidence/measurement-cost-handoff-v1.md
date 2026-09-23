@@ -168,3 +168,12 @@ and may record the **ratio**, with the instruction to compare runs by their per-
 N = 64,000 at 78 % of the profile, it is the one lever left on the prep gate's cost.
 
 **Next: RFC 158 Stage A** — its handoff goes live when the architect publishes it, not before.
+
+## Addendum 3 2026-09-23 — the handoff is closed
+
+**Accepted** (review `rfc133-measurement-cost-controls-review-v1`): `9bcdc956`. Gates 14/14 re-run by the
+architect, 2,266 / 0 / 31 per toolchain; the filename control reddens when the `started_at` suffix is dropped.
+Both Addendum 2 items are done and nothing else changed. **This handoff is closed.** The *generate once per size,
+copy per sample* measurement stays open as a note, not a task.
+
+**RFC 158 Stage A is next; its handoff goes live when the architect publishes it.**
