@@ -5,20 +5,27 @@
 
 use super::*;
 
-/// A `Read` that counts how many bytes it has actually yielded, and otherwise hands out an
-/// unbounded stream of zero bytes -- standing in for a source that would happily supply far more
-/// than any declared size claims, exactly the "declared size lies" shape control 2 exists for.
+/// How much a [`CountingSource`] is prepared to supply before it ends. Far more than any bound
+/// these tests use, so a reader that does not stop at `bound + 1` reads all of it -- but finite, so
+/// that removing the streaming bound makes the assertion below *fail* rather than hang forever
+/// (a control that goes red by never returning is a control that stalls CI, not one that reports).
+const SOURCE_TOTAL: usize = 64 * 1024;
+
+/// A `Read` that counts how many bytes it has actually yielded, standing in for a source that would
+/// happily supply far more than any declared size claims -- exactly the "declared size lies" shape
+/// control 2 exists for -- and then ends.
 struct CountingSource {
     yielded: usize,
 }
 
 impl Read for CountingSource {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        for byte in buf.iter_mut() {
+        let n = buf.len().min(SOURCE_TOTAL - self.yielded);
+        for byte in &mut buf[..n] {
             *byte = 0;
         }
-        self.yielded += buf.len();
-        Ok(buf.len())
+        self.yielded += n;
+        Ok(n)
     }
 }
 
@@ -71,8 +78,8 @@ fn a_declared_size_exactly_at_the_bound_is_not_refused_on_declaration_alone() {
 fn a_source_yielding_more_than_its_declared_size_is_refused_at_bound_plus_one() {
     let mut source = CountingSource { yielded: 0 };
     let bound = SizeBound::fixed(1024, "a test artifact");
-    // Declares exactly the bound (a lie -- the source below never stops), so the declared-size
-    // check passes and only the streaming check can catch it.
+    // Declares exactly the bound (a lie -- the source below has 64 KiB to give), so the
+    // declared-size check passes and only the streaming check can catch it.
     let result = read_bounded("test artifact", "test", 1024, &mut source, &bound);
     assert!(
         result.is_err(),
@@ -80,7 +87,7 @@ fn a_source_yielding_more_than_its_declared_size_is_refused_at_bound_plus_one() 
     );
     assert_eq!(
         source.yielded, 1025,
-        "the reader must stop at exactly bound + 1 bytes, never reading the source's true, \
-         unbounded length"
+        "the reader must stop at exactly bound + 1 bytes, never reading the source's true \
+         length"
     );
 }
