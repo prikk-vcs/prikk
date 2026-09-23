@@ -11,6 +11,32 @@
 Acceptance is of the design and that order, not an authorization of any cut; each release still needs the owner's
 word. Handoffs are written when 0.47.0 opens.
 
+**Correction, 2026-09-23 — §1's "nothing bounds an object's size anywhere" is wrong for incoming artifacts, and
+the truth is a different hole.** Found writing the Stage A handoff, checked at source and on the released 0.46.0
+binary:
+
+- **A bound exists, on the whole input.** DC-86 caps a bundle at **256 MiB** (`DEFAULT_BUNDLE_MAX_TOTAL_BYTES`,
+  `PRIKK_BUNDLE_MAX_BYTES`) and a sync exchange artifact at **256 MiB** (`PRIKK_EXCHANGE_MAX_BYTES`); a sync summary
+  at 16 MiB and a have-list at 64 MiB. No object inside can exceed its artifact, so no incoming object reaches
+  256 MiB at the defaults. **None of these env vars appears in the user docs.**
+- **It is checked after the whole file is already in memory.** All six CLI entry points that read an outside
+  artifact — `bundle import`, `bundle preview`, `bundle verify`, `sync accept`, `sync compare`, `sync build` — call
+  `std::fs::read` first and let the store compare `bytes.len()` afterwards. Measured on 0.46.0: a sparse 1 GiB file
+  given to `bundle verify` peaks at **1,051,060 KB** resident and then refuses; a 300 MiB one peaks at 310,492 KB.
+  **The refusal comes after the allocation it exists to prevent**, so §1's conclusion stands — *the machine decides,
+  not prikk* — for any file larger than memory, but the cause is the read order, not the absence of a bound.
+- The refusal reads *"malformed persisted data: bundle is N bytes, over the configured limit of M bytes"*: the input
+  is neither malformed nor persisted, and it does not say where M comes from or how to change it (§2).
+
+**What changes and what does not.** The design rulings stand (§8: the bound in `prikk config`, `prikk reclaim`, the
+schedule). Stage A's own perturbation — *"the bound checked after reading"* — turns out to describe the code as it
+is, so Stage A's **first** job is to refuse before reading, on all six entry points; the per-object bound is added
+on top. **At the defaults the per-object bound is inert** — an object cannot exceed its artifact's 256 MiB — and
+its default is set so that nothing importing on 0.46.0 starts refusing. It matters when an operator lowers it, and
+when Stage B lets a legitimate artifact exceed 256 MiB. Handoff:
+`rfcs/handoffs/158-large-objects/incoming-bound-handoff-v1.md`. **Not decided here, recorded so it is not lost:**
+whether the six DC-86 env vars later move into `prikk config` beside the new key.
+
 *History:* **PROPOSED 2026-09-21 by the architect**, on the owner's word after the measurement below: *"Record it to
 make schedule and manage release cycles. We will have to carefully design for 'finally clean, safe and secure, robust
 and sophisticated design'. Usability, function, data structure and life cycle are prioritized to initial cost."*
@@ -45,7 +71,8 @@ dependency**; a binary change is a `ReplaceBinary` naming a new whole blob.
 **Two consequences.**
 1. **A product limit.** A 100 MB asset revised twenty times costs 2 GB, and a 1 GiB file needs roughly 5 GiB of RAM to
    commit.
-2. **A robustness hole with a security edge.** Nothing bounds an object's size anywhere — not on commit, not on
+2. **A robustness hole with a security edge.** *(Corrected 2026-09-23 — see Status: incoming artifacts are bounded
+   at 256 MiB, but only after the whole file has been read.)* Nothing bounds an object's size anywhere — not on commit, not on
    `bundle import`, not in `bundle verify`, which needs no repository. A bundle naming a multi-gigabyte blob is decoded
    into memory by the receiver. The failure is an out-of-memory kill, not a refusal: **the machine decides, not prikk.**
 
