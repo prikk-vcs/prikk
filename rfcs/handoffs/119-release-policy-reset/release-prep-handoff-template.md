@@ -54,21 +54,24 @@ over the runs give both in minutes.
 
    Put the ratio in the report; a ratio that moved since the last release stops the cut until explained.
    It writes its report to
-   `.git-exclude/measurements/rfc133/node-count-memory-measurement-release-gate-<revision>.md` and prints
-   the path; it writes nothing under `rfcs/`, and the previous release's figure is the latest such file.
+   `.git-exclude/measurements/rfc133/node-count-memory-measurement-release-gate-<revision>-<started-at>.md`
+   (the trailing Unix-epoch timestamp so a second run cannot silently overwrite the first's evidence) and
+   prints the path; it writes nothing under `rfcs/`, and the previous release's figure is the latest such
+   file for the release-gate report name.
 
    **Start it first**, before the rest of this sweep. Items 1-5, 7 and 8 above are reading and grepping,
    not building — do them while the profile runs. **Do not start a build or another gate run alongside
    it**: the peak-RSS figures come from fresh child processes and survive load, but `/tmp` is a shared,
-   size-capped tmpfs that a concurrent build or gate run can fill out from under it.
+   size-capped tmpfs that a concurrent build or gate run can fill out from under it. **The measurement
+   owns the machine while it runs — including gates, from the architect's own side, not only builds.**
 
-   **Measured cost, once each on an idle machine (0.47.0 prep):** the release-gate profile itself took
-   **~88-94 minutes** across two independent clean runs (87.66 min, 93.6 min) — an afternoon, not the ten
-   minutes once assumed. It inherits the full sweep's dominant cost, per-sample repository setup at the
-   two largest N, which trimming five of seven points does not remove. **The matching full-sweep number
-   for this cycle could not be measured** — two attempts were interrupted by the machine rebooting
-   mid-run before either could report a duration — so treat the comparison as open, not "roughly half."
-   The next round that measures the full sweep cleanly should record its number here.
+   **Wall-clock cost: being measured, not yet recorded.** Two prior clean runs reported ~88-94 minutes
+   for this profile, longer than the full sweep's own historical ~75 minutes — arithmetically impossible
+   for a strict subset of that sweep's work, so that figure is **withdrawn**, along with the earlier
+   "~10 minutes" estimate it replaced. Both entry points now print and report per-point elapsed time
+   (an "elapsed (s)" column in the incremental table of both reports), so the next clean run — on a
+   committed revision, on an idle machine, with nothing else running — records a real number here, and a
+   run interrupted mid-sweep still leaves per-point timings for whatever it completed.
 
    **This profile is not a substitute for the full sweep everywhere.** A round that adds or changes a
    replay-shaped reader (a `tree` row, a `diff` row, anything the incremental or genesis series exercises
