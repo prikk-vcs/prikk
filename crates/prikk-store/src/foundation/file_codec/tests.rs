@@ -19,8 +19,13 @@ use proptest::prelude::*;
 
 use prikk_object::{ObjectEnvelope, ObjectType, Signature, SignatureAlgorithm, SignerRole};
 
-use super::{decode_envelope_file, encode_envelope_file_structural};
+use super::{
+    decode_envelope_file, encode_envelope_file_structural, push_bytes_u64,
+    read_bounded_object_frame,
+};
 use crate::format::validate_format2_schema;
+use crate::foundation::byte_cursor::ByteCursor;
+use prikk_error::PrikkError;
 
 fn object_type_strategy() -> impl Strategy<Value = ObjectType> {
     (0..ObjectType::ALL.len()).prop_map(|index| {
@@ -123,4 +128,47 @@ proptest! {
         };
         prop_assert_eq!(validate_format2_schema(&envelope).is_ok(), expected_ok);
     }
+}
+
+/// One length-prefixed frame of `len` bytes, as `decode_bundle` and `decode_envelope_section` read it.
+fn frame_of(len: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_bytes_u64(&mut out, &vec![7u8; len]).expect("a small frame encodes");
+    out
+}
+
+/// RFC 158 Stage A handoff Addendum 1 item 2: the per-object boundary is pinned on both sides. A
+/// frame of exactly `bound` bytes reads; one of `bound + 1` refuses with `ObjectOverBound`, naming
+/// both numbers. *Perturbed by hand: `declared_bytes > bound_bytes` to `>=` makes the first
+/// assertion fail (the at-the-bound frame refuses) -- confirmed and reverted, see the report.*
+#[test]
+fn an_object_frame_of_exactly_the_bound_reads_and_one_byte_more_refuses() {
+    let bound = 100;
+
+    let at = frame_of(bound);
+    let read = read_bounded_object_frame(&mut ByteCursor::new(&at), bound)
+        .expect("a frame of exactly the bound must read");
+    assert_eq!(read.len(), bound);
+
+    let over = frame_of(bound + 1);
+    let err = read_bounded_object_frame(&mut ByteCursor::new(&over), bound)
+        .expect_err("a frame one byte over the bound must refuse");
+    assert_eq!(
+        err,
+        PrikkError::ObjectOverBound {
+            declared_bytes: 101,
+            bound_bytes: 100
+        }
+    );
+}
+
+/// The refusal is on the length prefix alone: a frame whose prefix declares far more than the bound
+/// refuses even though the bytes it claims are not there, so nothing was copied to find out.
+#[test]
+fn an_object_frame_over_the_bound_refuses_before_its_bytes_are_needed() {
+    let mut declared_only = Vec::new();
+    declared_only.extend_from_slice(&u64::MAX.to_be_bytes());
+    let err = read_bounded_object_frame(&mut ByteCursor::new(&declared_only), 100)
+        .expect_err("a prefix over the bound must refuse");
+    assert!(matches!(err, PrikkError::ObjectOverBound { .. }), "{err:?}");
 }

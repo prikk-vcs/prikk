@@ -314,8 +314,8 @@ implemented.
   export/import, as `layout.rs`'s own retired-format messages describe, has not been exercised end
   to end as part of this page.
 - **`bundle import`, `bundle preview` and `bundle verify` each refuse a bundle over a size bound
-  before reading it**, and refuse any one object inside it over a separate, smaller bound you can
-  set — see [Size bounds on incoming artifacts](../reference/commands.md#size-bounds-on-incoming-artifacts)
+  before reading it**, and refuse any one object inside it over a separate bound you can set
+  (equal to the total by default, so it only bites once you lower it) — see [Size bounds on incoming artifacts](../reference/commands.md#size-bounds-on-incoming-artifacts)
   for the defaults, the refusal wording, and how to raise or lower either one.
 
 ## Claim-to-Source Anchors

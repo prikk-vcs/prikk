@@ -22,7 +22,9 @@ than this caller accepts.
 bytes are copied or decoded. Default 256 MiB — the same as the existing total-artifact bound, so
 nothing importing at today's defaults starts refusing — resolved from `--max-object-bytes N` on the
 command, else the repository's own `incoming.max-object-bytes` (see below), else the default;
-`bundle verify` has no repository, so only the flag and the default apply to it. A repository's own
+`bundle verify` has no repository, so only the flag and the default apply to it. The bound measures an
+object's encoded size, which is its content plus a 69-byte header, so a file of exactly the bound refuses:
+a file of N bytes needs a bound of at least N + 69. A repository's own
 `commit` is not bounded by this or any size limit, by design.
 
 `prikk config get|set|unset|list` is new: a small, durable, per-repository settings file at

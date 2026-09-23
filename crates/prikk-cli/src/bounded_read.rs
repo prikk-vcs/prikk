@@ -153,9 +153,11 @@ pub(crate) fn read_bounded<R: Read>(
     let mut buf = Vec::with_capacity(capacity);
     // Metadata can lie (a FIFO reports 0; a file can grow after the check above), so this is
     // enforced again here, independently -- `take(bound + 1)` never reads more than one byte past
-    // the bound no matter what `source` is prepared to yield.
+    // the bound no matter what `source` is prepared to yield. **`saturating_add`, not `+`:** a bound
+    // of `u64::MAX` (0.46.0's way to say "no practical limit") panicked here in a debug build and
+    // wrapped to `take(0)` in a release one, refusing every input as an empty, malformed one.
     source
-        .take(bound.bytes + 1)
+        .take(bound.bytes.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(|err| format!("failed to read {label} at {display_path}: {err}"))?;
     if buf.len() as u64 > bound.bytes {

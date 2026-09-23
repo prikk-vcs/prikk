@@ -304,6 +304,38 @@ fn control4_exactly_at_the_total_bound_imports_one_less_refuses_before_reading()
     let _ = std::fs::remove_dir_all(&receiver2);
 }
 
+/// Addendum 1 item 1: `PRIKK_BUNDLE_MAX_BYTES=usize::MAX` -- 0.46.0's way to say "no practical
+/// limit" -- must still verify and import a real bundle. `bound + 1` overflowed: a panic in a debug
+/// build (which is what runs here, so reverting to `+ 1` turns this red by panicking), and in a
+/// release build a wrap to `take(0)` that refused every bundle as `invalid bundle magic`.
+#[test]
+fn a_total_bound_of_usize_max_still_verifies_and_imports_a_real_bundle() {
+    let (sender, bundle) = two_object_sender("rfc158-a1-max");
+    let max = usize::MAX.to_string();
+    let verified = support::prikk(&sender)
+        .env("PRIKK_BUNDLE_MAX_BYTES", &max)
+        .args(["bundle", "verify", "--input", bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    support::ok(
+        &verified,
+        "bundle verify under PRIKK_BUNDLE_MAX_BYTES=usize::MAX",
+    );
+    let receiver = support::unique_repo("rfc158-a1-max-receiver");
+    support::init(&receiver);
+    let imported = support::prikk(&receiver)
+        .env("PRIKK_BUNDLE_MAX_BYTES", &max)
+        .args(["bundle", "import", "--input", bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    support::ok(
+        &imported,
+        "bundle import under PRIKK_BUNDLE_MAX_BYTES=usize::MAX",
+    );
+    let _ = std::fs::remove_dir_all(&sender);
+    let _ = std::fs::remove_dir_all(&receiver);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Control 3: a lying declared size is caught while streaming, through a real FIFO.
 // ---------------------------------------------------------------------------------------------
@@ -317,6 +349,52 @@ fn make_fifo(path: &Path) {
     assert!(made.success(), "mkfifo");
 }
 
+/// Feed `total` bytes into the FIFO at `path` from a background thread, **without ever being able
+/// to block the test forever** (the architect's review of round 1, observation 2). A plain blocking
+/// `open` for writing waits until a reader opens the other end, so if `prikk` ever exited before
+/// opening the FIFO, `writer.join()` would stall CI -- the same class as a control that goes red by
+/// hanging. This opens `O_NONBLOCK` (which fails with `ENXIO` while there is no reader) and retries
+/// until a deadline, then writes tolerating a full pipe (`EAGAIN`) until the same deadline, and
+/// gives up quietly if the reader closes (`EPIPE`) -- the reader's own refusal is what the test
+/// asserts, never the writer's outcome.
+#[cfg(target_os = "linux")]
+fn feed_fifo(path: &Path, total: usize) -> std::thread::JoinHandle<()> {
+    use std::io::{ErrorKind, Write};
+    use std::os::unix::fs::OpenOptionsExt;
+    /// `O_NONBLOCK` on Linux (`0o4000`); these controls are Linux-only, and std has no name for it.
+    const O_NONBLOCK: i32 = 0o4000;
+    let path = path.to_path_buf();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut file = loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(O_NONBLOCK)
+                .open(&path)
+            {
+                Ok(file) => break file,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(_) => return,
+            }
+        };
+        let chunk = vec![7u8; 64 * 1024];
+        let mut written = 0usize;
+        while written < total && std::time::Instant::now() < deadline {
+            let n = chunk.len().min(total - written);
+            match file.write(&chunk[..n]) {
+                Ok(0) => break,
+                Ok(n) => written += n,
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn control3_a_fifo_fed_one_byte_over_the_bound_is_refused_while_streaming() {
@@ -326,14 +404,7 @@ fn control3_a_fifo_fed_one_byte_over_the_bound_is_refused_while_streaming() {
     make_fifo(&fifo);
     let bound: u64 = 4096;
 
-    let fifo_writer = fifo.clone();
-    let writer = std::thread::spawn(move || {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&fifo_writer) {
-            let data = vec![7u8; usize::try_from(bound + 1).unwrap()];
-            let _ = file.write_all(&data);
-        }
-    });
+    let writer = feed_fifo(&fifo, usize::try_from(bound + 1).unwrap());
 
     let child = support::prikk(&dir)
         .env("PRIKK_BUNDLE_MAX_BYTES", bound.to_string())
@@ -363,14 +434,7 @@ fn control3_a_fifo_fed_exactly_the_bound_passes_the_reader() {
     make_fifo(&fifo);
     let bound: u64 = 4096;
 
-    let fifo_writer = fifo.clone();
-    let writer = std::thread::spawn(move || {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&fifo_writer) {
-            let data = vec![7u8; usize::try_from(bound).unwrap()];
-            let _ = file.write_all(&data);
-        }
-    });
+    let writer = feed_fifo(&fifo, usize::try_from(bound).unwrap());
 
     let child = support::prikk(&dir)
         .env("PRIKK_BUNDLE_MAX_BYTES", bound.to_string())
@@ -410,20 +474,7 @@ fn control3_a_fifo_lying_about_50mib_keeps_peak_rss_low() {
     let bound: u64 = 4096;
     let huge: usize = 200 * 1024 * 1024;
 
-    let fifo_writer = fifo.clone();
-    let writer = std::thread::spawn(move || {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&fifo_writer) {
-            let chunk = vec![9u8; 64 * 1024];
-            let mut written = 0usize;
-            while written < huge {
-                match file.write(&chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => written += n,
-                }
-            }
-        }
-    });
+    let writer = feed_fifo(&fifo, huge);
 
     let run = measure_rss_allow_failure(
         &dir,
@@ -489,14 +540,38 @@ fn two_object_sender(tag: &str) -> (PathBuf, PathBuf) {
     (sender, bundle)
 }
 
-/// Control 5 (bundle import half): `--max-object-bytes` at the largest frame succeeds; one less
-/// refuses, naming the object's size, the bound, and `--max-object-bytes` as the source.
-#[test]
-fn control5_bundle_import_object_bound_at_and_below_the_largest_frame() {
-    let (sender, bundle) = two_object_sender("rfc158-c5-import");
+/// The length of every object frame in a `PBNDL003` bundle, in order: magic (8), the ref name
+/// (u64 length + bytes), the object count (u64), then that many u64-length-prefixed frames. Read
+/// from the bytes on disk so the boundary controls below use the frames the bundle really has.
+fn frame_lengths(bundle: &[u8]) -> Vec<usize> {
+    let u64_at = |at: usize| u64::from_be_bytes(bundle[at..at + 8].try_into().unwrap()) as usize;
+    assert_eq!(&bundle[..8], b"PBNDL003", "a current bundle");
+    let mut at = 8;
+    at += 8 + u64_at(at);
+    let count = u64_at(at);
+    at += 8;
+    let mut lengths = Vec::new();
+    for _ in 0..count {
+        let len = u64_at(at);
+        lengths.push(len);
+        at += 8 + len;
+    }
+    lengths
+}
 
-    // A bound generous enough that the largest real object frame (well under 20,000 bytes once
-    // encoded with its own header) passes.
+/// Control 5 (bundle import half), as the handoff words it: `--max-object-bytes` **equal to** the
+/// bundle's largest frame imports; **one less** refuses, naming the object's size, the bound, and
+/// `--max-object-bytes` as the source. (Addendum 1 item 2: this used to use 25,000 and 50, which
+/// pinned neither side of the boundary.) *Perturbed by hand: `>` to `>=` in
+/// `read_bounded_object_frame` makes the at-the-largest-frame import refuse -- see the report.*
+#[test]
+fn control5_bundle_import_object_bound_at_and_one_below_the_largest_frame() {
+    let (sender, bundle) = two_object_sender("rfc158-c5-import");
+    let largest = *frame_lengths(&std::fs::read(&bundle).unwrap())
+        .iter()
+        .max()
+        .unwrap();
+
     let receiver_ok = support::unique_repo("rfc158-c5-import-ok");
     support::init(&receiver_ok);
     let ok = support::prikk(&receiver_ok)
@@ -506,11 +581,11 @@ fn control5_bundle_import_object_bound_at_and_below_the_largest_frame() {
             "--input",
             bundle.to_str().unwrap(),
             "--max-object-bytes",
-            "25000",
+            &largest.to_string(),
         ])
         .output()
         .unwrap();
-    support::ok(&ok, "import with a generous per-object bound");
+    support::ok(&ok, "import with the bound equal to the largest frame");
 
     let receiver_refused = support::unique_repo("rfc158-c5-import-refused");
     support::init(&receiver_refused);
@@ -521,21 +596,93 @@ fn control5_bundle_import_object_bound_at_and_below_the_largest_frame() {
             "--input",
             bundle.to_str().unwrap(),
             "--max-object-bytes",
-            "50",
+            &(largest - 1).to_string(),
         ])
         .output()
         .unwrap();
     assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
     let message = text(&refused);
     assert!(
-        message.contains("declares")
-            && message.contains("50 bytes")
+        message.contains(&format!("declares {largest} bytes"))
+            && message.contains(&format!("limit of {} bytes", largest - 1))
             && message.contains("--max-object-bytes"),
         "must name the object's declared size, the bound, and --max-object-bytes as the source: {message}"
     );
     let _ = std::fs::remove_dir_all(&sender);
     let _ = std::fs::remove_dir_all(&receiver_ok);
     let _ = std::fs::remove_dir_all(&receiver_refused);
+}
+
+/// The bytes an object's frame adds to its content -- the envelope header, the payload framing and
+/// the blob's own fields -- **measured**, then pinned (Addendum 1 item 3). A file of exactly N bytes
+/// is a frame of N + 69, so a bound of N refuses it: the docs say so, and this is what keeps the
+/// number they quote true. Constant across sizes and across text and binary (measured at 5,000,
+/// 20,000 and 30,000 bytes, text and binary).
+const FRAME_OVERHEAD: usize = 69;
+
+#[test]
+fn a_file_of_n_bytes_refuses_under_a_bound_of_n_and_imports_at_n_plus_69() {
+    const N: usize = 5_000;
+    let sender = support::unique_repo("rfc158-k-sender");
+    support::init(&sender);
+    std::fs::write(sender.join("blob.bin"), vec![b'y'; N]).unwrap();
+    support::ok(
+        &support::commit(&sender, "heads/main", "one file"),
+        "commit",
+    );
+    support::ok(&support::seal(&sender, "heads/main"), "seal");
+    let bundle = sender.join("k.bundle");
+    support::ok(
+        &support::prikk(&sender)
+            .args([
+                "bundle",
+                "export",
+                "--ref",
+                "heads/main",
+                "--output",
+                bundle.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "bundle export",
+    );
+    let largest = *frame_lengths(&std::fs::read(&bundle).unwrap())
+        .iter()
+        .max()
+        .unwrap();
+    assert_eq!(
+        largest,
+        N + FRAME_OVERHEAD,
+        "the blob's frame is its {N} bytes plus the measured overhead"
+    );
+
+    let verify_under = |bound: usize| {
+        support::prikk(&sender)
+            .args([
+                "bundle",
+                "verify",
+                "--input",
+                bundle.to_str().unwrap(),
+                "--max-object-bytes",
+                &bound.to_string(),
+            ])
+            .output()
+            .unwrap()
+    };
+    for refused_bound in [N, N + FRAME_OVERHEAD - 1] {
+        let refused = verify_under(refused_bound);
+        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+        assert!(
+            text(&refused).contains(&format!("declares {} bytes", N + FRAME_OVERHEAD)),
+            "a bound of {refused_bound} must refuse the {N}-byte file: {}",
+            text(&refused)
+        );
+    }
+    support::ok(
+        &verify_under(N + FRAME_OVERHEAD),
+        "a bound of N + 69 admits the N-byte file",
+    );
+    let _ = std::fs::remove_dir_all(&sender);
 }
 
 /// Control 5 (the rest): the same object bound through `sync accept`, `bundle preview`, and

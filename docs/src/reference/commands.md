@@ -180,7 +180,8 @@ was too large and its size, the bound applied (in bytes and the nearest binary u
 bound came from, and how to change it; none of them says "malformed" or a bundle is "persisted"
 data, since neither is true of an oversized but otherwise well-formed input.
 
-Six total-artifact bounds exist (DC-86), none previously documented:
+Four size bounds (three overridable, the have-list fixed) and three count bounds exist — six
+variables in all (DC-86), none previously documented. The size bounds:
 
 | bound | default | applies to | override |
 |---|---|---|---|
@@ -196,9 +197,11 @@ by `PRIKK_SYNC_SUMMARY_MAX_REFS` (default 100,000).
 
 **The per-object bound** applies to `bundle import`, `bundle preview`, `bundle verify` and `sync
 accept` — everything that decodes objects from outside, never to a repository's own `commit`, which
-is not bounded by default. It measures an object's *encoded* size as it travels (its content plus a
-small header), checked on the length prefix before the object's bytes are copied or decoded, so a
-file of exactly the bound you set is not a surprise refusal. Default: 256 MiB, the same as the total
+is not bounded by default. It measures an object's *encoded* size as it travels — its content plus
+a header — checked on the length prefix before the object's bytes are copied or decoded. **So a
+file of exactly the bound you set refuses:** the header adds **69 bytes** (measured, for text and
+binary files alike, and pinned by a test), so a file of N bytes needs a bound of at least N + 69.
+The refusal names the size it saw, which is that N + 69. Default: 256 MiB, the same as the total
 bundle/exchange bound, so it is inert at the defaults — it only acts once an operator lowers it.
 Resolved highest-precedence first: `--max-object-bytes N` on the command itself (on `bundle import`,
 `bundle preview`, `bundle verify`, and `sync accept`), else the repository's own
@@ -219,7 +222,8 @@ lines and `#` comments are allowed. An unknown key, a duplicate key, or an inval
 negative, non-integer) each refuse, naming the line, never a silent fall back to the default. The
 only key today is `incoming.max-object-bytes`. `get`/`list` print the effective value and its source
 (`(default)` or `` `.prikk/config` ``); `set` validates then writes atomically; `unset` restores the
-default. An older `prikk` build simply does not read this file — it has no effect on that build's
+default. **`set` rewrites the whole file and `unset` removes it, so a comment you wrote by hand — which
+the format allows — is dropped without a word:** keep notes somewhere else. An older `prikk` build simply does not read this file — it has no effect on that build's
 own behavior, and no error results from a repository holding one.
 
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:

@@ -123,8 +123,8 @@ ordinary, not corruption.
   build artifact and are adopted separately** (RFC 117) — a repository can receive and adopt tags
   even though `compare` never mentions them.
 - **`sync compare`, `sync build` and `sync accept` each refuse an oversized input file before
-  reading it**, and `sync accept` refuses any one object inside the artifact over a separate,
-  smaller bound you can set — see
+  reading it**, and `sync accept` refuses any one object inside the artifact over a separate
+  bound you can set (equal to the total by default, so it only bites once you lower it) — see
   [Size bounds on incoming artifacts](../reference/commands.md#size-bounds-on-incoming-artifacts)
   for the defaults, the refusal wording, and how to raise or lower either one.
 

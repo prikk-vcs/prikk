@@ -91,3 +91,15 @@ fn a_source_yielding_more_than_its_declared_size_is_refused_at_bound_plus_one() 
          length"
     );
 }
+
+/// Addendum 1 item 1: a bound of `u64::MAX` -- 0.46.0's way to say "no practical limit" -- must read
+/// a source that fits it. `bound + 1` overflowed: a panic in a debug build (where tests run), a wrap
+/// to `take(0)` and an empty read in a release one. *Perturbed by hand: `saturating_add(1)` back to
+/// `+ 1` panics here with "attempt to add with overflow" -- confirmed and reverted, see the report.*
+#[test]
+fn a_bound_of_u64_max_reads_a_source_that_fits_it() {
+    let mut source = CountingSource { yielded: 0 };
+    let bound = SizeBound::fixed(usize::MAX, "a test artifact");
+    let result = read_bounded("test artifact", "test", 10, &mut source, &bound);
+    assert_eq!(result.unwrap().len(), SOURCE_TOTAL);
+}
