@@ -50,15 +50,19 @@ prikk branch close heads/<name>
 prikk branch switch heads/<name>
 prikk tag [list] [--format json]
 prikk tag create tags/<name> --target <ref|block> [-m <message>]
+prikk config get <key>
+prikk config set <key> <value>
+prikk config unset <key>
+prikk config list
 prikk bundle export --ref REF --output <file> [--force]
-prikk bundle import --input <file>
-prikk bundle preview --input <file> [--ref REF] [--format json]
-prikk bundle verify --input <file>
+prikk bundle import --input <file> [--max-object-bytes N]
+prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]
+prikk bundle verify --input <file> [--max-object-bytes N]
 prikk sync summary --output <file>
 prikk sync compare --summary <file>
 prikk sync have <ref> --output <file>
 prikk sync build <ref> --have <file> --output <file> [--force]
-prikk sync accept <file> [--claims-out <file>] [--force]
+prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]
 prikk sync pending
 prikk sync seal <ref> --claim <id>
 prikk sync seal <ref> --claims <file>
@@ -166,6 +170,57 @@ are larger. `--path` (repeatable, exact) filters the output, and the work is who
 that are the same give `no differences` and exit `0`; `diff` writes nothing. An unsupported operation, or a
 blob that is missing or does not recompute, in either history fails the whole call. `--format json` is
 `diff-report-v1`; see [Comparing](../guide/diff.md).
+
+**Size bounds on incoming artifacts.** RFC 158 Stage A: `bundle import`, `bundle preview`, `bundle
+verify`, `sync compare`, `sync build` and `sync accept` all read a file arriving from outside the
+repository, and every one of them refuses **before reading it** when its size is over the bound —
+on the open file's own metadata, so nothing large is allocated to discover it is large, then
+enforced again while it streams, so a lying declared size is still caught. Every refusal names what
+was too large and its size, the bound applied (in bytes and the nearest binary unit), where that
+bound came from, and how to change it; none of them says "malformed" or a bundle is "persisted"
+data, since neither is true of an oversized but otherwise well-formed input.
+
+Six total-artifact bounds exist (DC-86), none previously documented:
+
+| bound | default | applies to | override |
+|---|---|---|---|
+| bundle | 256 MiB | `bundle import`/`preview`/`verify` | `PRIKK_BUNDLE_MAX_BYTES` |
+| sync exchange artifact | 256 MiB | `sync accept` | `PRIKK_EXCHANGE_MAX_BYTES` |
+| sync summary | 16 MiB | `sync compare` | `PRIKK_SYNC_SUMMARY_MAX_BYTES` |
+| have-list | 64 MiB | `sync build --have` | fixed — no override exists |
+
+A bundle and a sync exchange artifact also each declare a count of objects they carry (bundles) or
+of patches/blobs/author keys/claims (exchange artifacts), bounded by `PRIKK_BUNDLE_MAX_OBJECTS` and
+`PRIKK_EXCHANGE_MAX_OBJECTS` respectively (default 100,000 each), and the sync summary's ref count
+by `PRIKK_SYNC_SUMMARY_MAX_REFS` (default 100,000).
+
+**The per-object bound** applies to `bundle import`, `bundle preview`, `bundle verify` and `sync
+accept` — everything that decodes objects from outside, never to a repository's own `commit`, which
+is not bounded by default. It measures an object's *encoded* size as it travels (its content plus a
+small header), checked on the length prefix before the object's bytes are copied or decoded, so a
+file of exactly the bound you set is not a surprise refusal. Default: 256 MiB, the same as the total
+bundle/exchange bound, so it is inert at the defaults — it only acts once an operator lowers it.
+Resolved highest-precedence first: `--max-object-bytes N` on the command itself (on `bundle import`,
+`bundle preview`, `bundle verify`, and `sync accept`), else the repository's own
+`incoming.max-object-bytes` in `prikk config` (not available to `bundle verify`, which opens no
+repository), else the default. The bound is never taken from the input it bounds — nothing inside a
+bundle or exchange artifact can raise it, and nothing an import or accept writes can reach
+`.prikk/config`.
+
+**What is still true until RFC 158 Stage B (streaming)**: an artifact under its bound is still read
+whole into memory, and decoding costs a multiple of that — measured on a bundle carrying one 255 MiB
+blob, at the defaults, three samples each: `bundle verify` peaks at a median of 787,400 KiB (≈3.0×
+the bundle's own size), `bundle import` at 1,570,984 KiB (≈6.0×). Streaming removes this multiplier;
+it does not exist yet.
+
+**`prikk config`** is a repository's own small, durable settings file at `.prikk/config` — never in
+the worktree, so a checked-out or imported file can never set one. One `key = value` per line; blank
+lines and `#` comments are allowed. An unknown key, a duplicate key, or an invalid value (zero,
+negative, non-integer) each refuse, naming the line, never a silent fall back to the default. The
+only key today is `incoming.max-object-bytes`. `get`/`list` print the effective value and its source
+(`(default)` or `` `.prikk/config` ``); `set` validates then writes atomically; `unset` restores the
+default. An older `prikk` build simply does not read this file — it has no effect on that build's
+own behavior, and no error results from a repository holding one.
 
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an

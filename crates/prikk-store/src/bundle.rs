@@ -84,7 +84,7 @@ use crate::author::author_key_index::{
 };
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{
-    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64,
+    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64, read_bounded_object_frame,
 };
 use crate::foundation::fsutil::len_to_u64;
 use crate::foundation::layout::{
@@ -121,6 +121,12 @@ pub const DEFAULT_BUNDLE_MAX_OBJECT_COUNT: usize = 100_000;
 /// cheaper than decoding first only to discover the result should have been refused. 256 MiB.
 pub const DEFAULT_BUNDLE_MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 
+/// RFC 158 Stage A §3: the default per-object bound, equal to the total default so that nothing
+/// importing on 0.46.0 starts refusing — an object can never exceed its own bundle's 256 MiB total
+/// at the defaults, so this bound is inert until an operator lowers it or a later stage lets an
+/// artifact legitimately exceed 256 MiB.
+pub const DEFAULT_BUNDLE_MAX_OBJECT_BYTES: usize = DEFAULT_BUNDLE_MAX_TOTAL_BYTES;
+
 /// DC-86 resource bound for [`import_bundle`], checked before any object is decoded or written —
 /// DC-57's shape: a hard block ahead of any write, with a documented default the CLI may override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,15 +135,20 @@ pub struct BundleImportOptions {
     pub max_object_count: usize,
     /// Maximum encoded byte length a bundle may have. Refused before `decode_bundle` runs at all.
     pub max_total_bytes: usize,
+    /// RFC 158 Stage A §3: maximum encoded byte length any *one* object frame in the bundle may
+    /// have. Refused on the length prefix, before that frame is copied or decoded.
+    pub max_object_bytes: usize,
 }
 
 impl BundleImportOptions {
-    /// [`DEFAULT_BUNDLE_MAX_OBJECT_COUNT`] and [`DEFAULT_BUNDLE_MAX_TOTAL_BYTES`].
+    /// [`DEFAULT_BUNDLE_MAX_OBJECT_COUNT`], [`DEFAULT_BUNDLE_MAX_TOTAL_BYTES`], and
+    /// [`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`].
     #[must_use]
     pub const fn default_limits() -> Self {
         Self {
             max_object_count: DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
             max_total_bytes: DEFAULT_BUNDLE_MAX_TOTAL_BYTES,
+            max_object_bytes: DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
         }
     }
 
@@ -152,6 +163,13 @@ impl BundleImportOptions {
     #[must_use]
     pub const fn with_max_total_bytes(mut self, max_total_bytes: usize) -> Self {
         self.max_total_bytes = max_total_bytes;
+        self
+    }
+
+    /// Override the maximum per-object encoded byte length.
+    #[must_use]
+    pub const fn with_max_object_bytes(mut self, max_object_bytes: usize) -> Self {
+        self.max_object_bytes = max_object_bytes;
         self
     }
 }
@@ -1084,7 +1102,7 @@ fn validate_bundle_contents(
         )));
     }
     let (origin_ref_name, objects, author_keys, decoded_manifest) =
-        decode_bundle(bytes, options.max_object_count)?;
+        decode_bundle(bytes, options.max_object_count, options.max_object_bytes)?;
     let Some(ref_state_envelope) = objects.first() else {
         return Err(PrikkError::MalformedData(
             "bundle contains no objects".to_string(),
@@ -1537,7 +1555,11 @@ type DecodedBundle = (
     Option<DecodedManifest>,
 );
 
-fn decode_bundle(bytes: &[u8], max_object_count: usize) -> Result<DecodedBundle> {
+fn decode_bundle(
+    bytes: &[u8],
+    max_object_count: usize,
+    max_object_bytes: usize,
+) -> Result<DecodedBundle> {
     let mut cursor = ByteCursor::new(bytes);
     let magic = cursor.read_array::<8>()?;
     // DC-53 Stage 2 follow-up (bundle-v1-import-regression-v1.md): `PBNDL001` is accepted here, not
@@ -1581,7 +1603,10 @@ fn decode_bundle(bytes: &[u8], max_object_count: usize) -> Result<DecodedBundle>
     }
     let mut objects = Vec::new();
     for _ in 0..count {
-        let encoded = cursor.read_bytes_u64()?;
+        // RFC 158 Stage A §3: checked on the length prefix, before this frame is copied or
+        // decoded -- the same declared-count discipline DC-86 already applies to `count` above,
+        // now applied per object rather than to the whole set.
+        let encoded = read_bounded_object_frame(&mut cursor, max_object_bytes)?;
         objects.push(decode_envelope_file(&encoded)?);
     }
     // DC-53 Stage 2, D6/C1 (plan review): the same declared-count bound DC-86 already applies to

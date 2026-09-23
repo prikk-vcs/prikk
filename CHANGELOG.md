@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Fixed — a bundle or sync file over its size bound was read in full before being refused
+
+`bundle import`, `bundle preview`, `bundle verify`, `sync compare`, `sync build` and `sync accept`
+each read the whole input file into memory before comparing its size against the configured bound —
+so the refusal came after the allocation it existed to prevent, and a file larger than available
+memory was an out-of-memory kill rather than a clean refusal. Measured on 0.46.0: a sparse 1 GiB file
+given to `bundle verify` peaked at 1,051,060 KB resident, then refused. All six now refuse on the open
+file's own metadata before reading a byte, and again while streaming if a declared size turns out to
+be a lie; peak memory for an oversized input now stays under 64 MiB regardless of the file's own size.
+Every refusal now names the size found, the bound applied, where it came from, and how to change it —
+it no longer says the input is "malformed" or "persisted data", since it may be neither, only larger
+than this caller accepts.
+
+### Added — a per-object bound on incoming bundles and sync exchange artifacts, and `prikk config`
+
+`bundle import`, `bundle preview`, `bundle verify` and `sync accept` now also bound the size of any
+*one* object inside an otherwise-accepted artifact, checked on its length prefix before that object's
+bytes are copied or decoded. Default 256 MiB — the same as the existing total-artifact bound, so
+nothing importing at today's defaults starts refusing — resolved from `--max-object-bytes N` on the
+command, else the repository's own `incoming.max-object-bytes` (see below), else the default;
+`bundle verify` has no repository, so only the flag and the default apply to it. A repository's own
+`commit` is not bounded by this or any size limit, by design.
+
+`prikk config get|set|unset|list` is new: a small, durable, per-repository settings file at
+`.prikk/config` (never the worktree, so nothing checked out or imported can set a value in it). One
+key exists today, `incoming.max-object-bytes`; an unknown key, a duplicate key, or an invalid value
+each refuse, naming the line, never a silent fall back to the default. See [Size bounds on incoming
+artifacts](docs/src/reference/commands.md) for the full defaults table.
+
 ### Fixed — an explicit `--ref`/`--from` naming the current branch, unpublished, falsely refused
 
 0.45.0 and 0.46.0 refused `ref heads/<branch> does not exist in this repository` when `--ref` (or

@@ -18,7 +18,8 @@ use prikk_object::{ObjectEnvelope, ObjectType, Signature, SignatureAlgorithm, Si
 use crate::author::author_key_index::AuthorKeyEntry;
 
 use super::super::{
-    BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle,
+    BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+    decode_bundle, encode_bundle,
 };
 
 fn key_id_strategy() -> impl Strategy<Value = String> {
@@ -110,7 +111,7 @@ proptest! {
             .expect("generation invariants keep the ref name, objects, author keys, and manifest \
                      encodable");
         let (decoded_ref_name, decoded_objects, decoded_author_keys, decoded_manifest) =
-            decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)
+            decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)
                 .expect("a bundle this small must decode under the default object-count limit");
         prop_assert_eq!(decoded_ref_name, ref_name.clone());
         prop_assert_eq!(decoded_objects, objects.clone());
@@ -128,6 +129,6 @@ proptest! {
     fn decode_bundle_never_panics_on_arbitrary_bytes(
         bytes in proptest::collection::vec(any::<u8>(), 0..512)
     ) {
-        let _ = decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT);
+        let _ = decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES);
     }
 }

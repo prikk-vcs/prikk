@@ -29,8 +29,8 @@ pub use crate::recognition_claim::ClaimSignatureVerification;
 pub use crate::tag_travel::TagSignatureVerification;
 
 use super::artifact::{
-    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
-    decode_exchange_artifact,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, decode_exchange_artifact,
 };
 
 /// DC-86 resource bound for [`accept_exchange_artifact`], checked before any decode or write --
@@ -42,16 +42,21 @@ pub struct AcceptOptions {
     pub max_object_count: usize,
     /// Maximum encoded byte length the artifact may have. Refused before decoding starts at all.
     pub max_total_bytes: usize,
+    /// RFC 158 Stage A §3: maximum encoded byte length any *one* object frame (a patch, blob,
+    /// claim, or tag) may have. Refused on the length prefix, before that frame is copied or
+    /// decoded.
+    pub max_object_bytes: usize,
 }
 
 impl AcceptOptions {
-    /// [`DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT`] and
-    /// [`DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES`].
+    /// [`DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT`], [`DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES`],
+    /// and [`DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES`].
     #[must_use]
     pub const fn default_limits() -> Self {
         Self {
             max_object_count: DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
             max_total_bytes: DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
+            max_object_bytes: DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
         }
     }
 
@@ -66,6 +71,13 @@ impl AcceptOptions {
     #[must_use]
     pub const fn with_max_total_bytes(mut self, max_total_bytes: usize) -> Self {
         self.max_total_bytes = max_total_bytes;
+        self
+    }
+
+    /// Override the maximum per-object encoded byte length.
+    #[must_use]
+    pub const fn with_max_object_bytes(mut self, max_object_bytes: usize) -> Self {
+        self.max_object_bytes = max_object_bytes;
         self
     }
 }
@@ -133,7 +145,8 @@ pub fn accept_exchange_artifact(
     // Phase A item 2 (each declared count against `max_object_count`) and Phase B item 3 (decode
     // all sections) both happen inside `decode_exchange_artifact` -- the same split `decode_bundle`
     // keeps between its own caller-checked total-byte bound and its own declared-count bounds.
-    let decoded = decode_exchange_artifact(bytes, options.max_object_count)?;
+    let decoded =
+        decode_exchange_artifact(bytes, options.max_object_count, options.max_object_bytes)?;
 
     // Phase B item 4: recompute the patch-set digest over the decoded patches; refuse on mismatch.
     let mut decoded_patch_ids: Vec<ObjectId> = decoded

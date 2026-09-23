@@ -16,8 +16,13 @@ one child, wait, read, exit", each invocation is its own fresh process by constr
 invoked once per sample by the Rust harness, not from anything inside this script.
 
 Usage: rusage_child.py <cwd> <binary> [args...]
-Prints exactly one line to stdout: the child's peak RSS in KiB. Exits non-zero, with the child's
-own stderr forwarded, if the child itself failed.
+Always prints the child's peak RSS in KiB as the *first* line of stdout -- `getrusage` reports it
+after `wait()` regardless of the child's own exit status, so a refusal is measurable exactly like a
+success (RFC 158 Stage A's own controls need this: the interesting case is a child that peaks low
+*and* refuses). If the child failed, its own stdout and stderr are forwarded after that first line
+(stdout after the RSS line, stderr on this script's own stderr, unchanged from before), and this
+script exits with the child's own exit code. On success, stdout is unchanged from before: the bare
+RSS number and nothing else.
 """
 
 import subprocess
@@ -34,13 +39,13 @@ def main() -> int:
     args = sys.argv[3:]
 
     result = subprocess.run([binary, *args], cwd=cwd, capture_output=True)
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    print(usage.ru_maxrss)
     if result.returncode != 0:
         sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
         sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
         return result.returncode
 
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    print(usage.ru_maxrss)
     return 0
 
 

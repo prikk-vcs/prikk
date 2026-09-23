@@ -186,13 +186,24 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "config",
+        run: crate::run_config,
+        help_lines: &[
+            "  prikk config get <key>                    Print one key's effective value and where it came from",
+            "  prikk config set <key> <value>             Validate and durably write one key",
+            "  prikk config unset <key>                   Remove one key (its default applies again)",
+            "  prikk config list                          Print every known key, its effective value, and its source",
+            "  note: the only key today is incoming.max-object-bytes (RFC 158 Stage A); the file lives at .prikk/config, never the worktree",
+        ],
+    },
+    Command {
         name: "bundle",
         run: crate::run_bundle,
         help_lines: &[
             "  prikk bundle export --ref REF --output <file> [--force]  Write a self-contained history bundle; refuses an existing file unless --force",
-            "  prikk bundle import --input <file>        Import a bundle as an untrusted received pointer",
-            "  prikk bundle preview --input <file> [--ref REF] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
-            "  prikk bundle verify --input <file>        Check a bundle offline; writes nothing, needs no repository",
+            "  prikk bundle import --input <file> [--max-object-bytes N]  Import a bundle as an untrusted received pointer",
+            "  prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
+            "  prikk bundle verify --input <file> [--max-object-bytes N]  Check a bundle offline; writes nothing, needs no repository",
         ],
     },
     Command {
@@ -347,7 +358,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk sync have <ref> --output <file>     Write a PSYNCHV1 have-list for one ref",
             "  prikk sync build <ref> --have <file> --output <file> [--force]  Build a PEXCH002 artifact closing the gap",
             "  note: a built sync artifact contains repository content in the clear -- prikk does not encrypt it; move it only over a channel you trust",
-            "  prikk sync accept <file> [--claims-out <file>] [--force]  Accept a PEXCH002 artifact (prints claim ids; optionally writes them)",
+            "  prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]  Accept a PEXCH002 artifact (prints claim ids; optionally writes them)",
             "  prikk sync pending                        List accepted-but-unsealed patches",
             "  prikk sync seal <ref> --claim <id>        Seal one accepted claim's patches into a block",
             "  prikk sync seal <ref> --claims <file>     Seal a batch of claims, ordered by parent block first",

@@ -45,10 +45,10 @@ use std::path::PathBuf;
 
 use prikk_object::ObjectId;
 use prikk_store::{
-    AcceptOptions, ClaimSignatureVerification, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
-    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT,
-    DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot, ReceivedTagResolution,
-    SealFromAcceptedOutcome, SyncArtifactOutcome, TagSignatureVerification,
+    AcceptOptions, ClaimSignatureVerification, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
+    DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT, DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot,
+    ReceivedTagResolution, SealFromAcceptedOutcome, SyncArtifactOutcome, TagSignatureVerification,
     accept_exchange_artifact, accepted_but_unsealed_patch_ids, adopt_tag, build_have_list,
     build_sync_artifact, build_sync_summary, compare_sync_summary, decode_sync_summary,
     list_received_tags, order_claims_for_sealing, seal_from_accepted_claim,
@@ -58,7 +58,9 @@ use prikk_store::{
 use crate::stdout::println;
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
+use crate::bounded_read::{SizeBound, read_bounded_file, render_incoming_error};
 use crate::commands::CliError;
+use crate::config::resolve_max_object_bytes;
 use crate::maintainer_signer_from_env;
 
 /// Dispatch `prikk sync [summary|compare|have|build|accept|pending|seal|tags|adopt-tag]`.
@@ -105,15 +107,22 @@ fn run_summary(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
 fn run_compare(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_summary_input_args(args, "sync compare")?;
     let layout = crate::open_repository(root)?;
-    let bytes = std::fs::read(&parsed.summary).map_err(|err| {
-        format!(
-            "failed to read sync summary from {}: {err}",
-            parsed.summary.display()
-        )
-    })?;
-    let (max_total_bytes, max_ref_count) = sync_summary_limits_from_env()?;
-    let remote = decode_sync_summary(&bytes, max_total_bytes, max_ref_count)
-        .map_err(|err| err.to_string())?;
+    let total_bound = SizeBound::from_env(
+        "PRIKK_SYNC_SUMMARY_MAX_BYTES",
+        DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES,
+    )?;
+    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
+    let bytes = read_bounded_file("sync summary", &parsed.summary, &total_bound)?;
+    let max_ref_count = parse_limit_env(
+        "PRIKK_SYNC_SUMMARY_MAX_REFS",
+        DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT,
+    )?;
+    let remote = decode_sync_summary(
+        &bytes,
+        usize::try_from(total_bound.bytes).unwrap_or(usize::MAX),
+        max_ref_count,
+    )
+    .map_err(|err| err.to_string())?;
     let comparisons = compare_sync_summary(&layout, &remote).map_err(|err| err.to_string())?;
     for comparison in &comparisons {
         println!("{} {}", comparison.ref_name, comparison.state.as_str());
@@ -135,12 +144,17 @@ fn run_have(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
 fn run_build(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_build_args(args)?;
     let layout = crate::open_repository(root)?;
-    let have_list_bytes = std::fs::read(&parsed.have).map_err(|err| {
-        format!(
-            "failed to read have-list from {}: {err}",
-            parsed.have.display()
-        )
-    })?;
+    // RFC 158 Stage A §1: refused before a byte is read. The have-list bound is fixed, "a
+    // constant, no variable" (handoff's own Why section) -- `build_sync_artifact` below still
+    // enforces it too, via `DEFAULT_HAVE_LIST_MAX_TOTAL_BYTES`, unconditionally.
+    let have_list_bytes = read_bounded_file(
+        "have-list",
+        &parsed.have,
+        &SizeBound::fixed(
+            prikk_store::DEFAULT_HAVE_LIST_MAX_TOTAL_BYTES,
+            "a have-list",
+        ),
+    )?;
     let signer = maintainer_signer_from_env()?;
     let outcome = build_sync_artifact(&layout, &parsed.ref_name, &have_list_bytes, &signer)
         .map_err(|err| err.to_string())?;
@@ -200,15 +214,23 @@ fn run_accept(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         }
     }
     let layout = crate::open_repository(root)?;
-    let bytes = std::fs::read(&parsed.input).map_err(|err| {
-        format!(
-            "failed to read sync artifact from {}: {err}",
-            parsed.input.display()
-        )
-    })?;
-    let options = accept_options_from_env()?;
-    let report =
-        accept_exchange_artifact(&layout, &bytes, &options).map_err(|err| err.to_string())?;
+    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
+    let bytes = read_bounded_file(
+        "sync exchange artifact",
+        &parsed.input,
+        &SizeBound::from_env(
+            "PRIKK_EXCHANGE_MAX_BYTES",
+            DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
+        )?,
+    )?;
+    let object_bound = resolve_max_object_bytes(
+        parsed.max_object_bytes,
+        Some(&layout),
+        DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
+    )?;
+    let options = accept_options(&object_bound)?;
+    let report = accept_exchange_artifact(&layout, &bytes, &options)
+        .map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("accepted sync artifact");
     println!("patches: {}", report.patch_count);
     println!("blobs: {}", report.blob_count);
@@ -434,11 +456,10 @@ fn print_seal_outcome(outcome: &SealFromAcceptedOutcome, claim_id: ObjectId) {
     }
 }
 
-/// DC-86: `AcceptOptions` from `PRIKK_EXCHANGE_MAX_OBJECTS`/`PRIKK_EXCHANGE_MAX_BYTES`, the same
-/// shape `bundle.rs`'s own `bundle_import_options_from_env` gives `BundleImportOptions` -- absent
-/// means the documented default; present but non-numeric or zero is a hard error, never a silent
-/// fallback.
-fn accept_options_from_env() -> std::result::Result<AcceptOptions, String> {
+/// DC-86 (`PRIKK_EXCHANGE_MAX_OBJECTS`/`PRIKK_EXCHANGE_MAX_BYTES`, unchanged) plus the
+/// already-resolved per-object bound (RFC 158 Stage A §3), the same split
+/// `bundle.rs`'s own `bundle_import_options` keeps for `BundleImportOptions`.
+fn accept_options(object_bound: &SizeBound) -> std::result::Result<AcceptOptions, CliError> {
     let max_object_count = parse_limit_env(
         "PRIKK_EXCHANGE_MAX_OBJECTS",
         DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
@@ -449,22 +470,8 @@ fn accept_options_from_env() -> std::result::Result<AcceptOptions, String> {
     )?;
     Ok(AcceptOptions::default_limits()
         .with_max_object_count(max_object_count)
-        .with_max_total_bytes(max_total_bytes))
-}
-
-/// `PRIKK_SYNC_SUMMARY_MAX_BYTES`/`PRIKK_SYNC_SUMMARY_MAX_REFS` overrides for decoding a *remote*
-/// summary in `sync compare` -- the one sync subcommand whose own decode step takes bound
-/// parameters directly, so the same override shape applies here.
-fn sync_summary_limits_from_env() -> std::result::Result<(usize, usize), String> {
-    let max_total_bytes = parse_limit_env(
-        "PRIKK_SYNC_SUMMARY_MAX_BYTES",
-        DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES,
-    )?;
-    let max_ref_count = parse_limit_env(
-        "PRIKK_SYNC_SUMMARY_MAX_REFS",
-        DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT,
-    )?;
-    Ok((max_total_bytes, max_ref_count))
+        .with_max_total_bytes(max_total_bytes)
+        .with_max_object_bytes(usize::try_from(object_bound.bytes).unwrap_or(usize::MAX)))
 }
 
 fn parse_limit_env(name: &str, default: usize) -> std::result::Result<usize, String> {
@@ -532,6 +539,7 @@ struct AcceptArgs {
     input: PathBuf,
     claims_out: Option<PathBuf>,
     force: bool,
+    max_object_bytes: Option<u64>,
 }
 
 fn parse_accept_args(args: Vec<String>) -> std::result::Result<AcceptArgs, CliError> {
@@ -548,6 +556,7 @@ fn parse_accept_args(args: Vec<String>) -> std::result::Result<AcceptArgs, CliEr
     }
     let mut claims_out = None;
     let mut force = false;
+    let mut max_object_bytes = None;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--claims-out" => {
@@ -555,6 +564,11 @@ fn parse_accept_args(args: Vec<String>) -> std::result::Result<AcceptArgs, CliEr
                 claims_out.set_once("--claims-out", PathBuf::from(value))?;
             }
             "--force" => mark_seen(&mut force, "--force")?,
+            "--max-object-bytes" => {
+                let value = flag_value(&mut iter, "sync accept --max-object-bytes")?;
+                let parsed = crate::bounded_read::parse_max_object_bytes_value(&value)?;
+                max_object_bytes.set_once("--max-object-bytes", parsed)?;
+            }
             other => return Err(unknown_argument("sync accept", other)),
         }
     }
@@ -562,6 +576,7 @@ fn parse_accept_args(args: Vec<String>) -> std::result::Result<AcceptArgs, CliEr
         input: PathBuf::from(input),
         claims_out,
         force,
+        max_object_bytes,
     })
 }
 

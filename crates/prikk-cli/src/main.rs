@@ -22,12 +22,14 @@ use stdout::println;
 
 mod arg_scan;
 mod args;
+mod bounded_read;
 mod branch;
 mod bundle;
 mod cat;
 mod checkout;
 mod commands;
 mod compact;
+mod config;
 mod current_branch;
 mod diff;
 mod durable_output;
@@ -285,6 +287,12 @@ fn run_bundle(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_sync(args: Vec<String>) -> std::result::Result<(), CliError> {
     let root = current_dir()?;
     sync::run_sync(root, args)?;
+    Ok(())
+}
+
+fn run_config(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let root = current_dir()?;
+    config::run_config(root, args)?;
     Ok(())
 }
 

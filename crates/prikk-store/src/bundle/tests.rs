@@ -15,9 +15,9 @@ use crate::author::author_key_index::{
 };
 use crate::author::author_signing::{AuthorSigner, author_signature};
 use crate::bundle::{
-    BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    decode_bundle, encode_bundle, encode_bundle_v1_for_test, encode_bundle_v2_for_test,
-    export_bundle, import_bundle, verify_bundle,
+    BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle, encode_bundle_v1_for_test,
+    encode_bundle_v2_for_test, export_bundle, import_bundle, verify_bundle,
 };
 use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 use crate::foundation::fsutil::len_to_u64;
@@ -609,8 +609,11 @@ fn dc53_stage2_vector8_a_transported_key_that_does_not_verify_reads_failed()
     seal_two_block_history_with_author(&source, &signer, true)?;
 
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, mut author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, mut author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(author_keys.len(), 1);
     if let Some(entry) = author_keys.first_mut() {
         // Swap in an unrelated public key for the same key_id -- the forgery this vector targets.
@@ -650,8 +653,11 @@ fn import_rejects_a_bundle_whose_author_key_section_disagrees_with_itself()
     seal_two_block_history_with_author(&source, &signer, true)?;
 
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, mut author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, mut author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(author_keys.len(), 1);
     let key_id = author_keys
         .first()
@@ -751,8 +757,11 @@ fn import_rejects_a_later_conflicting_key_without_recording_an_earlier_one()
     let signer_a = transport_test_signer(0xb1)?;
     seal_two_block_history_with_author(&source, &signer_a, true)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, mut author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, mut author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(
         author_keys.len(),
         1,
@@ -875,13 +884,13 @@ fn author_key_count_limit_fires_exactly_at_the_boundary() -> prikk_error::Result
     ];
     let bytes = encode_bundle(&ref_name, &objects, &author_keys, &test_manifest())?;
 
-    let refused = decode_bundle(&bytes, 1);
+    let refused = decode_bundle(&bytes, 1, DEFAULT_BUNDLE_MAX_OBJECT_BYTES);
     assert!(
         refused.is_err(),
         "a limit one below the actual author-key count (2) must refuse"
     );
 
-    let accepted = decode_bundle(&bytes, 2);
+    let accepted = decode_bundle(&bytes, 2, DEFAULT_BUNDLE_MAX_OBJECT_BYTES);
     assert!(
         accepted.is_ok(),
         "a limit exactly at the actual author-key count (2) must accept"
@@ -930,8 +939,11 @@ fn a_pbndl001_bundle_imports_and_its_patch_reads_unverifiable() -> prikk_error::
     // DC-44 increment 3: renamed from "v2" -- `export_bundle` now always emits `PBNDL003`, not
     // `PBNDL002`; only `v1_bytes` below is genuinely format-specific.
     let (_, current_bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&current_bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &current_bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(
         author_keys.len(),
         1,
@@ -1026,8 +1038,11 @@ fn row1_a_bundle_whose_ref_target_is_absent_is_refused() -> prikk_error::Result<
     )?;
 
     let (_, bytes) = export_bundle(&source, "tags/v1")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         objects
             .iter()
@@ -1077,8 +1092,11 @@ fn row2_a_bundle_missing_a_referenced_blob_is_refused() -> prikk_error::Result<(
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         objects
             .iter()
@@ -1125,8 +1143,11 @@ fn row2b_a_bundle_missing_a_blocks_snapshot_blob_is_refused() -> prikk_error::Re
     let source = RepositoryLayout::init(source_root.clone())?;
     let (_, snapshot_blob_id) = seal_two_block_history_with_snapshot_blob(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         objects
             .iter()
@@ -1186,8 +1207,11 @@ fn row3_a_bundle_missing_a_blocks_patch_is_refused() -> prikk_error::Result<()> 
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         objects
             .iter()
@@ -1231,8 +1255,11 @@ fn row4_a_bundle_missing_a_blocks_parent_is_refused() -> prikk_error::Result<()>
     let source = RepositoryLayout::init(source_root.clone())?;
     let child_block_id = seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let is_root_block = |envelope: &ObjectEnvelope| {
         envelope.object_type == ObjectType::Block && envelope.object_id() != child_block_id
     };
@@ -1296,8 +1323,11 @@ fn row5_objects_already_held_locally_satisfy_present() -> prikk_error::Result<()
     let (_, bytes) = export_bundle(&source, "heads/main")?;
 
     // Scenario A: item 3 (block's own patch) and item 4 (block's own parent).
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let target_root = unique_temp_dir("dc78-closure-row5-target");
     let target = RepositoryLayout::init(target_root.clone())?;
     let mut target_objects = FileObjectStore::new(target.clone());
@@ -1339,8 +1369,11 @@ fn row5_objects_already_held_locally_satisfy_present() -> prikk_error::Result<()
     );
 
     // Scenario B: item 2 (blob referenced by a carried patch's own operations).
-    let (ref_name_b, objects_b, author_keys_b, _manifest_b) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name_b, objects_b, author_keys_b, _manifest_b) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let target_b_root = unique_temp_dir("dc78-closure-row5-target-b");
     let target_b = RepositoryLayout::init(target_b_root.clone())?;
     let mut target_b_objects = FileObjectStore::new(target_b.clone());
@@ -1439,8 +1472,11 @@ fn row6_a_refused_import_writes_no_pointer_and_records_no_key_material() -> prik
     let attack_source = RepositoryLayout::init(attack_source_root.clone())?;
     seal_two_block_history_with_author(&attack_source, &attack_signer, true)?;
     let (_, attack_bytes) = export_bundle(&attack_source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&attack_bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &attack_bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(
         author_keys.len(),
         1,
@@ -1498,8 +1534,11 @@ fn row7_a_well_formed_bundle_still_imports_both_formats() -> prikk_error::Result
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, _author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, _author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let v1_bytes = encode_bundle_v1_for_test(&ref_name, &objects)?;
 
     let current_target_root = unique_temp_dir("dc78-closure-row7-current-target");
@@ -1561,8 +1600,11 @@ fn a_pbndl002_bundle_imports_with_no_manifest_but_recorded_author_key_material()
     )?;
     crate::rfc111_seal_simulation::simulate_one_seal(&source, "heads/main", &maintainer)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(author_keys.len(), 1, "fixture sanity: material to carry");
     let v2_bytes = encode_bundle_v2_for_test(&ref_name, &objects, &author_keys)?;
 
@@ -1598,16 +1640,22 @@ fn object_ids_are_unchanged_across_the_pbndl003_bump() -> prikk_error::Result<()
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, current_bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, manifest) =
-        decode_bundle(&current_bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, manifest) = decode_bundle(
+        &current_bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         manifest.is_some(),
         "fixture sanity: a real export carries a manifest"
     );
 
     let v2_bytes = encode_bundle_v2_for_test(&ref_name, &objects, &author_keys)?;
-    let (_, v2_objects, _, v2_manifest) =
-        decode_bundle(&v2_bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (_, v2_objects, _, v2_manifest) = decode_bundle(
+        &v2_bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         v2_manifest.is_none(),
         "fixture sanity: PBNDL002 carries no manifest"
@@ -1643,8 +1691,11 @@ fn a_manifest_that_disagrees_with_the_payload_is_refused_by_verify_and_import()
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let Some(manifest) = manifest else {
         return Err(prikk_error::PrikkError::Integrity(
             "fixture sanity: a real export carries a manifest".to_string(),
@@ -1943,8 +1994,16 @@ fn tag_ref_and_heads_ref_at_the_same_block_export_the_same_object_closure()
     let (_, heads_bytes) = export_bundle(&layout, "heads/main")?;
     let (_, tag_bytes) = export_bundle(&layout, "tags/v1")?;
 
-    let (_, heads_objects, _, _) = decode_bundle(&heads_bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
-    let (_, tag_objects, _, _) = decode_bundle(&tag_bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (_, heads_objects, _, _) = decode_bundle(
+        &heads_bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+    let (_, tag_objects, _, _) = decode_bundle(
+        &tag_bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
 
     let closure_only = |objects: &[ObjectEnvelope]| {
         objects
@@ -2105,8 +2164,11 @@ fn verify_and_import_agree_a_declared_count_that_disagrees_with_content_is_refus
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         objects.len() > 1,
         "fixture sanity: need room to under-count"
@@ -2175,8 +2237,11 @@ fn verify_and_import_agree_a_corrupted_object_whose_id_no_longer_matches_its_byt
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let original_patch_id = objects
         .iter()
         .find(|envelope| envelope.object_type == ObjectType::Patch)
@@ -2280,8 +2345,11 @@ fn verify_and_import_agree_a_bundle_missing_a_referenced_blob_is_refused() -> pr
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let broken_objects: Vec<ObjectEnvelope> = objects
         .into_iter()
         .filter(|envelope| envelope.object_type != ObjectType::Blob)
@@ -2428,8 +2496,11 @@ fn a_bundle_carries_a_checkpoints_content_blobs_and_refuses_one_without_them()
     );
 
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (ref_name, carried, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, carried, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert!(
         carried
             .iter()
@@ -2627,7 +2698,11 @@ fn an_import_meeting_a_stored_id_with_other_envelope_bytes_writes_nothing()
         conflicting_import_fixture("import-stored-id-conflict")?;
     // The refusal this control proves is format 6's (RFC 156 §5b): a format-7 target merges instead.
     let target = crate::test_gates::test_support::init_format_6_repository(target_root.clone())?;
-    let (_, objects, _, _) = decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (_, objects, _, _) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     // The last object, so every object ahead of it would have been written under the old order.
     let last = objects.last().cloned().ok_or_else(|| {
         prikk_error::PrikkError::Integrity("the bundle carries no objects".to_string())
@@ -2660,8 +2735,11 @@ fn a_bundle_carrying_one_id_twice_with_different_envelopes_is_refused_before_wri
 -> prikk_error::Result<()> {
     let (source_root, target_root, target, bytes) =
         conflicting_import_fixture("import-duplicate-id")?;
-    let (ref_name, mut objects, author_keys, _manifest) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, mut objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let mut twin = objects.last().cloned().ok_or_else(|| {
         prikk_error::PrikkError::Integrity("the bundle carries no objects".to_string())
     })?;
@@ -2707,7 +2785,11 @@ fn two_authored_bundles(tag: &str) -> prikk_error::Result<(Vec<u8>, Vec<u8>, Obj
         let _ = std::fs::remove_dir_all(root);
     }
     let patch_id = |bytes: &[u8]| -> prikk_error::Result<ObjectId> {
-        let (_, objects, _, _) = decode_bundle(bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+        let (_, objects, _, _) = decode_bundle(
+            bytes,
+            DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+            DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+        )?;
         objects
             .iter()
             .find(|envelope| envelope.object_type == ObjectType::Patch)
@@ -2784,8 +2866,11 @@ fn a_patch_imported_under_two_signers_merges_identically_in_either_order() -> pr
 fn an_invalid_signature_for_a_held_object_refuses_the_import_with_nothing_written()
 -> prikk_error::Result<()> {
     let (bundle_a, bundle_b, patch_id) = two_authored_bundles("union-invalid")?;
-    let (ref_name, mut objects, author_keys, _) =
-        decode_bundle(&bundle_b, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, mut objects, author_keys, _) = decode_bundle(
+        &bundle_b,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     for envelope in &mut objects {
         if envelope.object_id() == patch_id {
             for signature in &mut envelope.signatures {
@@ -2821,8 +2906,11 @@ fn an_invalid_signature_for_a_held_object_refuses_the_import_with_nothing_writte
 fn a_non_adopted_maintainer_signature_for_a_held_object_is_dropped_and_reported()
 -> prikk_error::Result<()> {
     let (bundle_a, _, _) = two_authored_bundles("union-maintainer")?;
-    let (ref_name, mut objects, author_keys, _) =
-        decode_bundle(&bundle_a, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, mut objects, author_keys, _) = decode_bundle(
+        &bundle_a,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let stranger = Ed25519MaintainerSigner::from_seed("stranger-maintainer", &[0x77; 32])?;
     let block = objects
         .iter_mut()
@@ -2879,8 +2967,11 @@ fn bundle_with_patch_signers(
     seal_two_block_history_with_author(&source, &transport_test_signer(0xa1)?, true)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
     let _ = std::fs::remove_dir_all(root);
-    let (ref_name, mut objects, author_keys, _) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, mut objects, author_keys, _) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let patch = objects
         .iter_mut()
         .find(|envelope| envelope.object_type == ObjectType::Patch)
@@ -3089,8 +3180,11 @@ fn the_bound_stops_verifying_once_the_count_passes_the_limit() -> prikk_error::R
         &prikk_hash::to_hex(&maintainer.public_key_bytes()),
     )?;
     let (bytes, patch_id) = bundle_with_patch_signers("bound-forged-source", &[], None)?;
-    let (ref_name, mut objects, author_keys, _) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
+    let (ref_name, mut objects, author_keys, _) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let patch = objects
         .iter_mut()
         .find(|envelope| envelope.object_id() == patch_id)

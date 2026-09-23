@@ -56,30 +56,6 @@ fn verify_view(repo: &Path) -> (Option<i32>, String) {
     (output.status.code(), line)
 }
 
-/// Every file under `.prikk`, except lock files, which the refused command creates and removes itself.
-fn store_bytes(repo: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
-    let mut files = std::collections::BTreeMap::new();
-    let mut stack = vec![repo.join(".prikk")];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains("lock"))
-            {
-                continue;
-            }
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                files.insert(path.clone(), std::fs::read(&path).unwrap());
-            }
-        }
-    }
-    files
-}
-
 /// Control 1: the colliding author id. Before the fix `verify` went from exit 0 to exit 1 and the
 /// object count doubled; now the refusal changes nothing, byte for byte.
 #[test]
@@ -112,7 +88,7 @@ fn a_bundle_import_refused_for_a_colliding_author_id_changes_nothing() {
 
     let view_before = verify_view(&receiver);
     assert_eq!(view_before.0, Some(0), "the receiver starts healthy");
-    let bytes_before = store_bytes(&receiver);
+    let bytes_before = support::store_bytes(&receiver);
 
     let imported = run(
         &receiver,
@@ -127,7 +103,7 @@ fn a_bundle_import_refused_for_a_colliding_author_id_changes_nothing() {
 
     assert_eq!(verify_view(&receiver), view_before, "verify reads the same");
     assert!(
-        store_bytes(&receiver) == bytes_before,
+        support::store_bytes(&receiver) == bytes_before,
         "every file under .prikk is unchanged"
     );
     let _ = std::fs::remove_dir_all(&receiver);
@@ -179,7 +155,7 @@ fn a_sync_accept_refused_for_a_colliding_author_id_changes_nothing() {
     );
 
     let view_before = verify_view(&receiver);
-    let bytes_before = store_bytes(&receiver);
+    let bytes_before = support::store_bytes(&receiver);
     let accepted = run(&receiver, &["sync", "accept", artifact.to_str().unwrap()]);
     assert_eq!(accepted.status.code(), Some(1), "{}", text(&accepted));
     assert!(
@@ -188,7 +164,7 @@ fn a_sync_accept_refused_for_a_colliding_author_id_changes_nothing() {
         text(&accepted)
     );
     assert_eq!(verify_view(&receiver), view_before);
-    assert!(store_bytes(&receiver) == bytes_before);
+    assert!(support::store_bytes(&receiver) == bytes_before);
     let _ = std::fs::remove_dir_all(&receiver);
     let _ = std::fs::remove_dir_all(&sender);
 }

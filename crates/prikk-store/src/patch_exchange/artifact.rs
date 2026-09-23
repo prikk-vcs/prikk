@@ -39,7 +39,7 @@ use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, Signature, SignerRole};
 use crate::author::author_key_index::{AuthorKeyEntry, lookup_author_key_entries};
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{
-    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64,
+    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64, read_bounded_object_frame,
 };
 use crate::foundation::fsutil::len_to_u64;
 use crate::foundation::layout::RepositoryLayout;
@@ -63,6 +63,12 @@ pub const DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT: usize = 100_000;
 /// begins -- the same tight, cheap proxy `DEFAULT_BUNDLE_MAX_TOTAL_BYTES` uses, restated for this
 /// format. 256 MiB.
 pub const DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+
+/// RFC 158 Stage A §3: the default per-object bound, equal to the total default -- the same
+/// "inert at the defaults" reasoning [`crate::bundle::DEFAULT_BUNDLE_MAX_OBJECT_BYTES`] states,
+/// restated here because this is a distinct format with its own ceiling.
+pub const DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES: usize =
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES;
 
 /// Summary of an exchange-artifact export.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,6 +322,7 @@ fn encode_exchange_artifact(
 pub(super) fn decode_exchange_artifact(
     bytes: &[u8],
     max_object_count: usize,
+    max_object_bytes: usize,
 ) -> Result<DecodedExchangeArtifact> {
     let mut cursor = ByteCursor::new(bytes);
     let magic = cursor.read_array::<8>()?;
@@ -326,8 +333,9 @@ pub(super) fn decode_exchange_artifact(
     }
     let declared_digest = PatchSetDigest(cursor.read_array::<32>()?);
 
-    let patches = decode_envelope_section(&mut cursor, max_object_count, "patches")?;
-    let blobs = decode_envelope_section(&mut cursor, max_object_count, "blobs")?;
+    let patches =
+        decode_envelope_section(&mut cursor, max_object_count, max_object_bytes, "patches")?;
+    let blobs = decode_envelope_section(&mut cursor, max_object_count, max_object_bytes, "blobs")?;
 
     let author_key_count = cursor.read_u64()?;
     if author_key_count > len_to_u64(max_object_count)? {
@@ -349,8 +357,13 @@ pub(super) fn decode_exchange_artifact(
         author_keys.push(AuthorKeyEntry { key_id, public_key });
     }
 
-    let claims = decode_envelope_section(&mut cursor, max_object_count, "recognition claims")?;
-    let tags = decode_envelope_section(&mut cursor, max_object_count, "tags")?;
+    let claims = decode_envelope_section(
+        &mut cursor,
+        max_object_count,
+        max_object_bytes,
+        "recognition claims",
+    )?;
+    let tags = decode_envelope_section(&mut cursor, max_object_count, max_object_bytes, "tags")?;
 
     if !cursor.is_finished() {
         return Err(PrikkError::MalformedData(
@@ -371,6 +384,7 @@ pub(super) fn decode_exchange_artifact(
 fn decode_envelope_section(
     cursor: &mut ByteCursor<'_>,
     max_object_count: usize,
+    max_object_bytes: usize,
     section_name: &str,
 ) -> Result<Vec<ObjectEnvelope>> {
     let count = cursor.read_u64()?;
@@ -382,7 +396,10 @@ fn decode_envelope_section(
     }
     let mut envelopes = Vec::new();
     for _ in 0..count {
-        let encoded = cursor.read_bytes_u64()?;
+        // RFC 158 Stage A §3: checked on the length prefix, before this frame is copied or
+        // decoded -- applies to every section this function reads, not blobs alone, since any of
+        // them can in principle carry an outsized frame.
+        let encoded = read_bounded_object_frame(cursor, max_object_bytes)?;
         envelopes.push(decode_envelope_file(&encoded)?);
     }
     Ok(envelopes)

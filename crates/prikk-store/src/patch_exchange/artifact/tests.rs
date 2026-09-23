@@ -39,7 +39,7 @@ fn export_then_decode_round_trips_every_section() -> Result<()> {
     assert_eq!(report.claim_count, 0);
     assert_eq!(report.tag_count, 0);
 
-    let decoded = decode_exchange_artifact(&bytes, 1_000)?;
+    let decoded = decode_exchange_artifact(&bytes, 1_000, usize::MAX)?;
     assert_eq!(decoded.patches.len(), 1);
     assert_eq!(decoded.patches[0].object_id(), patch_id);
     assert_eq!(decoded.blobs.len(), 1);
@@ -76,7 +76,7 @@ fn export_then_decode_round_trips_the_tag_section() -> Result<()> {
     let (report, bytes) = export_exchange_artifact(&layout, &[], &[], &[tag_id], None)?;
     assert_eq!(report.tag_count, 1);
 
-    let decoded = decode_exchange_artifact(&bytes, 1_000)?;
+    let decoded = decode_exchange_artifact(&bytes, 1_000, usize::MAX)?;
     assert_eq!(decoded.tags.len(), 1);
     assert_eq!(decoded.tags[0].object_id(), tag_id);
 
@@ -88,7 +88,7 @@ fn export_then_decode_round_trips_the_tag_section() -> Result<()> {
 fn decode_rejects_wrong_magic() {
     let mut bytes = vec![0_u8; 40];
     bytes[..8].copy_from_slice(b"NOTPEXCH");
-    assert!(decode_exchange_artifact(&bytes, 1_000).is_err());
+    assert!(decode_exchange_artifact(&bytes, 1_000, usize::MAX).is_err());
 }
 
 /// RFC 117 stage 3 §2/§7 row 7: the retired `PEXCH001` magic is refused outright by the new reader
@@ -97,7 +97,7 @@ fn decode_rejects_wrong_magic() {
 fn decode_rejects_the_retired_pexch001_magic() {
     let mut bytes = vec![0_u8; 40];
     bytes[..8].copy_from_slice(b"PEXCH001");
-    let error = decode_exchange_artifact(&bytes, 1_000).unwrap_err();
+    let error = decode_exchange_artifact(&bytes, 1_000, usize::MAX).unwrap_err();
     assert!(
         error.to_string().contains("magic"),
         "expected a magic-naming refusal, got: {error}"
@@ -110,7 +110,7 @@ fn decode_rejects_a_declared_patch_count_over_the_configured_limit() -> Result<(
     let (_, bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[], None)?;
     // The artifact declares one patch; a limit of 0 must refuse on the declared count alone,
     // before any patch is decoded.
-    let error = decode_exchange_artifact(&bytes, 0).unwrap_err();
+    let error = decode_exchange_artifact(&bytes, 0, usize::MAX).unwrap_err();
     let message = error.to_string();
     assert!(
         message.contains("patches") && message.contains('0'),
@@ -126,7 +126,7 @@ fn decode_rejects_trailing_bytes() -> Result<()> {
     let (layout, patch_id) = repo_with_one_patch("pexch-artifact-trailing")?;
     let (_, mut bytes) = export_exchange_artifact(&layout, &[patch_id], &[], &[], None)?;
     bytes.push(0xAB);
-    assert!(decode_exchange_artifact(&bytes, 1_000).is_err());
+    assert!(decode_exchange_artifact(&bytes, 1_000, usize::MAX).is_err());
     let _ = std::fs::remove_dir_all(layout.root());
     Ok(())
 }

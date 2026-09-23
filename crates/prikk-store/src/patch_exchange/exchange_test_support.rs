@@ -143,7 +143,8 @@ pub(super) fn reencode_artifact(
 ) -> Result<Vec<u8>> {
     use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 
-    let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(bytes, 10_000_000)?;
+    let decoded =
+        crate::patch_exchange::artifact::decode_exchange_artifact(bytes, 10_000_000, usize::MAX)?;
     let patches = patches.unwrap_or(decoded.patches);
     let blobs = blobs.unwrap_or(decoded.blobs);
     let claims = claims.unwrap_or(decoded.claims);

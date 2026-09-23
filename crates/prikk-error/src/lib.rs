@@ -46,6 +46,19 @@ pub enum PrikkError {
     Precondition(String),
     /// The requested object type cannot be persisted in the requested store.
     UnsupportedObjectType(String),
+    /// RFC 158 Stage A: an object frame inside an incoming artifact (a bundle or a patch-exchange
+    /// artifact) declared a size over the caller's per-object bound. Checked on the length prefix,
+    /// before the frame is copied or decoded — the frame's bytes were never read into memory. This
+    /// variant's own `Display` deliberately says neither "malformed" nor "persisted": the input may
+    /// be perfectly well-formed, just larger than this caller is willing to accept, and the CLI
+    /// layer re-renders this into a refusal naming where the bound came from and how to change it
+    /// (`prikk-store` has no notion of a flag or a config file to name).
+    ObjectOverBound {
+        /// The size this frame declared, in bytes.
+        declared_bytes: u64,
+        /// The per-object bound that was exceeded, in bytes.
+        bound_bytes: u64,
+    },
     /// An I/O failure. `kind` is `Some` only when this value was built from a real
     /// `std::io::Error` via [`From`] -- every explicit construction site elsewhere in the workspace
     /// (a caller-precondition violation, a platform-capability refusal, or a validation failure
@@ -78,6 +91,14 @@ impl fmt::Display for PrikkError {
             Self::LockConflict(msg) => write!(f, "lock conflict: {msg}"),
             Self::Precondition(msg) => write!(f, "precondition not met: {msg}"),
             Self::UnsupportedObjectType(msg) => write!(f, "unsupported object type: {msg}"),
+            Self::ObjectOverBound {
+                declared_bytes,
+                bound_bytes,
+            } => write!(
+                f,
+                "an object declares {declared_bytes} bytes, over the per-object bound of \
+                 {bound_bytes} bytes"
+            ),
             Self::Io { context, .. } => write!(f, "i/o error: {context}"),
         }
     }

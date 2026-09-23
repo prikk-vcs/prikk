@@ -1,0 +1,86 @@
+//! RFC 158 Stage A handoff §6 control 2: the shared reader itself, unit-tested over an in-memory
+//! `Read` that counts bytes -- never by running a real `prikk` subprocess.
+
+#![allow(clippy::indexing_slicing, clippy::unwrap_used)]
+
+use super::*;
+
+/// A `Read` that counts how many bytes it has actually yielded, and otherwise hands out an
+/// unbounded stream of zero bytes -- standing in for a source that would happily supply far more
+/// than any declared size claims, exactly the "declared size lies" shape control 2 exists for.
+struct CountingSource {
+    yielded: usize,
+}
+
+impl Read for CountingSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        for byte in buf.iter_mut() {
+            *byte = 0;
+        }
+        self.yielded += buf.len();
+        Ok(buf.len())
+    }
+}
+
+/// A declared size over the bound refuses before a single byte is read.
+#[test]
+fn a_declared_size_over_the_bound_reads_zero_bytes() {
+    let mut source = CountingSource { yielded: 0 };
+    let bound = SizeBound::fixed(1024, "a test artifact");
+    let result = read_bounded("test artifact", "test", 1025, &mut source, &bound);
+    assert!(
+        result.is_err(),
+        "a declared size one over the bound must refuse"
+    );
+    assert_eq!(
+        source.yielded, 0,
+        "refusing on the declared size must not touch the source at all"
+    );
+}
+
+/// A declared size exactly at the bound is not refused on the declared-size check -- it is only
+/// refused later if the source actually yields more than the bound while streaming.
+#[test]
+fn a_declared_size_exactly_at_the_bound_is_not_refused_on_declaration_alone() {
+    struct ExactSource {
+        remaining: usize,
+    }
+    impl Read for ExactSource {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.remaining);
+            for byte in &mut buf[..n] {
+                *byte = 0;
+            }
+            self.remaining -= n;
+            Ok(n)
+        }
+    }
+    let mut source = ExactSource { remaining: 4 };
+    let bound = SizeBound::fixed(4, "a test artifact");
+    let result = read_bounded("test artifact", "test", 4, &mut source, &bound);
+    assert!(
+        result.is_ok(),
+        "a declared size exactly at the bound, matched by what the source yields, must not refuse"
+    );
+    assert_eq!(result.unwrap().len(), 4);
+}
+
+/// A source that yields more than its declared size is refused at `bound + 1` -- the streaming
+/// check catches a lying declaration without ever reading the source's true, unbounded length.
+#[test]
+fn a_source_yielding_more_than_its_declared_size_is_refused_at_bound_plus_one() {
+    let mut source = CountingSource { yielded: 0 };
+    let bound = SizeBound::fixed(1024, "a test artifact");
+    // Declares exactly the bound (a lie -- the source below never stops), so the declared-size
+    // check passes and only the streaming check can catch it.
+    let result = read_bounded("test artifact", "test", 1024, &mut source, &bound);
+    assert!(
+        result.is_err(),
+        "a source that keeps yielding bytes past its declared size must be refused"
+    );
+    assert_eq!(
+        source.yielded, 1025,
+        "the reader must stop at exactly bound + 1 bytes, never reading the source's true, \
+         unbounded length"
+    );
+}

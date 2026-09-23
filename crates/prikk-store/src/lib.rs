@@ -116,9 +116,9 @@ pub use branch_switch::{BranchSwitchReport, switch_branch};
 pub use bundle::{
     BundleExportReport, BundleImportOptions, BundleImportReport, BundleManifest,
     BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffect, BundlePreviewEffectKind,
-    BundlePreviewReport, BundleScope, BundleVerifyReport, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, preview_bundle,
-    preview_bundle_reporting_anchor, verify_bundle,
+    BundlePreviewReport, BundleScope, BundleVerifyReport, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle,
+    preview_bundle, preview_bundle_reporting_anchor, verify_bundle,
 };
 pub use checkout::{
     CheckoutMaterialization, CheckoutPlan, DEFAULT_CHECKOUT_REF, SnapshotCheckoutPlan,
@@ -189,9 +189,9 @@ pub use patch_checkout::{
 };
 pub use patch_exchange::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification,
-    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
-    ExchangeExportReport, accept_exchange_artifact, accepted_but_unsealed_patch_ids,
-    export_exchange_artifact,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, accept_exchange_artifact,
+    accepted_but_unsealed_patch_ids, export_exchange_artifact,
 };
 pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,

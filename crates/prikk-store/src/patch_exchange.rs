@@ -34,8 +34,8 @@ pub use accept::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification, accept_exchange_artifact,
 };
 pub use artifact::{
-    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
-    ExchangeExportReport, export_exchange_artifact,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, export_exchange_artifact,
 };
 
 /// D2's derived query (design-v1.md §3, RFC 115 Stage 3 §5): **no new container, no stored pending

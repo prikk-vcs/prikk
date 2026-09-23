@@ -314,6 +314,32 @@ pub fn verify(repo: &Path) -> Output {
     prikk(repo).arg("verify").output().unwrap()
 }
 
+/// Every file under `.prikk`, except lock files, which a refused command creates and removes
+/// itself in the course of refusing -- shared by every "a refusal writes nothing" control (DC-44's
+/// own 0.44.0-sense definition: byte-for-byte, not just "the object count is unchanged").
+pub fn store_bytes(repo: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut stack = vec![repo.join(".prikk")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains("lock"))
+            {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.insert(path.clone(), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
 /// Append an attributable torn tail to the shared ref-log container, by duplicating (truncated) the
 /// header of whichever real record currently sits last in the file.
 ///

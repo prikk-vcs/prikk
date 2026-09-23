@@ -123,5 +123,27 @@ pub(crate) fn push_bytes_u64(out: &mut Vec<u8>, value: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Read one object frame's bytes, prefixed by a u64 length, refusing before copying if the declared
+/// length exceeds `max_object_bytes` (RFC 158 Stage A §1: "checked on the length prefix, before the
+/// frame is copied or decoded"). Shared by `decode_bundle`'s object loop and
+/// `patch_exchange::artifact::decode_envelope_section` -- the one place both formats read a
+/// caller-bounded object frame out of an already-buffered, already-total-bounded input.
+pub(crate) fn read_bounded_object_frame(
+    cursor: &mut ByteCursor<'_>,
+    max_object_bytes: usize,
+) -> Result<Vec<u8>> {
+    let declared_bytes = cursor.read_u64()?;
+    let bound_bytes = len_to_u64(max_object_bytes)?;
+    if declared_bytes > bound_bytes {
+        return Err(PrikkError::ObjectOverBound {
+            declared_bytes,
+            bound_bytes,
+        });
+    }
+    let len = usize::try_from(declared_bytes)
+        .map_err(|_| PrikkError::MalformedData("u64 length does not fit usize".to_string()))?;
+    Ok(cursor.read_exact(len)?.to_vec())
+}
+
 #[cfg(test)]
 mod tests;

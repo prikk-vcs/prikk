@@ -122,6 +122,11 @@ ordinary, not corruption.
   history is a separate namespace. **Tags are not listed in the summary, but they do travel in the
   build artifact and are adopted separately** (RFC 117) — a repository can receive and adopt tags
   even though `compare` never mentions them.
+- **`sync compare`, `sync build` and `sync accept` each refuse an oversized input file before
+  reading it**, and `sync accept` refuses any one object inside the artifact over a separate,
+  smaller bound you can set — see
+  [Size bounds on incoming artifacts](../reference/commands.md#size-bounds-on-incoming-artifacts)
+  for the defaults, the refusal wording, and how to raise or lower either one.
 
 ## Out of scope
 

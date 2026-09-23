@@ -34,12 +34,15 @@ use std::path::PathBuf;
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
+use crate::bounded_read::{SizeBound, read_bounded_file, render_incoming_error};
 use crate::commands::CliError;
+use crate::config::resolve_max_object_bytes;
 use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
 use crate::stdout::println;
 use prikk_store::{
-    BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle, verify_bundle,
+    BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle,
+    verify_bundle,
 };
 
 /// Dispatch `prikk bundle [export|import|preview|verify]`.
@@ -95,14 +98,16 @@ fn run_export(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_import_args(args)?;
     let layout = crate::open_repository(root)?;
-    let bytes = std::fs::read(&parsed.input).map_err(|err| {
-        format!(
-            "failed to read bundle from {}: {err}",
-            parsed.input.display()
-        )
-    })?;
-    let options = bundle_import_options_from_env()?;
-    let report = import_bundle(&layout, &bytes, &options).map_err(|err| err.to_string())?;
+    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
+    let bytes = read_bounded_file("bundle", &parsed.input, &bundle_total_size_bound()?)?;
+    let object_bound = resolve_max_object_bytes(
+        parsed.max_object_bytes,
+        Some(&layout),
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+    let options = bundle_import_options(&object_bound)?;
+    let report = import_bundle(&layout, &bytes, &options)
+        .map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("received {}", report.ref_name);
     println!("RefState: {}", report.ref_state_id);
     println!("objects: {}", report.object_count);
@@ -141,18 +146,19 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_preview_args(args)?;
     let layout = crate::open_repository(root)?;
-    let bytes = std::fs::read(&parsed.input).map_err(|err| {
-        format!(
-            "failed to read bundle from {}: {err}",
-            parsed.input.display()
-        )
-    })?;
-    let options = bundle_import_options_from_env()?;
+    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
+    let bytes = read_bounded_file("bundle", &parsed.input, &bundle_total_size_bound()?)?;
+    let object_bound = resolve_max_object_bytes(
+        parsed.max_object_bytes,
+        Some(&layout),
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+    let options = bundle_import_options(&object_bound)?;
     // RFC 151 §2.2: the local branch the preview compares against, not anything the bundle carries.
     let ref_name = crate::current_branch::resolve_ref(&layout, parsed.ref_name)?;
     let (report, anchor_fallbacks) =
         prikk_store::preview_bundle_reporting_anchor(&layout, &bytes, &options, &ref_name)
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| render_incoming_error(err, &object_bound))?;
     // RFC 136 §10.3b.4: a snapshot the preview could not anchor at is named on stderr.
     crate::warn_anchor_fallbacks(anchor_fallbacks.iter());
     if parsed.format_json {
@@ -167,18 +173,25 @@ struct PreviewArgs {
     input: PathBuf,
     ref_name: Option<String>,
     format_json: bool,
+    max_object_bytes: Option<u64>,
 }
 
 fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, CliError> {
     let mut input = None;
     let mut ref_name = None;
     let mut format_json = false;
+    let mut max_object_bytes = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--input" => {
                 let value = flag_value(&mut iter, "bundle preview --input")?;
                 input.set_once("--input", PathBuf::from(value))?;
+            }
+            "--max-object-bytes" => {
+                let value = flag_value(&mut iter, "bundle preview --max-object-bytes")?;
+                let parsed = crate::bounded_read::parse_max_object_bytes_value(&value)?;
+                max_object_bytes.set_once("--max-object-bytes", parsed)?;
             }
             "--ref" => {
                 let value = flag_value(&mut iter, "bundle preview --ref")?;
@@ -207,19 +220,24 @@ fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, Cli
         input,
         ref_name,
         format_json,
+        max_object_bytes,
     })
 }
 
 fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_verify_args(args)?;
-    let bytes = std::fs::read(&parsed.input).map_err(|err| {
-        format!(
-            "failed to read bundle from {}: {err}",
-            parsed.input.display()
-        )
-    })?;
-    let options = bundle_import_options_from_env()?;
-    let report = verify_bundle(&bytes, &options).map_err(|err| err.to_string())?;
+    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
+    let bytes = read_bounded_file("bundle", &parsed.input, &bundle_total_size_bound()?)?;
+    // No repository (this command's own module doc: `run_verify` never calls `open_repository`),
+    // so `prikk config` never applies here and never appears in this refusal (handoff §3).
+    let object_bound = resolve_max_object_bytes(
+        parsed.max_object_bytes,
+        None,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+    let options = bundle_import_options(&object_bound)?;
+    let report =
+        verify_bundle(&bytes, &options).map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("bundle verifies: {}", report.ref_name);
     println!("RefState: {}", report.ref_state_id);
     println!("tip block: {}", report.tip_block_id);
@@ -262,10 +280,12 @@ fn print_manifest(manifest: &BundleManifest) {
 
 struct VerifyArgs {
     input: PathBuf,
+    max_object_bytes: Option<u64>,
 }
 
 fn parse_verify_args(args: Vec<String>) -> std::result::Result<VerifyArgs, CliError> {
     let mut input = None;
+    let mut max_object_bytes = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -273,25 +293,46 @@ fn parse_verify_args(args: Vec<String>) -> std::result::Result<VerifyArgs, CliEr
                 let value = flag_value(&mut iter, "bundle verify --input")?;
                 input.set_once("--input", PathBuf::from(value))?;
             }
+            "--max-object-bytes" => {
+                let value = flag_value(&mut iter, "bundle verify --max-object-bytes")?;
+                let parsed = crate::bounded_read::parse_max_object_bytes_value(&value)?;
+                max_object_bytes.set_once("--max-object-bytes", parsed)?;
+            }
             other => return Err(unknown_argument("bundle verify", other)),
         }
     }
     let input =
         input.ok_or_else(|| CliError::Usage("bundle verify requires --input".to_string()))?;
-    Ok(VerifyArgs { input })
+    Ok(VerifyArgs {
+        input,
+        max_object_bytes,
+    })
 }
 
-/// DC-86: `BundleImportOptions` from `PRIKK_BUNDLE_MAX_OBJECTS`/`PRIKK_BUNDLE_MAX_BYTES`, in
-/// `ActivePatchThresholds::from_env`'s exact shape (DC-57) — absent means the documented default;
-/// present but non-numeric or zero is a hard error, never a silent fallback to the default.
-fn bundle_import_options_from_env() -> std::result::Result<BundleImportOptions, String> {
+/// DC-86: the bundle's total-byte bound from `PRIKK_BUNDLE_MAX_BYTES`, with a description of where
+/// it came from (RFC 158 Stage A §2) for [`crate::bounded_read::read_bounded_file`]'s own refusal.
+fn bundle_total_size_bound() -> std::result::Result<SizeBound, CliError> {
+    Ok(SizeBound::from_env(
+        "PRIKK_BUNDLE_MAX_BYTES",
+        DEFAULT_BUNDLE_MAX_TOTAL_BYTES,
+    )?)
+}
+
+/// `BundleImportOptions` from `PRIKK_BUNDLE_MAX_OBJECTS` (DC-86, unchanged) and the already-resolved
+/// per-object bound (RFC 158 Stage A §3) — `object_bound.bytes` came from `--max-object-bytes`,
+/// `prikk config`, or the default, resolved once by [`resolve_max_object_bytes`], not re-derived
+/// here.
+fn bundle_import_options(
+    object_bound: &SizeBound,
+) -> std::result::Result<BundleImportOptions, CliError> {
     let max_object_count =
         parse_bundle_limit_env("PRIKK_BUNDLE_MAX_OBJECTS", DEFAULT_BUNDLE_MAX_OBJECT_COUNT)?;
     let max_total_bytes =
         parse_bundle_limit_env("PRIKK_BUNDLE_MAX_BYTES", DEFAULT_BUNDLE_MAX_TOTAL_BYTES)?;
     Ok(BundleImportOptions::default_limits()
         .with_max_object_count(max_object_count)
-        .with_max_total_bytes(max_total_bytes))
+        .with_max_total_bytes(max_total_bytes)
+        .with_max_object_bytes(usize::try_from(object_bound.bytes).unwrap_or(usize::MAX)))
 }
 
 fn parse_bundle_limit_env(name: &str, default: usize) -> std::result::Result<usize, String> {
@@ -351,10 +392,12 @@ fn parse_export_args(args: Vec<String>) -> std::result::Result<ExportArgs, CliEr
 
 struct ImportArgs {
     input: PathBuf,
+    max_object_bytes: Option<u64>,
 }
 
 fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliError> {
     let mut input = None;
+    let mut max_object_bytes = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -362,10 +405,18 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
                 let value = flag_value(&mut iter, "bundle import --input")?;
                 input.set_once("--input", PathBuf::from(value))?;
             }
+            "--max-object-bytes" => {
+                let value = flag_value(&mut iter, "bundle import --max-object-bytes")?;
+                let parsed = crate::bounded_read::parse_max_object_bytes_value(&value)?;
+                max_object_bytes.set_once("--max-object-bytes", parsed)?;
+            }
             other => return Err(unknown_argument("bundle import", other)),
         }
     }
     let input =
         input.ok_or_else(|| CliError::Usage("bundle import requires --input".to_string()))?;
-    Ok(ImportArgs { input })
+    Ok(ImportArgs {
+        input,
+        max_object_bytes,
+    })
 }

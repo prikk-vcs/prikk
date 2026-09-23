@@ -59,6 +59,40 @@ fn build_single_patch_artifact(
     Ok((bytes, patch_id))
 }
 
+/// RFC 158 Stage A handoff §7 item 6: hand-perturbing away `accept_exchange_artifact`'s own
+/// `bytes.len() > options.max_total_bytes` check (the library-caller bound `import_bundle`'s
+/// analogous check already had a test for) found no existing test here that would go red -- a
+/// real gap, closed by this test rather than merely noted.
+#[test]
+fn accept_total_bytes_limit_fires_exactly_at_the_boundary() -> Result<()> {
+    let signer = author_signer(0x11)?;
+    let (bytes, _patch_id) =
+        build_single_patch_artifact("pexch-accept-limit-bytes-boundary-sender", &signer, true)?;
+
+    let under_target = fresh_repo("pexch-accept-limit-bytes-boundary-under")?;
+    let refused = accept_exchange_artifact(
+        &under_target,
+        &bytes,
+        &AcceptOptions::default_limits().with_max_total_bytes(bytes.len() - 1),
+    );
+    assert!(
+        refused.is_err(),
+        "a byte limit one below the artifact's own length must refuse"
+    );
+
+    let at_target = fresh_repo("pexch-accept-limit-bytes-boundary-at")?;
+    let accepted = accept_exchange_artifact(
+        &at_target,
+        &bytes,
+        &AcceptOptions::default_limits().with_max_total_bytes(bytes.len()),
+    );
+    assert!(
+        accepted.is_ok(),
+        "a byte limit exactly at the artifact's own length must accept"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_healthy_artifact_is_accepted_and_writes_everything_it_carries() -> Result<()> {
     let signer = author_signer(0x10)?;
@@ -478,7 +512,8 @@ fn row8_a_digest_mismatch_refuses_before_signature_work() -> Result<()> {
     let (_, bytes) = export_exchange_artifact(&sender, &[patch_a_id, patch_b_id], &[], &[], None)?;
     let _ = std::fs::remove_dir_all(sender.root());
 
-    let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000_000)?;
+    let decoded =
+        crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000_000, usize::MAX)?;
     let truncated_patches = vec![decoded.patches[0].clone()];
     let mutated = reencode_artifact(&bytes, Some(truncated_patches), None, None, None)?;
 
@@ -788,7 +823,8 @@ fn a_patch_whose_second_author_signature_is_invalid_refuses_the_exchange() -> Re
     let second = crate::Ed25519AuthorSigner::from_seed("zz-second-author", &[0x52; 32])?;
     let (bytes, patch_id) =
         build_single_patch_artifact("pexch-accept-second-author-sender", &first, true)?;
-    let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000)?;
+    let decoded =
+        crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000, usize::MAX)?;
     let mut patch = decoded.patches[0].clone();
     let mut signature = crate::author_signature(&second, patch_id)?;
     signature.signature_bytes[0] ^= 0x01;
@@ -835,7 +871,8 @@ fn the_signature_bound_holds_through_accept() -> Result<()> {
         author_signer(0x65)?,
     ];
     let (bytes, patch_id) = build_single_patch_artifact("pexch-accept-bound-sender", &first, true)?;
-    let decoded = crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000)?;
+    let decoded =
+        crate::patch_exchange::artifact::decode_exchange_artifact(&bytes, 10_000, usize::MAX)?;
     let with_signers = |count: usize| -> Result<Vec<u8>> {
         let mut patch = decoded.patches[0].clone();
         for signer in extra.iter().take(count) {
