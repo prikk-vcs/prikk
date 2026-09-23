@@ -776,6 +776,7 @@ fn warm_sample(
     cell: &Path,
     profile: &Profile,
     baseline_cache_sha: &Option<String>,
+    edit_path: Option<&str>,
     tag: &str,
 ) -> (Duration, Option<u64>, &'static str, Option<String>) {
     let dir = support::unique_dir(tag);
@@ -801,8 +802,20 @@ fn warm_sample(
         baseline_cache_sha,
         "the untimed materialize must leave the cache alone"
     );
-    std::fs::create_dir_all(dir.join("bench")).unwrap();
-    std::fs::write(dir.join("bench/sample.txt"), b"a sample commit\n").unwrap();
+    match edit_path {
+        // The file the tip block itself edited: its baseline content is an `EditText` result no one
+        // stored, so authoring an edit of it materializes it (`current_text_for_node`).
+        Some(path) => {
+            let file = dir.join(path);
+            let mut bytes = std::fs::read(&file).expect("the edited file is in the worktree");
+            bytes.extend_from_slice(b"\nan edit made by the instrument\n");
+            std::fs::write(file, bytes).unwrap();
+        }
+        None => {
+            std::fs::create_dir_all(dir.join("bench")).unwrap();
+            std::fs::write(dir.join("bench/sample.txt"), b"a sample commit\n").unwrap();
+        }
+    }
     let before = header(&dir);
     let command = execute::commit_command(binary, &dir, profile, execute::REF_NAME, "sample")
         .expect("commit command");
@@ -839,9 +852,17 @@ fn two_c_warm_cells() {
     let probe_world = std::env::var("PRIKK_2C_PROBE_WORLD").unwrap_or_else(|_| "before".into());
     assert!(probe_world == "before" || probe_world == "with");
     let profile = self_profile();
+    let manifest = prikk_corpus::plan(&profile, two_c_depth()).expect("planning");
+    let sample_kind = std::env::var("PRIKK_2C_SAMPLE").unwrap_or_else(|_| "new".to_string());
+    assert!(sample_kind == "new" || sample_kind == "edit");
     let mut text = format!(
-        "# 2c warm cells: `{}`\n\nbefore `{}` (sha256 `{}`), with `{}` (sha256 `{}`). Probe describes `{probe_world}`. {SAMPLES} interleaved rounds per cell; peak RSS by `getrusage(RUSAGE_CHILDREN)`; elapsed includes ~30 ms of wrapper start-up.\n\n",
+        "# 2c warm cells: `{}` (the timed commit {})\n\nbefore `{}` (sha256 `{}`), with `{}` (sha256 `{}`). Probe describes `{probe_world}`. {SAMPLES} interleaved rounds per cell; peak RSS by `getrusage(RUSAGE_CHILDREN)`; elapsed includes ~30 ms of wrapper start-up.\n\n",
         label(),
+        if sample_kind == "edit" {
+            "appends a line to the file the tip block edited"
+        } else {
+            "adds one new file"
+        },
         before_binary.display(),
         execute::binary_identity(&before_binary).unwrap().sha256,
         with_binary.display(),
@@ -854,6 +875,16 @@ fn two_c_warm_cells() {
         let cell_probe = baseline_cache_rung_for_test_support(&layout, execute::REF_NAME)
             .expect("probe at the cell");
         let baseline_cache_sha = cache_sha(&cell);
+        let edit_path: Option<String> = (sample_kind == "edit").then(|| {
+            manifest.commits[block as usize - 1]
+                .actions
+                .iter()
+                .find_map(|action| match action {
+                    PlannedAction::EditText { path, .. } => Some(path.clone()),
+                    _ => None,
+                })
+                .expect("the tip block of a dc65-miss cell edits a file")
+        });
         let mut before_runs = Vec::new();
         let mut with_runs = Vec::new();
         let mut caches_equal = true;
@@ -870,6 +901,7 @@ fn two_c_warm_cells() {
                     &cell,
                     &profile,
                     &baseline_cache_sha,
+                    edit_path.as_deref(),
                     &format!("two-c-warm-{depth}-{round}-{name}"),
                 );
                 eprintln!(
@@ -934,7 +966,11 @@ fn two_c_warm_cells() {
         );
         assert!(!class.is_empty());
     }
-    std::fs::write(out_dir().join(format!("2c-warm-{}.md", label())), &text).expect("writing");
+    std::fs::write(
+        out_dir().join(format!("2c-warm-{}-{sample_kind}.md", label())),
+        &text,
+    )
+    .expect("writing");
     eprintln!("{text}");
 }
 
