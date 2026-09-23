@@ -138,3 +138,33 @@ during it.
 out-of-memory hole against untrusted input. Do this round's items, then Stage A's handoff goes live.
 
 **Report:** `.git-exclude/review-request/rfc133-measurement-cost-follow-up-report-v1.md`.
+
+## Addendum 2 2026-09-23 — accepted; one explanation corrected; two small controls owed
+
+**Accepted** (review `rfc133-measurement-cost-follow-up-review-v1`): `ef120c58`, `f10d2a89`. Gates 14/14 re-run by
+the architect on the exact final commit, including both cross-target clippy runs, 2,265 / 0 / 31 per toolchain.
+The arithmetic holds: the profile (5,345.5 s) is a strict subset of the sweep (9,633.1 s), about **55 %** within
+one session; the points that carry the cost agree within 5 % and 0.2 % across the two runs, and RSS within noise.
+You ran nothing else while they ran and named what you could not stop — that is the honest report of a shared
+machine.
+
+**One explanation is corrected, and it decides what the template may say.** The report calls the old 75 minutes
+*"stale, from before the sweep gained its tree/diff columns."* **It was not:** the `d6d21df0` report already has
+the same five sections as today's. **The same sweep took 4,504 s on 2026-09-22 and 9,633 s on 2026-09-23 —
+2.14× for identical work.** Absolute wall time on this machine moves about 2× with load; ratios and per-point
+agreement within one session do not. **So the template records no absolute minutes** — as it now correctly says —
+and may record the **ratio**, with the instruction to compare runs by their per-point elapsed column.
+
+**Owed, fold into the next round you open (no design needed):**
+
+1. **A control for the run-distinguishing filename** — two `RunRevision` captures at different `started_at` give
+   different `file_name()`s, and the suffix is present. It guards the defect that actually lost a run's evidence.
+   *Perturb: drop the suffix — red.*
+2. **`assert_eq!(rss.len(), elapsed.len())` at the top of both render functions**, and the rendering control
+   asserts the `elapsed (s)` header. The rows are joined with `zip`, which silently drops a row if a future caller
+   passes one elapsed value too few.
+
+**Still open, not pressed:** the original §2a's *generate once per size, copy per sample* measurement. With
+N = 64,000 at 78 % of the profile, it is the one lever left on the prep gate's cost.
+
+**Next: RFC 158 Stage A** — its handoff goes live when the architect publishes it, not before.

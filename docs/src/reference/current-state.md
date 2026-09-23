@@ -50,11 +50,19 @@ measured shapes:
 
 - **Sealing cost grows quadratically with history depth.** Per-seal cost is roughly linear in depth,
   so cumulative cost to build a history of a given depth is roughly quadratic — a measured power-law
-  exponent of 2.03.
+  exponent of 2.03. *Measured before 0.43.0, and not re-measured since:* to seal one more block, `seal`
+  derives the next state root by walking the ancestor lineage, so each seal reads a number of objects
+  that grows with depth. 0.43.0 made `seal` *write* checkpoint snapshots; its measured gains were in
+  checkouts and worktree writes (below), and no measurement since has shown sealing get cheaper.
+  **This is the figure that decides how long it takes to build — or import — a deep history.**
 - **Checkout and merge-evidence both cost roughly `depth^1.45`**, from two separate, uncached history
   walks — measured exponents 1.446 and 1.445. Over the same range, tree size itself grew only as
   `depth^0.859`. **Cost tracks history depth, not repository size**: a wide, shallow repository is
-  cheap to work with; a deep one is not, regardless of how large its tree is.
+  cheap to work with; a deep one is not, regardless of how large its tree is. *Since 0.43.0 this is
+  half true:* anchored snapshots bound a checkout's replay to the nearest checkpoint, and
+  `checkout --patch-plan` measured **0.28×** its earlier cost at depth 256. **`merge-evidence` — and
+  `commit` on a cold cache — were not anchored** and measured the same before and after (about
+  13.4 s at depth 256); they still grow with depth.
 - **Incremental commit memory is flat up to a few thousand tracked files, then grows linearly** at
   roughly 1.7 KiB per file beyond that — measured peak around 11.6 MiB at 100 files and 113 MiB at
   64,000.
