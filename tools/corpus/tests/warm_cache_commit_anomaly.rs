@@ -638,13 +638,22 @@ fn two_c_build_corpus() {
 /// live nodes, path index, `latest_tombstone_by_id`, `seen_ids`), and records the SHA-256 of each rendering.
 /// A difference panics naming the tip. `PRIKK_2C_ASSERT_BUILD=1` also requires the rung the walk names at
 /// each tip to equal the one `two_c_build_corpus` recorded, which holds when the corpus was built by this
-/// tree's own binary (it validates the walk as an instrument).
+/// tree's own binary (it validates the walk as an instrument). `PRIKK_2C_DROP_VERIFIED=1` deletes the copy's
+/// replay-verified record first: with a prototype that anchors only at a verified block, the walk must then
+/// name the rungs a build without the prototype took (`PRIKK_2C_ASSERT_BUILD=1` against a corpus that
+/// binary built), and a prototype that trusts an unrecorded snapshot goes red.
 #[test]
 #[ignore = "RFC 136 2c: the ladder over the kept corpus, whole-state identity against full replay at every tip"]
 fn two_c_chain_walk() {
     let out = env_path("PRIKK_2C_CORPUS_OUT");
     let scratch = support::unique_dir("two-c-walk");
     support::copy_prikk_only(&out.join("corpus"), &scratch);
+    if std::env::var("PRIKK_2C_DROP_VERIFIED").is_ok_and(|value| value == "1") {
+        // The replay-verified record is rebuildable; without it no snapshot may anchor a baseline.
+        let record = scratch.join(".prikk/cache/replay-verified-blocks.v1");
+        assert!(record.exists(), "the corpus has a replay-verified record");
+        std::fs::remove_file(record).unwrap();
+    }
     let layout = RepositoryLayout::open(scratch.clone()).unwrap();
     let compare = std::env::var("PRIKK_2C_COMPARE").map_or(true, |value| value != "0");
     let started = std::time::Instant::now();
@@ -713,10 +722,14 @@ fn two_c_chain_walk() {
         took.as_secs(),
         if compare { "on" } else { "off" }
     );
-    text.push_str(&format!(
-        "**Identical at {identical} of {} tips** (`NodeLifecycleState` equality: live nodes, path index, `latest_tombstone_by_id`, `seen_ids`).\n\n",
-        tips.len()
-    ));
+    if compare {
+        text.push_str(&format!(
+            "**Identical at {identical} of {} tips** (`NodeLifecycleState` equality: live nodes, path index, `latest_tombstone_by_id`, `seen_ids`).\n\n",
+            tips.len()
+        ));
+    } else {
+        text.push_str("**Identity not measured in this run** (`PRIKK_2C_COMPARE=0`).\n\n");
+    }
     text.push_str(&share_table(&classes, &two_c_depths()));
     let ladder_ms: Vec<u128> = tips.iter().map(|tip| tip.elapsed.as_millis()).collect();
     text.push_str("\n| depth | ladder seconds over tips up to it |\n|---:|---:|\n");
