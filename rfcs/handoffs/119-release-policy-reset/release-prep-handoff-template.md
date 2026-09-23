@@ -44,7 +44,41 @@ over the runs give both in minutes.
 4. **Root-export name diff** from the last tag (`LC_ALL=C sort` + `comm`), plus `git diff <tag>..HEAD |
    grep '^+ *pub [a-z_]*:'` for struct-shape changes, plus `#[non_exhaustive]` on any new report type.
 5. **`cargo package --list -p prikk`**: file count, and that no unintended file ships.
-6. **Memory ratio (RFC 133 §6a).** Run the `#[ignore]`d instrument in `rfc133_node_count_memory.rs` at two repository sizes and put the incremental-commit peak-memory ratio in the report; a ratio that moved since the last release stops the cut until explained. The run writes its report to `.git-exclude/measurements/rfc133/node-count-memory-measurement-<revision>.md` and prints the path; it writes nothing under `rfcs/`, and the previous release's figure is the latest such file (or, before 0.43, the tracked `rfcs/handoffs/133-…/node-count-memory-measurement-report-v1.md`).
+6. **Memory ratio (RFC 133 §6a).** Run the release-gate profile, not the full sweep — the prep step
+   needs exactly one number, the incremental-commit peak-RSS ratio between the two largest N, and the
+   profile gives it at a fraction of the full driver's points:
+
+   ```text
+   cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_release_gate
+   ```
+
+   Put the ratio in the report; a ratio that moved since the last release stops the cut until explained.
+   It writes its report to
+   `.git-exclude/measurements/rfc133/node-count-memory-measurement-release-gate-<revision>.md` and prints
+   the path; it writes nothing under `rfcs/`, and the previous release's figure is the latest such file.
+
+   **Start it first**, before the rest of this sweep. Items 1-5, 7 and 8 above are reading and grepping,
+   not building — do them while the profile runs. **Do not start a build or another gate run alongside
+   it**: the peak-RSS figures come from fresh child processes and survive load, but `/tmp` is a shared,
+   size-capped tmpfs that a concurrent build or gate run can fill out from under it.
+
+   **Measured cost, once each on an idle machine (0.47.0 prep):** the release-gate profile itself took
+   **~88-94 minutes** across two independent clean runs (87.66 min, 93.6 min) — an afternoon, not the ten
+   minutes once assumed. It inherits the full sweep's dominant cost, per-sample repository setup at the
+   two largest N, which trimming five of seven points does not remove. **The matching full-sweep number
+   for this cycle could not be measured** — two attempts were interrupted by the machine rebooting
+   mid-run before either could report a duration — so treat the comparison as open, not "roughly half."
+   The next round that measures the full sweep cleanly should record its number here.
+
+   **This profile is not a substitute for the full sweep everywhere.** A round that adds or changes a
+   replay-shaped reader (a `tree` row, a `diff` row, anything the incremental or genesis series exercises
+   structurally) runs the **full driver** instead —
+   `cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture
+   rfc133_node_count_memory` — because that round measures the **shape** across all seven points and both
+   series, and shape needs every point. Use the release-gate profile only for this step's ordinary ratio
+   check. Nothing about the release commit's own gate set (item 2, below) is conditional on which memory
+   path ran: it always gets the full 12 gates, plus cross-target clippy when its diff touches
+   `cfg(target_os)`-gated code, whatever the sweep found.
 7. **A smoke script** exercising every shipped feature on a fresh fixture with a clean environment,
    runnable against any `prikk` binary path — the architect runs it against the published asset.
 8. **Absence claims** (owner's rule 2026-09-13, after `git-mapping.md` called four shipped features
