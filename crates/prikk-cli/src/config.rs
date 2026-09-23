@@ -20,6 +20,15 @@
 //! **The file is itself read through the shared bounded reader** (`bounded_read`, §1) -- 64 KiB is
 //! ample for a hand-built key=value file, and there is no reason this one file should be exempt
 //! from the same discipline every other incoming read now has.
+//!
+//! **Concurrency, and exactly why it is fine today:** `set` writes the *whole* file from the one
+//! key it was given, without reading the file first. With one key, two concurrent `set`s therefore
+//! race only for which rename lands last, and the loser's value is simply replaced -- last-writer-
+//! wins, exact, with no lost update to any *other* key because no other key exists. **A second key
+//! changes this:** `set` would become a read-modify-write (read the other key, change one, write
+//! all), two concurrent `set`s of different keys could then drop one another's change, and that
+//! needs a lock and a race test. That is the work of the round that adds the second key, not this
+//! one's -- do not extend `set` to a second key without it.
 
 use std::path::PathBuf;
 
