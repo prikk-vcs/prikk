@@ -82,14 +82,6 @@ fn self_profile() -> Profile {
     toml::from_str(&text).expect("parsing profiles/prikk-self.toml")
 }
 
-fn fmt_ms(duration: Duration) -> String {
-    format!("{:.2}", duration.as_secs_f64() * 1000.0)
-}
-
-fn fmt_kb(kb: Option<u64>) -> String {
-    kb.map_or_else(|| "not measured".to_owned(), |value| format!("{value} KB"))
-}
-
 #[cfg(target_os = "linux")]
 fn read_vm_hwm_kb(pid: u32) -> Option<u64> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
@@ -165,12 +157,6 @@ struct CheckoutSample {
     materialize_peak_kb: Option<u64>,
 }
 
-struct MergeSample {
-    depth: u64,
-    elapsed_ms: f64,
-    peak_kb: Option<u64>,
-}
-
 fn write_divergence_file(repo_root: &Path, path: &str, seed: u64) {
     let bytes = prikk_corpus::rng::generate_bytes(seed, 32);
     let full_path = repo_root.join(path);
@@ -180,61 +166,76 @@ fn write_divergence_file(repo_root: &Path, path: &str, seed: u64) {
     std::fs::write(full_path, bytes).expect("writing divergence file");
 }
 
-/// Item 1: copy `.prikk` twice (never the worktree) into fresh directories, time `--patch-plan` and
-/// `--patch-materialize` in each.
-fn measure_checkout(binary: &Path, repo_root: &Path, depth: u64) -> CheckoutSample {
-    let plan_dir = support::unique_dir(&format!("checkout-plan-{depth}"));
-    support::copy_prikk_only(repo_root, &plan_dir);
-    let (plan_elapsed, plan_peak_kb, plan_output) = run_measured({
-        let mut command = Command::new(binary);
-        command.current_dir(&plan_dir).args([
-            "checkout",
-            "--patch-plan",
-            "--ref",
-            execute::REF_NAME,
-        ]);
-        command
-    });
-    require_success(&plan_output, "checkout --patch-plan");
-    let _ = std::fs::remove_dir_all(&plan_dir);
+/// Item 1: copy `.prikk` (never the worktree) into a fresh directory per sample, and time `--patch-plan` and
+/// `--patch-materialize` in it, `samples` times, alternating the two commands; the medians are returned.
+fn measure_checkout(binary: &Path, repo_root: &Path, depth: u64, samples: usize) -> CheckoutSample {
+    let mut plan = Vec::new();
+    let mut materialize = Vec::new();
+    let mut tree_files = 0;
+    for round in 0..samples {
+        let plan_dir = support::unique_dir(&format!("checkout-plan-{depth}-{round}"));
+        support::copy_prikk_only(repo_root, &plan_dir);
+        let (elapsed, peak, output) = run_measured({
+            let mut command = Command::new(binary);
+            command.current_dir(&plan_dir).args([
+                "checkout",
+                "--patch-plan",
+                "--ref",
+                execute::REF_NAME,
+            ]);
+            command
+        });
+        require_success(&output, "checkout --patch-plan");
+        plan.push((elapsed.as_secs_f64() * 1000.0, peak));
+        let _ = std::fs::remove_dir_all(&plan_dir);
 
-    let materialize_dir = support::unique_dir(&format!("checkout-materialize-{depth}"));
-    support::copy_prikk_only(repo_root, &materialize_dir);
-    let (materialize_elapsed, materialize_peak_kb, materialize_output) = run_measured({
-        let mut command = Command::new(binary);
-        command.current_dir(&materialize_dir).args([
-            "checkout",
-            "--patch-materialize",
-            "--ref",
-            execute::REF_NAME,
-        ]);
-        command
-    });
-    require_success(&materialize_output, "checkout --patch-materialize");
-    let tree_files = support::count_tree_files(&materialize_dir);
-    let _ = std::fs::remove_dir_all(&materialize_dir);
-
+        let dir = support::unique_dir(&format!("checkout-materialize-{depth}-{round}"));
+        support::copy_prikk_only(repo_root, &dir);
+        let (elapsed, peak, output) = run_measured({
+            let mut command = Command::new(binary);
+            command.current_dir(&dir).args([
+                "checkout",
+                "--patch-materialize",
+                "--ref",
+                execute::REF_NAME,
+            ]);
+            command
+        });
+        require_success(&output, "checkout --patch-materialize");
+        tree_files = support::count_tree_files(&dir);
+        materialize.push((elapsed.as_secs_f64() * 1000.0, peak));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    let peak = |samples: &[(f64, Option<u64>)]| samples.iter().filter_map(|s| s.1).max();
     CheckoutSample {
         depth,
         tree_files,
-        plan_ms: plan_elapsed.as_secs_f64() * 1000.0,
-        plan_peak_kb,
-        materialize_ms: materialize_elapsed.as_secs_f64() * 1000.0,
-        materialize_peak_kb,
+        plan_ms: median(plan.iter().map(|s| s.0).collect()),
+        plan_peak_kb: peak(&plan),
+        materialize_ms: median(materialize.iter().map(|s| s.0).collect()),
+        materialize_peak_kb: peak(&materialize),
     }
 }
 
-/// Item 2: cut a branch from `heads/main`'s current tip, grow both sides by [`DIVERGENCE_SIZE`]
-/// commits (disjoint new files), then time `merge-evidence`. Restores the worktree to
-/// `heads/main`'s own real state before returning (removes the right side's files) so the caller can
-/// safely resume committing to `heads/main`. Returns the sample plus how many additional real
-/// commits `heads/main` gained (for the caller's own depth bookkeeping).
-fn measure_merge(
+/// The three blocks a `merge-evidence` names, and how many commits `heads/main` gained.
+struct Divergence {
+    baseline: String,
+    left: String,
+    right: String,
+    left_growth: u64,
+}
+
+/// Item 2, **sides that carry no edits** (release re-measurement handoff §1.2): cut a branch from `heads/main`'s
+/// current tip and grow both sides by [`DIVERGENCE_SIZE`] commits of brand-new files, so `merge-evidence` does
+/// the baseline replay and nothing else. Restores the worktree to `heads/main`'s own real state (removes the
+/// right side's files) so the caller can resume committing to `heads/main`. `heads/main` gains
+/// [`DIVERGENCE_SIZE`] real commits.
+fn prepare_divergence_without_edits(
     binary: &Path,
     repo_root: &Path,
     profile: &Profile,
     depth: u64,
-) -> (MergeSample, u64) {
+) -> Divergence {
     let branch_name = format!("heads/divergence-{depth}");
     let baseline_id = support::block_ids(binary, repo_root, execute::REF_NAME, 1)
         .into_iter()
@@ -293,51 +294,179 @@ fn measure_merge(
     for path in &right_paths {
         std::fs::remove_file(repo_root.join(path)).expect("removing right divergence file");
     }
+    Divergence {
+        baseline: baseline_id,
+        left: left_id,
+        right: right_id,
+        left_growth: DIVERGENCE_SIZE,
+    }
+}
 
+/// Item 2, **sides that carry edits**: each side makes [`DIVERGENCE_SIZE`] commits appending a line to a file
+/// the corpus had already edited (its content is an `EditText` result nobody stored, so `merge-evidence` needs its
+/// baseline text for every one of those operations). The two sides edit different files. Runs in the **throwaway
+/// copy** `repo_root` (the caller discards it), so `heads/main` proper is not perturbed: the worktree ends
+/// inconsistent with `heads/main`, which does not matter to a read-only `merge-evidence`.
+fn prepare_divergence_with_edits(
+    binary: &Path,
+    repo_root: &Path,
+    profile: &Profile,
+    depth: u64,
+    edited_paths: &[String],
+) -> Divergence {
+    let [left_path, right_path] = edited_paths else {
+        panic!("two edited files are needed, got {edited_paths:?}");
+    };
+    let branch_name = format!("heads/divergence-edits-{depth}");
+    let baseline_id = support::block_ids(binary, repo_root, execute::REF_NAME, 1)
+        .into_iter()
+        .next()
+        .expect("heads/main has a sealed tip");
+    execute::branch_create(binary, repo_root, profile, &branch_name, execute::REF_NAME)
+        .expect("branch create");
+    let original_left = std::fs::read(repo_root.join(left_path)).expect("left file");
+    let append = |path: &str, line: String| {
+        let full = repo_root.join(path);
+        let mut bytes = std::fs::read(&full).expect("reading the file to edit");
+        bytes.extend_from_slice(line.as_bytes());
+        std::fs::write(full, bytes).expect("editing");
+    };
+    for index in 0..DIVERGENCE_SIZE {
+        append(left_path, format!("left edit {depth}-{index}\n"));
+        execute::run_commit(
+            binary,
+            repo_root,
+            profile,
+            execute::REF_NAME,
+            &format!("left edit {depth}-{index}"),
+        )
+        .expect("left edit commit");
+        execute::run_seal(binary, repo_root, profile, execute::REF_NAME).expect("left edit seal");
+    }
+    let left_id = support::block_ids(binary, repo_root, execute::REF_NAME, 1)
+        .into_iter()
+        .next()
+        .expect("main tip");
+    // The branch's baseline does not have the left side's edits: put the file back before committing on it.
+    std::fs::write(repo_root.join(left_path), original_left).expect("restoring the left file");
+    for index in 0..DIVERGENCE_SIZE {
+        append(right_path, format!("right edit {depth}-{index}\n"));
+        execute::run_commit(
+            binary,
+            repo_root,
+            profile,
+            &branch_name,
+            &format!("right edit {depth}-{index}"),
+        )
+        .expect("right edit commit");
+        execute::run_seal(binary, repo_root, profile, &branch_name).expect("right edit seal");
+    }
+    let right_id = support::block_ids(binary, repo_root, &branch_name, 1)
+        .into_iter()
+        .next()
+        .expect("branch tip");
+    Divergence {
+        baseline: baseline_id,
+        left: left_id,
+        right: right_id,
+        left_growth: 0,
+    }
+}
+
+/// One timed `merge-evidence` over `divergence`, in `dir`.
+fn time_merge_evidence(binary: &Path, dir: &Path, divergence: &Divergence) -> (f64, Option<u64>) {
     let (elapsed, peak_kb, output) = run_measured({
         let mut command = Command::new(binary);
-        command.current_dir(repo_root).args([
+        command.current_dir(dir).args([
             "merge-evidence",
             "--baseline-block",
-            &baseline_id,
+            &divergence.baseline,
             "--left-block",
-            &left_id,
+            &divergence.left,
             "--right-block",
-            &right_id,
+            &divergence.right,
         ]);
         command
     });
     require_success(&output, "merge-evidence");
+    (elapsed.as_secs_f64() * 1000.0, peak_kb)
+}
 
-    (
-        MergeSample {
-            depth,
-            elapsed_ms: elapsed.as_secs_f64() * 1000.0,
-            peak_kb,
-        },
-        DIVERGENCE_SIZE,
-    )
+/// The last two distinct files the plan edited up to commit `upto` that are still on disk in `repo_root`.
+fn recently_edited_files(
+    manifest: &prikk_corpus::ActionManifest,
+    upto: usize,
+    repo_root: &Path,
+) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for commit in manifest.commits[..upto].iter().rev() {
+        for action in commit.actions.iter().rev() {
+            if let prikk_corpus::PlannedAction::EditText { path, .. } = action {
+                if !found.contains(path) && repo_root.join(path).is_file() {
+                    found.push(path.clone());
+                    if found.len() == 2 {
+                        return found;
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+fn median(mut values: Vec<f64>) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values[values.len() / 2]
+}
+
+fn out_dir() -> std::path::PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.git-exclude/measurements/rfc139");
+    std::fs::create_dir_all(&dir).expect("creating the measurement directory");
+    dir
+}
+
+/// One row of the merge-evidence table: `(depth, no-edit samples ms, edit samples ms, edit ops per side)`.
+struct MergeRow {
+    depth: u64,
+    without_edits: Vec<(f64, Option<u64>)>,
+    with_edits: Vec<(f64, Option<u64>)>,
+    edited_files: Vec<String>,
 }
 
 #[test]
-#[ignore = "RFC 139 increment 3's own measurement instrument; expensive, run deliberately"]
+#[ignore = "RFC 139 increment 3's own measurement instrument, in release; expensive, run deliberately"]
 fn two_measurements() {
     let profile = self_profile();
-    let manifest = prikk_corpus::plan(&profile, PRACTICAL_DEPTH).expect("planning to depth 256");
-    let binary = support::prikk_binary_path();
+    let mut manifest =
+        prikk_corpus::plan(&profile, PRACTICAL_DEPTH).expect("planning to depth 256");
+    // For trying the instrument out: `PRIKK_TM_MAX_DEPTH` cuts the plan short.
+    if let Some(cap) = std::env::var("PRIKK_TM_MAX_DEPTH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        manifest.commits.truncate(cap);
+    }
+    let (binary, build) = support::measurement_binary();
     let identity = execute::binary_identity(binary).expect("binary identity");
+    let samples: usize = std::env::var("PRIKK_TM_SAMPLES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3);
+    let label = std::env::var("PRIKK_TM_LABEL").unwrap_or_else(|_| build.to_string());
     let repo_root = support::unique_dir("two-measurements");
 
-    eprintln!("binary: {} ({})", identity.path, identity.version_output);
+    eprintln!(
+        "build: {build}; binary: {} ({})",
+        identity.path, identity.version_output
+    );
     eprintln!("binary sha256: {}", identity.sha256);
-    eprintln!("planned commits: {}", manifest.commits.len());
 
     execute::init_repository(binary, &repo_root).expect("init");
 
     let mut trusted = false;
     let mut actual_depth: u64 = 0;
     let mut checkout_samples = Vec::new();
-    let mut merge_samples = Vec::new();
+    let mut merge_rows: Vec<MergeRow> = Vec::new();
 
     for (index, commit) in manifest.commits.iter().enumerate() {
         execute::materialize_commit(&repo_root, commit).expect("materializing commit");
@@ -360,48 +489,70 @@ fn two_measurements() {
         if CHECKPOINTS.contains(&nominal_depth) {
             let depth = actual_depth;
             eprintln!("checkpoint: nominal {nominal_depth}, actual {depth}");
+            let (load, _) = (
+                std::fs::read_to_string("/proc/loadavg").unwrap_or_default(),
+                (),
+            );
+            eprintln!("  load at the checkpoint: {}", load.trim());
 
-            let checkout_sample = measure_checkout(binary, &repo_root, depth);
+            let checkout_sample = measure_checkout(binary, &repo_root, depth, samples);
             eprintln!(
-                "  checkout: tree {} files, plan {} ms (peak {}), materialize {} ms (peak {})",
-                checkout_sample.tree_files,
-                fmt_ms(Duration::from_secs_f64(checkout_sample.plan_ms / 1000.0)),
-                fmt_kb(checkout_sample.plan_peak_kb),
-                fmt_ms(Duration::from_secs_f64(
-                    checkout_sample.materialize_ms / 1000.0
-                )),
-                fmt_kb(checkout_sample.materialize_peak_kb),
+                "  checkout: tree {} files, plan {:.2} ms, materialize {:.2} ms",
+                checkout_sample.tree_files, checkout_sample.plan_ms, checkout_sample.materialize_ms,
             );
             checkout_samples.push(checkout_sample);
 
-            let (merge_sample, left_growth) = measure_merge(binary, &repo_root, &profile, depth);
+            // The edit variant first, in a throwaway copy at exactly this depth; then the no-edit variant on the
+            // real repository (which gains DIVERGENCE_SIZE commits, as before).
+            let edited_files = recently_edited_files(&manifest, index + 1, &repo_root);
+            let copy = support::unique_dir(&format!("two-measurements-edits-{depth}"));
+            support::copy_dir_all(&repo_root, &copy);
+            let with_edits =
+                prepare_divergence_with_edits(binary, &copy, &profile, depth, &edited_files);
+            let without_edits =
+                prepare_divergence_without_edits(binary, &repo_root, &profile, depth);
+            let mut row = MergeRow {
+                depth,
+                without_edits: Vec::new(),
+                with_edits: Vec::new(),
+                edited_files,
+            };
+            for _ in 0..samples {
+                row.without_edits
+                    .push(time_merge_evidence(binary, &repo_root, &without_edits));
+                row.with_edits
+                    .push(time_merge_evidence(binary, &copy, &with_edits));
+            }
             eprintln!(
-                "  merge-evidence: {} ms (peak {})",
-                fmt_ms(Duration::from_secs_f64(merge_sample.elapsed_ms / 1000.0)),
-                fmt_kb(merge_sample.peak_kb),
+                "  merge-evidence: no edits {:?} ms, with edits {:?} ms",
+                row.without_edits
+                    .iter()
+                    .map(|s| s.0.round())
+                    .collect::<Vec<_>>(),
+                row.with_edits
+                    .iter()
+                    .map(|s| s.0.round())
+                    .collect::<Vec<_>>(),
             );
-            merge_samples.push(merge_sample);
-            actual_depth += left_growth;
+            merge_rows.push(row);
+            let _ = std::fs::remove_dir_all(&copy);
+            actual_depth += without_edits.left_growth;
         }
     }
 
     let mut report = String::new();
-    report.push_str("# RFC 139 increment 3 -- the two measurements\n\n");
     report.push_str(&format!(
-        "Generated by `cargo test -p prikk-corpus --locked --test two_measurements -- --ignored \
-         --nocapture two_measurements`. Profile: `profiles/prikk-self.toml`. Practical depth cap: \
-         {PRACTICAL_DEPTH} (increment 2's ruling; the RFC 139 §6 floor of 2,048 is unreachable in \
-         practice). Divergence size: {DIVERGENCE_SIZE} commits per side, disjoint new files (see this \
-         file's own module doc for what is profiled and what is invented). Binary: `{}` (`{}`), sha256 \
-         `{}`.\n\n**256 / 64 = 4 `REANCHOR_BOUND` intervals -- this is not a cadence curve.**\n\n",
+        "# RFC 139 increment 3 -- the two measurements ({build})\n\n"
+    ));
+    report.push_str(&format!(
+        "Generated by `cargo test -p prikk-corpus --locked --test two_measurements -- --ignored --nocapture two_measurements`. \
+         Profile: `profiles/prikk-self.toml`. Depth cap {PRACTICAL_DEPTH}. **{build} build**: `{}` (`{}`), sha256 `{}`. \
+         {samples} samples per cell, medians; peak memory is the maximum over samples of a `VmHWM` poll (500 us), reported as such. \
+         Divergence: {DIVERGENCE_SIZE} commits per side.\n\n\
+         **256 / 64 = 4 `REANCHOR_BOUND` intervals -- this is not a cadence curve.**\n\n",
         identity.path, identity.version_output, identity.sha256,
     ));
-
-    report.push_str("## Item 1 -- checkout cost (RFC 136 §9 item 1)\n\n");
-    report.push_str(
-        "| Baseline depth | Tree files | patch-plan (ms) | plan peak (KB) | patch-materialize (ms) | materialize peak (KB) |\n",
-    );
-    report.push_str("|---:|---:|---:|---:|---:|---:|\n");
+    report.push_str("## Item 1 -- checkout cost\n\n| Baseline depth | Tree files | patch-plan (ms) | plan peak (KB, VmHWM) | patch-materialize (ms) | materialize peak (KB, VmHWM) |\n|---:|---:|---:|---:|---:|---:|\n");
     for sample in &checkout_samples {
         report.push_str(&format!(
             "| {} | {} | {:.2} | {} | {:.2} | {} |\n",
@@ -417,32 +568,42 @@ fn two_measurements() {
                 .map_or_else(|| "not measured".to_owned(), |kb| kb.to_string()),
         ));
     }
-
-    report.push_str("\n## Item 2 -- merge baseline reconstruction cost (RFC 136 §9 item 2)\n\n");
     report.push_str(&format!(
-        "Each row's baseline is the block `heads/main` was at when the divergence was cut; both \
-         sides then grew by {DIVERGENCE_SIZE} commits (disjoint new files) before `merge-evidence` \
-         was timed.\n\n",
+        "\n## Item 2 -- `merge-evidence`\n\nBaseline = the block `heads/main` was at when the divergence was cut. **Without edits:** both sides create brand-new files, so \
+         the cost is the baseline replay only. **With edits:** each side appends to a file the corpus had already edited (different files), so every one of its \
+         {DIVERGENCE_SIZE} operations needs a baseline text nobody stored.\n\n\
+         | Baseline depth | without edits (ms, median (min–max)) | with edits (ms, median (min–max)) | files edited (left, right) | peak KB without / with |\n|---:|---|---|---|---|\n"
     ));
-    report.push_str("| Baseline depth | merge-evidence (ms) | peak (KB) |\n");
-    report.push_str("|---:|---:|---:|\n");
-    for sample in &merge_samples {
+    for row in &merge_rows {
+        let range = |values: &[(f64, Option<u64>)]| {
+            let ms: Vec<f64> = values.iter().map(|v| v.0).collect();
+            let lo = ms.iter().cloned().fold(f64::MAX, f64::min);
+            let hi = ms.iter().cloned().fold(0.0, f64::max);
+            format!("{:.1} ({lo:.1}–{hi:.1})", median(ms))
+        };
+        let peak = |values: &[(f64, Option<u64>)]| {
+            values
+                .iter()
+                .filter_map(|v| v.1)
+                .max()
+                .map_or("-".to_string(), |kb| kb.to_string())
+        };
         report.push_str(&format!(
-            "| {} | {:.2} | {} |\n",
-            sample.depth,
-            sample.elapsed_ms,
-            sample
-                .peak_kb
-                .map_or_else(|| "not measured".to_owned(), |kb| kb.to_string()),
+            "| {} | {} | {} | {} | {} / {} |\n",
+            row.depth,
+            range(&row.without_edits),
+            range(&row.with_edits),
+            row.edited_files.join(", "),
+            peak(&row.without_edits),
+            peak(&row.with_edits),
         ));
     }
-
-    let report_path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../rfcs/handoffs/139-measurement-corpus/two-measurements-report-v1.md"
-    );
-    std::fs::write(report_path, &report).expect("writing report");
-    eprintln!("report written to {report_path}");
+    std::fs::write(
+        out_dir().join(format!("two-measurements-{label}.md")),
+        &report,
+    )
+    .expect("writing report");
+    eprintln!("{report}");
 
     let _ = std::fs::remove_dir_all(&repo_root);
 }

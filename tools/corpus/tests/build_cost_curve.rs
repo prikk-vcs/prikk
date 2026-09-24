@@ -1,34 +1,29 @@
-//! RFC 139 §6's own deliverable: the build-cost curve -- wall clock and peak RSS against sealed
-//! depth, out to the depth the curve itself says is reachable -- and the depth target this increment
-//! states against it. `#[ignore]`d, matching `dc59_commit_benchmark.rs`/`dc92_lineage_replay_
-//! benchmark.rs`'s own precedent: an expensive, deliberately-invoked measurement instrument, not a
-//! correctness test.
+//! RFC 139 §6's build-cost curve -- `commit` and `seal` wall clock against sealed depth -- **in the build people
+//! run** (release re-measurement handoff, `rfcs/handoffs/139-measurement-corpus/release-remeasurement-handoff-v1.md`
+//! §1.1). `#[ignore]`d, an expensive deliberately-invoked instrument.
 //!
-//! **One repository, grown generation by generation to the target depth** (dc92's own technique):
-//! rebuilding independently at every checkpoint would redo every smaller depth's work each time.
-//! Every commit and every seal is timed individually; `CHECKPOINTS` reports a subset for
-//! readability.
-//!
-//! **Peak RSS is folded into the same invocations, not a separate growth pass.** dc59/dc92's own
-//! memory passes rebuild a second time because their timing pass uses `.output()` and the memory
-//! pass needs `.spawn()` + `/proc` polling. Here, since this is already a single continuously-growing
-//! repository, the commit at each checkpoint depth is simply spawned-and-polled instead of run via
-//! `.output()` -- same invocation, same cost, both figures. Non-checkpoint depths stay on the cheaper
-//! `.output()` path. **Peak RSS is Linux-only** (`/proc/<pid>/status`); a missed or unavailable sample
-//! is reported as *not measured*, never as zero (DC-62's own discipline).
-//!
-//! **One sample run, not several.** Growing to RFC 139 §6's own 2,048-block floor is itself the
-//! expensive part this measurement exists to price; running it several times for a median would
-//! multiply that cost answering a shape question (does cost grow, and how) a single run already
-//! answers. dc92's own "reduced sample count, stated rather than hidden" precedent, restated rather
-//! than silently reused.
+//! **What changed from the debug-build instrument this replaces.**
+//! - The binary is the release build (`support::measurement_binary`), or the debug one only when
+//!   `PRIKK_MEASURE_PROFILE=debug` asks for a bridging column; the report says which.
+//! - **Three independent samples** (`PRIKK_BCC_SAMPLES`, default 3) where the original had one: the sealing
+//!   exponent was "the least-supported figure". Each sample is its own repository grown from the same plan, in
+//!   sequence, never in parallel (a parallel run would time itself).
+//! - **Every block's commit and seal time is kept** (a TSV per sample), so per-seal cost can be reported against
+//!   depth separately from the cumulative cost, and both can be fitted.
+//! - **The depth is decided by a rule, not by feel.** The plan is RFC 139 §6's floor (2,048). The first sample builds
+//!   to 256 whatever it costs; then, at each checkpoint it has reached, it projects the build **to the next
+//!   checkpoint** from the per-block times already measured (a log-log fit of commit + seal against depth, summed
+//!   over the blocks still to build) and continues only while that build is projected to finish within
+//!   `PRIKK_BCC_MAX_HOURS` (default 2). It stops at the first checkpoint that would not, and says which. The other
+//!   samples build to the depth the first reached, so the samples are comparable.
+//! - **Peak memory is not measured here.** Timing is this round's point; the original's `VmHWM` samples at 500 us
+//!   would have put a polling thread beside the timed command. (RFC 133 owns memory, by `getrusage`.)
+//! - The report goes to `.git-exclude/measurements/rfc139/`, not into `rfcs/`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use prikk_corpus::{Profile, execute};
 
@@ -37,8 +32,11 @@ mod support;
 /// RFC 139 §6's floor: 32 `REANCHOR_BOUND` (64) intervals.
 const FLOOR_DEPTH: u64 = 2048;
 
-/// Depths this run reports in detail. Doubling, plus the floor itself.
+/// Depths reported in detail. Doubling, plus the floor.
 const CHECKPOINTS: [u64; 7] = [32, 64, 128, 256, 512, 1024, 2048];
+
+/// The depth the first sample always reaches, whatever it costs.
+const ALWAYS_BUILD_TO: u64 = 256;
 
 fn self_profile() -> Profile {
     let text = std::fs::read_to_string(concat!(
@@ -49,201 +47,238 @@ fn self_profile() -> Profile {
     toml::from_str(&text).expect("parsing profiles/prikk-self.toml")
 }
 
-fn fmt_ms(duration: Duration) -> String {
-    format!("{:.2}", duration.as_secs_f64() * 1000.0)
+fn env_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
-struct DepthSample {
-    depth: u64,
-    commit_ms: f64,
-    seal_ms: f64,
-    /// Total wall-clock elapsed for every commit+seal so far, from the first commit through this
-    /// checkpoint's own seal -- the practically useful figure ("how long to build a corpus of depth
-    /// N"), and far more robust to this profile's own high per-commit variance (1 to 66 files
-    /// changed, tens of bytes to megabytes) than any single checkpoint's own commit/seal time, which
-    /// can be an outlier in either direction depending on what that one commit happened to draw.
-    cumulative_ms: f64,
-    tree_files: u64,
-    peak_kb: Option<u64>,
+fn out_dir() -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.git-exclude/measurements/rfc139");
+    std::fs::create_dir_all(&dir).expect("creating the measurement directory");
+    dir
 }
 
-#[cfg(target_os = "linux")]
-fn read_vm_hwm_kb(pid: u32) -> Option<u64> {
-    let text = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("VmHWM:") {
-            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-            return Some(kb);
-        }
+/// One sample: every block's `(depth, commit ms, seal ms)`, and where it stopped.
+struct Run {
+    blocks: Vec<(u64, f64, f64)>,
+    /// `(checkpoint not built, projected hours to build to it)` when the 2-hour rule stopped the sample.
+    refused: Option<(u64, f64)>,
+    total_seconds: f64,
+}
+
+/// Fit `y = exp(a) * depth^b` by least squares on `(ln depth, ln y)`, over blocks at or above `from_depth`.
+/// Returns `(a, b)`.
+fn power_fit(points: &[(f64, f64)]) -> (f64, f64) {
+    let n = points.len() as f64;
+    let (sx, sy): (f64, f64) = points
+        .iter()
+        .fold((0.0, 0.0), |acc, (x, y)| (acc.0 + x.ln(), acc.1 + y.ln()));
+    let (mx, my) = (sx / n, sy / n);
+    let (mut num, mut den) = (0.0, 0.0);
+    for (x, y) in points {
+        num += (x.ln() - mx) * (y.ln() - my);
+        den += (x.ln() - mx).powi(2);
     }
-    None
+    let b = num / den;
+    (my - b * mx, b)
 }
 
-/// Spawn `command`, poll for `VmHWM` while it runs, and return `(elapsed, peak_kb)`. Asserts the
-/// command succeeded. Polling interval matches DC-62's own harness.
-#[cfg(target_os = "linux")]
-fn spawn_and_measure(mut command: Command, what: &str) -> (Duration, Option<u64>) {
-    const INTERVAL: Duration = Duration::from_micros(500);
-    let start = Instant::now();
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let mut peak_kb: Option<u64> = None;
-    loop {
-        if let Some(kb) = read_vm_hwm_kb(pid) {
-            peak_kb = Some(peak_kb.map_or(kb, |current: u64| current.max(kb)));
+/// Grow one repository. `stop_at` fixes the depth (samples after the first); `None` applies the projection rule.
+fn grow(
+    binary: &Path,
+    profile: &Profile,
+    manifest: &prikk_corpus::ActionManifest,
+    stop_at: Option<u64>,
+    max_hours: f64,
+    label: &str,
+) -> Run {
+    let repo_root = support::unique_dir(label);
+    execute::init_repository(binary, &repo_root).expect("init");
+    let mut trusted = false;
+    let mut blocks = Vec::new();
+    let mut refused = None;
+    let run_start = Instant::now();
+    for (index, commit) in manifest.commits.iter().enumerate() {
+        let depth = (index + 1) as u64;
+        execute::materialize_commit(&repo_root, commit).expect("materializing commit");
+        let start = Instant::now();
+        execute::run_commit(
+            binary,
+            &repo_root,
+            profile,
+            execute::REF_NAME,
+            &format!("corpus commit {index}"),
+        )
+        .expect("commit");
+        let commit_ms = start.elapsed().as_secs_f64() * 1000.0;
+        if !trusted {
+            execute::trust_maintainer(binary, &repo_root, profile).expect("trust");
+            trusted = true;
         }
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        std::thread::sleep(INTERVAL);
-    }
-    let elapsed = start.elapsed();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{what} failed (status {:?}): {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    (elapsed, peak_kb)
-}
+        let start = Instant::now();
+        execute::run_seal(binary, &repo_root, profile, execute::REF_NAME).expect("seal");
+        let seal_ms = start.elapsed().as_secs_f64() * 1000.0;
+        blocks.push((depth, commit_ms, seal_ms));
 
-fn count_tree_files(repo_root: &Path) -> u64 {
-    fn walk(dir: &Path, count: &mut u64) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_name() == ".prikk" {
-                continue;
+        if CHECKPOINTS.contains(&depth) {
+            eprintln!(
+                "[{label}] depth {depth}: commit {commit_ms:.1} ms, seal {seal_ms:.1} ms, cumulative {:.1} s",
+                run_start.elapsed().as_secs_f64()
+            );
+            if let Some(stop) = stop_at {
+                if depth >= stop {
+                    break;
+                }
+            } else if depth >= ALWAYS_BUILD_TO {
+                let Some(next) = CHECKPOINTS.iter().copied().find(|c| *c > depth) else {
+                    break;
+                };
+                // The projection: commit + seal per block, fitted over the blocks measured so far (from
+                // depth 16, past the first blocks' fixed costs), summed over the blocks still to build.
+                let points: Vec<(f64, f64)> = blocks
+                    .iter()
+                    .filter(|(d, _, _)| *d >= 16)
+                    .map(|(d, c, s)| (*d as f64, c + s))
+                    .collect();
+                let (a, b) = power_fit(&points);
+                let remaining_s: f64 = ((depth + 1)..=next)
+                    .map(|d| a.exp() * (d as f64).powf(b) / 1000.0)
+                    .sum();
+                let projected_hours = (run_start.elapsed().as_secs_f64() + remaining_s) / 3600.0;
+                eprintln!(
+                    "[{label}] projection to {next}: fit exponent {b:.2}, {projected_hours:.2} h (limit {max_hours} h)"
+                );
+                if projected_hours > max_hours {
+                    refused = Some((next, projected_hours));
+                    break;
+                }
             }
-            if entry.file_type().unwrap().is_dir() {
-                walk(&entry.path(), count);
-            } else {
-                *count += 1;
-            }
         }
     }
-    let mut count = 0;
-    walk(repo_root, &mut count);
-    count
+    let total_seconds = run_start.elapsed().as_secs_f64();
+    let _ = std::fs::remove_dir_all(&repo_root);
+    Run {
+        blocks,
+        refused,
+        total_seconds,
+    }
 }
 
 #[test]
-#[ignore = "RFC 139 §6's own measurement instrument; expensive, run deliberately"]
+#[ignore = "RFC 139 §6's build-cost curve, in release; expensive, run deliberately"]
 fn build_cost_curve() {
     let profile = self_profile();
     let manifest =
         prikk_corpus::plan(&profile, FLOOR_DEPTH).expect("planning to the RFC 139 §6 floor");
-    let binary = support::prikk_binary_path();
+    let (binary, build) = support::measurement_binary();
     let identity = execute::binary_identity(binary).expect("binary identity");
-    let repo_root = support::unique_dir("build-cost-curve");
+    let samples = env_f64("PRIKK_BCC_SAMPLES", 3.0) as usize;
+    let max_hours = env_f64("PRIKK_BCC_MAX_HOURS", 2.0);
+    let max_depth = env_f64("PRIKK_BCC_MAX_DEPTH", FLOOR_DEPTH as f64) as u64;
+    let label = std::env::var("PRIKK_BCC_LABEL").unwrap_or_else(|_| build.to_string());
+    eprintln!(
+        "build: {build}; binary {} ({}), sha256 {}",
+        identity.path, identity.version_output, identity.sha256
+    );
 
-    eprintln!("binary: {} ({})", identity.path, identity.version_output);
-    eprintln!("binary sha256: {}", identity.sha256);
-    eprintln!("planned commits: {}", manifest.commits.len());
-
-    execute::init_repository(binary, &repo_root).expect("init");
-
-    let mut trusted = false;
-    let mut samples = Vec::new();
-    let run_start = Instant::now();
-
-    for (index, commit) in manifest.commits.iter().enumerate() {
-        execute::materialize_commit(&repo_root, commit).expect("materializing commit");
-        let depth = (index + 1) as u64;
-        let message = format!("corpus commit {index}");
-        let is_checkpoint = CHECKPOINTS.contains(&depth);
-
-        #[cfg(target_os = "linux")]
-        let (commit_elapsed, peak_kb) = if is_checkpoint {
-            spawn_and_measure(
-                execute::commit_command(binary, &repo_root, &profile, execute::REF_NAME, &message)
-                    .expect("commit command"),
-                "commit",
-            )
-        } else {
-            let start = Instant::now();
-            execute::run_commit(binary, &repo_root, &profile, execute::REF_NAME, &message)
-                .expect("commit");
-            (start.elapsed(), None)
-        };
-        #[cfg(not(target_os = "linux"))]
-        let (commit_elapsed, peak_kb) = {
-            let start = Instant::now();
-            execute::run_commit(binary, &repo_root, &profile, execute::REF_NAME, &message)
-                .expect("commit");
-            (start.elapsed(), None)
-        };
-
-        if !trusted {
-            execute::trust_maintainer(binary, &repo_root, &profile).expect("trust");
-            trusted = true;
+    let mut runs: Vec<Run> = Vec::new();
+    let mut manifest = manifest;
+    manifest.commits.truncate(max_depth as usize);
+    for sample in 0..samples {
+        let stop_at = runs
+            .first()
+            .map(|first| first.blocks.last().map_or(0, |(depth, _, _)| *depth));
+        let run = grow(
+            binary,
+            &profile,
+            &manifest,
+            stop_at,
+            max_hours,
+            &format!("bcc-{label}-{sample}"),
+        );
+        let mut tsv = String::from("depth\tcommit_ms\tseal_ms\n");
+        for (depth, commit_ms, seal_ms) in &run.blocks {
+            tsv.push_str(&format!("{depth}\t{commit_ms:.3}\t{seal_ms:.3}\n"));
         }
-
-        let seal_start = Instant::now();
-        execute::run_seal(binary, &repo_root, &profile, execute::REF_NAME).expect("seal");
-        let seal_elapsed = seal_start.elapsed();
-
-        if is_checkpoint {
-            let tree_files = count_tree_files(&repo_root);
-            let cumulative_ms = run_start.elapsed().as_secs_f64() * 1000.0;
-            eprintln!(
-                "depth {depth}: commit {} ms, seal {} ms, cumulative {:.0} ms, tree {tree_files} \
-                 files, peak {}",
-                fmt_ms(commit_elapsed),
-                fmt_ms(seal_elapsed),
-                cumulative_ms,
-                peak_kb.map_or_else(|| "not measured".to_owned(), |kb| format!("{kb} KB")),
-            );
-            samples.push(DepthSample {
-                depth,
-                commit_ms: commit_elapsed.as_secs_f64() * 1000.0,
-                seal_ms: seal_elapsed.as_secs_f64() * 1000.0,
-                cumulative_ms,
-                tree_files,
-                peak_kb,
-            });
-        }
+        std::fs::write(
+            out_dir().join(format!("build-curve-{label}-run{sample}.tsv")),
+            tsv,
+        )
+        .expect("writing the per-block times");
+        eprintln!(
+            "[{label}] sample {sample}: {} blocks in {:.0} s",
+            run.blocks.len(),
+            run.total_seconds
+        );
+        runs.push(run);
     }
 
-    let mut report = String::new();
-    report.push_str("# RFC 139 §6 -- corpus build-cost curve\n\n");
-    report.push_str(&format!(
-        "Generated by `cargo test -p prikk-corpus --locked --test build_cost_curve -- --ignored \
-         --nocapture build_cost_curve`. Profile: `profiles/prikk-self.toml`. One growing repository, \
-         one sample run (see module doc for why). Binary: `{}` (`{}`), sha256 `{}`.\n\n",
+    // Report: per checkpoint, the median over samples of the block at the checkpoint, and of the mean over the
+    // 16 blocks ending at it (a block's own time is noisy: this profile changes 1 to 66 files per commit).
+    let deepest = runs[0].blocks.last().map_or(0, |(depth, _, _)| *depth);
+    let mut report = format!(
+        "# RFC 139 §6 -- corpus build-cost curve ({build})\n\nProfile `profiles/prikk-self.toml`, planned to {FLOOR_DEPTH}. \
+         **{build} build**: `{}` (`{}`), sha256 `{}`. {samples} independent samples, each a repository grown in sequence. \
+         Deepest depth reached: **{deepest}**.\n\n",
         identity.path, identity.version_output, identity.sha256,
-    ));
-    report.push_str(
-        "| Sealed blocks (depth) | Tree files | Commit (ms) | Seal (ms) | Cumulative (s) | Peak VmHWM (KB) |\n",
     );
-    report.push_str("|---:|---:|---:|---:|---:|---:|\n");
-    for sample in &samples {
+    if let Some((next, hours)) = runs[0].refused {
         report.push_str(&format!(
-            "| {} | {} | {:.2} | {:.2} | {:.1} | {} |\n",
-            sample.depth,
-            sample.tree_files,
-            sample.commit_ms,
-            sample.seal_ms,
-            sample.cumulative_ms / 1000.0,
-            sample
-                .peak_kb
-                .map_or_else(|| "not measured".to_owned(), |kb| kb.to_string()),
+            "**Stopped by the {max_hours}-hour rule**: the build to checkpoint {next} was projected at {hours:.1} h.\n\n"
         ));
     }
-    // Matches dc59/dc92's own established path for this kind of harness: a raw data artifact next
-    // to the RFC's own handoff material, regenerated by re-running the instrument -- not narrative
-    // RFC content, so distinct from this round's own prose report (which goes to
-    // `.git-exclude/review-request/`, per this increment's handoff §9).
-    let report_path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../rfcs/handoffs/139-measurement-corpus/build-cost-curve-report-v1.md"
-    );
-    std::fs::write(report_path, &report).expect("writing report");
-    eprintln!("report written to {report_path}");
-
-    let _ = std::fs::remove_dir_all(&repo_root);
+    report.push_str("| depth | seal at the block (ms), per sample | seal, mean of the last 16 blocks (ms), median | commit, mean of the last 16 (ms), median | cumulative commit+seal (s), per sample |\n|---:|---|---:|---:|---|\n");
+    for checkpoint in CHECKPOINTS.iter().copied().filter(|c| *c <= deepest) {
+        let window = |run: &Run, pick: fn(&(u64, f64, f64)) -> f64| -> f64 {
+            let lo = checkpoint.saturating_sub(15);
+            let values: Vec<f64> = run
+                .blocks
+                .iter()
+                .filter(|(d, _, _)| *d >= lo && *d <= checkpoint)
+                .map(pick)
+                .collect();
+            values.iter().sum::<f64>() / values.len() as f64
+        };
+        let median = |mut values: Vec<f64>| {
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            values[values.len() / 2]
+        };
+        let at_block: Vec<String> = runs
+            .iter()
+            .map(|run| {
+                run.blocks
+                    .iter()
+                    .find(|(d, _, _)| *d == checkpoint)
+                    .map_or("-".to_string(), |(_, _, s)| format!("{s:.1}"))
+            })
+            .collect();
+        let cumulative: Vec<String> = runs
+            .iter()
+            .map(|run| {
+                let total: f64 = run
+                    .blocks
+                    .iter()
+                    .filter(|(d, _, _)| *d <= checkpoint)
+                    .map(|(_, c, s)| c + s)
+                    .sum();
+                format!("{:.1}", total / 1000.0)
+            })
+            .collect();
+        report.push_str(&format!(
+            "| {checkpoint} | {} | {:.1} | {:.1} | {} |\n",
+            at_block.join(", "),
+            median(runs.iter().map(|r| window(r, |b| b.2)).collect()),
+            median(runs.iter().map(|r| window(r, |b| b.1)).collect()),
+            cumulative.join(", "),
+        ));
+    }
+    report.push_str("\nPer-block times: `build-curve-*-run*.tsv` beside this file; exponents are fitted from them (`fit_build_curve.py`).\n");
+    std::fs::write(
+        out_dir().join(format!("build-cost-curve-{label}.md")),
+        &report,
+    )
+    .expect("writing the report");
+    eprintln!("{report}");
 }

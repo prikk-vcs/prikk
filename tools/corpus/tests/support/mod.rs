@@ -104,6 +104,17 @@ pub fn prikk_debug_binary_path_for_bridging_columns() -> &'static Path {
     })
 }
 
+/// The binary a **measurement** uses, and the label its report must state: the release build, unless
+/// `PRIKK_MEASURE_PROFILE=debug` asks for the debug column of a bridging table (RFC 139 release re-measurement
+/// handoff, §1.4). Never the other way round: release is the default, in source.
+pub fn measurement_binary() -> (&'static Path, &'static str) {
+    if std::env::var("PRIKK_MEASURE_PROFILE").is_ok_and(|value| value == "debug") {
+        (prikk_debug_binary_path_for_bridging_columns(), "debug")
+    } else {
+        (prikk_binary_path(), "release")
+    }
+}
+
 /// `env!("CARGO")` -- the exact cargo binary that built this test, per rustc/cargo's own
 /// documented mechanism for a crate to reliably re-invoke cargo without assuming it is on `PATH`.
 const CARGO: &str = env!("CARGO");
@@ -215,6 +226,11 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
             std::fs::copy(entry.path(), &dst_path).expect("copying file");
         }
     }
+}
+
+/// A whole-directory copy (worktree and `.prikk`), for a throwaway repository a measurement may perturb.
+pub fn copy_dir_all(src: &Path, dst: &Path) {
+    copy_dir_recursive(src, dst);
 }
 
 /// Every real file under `root`, excluding `.prikk` -- a materialized worktree's file count.
