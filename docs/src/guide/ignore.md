@@ -51,8 +51,9 @@ no rules, and every repository created before 0.29.0 behaves exactly as it alway
 
 ## It is an ordinary tracked file, not configuration
 
-There is no separate configuration mechanism for it — a general configuration file remains a
-deliberately deferred, future increment. `.prikkignore` is committed and signed like any other
+There is no separate configuration mechanism for it. `prikk config` (since 0.47.0) exists, but its
+one key bounds the size of incoming objects and has nothing to do with exclusion; a general
+configuration file remains a deliberately deferred, future increment. `.prikkignore` is committed and signed like any other
 worktree file, and it travels through `bundle export`/`import` and `sync` the same way. A repository
 you receive carries the sender's own rules, and those rules shape *your* future commits from that
 point on — they say nothing about, and change nothing in, the patches you already received.

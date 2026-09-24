@@ -65,9 +65,11 @@ artifacts](docs/src/reference/commands.md) for the full defaults table.
 `diff`'s `--from`, naming the worktree's baseline) named the repository's own current branch and it had
 never been sealed — the one state every *implicit* read already tolerated. `prikk worktree-status --ref`,
 `log --ref`, `tree --ref`, `cat --path … --ref`, `diff --from` and `checkout --plan-only --ref` all
-answer for the current branch exactly as leaving `--ref`/`--from` off does now, published or not; a
+answer for the current branch as leaving `--ref`/`--from` off does now, published or not; a
 consumer that resolves its own default and always passes it explicitly was affected on every one of these
-commands. Every other absent ref, and the current branch named as one side of `diff --from … --to …`,
+commands. One difference remains on purpose, in `diff` only: with a queued, unsealed `commit` and no
+seal yet, bare `diff` folds the queue onto the empty state (a queued file reads as unchanged), while
+`diff --from heads/main` compares against the empty state exactly (the same file reads as `added`). Every other absent ref, and the current branch named as one side of `diff --from … --to …`,
 still refuses exactly as before.
 
 ### Added — `branch list` names an unpublished current branch
