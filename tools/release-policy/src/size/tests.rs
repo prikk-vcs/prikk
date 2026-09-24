@@ -163,7 +163,7 @@ fn an_inline_test_module_is_not_production() {
         .lines()
         .count();
     assert_eq!(
-        physical, 1391,
+        physical, 1397,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -173,7 +173,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1342);
+    assert_eq!(counted.production_lines, 1348);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -211,8 +211,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 136 -> 137. RFC 156 §4 added `signature_admission.rs`: 137 -> 138. The RFC 132 refusal sweep added
     // `ref_resolution.rs`: 138 -> 139. RFC 153's point resolver added `point.rs`: 139 -> 140.
     // RFC 157 added `point_reading.rs`: 140 -> 141. RFC 153's `diff` added `diff.rs` and `line_diff.rs`:
-    // 141 -> 143. Its worktree side added `worktree_read.rs`: 143 -> 144.
-    assert_eq!(store.production_files, 144);
+    // 141 -> 143. Its worktree side added `worktree_read.rs`: 143 -> 144. RFC 136 increment 2c added
+    // `anchor_fallback.rs` and `lifecycle_cache/anchored_text.rs`: 144 -> 146.
+    assert_eq!(store.production_files, 146);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

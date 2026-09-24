@@ -102,7 +102,7 @@ const UPPER_LAYER: [&str; 25] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 34] = [
+const LOWER_LAYER: [&str; 35] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -131,6 +131,10 @@ const LOWER_LAYER: [&str; 34] = [
     "trust_index",
     "wal",
     "worktree_marker",
+    // RFC 136 increment 2c: a snapshot anchor that could not be used, and the per-thread list the CLI drains to
+    // name it on stderr. Depends on no store module (only `prikk_object`); `lifecycle_cache::anchored_text` and
+    // `patch_replay::anchor` (both lower) record and construct it, and `lib.rs` exports the drain.
+    "anchor_fallback",
     // RFC 136 increment 2b: the replay-verified block record, a rebuildable cache under `.prikk/cache/`
     // that `block_state` (seal) and `verify` write and the anchored worktree writes read. It depends
     // only on `foundation`, so it sits with the lower-layer state it records.

@@ -131,8 +131,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 153's point resolver added `point`, a point's lower-layer shape: 138 -> 139.
     // RFC 157 added `point_reading`, `tree` and `cat`'s reader: 139 -> 140. RFC 153's `diff` added `diff`
     // (upper) and `line_diff` (lower): 140 -> 142. Its worktree side added `worktree_read`, the read-only view of
-    // what `commit` would author, beside `worktree_files`: 142 -> 143.
-    assert_eq!(modules.len(), 143, "modules: {modules:?}");
+    // what `commit` would author, beside `worktree_files`: 142 -> 143. RFC 136 increment 2c added
+    // `anchor_fallback` and `lifecycle_cache::anchored_text`: 143 -> 145.
+    assert_eq!(modules.len(), 145, "modules: {modules:?}");
     assert!(
         !modules
             .iter()
