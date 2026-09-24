@@ -45,56 +45,66 @@ Prikk is not yet the right tool if you need:
 ## What scale to expect
 
 The list above is about missing features. Scale is a separate question, and worth stating on its
-own: what happens as a repository's history gets deep, or its tracked file count gets large. Three
-measured shapes:
+own: what happens as a repository's history gets deep, or its tracked file count gets large. Every
+figure below was measured with a **release build** (the build you install) on Linux, on the
+development state after 0.46.0 (0.46.0 plus the changes under "Unreleased" in the CHANGELOG), on
+the RFC 139 corpus profile `prikk-self` (a real project's shape; 155 tracked files at depth 256). Each figure names the depth range it rests on. Depth is the number
+of sealed blocks.
 
-> **Correction, 2026-09-24: the timing figures below were measured with an unoptimized (debug) build,
-> not the release build you install.** The measurement tool built `prikk` without `--release`. The
-> commit-memory figures are unaffected (that instrument runs in release). The timing figures are
-> affected: the sealing exponent and its hours projection, the `depth^1.45` exponents, the 0.28× ratio
-> and the 13.4 s figure. On the same 256-block history, a cold full replay (`prikk diff`) takes
-> **14.0 s** with a debug build and **0.47 s** with a release build, identical output, three
-> interleaved samples each. The *shapes* also differ between the two builds: cold `commit` grows with
-> exponent 1.18 in debug and 0.96 in release over the same range. So read every timing line below as
-> **a debug-build figure, overstated for the release build by an unmeasured and possibly large
-> factor, with a shape that may not hold**. Release-build re-measurement is scheduled; this page is
-> corrected when it lands.
+- **Sealing cost grows roughly quadratically with history depth, and per-seal cost is worse than
+  linear.** `seal` derives the next state root by walking the ancestor lineage, so each seal costs
+  more the deeper the history is. Three independent builds, each grown to depth 1,024 (the deepest
+  measured), median of three, mean over the 16 blocks ending at each depth:
 
-- **Sealing cost grows quadratically with history depth.** Per-seal cost is roughly linear in depth,
-  so cumulative cost to build a history of a given depth is roughly quadratic — a measured power-law
-  exponent of 2.03. *Measured before 0.43.0, and not re-measured since:* to seal one more block, `seal`
-  derives the next state root by walking the ancestor lineage, so each seal reads a number of objects
-  that grows with depth. 0.43.0 made `seal` *write* checkpoint snapshots; its measured gains were in
-  checkouts and worktree writes (below), and no measurement since has shown sealing get cheaper.
-  **This is the figure that decides how long it takes to build — or import — a deep history.**
-- **Checkout and merge-evidence both cost roughly `depth^1.45`**, from two separate, uncached history
-  walks — measured exponents 1.446 and 1.445. Over the same range, tree size itself grew only as
-  `depth^0.859`. **Cost tracks history depth, not repository size**: a wide, shallow repository is
-  cheap to work with; a deep one is not, regardless of how large its tree is. *Since 0.43.0 this is
-  half true:* anchored snapshots bound a checkout's replay to the nearest checkpoint, and
-  `checkout --patch-plan` measured **0.28×** its earlier cost at depth 256. **`merge-evidence` — and
-  `commit` on a cold cache — were not anchored** and measured the same before and after (about
-  13.4 s at depth 256); they still grow with depth.
+  | depth | one `seal` | cumulative time to build to it |
+  |---:|---:|---:|
+  | 32 | 0.09 s | 4 s |
+  | 64 | 0.18 s | 11 s |
+  | 128 | 0.30 s | 30 s |
+  | 256 | 0.64 s | 98 s |
+  | 512 | 1.4 s | 6.4 min |
+  | 1,024 | 5.0 s | 34 min |
+
+  The per-seal exponent is 1.2 over depth 32–1,024 (1.15–1.24 across the three builds) and rises
+  with depth: it is about 1 up to 256, and 1.6–1.8 between 512 and 1,024. The cumulative exponent is
+  2.0 over depth 128–1,024 (1.9 over 64–1,024). **The old "quadratic" was not a debug-build
+  artefact for sealing**: the shape holds in release, at about 15–33 times lower absolute cost (a
+  debug build measured 9.9 s per seal at depth 128, against 0.30 s). **This is the figure that decides
+  how long it takes to build, or import, a deep history**, and it has been measured only to depth
+  1,024; the build to 2,048 was not attempted (the 2-hour rule stopped it, its build having been
+  projected at 2.3 hours). Nothing here is projected past 1,024.
+- **Checkout is close to linear in depth; `merge-evidence` is a little worse, and both are cheap at
+  these depths.** From depth 32 to 256: `checkout --patch-plan` 36 → 152 ms and
+  `checkout --patch-materialize` 125 → 591 ms (exponents 0.70 and 0.77; the tree itself grew as
+  depth<sup>0.84</sup>, 29 → 155 files), and `merge-evidence` 34 → 455 ms when the two sides only add
+  files (exponent 1.28; the baseline's replay is all it does). When each side edits files that were
+  edited before, `merge-evidence` costs 69 → 473 ms (0.97). Peak memory at depth 256 is about 11 MB
+  for all of them (polled `VmHWM`). **Cost tracks history depth, not repository size**, but at these depths depth is
+  cheap: a `commit` that has to replay the whole history (no cache) measured 69 ms at depth 33 and
+  494 ms at depth 256 (exponent 0.96). *The depth<sup>1.45</sup> figures this page used to give were
+  debug-build figures; in release the shapes are much nearer linear.*
+- **A `commit` that can use the cache costs about the same at any depth we measured.** Between
+  seals, the second and third `commit`, and a `commit` after `worktree-status`, take 39–44 ms at
+  depth 256, against about 475–507 ms before 0.47.0 (they replayed the whole history each time). A
+  `commit` at a tip that edits text an earlier block edited, 487 ms → 52 ms; the same `commit`
+  editing that file, 936 ms → 53 ms. The cache's independent full replay still happens every 64
+  uses. Depth range 32–256; three interleaved runs each.
 - **Incremental commit memory is flat up to a few thousand tracked files, then grows linearly** at
   roughly 1.7 KiB per file beyond that — measured peak around 11.6 MiB at 100 files and 113 MiB at
-  64,000.
+  64,000 (release, three samples at each of seven sizes).
 
 A few things worth knowing about these numbers before relying on them:
 
 - They describe *shape and order of magnitude*, not a guarantee for any particular repository.
-  They were measured against synthetic history ladders and a small corpus of profiles — two
-  profiles, chosen deliberately at opposite ends of one axis but also differing 46x in breadth from
-  each other, so results are bracketed by two shapes rather than interpolated across every shape a
-  real repository might have.
-- The three shapes do not rest on equal evidence. The commit-memory figures come from three samples
-  at each of seven repository sizes, out to 64,000 files. The checkout and merge-evidence exponents
-  come from a purpose-built history ladder reaching depth 256. The sealing exponent comes from a
-  single run reaching depth 128 — so of the three, treat the sealing shape as the least-supported,
-  and the one most worth confirming against your own history before relying on it.
-- Extrapolating the sealing curve to very deep history (a few thousand sealed blocks) lands
-  somewhere between roughly 23 and 101 hours, depending on which points the extrapolation is fit
-  from — that range is a **projection**, not a measurement; that depth has never actually been
-  built. If you quote a number like that, say "projected" alongside it, or better, quote the shape
-  (quadratic) and apply it to your own depth.
-- All of the above was measured on Linux. **The commit-memory figures used release builds; the timing
-  figures used debug builds** (see the correction at the top of this section).
+  They were measured against a small corpus of profiles — two profiles, chosen deliberately at
+  opposite ends of one axis but also differing 46x in breadth from each other, so results are
+  bracketed by two shapes rather than interpolated across every shape a real repository might
+  have. The timing figures above use one of them, `prikk-self`.
+- The evidence is not equally deep. The sealing figures are three builds to depth 1,024; the
+  checkout and `merge-evidence` figures are five depths (32 to 256), three samples each, so their
+  exponents are direction, not a fitted curve; the cache figures are five cells, depth 32–256; the
+  commit-memory figures reach 64,000 files.
+- The machine was shared with other work (load average 1.7–13 during the sealing builds), which is
+  why each sealing figure is the median of three and why absolute times can move by up to about
+  two times between runs. Ratios within a table are the sturdier reading.
+- All of the above was measured on Linux.

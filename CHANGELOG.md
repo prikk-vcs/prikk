@@ -11,8 +11,9 @@ again for each file it edited, and `merge-evidence` did it once for the baseline
 either side. They now take that text from the nearest snapshot that this repository has verified by replay,
 and carry it forward through the at most 63 blocks after it. The text is used only if its content id equals the
 one the history names, so a wrong snapshot cannot change an answer; `commit`, `merge-evidence`, the queued-patch
-fold and `diff` all use it. Measured on a 256-block history (release build, three interleaved runs each): a
-`commit` at a tip that edits earlier-edited text 513 → 68 ms, the same `commit` editing that file 958 → 61 ms,
+fold and `diff` all use it. Measured on a 256-block history (release build, three interleaved runs each; the
+`commit` figures from a quiet-machine re-measurement on 2026-09-24): a
+`commit` at a tip that edits earlier-edited text 487 → 52 ms, the same `commit` editing that file 936 → 53 ms,
 `merge-evidence` 4.02 s → 0.49 s with identical output. Peak memory is unchanged (about 12 MB), and a cold
 `commit` with no cache is unchanged (0.52 s), because it still replays the whole history. If a verified
 snapshot cannot supply a text (its manifest fails validation, or the text it yields fails its check) the command
@@ -23,9 +24,9 @@ The baseline cache is now also used when a command asks for the block it already
 first between two `seal`s, and a `commit` after `worktree-status`, which each replayed the whole history and reset
 the cache's step count. Such a request returns the cached state and counts as one of the cache's 64 uses, so the
 independent full replay that guards against a corrupted cache still happens within 64 uses. Measured on the same
-256-block history (release build, three interleaved runs, two sessions): the second and third `commit` at one sealed
-tip 536–558 → 44–46 ms, `worktree-status` followed by a `commit` 514–558 → 45–92 ms; a `commit` after a seal, and
-`worktree-status` itself, are unchanged.
+256-block history (release build, three interleaved runs, on a machine at load 2.5–4): the second and third `commit`
+at one sealed tip 480 and 475 → 39 and 41 ms, `worktree-status` followed by a `commit` 507 → 44 ms; a `commit` after a
+seal, and `worktree-status` itself, are unchanged.
 
 ### Fixed — a bundle or sync file over its size bound was read in full before being refused
 
