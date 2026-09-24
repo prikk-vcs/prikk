@@ -19,6 +19,14 @@ snapshot cannot supply a text (its manifest fails validation, or the text it yie
 still succeeds, by replaying in full, and now says so on stderr, naming the block, so that `prikk verify` can be
 run.
 
+The baseline cache is now also used when a command asks for the block it already holds — every `commit` after the
+first between two `seal`s, and a `commit` after `worktree-status`, which each replayed the whole history and reset
+the cache's step count. Such a request returns the cached state and counts as one of the cache's 64 uses, so the
+independent full replay that guards against a corrupted cache still happens within 64 uses. Measured on the same
+256-block history (release build, three interleaved runs, two sessions): the second and third `commit` at one sealed
+tip 536–558 → 44–46 ms, `worktree-status` followed by a `commit` 514–558 → 45–92 ms; a `commit` after a seal, and
+`worktree-status` itself, are unchanged.
+
 ### Fixed — a bundle or sync file over its size bound was read in full before being refused
 
 `bundle import`, `bundle preview`, `bundle verify`, `sync compare`, `sync build` and `sync accept`
