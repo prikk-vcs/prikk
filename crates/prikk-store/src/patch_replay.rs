@@ -789,6 +789,117 @@ pub fn baseline_cache_rung_for_test_support(
     )
 }
 
+/// Test-support instruments for RFC 136 increment 2c's design round: the ref-resolving entry points to the
+/// probes in `lifecycle_cache` (which take ids, so that module names neither `refs` nor this one). Read-only
+/// except the ladder walk, which refreshes the cache under `layout` -- give it a copy. Never in a shipped build.
+///
+/// `ref_name`'s lineage, oldest first, with a read snapshot.
+#[cfg(feature = "test-support")]
+fn ref_chain_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<(crate::object_store::ObjectReadSnapshot, Vec<ObjectId>)> {
+    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
+    let tip = crate::refs::read_current_ref_tip_block(layout, &reader, ref_name)?;
+    let chain = single_parent_chain(&reader, tip)?;
+    if chain.is_empty() {
+        return Err(PrikkError::Integrity(format!(
+            "ref {ref_name} lineage is empty"
+        )));
+    }
+    Ok((reader, chain))
+}
+
+/// Block `block_number` (1 is the ref's first block) of `ref_name`'s lineage and its horizon.
+#[cfg(feature = "test-support")]
+fn ref_block_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<(crate::object_store::ObjectReadSnapshot, ObjectId, ObjectId)> {
+    let (reader, chain) = ref_chain_for_test_support(layout, ref_name)?;
+    let horizon = *chain
+        .first()
+        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} lineage is empty")))?;
+    let block_id = *block_number
+        .checked_sub(1)
+        .and_then(|index| chain.get(index))
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "ref {ref_name} has {} blocks, not {block_number}",
+                chain.len()
+            ))
+        })?;
+    Ok((reader, block_id, horizon))
+}
+
+/// Every block of `ref_name`, oldest first, through the real baseline ladder over a cache that starts absent
+/// and is refreshed after each step -- what a corpus build's successive `commit`s do -- naming per tip the rung
+/// taken, the header left and (with `compare`) whether the state returned equals full replay's in every field.
+///
+/// # Errors
+///
+/// The ref does not resolve, or a step fails.
+#[cfg(feature = "test-support")]
+pub fn ladder_walk_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    compare: bool,
+) -> Result<Vec<crate::lifecycle_cache::incremental::LadderTip>> {
+    let (reader, chain) = ref_chain_for_test_support(layout, ref_name)?;
+    crate::lifecycle_cache::incremental::ladder_walk_over_chain_for_test_support(
+        layout, &reader, &chain, compare,
+    )
+}
+
+/// The size, with the DC-64 codec, of the lifecycle state at block `block_number` of `ref_name`.
+///
+/// # Errors
+///
+/// The store cannot be read, or the lineage does not replay.
+#[cfg(feature = "test-support")]
+pub fn lifecycle_state_shape_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<crate::lifecycle_cache::incremental::LifecycleStateShape> {
+    let (reader, block_id, horizon) = ref_block_for_test_support(layout, ref_name, block_number)?;
+    crate::lifecycle_cache::incremental::lifecycle_state_shape_at_for_test_support(
+        &reader, block_id, horizon,
+    )
+}
+
+/// Where a full replay of block `block_number` of `ref_name` spends its time (RFC 136 2c option (i)).
+///
+/// # Errors
+///
+/// The store cannot be read, the lineage does not replay, or the timed fold disagrees with the product's.
+#[cfg(feature = "test-support")]
+pub fn replay_time_split_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<crate::lifecycle_cache::replay::ReplayTimeSplit> {
+    let (reader, block_id, horizon) = ref_block_for_test_support(layout, ref_name, block_number)?;
+    crate::lifecycle_cache::replay::replay_time_split_for_test_support(&reader, block_id, horizon)
+}
+
+/// What an id-only walk derives of the history fields at block `block_number` of `ref_name`, against full
+/// replay (RFC 136 2c option (i)).
+///
+/// # Errors
+///
+/// The store cannot be read, or the lineage does not decode or replay.
+#[cfg(feature = "test-support")]
+pub fn id_only_history_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<crate::lifecycle_cache::replay::IdOnlyHistory> {
+    let (reader, block_id, horizon) = ref_block_for_test_support(layout, ref_name, block_number)?;
+    crate::lifecycle_cache::replay::id_only_history_for_test_support(&reader, block_id, horizon)
+}
+
 /// The baseline lifecycle state a worktree operation should compare or author against: the sealed
 /// baseline (or an empty genesis state), with any already-queued (unsealed) patches for this ref
 /// folded on top (DC-66) exactly as `commit` folds them.

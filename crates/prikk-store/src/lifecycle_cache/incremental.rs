@@ -616,37 +616,36 @@ pub struct LadderTip {
     pub tombstones: usize,
 }
 
-/// Resolve every block of `ref_name`'s lineage, oldest first, through the real ladder over a cache that
+/// Resolve every block of `chain` (a ref's lineage, oldest first), through the real ladder over a cache that
 /// starts absent and is refreshed after each step; `compare` also runs full replay at each tip and
-/// compares the whole state. **Writes the cache under `layout`** -- give it a copy.
+/// compares the whole state. **Writes the cache under `layout`** -- give it a copy. The ref-resolving entry
+/// point is `patch_replay::ladder_walk_for_test_support`.
 ///
 /// # Errors
 ///
-/// The ref does not resolve, or a step fails (the real path would propagate it too).
+/// A step fails (the real path would propagate it too), or `chain` is empty.
 #[cfg(feature = "test-support")]
-pub fn ladder_walk_for_test_support(
+pub(crate) fn ladder_walk_over_chain_for_test_support(
     layout: &RepositoryLayout,
-    ref_name: &str,
+    reader: &impl ObjectReader,
+    chain: &[ObjectId],
     compare: bool,
 ) -> Result<Vec<LadderTip>> {
-    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
-    let tip = crate::refs::read_current_ref_tip_block(layout, &reader, ref_name)?;
-    let chain = crate::patch_replay::read::single_parent_chain(&reader, tip)?;
-    let horizon = *chain.first().ok_or_else(|| {
-        prikk_error::PrikkError::Integrity(format!("ref {ref_name} lineage is empty"))
-    })?;
+    let horizon = *chain
+        .first()
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("the lineage is empty".to_string()))?;
     let cache = cache_path(layout);
     let _ = std::fs::remove_file(&cache);
     let mut tips = Vec::with_capacity(chain.len());
-    for block_id in chain {
-        let rung = baseline_cache_rung_at_for_test_support(layout, &reader, block_id, horizon);
+    for block_id in chain.iter().copied() {
+        let rung = baseline_cache_rung_at_for_test_support(layout, reader, block_id, horizon);
         let start = std::time::Instant::now();
         let resolved =
-            resolve_baseline_state_with(layout, &reader, block_id, horizon, CacheWrite::Refresh)?;
+            resolve_baseline_state_with(layout, reader, block_id, horizon, CacheWrite::Refresh)?;
         let elapsed = start.elapsed();
         let header = load(layout);
         let (identical, digests) = if compare {
-            let full = replay_derived_state(&reader, block_id, horizon)?;
+            let full = replay_derived_state(reader, block_id, horizon)?;
             let digest = |state: &NodeLifecycleState| {
                 prikk_hash::to_hex(&prikk_hash::sha256(format!("{state:?}").as_bytes()))
             };
@@ -689,46 +688,19 @@ pub struct LifecycleStateShape {
     pub cache_file_bytes: usize,
 }
 
-/// The block `block_number` (1 is the ref's first block) of `ref_name`'s lineage, with its horizon.
-#[cfg(feature = "test-support")]
-fn block_of_chain(
-    layout: &RepositoryLayout,
-    reader: &impl ObjectReader,
-    ref_name: &str,
-    block_number: usize,
-) -> Result<(ObjectId, ObjectId)> {
-    let tip = crate::refs::read_current_ref_tip_block(layout, reader, ref_name)?;
-    let chain = crate::patch_replay::read::single_parent_chain(reader, tip)?;
-    let horizon = *chain.first().ok_or_else(|| {
-        prikk_error::PrikkError::Integrity(format!("ref {ref_name} lineage is empty"))
-    })?;
-    let block_id = *block_number
-        .checked_sub(1)
-        .and_then(|index| chain.get(index))
-        .ok_or_else(|| {
-            prikk_error::PrikkError::Integrity(format!(
-                "ref {ref_name} has {} blocks, not {block_number}",
-                chain.len()
-            ))
-        })?;
-    Ok((block_id, horizon))
-}
-
-/// The shape of block `block_number` of `ref_name`'s replay-derived lifecycle state, sized with the
-/// DC-64 codec.
+/// The shape of `block_id`'s replay-derived lifecycle state, sized with the DC-64 codec. The ref-resolving
+/// entry point is `patch_replay::lifecycle_state_shape_for_test_support`.
 ///
 /// # Errors
 ///
 /// The store cannot be read, or the lineage does not replay.
 #[cfg(feature = "test-support")]
-pub fn lifecycle_state_shape_for_test_support(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    block_number: usize,
+pub(crate) fn lifecycle_state_shape_at_for_test_support(
+    reader: &impl ObjectReader,
+    block_id: ObjectId,
+    horizon: ObjectId,
 ) -> Result<LifecycleStateShape> {
-    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
-    let (block_id, horizon) = block_of_chain(layout, &reader, ref_name, block_number)?;
-    let replayed = replay_derived_state(&reader, block_id, horizon)?;
+    let replayed = replay_derived_state(reader, block_id, horizon)?;
     let state = replayed.state();
     // Field header of one record-list item: tag (2), wire (1), length (8).
     const ITEM_OVERHEAD: usize = 11;
@@ -758,23 +730,6 @@ pub fn lifecycle_state_shape_for_test_support(
     })
 }
 
-/// Where a full replay of block `block_number` of `ref_name` spends its time (RFC 136 2c option (i)).
-///
-/// # Errors
-///
-/// The store cannot be read, the lineage does not replay, or the timed fold disagrees with the
-/// product's.
-#[cfg(feature = "test-support")]
-pub fn replay_time_split_for_test_support(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    block_number: usize,
-) -> Result<replay::ReplayTimeSplit> {
-    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
-    let (block_id, horizon) = block_of_chain(layout, &reader, ref_name, block_number)?;
-    replay::replay_time_split_for_test_support(&reader, block_id, horizon)
-}
-
 /// SHA-256 of the persisted cache's lifecycle state (`Debug` rendering; every map and set in it is
 /// ordered), or `None` when no cache loads. The header is not in it, so a cache written by a full replay
 /// and one written by an incremental step over the same tip compare equal exactly when their states do.
@@ -784,21 +739,4 @@ pub fn lifecycle_cache_state_digest_for_test_support(layout: &RepositoryLayout) 
     load(layout).map(|cache| {
         prikk_hash::to_hex(&prikk_hash::sha256(format!("{:?}", cache.state).as_bytes()))
     })
-}
-
-/// What an id-only walk derives of the history fields at block `block_number` of `ref_name`, against full
-/// replay (RFC 136 2c option (i)).
-///
-/// # Errors
-///
-/// The store cannot be read, or the lineage does not decode or replay.
-#[cfg(feature = "test-support")]
-pub fn id_only_history_for_test_support(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    block_number: usize,
-) -> Result<replay::IdOnlyHistory> {
-    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
-    let (block_id, horizon) = block_of_chain(layout, &reader, ref_name, block_number)?;
-    replay::id_only_history_for_test_support(&reader, block_id, horizon)
 }

@@ -163,9 +163,7 @@ pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::incremental::{
     BaselineCacheRung, LadderTip, LifecycleCacheHeader, LifecycleStateShape,
-    id_only_history_for_test_support, ladder_walk_for_test_support,
     lifecycle_cache_header_for_test_support, lifecycle_cache_state_digest_for_test_support,
-    lifecycle_state_shape_for_test_support, replay_time_split_for_test_support,
 };
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::replay::{IdOnlyHistory, ReplayTimeSplit};
@@ -212,7 +210,9 @@ pub use patch_replay::{
 };
 #[cfg(feature = "test-support")]
 pub use patch_replay::{
-    baseline_cache_rung_for_test_support, replayed_block_count_at_point_for_test_support,
+    baseline_cache_rung_for_test_support, id_only_history_for_test_support,
+    ladder_walk_for_test_support, lifecycle_state_shape_for_test_support,
+    replay_time_split_for_test_support, replayed_block_count_at_point_for_test_support,
 };
 pub use patch_set_digest::{
     PatchSetDigest, PatchSetResolution, compute_patch_set_digest,
