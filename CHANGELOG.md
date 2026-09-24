@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed — a `commit` that edits earlier-edited text, and `merge-evidence`, no longer replay the whole history
+
+A text file's content after an edit is an identity, not a stored object, so a command that needed such a
+file's bytes replayed the lineage from the start: the incremental step of the baseline cache did it whenever
+a commit's tip edited text an earlier block had edited (56–61 % of tips on RFC 139's corpus), `commit` did it
+again for each file it edited, and `merge-evidence` did it once for the baseline and once for every edit on
+either side. They now take that text from the nearest snapshot that this repository has verified by replay,
+and carry it forward through the at most 63 blocks after it. The text is used only if its content id equals the
+one the history names, so a wrong snapshot cannot change an answer; `commit`, `merge-evidence`, the queued-patch
+fold and `diff` all use it. Measured on a 256-block history (release build, three interleaved runs each): a
+`commit` at a tip that edits earlier-edited text 513 → 68 ms, the same `commit` editing that file 958 → 61 ms,
+`merge-evidence` 4.02 s → 0.49 s with identical output. Peak memory is unchanged (about 12 MB), and a cold
+`commit` with no cache is unchanged (0.52 s), because it still replays the whole history. If a verified
+snapshot cannot supply a text (its manifest fails validation, or the text it yields fails its check) the command
+still succeeds, by replaying in full, and now says so on stderr, naming the block, so that `prikk verify` can be
+run.
+
 ### Fixed — a bundle or sync file over its size bound was read in full before being refused
 
 `bundle import`, `bundle preview`, `bundle verify`, `sync compare`, `sync build` and `sync accept`
