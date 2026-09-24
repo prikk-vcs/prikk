@@ -249,3 +249,58 @@ no longer replay the whole history.
 
 **Next after this, in order:** the release re-measurement round (drafted, goes live when this closes), then the gate
 plan.
+
+## Addendum 2 — 2026-09-24: Addendum 1 is accepted; close the same-baseline gap before the cut
+
+**Addendum 1 is ACCEPTED** (`2926e84c`, `7728a506`, `cc00e2e1`, `4ec84b1a`; review `rfc136-2c-implementation-review-v1`;
+14/14 gates re-run by the architect). **This addendum is live, and it is next.** It is small and in the same ladder.
+It comes before the 0.47.0 cut, because without it the CHANGELOG's headline holds only for the first `commit` after
+each `seal`.
+
+**The gap (your §5.1, verified at source).** `resolve_baseline_state_with` either steps one block from the cached
+baseline or replays in full. A request **for the cached baseline itself** falls through to full replay, and resets
+`steps_since_reanchor`. So every `commit` after the first between two seals is a full replay, and so is `commit`
+after `worktree-status`. DC-64 §3.2 never considered asking again for the same block.
+
+### 1. A same-baseline hit
+
+When the cache's `horizon_id` matches, `steps_since_reanchor < CHECKPOINT_CADENCE`, and the cache's
+`baseline_block_id` **equals** the requested one:
+- return the cached state **through `ReplayDerivedLifecycleState::from_replay`**. Its validation is not bypassed:
+  binding condition 3.
+- On `CacheWrite::Refresh`, persist it with `steps_since_reanchor + 1`. **A hit counts as a step**, so DC-64 §5's
+  independent full replay still happens within 64 uses.
+- `CacheWrite::Never` (`diff`) writes nothing, as now.
+
+Nothing else in the ladder changes.
+
+### 2. Controls — each shown red
+
+1. **Two resolutions at one baseline:** the second is a hit, with `steps + 1` and no full replay (the ladder's
+   counters, or the probe).
+   **Perturb:** remove the branch.
+2. **The whole state equals full replay's**, history fields included, after a hit, on the existing 70-block
+   fixture.
+3. **The reanchor still fires:** after 64 uses made of hits and steps, the next resolution is a full replay that
+   resets to 0.
+   **Perturb:** do not count a hit as a step.
+4. **A poisoned cache at the same baseline:** `verify` still reports the divergence, and the reanchor still
+   overwrites it. Reuse `poison_lifecycle_cache_for_test_support`.
+5. **`diff` writes nothing** on a hit. The existing byte-for-byte control extends to it.
+
+### 3. `take_anchor_fallbacks`'s contract
+
+Its doc comment says that a library caller must drain it after each operation, and that it never affects a
+result. The CLI already drains it in `main`.
+
+### 4. Measurement — release, one session, three interleaved rounds
+
+On the kept corpus, before and with, at the five cells:
+- three consecutive `commit`s at one sealed tip;
+- `worktree-status` then `commit`.
+
+### 5. CHANGELOG
+
+Extend the 2c entry, with release figures: repeated commits between seals no longer replay the whole history.
+
+**Next after this, in order:** the release re-measurement round, then the gate plan.
