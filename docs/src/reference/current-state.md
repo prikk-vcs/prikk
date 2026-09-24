@@ -67,9 +67,10 @@ of sealed blocks.
 
   The per-seal exponent is 1.2 over depth 32–1,024 (1.15–1.24 across the three builds) and rises
   with depth: it is about 1 up to 256, and 1.6–1.8 between 512 and 1,024. The cumulative exponent is
-  2.0 over depth 128–1,024 (1.9 over 64–1,024). **The old "quadratic" was not a debug-build
-  artefact for sealing**: the shape holds in release, at about 15–33 times lower absolute cost (a
-  debug build measured 9.9 s per seal at depth 128, against 0.30 s). **This is the figure that decides
+  2.0 over depth 128–1,024 (1.9 over 64–1,024). **Quadratic is the release build's shape too, but
+  only from about depth 128 on**: over depth 32–128, the only range a debug build measured, the
+  cumulative exponent is 1.4 in release against 1.96 in debug (the cause was not investigated). A release seal is 15–33 times cheaper than a debug one at
+  the same depth (0.30 s against 9.9 s at depth 128). **This is the figure that decides
   how long it takes to build, or import, a deep history**, and it has been measured only to depth
   1,024; the build to 2,048 was not attempted (the 2-hour rule stopped it, its build having been
   projected at 2.3 hours). Nothing here is projected past 1,024.
@@ -82,7 +83,9 @@ of sealed blocks.
   for all of them (polled `VmHWM`). **Cost tracks history depth, not repository size**, but at these depths depth is
   cheap: a `commit` that has to replay the whole history (no cache) measured 69 ms at depth 33 and
   494 ms at depth 256 (exponent 0.96). *The depth<sup>1.45</sup> figures this page used to give were
-  debug-build figures; in release the shapes are much nearer linear.*
+  measured before 0.43.0 (checkout was not yet anchored), at checkpoints that a divergence had
+  shifted, in a debug build. A debug build measured today gives nearly the same shapes as release
+  over the same depths (0.68 and 1.26), and costs 8–30 times more at each depth.*
 - **A `commit` that can use the cache costs about the same at any depth we measured.** Between
   seals, the second and third `commit`, and a `commit` after `worktree-status`, take 39–44 ms at
   depth 256, against about 475–507 ms before 0.47.0 (they replayed the whole history each time). A
