@@ -1095,8 +1095,6 @@ fn two_c_cold_and_merge_evidence() {
         ));
     }
     edit_counts.push('\n');
-    let mut evidence_text: Vec<[Option<Vec<u8>>; 2]> =
-        merge_depths.iter().map(|_| [None, None]).collect();
     let mut merge: Vec<[Samples; 2]> = merge_depths
         .iter()
         .map(|_| [Vec::new(), Vec::new()])
@@ -1123,7 +1121,6 @@ fn two_c_cold_and_merge_evidence() {
                 ]);
                 let (elapsed, peak, output) = run_rusage(&command);
                 require(&output, "merge-evidence");
-                evidence_text[slot][which].get_or_insert_with(|| output.stdout.clone());
                 eprintln!(
                     "merge-evidence depth {depth} round {round} binary {which}: {} ms, {peak:?} KiB",
                     elapsed.as_millis()
@@ -1152,9 +1149,31 @@ fn two_c_cold_and_merge_evidence() {
             fmt_peak(&merge[slot][1])
         ));
     }
-    for (slot, depth) in merge_depths.iter().enumerate() {
+    // `rusage_child.py` reports only the peak on success, so the evidence itself is compared from one plain run
+    // per binary and depth: the two binaries must print the same merge evidence.
+    for depth in &merge_depths {
+        let d = *depth as usize;
+        let mut printed = Vec::new();
+        for binary in [&before_binary, &with_binary] {
+            let output = Command::new(binary)
+                .current_dir(&corpus)
+                .args([
+                    "merge-evidence",
+                    "--baseline-block",
+                    &ids[d - 3],
+                    "--left-block",
+                    &ids[d - 2],
+                    "--right-block",
+                    &ids[d - 1],
+                ])
+                .output()
+                .expect("running prikk merge-evidence");
+            require(&output, "merge-evidence (plain run)");
+            printed.push(output.stdout);
+        }
+        assert!(!printed[0].is_empty());
         assert_eq!(
-            evidence_text[slot][0], evidence_text[slot][1],
+            printed[0], printed[1],
             "the two binaries print different merge evidence at depth {depth}"
         );
     }
