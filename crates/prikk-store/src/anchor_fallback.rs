@@ -94,6 +94,12 @@ pub(crate) fn record_anchor_fallback(fallback: SnapshotAnchorFallback) {
 
 /// The findings noted on this thread since the last call, oldest first. The CLI calls it once, after a
 /// command, and prints each on stderr (`warn_anchor_fallbacks`).
+///
+/// **A library caller must drain it after each operation it wants findings for** (any store call that reads a
+/// baseline or a file's text: a commit, a status, a merge-evidence, a diff): findings accumulate per thread until
+/// taken, and the list is deduplicated but not bounded by anything else. **It never affects a result.** A finding
+/// records that a verified snapshot could not be used and the answer came from a full replay instead; the answer
+/// is the same either way, so a caller that never drains loses the message and nothing else.
 #[must_use]
 pub fn take_anchor_fallbacks() -> Vec<SnapshotAnchorFallback> {
     PENDING.with(|pending| std::mem::take(&mut *pending.borrow_mut()))

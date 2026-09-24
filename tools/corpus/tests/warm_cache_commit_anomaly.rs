@@ -156,7 +156,9 @@ fn taken(
 
 fn agrees(taken: &str, rung: &BaselineCacheRung) -> bool {
     match rung {
-        BaselineCacheRung::Incremental => taken == "incremental",
+        BaselineCacheRung::Incremental | BaselineCacheRung::SameBaselineHit => {
+            taken == "incremental"
+        }
         BaselineCacheRung::Genesis | BaselineCacheRung::StepError { .. } => false,
         _ => taken == "full replay",
     }
@@ -164,7 +166,7 @@ fn agrees(taken: &str, rung: &BaselineCacheRung) -> bool {
 
 fn reason(rung: &BaselineCacheRung) -> String {
     match rung {
-        BaselineCacheRung::Incremental => "(hit)".to_string(),
+        BaselineCacheRung::Incremental | BaselineCacheRung::SameBaselineHit => "(hit)".to_string(),
         BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect { detail } => {
             format!("MissingBlobForLifecycleEffect: {detail}")
         }
@@ -418,6 +420,7 @@ fn rung_class(rung: &BaselineCacheRung) -> &'static str {
     match rung {
         BaselineCacheRung::Genesis => "genesis",
         BaselineCacheRung::Incremental => "incremental",
+        BaselineCacheRung::SameBaselineHit => "same-baseline",
         BaselineCacheRung::FullReplayNoUsableCache => "no-cache",
         BaselineCacheRung::FullReplayHorizonMismatch => "horizon-mismatch",
         BaselineCacheRung::FullReplayReanchorDue { .. } => "reanchor-due",
@@ -1279,4 +1282,161 @@ fn two_c_rung3_split_and_state_shape() {
     std::fs::write(out_dir().join(format!("2c-split-{}.md", label())), &text).expect("writing");
     eprintln!("{text}");
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// `(label, elapsed, peak KiB, cache steps after)` of one timed step.
+type RepeatStep = (&'static str, Duration, Option<u64>, Option<u32>);
+
+/// One repeat sample (RFC 136 increment 2c, Addendum 2): a copy of the cell, an untimed materialize, then the
+/// steps of `sequence` at **one sealed tip**. `commits`: three `commit`s, each of one new file. `status`: a
+/// `worktree-status`, then a `commit`. Returns `(label, elapsed, peak KiB, cache steps after)` per timed step.
+fn repeat_sample(
+    binary: &Path,
+    cell: &Path,
+    profile: &Profile,
+    sequence: &str,
+    tag: &str,
+) -> Vec<RepeatStep> {
+    let dir = support::unique_dir(tag);
+    support::copy_prikk_only(cell, &dir);
+    require(
+        &prikk(
+            binary,
+            &dir,
+            &[
+                "checkout",
+                "--patch-materialize",
+                "--ref",
+                execute::REF_NAME,
+            ],
+        )
+        .output()
+        .unwrap(),
+        "untimed materialize",
+    );
+    std::fs::create_dir_all(dir.join("bench")).unwrap();
+    let mut out = Vec::new();
+    let steps = |dir: &Path| header(dir).map(|h| h.steps_since_reanchor);
+    let commit = |label: &'static str, index: usize, out: &mut Vec<RepeatStep>| {
+        std::fs::write(
+            dir.join(format!("bench/s{index}.txt")),
+            format!("sample {index}\n"),
+        )
+        .unwrap();
+        let command = execute::commit_command(binary, &dir, profile, execute::REF_NAME, "sample")
+            .expect("commit command");
+        let (elapsed, peak, output) = run_rusage(&command);
+        require(&output, label);
+        out.push((label, elapsed, peak, steps(&dir)));
+    };
+    match sequence {
+        "commits" => {
+            commit("commit 1", 1, &mut out);
+            commit("commit 2", 2, &mut out);
+            commit("commit 3", 3, &mut out);
+        }
+        "status" => {
+            let mut command = Command::new(binary);
+            command
+                .current_dir(&dir)
+                .args(["worktree-status", "--ref", execute::REF_NAME]);
+            let (elapsed, peak, output) = run_rusage(&command);
+            require(&output, "worktree-status");
+            out.push(("worktree-status", elapsed, peak, steps(&dir)));
+            commit("commit after status", 1, &mut out);
+        }
+        other => panic!("unknown sequence {other}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    out
+}
+
+/// **Addendum 2's measurement:** at each cell, three consecutive `commit`s at one sealed tip, and `worktree-status`
+/// then `commit`. Same binaries, interleaving and RSS method as `two_c_warm_cells`. The cache's step count after
+/// each step is recorded: a hit counted as a step raises it by one; a full replay resets it to 0.
+#[test]
+#[ignore = "RFC 136 2c Addendum 2: repeated commits at one sealed tip, before vs with"]
+fn two_c_repeat_cells() {
+    let out = env_path("PRIKK_2C_CORPUS_OUT");
+    let before_binary = binary_from_env("PRIKK_2C_BINARY_BEFORE");
+    let with_binary = binary_from_env("PRIKK_2C_BINARY_WITH");
+    let profile = self_profile();
+    let mut text = format!(
+        "# 2c repeat cells: `{}`\n\nbefore `{}`, with `{}`. {SAMPLES} interleaved rounds per cell; peak RSS by `getrusage(RUSAGE_CHILDREN)`; elapsed includes ~30 ms of wrapper start-up. Each step's time is the median over rounds; `steps` is the cache's step count after the step (first round).\n\n",
+        label(),
+        before_binary.display(),
+        with_binary.display(),
+    );
+    for sequence in ["commits", "status"] {
+        text.push_str(&format!(
+            "## `{sequence}`\n\n| cell | step | before ms (min–max) | with ms (min–max) | × | before peak KiB | with peak KiB | steps after: before / with |\n|---:|---|---|---|---:|---|---|---|\n"
+        ));
+        for (depth, block, _class, _steps) in read_cells(&out) {
+            let cell = out.join(format!("cells/{depth}"));
+            let mut runs: [Vec<Vec<RepeatStep>>; 2] = [Vec::new(), Vec::new()];
+            for round in 0..SAMPLES {
+                let order = if round % 2 == 0 { [0, 1] } else { [1, 0] };
+                for which in order {
+                    let binary = if which == 0 {
+                        &before_binary
+                    } else {
+                        &with_binary
+                    };
+                    let sample = repeat_sample(
+                        binary,
+                        &cell,
+                        &profile,
+                        sequence,
+                        &format!("two-c-repeat-{sequence}-{depth}-{round}-{which}"),
+                    );
+                    eprintln!(
+                        "repeat {sequence} cell {depth} round {round} binary {which}: {:?}",
+                        sample
+                            .iter()
+                            .map(|s| (s.0, s.1.as_millis(), s.3))
+                            .collect::<Vec<_>>()
+                    );
+                    runs[which].push(sample);
+                }
+            }
+            let steps_count = runs[0][0].len();
+            for step in 0..steps_count {
+                let column = |which: usize| -> Vec<u128> {
+                    runs[which].iter().map(|r| r[step].1.as_millis()).collect()
+                };
+                let range = |values: &[u128]| {
+                    let mut sorted = values.to_vec();
+                    sorted.sort_unstable();
+                    format!(
+                        "{} ({}–{})",
+                        sorted[sorted.len() / 2],
+                        sorted[0],
+                        sorted[sorted.len() - 1]
+                    )
+                };
+                let peak = |which: usize| {
+                    runs[which]
+                        .iter()
+                        .map(|r| r[step].2.map_or("-".to_string(), |kib| kib.to_string()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let (b, w) = (column(0), column(1));
+                text.push_str(&format!(
+                    "| {depth} ({block}) | {} | {} | {} | {:.1} | {} | {} | {:?} / {:?} |\n",
+                    runs[0][0][step].0,
+                    range(&b),
+                    range(&w),
+                    median(&b) as f64 / median(&w).max(1) as f64,
+                    peak(0),
+                    peak(1),
+                    runs[0][0][step].3,
+                    runs[1][0][step].3,
+                ));
+            }
+        }
+        text.push('\n');
+    }
+    std::fs::write(out_dir().join(format!("2c-repeat-{}.md", label())), &text).expect("writing");
+    eprintln!("{text}");
 }

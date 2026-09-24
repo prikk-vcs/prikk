@@ -164,3 +164,76 @@ fn a_verified_anchor_that_could_not_supply_a_text_is_named_on_stderr() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("edit-text f.txt"));
     let _ = std::fs::remove_dir_all(repo);
 }
+
+// ---- Addendum 2: a request for the cached baseline itself ------------------------------------------------
+
+fn cache_steps(repo: &Path) -> Option<u32> {
+    let layout = prikk_store::RepositoryLayout::open(repo.to_path_buf()).unwrap();
+    prikk_store::lifecycle_cache_header_for_test_support(&layout).map(|h| h.steps_since_reanchor)
+}
+
+fn set_text(repo: &Path, last: &str) {
+    std::fs::write(
+        repo.join("f.txt"),
+        format!("one\ntwo\nthree\nfour\nfive\n{last}\n"),
+    )
+    .unwrap();
+}
+
+/// Several `commit`s between two `seal`s, and `worktree-status` before a `commit`, resolve the same sealed tip:
+/// each is a hit counted as a step -- the cache's step count rises by one each time, where it used to reset to 0
+/// (a full replay). **Perturb:** remove the `same_baseline_hit` branch: the count resets and this goes red.
+#[test]
+fn commits_between_seals_and_a_status_before_a_commit_are_hits_not_full_replays() {
+    let repo = repo_with_edits("hits", 3);
+    set_text(&repo, "six-a");
+    ok(&commit(&repo, "first after the seal"), "first commit");
+    let first = cache_steps(&repo).expect("a cache");
+    set_text(&repo, "six-b");
+    ok(&commit(&repo, "second"), "second commit");
+    assert_eq!(
+        cache_steps(&repo),
+        Some(first + 1),
+        "the second commit at one tip is a hit"
+    );
+    set_text(&repo, "six-c");
+    ok(&commit(&repo, "third"), "third commit");
+    assert_eq!(cache_steps(&repo), Some(first + 2));
+
+    ok(
+        &prikk(&repo).arg("worktree-status").output().unwrap(),
+        "worktree-status",
+    );
+    assert_eq!(
+        cache_steps(&repo),
+        Some(first + 3),
+        "worktree-status is a hit too"
+    );
+    set_text(&repo, "six-d");
+    let out = commit(&repo, "after a status");
+    ok(&out, "commit after a status");
+    assert_eq!(
+        cache_steps(&repo),
+        Some(first + 4),
+        "and so is the commit after it"
+    );
+    assert!(!stderr(&out).contains("warning:"), "{}", stderr(&out));
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// A poisoned cache at the baseline being asked for is still something `verify` reports.
+#[test]
+fn verify_reports_a_poisoned_cache_whose_baseline_is_the_tip() {
+    let repo = repo_with_edits("verify-poison", 3);
+    set_text(&repo, "six-a");
+    ok(
+        &commit(&repo, "a commit, so the cache is over the tip"),
+        "commit",
+    );
+    let layout = prikk_store::RepositoryLayout::open(repo.clone()).unwrap();
+    assert!(prikk_store::poison_lifecycle_cache_for_test_support(&layout).unwrap());
+    let out = prikk(&repo).arg("verify").output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.contains("lifecycle-cache divergences: 1"), "{text}");
+    let _ = std::fs::remove_dir_all(repo);
+}

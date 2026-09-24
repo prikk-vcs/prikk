@@ -203,3 +203,210 @@ fn the_ladder_equals_full_replay_at_every_tip_across_a_checkpoint() {
     );
     assert!(take_anchor_fallbacks().is_empty());
 }
+
+// ---- RFC 136 increment 2c, Addendum 2: a request for the cached baseline itself ---------------------------
+
+/// Control 1. Two resolutions at one baseline: the second is a hit -- `steps + 1`, not a full replay (which would
+/// leave `steps == 0`) -- and the state is full replay's. **Perturb:** remove the `same_baseline_hit` branch: the
+/// second resolution replays in full and `steps` is 0.
+#[test]
+fn a_second_resolution_at_one_baseline_is_a_hit_counted_as_a_step() {
+    let history = AnchoredHistory::standard("anchored-hit-two", 9);
+    let horizon = history.horizon();
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    let resolve = |k: usize| {
+        resolve_baseline_state(
+            &history.layout,
+            &history.store,
+            history.blocks[k - 1],
+            horizon,
+        )
+        .unwrap()
+    };
+    resolve(4);
+    assert_eq!(steps(&history), Some(0), "the first is a full replay");
+    resolve(5);
+    assert_eq!(steps(&history), Some(1), "a one-block step");
+    let hit = resolve(5);
+    assert_eq!(
+        steps(&history),
+        Some(2),
+        "the same baseline again is a hit, and a step"
+    );
+    assert_eq!(hit.state(), full_replay(&history, 5).state());
+    let again = resolve(5);
+    assert_eq!(steps(&history), Some(3));
+    assert_eq!(again.state(), hit.state());
+}
+
+/// Control 2. The whole state -- history fields included -- equals full replay's after a hit, at **every** tip of
+/// the 70-block fixture (two resolutions per tip: the step, then the hit). **Perturb:** hand the hit a snapshot-shaped
+/// state (live nodes only): red at the first tip after block 5.
+#[test]
+fn a_hit_equals_full_replay_at_every_tip_across_a_checkpoint() {
+    let history = AnchoredHistory::standard("anchored-hit-identity", 70);
+    let horizon = history.horizon();
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    let mut hits = 0;
+    for k in 1..=history.blocks.len() {
+        let resolve = || {
+            resolve_baseline_state(
+                &history.layout,
+                &history.store,
+                history.blocks[k - 1],
+                horizon,
+            )
+            .unwrap()
+        };
+        let first = resolve();
+        let after_first = steps(&history);
+        let second = resolve();
+        if steps(&history) == after_first.map(|steps| steps + 1) {
+            hits += 1;
+        }
+        let truth = full_replay(&history, k);
+        assert_eq!(first.state(), truth.state(), "the step differs at tip {k}");
+        assert_eq!(second.state(), truth.state(), "the hit differs at tip {k}");
+    }
+    assert!(hits >= 30, "the run exercised hits ({hits})");
+    assert!(take_anchor_fallbacks().is_empty());
+}
+
+/// Control 3. The reanchor still fires. Sixty-four uses made of steps and hits fill the cache's budget; the next
+/// resolution is a full replay that resets `steps` to 0. **Perturb:** persist a hit with `steps` unchanged (do not
+/// count it): the budget never fills and `steps == Some(64)` is never reached.
+#[test]
+fn the_reanchor_fires_after_sixty_four_uses_made_of_hits_and_steps() {
+    let history = AnchoredHistory::standard("anchored-hit-reanchor", 40);
+    let horizon = history.horizon();
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    let resolve = |k: usize| {
+        resolve_baseline_state(
+            &history.layout,
+            &history.store,
+            history.blocks[k - 1],
+            horizon,
+        )
+        .unwrap()
+    };
+    resolve(1);
+    assert_eq!(steps(&history), Some(0));
+    // Alternate: a step to block k, then hits at block k, until 64 uses are made.
+    let mut uses = 0;
+    let mut k = 1;
+    while uses < 64 {
+        if uses % 3 == 0 {
+            k += 1;
+            resolve(k);
+        } else {
+            resolve(k);
+        }
+        uses += 1;
+        assert_eq!(steps(&history), Some(uses), "use {uses}");
+    }
+    assert_eq!(steps(&history), Some(64));
+    let state = resolve(k);
+    assert_eq!(
+        steps(&history),
+        Some(0),
+        "the next resolution is an independent full replay"
+    );
+    assert_eq!(state.state(), full_replay(&history, k).state());
+}
+
+/// Control 4. A poisoned cache at the baseline being asked for. `verify`'s check (`verify_divergence`) reports
+/// it; a hit trusts it (as a step trusts it: the cache is trusted state, DC-64 §5's exposure), but counts as a
+/// step, and once the budget is spent the reanchor overwrites it with the truth. The CLI-level form (`prikk
+/// verify` names it) is `tests/rfc136_anchored_text.rs`. **Perturb:** do not count a hit as a step: the poisoned
+/// state is never replaced.
+#[test]
+fn a_poisoned_cache_at_the_same_baseline_is_reported_and_then_overwritten() {
+    let history = AnchoredHistory::standard("anchored-hit-poison", 9);
+    let horizon = history.horizon();
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    resolve_baseline_state(&history.layout, &history.store, history.blocks[4], horizon).unwrap();
+    let cached = load(&history.layout).unwrap();
+    let wrong = crate::text_span::text_blob_id(b"a content id nobody stored\n").unwrap();
+    let node_a = crate::test_gates::test_support::anchored_node(NODE_A);
+    let mut poisoned = NodeLifecycleState::new();
+    for (node_id, node) in cached.state.live_nodes() {
+        let mut node = node.clone();
+        if *node_id == node_a {
+            if let NodeContent::File { mode, .. } = node.content {
+                node.content = NodeContent::File {
+                    blob_id: wrong,
+                    mode,
+                };
+            }
+        }
+        poisoned.seed_live_node(*node_id, node).unwrap();
+    }
+    for (node_id, tombstone) in cached.state.tombstones() {
+        poisoned
+            .seed_tombstone(*node_id, tombstone.clone())
+            .unwrap();
+    }
+    // One use short of the budget.
+    persist(
+        &history.layout,
+        history.blocks[4],
+        horizon,
+        CHECKPOINT_CADENCE - 1,
+        &poisoned,
+    );
+
+    let divergences = verify_divergence(&history.store, &history.layout);
+    assert_eq!(
+        divergences.len(),
+        1,
+        "verify reports the poisoned cache: {divergences:?}"
+    );
+
+    let hit = resolve_baseline_state(&history.layout, &history.store, history.blocks[4], horizon)
+        .unwrap();
+    assert_eq!(
+        steps(&history),
+        Some(CHECKPOINT_CADENCE),
+        "the hit spent the last use"
+    );
+    assert_ne!(
+        hit.state(),
+        full_replay(&history, 5).state(),
+        "a hit trusts the cache, as a step does"
+    );
+
+    let repaired =
+        resolve_baseline_state(&history.layout, &history.store, history.blocks[4], horizon)
+            .unwrap();
+    assert_eq!(steps(&history), Some(0), "the reanchor is a full replay");
+    assert_eq!(repaired.state(), full_replay(&history, 5).state());
+    assert!(
+        verify_divergence(&history.store, &history.layout).is_empty(),
+        "and it overwrote the poison"
+    );
+}
+
+/// Control 5, store form. A hit under `CacheWrite::Never` (what `diff` passes) writes nothing: the cache file is
+/// byte-identical after, the state is the cached one. **Perturb:** persist on a hit whatever `cache_write` says.
+#[test]
+fn a_hit_that_must_not_write_leaves_the_cache_byte_identical() {
+    let history = AnchoredHistory::standard("anchored-hit-never", 9);
+    let horizon = history.horizon();
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    resolve_baseline_state(&history.layout, &history.store, history.blocks[4], horizon).unwrap();
+    let before = std::fs::read(cache_path(&history.layout)).unwrap();
+    let state = resolve_baseline_state_with(
+        &history.layout,
+        &history.store,
+        history.blocks[4],
+        horizon,
+        CacheWrite::Never,
+    )
+    .unwrap();
+    assert_eq!(state.state(), full_replay(&history, 5).state());
+    assert_eq!(
+        std::fs::read(cache_path(&history.layout)).unwrap(),
+        before,
+        "nothing was written"
+    );
+}

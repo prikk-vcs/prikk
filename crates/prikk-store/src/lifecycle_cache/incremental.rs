@@ -124,6 +124,21 @@ pub(crate) fn resolve_baseline_state_with(
 ) -> Result<ReplayDerivedLifecycleState> {
     if let Some(cached) = load(layout) {
         if cached.horizon_id == horizon_id && cached.steps_since_reanchor < CHECKPOINT_CADENCE {
+            if let Some(state) = same_baseline_hit(&cached, baseline_block_id) {
+                // RFC 136 increment 2c, Addendum 2. A hit counts as a step, so DC-64 §5's independent full replay
+                // still happens within `CHECKPOINT_CADENCE` uses however they are made up.
+                let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
+                if cache_write == CacheWrite::Refresh {
+                    persist(
+                        layout,
+                        baseline_block_id,
+                        horizon_id,
+                        cached.steps_since_reanchor + 1,
+                        result.state(),
+                    );
+                }
+                return Ok(result);
+            }
             if let Some(state) = try_incremental_step(layout, reader, &cached, baseline_block_id)? {
                 let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
                 if cache_write == CacheWrite::Refresh {
@@ -144,6 +159,19 @@ pub(crate) fn resolve_baseline_state_with(
         persist(layout, baseline_block_id, horizon_id, 0, result.state());
     }
     Ok(result)
+}
+
+/// A request for the cached baseline **itself** (RFC 136 increment 2c, Addendum 2). DC-64 §3.2 defined eligibility
+/// as "the new block's parent is the cache's baseline" and never considered asking again for the same block, so
+/// every `commit` after the first between two `seal`s, and a `commit` after `worktree-status`, fell through to a
+/// full replay and reset the step count. The cached state is exactly what a one-block step would start from and
+/// trust entirely; a hit trusts the same state and applies nothing. The caller still binds it through
+/// `ReplayDerivedLifecycleState::from_replay`, so its validation is not bypassed.
+fn same_baseline_hit(
+    cached: &IncrementalCache,
+    baseline_block_id: ObjectId,
+) -> Option<NodeLifecycleState> {
+    (cached.baseline_block_id == baseline_block_id).then(|| cached.state.clone())
 }
 
 /// Attempt the incremental step. `Ok(None)` means "not eligible" — parent mismatch, multi-parent, the
@@ -545,6 +573,9 @@ pub enum BaselineCacheRung {
     Genesis,
     /// Incremental step from the cached predecessor.
     Incremental,
+    /// The request is for the cached baseline itself: the cached state is returned and counted as a step
+    /// (RFC 136 increment 2c, Addendum 2).
+    SameBaselineHit,
     /// Full replay: no cache file, or it failed to load (checksum, decode, schema).
     FullReplayNoUsableCache,
     /// Full replay: the cache was derived under another lineage genesis.
@@ -607,6 +638,9 @@ pub(crate) fn baseline_cache_rung_at_for_test_support(
         return BaselineCacheRung::FullReplayReanchorDue {
             steps_since_reanchor: cached.steps_since_reanchor,
         };
+    }
+    if same_baseline_hit(&cached, baseline_block_id).is_some() {
+        return BaselineCacheRung::SameBaselineHit;
     }
     let Ok(block) = replay::read_block(reader, baseline_block_id) else {
         return BaselineCacheRung::FullReplayBlockUnreadable;

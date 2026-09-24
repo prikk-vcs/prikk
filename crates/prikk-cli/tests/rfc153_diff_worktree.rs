@@ -623,6 +623,12 @@ fn w8_diff_is_read_only_under_a_lock_and_a_provisional_worktree() {
     let w = worktree_fixture("rfc153-wt-w8");
     ok(&w.repo, &["commit", "-m", "queued"]);
     write(&w.repo, "late.txt", b"after the queue\n");
+    // The queued commit left the baseline cache over the sealed tip, so every diff below asks for the cached
+    // baseline itself: a hit (RFC 136 2c, Addendum 2), which under `CacheWrite::Never` must write nothing.
+    assert!(
+        w.repo.join(".prikk/cache/lifecycle-state.v1").exists(),
+        "the cache the diffs will hit"
+    );
     let before = metadata_tree(&w.repo);
 
     let plain = report(&w.repo, &[]);
