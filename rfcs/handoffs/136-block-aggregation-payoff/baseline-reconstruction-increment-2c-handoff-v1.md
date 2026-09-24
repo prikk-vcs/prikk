@@ -304,3 +304,6 @@ On the kept corpus, before and with, at the five cells:
 Extend the 2c entry, with release figures: repeated commits between seals no longer replay the whole history.
 
 **Next after this, in order:** the release re-measurement round, then the gate plan.
+
+**Addendum 2 ACCEPTED 2026-09-24** (`aa0f8ab5`, `b86b6a26`, `fc2f9753`; review `rfc136-2c-addendum-2-review-v1`; 14/14
+gates re-run by the architect). **Increment 2c is closed.** Next: `139-measurement-corpus/release-remeasurement-handoff-v1.md`.
