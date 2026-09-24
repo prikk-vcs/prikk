@@ -1151,17 +1151,22 @@ fn show_on_a_queued_patch_leaves_a_stale_lifecycle_cache_untouched() {
     };
     let block_one = current_block_id(&layout);
     prime_at(block_one);
-    let primed = std::fs::read(&cache_path).unwrap();
+    let first_prime = std::fs::read(&cache_path).unwrap();
 
     // A second block, sealed with no reader call in between: sealing alone never touches this cache,
-    // so it still describes block one -- now stale.
+    // so it still describes block one -- now stale. (The `commit` inside `generation` asks for the
+    // cached baseline itself, block one: since RFC 136 increment 2c, Addendum 2, that is a hit counted
+    // as a step, so the file's step count moves by one; it still describes block one, and that is the
+    // staleness this test needs. Before Addendum 2 the same commit replayed in full and rewrote the same
+    // bytes, which is why this used to compare equal.)
     generation(&layout, "b.txt", b"two\n", "block two");
     let block_two = current_block_id(&layout);
     assert_ne!(block_one, block_two);
+    let primed = std::fs::read(&cache_path).unwrap();
     assert_eq!(
-        std::fs::read(&cache_path).unwrap(),
-        primed,
-        "sealing a second block does not by itself touch the cache"
+        primed.len(),
+        first_prime.len(),
+        "the cache still holds block one's state (only its step count moved)"
     );
 
     let node_id = NodeId::from_bytes([0x99; 32]);
