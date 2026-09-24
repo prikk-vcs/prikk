@@ -79,3 +79,8 @@ Rewrite the scale section of `docs/src/reference/current-state.md` from the rele
 
 Any product change. `seal`'s lineage walk is theme 17's, designed together with the split walk (2c option (i)).
 Changing `CHECKPOINT_CADENCE`.
+
+**ACCEPTED 2026-09-25** (`bf25960e`, `e459ef7c`, `bb9dfbe1`, `3a627af2`; review `release-remeasurement-review-v1`; 14/14
+gates re-run by the architect, and a release `seal` reproduced independently at 0.52–0.55 s for an ordinary block at
+depth 258). **This handoff is closed.** The expectation above that release might be near-linear was the architect's,
+and the measurement refuted it: `seal` is still roughly quadratic in release from about depth 128 on.
