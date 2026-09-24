@@ -481,3 +481,7 @@ fn reanchor_bound_forces_a_full_replay() {
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+// RFC 136 increment 2c: the anchored-text controls on the ladder. Under `tests/` so the record-writer scan
+// (`verified_blocks::tests::only_seal_and_verify_write_the_record`) reads them as tests.
+mod anchored;

@@ -515,8 +515,6 @@ fn decode_node_record(
 }
 
 #[cfg(test)]
-mod anchored_tests;
-#[cfg(test)]
 mod tests;
 
 // Test-support instrument (warm-cache `commit` anomaly measurement, RFC 136): read-only, never in a

@@ -9,7 +9,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use super::*;
+use super::super::*;
 use crate::anchor_fallback::take_anchor_fallbacks;
 use crate::lifecycle_cache::anchored_text::{
     anchored_text_uses_for_test, without_anchoring_for_test,
