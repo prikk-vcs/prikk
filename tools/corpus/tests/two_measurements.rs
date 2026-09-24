@@ -19,18 +19,15 @@
 //!    unreachable on any repository this corpus can build -- not attempted here (verified via
 //!    `prepare_snapshot_checkout_plan`'s own `Integrity` refusal on a `None` snapshot ref, not
 //!    assumed).
-//! 2. **Item 2 (merge baseline reconstruction).** A branch is cut from `heads/main`'s current tip
-//!    (the depth-profiled baseline), then **both** `heads/main` and the new branch grow by
-//!    [`DIVERGENCE_SIZE`] commits each, one new branch-unique file per commit -- disjoint paths, not
-//!    overlapping edits (§2.3's own invented-shape disclosure, below). `merge-evidence` is then timed
-//!    against the frozen baseline/left/right block ids. `heads/main`'s own [`DIVERGENCE_SIZE`]
-//!    commits are real, permanent growth (this file's own `actual_depth` tracks that, since the
-//!    checkpoint-numbering loop index alone would understate true depth after the first divergence);
-//!    the branch's are discarded from the worktree afterward so `heads/main`'s own continued growth
-//!    stays worktree-consistent (see `crates/prikk-cli/tests/dc74_merge_execution.rs`'s own
-//!    add-then-remove-file precedent for why this is necessary: one physical worktree, no
-//!    branch-switch concept, `prikk commit --ref X` diffs the worktree against `X`'s own last sealed
-//!    baseline only).
+//! 2. **Item 2 (merge baseline reconstruction).** A branch is cut from `heads/main`'s tip (the
+//!    depth-profiled baseline), then both `heads/main` and the branch grow by [`DIVERGENCE_SIZE`] commits
+//!    each, and `merge-evidence` is timed against the frozen baseline/left/right block ids. **Two
+//!    variants** (release re-measurement handoff §1.2): **without edits** each side creates brand-new files
+//!    (the cost is the baseline replay only), and **with edits** each side appends to a file the corpus had
+//!    already edited, so every operation needs a baseline text nobody stored. **Both run in throwaway copies**
+//!    of the repository at exactly the checkpoint depth, so `heads/main` is never grown by a divergence and
+//!    every checkpoint is the depth it says (the debug-build original grew `heads/main` in place, which
+//!    shifted its later checkpoints to 69, 138, 207 and 276).
 //!
 //! ## §2.3's own disclosure: what is profiled, what is invented
 //!
@@ -217,19 +214,18 @@ fn measure_checkout(binary: &Path, repo_root: &Path, depth: u64, samples: usize)
     }
 }
 
-/// The three blocks a `merge-evidence` names, and how many commits `heads/main` gained.
+/// The three blocks a `merge-evidence` names.
 struct Divergence {
     baseline: String,
     left: String,
     right: String,
-    left_growth: u64,
 }
 
 /// Item 2, **sides that carry no edits** (release re-measurement handoff §1.2): cut a branch from `heads/main`'s
 /// current tip and grow both sides by [`DIVERGENCE_SIZE`] commits of brand-new files, so `merge-evidence` does
 /// the baseline replay and nothing else. Restores the worktree to `heads/main`'s own real state (removes the
 /// right side's files) so the caller can resume committing to `heads/main`. `heads/main` gains
-/// [`DIVERGENCE_SIZE`] real commits.
+/// [`DIVERGENCE_SIZE`] real commits (the caller runs it in a throwaway copy).
 fn prepare_divergence_without_edits(
     binary: &Path,
     repo_root: &Path,
@@ -298,7 +294,6 @@ fn prepare_divergence_without_edits(
         baseline: baseline_id,
         left: left_id,
         right: right_id,
-        left_growth: DIVERGENCE_SIZE,
     }
 }
 
@@ -369,7 +364,6 @@ fn prepare_divergence_with_edits(
         baseline: baseline_id,
         left: left_id,
         right: right_id,
-        left_growth: 0,
     }
 }
 
@@ -464,7 +458,6 @@ fn two_measurements() {
     execute::init_repository(binary, &repo_root).expect("init");
 
     let mut trusted = false;
-    let mut actual_depth: u64 = 0;
     let mut checkout_samples = Vec::new();
     let mut merge_rows: Vec<MergeRow> = Vec::new();
 
@@ -483,12 +476,11 @@ fn two_measurements() {
             trusted = true;
         }
         execute::run_seal(binary, &repo_root, &profile, execute::REF_NAME).expect("seal");
-        actual_depth += 1;
 
         let nominal_depth = (index + 1) as u64;
         if CHECKPOINTS.contains(&nominal_depth) {
-            let depth = actual_depth;
-            eprintln!("checkpoint: nominal {nominal_depth}, actual {depth}");
+            let depth = nominal_depth;
+            eprintln!("checkpoint: depth {depth}");
             let (load, _) = (
                 std::fs::read_to_string("/proc/loadavg").unwrap_or_default(),
                 (),
@@ -502,15 +494,18 @@ fn two_measurements() {
             );
             checkout_samples.push(checkout_sample);
 
-            // The edit variant first, in a throwaway copy at exactly this depth; then the no-edit variant on the
-            // real repository (which gains DIVERGENCE_SIZE commits, as before).
+            // Both variants run in **throwaway copies** of the repository at exactly this depth, so `heads/main`
+            // is never grown by a divergence and every checkpoint is the depth it says (the original grew
+            // `heads/main` by the no-edit divergence, which shifted every later checkpoint: 32, 69, 138, ...).
             let edited_files = recently_edited_files(&manifest, index + 1, &repo_root);
-            let copy = support::unique_dir(&format!("two-measurements-edits-{depth}"));
-            support::copy_dir_all(&repo_root, &copy);
+            let copy_edits = support::unique_dir(&format!("two-measurements-edits-{depth}"));
+            support::copy_dir_all(&repo_root, &copy_edits);
             let with_edits =
-                prepare_divergence_with_edits(binary, &copy, &profile, depth, &edited_files);
+                prepare_divergence_with_edits(binary, &copy_edits, &profile, depth, &edited_files);
+            let copy_plain = support::unique_dir(&format!("two-measurements-plain-{depth}"));
+            support::copy_dir_all(&repo_root, &copy_plain);
             let without_edits =
-                prepare_divergence_without_edits(binary, &repo_root, &profile, depth);
+                prepare_divergence_without_edits(binary, &copy_plain, &profile, depth);
             let mut row = MergeRow {
                 depth,
                 without_edits: Vec::new(),
@@ -519,9 +514,9 @@ fn two_measurements() {
             };
             for _ in 0..samples {
                 row.without_edits
-                    .push(time_merge_evidence(binary, &repo_root, &without_edits));
+                    .push(time_merge_evidence(binary, &copy_plain, &without_edits));
                 row.with_edits
-                    .push(time_merge_evidence(binary, &copy, &with_edits));
+                    .push(time_merge_evidence(binary, &copy_edits, &with_edits));
             }
             eprintln!(
                 "  merge-evidence: no edits {:?} ms, with edits {:?} ms",
@@ -535,8 +530,8 @@ fn two_measurements() {
                     .collect::<Vec<_>>(),
             );
             merge_rows.push(row);
-            let _ = std::fs::remove_dir_all(&copy);
-            actual_depth += without_edits.left_growth;
+            let _ = std::fs::remove_dir_all(&copy_edits);
+            let _ = std::fs::remove_dir_all(&copy_plain);
         }
     }
 
