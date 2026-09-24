@@ -1657,6 +1657,7 @@ fn apply_queued_patch_envelopes_resolves_a_two_node_swap() {
     let mut state = NodeLifecycleState::new();
     let mut text_cache = TextCache::new();
     apply_queued_patch_envelopes(
+        None,
         &reader,
         &[create_record, swap_record],
         &mut state,

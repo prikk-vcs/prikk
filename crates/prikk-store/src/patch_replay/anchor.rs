@@ -18,7 +18,6 @@
 //! back to genesis and returns the finding, which the caller prints on stderr naming `prikk verify`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
 use prikk_error::Result;
 use prikk_object::{NodeId, ObjectId};
@@ -31,6 +30,7 @@ use super::decode::{
 use super::read::{read_block, read_patch, replay_state_from_snapshot};
 use super::{PatchReplayDeletedFile, apply_operation_sequence};
 use crate::ObjectReader;
+pub use crate::anchor_fallback::SnapshotAnchorFallback;
 use crate::path::RepoPath;
 use crate::snapshot::{SnapshotFile, load_block_snapshot};
 
@@ -45,28 +45,6 @@ pub(crate) enum Anchoring<'a> {
     /// whose Block is in this repository's replay-verified record **and** that passes the loader.
     /// A snapshot on an unrecorded Block is skipped without being read.
     VerifiedWorktreeWrite(&'a BTreeSet<ObjectId>),
-}
-
-/// A snapshot a read-only report could not anchor at because it failed validation (RFC 136 §10.3b.4).
-/// The report replayed from genesis instead, so its output is unchanged.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotAnchorFallback {
-    /// The block whose snapshot failed the loader.
-    pub block_id: ObjectId,
-    /// The loader's finding.
-    pub finding: String,
-}
-
-impl fmt::Display for SnapshotAnchorFallback {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "warning: the snapshot of Block {} failed validation ({}); this report replayed the whole \
-             history instead -- run `prikk verify`",
-            self.block_id, self.finding
-        )
-    }
 }
 
 /// The replayed chain: state, the whole chain's history fields, and any fallback.
@@ -194,10 +172,10 @@ fn find_anchor(
             Err(err) => {
                 return Ok((
                     None,
-                    Some(SnapshotAnchorFallback {
-                        block_id: *block_id,
-                        finding: err.to_string(),
-                    }),
+                    Some(SnapshotAnchorFallback::for_report(
+                        *block_id,
+                        err.to_string(),
+                    )),
                 ));
             }
         }

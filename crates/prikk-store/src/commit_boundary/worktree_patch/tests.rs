@@ -2286,3 +2286,60 @@ fn commit_on_an_emptied_tree_at_a_checkpoint_authors_normally() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// RFC 136 increment 2c, per call site (`commit`, `node_authoring.rs` `current_text_for_node`): a worktree that edits
+/// a file whose baseline text nobody stored takes that text from a replay-verified anchor, and authors the patch it
+/// authors with anchoring off. The fixture is sealed through `seal_block`, so a checkpoint and a verified record
+/// exist; no baseline cache exists, so the ladder replays in full and only this site can use an anchor.
+/// **Perturb:** `current_text_for_node` calls `materialize_edited_text`: `used` is 0 and this goes red.
+#[test]
+fn commit_takes_the_baseline_text_from_an_anchor_and_authors_the_same_patch() {
+    use crate::lifecycle_cache::anchored_text::{
+        anchored_text_uses_for_test, without_anchoring_for_test,
+    };
+    use crate::test_gates::test_support::{AnchoredHistory, NODE_A};
+
+    let author_once = |suppress: bool| {
+        let history = AnchoredHistory::standard("anchored-site-commit", 9);
+        let edited =
+            crate::lifecycle_cache::anchored_text::tests_support::edited_a(&history, "worktree");
+        crate::lifecycle_cache::anchored_text::tests_support::write_tip_worktree(&history, &edited);
+        let mut generator = deterministic_generator();
+        let mut commit = || {
+            commit_worktree_changes_with_generator(
+                &history.layout,
+                "heads/main",
+                "edit a",
+                WorktreePatchCommitOptions::prefer_text_edits(),
+                &mut generator,
+                &test_signer(),
+            )
+            .unwrap()
+        };
+        let before = anchored_text_uses_for_test();
+        let report = if suppress {
+            without_anchoring_for_test(&mut commit)
+        } else {
+            commit()
+        };
+        assert_eq!(
+            report.changes[0].operation,
+            WorktreePatchOperationKind::EditText
+        );
+        let _ = NODE_A;
+        (
+            report.patch_id,
+            report.text_edit_count,
+            anchored_text_uses_for_test() - before,
+        )
+    };
+    let (anchored_id, edits, used) = author_once(false);
+    assert_eq!(edits, 1);
+    assert_eq!(used, 1, "the edit's baseline text came from an anchor");
+    let (plain_id, _, plain_used) = author_once(true);
+    assert_eq!(plain_used, 0);
+    assert_eq!(
+        anchored_id, plain_id,
+        "the same patch id with and without anchoring"
+    );
+}

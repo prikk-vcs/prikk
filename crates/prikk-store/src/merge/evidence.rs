@@ -56,7 +56,8 @@ pub fn prepare_merge_evidence(
     let replay = replay_derived_state(&object_store, baseline_block_id, baseline_horizon)?;
     let evidence =
         StorePatchAlgebraEvidence::from_replay_derived(&object_store, baseline_horizon, replay)
-            .map_err(|err| PrikkError::Integrity(format!("merge evidence baseline: {err:?}")))?;
+            .map_err(|err| PrikkError::Integrity(format!("merge evidence baseline: {err:?}")))?
+            .with_layout(layout);
     let left_selector = resolve_target(layout, &object_store, left_target)?;
     let right_selector = resolve_target(layout, &object_store, right_target)?;
     let (left_operations, left_author_key_ids) = candidate_sequence(

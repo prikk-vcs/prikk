@@ -88,7 +88,12 @@ pub(crate) fn open_repository(
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let outcome = run();
+    // RFC 136 increment 2c: a verified snapshot that could not supply a file's text (its manifest failed validation,
+    // or the text it yielded failed its hash) sends the command back to a full replay, and that is named here, once,
+    // whichever command it was and however it ended (§10.3b.4's rule: an anchor's failure is never swallowed).
+    warn_anchor_fallbacks(prikk_store::take_anchor_fallbacks().iter());
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {}", err.message());

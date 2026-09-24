@@ -25,12 +25,82 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// Build `crates/prikk-cli` (package `prikk`) and return the resulting binary's path. Cached for the
-/// life of the test process.
+/// Which build of `prikk` a measurement wants (RFC 136 increment 2c, item 0).
+///
+/// **Timing is measured in release.** Every corpus-driven timing before 2c came through a `cargo build` without
+/// `--release`: the shapes of those curves (the exponents, the sealing projection, the cold-`commit` growth) are
+/// debug-build artefacts, and a release build is ~30x faster with different shapes. So the default build is
+/// release, **fixed in source** -- not an environment knob, for the reason RFC 133's memory instrument runs its
+/// release profile -- and a debug build is a separate, explicitly named request for the bridging columns a
+/// re-measurement needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildProfile {
+    /// What every timing uses: `cargo build --release`.
+    Release,
+    /// Only when a debug column is wanted beside the release one: `cargo build`.
+    DebugForBridgingColumns,
+}
+
+/// The arguments of the `cargo build` that produces the binary for `profile`.
+pub fn build_args(profile: BuildProfile, manifest_path: &str) -> Vec<String> {
+    let mut args: Vec<String> = ["build", "--locked", "--message-format=json"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if profile == BuildProfile::Release {
+        args.push("--release".to_string());
+    }
+    args.extend(
+        ["--manifest-path", manifest_path, "-p", "prikk"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    args
+}
+
+/// The `opt_level` Cargo's own `compiler-artifact` record names for a build, e.g. `"3"` or `"0"`.
+pub fn artifact_opt_level(artifact: &serde_json::Value) -> Option<String> {
+    artifact
+        .get("profile")?
+        .get("opt_level")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Refuse a default (release) binary whose artifact record says it is not optimized: read from Cargo's JSON, not
+/// inferred from a path or an argument list, so a change of profile settings that quietly produced an
+/// unoptimized build is caught where the number would have been taken.
+pub fn require_optimized(opt_level: Option<&str>) -> Result<(), String> {
+    match opt_level {
+        Some("0") => Err(
+            "the `prikk` binary is unoptimized (opt_level 0): timings from it are debug-build \
+                          timings"
+                .to_string(),
+        ),
+        Some(_) => Ok(()),
+        None => Err("Cargo's compiler-artifact record for `prikk` names no opt_level".to_string()),
+    }
+}
+
+/// The release binary of `crates/prikk-cli` (package `prikk`), built once per test process and checked
+/// optimized. **The one every timing uses.**
 pub fn prikk_binary_path() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
     PATH.get_or_init(|| {
-        locate_prikk_binary().unwrap_or_else(|err| panic!("locating the `prikk` binary: {err}"))
+        let built = locate_prikk_binary(BuildProfile::Release)
+            .unwrap_or_else(|err| panic!("locating the `prikk` binary: {err}"));
+        require_optimized(built.opt_level.as_deref()).unwrap_or_else(|err| panic!("{err}"));
+        built.path
+    })
+}
+
+/// The debug binary, for a bridging column beside a release one. Named so that asking for it is deliberate.
+pub fn prikk_debug_binary_path_for_bridging_columns() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        locate_prikk_binary(BuildProfile::DebugForBridgingColumns)
+            .unwrap_or_else(|err| panic!("locating the debug `prikk` binary: {err}"))
+            .path
     })
 }
 
@@ -38,18 +108,16 @@ pub fn prikk_binary_path() -> &'static Path {
 /// documented mechanism for a crate to reliably re-invoke cargo without assuming it is on `PATH`.
 const CARGO: &str = env!("CARGO");
 
-fn locate_prikk_binary() -> Result<PathBuf, String> {
+/// Where a build put the binary, and the optimization level Cargo recorded for it.
+pub struct BuiltBinary {
+    pub path: PathBuf,
+    pub opt_level: Option<String>,
+}
+
+pub fn locate_prikk_binary(profile: BuildProfile) -> Result<BuiltBinary, String> {
     let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml");
     let output = std::process::Command::new(CARGO)
-        .args([
-            "build",
-            "--locked",
-            "--message-format=json",
-            "--manifest-path",
-            manifest_path,
-            "-p",
-            "prikk",
-        ])
+        .args(build_args(profile, manifest_path))
         .output()
         .map_err(|err| format!("spawning {CARGO} build: {err}"))?;
     if !output.status.success() {
@@ -79,7 +147,10 @@ fn locate_prikk_binary() -> Result<PathBuf, String> {
             continue;
         }
         if let Some(executable) = value.get("executable").and_then(serde_json::Value::as_str) {
-            return Ok(PathBuf::from(executable));
+            return Ok(BuiltBinary {
+                path: PathBuf::from(executable),
+                opt_level: artifact_opt_level(&value),
+            });
         }
     }
     Err(format!(

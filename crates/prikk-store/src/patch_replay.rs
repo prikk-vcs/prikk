@@ -1097,6 +1097,7 @@ fn resolve_folded_worktree_baseline_with(
         match crate::read_active_ref_metadata(layout)? {
             crate::ActiveRefMetadata::Valid(actual) if actual == canonical_ref => {
                 crate::lifecycle_cache::replay::apply_queued_patch_envelopes(
+                    Some(layout),
                     object_store,
                     records,
                     &mut state,

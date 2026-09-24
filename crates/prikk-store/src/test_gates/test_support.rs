@@ -332,6 +332,9 @@ fn unique_suffix() -> String {
     format!("{}-{nanos}-{sequence}", std::process::id())
 }
 
+mod anchored_history;
+pub(crate) use anchored_history::{AnchoredHistory, NODE_A, NODE_B, NODE_D, node as anchored_node};
+
 mod rename_history;
 pub(crate) use rename_history::{
     publish_two_nodes_then_rename_cycle_block,

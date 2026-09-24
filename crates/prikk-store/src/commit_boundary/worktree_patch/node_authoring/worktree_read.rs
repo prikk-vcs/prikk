@@ -116,6 +116,7 @@ fn manifest_entry(
 /// A baseline file as a manifest entry, its content materialized the way `commit` materializes it. A blob that
 /// is missing fails the whole call (RFC 153 §6a A), as it does for `tree` and `cat`.
 fn baseline_entry(
+    layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     base: &BaselineFile,
     path: &str,
@@ -123,9 +124,15 @@ fn baseline_entry(
     text_cache: &TextCache,
 ) -> Result<ReplayManifestEntry> {
     let bytes = match base.kind {
-        NodeKind::TextFile => {
-            current_text_for_node(object_store, base, path, lineage.0, lineage.1, text_cache)?
-        }
+        NodeKind::TextFile => current_text_for_node(
+            layout,
+            object_store,
+            base,
+            path,
+            lineage.0,
+            lineage.1,
+            text_cache,
+        )?,
         NodeKind::BinaryFile => read_file_blob_bytes_if_present(object_store, base.blob_id)?
             .ok_or_else(|| {
                 PrikkError::Integrity(format!(
@@ -248,7 +255,7 @@ pub(crate) fn read_worktree_for_diff(
     let mut worktree_side: Vec<ReplayManifestEntry> = Vec::new();
     let mut baseline_side: Vec<ReplayManifestEntry> = Vec::new();
     let materialize = |base: &BaselineFile, path: &str| {
-        baseline_entry(&object_store, base, path, lineage, &text_cache)
+        baseline_entry(layout, &object_store, base, path, lineage, &text_cache)
     };
 
     for (path, meta) in &worktree {

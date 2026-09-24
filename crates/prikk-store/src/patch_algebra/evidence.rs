@@ -18,6 +18,10 @@ pub(crate) struct StorePatchAlgebraEvidence<'a, R: ObjectReader> {
     // content identity rather than a stored object.
     lineage_horizon_id: ObjectId,
     baseline_state: NodeLifecycleState,
+    // RFC 136 increment 2c: where the replay-verified record lives, so a baseline text nobody stored can be taken
+    // from the nearest verified anchor instead of a full replay. `None` (a test's in-memory store) means the
+    // full replay, as before.
+    layout: Option<crate::foundation::layout::RepositoryLayout>,
 }
 
 impl<'a, R: ObjectReader> StorePatchAlgebraEvidence<'a, R> {
@@ -58,7 +62,17 @@ impl<'a, R: ObjectReader> StorePatchAlgebraEvidence<'a, R> {
             baseline_block_id: replay.baseline_block_id(),
             lineage_horizon_id,
             baseline_state,
+            layout: None,
         })
+    }
+
+    /// Take a baseline text nobody stored from the nearest replay-verified anchor of `layout` (RFC 136 increment 2c).
+    pub(crate) fn with_layout(
+        mut self,
+        layout: &crate::foundation::layout::RepositoryLayout,
+    ) -> Self {
+        self.layout = Some(layout.clone());
+        self
     }
 
     #[cfg(test)]
@@ -174,12 +188,23 @@ impl<R: ObjectReader> PatchAlgebraEvidence for StorePatchAlgebraEvidence<'_, R> 
                 // DC-65: a `TextFile` node's `blob_id` after any `EditText` is a content identity,
                 // not necessarily a stored object — materialize it from the diff chain (the same
                 // pattern `patch_replay`/`lifecycle_cache::replay` already use) before giving up.
-                match materialize_edited_text(
-                    self.reader,
-                    self.baseline_block_id,
-                    self.lineage_horizon_id,
-                    node_id,
-                ) {
+                let materialized = match &self.layout {
+                    Some(layout) => crate::lifecycle_cache::materialize_edited_text_anchored(
+                        layout,
+                        self.reader,
+                        self.baseline_block_id,
+                        self.lineage_horizon_id,
+                        node_id,
+                        blob_id,
+                    ),
+                    None => materialize_edited_text(
+                        self.reader,
+                        self.baseline_block_id,
+                        self.lineage_horizon_id,
+                        node_id,
+                    ),
+                };
+                match materialized {
                     Ok(Some(text)) => Evidence::Known(text),
                     Ok(None) => Evidence::Missing {
                         scope,

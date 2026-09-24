@@ -389,6 +389,121 @@ pub(in crate::lifecycle_cache) fn apply_one_block(
     )
 }
 
+/// [`apply_one_block`] with a caller-carried `TextCache` (RFC 136 2c): the same resolver, the same schema
+/// rule and the same `apply_patch_ids` fold, but text materialized elsewhere -- from a verified anchor, by
+/// [`materialize_wanted_text_forward`] -- is visible to this block's `EditText` operations.
+pub(in crate::lifecycle_cache) fn apply_one_block_carrying_text(
+    reader: &impl ObjectReader,
+    block: &BlockPayload,
+    state: &mut NodeLifecycleState,
+    text_cache: &mut TextCache,
+) -> Result<(), LifecycleReplayError> {
+    let blob_resolver = StoreBackedResolver::new(reader);
+    apply_patch_ids(
+        reader,
+        &block.patch_ids,
+        &blob_resolver,
+        state,
+        text_cache,
+        false,
+    )
+}
+
+/// The nodes `block`'s `EditText` operations target, from the operations alone (RFC 136 2c: the nodes whose text
+/// a one-block step may need).
+pub(in crate::lifecycle_cache) fn edited_text_nodes(
+    reader: &impl ObjectReader,
+    block: &BlockPayload,
+) -> Result<BTreeSet<NodeId>, LifecycleReplayError> {
+    let mut nodes = BTreeSet::new();
+    for patch_id in &block.patch_ids {
+        for operation in read_patch_operations(reader, *patch_id, false)? {
+            if let DecodedOperationKind::EditText { node_id, .. } = operation.kind {
+                nodes.insert(node_id);
+            }
+        }
+    }
+    Ok(nodes)
+}
+
+/// **Text only** (RFC 136 2c). Carry the text of the `wanted` nodes forward through `blocks` (oldest first):
+/// `seeds` is each wanted node's text where the walk starts (its content at the anchor); an `EditText` on a
+/// wanted node is localized and spliced exactly as `apply_edit_text` does (the same `text_span` functions); a
+/// `CreateFile` on a wanted node takes the created blob's content; `DeleteNode` and `ReplaceBinary` drop the
+/// node's text. Every other operation, and every operation on a node nobody wants, is passed over: no lifecycle
+/// state is built. `None` on anything it cannot follow -- the caller's fallback is full replay -- never an
+/// invented text. The result is **unverified**; the caller checks each text against the content id it expects.
+pub(in crate::lifecycle_cache) fn materialize_wanted_text_forward(
+    reader: &impl ObjectReader,
+    seeds: TextCache,
+    blocks: &[BlockPayload],
+    wanted: &BTreeSet<NodeId>,
+) -> Result<Option<TextCache>, LifecycleReplayError> {
+    let blob_resolver = StoreBackedResolver::new(reader);
+    let mut texts = seeds;
+    for block in blocks {
+        for patch_id in &block.patch_ids {
+            for operation in read_patch_operations(reader, *patch_id, false)? {
+                match &operation.kind {
+                    DecodedOperationKind::EditText {
+                        node_id,
+                        span_id,
+                        old_span_hash,
+                        left_anchor_hash,
+                        right_anchor_hash,
+                        replacement_text,
+                        old_span_text,
+                        left_anchor_len,
+                        right_anchor_len,
+                    } if wanted.contains(node_id) => {
+                        let Some(current) = texts.get(node_id) else {
+                            return Ok(None);
+                        };
+                        let Ok((start, end)) = text_span::resolve_text_span(
+                            current,
+                            old_span_text,
+                            left_anchor_hash,
+                            right_anchor_hash,
+                            span_id,
+                            *node_id,
+                            old_span_hash,
+                            *left_anchor_len,
+                            *right_anchor_len,
+                        ) else {
+                            return Ok(None);
+                        };
+                        let Ok(next) =
+                            text_span::splice_text(current, start, end, replacement_text)
+                        else {
+                            return Ok(None);
+                        };
+                        texts.insert(*node_id, next);
+                    }
+                    DecodedOperationKind::CreateFile {
+                        node_id, blob_id, ..
+                    } if wanted.contains(node_id) => match blob_resolver.blob_content(blob_id) {
+                        Ok(Some((BlobKind::Text, bytes))) => {
+                            texts.insert(*node_id, bytes);
+                        }
+                        Ok(_) => {
+                            texts.remove(node_id);
+                        }
+                        Err(_) => return Ok(None),
+                    },
+                    DecodedOperationKind::DeleteNode { node_id, .. }
+                    | DecodedOperationKind::ReplaceBinary { node_id, .. }
+                        if wanted.contains(node_id) =>
+                    {
+                        texts.remove(node_id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(Some(texts))
+}
+
 /// Apply exactly one already-read block's patches to an existing lifecycle state **and** an
 /// existing, externally-carried `TextCache` (DC-92). Unlike `apply_one_block`, which creates a
 /// fresh cache per call — correct only when the caller processes one block in isolation — this
@@ -398,9 +513,11 @@ pub(in crate::lifecycle_cache) fn apply_one_block(
 /// `EditText` (a content identity, not necessarily a stored object — see the DC-65 invariant
 /// document) would be unreachable once that earlier call's own local cache was discarded, and a
 /// later `EditText` against the same node would fail looking for a blob that was never stored.
-/// `crate::lifecycle_cache::incremental`'s own one-block step hits exactly this gap and falls
-/// back to full replay rather than solving it (see its module doc); this function is DC-92's
-/// solution for the case where blocks are visited **in order**, so there is a real cache to carry.
+/// `crate::lifecycle_cache::incremental`'s own one-block step hits exactly this gap; it has no cache
+/// to carry (it sees one block), and since RFC 136 increment 2c it takes the missing text from a
+/// replay-verified anchor (`anchored_text`), falling back to full replay only when that cannot. This
+/// function is DC-92's solution for the case where blocks are visited **in order**, so there is a real
+/// cache to carry.
 pub(crate) fn apply_one_block_with_text_cache(
     reader: &impl ObjectReader,
     block: &BlockPayload,
@@ -455,6 +572,7 @@ pub(crate) fn apply_candidate_patches(
 /// in this queue was created within the queue itself (there is no sealed history to consult), so the
 /// fallback is never exercised in that case; if it somehow were, failing closed is correct.
 pub(crate) fn apply_queued_patch_envelopes(
+    layout: Option<&crate::foundation::layout::RepositoryLayout>,
     reader: &impl ObjectReader,
     records: &[crate::wal::WalRecord],
     state: &mut NodeLifecycleState,
@@ -490,12 +608,25 @@ pub(crate) fn apply_queued_patch_envelopes(
                              from"
                         )));
                     };
-                    let text = super::materialize_edited_text(
-                        reader,
-                        baseline_block_id,
-                        horizon_id,
-                        *node_id,
-                    )?
+                    // RFC 136 increment 2c: from the nearest replay-verified anchor when there is one (its text
+                    // must hash to `blob_id`, the content this node has), otherwise a full replay, as before.
+                    // `layout` is `None` only for a caller with no repository (a test's in-memory store).
+                    let text = match layout {
+                        Some(layout) => super::materialize_edited_text_anchored(
+                            layout,
+                            reader,
+                            baseline_block_id,
+                            horizon_id,
+                            *node_id,
+                            blob_id,
+                        )?,
+                        None => super::materialize_edited_text(
+                            reader,
+                            baseline_block_id,
+                            horizon_id,
+                            *node_id,
+                        )?,
+                    }
                     .ok_or_else(|| {
                         PrikkError::Integrity(format!(
                             "queued patch {patch_id} edits node {node_id:?} whose content blob \

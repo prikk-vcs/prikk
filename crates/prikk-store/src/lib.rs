@@ -16,6 +16,7 @@
 //! plugin execution, and remote sync remain separate increments.
 
 // RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
+mod anchor_fallback;
 mod author;
 mod blob_access;
 mod block_state;
@@ -106,6 +107,7 @@ mod worktree_status;
 #[cfg(test)]
 mod test_gates;
 
+pub use anchor_fallback::take_anchor_fallbacks;
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 pub use block_state::{
@@ -164,6 +166,7 @@ pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
 pub use lifecycle_cache::incremental::{
     BaselineCacheRung, LadderTip, LifecycleCacheHeader, LifecycleStateShape,
     lifecycle_cache_header_for_test_support, lifecycle_cache_state_digest_for_test_support,
+    poison_lifecycle_cache_for_test_support,
 };
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::replay::{IdOnlyHistory, ReplayTimeSplit};

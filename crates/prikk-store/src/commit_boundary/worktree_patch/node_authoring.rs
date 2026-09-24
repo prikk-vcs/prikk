@@ -588,12 +588,12 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                             None => read_existing_file_bytes(layout, path, BlobKind::Text)?,
                         };
                         planned.push(plan_edit_text(
+                            layout,
                             &object_store,
                             base,
                             &bytes,
                             path,
-                            lineage_baseline_block_id,
-                            lineage_horizon_id,
+                            (lineage_baseline_block_id, lineage_horizon_id),
                             &queue_text_cache,
                         )?);
                     }
@@ -735,12 +735,12 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             match base.kind {
                 NodeKind::TextFile => {
                     planned.push(plan_edit_text(
+                        layout,
                         &object_store,
                         base,
                         &bytes,
                         new_path,
-                        lineage_baseline_block_id,
-                        lineage_horizon_id,
+                        (lineage_baseline_block_id, lineage_horizon_id),
                         &queue_text_cache,
                     )?);
                 }
@@ -1033,15 +1033,16 @@ fn classify_new(bytes: &[u8]) -> (BlobKind, NodeKind) {
 /// Plan an arbitrary-span `EditText` for a modified existing `TextFile`, with all span identity computed
 /// through the shared `text_span` module (no authoring-local span logic).
 fn plan_edit_text(
+    layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     base: &BaselineFile,
     new_bytes: &[u8],
     path: &str,
-    lineage_baseline_block_id: Option<ObjectId>,
-    lineage_horizon_id: Option<ObjectId>,
+    (lineage_baseline_block_id, lineage_horizon_id): (Option<ObjectId>, Option<ObjectId>),
     queue_text_cache: &crate::lifecycle_cache::replay::TextCache,
 ) -> std::result::Result<PlannedOp, AuthorError> {
     let old_text = current_text_for_node(
+        layout,
         object_store,
         base,
         path,
@@ -1297,6 +1298,7 @@ fn read_file_blob_bytes_if_present(
 /// exceptional, for any node whose most recent *sealed* operation was an `EditText`; see the invariant
 /// document at `rfcs/handoffs/DC-65-text-edit-baseline-content/prerequisite-questions-v1.md`.
 fn current_text_for_node(
+    layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     base: &BaselineFile,
     path: &str,
@@ -1320,11 +1322,15 @@ fn current_text_for_node(
             ))));
         }
     };
-    crate::lifecycle_cache::materialize_edited_text(
+    // RFC 136 increment 2c: from the nearest replay-verified anchor when there is one (and it yields a text
+    // hashing to the content id this baseline names), otherwise a full replay, as before.
+    crate::lifecycle_cache::materialize_edited_text_anchored(
+        layout,
         object_store,
         baseline_block_id,
         horizon_id,
         base.node_id,
+        base.blob_id,
     )
     .map_err(AuthorError::Store)?
     .ok_or_else(|| {

@@ -104,8 +104,9 @@ fn state_derivation_parent(payload: &BlockPayload) -> Option<ObjectId> {
 /// single continuous replay materializes it into a `TextCache` as it walks the lineage, and a later
 /// `EditText` against the same node depends on finding it there. Splitting a from-genesis replay
 /// into separately-memoized steps without carrying that cache forward reproduces exactly the gap
-/// `crate::lifecycle_cache::incremental`'s own one-block step already found and falls back to full
-/// replay for (see its module doc) — this was caught here by the existing test suite, not
+/// `crate::lifecycle_cache::incremental`'s own one-block step already found (which, since RFC 136
+/// increment 2c, takes the missing text from a verified anchor or falls back to full replay; see its
+/// module doc) — this was caught here by the existing test suite, not
 /// anticipated in the original design, and fixed by carrying the cache rather than by falling back,
 /// since blocks memoized here really are visited in lineage order and a real cache exists to carry.
 #[derive(Debug, Default)]

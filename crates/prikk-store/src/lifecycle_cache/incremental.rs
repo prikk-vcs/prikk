@@ -124,7 +124,7 @@ pub(crate) fn resolve_baseline_state_with(
 ) -> Result<ReplayDerivedLifecycleState> {
     if let Some(cached) = load(layout) {
         if cached.horizon_id == horizon_id && cached.steps_since_reanchor < CHECKPOINT_CADENCE {
-            if let Some(state) = try_incremental_step(reader, &cached, baseline_block_id)? {
+            if let Some(state) = try_incremental_step(layout, reader, &cached, baseline_block_id)? {
                 let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
                 if cache_write == CacheWrite::Refresh {
                     persist(
@@ -154,12 +154,12 @@ pub(crate) fn resolve_baseline_state_with(
 /// `apply_state_effect` fold full replay uses, but a fold that spans only one block cannot
 /// materialize a node whose current content is itself an *earlier*, already-cached-away block's
 /// `EditText` result — full replay's `TextCache` accumulates across the whole lineage and never has
-/// this gap. Structurally falling back to full replay for this one commit is the correct, general
-/// fix (rather than a narrower per-node fallback), consistent with the DC-65 invariant that any
-/// consumer needing a `TextFile` node's actual bytes must be able to materialize them, never assume
-/// a stored object. See the design document §9a. A genuine application failure of any other class
-/// propagates as `Err`, still not folded into the fallback path — see §3.
+/// this gap. **RFC 136 increment 2c closes it without a full replay:** the missing text is taken from the
+/// nearest replay-verified anchor ([`anchored_text_retry`]); only if that too is unavailable is this
+/// commit's baseline a full replay. See the design document §9a. A genuine application failure of any
+/// other class propagates as `Err`, still not folded into the fallback path — see §3.
 fn try_incremental_step(
+    layout: &RepositoryLayout,
     reader: &impl ObjectReader,
     cached: &IncrementalCache,
     baseline_block_id: ObjectId,
@@ -172,6 +172,54 @@ fn try_incremental_step(
     }
     let mut state = cached.state.clone();
     match replay::apply_one_block(reader, &block, &mut state, false) {
+        Ok(()) => Ok(Some(state)),
+        Err(replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. }) => {
+            anchored_text_retry(layout, reader, cached, &block)
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// RFC 136 increment 2c. The one-block step needed the text of a node whose content came from an earlier block's
+/// `EditText`. Take it from the nearest replay-verified anchor (`anchored_text::anchored_texts`), which returns a
+/// text only if it hashes to the blob id the **cached** state names for its node, and apply the block to the
+/// **cached** state -- history fields intact -- with that text in hand. No state is anchored (§10.3c ruling 3
+/// governs one); the anchor supplies text. `None` -- today's full replay -- whenever the anchor cannot: there is
+/// none in reach, or it is a verified anchor that failed and was named for the CLI.
+fn anchored_text_retry(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    cached: &IncrementalCache,
+    block: &prikk_object::BlockPayload,
+) -> Result<Option<NodeLifecycleState>> {
+    let Ok(edited) = replay::edited_text_nodes(reader, block) else {
+        return Ok(None);
+    };
+    // The nodes whose text this block edits and whose current content nobody stored: the miss itself.
+    let mut wanted = std::collections::BTreeMap::new();
+    for node_id in edited {
+        let Some(live) = cached.state.live_node(&node_id) else {
+            continue;
+        };
+        let NodeContent::File { blob_id, .. } = &live.content else {
+            continue;
+        };
+        if live.kind == prikk_object::NodeKind::TextFile
+            && matches!(
+                reader.has_object(*blob_id, prikk_object::ObjectType::Blob),
+                Ok(false)
+            )
+        {
+            wanted.insert(node_id, *blob_id);
+        }
+    }
+    let Some(mut text_cache) =
+        super::anchored_text::anchored_texts(layout, reader, cached.baseline_block_id, &wanted)
+    else {
+        return Ok(None);
+    };
+    let mut state = cached.state.clone();
+    match replay::apply_one_block_carrying_text(reader, block, &mut state, &mut text_cache) {
         Ok(()) => Ok(Some(state)),
         Err(replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. }) => Ok(None),
         Err(other) => Err(other.into()),
@@ -467,6 +515,8 @@ fn decode_node_record(
 }
 
 #[cfg(test)]
+mod anchored_tests;
+#[cfg(test)]
 mod tests;
 
 // Test-support instrument (warm-cache `commit` anomaly measurement, RFC 136): read-only, never in a
@@ -573,8 +623,14 @@ pub(crate) fn baseline_cache_rung_at_for_test_support(
     match replay::apply_one_block(reader, &block, &mut state, false) {
         Ok(()) => BaselineCacheRung::Incremental,
         Err(err @ replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. }) => {
-            BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
-                detail: format!("{err}"),
+            match anchored_text_retry(layout, reader, &cached, &block) {
+                Ok(Some(_)) => BaselineCacheRung::Incremental,
+                Ok(None) => BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
+                    detail: format!("{err}"),
+                },
+                Err(other) => BaselineCacheRung::StepError {
+                    detail: format!("{other}"),
+                },
             }
         }
         Err(err) => BaselineCacheRung::StepError {
@@ -739,4 +795,50 @@ pub fn lifecycle_cache_state_digest_for_test_support(layout: &RepositoryLayout) 
     load(layout).map(|cache| {
         prikk_hash::to_hex(&prikk_hash::sha256(format!("{:?}", cache.state).as_bytes()))
     })
+}
+
+/// Rewrite the persisted cache so its first live text node names a content id no text has (RFC 136 increment 2c
+/// control: a carried text that fails its hash against the cache's claim must fall back and be named). The cache
+/// keeps its baseline, horizon and step count, so the next `commit`'s one-block step reads it as valid.
+/// Returns `false` when there is no usable cache or no live text node.
+///
+/// # Errors
+///
+/// The poisoned cache cannot be written.
+#[cfg(feature = "test-support")]
+pub fn poison_lifecycle_cache_for_test_support(layout: &RepositoryLayout) -> Result<bool> {
+    let Some(cached) = load(layout) else {
+        return Ok(false);
+    };
+    let wrong = ObjectId::from_bytes([0xEE; 32]);
+    let mut poisoned = NodeLifecycleState::new();
+    let mut changed = false;
+    for (node_id, node) in cached.state.live_nodes() {
+        let mut node = node.clone();
+        if !changed && node.kind == prikk_object::NodeKind::TextFile {
+            if let NodeContent::File { mode, .. } = node.content {
+                node.content = NodeContent::File {
+                    blob_id: wrong,
+                    mode,
+                };
+                changed = true;
+            }
+        }
+        poisoned.seed_live_node(*node_id, node)?;
+    }
+    for (node_id, tombstone) in cached.state.tombstones() {
+        poisoned.seed_tombstone(*node_id, tombstone.clone())?;
+    }
+    if changed {
+        save(
+            layout,
+            &IncrementalCache {
+                baseline_block_id: cached.baseline_block_id,
+                horizon_id: cached.horizon_id,
+                steps_since_reanchor: cached.steps_since_reanchor,
+                state: poisoned,
+            },
+        )?;
+    }
+    Ok(changed)
 }

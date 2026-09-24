@@ -63,6 +63,9 @@ pub(in crate::lifecycle_cache) use store_resolvers::StoreBackedResolver;
 /// Authoritative lifecycle replay: lineage walker + dispatch skeleton (4.4-2c-2a).
 pub(crate) mod replay;
 
+/// Text from a replay-verified anchor, in place of a replay from genesis (RFC 136 increment 2c).
+pub(crate) mod anchored_text;
+
 /// Incremental baseline lifecycle-state cache, scoped to the commit path (DC-64).
 pub(crate) mod incremental;
 
@@ -135,6 +138,29 @@ pub(crate) fn materialize_edited_text(
         lineage_horizon_id,
     )?;
     Ok(text_cache.get(&node_id).cloned())
+}
+
+/// [`materialize_edited_text`] taking the node's text from the nearest replay-verified anchor first (RFC 136
+/// increment 2c). `expected_blob_id` is the content id the caller's baseline names for the node; the anchored
+/// text is used only if it hashes to it (`anchored_text`'s rule 2). Anything else -- no anchor, or an anchor that
+/// could not supply it, which is named for the CLI -- is the full replay [`materialize_edited_text`] runs.
+pub(crate) fn materialize_edited_text_anchored(
+    layout: &crate::foundation::layout::RepositoryLayout,
+    reader: &impl ObjectReader,
+    baseline_block_id: ObjectId,
+    lineage_horizon_id: ObjectId,
+    node_id: prikk_object::NodeId,
+    expected_blob_id: ObjectId,
+) -> Result<Option<Vec<u8>>> {
+    let wanted = std::collections::BTreeMap::from([(node_id, expected_blob_id)]);
+    if let Some(mut texts) =
+        anchored_text::anchored_texts(layout, reader, baseline_block_id, &wanted)
+    {
+        if let Some(text) = texts.remove(&node_id) {
+            return Ok(Some(text));
+        }
+    }
+    materialize_edited_text(reader, baseline_block_id, lineage_horizon_id, node_id)
 }
 
 #[cfg(test)]
