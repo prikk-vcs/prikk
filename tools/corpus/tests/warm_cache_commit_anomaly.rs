@@ -35,9 +35,10 @@ use std::time::Duration;
 use prikk_corpus::{PlannedAction, Profile, execute};
 use prikk_store::{
     BaselineCacheRung, LifecycleCacheHeader, RepositoryLayout,
-    baseline_cache_rung_for_test_support, ladder_walk_for_test_support,
-    lifecycle_cache_header_for_test_support, lifecycle_cache_state_digest_for_test_support,
-    lifecycle_state_shape_for_test_support, replay_time_split_for_test_support,
+    baseline_cache_rung_for_test_support, id_only_history_for_test_support,
+    ladder_walk_for_test_support, lifecycle_cache_header_for_test_support,
+    lifecycle_cache_state_digest_for_test_support, lifecycle_state_shape_for_test_support,
+    replay_time_split_for_test_support,
 };
 
 mod support;
@@ -990,7 +991,11 @@ fn two_c_cold_and_merge_evidence() {
         "# 2c cold commit and merge-evidence: `{}`\n\n{SAMPLES} interleaved rounds; peak RSS by `getrusage(RUSAGE_CHILDREN)`.\n\n## Cold `commit` (cache deleted; rung 3)\n\n| cell depth | tip block | before: ms (min–max) | with: ms (min–max) | before: peak KiB | with: peak KiB |\n|---:|---:|---|---|---:|---:|\n",
         label()
     );
+    let only_merge = std::env::var("PRIKK_2C_ONLY").is_ok_and(|value| value == "merge");
     for (depth, block, _class, _steps) in read_cells(&out) {
+        if only_merge {
+            break;
+        }
         let cell = out.join(format!("cells/{depth}"));
         let mut runs: [Samples; 2] = [Vec::new(), Vec::new()];
         for round in 0..SAMPLES {
@@ -1068,6 +1073,30 @@ fn two_c_cold_and_merge_evidence() {
     assert_eq!(ids.len() as u64, two_c_depth());
     text.push_str("\n## `merge-evidence` (kept corpus, in place)\n\n| depth D (baseline D − 2) | before: ms (min–max) | with: ms (min–max) | before: peak KiB | with: peak KiB |\n|---:|---|---|---:|---:|\n");
     let merge_depths = two_c_depths();
+    // What each side of the merge-evidence carries: the `EditText` operations of the blocks after the
+    // baseline (left: block D - 1; right: blocks D - 1 and D), the ones whose baseline text
+    // `patch_algebra`'s `baseline_text` may have to materialize.
+    let manifest = prikk_corpus::plan(&profile, two_c_depth()).expect("planning");
+    let edits_in = |block: usize| {
+        manifest.commits[block - 1]
+            .actions
+            .iter()
+            .filter(|action| matches!(action, PlannedAction::EditText { .. }))
+            .count()
+    };
+    let mut edit_counts = String::from("\nEditText actions in the blocks after each baseline: ");
+    for depth in &merge_depths {
+        let d = *depth as usize;
+        edit_counts.push_str(&format!(
+            "D = {depth}: block {} has {}, block {depth} has {}; ",
+            d - 1,
+            edits_in(d - 1),
+            edits_in(d)
+        ));
+    }
+    edit_counts.push('\n');
+    let mut evidence_text: Vec<[Option<Vec<u8>>; 2]> =
+        merge_depths.iter().map(|_| [None, None]).collect();
     let mut merge: Vec<[Samples; 2]> = merge_depths
         .iter()
         .map(|_| [Vec::new(), Vec::new()])
@@ -1094,6 +1123,7 @@ fn two_c_cold_and_merge_evidence() {
                 ]);
                 let (elapsed, peak, output) = run_rusage(&command);
                 require(&output, "merge-evidence");
+                evidence_text[slot][which].get_or_insert_with(|| output.stdout.clone());
                 eprintln!(
                     "merge-evidence depth {depth} round {round} binary {which}: {} ms, {peak:?} KiB",
                     elapsed.as_millis()
@@ -1122,6 +1152,14 @@ fn two_c_cold_and_merge_evidence() {
             fmt_peak(&merge[slot][1])
         ));
     }
+    for (slot, depth) in merge_depths.iter().enumerate() {
+        assert_eq!(
+            evidence_text[slot][0], evidence_text[slot][1],
+            "the two binaries print different merge evidence at depth {depth}"
+        );
+    }
+    text.push_str("\nThe two binaries printed identical evidence at every depth.\n");
+    text.push_str(&edit_counts);
     std::fs::write(out_dir().join(format!("2c-cold-{}.md", label())), &text).expect("writing");
     eprintln!("{text}");
 }
@@ -1187,6 +1225,36 @@ fn two_c_rung3_split_and_state_shape() {
             shape.live_record_bytes,
             shape.tombstone_record_bytes,
             shape.cache_file_bytes
+        ));
+    }
+    text.push_str("\n## The history fields from an id-only walk (option (i))\n\nBlock reads, patch reads and decoding, and the bookkeeping only; no lifecycle state, no text. Compared with full replay's tombstones (kind, content, path, node for node) and `seen_ids` (live plus tombstoned ids).\n\n| block | id-only ms | full replay ms | id-only / full | operations | tombstones | seen ids | tombstones equal | seen ids equal |\n|---:|---:|---:|---:|---:|---:|---:|---|---|\n");
+    let mut points: Vec<u64> = two_c_depths();
+    points.extend(
+        CHECKPOINT_BLOCKS
+            .iter()
+            .copied()
+            .filter(|b| *b <= two_c_depth()),
+    );
+    points.sort_unstable();
+    points.dedup();
+    for block in points {
+        let history = id_only_history_for_test_support(&layout, TWO_C_REF, block as usize)
+            .expect("id-only history");
+        assert!(
+            history.tombstones_equal && history.seen_ids_equal_live_and_tombstoned,
+            "the id-only walk's history fields differ from full replay's at block {block}: {history:?}"
+        );
+        let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
+        text.push_str(&format!(
+            "| {block} | {:.1} | {:.0} | {:.4} | {} | {} | {} | {} | {} |\n",
+            ms(history.id_only),
+            ms(history.full_replay),
+            ms(history.id_only) / ms(history.full_replay),
+            history.operations,
+            history.tombstones,
+            history.seen_ids,
+            history.tombstones_equal,
+            history.seen_ids_equal_live_and_tombstoned
         ));
     }
     std::fs::write(out_dir().join(format!("2c-split-{}.md", label())), &text).expect("writing");

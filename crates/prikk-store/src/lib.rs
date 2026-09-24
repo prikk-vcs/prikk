@@ -163,12 +163,12 @@ pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::incremental::{
     BaselineCacheRung, LadderTip, LifecycleCacheHeader, LifecycleStateShape,
-    ladder_walk_for_test_support, lifecycle_cache_header_for_test_support,
-    lifecycle_cache_state_digest_for_test_support, lifecycle_state_shape_for_test_support,
-    replay_time_split_for_test_support,
+    id_only_history_for_test_support, ladder_walk_for_test_support,
+    lifecycle_cache_header_for_test_support, lifecycle_cache_state_digest_for_test_support,
+    lifecycle_state_shape_for_test_support, replay_time_split_for_test_support,
 };
 #[cfg(feature = "test-support")]
-pub use lifecycle_cache::replay::ReplayTimeSplit;
+pub use lifecycle_cache::replay::{IdOnlyHistory, ReplayTimeSplit};
 pub use lock::{ActiveLock, ContainerLockGuard, RefLock, acquire_container_locks};
 pub use maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner, maintainer_signature};
 pub use memory_store::MemoryObjectStore;

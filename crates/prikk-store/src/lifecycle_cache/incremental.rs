@@ -785,3 +785,20 @@ pub fn lifecycle_cache_state_digest_for_test_support(layout: &RepositoryLayout) 
         prikk_hash::to_hex(&prikk_hash::sha256(format!("{:?}", cache.state).as_bytes()))
     })
 }
+
+/// What an id-only walk derives of the history fields at block `block_number` of `ref_name`, against full
+/// replay (RFC 136 2c option (i)).
+///
+/// # Errors
+///
+/// The store cannot be read, or the lineage does not decode or replay.
+#[cfg(feature = "test-support")]
+pub fn id_only_history_for_test_support(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    block_number: usize,
+) -> Result<replay::IdOnlyHistory> {
+    let reader = crate::object_store::ObjectReadSnapshot::open(layout)?;
+    let (block_id, horizon) = block_of_chain(layout, &reader, ref_name, block_number)?;
+    replay::id_only_history_for_test_support(&reader, block_id, horizon)
+}

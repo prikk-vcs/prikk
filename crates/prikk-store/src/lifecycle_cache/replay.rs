@@ -751,6 +751,127 @@ pub(crate) fn replay_time_split_for_test_support(
     Ok(split)
 }
 
+/// What a walk that reads only ids builds, against what full replay builds (RFC 136 2c option (i)).
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Default)]
+pub struct IdOnlyHistory {
+    /// Blocks walked.
+    pub blocks: usize,
+    /// Operations decoded.
+    pub operations: usize,
+    /// Wall time of the id-only walk: block reads, patch reads and decoding, and the bookkeeping.
+    pub id_only: std::time::Duration,
+    /// Wall time of `replay_derived_state` for the same block, for comparison.
+    pub full_replay: std::time::Duration,
+    /// Tombstones the id-only walk derived.
+    pub tombstones: usize,
+    /// `seen_ids` the id-only walk derived.
+    pub seen_ids: usize,
+    /// The id-only tombstones equal full replay's, node for node (kind, content, path).
+    pub tombstones_equal: bool,
+    /// The id-only `seen_ids` equal full replay's live nodes plus its tombstoned ones.
+    pub seen_ids_equal_live_and_tombstoned: bool,
+}
+
+/// Derive the two history fields -- `seen_ids` and `latest_tombstone_by_id` -- by decoding the lineage's
+/// operations and looking at no content: a create makes an id seen and clears its tombstone, a delete
+/// records the tombstone its own preimage names. No lifecycle state is built and no text is touched. The
+/// result is compared with full replay's, which is the only reason this exists: it measures whether
+/// option (i)'s split of the walk is possible at all, and what it costs.
+///
+/// # Errors
+///
+/// The lineage does not decode or replay.
+#[cfg(feature = "test-support")]
+pub(crate) fn id_only_history_for_test_support(
+    reader: &impl ObjectReader,
+    baseline: ObjectId,
+    horizon: ObjectId,
+) -> prikk_error::Result<IdOnlyHistory> {
+    use crate::node::node_lifecycle::Tombstone;
+    let start = std::time::Instant::now();
+    let chain = walk_lineage(reader, baseline, horizon)?;
+    let mut seen: BTreeSet<NodeId> = BTreeSet::new();
+    let mut tombstones: BTreeMap<NodeId, Tombstone> = BTreeMap::new();
+    let mut operations = 0;
+    for (_block_id, block) in &chain {
+        for patch_id in &block.patch_ids {
+            for operation in read_patch_operations(reader, *patch_id, false)? {
+                operations += 1;
+                match operation.kind {
+                    DecodedOperationKind::CreateFile { node_id, .. }
+                    | DecodedOperationKind::CreateSymlink { node_id, .. } => {
+                        tombstones.remove(&node_id);
+                        seen.insert(node_id);
+                    }
+                    DecodedOperationKind::DeleteNode {
+                        node_id,
+                        path,
+                        preimage,
+                    } => {
+                        let (kind, content) = match preimage {
+                            DecodedDeletePreimage::File {
+                                old_node_kind,
+                                old_blob_id,
+                                old_mode,
+                            } => (
+                                old_node_kind,
+                                NodeContent::File {
+                                    blob_id: old_blob_id,
+                                    mode: old_mode,
+                                },
+                            ),
+                            DecodedDeletePreimage::Symlink { old_target } => (
+                                NodeKind::Symlink,
+                                NodeContent::Symlink { target: old_target },
+                            ),
+                        };
+                        seen.insert(node_id);
+                        tombstones.insert(
+                            node_id,
+                            Tombstone {
+                                kind,
+                                content,
+                                path: RepoPath::parse(&path)?,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let id_only = start.elapsed();
+    let start = std::time::Instant::now();
+    let full = super::replay_derived_state(reader, baseline, horizon)?;
+    let full_replay = start.elapsed();
+    let full_tombstones: BTreeMap<NodeId, &Tombstone> = full
+        .state()
+        .tombstones()
+        .map(|(node_id, tombstone)| (*node_id, tombstone))
+        .collect();
+    let tombstones_equal = full_tombstones.len() == tombstones.len()
+        && tombstones
+            .iter()
+            .all(|(node_id, tombstone)| full_tombstones.get(node_id) == Some(&tombstone));
+    let mut full_seen: BTreeSet<NodeId> = full
+        .state()
+        .live_nodes()
+        .map(|(node_id, _)| *node_id)
+        .collect();
+    full_seen.extend(full_tombstones.keys().copied());
+    Ok(IdOnlyHistory {
+        blocks: chain.len(),
+        operations,
+        id_only,
+        full_replay,
+        tombstones: tombstones.len(),
+        seen_ids: seen.len(),
+        tombstones_equal,
+        seen_ids_equal_live_and_tombstoned: full_seen == seen,
+    })
+}
+
 mod effect;
 use effect::apply_state_effect;
 
