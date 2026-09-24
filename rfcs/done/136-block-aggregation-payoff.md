@@ -718,6 +718,13 @@ that root; only replay proves that (§6).
    - **Otherwise** `commit` keeps DC-64's incremental cache, which already reanchors at
      `CHECKPOINT_CADENCE`.
 
+**Reading of ruling 3 for increment 2c, recorded 2026-09-24 (architect; review `rfc136-2c-design-round-review-v1`
+§3.1).** Ruling 3 governs an anchored *state*. A path that keeps the cached state, history fields and all, and takes
+only the *text* of edited nodes from a replay-verified anchor, using each text only if its content id equals the
+blob id the cached state names, builds no anchored state. The text is self-certifying, so ruling 3 permits it. The
+verified-anchor requirement is kept anyway, as defence in depth. An anchored cold *state* (the design round's
+option (i)) is still bound by ruling 3 in full, and is deferred to be designed with `seal`'s lineage walk.
+
 **2a DONE 2026-09-15** (`14ac8b3f`, `f5e8dc1c`, `8b303094`, `2d96196b`; reviewed
 `.git-exclude/reviewed/rfc136-increment-2a-review-v1.md`).
 - **What landed:** the provisional marker with compare-and-remove clearing; the gate, one check with a

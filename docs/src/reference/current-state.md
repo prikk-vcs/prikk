@@ -48,6 +48,18 @@ The list above is about missing features. Scale is a separate question, and wort
 own: what happens as a repository's history gets deep, or its tracked file count gets large. Three
 measured shapes:
 
+> **Correction, 2026-09-24: the timing figures below were measured with an unoptimized (debug) build,
+> not the release build you install.** The measurement tool built `prikk` without `--release`. The
+> commit-memory figures are unaffected (that instrument runs in release). The timing figures are
+> affected: the sealing exponent and its hours projection, the `depth^1.45` exponents, the 0.28× ratio
+> and the 13.4 s figure. On the same 256-block history, a cold full replay (`prikk diff`) takes
+> **14.0 s** with a debug build and **0.47 s** with a release build, identical output, three
+> interleaved samples each. The *shapes* also differ between the two builds: cold `commit` grows with
+> exponent 1.18 in debug and 0.96 in release over the same range. So read every timing line below as
+> **a debug-build figure, overstated for the release build by an unmeasured and possibly large
+> factor, with a shape that may not hold**. Release-build re-measurement is scheduled; this page is
+> corrected when it lands.
+
 - **Sealing cost grows quadratically with history depth.** Per-seal cost is roughly linear in depth,
   so cumulative cost to build a history of a given depth is roughly quadratic — a measured power-law
   exponent of 2.03. *Measured before 0.43.0, and not re-measured since:* to seal one more block, `seal`
@@ -84,4 +96,5 @@ A few things worth knowing about these numbers before relying on them:
   from — that range is a **projection**, not a measurement; that depth has never actually been
   built. If you quote a number like that, say "projected" alongside it, or better, quote the shape
   (quadratic) and apply it to your own depth.
-- All of the above was measured on Linux, with release builds.
+- All of the above was measured on Linux. **The commit-memory figures used release builds; the timing
+  figures used debug builds** (see the correction at the top of this section).

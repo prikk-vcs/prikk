@@ -150,3 +150,102 @@ above it covers. *"Does this also cover `merge/evidence.rs`?"* is an acceptance 
 - load during measurement, and anything you could not stop;
 - **anything in this handoff that is not true at source.** The table of callers above and ruling 3's reading are the
   architect's, from 2026-09-24. If either is wrong, say it first.
+
+## Addendum 1 — 2026-09-24: the design round is accepted; implement (a) and the anchor-text helper
+
+**The design round is ACCEPTED** (six commits ending `4c739cab`; review `rfc136-2c-design-round-review-v1`; 14/14
+gates re-run by the architect). **This addendum is live, and it is next.**
+
+**Two corrections to this handoff, found by the round and verified by the architect:**
+- **The caller table above is wrong.** `cache_ladder.rs:817` and `patch_algebra/evidence.rs:31` are test-only.
+  `incremental.rs:70` is `verify_divergence`. `incremental.rs:142` is rung 3 for **every** miss reason. And the
+  `materialize_edited_text` family was missing.
+- **13.4 s in *Why* is a debug-build figure.** `locate_prikk_binary` builds without `--release`. In release, cold
+  `commit` at depth 256 is ~0.5 s.
+
+**Ruled (review §3):**
+- (a), plus the same helper for the `materialize_edited_text` family, is 2c.
+- (i) is deferred and scheduled with `seal`'s lineage walk (theme 17, the owner's scheduling).
+- (ii) is rejected.
+- (iii) is the interim state: the reanchor and `verify_divergence` stay full replays.
+
+### 0. The instrument measures release
+
+`tools/corpus/tests/support/mod.rs::locate_prikk_binary` builds with `--release`, **fixed in source**, not an
+environment knob. A separate, explicitly named function builds debug, for the bridging columns the re-measurement
+round will need.
+**Control:** assert, from Cargo's own JSON `compiler-artifact` record, that the default binary's profile is
+optimized (`opt_level` not `"0"`).
+**Perturb:** drop `--release`; the control must go red.
+
+### 1. (a) in product code, as the prototype built it
+
+In `try_incremental_step`'s `MissingBlobForLifecycleEffect` arm:
+- find the nearest block at or before the **cached** baseline that has a snapshot **and** is in the replay-verified
+  record;
+- validate its manifest;
+- read the text of the nodes the tip block edits, and carry it forward through the blocks after the anchor;
+- **use a text only if its content id equals the blob id the cached state names**;
+- apply the tip block to the **cached** state.
+
+Otherwise, fall back to full replay. The fold and `persist` are unchanged.
+
+### 2. The anchor-text helper for the `materialize_edited_text` family
+
+It follows the same two rules: a verified anchor only, and the hash check. **Every production caller is covered,
+or named with a measured reason not to be:**
+- `commit` (`node_authoring.rs:1323`);
+- `merge-evidence` (`patch_algebra/evidence.rs:177`);
+- the queued-patch fallback (`replay.rs:493`);
+- `diff` (`worktree_read.rs:127`). The prototype left `diff` out, and reading an anchor writes nothing.
+
+### 3. Failures are classified (review §3.3)
+
+Falling back to full replay is always allowed, since the answer stays correct. But a **verified** anchor whose
+manifest fails validation, or whose carried text fails its hash, is **named on stderr**, as `warn_anchor_fallbacks`
+names a snapshot a reader could not anchor at (§10.3b.4). It is never silently folded.
+
+### 4. Not in this round
+
+- rung 3 for any other reason (no cache, reanchor, horizon or parent mismatch);
+- `verify_divergence`;
+- option (i);
+- `CHECKPOINT_CADENCE`;
+- any cache schema change;
+- rewriting `current-state.md`'s figures. The re-measurement round after this one does that, and the page
+  carries a dated correction until then.
+
+### 5. Controls — landed, not `#[ignore]`d unless they need the corpus; each shown red
+
+1. **The DC-65 miss becomes incremental.** Use a store-level fixture sealed through `seal_block`, so that a
+   checkpoint and a verified record exist, and whose tip edits text an earlier block edited, with the cache one
+   block behind. The probe says `Incremental` and the header shows `steps + 1`.
+   **Perturb:** the arm returns `Ok(None)`.
+2. **A lying anchor is never consulted.** Use a snapshot that passes the loader but is not in the verified set
+   (`publish_snapshot_fixture_for_test_support`). The rung is full replay, and the state equals full replay's.
+   **Perturb:** remove the verified-set guard.
+3. **The hash check is its own layer.** Carried text that does not hash to the cached blob id makes the path fall
+   back, naming it on stderr, and the answer is correct.
+   **Perturb:** remove the hash check. Per the prototype, the step then *errors* instead of falling back.
+4. **Whole-state identity.** The entire `NodeLifecycleState`, history fields included, equals full replay's at
+   every tip of a small non-ignored fixture history. The history crosses a checkpoint and edits the same file
+   repeatedly. The corpus walk (`two_c_chain_walk`) is the `#[ignore]`d large version.
+   **Perturb:** apply the block to a snapshot-shaped state (no tombstones).
+5. **Per call site.** For each of §2's callers, remove the anchoring at that site. **Its** control goes red, and no
+   other does.
+6. **Outputs are byte-identical** with and without anchoring on the fixture: `commit`'s patch ids, and
+   `merge-evidence`'s printed evidence.
+
+### 6. Measurement — release primary, debug secondary, one session
+
+Repeat the design round's §3.2 table (warm `commit` at the five cells, new-file and edit) and §4.3
+(`merge-evidence`) with the product code. Three interleaved rounds, and peak RSS by `getrusage`. **Release is the
+column the CHANGELOG quotes.** The architect runs nothing while you measure.
+
+### 7. CHANGELOG
+
+One entry, with release figures: a warm `commit` on history that edits earlier-edited text, and `merge-evidence`,
+no longer replay the whole history.
+
+**Next after this, in order:** the release re-measurement round (drafted, goes live when this closes), then the gate
+plan.
