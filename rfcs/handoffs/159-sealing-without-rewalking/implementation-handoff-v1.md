@@ -117,3 +117,36 @@ and `opt_level`, and nothing from the architect while you measure, as always.
 `.git-exclude/review-request/rfc159-implementation-report-v1.md`: the gates on the exact final commit, each control
 with the perturbation that turned it red, the measurement tables, and anything in this handoff that is not true at
 source.
+
+## Addendum 1 — 2026-09-26: the interrupted measurement session, ruled
+
+Report: `.git-exclude/review-request/rfc159-measurement-session-interrupted-report-v1.md`. The session stopped because **the
+host was powered off** (`systemctl poweroff` from the user session, at 02:04:37), not because of the product or the
+instruments. The acceptance figure is already in hand: one `seal` at depth 1,024, **1,803 MiB → 29 MiB** peak and
+4,312 → 460 ms, three rounds each.
+
+1. **Combining boots: yes.** The completed build curves and seal table (boot 22:04–02:04) may stand beside the remaining
+   steps from a later boot, on two conditions:
+   - every **compared pair** (base against impl, and nopres against impl) is measured **adjacent and within one boot**;
+   - every table states its boot id, the load at start, and the binary sha256s.
+
+   No ratio may pair a base figure from one boot with an impl figure from another.
+2. **A + C: approved.**
+   - **A** is the resumable per-step driver, with `.done` records carrying the boot id, binaries and load, and started
+     with `setsid`. It lives in your scratch area, not in the repository.
+   - **C** splits the work into units:
+     - (i) the `sync` catch-up ×6, timed, alternating;
+     - (ii) the corpus-scale identity probes and `identity_by_cli`;
+     - (iii) `identity_of_every_snapshot` and the two shapes histories.
+
+     Each unit can be rerun alone.
+3. **B (holding shutdown): not approved.** The owner's machine is the owner's to switch off. With A and C, a power-off
+   costs one step. The architect has asked the owner only whether a window is convenient. **Do not use
+   `systemd-inhibit`.**
+4. **The sequence: confirmed.**
+   1. Unit (i) first. **Nothing heavy runs beside it**, including anything of the architect's.
+   2. Then (ii) and (iii). They are correctness checks, so load does not matter to them, but nothing else of yours runs
+      in the main tree meanwhile.
+   3. Then the docs, then the 14 gates on the exact final commit, then the report.
+
+   **The review waits for the corpus-scale identity**: it is §2 control 3, and the report is not complete without it.
