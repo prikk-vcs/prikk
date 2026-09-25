@@ -1,6 +1,17 @@
 # RFC 159 — Sealing without re-walking the lineage
 
-**Status.** **PROPOSED 2026-09-25 by the architect**, on the owner's instruction for history import's
+**Status.** **ACCEPTED by the project owner 2026-09-26** (*"Yes. Accepted."*, answering *"Accept RFC 159's direction,
+rulings included?"*). **The architect's reading, stated so it can be corrected:**
+- the direction of §4 is accepted, with **all seven rulings of §8**, including C2's anchor-trust rule and its extension
+  to RFC 136 2b's anchored worktree writes;
+- the fix ships as **0.48.0**, cut as soon as this implementation is accepted, **ahead of RFC 158 Stages B and C**,
+  and 0.47.0 is **not** re-tagged;
+- **crates.io:** 0.47.0 is published together with 0.48.0, at that release (*"How about publishing it when we are
+  ready for 0.48.0 release?"*).
+
+Implementation handoff: `rfcs/handoffs/159-sealing-without-rewalking/implementation-handoff-v1.md`.
+
+*History:* **PROPOSED 2026-09-25 by the architect**, on the owner's instruction for history import's
 prerequisite: *"Schedule it and start the design when ready."*
 
 **The architect's reading of that instruction, stated so it can be corrected:**

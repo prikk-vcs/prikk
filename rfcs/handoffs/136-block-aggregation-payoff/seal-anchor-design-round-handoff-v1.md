@@ -88,3 +88,7 @@ established pattern. **Nothing that runs in a shipped build.**
 7. Load, and anything you could not stop.
 8. **Anything in RFC 159 or this handoff that is not true at source.** The table of callers and the reading of the
    record are the architect's, from 2026-09-25. If either is wrong, say it first.
+
+**Design round ACCEPTED 2026-09-26** (`5e97cfa5`..`455eeca7`; review `rfc159-design-round-review-v1`); **RFC 159 accepted by the
+owner the same day.** This handoff is closed. The implementation continues under RFC 159's own directory:
+`rfcs/handoffs/159-sealing-without-rewalking/implementation-handoff-v1.md`.
