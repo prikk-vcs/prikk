@@ -25,9 +25,10 @@
 //!   snapshot: the first block, then every 64th after (65, 129, ...). The main table's 16-block windows end at a
 //!   multiple of 64 and so never contain one; the second table gives each checkpoint block's seal beside the mean of
 //!   the eight ordinary blocks before it.
-//! - **`PRIKK_BCC_KEEP_DIR` and `PRIKK_BCC_KEEP_AT`** (sample 0 only): after the seal at each depth listed (comma
-//!   separated), the repository is copied to `<KEEP_DIR>/sealed-d<depth>`, outside any timed step, for the
-//!   memory and catch-up instruments to run both binaries against the same history.
+//! - **`PRIKK_BCC_KEEP_DIR` and `PRIKK_BCC_KEEP_AT`**: after the seal at each depth listed (comma separated), the
+//!   repository is copied to `<KEEP_DIR>/sealed-d<depth>` (sample 0) or `<KEEP_DIR>/s<sample>-sealed-d<depth>` (the
+//!   first `PRIKK_BCC_KEEP_SAMPLES` samples, default 1), outside any timed step, for the memory, catch-up and identity
+//!   instruments to run against the same history.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -108,6 +109,7 @@ fn grow(
     max_hours: f64,
     label: &str,
     keep: Option<&(PathBuf, Vec<u64>)>,
+    sample: usize,
 ) -> Run {
     let repo_root = support::unique_dir(label);
     execute::init_repository(binary, &repo_root).expect("init");
@@ -138,7 +140,11 @@ fn grow(
         blocks.push((depth, commit_ms, seal_ms));
         if let Some((directory, depths)) = keep {
             if depths.contains(&depth) {
-                let destination = directory.join(format!("sealed-d{depth}"));
+                let destination = if sample == 0 {
+                    directory.join(format!("sealed-d{depth}"))
+                } else {
+                    directory.join(format!("s{sample}-sealed-d{depth}"))
+                };
                 let _ = std::fs::remove_dir_all(&destination);
                 support::copy_dir_all(&repo_root, &destination);
                 eprintln!(
@@ -204,6 +210,7 @@ fn build_cost_curve() {
     let max_hours = env_f64("PRIKK_BCC_MAX_HOURS", 2.0);
     let max_depth = env_f64("PRIKK_BCC_MAX_DEPTH", FLOOR_DEPTH as f64) as u64;
     let label = std::env::var("PRIKK_BCC_LABEL").unwrap_or_else(|_| build.to_string());
+    let keep_samples = env_f64("PRIKK_BCC_KEEP_SAMPLES", 1.0) as usize;
     let keep: Option<(PathBuf, Vec<u64>)> = std::env::var("PRIKK_BCC_KEEP_DIR").ok().map(|dir| {
         let depths = std::env::var("PRIKK_BCC_KEEP_AT")
             .unwrap_or_default()
@@ -233,7 +240,12 @@ fn build_cost_curve() {
             stop_at,
             max_hours,
             &format!("bcc-{label}-{sample}"),
-            if sample == 0 { keep.as_ref() } else { None },
+            if sample < keep_samples {
+                keep.as_ref()
+            } else {
+                None
+            },
+            sample,
         );
         let mut tsv = String::from("depth\tcommit_ms\tseal_ms\n");
         for (depth, commit_ms, seal_ms) in &run.blocks {
