@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
+use prikk_object::ObjectId;
 
 use crate::DEFAULT_ACTIVE_NAME;
 use crate::checkout::load_snapshot_checkout;
@@ -83,7 +84,7 @@ pub fn materialize_snapshot_checkout(
     // Checkout-refusal round §2.1: every conflict refuses here, before the provisional marker and the
     // dirty marker, so a refused materialization writes nothing at all.
     refuse_manifest_conflicts(layout, &manifest)?;
-    let provisional = !crate::verified_blocks::load_verified_blocks(layout).contains(&block_id);
+    let provisional = !snapshot_state_is_authenticated(layout, block_id);
     if provisional {
         mark_worktree_provisional(layout, ref_name, block_id)?;
     }
@@ -102,6 +103,27 @@ pub fn materialize_snapshot_checkout(
         total_content_bytes: plan.total_content_bytes,
         paths: plan.paths,
     })
+}
+
+/// Whether the snapshot about to be written is a state this repository may treat as replay-verified, so the worktree
+/// needs no provisional marker (RFC 136 §10.3c ruling 2, RFC 159 §8.2): **the anchor-trust function admits the block** --
+/// recorded, signed by an adopted maintainer key, its manifest valid. Anything else means the marker is set and the
+/// derivation gate applies. A *recorded* block whose manifest or signature fails is named on stderr.
+fn snapshot_state_is_authenticated(layout: &RepositoryLayout, block_id: ObjectId) -> bool {
+    use crate::anchor_trust::{Admission, AnchorSite, AnchorTrust};
+    let Ok(reader) = crate::object_store::ObjectReadSnapshot::open(layout) else {
+        return false;
+    };
+    match AnchorTrust::load(layout).admit(&reader, block_id, 0, AnchorSite::SnapshotMaterialize) {
+        Admission::Usable(_) => true,
+        Admission::NotUsable => false,
+        Admission::Signal(finding) => {
+            crate::anchor_fallback::record_anchor_fallback(
+                crate::anchor_fallback::SnapshotAnchorFallback::for_state(block_id, finding),
+            );
+            false
+        }
+    }
 }
 
 /// Result of materializing a validated manifest into a worktree.

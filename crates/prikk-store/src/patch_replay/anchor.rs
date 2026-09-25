@@ -31,8 +31,9 @@ use super::read::{read_block, read_patch, replay_state_from_snapshot};
 use super::{PatchReplayDeletedFile, apply_operation_sequence};
 use crate::ObjectReader;
 pub use crate::anchor_fallback::SnapshotAnchorFallback;
+use crate::anchor_trust::{Admission, AnchorSite, AnchorTrust, MAX_ANCHOR_DISTANCE};
 use crate::path::RepoPath;
-use crate::snapshot::{SnapshotFile, load_block_snapshot};
+use crate::snapshot::{SnapshotFile, load_block_snapshot, snapshot_files_from_manifest};
 
 /// Whether a replay may start at a snapshot. There is no default: every caller states it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,10 +42,11 @@ pub(crate) enum Anchoring<'a> {
     Never,
     /// A read-only report: may start at the nearest snapshot that passes the loader.
     ReadOnlyReport,
-    /// A worktree write (RFC 136 §10.3c ruling 2, increment 2b): may start only at the nearest snapshot
-    /// whose Block is in this repository's replay-verified record **and** that passes the loader.
-    /// A snapshot on an unrecorded Block is skipped without being read.
-    VerifiedWorktreeWrite(&'a BTreeSet<ObjectId>),
+    /// A worktree write (RFC 136 §10.3c ruling 2, increment 2b, and RFC 159 §8.2): may start only at a snapshot that
+    /// **the anchor-trust function admits** -- in this repository's replay-verified record, signed by an adopted
+    /// maintainer key, passing the loader, and at most 63 blocks back. A snapshot on a block it does not admit is
+    /// skipped; a recorded one whose manifest or signature fails is named and the replay runs from genesis.
+    VerifiedWorktreeWrite(&'a AnchorTrust),
 }
 
 /// The replayed chain: state, the whole chain's history fields, and any fallback.
@@ -100,9 +102,7 @@ pub(crate) fn replay_chain_capturing(
     let (anchor, fallback) = match anchoring {
         Anchoring::Never => (None, None),
         Anchoring::ReadOnlyReport => find_anchor(reader, block_ids, None)?,
-        Anchoring::VerifiedWorktreeWrite(verified) => {
-            find_anchor(reader, block_ids, Some(verified))?
-        }
+        Anchoring::VerifiedWorktreeWrite(trust) => find_anchor(reader, block_ids, Some(trust))?,
     };
     chain.fallback = fallback;
     let replay_from = match anchor {
@@ -140,13 +140,18 @@ pub(crate) fn replay_chain_capturing(
     Ok(chain)
 }
 
-/// The nearest snapshot on the chain that passes the loader, with its index; or, when the nearest
-/// snapshot fails the loader, no anchor and the finding.
+/// The nearest snapshot on the chain that may be used, with its index; or, when the nearest candidate fails, no
+/// anchor and the finding.
+///
+/// **A read-only report** (`trust` is `None`) uses the nearest snapshot that passes the loader (§10.3c ruling 1).
+/// **A worktree write** (`trust` is `Some`) uses the nearest one the anchor-trust function admits: candidates it
+/// finds not usable are skipped silently, back to the distance bound (an older one is farther still); a *recorded*
+/// candidate whose manifest or signature fails ends the search with the finding.
 #[allow(clippy::type_complexity)]
 fn find_anchor(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
-    verified: Option<&BTreeSet<ObjectId>>,
+    trust: Option<&AnchorTrust>,
 ) -> Result<(
     Option<(usize, Vec<SnapshotFile>)>,
     Option<SnapshotAnchorFallback>,
@@ -160,9 +165,37 @@ fn find_anchor(
         if block.snapshot_blob_ref.is_none() {
             continue;
         }
-        // A worktree write anchors only at a Block this repository replay-verified (§10.3c ruling 2).
-        if verified.is_some_and(|recorded| !recorded.contains(block_id)) {
-            continue;
+        if let Some(trust) = trust {
+            let distance = block_ids.len() - 1 - index;
+            match trust.admit(reader, *block_id, distance, AnchorSite::WorktreeWrite) {
+                Admission::Usable(manifest) => {
+                    // A snapshot was loaded (a candidate the function did not admit was skipped without being read).
+                    #[cfg(test)]
+                    SNAPSHOT_ANCHOR_LOADS.with(|loads| loads.set(loads.get() + 1));
+                    return Ok(
+                        match snapshot_files_from_manifest(reader, *block_id, manifest) {
+                            Ok(files) => (Some((index, files)), None),
+                            Err(err) => (
+                                None,
+                                Some(SnapshotAnchorFallback::for_state(
+                                    *block_id,
+                                    err.to_string(),
+                                )),
+                            ),
+                        },
+                    );
+                }
+                Admission::NotUsable if distance > MAX_ANCHOR_DISTANCE => return Ok((None, None)),
+                Admission::NotUsable => continue,
+                Admission::Signal(finding) => {
+                    #[cfg(test)]
+                    SNAPSHOT_ANCHOR_LOADS.with(|loads| loads.set(loads.get() + 1));
+                    return Ok((
+                        None,
+                        Some(SnapshotAnchorFallback::for_state(*block_id, finding)),
+                    ));
+                }
+            }
         }
         #[cfg(test)]
         SNAPSHOT_ANCHOR_LOADS.with(|loads| loads.set(loads.get() + 1));

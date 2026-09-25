@@ -504,6 +504,70 @@ pub(in crate::lifecycle_cache) fn materialize_wanted_text_forward(
     Ok(Some(texts))
 }
 
+/// RFC 159: the latest tombstone of every node that is not live after `blocks` (oldest first), from
+/// the operations alone. A create clears its node's tombstone; a delete records the one its own preimage names
+/// (`delete_node_checked` has already required that preimage to equal the live node). Nothing is applied and no
+/// content is read. Each patch is read as full replay reads it under a format-2 lineage
+/// (`require_schema_one = true`), so a patch object that is missing, not a Patch, of an unadmitted schema or
+/// undecodable fails here as it fails there.
+pub(crate) fn id_only_tombstones(
+    reader: &impl ObjectReader,
+    blocks: &[BlockPayload],
+) -> Result<BTreeMap<NodeId, crate::node::node_lifecycle::Tombstone>, LifecycleReplayError> {
+    use crate::node::node_lifecycle::Tombstone;
+    let mut tombstones: BTreeMap<NodeId, Tombstone> = BTreeMap::new();
+    for block in blocks {
+        for patch_id in &block.patch_ids {
+            for operation in read_patch_operations(reader, *patch_id, true)? {
+                match operation.kind {
+                    DecodedOperationKind::CreateFile { node_id, .. }
+                    | DecodedOperationKind::CreateSymlink { node_id, .. } => {
+                        tombstones.remove(&node_id);
+                    }
+                    DecodedOperationKind::DeleteNode {
+                        node_id,
+                        path,
+                        preimage,
+                    } => {
+                        let (kind, content) = match preimage {
+                            DecodedDeletePreimage::File {
+                                old_node_kind,
+                                old_blob_id,
+                                old_mode,
+                            } => (
+                                old_node_kind,
+                                NodeContent::File {
+                                    blob_id: old_blob_id,
+                                    mode: old_mode,
+                                },
+                            ),
+                            DecodedDeletePreimage::Symlink { old_target } => (
+                                NodeKind::Symlink,
+                                NodeContent::Symlink { target: old_target },
+                            ),
+                        };
+                        let path = RepoPath::parse(&path).map_err(|error| {
+                            LifecycleReplayError::InconsistentLifecycleEffect {
+                                detail: error.to_string(),
+                            }
+                        })?;
+                        tombstones.insert(
+                            node_id,
+                            Tombstone {
+                                kind,
+                                content,
+                                path,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(tombstones)
+}
+
 /// Apply exactly one already-read block's patches to an existing lifecycle state **and** an
 /// existing, externally-carried `TextCache` (DC-92). Unlike `apply_one_block`, which creates a
 /// fresh cache per call — correct only when the caller processes one block in isolation — this

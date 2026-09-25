@@ -50,7 +50,10 @@ use prikk_object::{
     RefStatePayload, RefUpdatePayload,
 };
 
-use crate::block_state::{BlockLineage, CandidateStateDerivationError, seal_block_classified};
+use crate::anchor_trust::AnchorSite;
+use crate::block_state::{
+    BlockLineage, CandidateStateDerivationError, StateAnchoring, seal_block_classified,
+};
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{
@@ -215,6 +218,7 @@ pub fn seal_from_accepted_claim(
         BlockLineage::Linear { parent },
         &selected_patch_ids,
         signer,
+        StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
         |err| match err {
             CandidateStateDerivationError::Lineage(err) => err,
             CandidateStateDerivationError::Patch(err) => classify_patch_application_failure(err),

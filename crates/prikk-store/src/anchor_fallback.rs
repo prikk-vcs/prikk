@@ -1,7 +1,7 @@
 //! A snapshot anchor that could not be used, and the one place such findings are collected (RFC 136 §10.3b.4,
 //! increment 2c).
 //!
-//! **Two users.** A read-only report (`checkout --patch-plan`, `diff --from`, `tree`, ...) names a snapshot that
+//! **Two users, and a third** (RFC 159's state anchors, [`AnchorUse::State`]). A read-only report (`checkout --patch-plan`, `diff --from`, `tree`, ...) names a snapshot that
 //! failed the loader and returns the finding beside its result. The baseline reconstruction of 2c
 //! (`lifecycle_cache::anchored_text`) takes *text* from a **verified** anchor, and when that anchor's manifest
 //! fails validation, or the text it yields fails its hash, the command falls back to a full replay (the answer
@@ -25,6 +25,10 @@ pub(crate) enum AnchorUse {
     Report,
     /// A baseline reconstruction took a text from it (2c).
     Text,
+    /// A signature would rest on its **state**: `seal`, `merge`, seal-from-accepted, or a worktree write (RFC 159
+    /// §8.2). Named when a *recorded* anchor's manifest fails validation or its maintainer signature does not verify
+    /// against an adopted key.
+    State,
 }
 
 /// A snapshot an anchored read could not use because it failed validation, or because what it yielded failed
@@ -57,6 +61,15 @@ impl SnapshotAnchorFallback {
             purpose: AnchorUse::Text,
         }
     }
+
+    /// A state anchor's finding (RFC 159 §8.2).
+    pub(crate) fn for_state(block_id: ObjectId, finding: String) -> Self {
+        Self {
+            block_id,
+            finding,
+            purpose: AnchorUse::State,
+        }
+    }
 }
 
 impl fmt::Display for SnapshotAnchorFallback {
@@ -72,6 +85,12 @@ impl fmt::Display for SnapshotAnchorFallback {
                 f,
                 "warning: the verified snapshot of Block {} could not supply a file's text ({}); this \
                  command replayed the whole history instead -- run `prikk verify`",
+                self.block_id, self.finding
+            ),
+            AnchorUse::State => write!(
+                f,
+                "warning: the recorded snapshot of Block {} was not used as an anchor ({}); this \
+                 command derived its state from the whole history instead -- run `prikk verify`",
                 self.block_id, self.finding
             ),
         }

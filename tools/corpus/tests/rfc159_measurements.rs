@@ -119,24 +119,6 @@ fn binary_header(build: &str, identity: &execute::BinaryIdentity) -> String {
     )
 }
 
-/// `PRIKK_159_TRACE=1` asks the prototype to print where a seal's parent-state derivation spent its time (a
-/// binary without the trace ignores the variable): the line goes to stderr, never into a report.
-fn traced(mut command: Command) -> Command {
-    if std::env::var("PRIKK_159_TRACE").is_ok_and(|value| value == "1") {
-        command.env("PRIKK_RFC159_TRACE", "1");
-    }
-    command
-}
-
-fn show_trace(label: &str, block: usize, output: &Output) {
-    for line in String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .filter(|line| line.starts_with("rfc159:"))
-    {
-        eprintln!("[{label}] block {block}: {line}");
-    }
-}
-
 #[test]
 #[ignore = "RFC 159 seal time and peak RSS at kept depths; run deliberately"]
 fn seal_time_and_memory_at_depth() {
@@ -198,21 +180,10 @@ fn seal_time_and_memory_at_depth() {
                 if slot == 0 {
                     loads.push(load_average());
                 }
-                let mut command = traced(
-                    execute::seal_command(binary, &copy, &profile, execute::REF_NAME).unwrap(),
-                );
-                // Tracing needs the child's stderr, which the rusage wrapper drops on success: a traced run is
-                // for finding where the time goes, never for a reported figure (peak RSS reads 0).
-                let (elapsed, peak, output) =
-                    if std::env::var("PRIKK_159_TRACE").is_ok_and(|value| value == "1") {
-                        let start = std::time::Instant::now();
-                        let output = command.output().expect("running prikk");
-                        (start.elapsed(), Some(0), output)
-                    } else {
-                        run_rusage(&command)
-                    };
+                let command =
+                    execute::seal_command(binary, &copy, &profile, execute::REF_NAME).unwrap();
+                let (elapsed, peak, output) = run_rusage(&command);
                 require_success(&output, &format!("seal of block {block}"));
-                show_trace(&label, block, &output);
                 cell.0.push(elapsed.as_secs_f64() * 1000.0);
                 cell.1.push(peak.expect("a peak RSS"));
                 eprintln!(

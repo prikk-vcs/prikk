@@ -43,6 +43,20 @@ pub(crate) fn node(seed: u8) -> NodeId {
     NodeId::from_bytes([seed; 32])
 }
 
+/// How a fixture's already-sealed blocks stand against what the repository has adopted (RFC 159 §8.2). A seal
+/// refuses to publish a block its own repository does not trust, so a fixture is **sealed as `Adopted` and its policy is
+/// then changed** ([`AnchoredHistory::retro_sign`]) -- which is also how such a block arises in practice: a key removed
+/// from the policy, or a lineage received from another maintainer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Signing {
+    /// Signed by the one maintainer key the repository adopted.
+    Adopted,
+    /// The signing key is no longer adopted; another key is, so the policy is not empty.
+    Unadopted,
+    /// The signing key id is adopted, **with a different public key**: no block's signature verifies against it.
+    Mismatched,
+}
+
 pub(crate) struct AnchoredHistory {
     pub(crate) layout: RepositoryLayout,
     pub(crate) store: FileObjectStore,
@@ -73,6 +87,38 @@ impl AnchoredHistory {
             text: BTreeMap::new(),
             paths: BTreeMap::new(),
             blocks: Vec::new(),
+        }
+    }
+
+    /// Change what this repository has adopted so that the blocks already sealed stand as `signing` says.
+    pub(crate) fn retro_sign(&self, signing: Signing) {
+        match signing {
+            Signing::Adopted => {}
+            Signing::Unadopted => {
+                let other = Ed25519MaintainerSigner::from_seed("rfc159-adopted-other", &[0x5A; 32])
+                    .unwrap();
+                add_trusted_maintainer(
+                    &self.layout,
+                    other.key_id(),
+                    &prikk_hash::to_hex(&other.public_key_bytes()),
+                )
+                .unwrap();
+                crate::remove_trusted_maintainer(&self.layout, self.maintainer.key_id()).unwrap();
+            }
+            Signing::Mismatched => {
+                let other = Ed25519MaintainerSigner::from_seed("rfc136-2c-maintainer", &[0x2D; 32])
+                    .unwrap();
+                // The key material is append-only and a lookup reads the latest entry for an id, so the adopted id now
+                // names a different public key.
+                crate::trust_index::append_trust_key_entry(
+                    &self.layout,
+                    &crate::trust_index::TrustKeyEntry {
+                        key_id: self.maintainer.key_id().to_string(),
+                        public_key: other.public_key_bytes(),
+                    },
+                )
+                .unwrap();
+            }
         }
     }
 
@@ -195,8 +241,25 @@ impl AnchoredHistory {
         self.blocks[0]
     }
 
+    /// The signer that seals this fixture's blocks (for a test that hand-builds a block beside them).
+    pub(crate) fn signer(&self) -> &Ed25519MaintainerSigner {
+        &self.maintainer
+    }
+
     /// The standard history, `total` blocks long (at least 9).
     pub(crate) fn standard(name: &str, total: usize) -> Self {
+        Self::standard_adopted(name, total)
+    }
+
+    /// [`Self::standard`] with the blocks standing as `signing` says once sealed ([`Self::retro_sign`]).
+    pub(crate) fn standard_signed(name: &str, total: usize, signing: Signing) -> Self {
+        let h = Self::standard(name, total);
+        h.retro_sign(signing);
+        h
+    }
+
+    /// The standard history, `total` blocks long (at least 9), all signed by an adopted key.
+    pub(crate) fn standard_adopted(name: &str, total: usize) -> Self {
         assert!(total >= 9);
         let mut h = Self::new(name);
         let a: Vec<u8> = (1..=20)

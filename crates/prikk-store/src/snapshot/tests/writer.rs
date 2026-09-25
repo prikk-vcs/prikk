@@ -1073,3 +1073,104 @@ fn seal_rename_free_history(sealer: &mut Sealer, blocks: usize) -> Result<()> {
     }
     Ok(())
 }
+
+/// **RFC 159 whole-state identity, on a history with every shape** (handoff §2 control 1, and the merge site of control
+/// 10): 130 blocks (checkpoints at 1, 65, 129) that create, edit (text and binary), rename (block 30), change a mode
+/// (block 40), delete a file whose tombstone must survive (block 20), **restore it exactly** (block 70), and hold **a
+/// merge block below the second checkpoint (block 26) and one above it (block 100)**. Every block is sealed again on
+/// its own parent by the anchored derivation and compared with an independent forward replay from genesis, and every
+/// 10th with the literal full walk (`rfc159_identity_probe`). The two `merge` operations that built the history must each
+/// have used an anchor at the merge site.
+///
+/// **Perturb (identity):** skip `seed_tombstone` in `anchored_parent_state`: the restoration at block 70 differs. Skip
+/// seeding the snapshot's mode or `seed_live_node`: block 41 onward differs. **Perturb (site):** `StateAnchoring::Never`
+/// at the merge call in `merge/execute.rs`: `uses["merge"]` is 0 and only this control is red.
+#[test]
+fn rfc159_identity_on_a_history_with_renames_restorations_and_merges() -> Result<()> {
+    use crate::{
+        anchor_uses_for_test_support, reset_anchor_uses_for_test_support, rfc159_identity_probe,
+    };
+
+    reset_anchor_uses_for_test_support();
+    let mut sealer = Sealer::new("rfc159-shapes", true)?;
+    let (binary, mut binary_id) = create_binary(&mut sealer, "bin.dat", 0xB1, b"\0binary 0")?;
+    let first = vec![
+        sealer.create("a.txt", 0xA1, b"alpha 0\n")?,
+        sealer.create("keep.txt", 0xA2, b"keep\n")?,
+        sealer.create("old.txt", 0xA3, b"old\n")?,
+        binary,
+    ];
+    sealer.seal(first)?;
+    let mut filler: u8 = 0;
+    let mut side = 0_u8;
+    while sealer.blocks.len() < 130 {
+        let number = sealer.blocks.len() + 1;
+        let op = match number {
+            20 => sealer.delete("old.txt", 0xA3)?,
+            30 => Sealer::rename(0xA2, "keep.txt", "renamed.txt"),
+            40 => sealer.chmod(0xA1, 0o100_755),
+            70 => sealer.create("old.txt", 0xA3, b"old\n")?,
+            50 | 120 => {
+                let bytes = format!("\0binary {number}");
+                let (op, id) = replace_binary(&mut sealer, 0xB1, binary_id, bytes.as_bytes())?;
+                binary_id = id;
+                op
+            }
+            26 | 100 => {
+                // A merge block: a side branch off the current tip gets one commit, and is merged into main.
+                let baseline = *sealer.blocks.last().ok_or_else(|| integrity("no tip"))?;
+                side += 1;
+                let branch = format!("heads/side{side}");
+                sealer.publish_branch(&branch, baseline)?;
+                let side_op = sealer.create(&format!("side{side}.txt"), 0xE0 + side, b"side\n")?;
+                sealer.seal_on(&branch, vec![side_op])?;
+                let merged =
+                    execute_merge(&sealer.layout, baseline, MAIN, &branch, &sealer.maintainer)?;
+                sealer.blocks.push(merged.block_id);
+                continue;
+            }
+            number if number % 5 == 0 => {
+                sealer.edit(0xA1, format!("alpha {number}\n").as_bytes())?
+            }
+            number => {
+                filler += 1;
+                sealer.create(&format!("f{number}.txt"), filler, b"filler\n")?
+            }
+        };
+        sealer.seal(vec![op])?;
+    }
+    assert_eq!(sealer.checkpoint_positions()?, vec![1, 65, 129]);
+    assert_eq!(
+        anchor_uses_for_test_support("merge"),
+        2,
+        "each merge continued from an anchor at the merge site"
+    );
+    let kinds: Vec<_> = sealer
+        .blocks
+        .iter()
+        .map(|id| sealer.block(*id).map(|block| block.kind))
+        .collect::<Result<_>>()?;
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == prikk_object::BlockKind::Merge)
+            .count(),
+        2,
+        "fixture sanity: two merge blocks on the mainline"
+    );
+
+    let tip = sealer
+        .blocks
+        .last()
+        .ok_or_else(|| integrity("no tip"))?
+        .to_hex();
+    let report = rfc159_identity_probe(&sealer.layout, &tip, 10)?;
+    assert!(report.differences.is_empty(), "{:#?}", report.differences);
+    assert_eq!(report.blocks, sealer.blocks.len());
+    assert_eq!(
+        report.fell_back, 1,
+        "only the first block has nothing to anchor at"
+    );
+    assert!(report.literal_full_compared >= 13);
+    Ok(())
+}

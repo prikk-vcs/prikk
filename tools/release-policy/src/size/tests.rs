@@ -212,8 +212,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // `ref_resolution.rs`: 138 -> 139. RFC 153's point resolver added `point.rs`: 139 -> 140.
     // RFC 157 added `point_reading.rs`: 140 -> 141. RFC 153's `diff` added `diff.rs` and `line_diff.rs`:
     // 141 -> 143. Its worktree side added `worktree_read.rs`: 143 -> 144. RFC 136 increment 2c added
-    // `anchor_fallback.rs` and `lifecycle_cache/anchored_text.rs`: 144 -> 146.
-    assert_eq!(store.production_files, 146);
+    // `anchor_fallback.rs` and `lifecycle_cache/anchored_text.rs`: 144 -> 146. RFC 159 added `anchor_trust.rs` and
+    // `block_state/anchored_parent.rs`: 146 -> 148.
+    assert_eq!(store.production_files, 148);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

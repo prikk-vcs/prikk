@@ -52,10 +52,9 @@ pub(crate) fn write_checkpoint_snapshot(
             continue;
         };
         let blob_id = *blob_id;
-        if object_store
-            .read_typed(blob_id, ObjectType::Blob)?
-            .is_some()
-        {
+        // RFC 159 §8.6: asked of the store's index, never read. The check exists only to learn whether the Blob is
+        // stored; reading and decoding every file's content on every checkpoint was most of a checkpoint seal.
+        if object_store.has_object(blob_id, ObjectType::Blob)? {
             continue;
         }
         let path = entry.path.as_str();
@@ -226,6 +225,17 @@ pub(crate) fn load_block_snapshot(
     let Some(manifest) = validate_snapshot_manifest(reader, block_id, block)? else {
         return Ok(None);
     };
+    snapshot_files_from_manifest(reader, block_id, manifest).map(Some)
+}
+
+/// The files of an already-validated manifest, each read by Blob id and its kind matched to the entry (`Integrity` on
+/// a mismatch). A caller that validated the manifest itself -- the anchor-trust function, which validates it as one
+/// of four conditions -- reads its files here without validating twice.
+pub(crate) fn snapshot_files_from_manifest(
+    reader: &impl ObjectReader,
+    block_id: ObjectId,
+    manifest: SnapshotManifest,
+) -> Result<Vec<SnapshotFile>> {
     let mut files = Vec::with_capacity(manifest.entries.len());
     for entry in manifest.entries {
         let path = entry.path.as_str().to_string();
@@ -259,7 +269,7 @@ pub(crate) fn load_block_snapshot(
             bytes,
         });
     }
-    Ok(Some(files))
+    Ok(files)
 }
 
 #[cfg(test)]

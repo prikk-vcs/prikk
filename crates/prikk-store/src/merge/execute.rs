@@ -20,6 +20,8 @@ use prikk_object::{
     RefUpdatePayload,
 };
 
+use crate::anchor_trust::AnchorSite;
+use crate::block_state::{StateAnchoring, seal_block_at};
 use crate::merge::evidence::{
     MergeEvidenceTarget, candidate_patch_ids, prepare_merge_evidence,
     verify_candidate_blocks_trusted,
@@ -27,8 +29,8 @@ use crate::merge::evidence::{
 use crate::received::validate_received_ref;
 use crate::{
     BlockLineage, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
-    RefPublication, RefStore, RepositoryLayout, maintainer_signature, seal_block,
-    validate_local_branch_ref, verify_signer_trusted,
+    RefPublication, RefStore, RepositoryLayout, maintainer_signature, validate_local_branch_ref,
+    verify_signer_trusted,
 };
 
 /// Result of a completed merge execution.
@@ -173,7 +175,7 @@ pub fn execute_merge(
     )?;
 
     let adopted_target_block_id = evidence.right_selector.target_block_id;
-    let block_id = seal_block(
+    let block_id = seal_block_at(
         layout,
         &mut object_store,
         BlockLineage::Merge {
@@ -183,6 +185,7 @@ pub fn execute_merge(
         },
         &adopted_patch_ids,
         signer,
+        StateAnchoring::Anchored(AnchorSite::Merge),
     )?;
 
     let update_seq = into_ref_state.update_seq.checked_add(1).ok_or_else(|| {

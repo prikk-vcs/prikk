@@ -487,6 +487,70 @@ fn row7_a_mixed_claim_seals_the_unsealed_remainder() -> Result<()> {
     Ok(())
 }
 
+/// **RFC 159 site control (`sync seal`)**: a second claim, sealed on a tip the first one made (a checkpoint, recorded and
+/// signed by the adopted maintainer), continues from that anchor **at the seal-from-accepted site and no other**, and
+/// seals the **identical block** as the same two claims sealed with no record (the full walk). Two repositories are built
+/// from the same fixed seeds; only the second has its record removed between the seals.
+/// **Perturb:** `StateAnchoring::Never` at the call in `seal_from_accepted.rs`: `uses["seal-from-accepted"]` is 0 and only
+/// this control (and the source scan) goes red.
+#[test]
+fn a_second_claim_continues_from_the_anchor_and_seals_the_identical_block() -> Result<()> {
+    use crate::verified_blocks::record_path;
+    use crate::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
+
+    let seal_two = |name: &str, drop_record: bool| -> Result<(ObjectId, usize)> {
+        let layout = fresh_repo(name)?;
+        let signer = maintainer_signer(0x74)?;
+        adopt(&layout, &signer)?;
+        let author = author_signer(0x75)?;
+        let mut objects = FileObjectStore::new(layout.clone());
+        let blob_a = write_blob(&mut objects, b"rfc159 first\n")?;
+        let patch_a = write_create_file_patch(&mut objects, &author, "r159-a.txt", 0x76, blob_a)?;
+        let claim_a = write_claim(
+            &mut objects,
+            &signer,
+            ObjectId::from_bytes([0xF3; 32]),
+            vec![patch_a],
+        )?;
+        seal_from_accepted_claim(&layout, TARGET_REF, claim_a, &signer)?;
+        if drop_record {
+            std::fs::remove_file(record_path(&layout))?;
+        }
+        let blob_b = write_blob(&mut objects, b"rfc159 second\n")?;
+        let patch_b = write_create_file_patch(&mut objects, &author, "r159-b.txt", 0x77, blob_b)?;
+        let claim_b = write_claim(
+            &mut objects,
+            &signer,
+            ObjectId::from_bytes([0xF4; 32]),
+            vec![patch_b],
+        )?;
+        reset_anchor_uses_for_test_support();
+        let outcome = seal_from_accepted_claim(&layout, TARGET_REF, claim_b, &signer)?;
+        let SealFromAcceptedOutcome::Sealed { block_id, .. } = outcome else {
+            panic!("expected Sealed, got {outcome:?}");
+        };
+        let used = anchor_uses_for_test_support("seal-from-accepted");
+        for other in ["seal", "merge", "worktree-write", "snapshot-materialize"] {
+            assert_eq!(
+                anchor_uses_for_test_support(other),
+                0,
+                "not the {other} site"
+            );
+        }
+        cleanup(&layout);
+        Ok((block_id, used))
+    };
+    let (anchored_block, anchored_uses) = seal_two("seal-from-accepted-159-anchored", false)?;
+    let (full_block, full_uses) = seal_two("seal-from-accepted-159-full", true)?;
+    assert_eq!(
+        anchored_uses, 1,
+        "the recorded, adopted checkpoint was the anchor"
+    );
+    assert_eq!(full_uses, 0, "with no record there is no anchor");
+    assert_eq!(anchored_block, full_block, "the same block, byte for byte");
+    Ok(())
+}
+
 /// §6 row 8: two stored claims naming overlapping patches but disagreeing on their relative order
 /// refuse, naming both.
 #[test]

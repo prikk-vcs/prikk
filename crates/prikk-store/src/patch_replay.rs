@@ -606,18 +606,19 @@ pub fn replayed_block_count_at_point_for_test_support(
         .replayed_block_count)
 }
 
-/// The replay for a **worktree write** (RFC 136 §10.3c ruling 2): it may start only at a snapshot whose
-/// Block is in this repository's replay-verified record and that passes the loader; otherwise it
-/// replays from genesis. A missing or damaged record is the empty set, so the replay runs in full.
+/// The replay for a **worktree write** (RFC 136 §10.3c ruling 2, RFC 159 §8.2): it may start only at a snapshot the
+/// anchor-trust function admits (in the replay-verified record, signed by an adopted maintainer key, passing the
+/// loader, within 63 blocks); otherwise it replays from genesis. A missing or damaged record is the empty set, and an
+/// empty trust policy adopts nothing, so the replay runs in full.
 pub(crate) fn replay_for_verified_worktree_write(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
-    let verified = crate::verified_blocks::load_verified_blocks(layout);
+    let trust = crate::anchor_trust::AnchorTrust::load(layout);
     replay_ref_chain(
         layout,
         ref_name,
-        anchor::Anchoring::VerifiedWorktreeWrite(&verified),
+        anchor::Anchoring::VerifiedWorktreeWrite(&trust),
     )
 }
 

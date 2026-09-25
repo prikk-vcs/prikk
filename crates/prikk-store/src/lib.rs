@@ -17,6 +17,7 @@
 
 // RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
 mod anchor_fallback;
+mod anchor_trust;
 mod author;
 mod blob_access;
 mod block_state;
@@ -108,8 +109,12 @@ mod worktree_status;
 mod test_gates;
 
 pub use anchor_fallback::take_anchor_fallbacks;
+#[cfg(feature = "test-support")]
+pub use anchor_trust::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
+#[cfg(feature = "test-support")]
+pub use block_state::anchored_parent::{Rfc159IdentityReport, rfc159_identity_probe};
 pub use block_state::{
     BlockLineage, BlockStateOutcome, BlockStateStatus, derive_next_state_root, seal_block,
     validate_block_v2_shape,

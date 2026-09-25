@@ -333,7 +333,9 @@ fn unique_suffix() -> String {
 }
 
 mod anchored_history;
-pub(crate) use anchored_history::{AnchoredHistory, NODE_A, NODE_B, NODE_D, node as anchored_node};
+pub(crate) use anchored_history::{
+    AnchoredHistory, NODE_A, NODE_B, NODE_D, Signing, node as anchored_node,
+};
 
 mod rename_history;
 pub(crate) use rename_history::{

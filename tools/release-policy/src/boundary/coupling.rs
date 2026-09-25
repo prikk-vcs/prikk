@@ -102,7 +102,7 @@ const UPPER_LAYER: [&str; 25] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 35] = [
+const LOWER_LAYER: [&str; 36] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -135,6 +135,11 @@ const LOWER_LAYER: [&str; 35] = [
     // name it on stderr. Depends on no store module (only `prikk_object`); `lifecycle_cache::anchored_text` and
     // `patch_replay::anchor` (both lower) record and construct it, and `lib.rs` exports the drain.
     "anchor_fallback",
+    // RFC 159 §8.2: the one anchor-trust function -- record, adopted maintainer signature, manifest, distance -- that
+    // stack A (`block_state`) and RFC 136 2b's worktree writes (`patch_replay`, `worktree`) ask before a snapshot's
+    // state may reach a signature. Depends on `trust`, `snapshot` and `verified_blocks`; every caller is lower, and
+    // `merge`/`seal_from_accepted` (upper) only name its `AnchorSite`.
+    "anchor_trust",
     // RFC 136 increment 2b: the replay-verified block record, a rebuildable cache under `.prikk/cache/`
     // that `block_state` (seal) and `verify` write and the anchored worktree writes read. It depends
     // only on `foundation`, so it sits with the lower-layer state it records.
@@ -310,6 +315,22 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 above, and it would remove this edge along with that one",
     },
     DeclaredCycle {
+        edges: &[("patch_replay", "anchor_trust"), ("anchor_trust", "trust")],
+        reason: "RFC 159 §8.2, ruled by the owner: a snapshot's state may reach a signature only through one \
+                  anchor-trust function, and one of its four conditions is that the block's maintainer \
+                  signature verifies against a key in the adopted trust policy -- which is `trust`'s \
+                  (`verify_trusted_publication_envelope`, `load_maintainer_trust_policy_or_empty`). \
+                  `patch_replay`'s anchored worktree write is one of its two users. The edges close a longer \
+                  cycle only because `trust` already reaches `refs` and `refs` reaches back into the \
+                  replay layer",
+        what_would_remove_it: "the same option named for the refs/trust pair above: moving the \
+                                incomplete-publication guard out of `refs` breaks the return path; or \
+                                passing the loaded `MaintainerTrustPolicy` into `patch_replay` as an \
+                                argument, which every caller would then have to load -- a real option, \
+                                not taken here because one function owning the rule is what RFC 159 \
+                                ruled, and two loaders would be two rules",
+    },
+    DeclaredCycle {
         edges: &[("patch_replay", "refs")],
         reason: "found by this round's own re-derivation (2026-06-27/2026-07-29): patch_replay \
                   needs `RefStore` to resolve which ref/block it is replaying from -- an ordinary \
@@ -353,6 +374,14 @@ struct DeclaredHub {
 /// `replay_derived_state` call sequence, the same "add one narrow function instead of widening
 /// internals" shape RFC 131 §3 argued for.
 const DECLARED_HUBS: &[DeclaredHub] = &[
+    DeclaredHub {
+        module: "lifecycle_cache::replay",
+        reason: "RFC 159's `id_only_tombstones` is the one id-only walk (presence, type, schema, decode of every \
+                  patch, and the tombstone map) that `block_state::anchored_parent` runs below an anchor; it \
+                  lives beside the replay it must agree with, and reads patches through the same \
+                  `read_patch_operations` rather than a second reader that could drift -- a sixth real \
+                  consumer sharing one derivation, not reach that crept outward",
+    },
     DeclaredHub {
         module: "block_state",
         reason: "the one seal function derives, decides the checkpoint and writes (RFC 136 \

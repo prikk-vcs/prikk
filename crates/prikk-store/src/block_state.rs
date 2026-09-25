@@ -7,6 +7,7 @@ use prikk_object::{
     BlockKind, BlockPayload, CanonicalEncode, MerkleRoot, ObjectEnvelope, ObjectId, ObjectType,
 };
 
+use crate::anchor_trust::AnchorSite;
 use crate::lifecycle_cache::replay::{
     LifecycleReplayError, TextCache, apply_candidate_patches, apply_one_block_with_text_cache,
 };
@@ -185,6 +186,21 @@ pub(crate) enum CandidateStateDerivationError {
     Patch(LifecycleReplayError),
 }
 
+/// Whether a derivation of the state a new block continues from may start at a snapshot (RFC 159). **An explicit
+/// argument with no default**, like `patch_replay::anchor::Anchoring`: every caller states it, and a source-scan test
+/// pins which files may name [`StateAnchoring::Never`] (none in production). [`derive_next_state_root`] and `verify`
+/// never anchor: they do not pass through here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StateAnchoring {
+    /// Start at the nearest snapshot that the anchor-trust function admits (`anchor_trust`), at the site named;
+    /// otherwise the full walk.
+    Anchored(AnchorSite),
+    /// The full walk, whatever the record holds. Only a control names it (`cfg(test)` / `test-support`): it is how a
+    /// test compares an anchored derivation with today's.
+    #[cfg(any(test, feature = "test-support"))]
+    Never,
+}
+
 /// Same derivation as [`derive_next_state_root`], but for a caller that must distinguish *why* it
 /// failed rather than receive one flattened [`PrikkError`] (RFC 115 Stage 4 handoff §4). The only
 /// caller today is the seal-from-accepted path: the first place prikk applies patches that were not
@@ -201,20 +217,100 @@ pub(crate) enum CandidateStateDerivationError {
 /// keys, each inserted only after `computed == payload.state_merkle_root` (RFC 136 increment 2b).
 #[allow(clippy::type_complexity)]
 pub(crate) fn derive_next_state_for_candidate(
+    layout: &crate::RepositoryLayout,
     reader: &impl ObjectReader,
     parent: Option<ObjectId>,
     patch_ids: &[ObjectId],
+    anchoring: StateAnchoring,
 ) -> std::result::Result<
     (Vec<StateRootEntry>, TextCache, Vec<ObjectId>),
     CandidateStateDerivationError,
 > {
-    let mut memo = LineageStateMemo::new();
-    let (mut state, mut text_cache) = resolved_parent_state(reader, parent, &mut memo)
-        .map_err(CandidateStateDerivationError::Lineage)?;
+    derive_candidate(layout, reader, parent, patch_ids, anchoring)
+        .map(|derived| (derived.entries, derived.text_cache, derived.verified))
+}
+
+/// A candidate derivation with everything a control compares.
+#[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+pub(crate) struct CandidateDerivation {
+    pub(crate) entries: Vec<StateRootEntry>,
+    pub(crate) text_cache: TextCache,
+    /// Every block whose root this derivation confirmed by replay: the whole lineage for the full walk, the blocks
+    /// folded after the anchor for an anchored one.
+    pub(crate) verified: Vec<ObjectId>,
+    pub(crate) state: NodeLifecycleState,
+    /// The anchored derivation was used (otherwise the full walk ran).
+    pub(crate) anchored: bool,
+    /// Blocks folded after the anchor, and blocks the id-only walk read (both 0 for the full walk).
+    pub(crate) folded: usize,
+    pub(crate) id_only_blocks: usize,
+}
+
+fn derive_candidate(
+    layout: &crate::RepositoryLayout,
+    reader: &impl ObjectReader,
+    parent: Option<ObjectId>,
+    patch_ids: &[ObjectId],
+    anchoring: StateAnchoring,
+) -> std::result::Result<CandidateDerivation, CandidateStateDerivationError> {
+    let anchored_parent = match (anchoring, parent) {
+        (StateAnchoring::Anchored(site), Some(parent_id)) => {
+            anchored_parent::anchored_parent_state(layout, reader, parent_id, site)
+        }
+        _ => None,
+    };
+    let (mut state, mut text_cache, verified, anchored_used, folded, id_only_blocks) =
+        match anchored_parent {
+            Some(found) => {
+                let folded = found.folded.len();
+                (
+                    found.state,
+                    found.text_cache,
+                    found.folded,
+                    true,
+                    folded,
+                    found.id_only_blocks,
+                )
+            }
+            None => {
+                let mut memo = LineageStateMemo::new();
+                let (state, text_cache) = resolved_parent_state(reader, parent, &mut memo)
+                    .map_err(CandidateStateDerivationError::Lineage)?;
+                (
+                    state,
+                    text_cache,
+                    memo.verified.keys().copied().collect(),
+                    false,
+                    0,
+                    0,
+                )
+            }
+        };
     apply_candidate_patches(reader, &mut state, &mut text_cache, patch_ids)
         .map_err(CandidateStateDerivationError::Patch)?;
     let entries = entries_from_state(&state).map_err(CandidateStateDerivationError::Lineage)?;
-    Ok((entries, text_cache, memo.verified.keys().copied().collect()))
+    Ok(CandidateDerivation {
+        entries,
+        text_cache,
+        verified,
+        state,
+        anchored: anchored_used,
+        folded,
+        id_only_blocks,
+    })
+}
+
+/// [`derive_next_state_for_candidate`] returning everything a control compares (the derived state, whether the anchor
+/// was used, how many blocks it folded). `anchoring` is the caller's, so a control can run the same candidate both ways.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn derive_next_state_for_candidate_choosing(
+    layout: &crate::RepositoryLayout,
+    reader: &impl ObjectReader,
+    parent: Option<ObjectId>,
+    patch_ids: &[ObjectId],
+    anchoring: StateAnchoring,
+) -> std::result::Result<CandidateDerivation, CandidateStateDerivationError> {
+    derive_candidate(layout, reader, parent, patch_ids, anchoring)
 }
 
 #[cfg(test)]
@@ -304,12 +400,33 @@ pub fn seal_block(
     patch_ids: &[ObjectId],
     signer: &impl MaintainerSigner,
 ) -> Result<ObjectId> {
+    seal_block_at(
+        layout,
+        object_store,
+        lineage,
+        patch_ids,
+        signer,
+        StateAnchoring::Anchored(AnchorSite::Seal),
+    )
+}
+
+/// [`seal_block`] with the caller stating whether, and for which site, the state it continues from may start at a
+/// snapshot (RFC 159): `merge` states its own site here, `prikk seal` reaches it through `seal_block`.
+pub(crate) fn seal_block_at(
+    layout: &crate::RepositoryLayout,
+    object_store: &mut (impl ObjectReader + ObjectWriter),
+    lineage: BlockLineage,
+    patch_ids: &[ObjectId],
+    signer: &impl MaintainerSigner,
+    anchoring: StateAnchoring,
+) -> Result<ObjectId> {
     seal_block_classified(
         layout,
         object_store,
         lineage,
         patch_ids,
         signer,
+        anchoring,
         |err| match err {
             CandidateStateDerivationError::Lineage(err) => err,
             CandidateStateDerivationError::Patch(err) => err.into(),
@@ -325,6 +442,7 @@ pub(crate) fn seal_block_classified(
     lineage: BlockLineage,
     patch_ids: &[ObjectId],
     signer: &impl MaintainerSigner,
+    anchoring: StateAnchoring,
     classify: impl FnOnce(CandidateStateDerivationError) -> PrikkError,
 ) -> Result<ObjectId> {
     let (parent_block_ids, kind, state_parent, mainline_parent_id, merge_baseline_block_id) =
@@ -357,7 +475,7 @@ pub(crate) fn seal_block_classified(
     // this path and never in an exporter. Nothing to do when every named Blob is already present.
     store_derived_content_for_candidate(object_store, state_parent, patch_ids)?;
     let (entries, text_cache, replay_verified) =
-        derive_next_state_for_candidate(&*object_store, state_parent, patch_ids)
+        derive_next_state_for_candidate(layout, &*object_store, state_parent, patch_ids, anchoring)
             .map_err(classify)?;
     let state_merkle_root = compute_state_root(&entries)?;
     // RFC 136 increment 1b: a checkpoint carries its own state, written before the Block is encoded
@@ -805,6 +923,8 @@ fn verify_v2_lineage_roots(
     }
     Ok(())
 }
+
+pub(crate) mod anchored_parent;
 
 #[cfg(test)]
 mod tests;
