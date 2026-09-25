@@ -10,7 +10,8 @@ its §8. **This ships as 0.48.0**, cut as soon as it is accepted, ahead of RFC 1
 
 Your prototype (`rfc159-prototype-v1.patch`) is the starting point, **not** the design. The rulings below change it.
 
-**Next after this, in order:** 0.48.0 release prep, then stack B (a later increment), then the gate plan.
+**Next after this, in order:** a time budget and a watcher for the measurement harnesses (owner-approved 2026-09-26;
+it goes live when this round is accepted), then 0.48.0 release prep, then stack B (a later increment), then the gate plan.
 
 ## 1. What lands
 
