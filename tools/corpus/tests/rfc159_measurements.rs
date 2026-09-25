@@ -187,6 +187,10 @@ fn seal_time_and_memory_at_depth() {
             support::copy_dir_all(&kept, &copy);
             for (slot, cell) in cells.iter_mut().enumerate() {
                 let block = depth + 1 + slot;
+                // The plan ends at its floor: a kept depth at the plan's end has fewer blocks left to seal.
+                if block > manifest.commits.len() {
+                    continue;
+                }
                 execute::materialize_commit(&copy, &manifest.commits[block - 1])
                     .expect("materializing");
                 execute::run_commit(binary, &copy, &profile, execute::REF_NAME, "next")
@@ -221,6 +225,9 @@ fn seal_time_and_memory_at_depth() {
         }
         for (slot, (ms, kib)) in cells.iter().enumerate() {
             let block = depth + 1 + slot;
+            if ms.is_empty() {
+                continue;
+            }
             report.push_str(&format!(
                 "| {depth} | {block} | {} | {} (median {:.0}) | {} (median {}) | {} |\n",
                 (block - 1) % 64,
