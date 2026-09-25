@@ -71,13 +71,19 @@ of sealed blocks.
   only from about depth 128 on**: over depth 32–128, the only range a debug build measured, the
   cumulative exponent is 1.4 in release against 1.96 in debug (the cause was not investigated). A release seal is 15–33 times cheaper than a debug one at
   the same depth (0.30 s against 9.9 s at depth 128). **Every 64th seal also writes a checkpoint and
-  costs about twice as much as an ordinary one** (in one of the release builds above, the seal of block 129 took 0.61 s
-  against 0.31–0.33 s for blocks 128 and 130; likewise blocks 65 and 193). The per-seal figures above are means over
+  costs more than an ordinary one**: about twice as much near depth 128 (the seal of block 129 took 0.61 s against
+  0.31–0.33 s for blocks 128 and 130), less at depth, because the lineage walk dominates both (1.6× at block 513, 1.4× at
+  961). The per-seal figures above are means over
   windows that end at every 64th block and so never include one of these; the cumulative column does include
   them. **This is the figure that decides
   how long it takes to build, or import, a deep history**, and it has been measured only to depth
   1,024; the build to 2,048 was not attempted (the 2-hour rule stopped it, its build having been
   projected at 2.3 hours). Nothing here is projected past 1,024.
+- **Sealing also needs memory that grows with the square of depth.** One `seal`'s peak resident memory, measured with
+  `getrusage` on the 0.47.0 release build: about 124 MiB at depth 256 and **about 1.8 GiB at depth 1,024** (1,874,000 KiB
+  sealing block 1,025, three samples). `seal` keeps a copy of the tree's state for every block of the lineage it walks. At
+  depths past a few thousand blocks, memory rather than time is the first limit. A change that seals from the nearest
+  verified checkpoint instead is being designed (RFC 159); it is not in any release.
 - **Checkout is close to linear in depth; `merge-evidence` is a little worse, and both are cheap at
   these depths.** From depth 32 to 256: `checkout --patch-plan` 36 → 152 ms and
   `checkout --patch-materialize` 125 → 591 ms (exponents 0.70 and 0.77; the tree itself grew as

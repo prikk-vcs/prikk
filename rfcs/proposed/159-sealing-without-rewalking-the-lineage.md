@@ -10,6 +10,10 @@ prerequisite: *"Schedule it and start the design when ready."*
 
 Author-review independence: the architect proposes and will review; §6's controls compensate, each shown to fail.
 
+**Design round DELIVERED and reviewed 2026-09-26** (instrument `5e97cfa5`..`455eeca7`; review
+`.git-exclude/reviewed/rfc159-design-round-review-v1.md`). The results and the architect's rulings are in **§8**. **Awaiting the
+owner's acceptance of the direction** before any implementation handoff.
+
 ## 1. Measured, not assumed — release build, 2026-09-25
 
 RFC 139's corpus (`prikk-self`), three independent histories built commit-then-seal to depth 1,024 (review
@@ -117,3 +121,70 @@ is trusted"*. That is exactly what `seal` re-checks today.
 - **Implementation:** 0.48.0, **before RFC 158 Stages B and C**, if the design needs no format change, as §4
   expects. If it does need one, it joins Stage C's format 8, and this RFC says so before anything is built.
 - **brygge** is told when the design round reports, with measured before-and-after figures, not before.
+
+## 8. Design round results and rulings — 2026-09-26
+
+**Measured (release, three samples, one session; the prototype built in a separate worktree and never landed):**
+
+| | shipped 0.47.0 | prototype |
+|---|---:|---:|
+| one ordinary `seal` at depth 1,024 (mean over a 64-block cycle) | 4,086 ms | 394 ms |
+| cumulative build to depth 1,024 | 1,894 s | 283 s |
+| cumulative build to depth 2,048 | not reachable in 2 h | 1,409 s |
+| **peak RSS of one `seal` at depth 1,024** | **1.8 GiB** | **30 MiB** |
+| a 64-block `sync` catch-up sealed at depth 1,024 | 251 s, 2.1 GiB | 18.2 s, 57 MiB |
+
+**Identity:** 0 differences across every anchored block of six 1,024-block histories, with the whole lifecycle state
+compared against an independent forward replay. `seal`, `merge` and seal-from-accepted were byte-identical in all three arms
+(prototype, prototype with anchoring off, baseline), including renames, restorations, mode changes and merge blocks.
+
+**The architect reproduced the shipped figure on the downloaded 0.47.0 asset:** sealing block 1,025 takes 5.3 s and
+**1,874,000 KiB** peak, three samples. **Today's release needs about 1.8 GiB to seal at depth 1,024**, and the memory grows
+roughly with the square of depth (the per-block clone memo of §2). At import depth the shipped code is killed by memory
+before it is slow.
+
+**What is still not flat:**
+- Past 1,024, per-seal cost follows the tree size, not the depth (exponent 1.05 over 256–2,048).
+- A checkpoint seal is 4–5× an ordinary one in the prototype, and about 80 % of it is the snapshot write.
+- The id-only walk is linear in depth: 42 ms at 1,025 blocks, 143 ms at 2,048.
+
+**Rulings (the architect's):**
+
+1. **C1, old blob content below the anchor is not re-read: accepted.** A state root commits to blob *ids*, never to their
+   content, so the new block signs nothing about content no live node names. `verify` still reports damaged content. The
+   implementation states this in the docs and pins it with a control: damaged content below the anchor, `seal` succeeds,
+   `verify` reports it.
+2. **C2, the record must not be the only gate: option (ii).** An anchor's *state* may reach a signed root only if all four
+   hold, and otherwise the walk runs in full:
+   - the anchor block is in the record;
+   - its snapshot passes `validate_snapshot_manifest`;
+   - its maintainer signature verifies against a key in this repository's adopted maintainer trust policy;
+   - it is within 63 blocks.
+
+   A rebuildable local file then only chooses *which* authenticated anchor to use; it never makes one. **Residual, stated:**
+   forging requires a trusted maintainer to have signed a wrong root, **and** write access to `.prikk/cache/`.
+
+   **The same anchor-trust function also governs RFC 136 increment 2b's anchored worktree writes**, which today trust the
+   record alone. That is one rule for every snapshot *state* that reaches a signature. 2c's anchored *text* stays as it is: it
+   is hash-checked, so it is self-certifying.
+3. **Received history as anchors: (A)**, any recorded block, under ruling 2. A received anchor is used only when an adopted
+   maintainer key signed it.
+4. **The id-only walk: nothing now.** At depth 1,024 it is about 1 % of today's walk. A history-fields cache is deferred to
+   the history-import work (theme 17), and **any cached history must be bound to something ruling 2 authenticates**: it must
+   not become a new unauthenticated input to a signed root. The same holds for `load_verified_blocks`' O(N) read.
+5. **Scope of the implementation: stack A only.** That is block-state derivation (`resolved_parent_state`), the one function
+   under `seal`, `merge` and seal-from-accepted. **Stack B** is baseline derivation, meaning the cold `commit` rung and
+   `merge-evidence`'s baseline; with it done, a `merge` pays one walk instead of two. Stack B follows as its own increment,
+   after `incremental.rs` can say whether a call is a cold start or the reanchor. The reanchor and `verify_divergence` are
+   never anchored.
+6. **Included, measured: the snapshot writer's presence check.** Where the checkpoint writer reads content only to learn
+   whether a blob is stored, it asks the index instead. It carries an identity control on every snapshot the corpus writes,
+   and the checkpoint seal is measured before and after.
+7. **Docs, owed now:** the scale page gains `seal`'s peak memory in the shipped release, and its checkpoint sentence is
+   corrected. The ratio falls with depth (2.0 at block 129, 1.4 at 961), so "about twice" holds only near depth 128.
+
+**Corrections to this RFC and its handoff, found by the round and verified:**
+- `merge/evidence.rs:173` is `lifecycle_state_at`, `show`'s helper, not `merge-evidence`.
+- `incremental.rs:157` does not distinguish a cold start from the reanchor.
+- A merge also pays a full baseline replay first (`execute.rs:101`).
+- "A checkpoint seal is about 2.3×" was one depth's probe, not the curve.
