@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.47.0 — 2026-09-25
 
 ### Changed — a `commit` that edits earlier-edited text, and `merge-evidence`, no longer replay the whole history
 
