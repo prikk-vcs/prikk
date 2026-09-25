@@ -99,6 +99,14 @@ fn power_fit(points: &[(f64, f64)]) -> (f64, f64) {
     (my - b * mx, b)
 }
 
+/// Which repositories to keep: the directory and depths of `PRIKK_BCC_KEEP_DIR` / `PRIKK_BCC_KEEP_AT`, and the sample
+/// number that names them.
+#[derive(Clone, Copy)]
+struct Keep<'a> {
+    spec: &'a (PathBuf, Vec<u64>),
+    sample: usize,
+}
+
 /// Grow one repository. `stop_at` fixes the depth (samples after the first); `None` applies the projection rule.
 /// `keep` = `(directory, depths)`: copy the repository to `directory/sealed-d<depth>` after the seal at each depth.
 fn grow(
@@ -108,8 +116,7 @@ fn grow(
     stop_at: Option<u64>,
     max_hours: f64,
     label: &str,
-    keep: Option<&(PathBuf, Vec<u64>)>,
-    sample: usize,
+    keep: Option<Keep<'_>>,
 ) -> Run {
     let repo_root = support::unique_dir(label);
     execute::init_repository(binary, &repo_root).expect("init");
@@ -138,7 +145,11 @@ fn grow(
         execute::run_seal(binary, &repo_root, profile, execute::REF_NAME).expect("seal");
         let seal_ms = start.elapsed().as_secs_f64() * 1000.0;
         blocks.push((depth, commit_ms, seal_ms));
-        if let Some((directory, depths)) = keep {
+        if let Some(Keep {
+            spec: (directory, depths),
+            sample,
+        }) = keep
+        {
             if depths.contains(&depth) {
                 let destination = if sample == 0 {
                     directory.join(format!("sealed-d{depth}"))
@@ -240,12 +251,9 @@ fn build_cost_curve() {
             stop_at,
             max_hours,
             &format!("bcc-{label}-{sample}"),
-            if sample < keep_samples {
-                keep.as_ref()
-            } else {
-                None
-            },
-            sample,
+            keep.as_ref()
+                .filter(|_| sample < keep_samples)
+                .map(|spec| Keep { spec, sample }),
         );
         let mut tsv = String::from("depth\tcommit_ms\tseal_ms\n");
         for (depth, commit_ms, seal_ms) in &run.blocks {
