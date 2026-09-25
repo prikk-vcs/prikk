@@ -341,6 +341,34 @@ pub fn seal_command(
     Ok(command)
 }
 
+/// A `prikk` command with **both** of the profile's fixed keys in its environment (the maintainer seed for
+/// anything that seals or merges, the author seed for anything that commits), for a caller that runs a command
+/// this module has no builder for (`merge`, `sync accept`, `sync seal`, RFC 159's identity and catch-up
+/// instruments). Arguments are the caller's.
+pub fn keyed_command(
+    binary_path: &Path,
+    repo_root: &Path,
+    profile: &Profile,
+) -> Result<Command, ExecuteError> {
+    let mut command = Command::new(binary_path);
+    command
+        .current_dir(repo_root)
+        .env("PRIKK_AUTHOR_KEY_ID", &profile.builder_inputs.author_key_id)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            seed_file(&profile.builder_inputs.author_seed_hex)?,
+        )
+        .env(
+            "PRIKK_MAINTAINER_KEY_ID",
+            &profile.builder_inputs.maintainer_key_id,
+        )
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            seed_file(&profile.builder_inputs.maintainer_seed_hex)?,
+        );
+    Ok(command)
+}
+
 /// Run `prikk seal --allow-no-audit --ref <ref_name>`, using the profile's fixed maintainer key.
 pub fn run_seal(
     binary_path: &Path,

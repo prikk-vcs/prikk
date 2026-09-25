@@ -19,6 +19,15 @@
 //! - **Peak memory is not measured here.** Timing is this round's point; the original's `VmHWM` samples at 500 us
 //!   would have put a polling thread beside the timed command. (RFC 133 owns memory, by `getrusage`.)
 //! - The report goes to `.git-exclude/measurements/rfc139/`, not into `rfcs/`.
+//!
+//! **RFC 159 design round additions.**
+//! - **Checkpoint blocks are reported apart from ordinary ones.** A block is a checkpoint when it carries a
+//!   snapshot: the first block, then every 64th after (65, 129, ...). The main table's 16-block windows end at a
+//!   multiple of 64 and so never contain one; the second table gives each checkpoint block's seal beside the mean of
+//!   the eight ordinary blocks before it.
+//! - **`PRIKK_BCC_KEEP_DIR` and `PRIKK_BCC_KEEP_AT`** (sample 0 only): after the seal at each depth listed (comma
+//!   separated), the repository is copied to `<KEEP_DIR>/sealed-d<depth>`, outside any timed step, for the
+//!   memory and catch-up instruments to run both binaries against the same history.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -55,7 +64,11 @@ fn env_f64(name: &str, default: f64) -> f64 {
 }
 
 fn out_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.git-exclude/measurements/rfc139");
+    // `PRIKK_BCC_OUT_SUBDIR` (default `rfc139`): RFC 159's round writes under `rfc159`.
+    let subdir = std::env::var("PRIKK_BCC_OUT_SUBDIR").unwrap_or_else(|_| "rfc139".to_string());
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.git-exclude/measurements")
+        .join(subdir);
     std::fs::create_dir_all(&dir).expect("creating the measurement directory");
     dir
 }
@@ -86,6 +99,7 @@ fn power_fit(points: &[(f64, f64)]) -> (f64, f64) {
 }
 
 /// Grow one repository. `stop_at` fixes the depth (samples after the first); `None` applies the projection rule.
+/// `keep` = `(directory, depths)`: copy the repository to `directory/sealed-d<depth>` after the seal at each depth.
 fn grow(
     binary: &Path,
     profile: &Profile,
@@ -93,6 +107,7 @@ fn grow(
     stop_at: Option<u64>,
     max_hours: f64,
     label: &str,
+    keep: Option<&(PathBuf, Vec<u64>)>,
 ) -> Run {
     let repo_root = support::unique_dir(label);
     execute::init_repository(binary, &repo_root).expect("init");
@@ -121,6 +136,17 @@ fn grow(
         execute::run_seal(binary, &repo_root, profile, execute::REF_NAME).expect("seal");
         let seal_ms = start.elapsed().as_secs_f64() * 1000.0;
         blocks.push((depth, commit_ms, seal_ms));
+        if let Some((directory, depths)) = keep {
+            if depths.contains(&depth) {
+                let destination = directory.join(format!("sealed-d{depth}"));
+                let _ = std::fs::remove_dir_all(&destination);
+                support::copy_dir_all(&repo_root, &destination);
+                eprintln!(
+                    "[{label}] kept the repository at depth {depth}: {}",
+                    destination.display()
+                );
+            }
+        }
 
         if CHECKPOINTS.contains(&depth) {
             eprintln!(
@@ -178,6 +204,16 @@ fn build_cost_curve() {
     let max_hours = env_f64("PRIKK_BCC_MAX_HOURS", 2.0);
     let max_depth = env_f64("PRIKK_BCC_MAX_DEPTH", FLOOR_DEPTH as f64) as u64;
     let label = std::env::var("PRIKK_BCC_LABEL").unwrap_or_else(|_| build.to_string());
+    let keep: Option<(PathBuf, Vec<u64>)> = std::env::var("PRIKK_BCC_KEEP_DIR").ok().map(|dir| {
+        let depths = std::env::var("PRIKK_BCC_KEEP_AT")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("creating the keep directory");
+        (dir, depths)
+    });
     eprintln!(
         "build: {build}; binary {} ({}), sha256 {}",
         identity.path, identity.version_output, identity.sha256
@@ -197,6 +233,7 @@ fn build_cost_curve() {
             stop_at,
             max_hours,
             &format!("bcc-{label}-{sample}"),
+            if sample == 0 { keep.as_ref() } else { None },
         );
         let mut tsv = String::from("depth\tcommit_ms\tseal_ms\n");
         for (depth, commit_ms, seal_ms) in &run.blocks {
@@ -272,6 +309,70 @@ fn build_cost_curve() {
             median(runs.iter().map(|r| window(r, |b| b.2)).collect()),
             median(runs.iter().map(|r| window(r, |b| b.1)).collect()),
             cumulative.join(", "),
+        ));
+    }
+    // Checkpoint blocks (65, 129, ...) beside the eight ordinary blocks before each.
+    report.push_str(
+        "\n**Checkpoint blocks** (the block carries a snapshot: 65, 129, 193, ...), per sample, beside the mean seal of the eight ordinary blocks before it. Median over samples.\n\n\
+         | checkpoint block | seal at it (ms), per sample | ordinary, mean of the 8 before (ms), median | ratio, median |\n|---:|---|---:|---:|\n",
+    );
+    let mut ratios: Vec<f64> = Vec::new();
+    let mut checkpoint = 65_u64;
+    while checkpoint <= deepest {
+        let at: Vec<Option<f64>> = runs
+            .iter()
+            .map(|run| {
+                run.blocks
+                    .iter()
+                    .find(|(d, _, _)| *d == checkpoint)
+                    .map(|(_, _, s)| *s)
+            })
+            .collect();
+        let before: Vec<f64> = runs
+            .iter()
+            .map(|run| {
+                let values: Vec<f64> = run
+                    .blocks
+                    .iter()
+                    .filter(|(d, _, _)| *d + 8 > checkpoint && *d < checkpoint)
+                    .map(|(_, _, s)| *s)
+                    .collect();
+                values.iter().sum::<f64>() / values.len().max(1) as f64
+            })
+            .collect();
+        let per_sample_ratio: Vec<f64> = at
+            .iter()
+            .zip(&before)
+            .filter_map(|(a, b)| a.map(|a| a / b))
+            .collect();
+        if !per_sample_ratio.is_empty() {
+            let mut sorted = per_sample_ratio.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median_ratio = sorted[sorted.len() / 2];
+            ratios.push(median_ratio);
+            let mut before_sorted = before.clone();
+            before_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            report.push_str(&format!(
+                "| {checkpoint} | {} | {:.1} | {:.2} |\n",
+                at.iter()
+                    .map(|v| v.map_or("-".to_string(), |v| format!("{v:.1}")))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                before_sorted[before_sorted.len() / 2],
+                median_ratio
+            ));
+        }
+        checkpoint += 64;
+    }
+    if !ratios.is_empty() {
+        let mut sorted = ratios.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        report.push_str(&format!(
+            "\nCheckpoint / ordinary seal, median over the {} checkpoint blocks reached: **{:.2}x** (range {:.2}-{:.2}).\n",
+            sorted.len(),
+            sorted[sorted.len() / 2],
+            sorted[0],
+            sorted[sorted.len() - 1]
         ));
     }
     report.push_str("\nPer-block times: `build-curve-*-run*.tsv` beside this file; exponents are fitted from them (`fit_build_curve.py`).\n");
