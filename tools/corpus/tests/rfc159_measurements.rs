@@ -119,6 +119,24 @@ fn binary_header(build: &str, identity: &execute::BinaryIdentity) -> String {
     )
 }
 
+/// `PRIKK_159_TRACE=1` asks the prototype to print where a seal's parent-state derivation spent its time (a
+/// binary without the trace ignores the variable): the line goes to stderr, never into a report.
+fn traced(mut command: Command) -> Command {
+    if std::env::var("PRIKK_159_TRACE").is_ok_and(|value| value == "1") {
+        command.env("PRIKK_RFC159_TRACE", "1");
+    }
+    command
+}
+
+fn show_trace(label: &str, block: usize, output: &Output) {
+    for line in String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| line.starts_with("rfc159:"))
+    {
+        eprintln!("[{label}] block {block}: {line}");
+    }
+}
+
 #[test]
 #[ignore = "RFC 159 seal time and peak RSS at kept depths; run deliberately"]
 fn seal_time_and_memory_at_depth() {
@@ -138,83 +156,85 @@ fn seal_time_and_memory_at_depth() {
     let mut report = format!(
         "# RFC 159 -- one `seal` at depth: wall time and peak RSS ({label})\n\n{} {samples} samples per cell, each a fresh copy of \
          the kept repository. Peak RSS is `getrusage(RUSAGE_CHILDREN)` by `rusage_child.py`; elapsed includes ~30 ms of \
-         wrapper start-up. `checkpoint` is block depth+1 (it carries a snapshot); `ordinary` is block depth+2.\n\n\
-         | kept depth | block | seal, ms per sample | peak RSS, KiB per sample | load at start |\n|---:|---|---|---|---|\n",
+         wrapper start-up. For each kept depth the next two blocks are sealed in turn, each timed. **Offset** is the block's \
+         distance from the checkpoint at or before it: 0 is a checkpoint (it carries a snapshot and writes one); an anchored seal \
+         folds `offset - 1` blocks, so its cost depends on the offset and a full-walk seal's does not.\n\n\
+         | kept depth | block | offset | seal, ms per sample | peak RSS, KiB per sample | load at start |\n|---:|---:|---:|---|---|---|\n",
         binary_header(&label, &identity)
     );
+    let fmt_f = |values: &[f64]| {
+        values
+            .iter()
+            .map(|v| format!("{v:.0}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let fmt_u = |values: &[u64]| {
+        values
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     for depth in depths {
         let kept = kept_dir().join(format!("sealed-d{depth}"));
         assert!(kept.is_dir(), "no kept repository at {}", kept.display());
-        let mut checkpoint_ms = Vec::new();
-        let mut checkpoint_kib = Vec::new();
-        let mut ordinary_ms = Vec::new();
-        let mut ordinary_kib = Vec::new();
+        // Per measured block (depth+1, depth+2): (ms, KiB) per sample.
+        let mut cells: [(Vec<f64>, Vec<u64>); 2] = Default::default();
         let mut loads = Vec::new();
         for sample in 0..samples {
             let copy = support::unique_dir(&format!("m159-seal-{depth}"));
             support::copy_dir_all(&kept, &copy);
-            // Block depth+1 (a checkpoint): commit it, then time its seal.
-            execute::materialize_commit(&copy, &manifest.commits[depth]).expect("materializing");
-            execute::run_commit(binary, &copy, &profile, execute::REF_NAME, "next")
-                .expect("commit");
-            loads.push(load_average());
-            let command =
-                execute::seal_command(binary, &copy, &profile, execute::REF_NAME).unwrap();
-            let (elapsed, peak, output) = run_rusage(&command);
-            require_success(&output, "seal (checkpoint block)");
-            checkpoint_ms.push(elapsed.as_secs_f64() * 1000.0);
-            checkpoint_kib.push(peak.expect("a peak RSS"));
-            // Block depth+2 (ordinary).
-            execute::materialize_commit(&copy, &manifest.commits[depth + 1])
-                .expect("materializing");
-            execute::run_commit(binary, &copy, &profile, execute::REF_NAME, "next")
-                .expect("commit");
-            let command =
-                execute::seal_command(binary, &copy, &profile, execute::REF_NAME).unwrap();
-            let (elapsed, peak, output) = run_rusage(&command);
-            require_success(&output, "seal (ordinary block)");
-            ordinary_ms.push(elapsed.as_secs_f64() * 1000.0);
-            ordinary_kib.push(peak.expect("a peak RSS"));
-            eprintln!(
-                "[{label}] depth {depth} sample {sample}: checkpoint {:.0} ms {} KiB; ordinary {:.0} ms {} KiB",
-                checkpoint_ms.last().unwrap(),
-                checkpoint_kib.last().unwrap(),
-                ordinary_ms.last().unwrap(),
-                ordinary_kib.last().unwrap()
-            );
+            for (slot, cell) in cells.iter_mut().enumerate() {
+                let block = depth + 1 + slot;
+                execute::materialize_commit(&copy, &manifest.commits[block - 1])
+                    .expect("materializing");
+                execute::run_commit(binary, &copy, &profile, execute::REF_NAME, "next")
+                    .expect("commit");
+                if slot == 0 {
+                    loads.push(load_average());
+                }
+                let mut command = traced(
+                    execute::seal_command(binary, &copy, &profile, execute::REF_NAME).unwrap(),
+                );
+                // Tracing needs the child's stderr, which the rusage wrapper drops on success: a traced run is
+                // for finding where the time goes, never for a reported figure (peak RSS reads 0).
+                let (elapsed, peak, output) =
+                    if std::env::var("PRIKK_159_TRACE").is_ok_and(|value| value == "1") {
+                        let start = std::time::Instant::now();
+                        let output = command.output().expect("running prikk");
+                        (start.elapsed(), Some(0), output)
+                    } else {
+                        run_rusage(&command)
+                    };
+                require_success(&output, &format!("seal of block {block}"));
+                show_trace(&label, block, &output);
+                cell.0.push(elapsed.as_secs_f64() * 1000.0);
+                cell.1.push(peak.expect("a peak RSS"));
+                eprintln!(
+                    "[{label}] kept depth {depth} sample {sample}: block {block}: {:.0} ms {} KiB",
+                    cell.0.last().unwrap(),
+                    cell.1.last().unwrap()
+                );
+            }
             let _ = std::fs::remove_dir_all(&copy);
         }
-        let fmt_f = |values: &[f64]| {
-            values
-                .iter()
-                .map(|v| format!("{v:.0}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let fmt_u = |values: &[u64]| {
-            values
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        report.push_str(&format!(
-            "| {depth} | checkpoint ({}) | {} (median {:.0}) | {} (median {}) | {} |\n",
-            depth + 1,
-            fmt_f(&checkpoint_ms),
-            median(&checkpoint_ms),
-            fmt_u(&checkpoint_kib),
-            median(&checkpoint_kib),
-            loads.join(" ; ")
-        ));
-        report.push_str(&format!(
-            "| {depth} | ordinary ({}) | {} (median {:.0}) | {} (median {}) | |\n",
-            depth + 2,
-            fmt_f(&ordinary_ms),
-            median(&ordinary_ms),
-            fmt_u(&ordinary_kib),
-            median(&ordinary_kib),
-        ));
+        for (slot, (ms, kib)) in cells.iter().enumerate() {
+            let block = depth + 1 + slot;
+            report.push_str(&format!(
+                "| {depth} | {block} | {} | {} (median {:.0}) | {} (median {}) | {} |\n",
+                (block - 1) % 64,
+                fmt_f(ms),
+                median(ms),
+                fmt_u(kib),
+                median(kib),
+                if slot == 0 {
+                    loads.join(" ; ")
+                } else {
+                    String::new()
+                }
+            ));
+        }
     }
     std::fs::write(
         out_dir().join(format!("seal-time-memory-{label}.md")),
