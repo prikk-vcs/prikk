@@ -98,3 +98,10 @@ Pushing, tagging, publishing, and `release-signers.toml` — never.
 1. brygge's letter 004 is sent (the owner's call, *"after 1"*).
 2. **The `seal` lineage walk: RFC 159's design round** (proposed 2026-09-25), which the owner scheduled.
 3. The gate plan (held).
+
+**RELEASED 2026-09-25.** Prep accepted (review `release-0-47-0-prep-review-v1`; 14/14 gates re-run by the architect on
+`21895f46`). CI 16/16 and Docs 2/2 on the release commit before the tag. The signed tag `0.47.0` is on `21895f46`
+(good signature). The Release workflow passed 5/5 with 16 assets, and the release is marked Latest. The shipped Linux
+x86_64 asset was verified: its checksum matches, its build-info names `21895f46` and tag `0.47.0`, it reports
+`prikk 0.47.0`, and the smoke script passes 231/231 against the **downloaded** binary. **crates.io: not yet**, pending
+the owner's word.
