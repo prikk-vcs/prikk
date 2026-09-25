@@ -11,6 +11,10 @@ rulings included?"*). **The architect's reading, stated so it can be corrected:*
 
 Implementation handoff: `rfcs/handoffs/159-sealing-without-rewalking/implementation-handoff-v1.md`.
 
+**Stack A DELIVERED and ACCEPTED 2026-09-26** (`0a5d6ead`; review `.git-exclude/reviewed/rfc159-implementation-review-v1.md`): an ordinary
+`seal` at depth 1,024 peaks at about 30 MiB (0.47.0: 1.8 GiB), and outputs are byte-identical at corpus scale. It ships in
+0.48.0. **Open in this RFC:** stack B (the cold baseline and `merge-evidence`'s baseline), a later increment.
+
 *History:* **PROPOSED 2026-09-25 by the architect**, on the owner's instruction for history import's
 prerequisite: *"Schedule it and start the design when ready."*
 

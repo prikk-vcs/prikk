@@ -151,3 +151,8 @@ instruments. The acceptance figure is already in hand: one `seal` at depth 1,024
    3. Then the docs, then the 14 gates on the exact final commit, then the report.
 
    **The review waits for the corpus-scale identity**: it is §2 control 3, and the report is not complete without it.
+
+**ACCEPTED 2026-09-26** (`4e11ce26`, `5fc00556`, `02f10add`, `0a5d6ead`; review `rfc159-implementation-review-v1`;
+14/14 gates re-run by the architect; the acceptance figure reproduced on the final commit's own release binary: an ordinary
+`seal` at depth 1,024 peaks at about 30 MiB, against 0.47.0's 1.8 GiB). **This handoff is closed.** Next, live:
+`rfcs/handoffs/133-performance-cost-and-its-evidence/measurement-budget-handoff-v1.md`.
