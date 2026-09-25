@@ -102,6 +102,21 @@ baseline — the sealed tip with the queue folded on top, truncated at that patc
 operation apart from a resolved one needs to know: a block's own output, and a bare *sealed* patch
 id's, are unchanged.
 
+### Changed — breaking once for Rust callers
+
+- `BundleImportOptions` and `AcceptOptions` each gain a public `max_object_bytes` field, and a
+  `with_max_object_bytes` builder. A struct literal outside `prikk-store` that lists their fields stops
+  compiling; start from `default_limits()` instead.
+- `diff_worktree_reporting_anchor`'s third parameter is now a `WorktreeDiffFrom` (`Implicit`,
+  `Point(&Point)` and `UnpublishedCurrentBranch`; the enum is `#[non_exhaustive]`) where it was
+  `Option<&Point>`: `None` becomes `WorktreeDiffFrom::Implicit` and `Some(point)` becomes
+  `WorktreeDiffFrom::Point(point)`.
+- `PrikkError` (already `#[non_exhaustive]`) gains `ObjectOverBound { declared_bytes, bound_bytes }`.
+- New: `DEFAULT_BUNDLE_MAX_OBJECT_BYTES`, `DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES`,
+  `take_anchor_fallbacks`, `is_unpublished_local_branch` and `WorktreeDiffFrom`. `SnapshotAnchorFallback`
+  keeps its path.
+- Nothing is removed from the root exports.
+
 ## 0.46.0 — 2026-09-22
 
 ### Added — `prikk diff`: what changed, between two points or against the worktree
