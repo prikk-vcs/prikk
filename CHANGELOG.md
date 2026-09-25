@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased
+
+### Changed — `seal`, `merge` and a `sync` catch-up no longer walk the whole history
+
+Sealing a block derived the state it signs by replaying every ancestor block from the start, keeping a copy of
+the tree's state for each — so a seal cost more the deeper the history was, and at depth 1,024 needed 1.8 GiB.
+`seal`, `merge` and `sync seal` now start from the nearest checkpoint (the snapshot every 64th block carries),
+fold the at most 63 blocks after it, and compare each folded block's state root with the root that block signed.
+What they still check below the checkpoint is what makes a history a history — every block and every patch is
+present, of the right type and schema, decodes, has the right shape, and the lineage reaches its first block —
+and the restoration of a deleted file is still checked against what was deleted. Measured on the RFC 139 corpus
+(release build, alternating with 0.47.0's, three samples each, on a shared machine, at a 1-minute load of 1.0–2.8 when each step started):
+
+| | 0.47.0 | now |
+|---|---:|---:|
+| one `seal` at depth 1,024 (an ordinary block) | 4.47 s, 1.8 GiB | 0.12 s, 30 MiB |
+| the same, the last ordinary block before a checkpoint | 4.31 s, 1.8 GiB | 0.46 s, 29 MiB |
+| the `seal` that writes a checkpoint, depth 1,024 | 6.13 s, 1.8 GiB | 1.80 s, 53 MiB |
+| one `seal` at depth 256 (an ordinary block) | 0.64 s, 123 MiB | 0.07 s, 12 MiB |
+| `sync seal --claims` of a 64-block catch-up at depth 1,024 | 254–280 s, 2.0 GiB | 17.9–18.5 s, 56–57 MiB |
+| cumulative time to build a history to depth 1,024 | 1,947 s | 279 s |
+
+The cost is not flat: past depth 1,024 the fold and the checkpoint write grow with the size of the tree (a seal at
+depth 2,048 averaged 1.7 s; 0.47.0 was not built that deep). The output is unchanged: every block, signature, ref
+and snapshot is byte-identical to what 0.47.0 writes for the same input, at every one of a 1,024-block history's 16
+checkpoints and at seal, merge and sync seal on histories with renames, restorations and merge blocks.
+
+**A checkpoint is now used only when an adopted maintainer signed it.** Deriving a signed block's state from a
+snapshot is only as good as the snapshot, so a checkpoint is an anchor only if this repository's record of
+replay-verified blocks lists it, its maintainer signature verifies against a key in the trust policy (`prikk trust
+maintainer list`), its manifest validates, and it is at most 63 blocks back. Otherwise the command does the full
+walk, as 0.47.0 did, and gives the same result. A block whose signer this repository has not adopted, or that lies
+more than 63 blocks back, is passed over silently; a *recorded* checkpoint whose manifest fails validation, or whose
+signature does not verify against an adopted key, is named on stderr ("the recorded snapshot of Block … was not
+used as an anchor …; run `prikk verify`"). The same rule now governs the two commands that already started from a
+recorded snapshot: `checkout --patch-materialize`, `--patch-materialize-delete` and `branch switch` start at a
+snapshot only if it passes it (and only within 63 blocks of the tip), and `checkout --snapshot-materialize`
+writes no provisional marker only if it does. Before, the record alone decided.
+
+Two smaller consequences. `seal` no longer re-reads the content of a file that no current file refers to (a file
+created and deleted below the checkpoint): a state root commits to blob ids, never content, and `prikk verify`
+still checks every blob. And the checkpoint writer asks the object index whether a file's blob is stored instead
+of reading and decoding it (a checkpoint seal at depth 1,024: 2.22 s → 1.80 s); a stored blob whose bytes are
+damaged is therefore no longer stopped at a checkpoint seal, and `prikk verify` reports it as before.
+
+There is no change to the public Rust API.
+
 ## 0.47.0 — 2026-09-25
 
 ### Changed — a `commit` that edits earlier-edited text, and `merge-evidence`, no longer replay the whole history

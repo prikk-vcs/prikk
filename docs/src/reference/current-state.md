@@ -79,11 +79,31 @@ of sealed blocks.
   how long it takes to build, or import, a deep history**, and it has been measured only to depth
   1,024; the build to 2,048 was not attempted (the 2-hour rule stopped it, its build having been
   projected at 2.3 hours). Nothing here is projected past 1,024.
+  **0.48.0 changes this** (in the CHANGELOG under Unreleased; not in a release yet). `seal`, `merge` and
+  `sync seal` start from the nearest checkpoint that an adopted maintainer signed and fold at most 63 blocks
+  instead of walking the lineage. Release build, alternating with 0.47.0's, three samples each (a shared machine,
+  1-minute load 1.0–2.8 at each step's start), medians:
+
+  | | 0.47.0 | 0.48.0 |
+  |---|---:|---:|
+  | one `seal` at depth 256 (an ordinary block) | 0.64 s | 0.07 s |
+  | one `seal` at depth 1,024 (an ordinary block) | 4.5 s | 0.12 s |
+  | the last ordinary block before a checkpoint, depth 1,024 | 4.3 s | 0.46 s |
+  | the `seal` that writes a checkpoint, depth 1,024 | 6.1 s | 1.8 s |
+  | `sync seal --claims` of a 64-block catch-up, depth 1,024 | 254–280 s | 17.9–18.5 s |
+  | cumulative time to build to depth 1,024 (three builds) | 1,947 s | 279 s |
+
+  **It is not flat.** A 0.48.0 build to depth 2,048 (three builds; 0.47.0 was not built that deep) averaged 1.7 s
+  per ordinary seal over its last 16 blocks and 1,308 s cumulative: the fold and the checkpoint write grow with the
+  size of the tree, not with depth. A checkpoint that no adopted maintainer signed, or that lies more than 63
+  blocks back, is not used, and the command does the full walk, as 0.47.0 does.
 - **Sealing also needs memory that grows with the square of depth.** One `seal`'s peak resident memory, measured with
   `getrusage` on the 0.47.0 release build: about 124 MiB at depth 256 and **about 1.8 GiB at depth 1,024** (1,874,000 KiB
   sealing block 1,025, three samples). `seal` keeps a copy of the tree's state for every block of the lineage it walks. At
-  depths past a few thousand blocks, memory rather than time is the first limit. A change that seals from the nearest
-  verified checkpoint instead is being designed (RFC 159); it is not in any release.
+  depths past a few thousand blocks, memory rather than time is the first limit. **In 0.48.0 it does not**: one `seal`
+  at depth 1,024 peaks at about 30 MiB (29–30 MiB over ordinary blocks, 53 MiB for the block that writes a checkpoint;
+  three samples each), against 1.8 GiB, and a 64-block `sync seal` catch-up at that depth peaks at 56–57 MiB against
+  2.0 GiB.
 - **Checkout is close to linear in depth; `merge-evidence` is a little worse, and both are cheap at
   these depths.** From depth 32 to 256: `checkout --patch-plan` 36 → 152 ms and
   `checkout --patch-materialize` 125 → 591 ms (exponents 0.70 and 0.77; the tree itself grew as

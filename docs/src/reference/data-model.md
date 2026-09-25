@@ -98,7 +98,9 @@ reference is empty.
 - **Who may start from one.** Read-only reports (`checkout --patch-plan`, `--patch-delete-plan`,
   `bundle preview`) may start at the nearest snapshot that passes validation. Commands that write the
   worktree (`checkout --patch-materialize`, `--patch-materialize-delete`, `branch switch`) start only at a
-  snapshot whose Block this repository has itself confirmed by replay; otherwise they replay from genesis.
+  snapshot whose Block this repository has itself confirmed by replay **and an adopted maintainer signed**, within
+  63 blocks of the tip; otherwise they replay from genesis. `seal`, `merge` and `sync seal` derive the state they
+  sign from the same kind of snapshot, under the same rule.
   `rollback-preview`, `commit`'s baseline and `merge-evidence` always replay the whole chain.
 - **The replay-verified record and the provisional marker.** Which Blocks count as confirmed is kept in
   `.prikk/cache/replay-verified-blocks.v1`, a cache that is always safe to delete. A worktree written

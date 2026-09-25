@@ -193,6 +193,17 @@ objects, signs and writes the Block and RefState, durably appends the ref pointe
 exactly one signed RefUpdate, confirms pointer/log agreement, and clears active state. Signer-backed
 retry is also the only authority that may finish an exact interrupted publication.
 
+**How seal derives the state it signs.** It starts from the nearest checkpoint snapshot on the derivation line
+and folds the blocks after it, comparing each folded block's state root with the root that block signed. A
+checkpoint is used only if this repository has replay-verified it (the record in `.prikk/cache/`), a maintainer
+key it has adopted signed it and the signature verifies, its manifest validates, and it is at most 63 blocks back;
+otherwise seal replays the whole lineage. **The record is a rebuildable local file and decides only *which*
+authenticated checkpoint to use, never whether one is authentic.** What remains is a trusted maintainer who signed
+a wrong root, together with write access to `.prikk/cache/`. Below the checkpoint seal still checks that every
+block and patch is present, of the right type and schema, decodes, has the right shape, and that the lineage reaches
+its first block, and it still checks a restored file against what was deleted; it no longer re-reads the content
+of files no current file refers to, which `prikk verify` still checks.
+
 Current seal does not run audit plugins, evaluate attestation policy, perform semantic merge, publish
 multi-parent merge Blocks, or provide remote trust distribution.
 
