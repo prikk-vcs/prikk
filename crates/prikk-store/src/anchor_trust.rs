@@ -116,13 +116,6 @@ impl AnchorTrust {
         !self.verified.is_empty()
     }
 
-    /// Whether `block_id` is in the record. The record alone never makes an anchor; a caller uses this only to decide
-    /// whether reading a block further is worth it, never to *use* one.
-    #[cfg(test)]
-    pub(crate) fn records(&self, block_id: &ObjectId) -> bool {
-        self.verified.contains(block_id)
-    }
-
     /// **The function.** `distance` is how many blocks back from the block the caller derives from `block_id` is
     /// (0 for that block itself). The conditions are checked cheapest first; a condition that fails before the block
     /// is known to be *recorded* is silent, one that fails after is a signal only where §8.2 says so.

@@ -218,8 +218,11 @@ fn identity_probe_at_every_block() {
 
 // ---- The commands, end to end -----------------------------------------------------------------------------
 
+/// A store's durable files by relative path: `(length, sha256)`.
+type StoreDigest = BTreeMap<String, (u64, String)>;
+
 /// Every file under `.prikk/` that is not the rebuildable cache or a lock, by relative path: `(length, sha256)`.
-fn store_digest(repo: &Path) -> BTreeMap<String, (u64, String)> {
+fn store_digest(repo: &Path) -> StoreDigest {
     fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, (u64, String)>) {
         for entry in std::fs::read_dir(dir).expect("reading directory") {
             let entry = entry.expect("entry");
@@ -297,7 +300,7 @@ fn identical_across_arms(
     args: &[&str],
     checks: &mut Vec<String>,
 ) -> String {
-    let mut digests: Vec<(&'static str, BTreeMap<String, (u64, String)>)> = Vec::new();
+    let mut digests: Vec<(&'static str, StoreDigest)> = Vec::new();
     let mut first_stderr = String::new();
     for arm in arms {
         let copy = support::unique_dir("id159-arm");

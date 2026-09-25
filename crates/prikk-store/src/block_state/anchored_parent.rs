@@ -257,7 +257,10 @@ pub fn rfc159_identity_probe(
     };
     let lineage_ids: BTreeSet<ObjectId> = chain.iter().map(|(id, _)| *id).collect();
     for (index, (block_id, payload)) in chain.iter().enumerate() {
-        let parent = index.checked_sub(1).map(|p| chain[p].0);
+        let parent = index
+            .checked_sub(1)
+            .and_then(|p| chain.get(p))
+            .map(|(id, _)| *id);
         let start = std::time::Instant::now();
         let derived: CandidateDerivation = derive_next_state_for_candidate_choosing(
             layout,
@@ -283,7 +286,9 @@ pub fn rfc159_identity_probe(
 
         // (1) against the independent forward replay.
         let (mut expected_state, mut expected_cache) = match index.checked_sub(1) {
-            Some(p) => forward[p].clone(),
+            Some(p) => forward.get(p).cloned().ok_or_else(|| {
+                prikk_error::PrikkError::Integrity(format!("probe: no forward state at block {p}"))
+            })?,
             None => (NodeLifecycleState::new(), TextCache::new()),
         };
         apply_candidate_patches(
@@ -318,7 +323,7 @@ pub fn rfc159_identity_probe(
         for entry in &derived.entries {
             if let StateRootContent::Blob(blob_id) = &entry.content {
                 if !reader.has_object(*blob_id, ObjectType::Blob)?
-                    && (derived.text_cache.get(&entry.node_id).is_none()
+                    && (!derived.text_cache.contains_key(&entry.node_id)
                         || derived.text_cache.get(&entry.node_id)
                             != expected_cache.get(&entry.node_id))
                 {

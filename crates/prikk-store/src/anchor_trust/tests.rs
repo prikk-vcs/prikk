@@ -114,7 +114,6 @@ fn observe(history: &mut AnchoredHistory) -> Seen {
             &[candidate],
             anchoring,
         )
-        .ok()
         .expect("the candidate derives")
     };
     let anchored = derive(SEAL);
@@ -500,7 +499,6 @@ fn a_recorded_anchor_whose_manifest_fails_validation_is_named() {
             &[candidate],
             anchoring,
         )
-        .ok()
         .expect("the full walk does not read the snapshot")
     };
     let anchored = derive(SEAL);

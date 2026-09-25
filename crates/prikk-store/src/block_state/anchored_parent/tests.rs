@@ -52,7 +52,6 @@ fn derive(
         &patches_of(history, index),
         anchoring,
     )
-    .ok()
     .expect("derivation")
 }
 
@@ -123,12 +122,8 @@ fn a_restoration_that_does_not_match_the_tombstone_is_refused_by_both_derivation
         derive(bad, SEAL).is_err(),
         "so must the anchored derivation"
     );
-    let full = derive(good, StateAnchoring::Never)
-        .ok()
-        .expect("an exact restoration is accepted");
-    let anchored = derive(good, SEAL)
-        .ok()
-        .expect("and by the anchored derivation");
+    let full = derive(good, StateAnchoring::Never).expect("an exact restoration is accepted");
+    let anchored = derive(good, SEAL).expect("and by the anchored derivation");
     assert!(anchored.anchored, "the anchor was used");
     assert_eq!(full.state, anchored.state);
     assert_eq!(full.entries, anchored.entries);
