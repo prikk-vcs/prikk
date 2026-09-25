@@ -18,9 +18,10 @@
 //!    the whole history -- there is no environment switch, RFC 159 handoff §1.7). The claim is that every file under
 //!    `.prikk/` except the rebuildable `cache/` and the lock files -- so every block, signature, ref and snapshot --
 //!    is **byte-identical** across arms.
-//! 3. [`identity_of_every_snapshot`] -- **every snapshot the corpus writes.** The same history is built once by each
-//!    binary and the whole durable store is compared: the snapshot writer's presence check (asked of the index,
-//!    RFC 159 §8.6) must not change a byte of any of the checkpoints.
+//! 3. [`identity_of_every_snapshot`] -- **every snapshot the corpus writes.** One history is built; at each checkpoint
+//!    block the repository is copied and `seal` runs on each copy under each arm, and the whole durable store is
+//!    compared: the snapshot writer's presence check (asked of the index, RFC 159 §8.6) must not change a byte of any
+//!    checkpoint. (Two separate builds are never byte-identical -- node ids come from the OS CSPRNG.)
 //!
 //! **What byte-identity cannot see**: a *valid* restoration succeeds with or without the tombstone, so command output
 //! is identical even if the anchored derivation dropped the history fields. The in-process control for that is
@@ -502,49 +503,62 @@ fn identity_by_cli() {
     }
 }
 
-/// **Every snapshot the corpus writes, byte for byte** (handoff §1.6): the same commit-then-seal history built by each
-/// binary, the whole durable store compared. The history crosses the checkpoints at blocks 1, 65 and 129; the blocks
-/// after the first are sealed by the anchored derivation in one arm and by the full walk in the other, and the
-/// snapshot writer asks the index in one and reads every blob in the other.
+/// **Every snapshot the corpus writes, byte for byte** (handoff §1.6): the history is built once, by this build, and
+/// **at every block that is a checkpoint** (1, 65, 129, ... : the blocks whose seal writes a snapshot) the repository is
+/// copied with that block's commit queued and `seal` runs on each copy under each arm; the whole durable store
+/// (blocks, patches, blobs -- the snapshot and every content blob the writer stored -- refs, index) must be
+/// **byte-identical** across arms. So the snapshot writer that asks the object index whether a blob is stored is
+/// compared with the one that reads every blob, on the same input, at each of a 1,024-block history's 16 checkpoints.
+///
+/// **Why not "build the history once with each binary and compare the stores"**: two builds are never byte-identical.
+/// A node id is drawn from the OS CSPRNG at commit (RFC 139 §5a), so every patch differs between any two builds, of
+/// one binary or two. That is what this instrument did first, and it failed on the two builds of *this* binary as
+/// well (every container has the same length and a different hash). A comparison needs one input and two seals.
 #[test]
 #[ignore = "RFC 159 identity of every corpus snapshot; run deliberately"]
 fn identity_of_every_snapshot() {
     let profile = self_profile();
     let (binary, build) = support::measurement_binary();
     let identity = execute::binary_identity(binary).expect("binary identity");
-    let depth = env_usize("PRIKK_159_SNAPSHOT_DEPTH", 200);
+    let depth = env_usize("PRIKK_159_SNAPSHOT_DEPTH", 1024);
     let arms = arms(binary);
     let mut manifest = prikk_corpus::plan(&profile, FLOOR_DEPTH).expect("planning");
     manifest.commits.truncate(depth);
-    let mut built = Vec::new();
-    for arm in &arms {
-        let repo = build_history(
-            &arm.binary,
-            &profile,
-            &manifest,
-            depth,
-            "id159-snap",
-            |_, _| {},
-        );
-        built.push((arm.name, store_digest(&repo), repo));
-    }
-    let checkpoints = 1 + (depth.saturating_sub(1)) / 64;
-    let (first_name, first, _) = &built[0];
-    for (name, digest, _) in &built[1..] {
-        assert_eq!(
-            first, digest,
-            "the store built by `{first_name}` differs from the store built by `{name}`"
-        );
-    }
+    let mut checks: Vec<String> = Vec::new();
+    let mut compared = Vec::new();
+    let repo = build_history(
+        binary,
+        &profile,
+        &manifest,
+        depth,
+        "id159-snap",
+        |block, repo| {
+            if (block - 1) % 64 == 0 {
+                identical_across_arms(
+                    &format!("seal of checkpoint block {block}"),
+                    &arms,
+                    &profile,
+                    repo,
+                    &["seal", "--allow-no-audit", "--ref", execute::REF_NAME],
+                    &mut checks,
+                );
+                compared.push(block);
+            }
+        },
+    );
+    assert!(
+        compared.len() >= 2,
+        "fixture sanity: the history has checkpoints to compare ({compared:?})"
+    );
     let report = format!(
         "# RFC 159 -- every snapshot the corpus writes ({build})\n\n**{build} build**: `{}` (`{}`), sha256 `{}`. \
-         Depth {depth} ({checkpoints} checkpoints), the same history built by each of {} binaries; {} durable files, \
-         **byte-identical**.\n",
+         Depth {depth}; `seal` compared under {} arms at each checkpoint block {compared:?}; every file under `.prikk/` \
+         except `cache/` and locks byte-identical at each.\n\n{}\n",
         identity.path,
         identity.version_output,
         identity.sha256,
         arms.len(),
-        first.len()
+        checks.join("\n")
     );
     std::fs::write(
         out_dir().join(format!("identity-snapshots-{build}.md")),
@@ -552,9 +566,7 @@ fn identity_of_every_snapshot() {
     )
     .expect("writing the report");
     eprintln!("{report}");
-    for (_, _, repo) in &built {
-        let _ = std::fs::remove_dir_all(repo);
-    }
+    let _ = std::fs::remove_dir_all(&repo);
 }
 
 // ---- Shapes the corpus does not have ---------------------------------------------------------------------
