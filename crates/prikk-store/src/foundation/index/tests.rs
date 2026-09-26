@@ -761,3 +761,108 @@ fn a_ranged_read_returns_the_range_and_refuses_what_a_whole_read_refuses() -> Re
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+// ---- Handoff §1.3: no change to any output ----------------------------------------------------------------------------------
+
+/// A fixed, deterministic run of appends across every kind of container the store has: the index entries and the containers it writes.
+fn fixed_append_run(layout: &RepositoryLayout) -> Result<()> {
+    let mut sequence: Vec<(ObjectType, ObjectEnvelope)> = Vec::new();
+    for index in 0..4 {
+        sequence.push((
+            ObjectType::Blob,
+            blob_envelope(&format!("blob-{index}"), 100 + 400 * index),
+        ));
+    }
+    for label in ["p1", "p2", "p3"] {
+        sequence.push((ObjectType::Patch, normal_patch_envelope(label)?));
+    }
+    for index in 0..2 {
+        sequence.push((
+            ObjectType::Block,
+            ObjectEnvelope::unsigned(ObjectType::Block, 2, format!("block-{index}").into_bytes()),
+        ));
+        sequence.push((
+            ObjectType::RefState,
+            ObjectEnvelope::unsigned(
+                ObjectType::RefState,
+                1,
+                format!("ref-state-{index}").into_bytes(),
+            ),
+        ));
+    }
+    sequence.push((
+        ObjectType::Tag,
+        ObjectEnvelope::unsigned(ObjectType::Tag, 1, b"a tag".to_vec()),
+    ));
+    sequence.push((ObjectType::Blob, blob_envelope("blob-last", 1000)));
+    for (object_type, envelope) in &sequence {
+        append_object_to_container(layout, *object_type, envelope)?;
+    }
+    Ok(())
+}
+
+/// **No output changes** (handoff §1.3): the same fixed run of appends writes byte-identical index and containers to what the code
+/// before this round wrote (the digests below were produced by 0.47.0's `append_object_to_container`, whole-container read and all, on
+/// this run), so an index entry's object id, type, slot, offset, length and checksum are unchanged.
+/// **Perturb:** `offset + 1`: red.
+#[test]
+fn a_fixed_run_of_appends_writes_the_same_index_and_containers_as_before() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-fixed-run");
+    let layout = RepositoryLayout::init(root.clone())?;
+    fixed_append_run(&layout)?;
+    let digest = |path: std::path::PathBuf| -> Result<String> {
+        Ok(prikk_hash::to_hex(&prikk_hash::sha256(&std::fs::read(
+            path,
+        )?)))
+    };
+    let mut found = vec![("index".to_string(), digest(layout.container_index_path())?)];
+    for object_type in [
+        ObjectType::Blob,
+        ObjectType::Patch,
+        ObjectType::Block,
+        ObjectType::RefState,
+        ObjectType::Tag,
+    ] {
+        found.push((
+            format!("{object_type}"),
+            digest(layout.container_slot_path(object_type, ContainerSlot::A))?,
+        ));
+    }
+    // Produced by the code before this round (`append_object_to_container` reading the whole container for its offset).
+    let expected = [
+        (
+            "index",
+            "5da3f04d1ef17074492bdaa1bd125d09ee2af762d3d26dedab1755ff6d7ee74f",
+        ),
+        (
+            "blob",
+            "6a9308889ddda362fe6b73d1bb83b54646627ad13d96c05212e4896960225153",
+        ),
+        (
+            "patch",
+            "fe7c104d9d89cd0b7548ef34b4634836901eb57f1cc27f7c4fb3011c26f931ad",
+        ),
+        (
+            "block",
+            "9ecf138543ee42cb07a80c1d4ac1302cc525ffffb27bfd8f5209fbef3fe8ed96",
+        ),
+        (
+            "ref-state",
+            "72e6629821240cbb178096c7457a6fc8d1f70a02d8864fb8a81cb293c8fab009",
+        ),
+        (
+            "tag",
+            "7b229168c2ddbc3ad72b5d7031f345a481f5720804cc24c7fa03ee111400ac95",
+        ),
+    ];
+    let found: Vec<(&str, &str)> = found
+        .iter()
+        .map(|(name, digest)| (name.as_str(), digest.as_str()))
+        .collect();
+    assert_eq!(
+        found, expected,
+        "the index and every container are byte-identical to what the code before this round wrote"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
