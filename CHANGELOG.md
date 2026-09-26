@@ -7,17 +7,20 @@
 Writing an object appends its record to a container file and records the record's offset in the index; the offset is the container's length
 just before the append, and it was learned by **reading the whole container into memory**. So a command's memory followed everything the
 repository stored, and a first commit or import of many files read quadratic bytes. A second whole-file read of the same kind sat in reading
-an object back: the container was read in full to decode one record at a known offset. The offset now comes from a stat of the very file
-the record is appended to, and an object is read from a positioned read of its own frame; nothing about what is stored changes (the same
-index entries, byte for byte, and the same refusals: a symlink, a directory, a FIFO or a missing container is still refused; a directory or
-a FIFO now reports the operating system's error where it used to report "not a regular file"). Measured on the release build against
-0.47.0's, on this machine at a 1-minute load of about 2: a `commit` that adds **one small file** to a repository whose blob container is
-256 MiB peaked at **266 MiB, and now at 23 MiB** (64 MiB container: 74 → 23 MiB; 8 MiB container: 22.0 → 21.7 MiB, so it no longer
-follows the container: +4.4 % from 8 to 256 MiB); a **first commit** of 4,000 files of 20 KB read **162 GB and now reads 1.1 GB** (15.0 s →
-0.3 s; 1,000 files: 10.1 GB → 87 MB, 2,000 files: 40.5 GB → 306 MB). What still grows faster than the content is the object index: after
-each object write the writer re-reads the whole index (about 133 bytes per object), which is quadratic in the number of objects and now
-the larger part of what a first commit reads (93 % of the 1.1 GB at 4,000 files; a first commit of 8,000 files of 40 bytes reads 4.3 GB,
-almost all of it the index, against 9.4 GB before); it is not changed here.
+an object back: the container was read in full to decode one record at a known offset, and a third in the writer's own upkeep: after each
+object write it re-read the whole object index to pick up the entry it had just appended. The offset now comes from a stat of the very
+file the record is appended to, an object is read from a positioned read of its own frame (and the frame's claimed length must agree with
+the index's, so a damaged frame header is a finding, not an allocation), and the writer reads only the index bytes appended since it last
+looked; nothing about what is stored changes (the same index entries, byte for byte, and the same refusals: a symlink, a directory, a FIFO
+or a missing container is still refused). Measured on the release build against 0.47.0's, on this machine at a 1-minute load of about 2: a `commit` that adds **one
+small file** to a repository whose blob container is 256 MiB peaked at **266 MiB, and now at 22 MiB** (64 MiB container: 74 → 22 MiB;
+8 MiB container: 22 → 21 MiB, so it no longer follows the container: +1.4 % from 8 to 256 MiB); a **first commit** of 4,000 files of 20 KB
+read **162 GB and now reads 81 MB** (16.2 s → 0.3 s), about the size of the files themselves and doubling as the count doubles (1,000
+files: 10.1 GB → 20 MB, 2,000 files: 40.5 GB → 40 MB); a first commit of 8,000 files of 40 bytes read 9.4 GB and now reads 1.6 MB.
+`prikk verify` on a repository whose object container has a damaged frame header (a length of 2^62, say) reports the damage and exits
+non-zero, as 0.47.0 did with a different message, and never aborts. Two refusals change their message: a container that is a directory
+now reports the operating system's "Is a directory", and one that is a FIFO with no reader "No such device or address", where both reported
+"not a regular file"; each is still refused before anything is written or indexed, and a FIFO is still never blocked on.
 
 ### Changed — `seal`, `merge` and a `sync` catch-up no longer walk the whole history
 
