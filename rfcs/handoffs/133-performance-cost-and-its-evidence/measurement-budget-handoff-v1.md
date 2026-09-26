@@ -104,3 +104,45 @@ Run the new release-gate profile end to end, once, on this machine. Report:
 - each control, and the perturbation that turned it red;
 - the gates on the exact final commit;
 - anything in this handoff that is not true at source.
+
+## Addendum 1 — 2026-09-26: the failed acceptance rule, ruled
+
+Report: `.git-exclude/review-request/measurement-budget-report-v1.md`. **Stopping was right.** The rule was the architect's,
+and it failed at both N. Read as the gate reads it, the failure is not a rounding matter:
+- the new median at N = 32,000 is **+0.95 %** above the old one;
+- the gate's own number, the 64,000 / 32,000 ratio, moves **−1.1 %** (1.936 → 1.914);
+- the last two releases moved it by 1.0–1.4 %, and the release-prep template says *a ratio that moved stops the cut
+  until explained*.
+
+A method change of that size cannot be accepted blind. **Option A is refused.**
+
+**Option B, with one hypothesis added, and a like-for-like baseline at the end.**
+
+1. **The suspect the report did not name: timestamps.** A copy that gives every file a fresh mtime may make the
+   "incremental" commit re-read or re-hash files it would otherwise skip. It would then be **a different operation**,
+   not the same one faster. Add a copy that **preserves each file's timestamps** as an arm of its own.
+2. **Arms, alternating, five samples each, at N = 32,000 and 64,000:**
+   - (i) fresh build, with the worktree diff (the old form);
+   - (ii) fresh build, without it;
+   - (iii) copy with fresh mtimes, without it (the new form as delivered);
+   - (iv) copy preserving mtimes, without it.
+
+   **Budget: 75 min, stop at 150**, declared in source, as §4 requires.
+3. **Decide by the result, using the rule stated here, before the run:** the chosen form's median must lie within
+   **±0.5 %** of arm (i)'s median at each N, and the ratio within ±0.5 % of arm (i)'s ratio. **±0.5 % is half the
+   smallest release-to-release swing on record.** The chosen form is the cheapest arm that meets the rule. If none
+   does, stop and report again.
+4. **Then re-baseline, whatever wins.** In one session, alternating, run the chosen trimmed profile on **0.47.0's
+   release commit (`21895f46`)** and on **HEAD**. 0.48.0 prep then compares like for like. The old profile's 1.910× is
+   never compared with the new profile's figure.
+5. **§5's end-to-end run is that re-baseline run.** It is not run separately, so the machine is not loaded twice. Its
+   wall time is the one duration the template may quote.
+
+**On the other questions:**
+- **§6.a**, the shared helper included by `#[path]` from two crates: **accepted**. It is test harness code, the boundary
+  gates pass, and a workspace member would be a larger decision for no gain.
+- **§6.f**, `PRIKK_BCC_REUSE_KEPT`: accepted, because a reuse run says in its own report that no curve was measured.
+  It never decides a **gate's** scope.
+- **The full sweep's 4-hour budget** stays a stated guess until it is next run under the watcher. That run replaces it.
+
+Gates on the exact final commit, then the report, with §2's arm table, the chosen form, and the re-baseline figures.
