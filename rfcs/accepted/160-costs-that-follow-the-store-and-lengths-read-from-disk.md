@@ -206,6 +206,10 @@ test run. Each was shown red by its own defect. The guard's cost to the store su
 - **F4** — a one-file `commit` reads every stored blob, to learn each one's kind: 1 / 16 / 64 MiB of content → 1.1 /
   16.8 / 67.1 MB read.
 
-The architect's proposal, **awaiting the owner:** F3 as the next 0.48.0 round, under one rule (a torn tail is a prefix
+The architect's proposal, **ruled by the owner 2026-09-27** (*"Yes."*): F3 as the next 0.48.0 round, under one rule (a torn tail is a prefix
 of one frame; a repair never removes a sound frame); F4 in 0.48.0 if its fix needs no format change; F1 and F2 in
 0.49.0.
+
+The round closed on 2026-09-27 at `e6404f46` (CI 16/16, Windows green). **F3 handoff, live:**
+`rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/torn-tail-is-one-frame-handoff-v1.md`. The F4 design
+round follows it.

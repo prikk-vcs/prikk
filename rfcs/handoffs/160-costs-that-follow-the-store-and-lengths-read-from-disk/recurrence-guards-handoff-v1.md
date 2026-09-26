@@ -92,5 +92,5 @@ on the pushed commit, and the round closes only when it is green.
 - perturbed the `trust_index.rs` fix (3 red) and the append's whole read (494 red);
 - reproduced F3-WAL and F4 on release binaries.
 
-**Closes when the Windows mutation suite is green on the pushed commit.** Findings F1–F4 go to RFC 160 §8, and their
-scheduling to the owner.
+**CLOSED 2026-09-27:** pushed at `e6404f46`, CI run `36249721982` 16/16, the Windows mutation suite green. Findings F1–F4
+are in RFC 160 §8. Next, live: `torn-tail-is-one-frame-handoff-v1.md` (F3).
