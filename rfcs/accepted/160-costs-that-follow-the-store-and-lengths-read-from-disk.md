@@ -154,3 +154,28 @@ measurement at all.
 - AUD-01, the object index's linear lookup: a CPU cost with its own ROADMAP row and a memory condition;
 - fuzzing the decoders: a later option, which P4's fixed cases do not replace;
 - RFC 158 Stage B's commit holding all new content at once: noted in that RFC.
+
+## 7. Architect's addendum, 2026-09-26 — `verify` does not report an indexed object whose record cannot be read
+
+Found while reviewing RFC 102's append-length round (review `append-length-without-reading-review-v2`); present in
+0.47.0 too. `verify/objects.rs` does the following:
+- the index pass skips any entry whose record fails to decode, on the stated assumption that the container scan below
+  reports it;
+- the container scan (`decode_container_records`) classifies a frame whose header claims more bytes than remain as a
+  **torn tail**, the harmless remnant of an interrupted append, and tolerates it.
+
+So a damaged header on the last record goes unreported by either pass. Measured, on 0.47.0 and on `9137125e` alike: a
+repository whose only blob has a header claiming 2⁶² bytes; `prikk verify` prints `object items: 0 scanned, 0 failed`
+and **exits 0**. The damage surfaces only when a sealed block's state replay happens to touch the object.
+
+**A genuine torn tail can never have an index entry**, because the index is appended only after the container record is
+durable (RFC 102's write protocol). So an indexed entry whose record cannot be read is always damage.
+
+**Ruled, as part of P4 in this RFC's round:**
+- the objects stage reports such an entry as a `Failed` item, naming the object id and offset, unless the container scan
+  already reported a failure at that offset;
+- P4's CLI control covers an **unsealed** repository as well as a sealed one;
+- **perturb:** restore the `continue`; the unsealed CLI control goes red.
+
+This is within the accepted direction ("a damaged repository never crashes the tools that diagnose it"): a tool that
+exits 0 over damage it could see is the same failure, quieter.

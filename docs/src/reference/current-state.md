@@ -127,7 +127,7 @@ of sealed blocks.
   64,000 (release, three samples at each of seven sizes).
 - **Before 0.48.0, a command's memory also followed the size of what the repository stored.** Every object write read its whole object
   container into memory only to learn its length, and reading an object back read the whole container to decode one record. A `commit` that
-  added one small file to a repository with a 256 MiB blob container peaked at 266 MiB on 0.47.0; **on 0.48.0 it peaks at 23 MiB**, the same
+  added one small file to a repository with a 256 MiB blob container peaked at 266 MiB on 0.47.0; **on 0.48.0 it peaks at 22 MiB**, the same
   as with an 8 MiB container (22 MiB; release build, three samples each, container sizes 8, 64 and 256 MiB). A first `commit` of 4,000
   files of 20 KB read 162 GB on 0.47.0 and reads 81 MB on 0.48.0 (16.2 s → 0.3 s), about the size of the files themselves: what a first
   commit reads now doubles when the file count doubles (1,000 files 20 MB, 2,000 files 40 MB, 4,000 files 81 MB). The writer used to re-read

@@ -184,3 +184,13 @@ and the `verify` robustness in one line.
 
 Gates on the exact final commit. Report: `.git-exclude/review-request/append-length-without-reading-report-v2.md`. Then
 the architect pushes the whole round, and it closes on a green Windows mutation suite.
+
+**ACCEPTED 2026-09-26** (`b77c3c20` … `9137125e`; review `append-length-without-reading-review-v2`). The architect:
+- re-ran the 14 gates on `9137125e`: 2369 / 0 / 52 on both toolchains;
+- reproduced M1 to the byte (20.2 / 40.3 / 80.7 / 1.6 MB) and M2 flat (about 13 MB at 8 to 256 MiB) on the architect's own
+  release build;
+- confirmed that the damaged-header `verify` no longer aborts;
+- perturbed the tail offset and the frame-length check himself.
+
+**Closes when the Windows mutation suite is green on the pushed commit.** The `verify` blind spot the report noted in its
+§7.2 goes to the RFC 160 round.

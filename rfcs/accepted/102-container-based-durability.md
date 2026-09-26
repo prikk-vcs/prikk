@@ -377,3 +377,16 @@ integrity one.**
 
 Handoff: `rfcs/handoffs/102-container-based-durability/append-length-without-reading-handoff-v1.md`. **Scheduled before
 0.48.0 release prep; the owner ruled it into 0.48.0** (2026-09-26: *"Yes. The fix should be put in 0.48.0."*).
+
+**DELIVERED and ACCEPTED 2026-09-26** (`b77c3c20` … `9137125e`; reviews `append-length-without-reading-review-v1` and
+`-v2`). All three sites are fixed:
+- **the append** takes its offset from `fstat` of its own descriptor;
+- **the object read** is a positioned read of its own frame, clamped to the file, and its claimed length must equal the
+  index's;
+- **the writer's index upkeep** reads only the bytes it appended.
+
+Release build against 0.47.0:
+- **a first commit of 4,000 × 20 KB files reads 162 GB → 81 MB**, and it now doubles as the file count doubles;
+- **a commit adding one small file** against a 256 MiB container peaks at **266 → 22 MiB**, flat from 8 MiB.
+
+Index entries are byte-identical to 0.47.0's (a pinned-digest control). Recurrence guards: RFC 160, in 0.48.0.
