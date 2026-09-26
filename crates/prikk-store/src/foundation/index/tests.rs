@@ -773,6 +773,139 @@ fn a_ranged_read_returns_the_range_and_refuses_what_a_whole_read_refuses() -> Re
     Ok(())
 }
 
+// ---- RFC 102 append-length round, site C: the index tail is read, not the index -----------------------------------------------
+
+/// What the tail replay did before this round, kept here as the reference: the whole file, decoded from `start`.
+fn whole_read_tail_reference(
+    layout: &RepositoryLayout,
+    start: u64,
+) -> Result<(super::IndexReplay, u64)> {
+    let Ok(bytes) = std::fs::read(layout.container_index_path()) else {
+        return Ok((
+            super::IndexReplay {
+                entries: Vec::new(),
+                trailing_partial_bytes: 0,
+                record_outcomes: Vec::new(),
+            },
+            0,
+        ));
+    };
+    if bytes.len() as u64 <= start {
+        return Ok((
+            super::decode_index_records(&bytes, bytes.len())?,
+            bytes.len() as u64,
+        ));
+    }
+    let replay = super::decode_index_records(&bytes, usize::try_from(start).expect("fits"))?;
+    let extent = (bytes.len() - replay.trailing_partial_bytes) as u64;
+    Ok((replay, extent))
+}
+
+/// **Control -- the tail read equals the whole-file decode.** Over a run of appends across every kind of container, then with a torn
+/// index tail (the last frame cut short), a damaged frame (one flipped byte in a frame's checksummed body), a file cut short of
+/// the start offset, and a missing index: for **every** record-boundary start offset, `replay_index_tail_with_extent` returns the same
+/// entries, `trailing_partial_bytes`, record outcomes (each offset and each message the file's, not the tail's) and extent as decoding
+/// the whole file from that offset did. The damaged case is compared by its `Err`/outcome shape too.
+/// **Perturb:** decode with `base = 0` (offsets and messages relative to the tail): every case with a start offset above zero goes red;
+/// shift the returned extent by one: red.
+#[test]
+fn the_index_tail_read_equals_the_whole_file_decode_at_every_start_offset() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-tail-equals-whole");
+    let layout = RepositoryLayout::init(root.clone())?;
+    fixed_append_run(&layout)?;
+    let index_path = layout.container_index_path();
+    let intact = std::fs::read(&index_path)?;
+    let whole = super::decode_index_records(&intact, 0)?;
+    let mut starts: Vec<u64> = whole
+        .record_outcomes
+        .iter()
+        .map(|outcome| outcome.offset as u64)
+        .collect();
+    starts.push(intact.len() as u64);
+    assert!(starts.len() > 10, "the run gives a real index");
+
+    let compare = |label: &str| -> Result<()> {
+        let on_disk_length = std::fs::metadata(&index_path).map_or(0, |meta| meta.len());
+        let mut starts = starts.clone();
+        starts.push(on_disk_length + 1); // beyond the end
+        for start in starts {
+            let reference = whole_read_tail_reference(&layout, start);
+            let tail = super::replay_index_tail_with_extent(&layout, start);
+            match (reference, tail) {
+                (Ok(expected), Ok(found)) => {
+                    assert_eq!(found, expected, "{label}: start {start}");
+                }
+                (Err(_), Err(_)) => {}
+                (expected, found) => panic!(
+                    "{label}: start {start}: reference {:?} vs tail {:?}",
+                    expected.map(|(replay, extent)| (replay.entries.len(), extent)),
+                    found.map(|(replay, extent)| (replay.entries.len(), extent)),
+                ),
+            }
+        }
+        Ok(())
+    };
+
+    compare("intact")?;
+
+    // A torn tail: the last frame cut short by a few bytes, and by all but one byte.
+    for cut in [1_usize, 20, 90] {
+        std::fs::write(&index_path, &intact[..intact.len() - cut])?;
+        compare(&format!("torn by {cut}"))?;
+    }
+    let torn = super::replay_index_tail_with_extent(&layout, starts[starts.len() - 3])?;
+    assert!(
+        torn.0.trailing_partial_bytes > 0,
+        "fixture sanity: the torn case really has a torn tail"
+    );
+
+    // A damaged frame: one byte flipped inside a middle frame.
+    let mut damaged = intact.clone();
+    let middle = starts[starts.len() / 2] as usize;
+    damaged[middle + 60] ^= 0xff;
+    std::fs::write(&index_path, &damaged)?;
+    compare("damaged middle frame")?;
+    let (damaged_tail, _) =
+        super::replay_index_tail_with_extent(&layout, starts[starts.len() / 2 - 1])?;
+    assert!(
+        damaged_tail.has_item_failure(),
+        "fixture sanity: the damaged case is seen as damaged"
+    );
+    let named = damaged_tail
+        .record_outcomes
+        .iter()
+        .find_map(|outcome| match &outcome.status {
+            super::IndexRecordStatus::Failed { message } => Some((outcome.offset, message.clone())),
+            _ => None,
+        })
+        .expect("a failed outcome");
+    assert_eq!(
+        named.0, middle,
+        "the failed outcome names the file's offset"
+    );
+    assert!(
+        named.1.contains(&format!("byte offset {middle}")),
+        "and its message names the file's offset too: {}",
+        named.1
+    );
+
+    // A file cut short of the start offset takes the path it always took.
+    std::fs::write(&index_path, &intact[..starts[3] as usize])?;
+    compare("shorter than the start")?;
+    let (empty, extent) = super::replay_index_tail_with_extent(&layout, starts[5])?;
+    assert!(empty.entries.is_empty() && empty.record_outcomes.is_empty());
+    assert_eq!(extent, starts[3], "its own length is the extent");
+
+    // No index at all.
+    std::fs::remove_file(&index_path)?;
+    compare("missing")?;
+    let (none, extent) = super::replay_index_tail_with_extent(&layout, 0)?;
+    assert!(none.entries.is_empty());
+    assert_eq!(extent, 0);
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 // ---- Handoff §1.3: no change to any output ----------------------------------------------------------------------------------
 
 /// A fixed, deterministic run of appends across every kind of container the store has: the index entries and the containers it writes.

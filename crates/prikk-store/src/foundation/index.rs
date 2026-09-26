@@ -29,7 +29,7 @@ use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::resync_to_next_magic;
 use crate::foundation::fsutil::{
     append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
-    read_file_range_if_exists, write_file_atomically,
+    read_file_range_if_exists, stat_file_state_if_exists, write_file_atomically,
 };
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
@@ -197,7 +197,9 @@ enum FrameAttempt {
     },
 }
 
-fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
+/// Parse one frame of a buffer that starts `base` bytes into the file (`0` for the whole file): messages that name a byte offset name the **file's**
+/// (`base + offset`), so a tail read decodes exactly as the whole-file decode would have reported.
+fn parse_frame_at_reporting(bytes: &[u8], offset: usize, base: usize) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < INDEX_HEADER_LEN {
         return FrameAttempt::TrailingPartial { remaining };
@@ -230,7 +232,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
     let expected = index_record_checksum(header_values.body_len, body);
     if expected != header_values.checksum {
         return FrameAttempt::Invalid {
-            message: format!("index checksum mismatch at byte offset {offset}"),
+            message: format!("index checksum mismatch at byte offset {}", base + offset),
         };
     }
     match decode_entry_body(body) {
@@ -254,14 +256,25 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
 /// stay absolute (true file position), not relative to `start_offset`, since callers report and
 /// compare against the real file. Every existing caller passes `0`, unchanged.
 pub(crate) fn decode_index_records(bytes: &[u8], start_offset: usize) -> Result<IndexReplay> {
+    decode_index_records_at(bytes, start_offset, 0)
+}
+
+/// [`decode_index_records`] over a buffer that is **the file from `base` onward**: the offsets it reports and the offsets its messages
+/// name are the file's (`base + position`), so decoding a tail read equals decoding the whole file from `base` (RFC 102, the append-length
+/// round: an `ObjectWriteSession` reads only the bytes appended since its snapshot, not the whole index).
+pub(crate) fn decode_index_records_at(
+    bytes: &[u8],
+    start_offset: usize,
+    base: usize,
+) -> Result<IndexReplay> {
     let mut entries = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = start_offset;
     loop {
-        match parse_frame_at(bytes, offset) {
+        match parse_frame_at_reporting(bytes, offset, base) {
             FrameAttempt::Record { entry, next_offset } => {
                 record_outcomes.push(IndexRecordOutcome {
-                    offset,
+                    offset: base + offset,
                     status: IndexRecordStatus::Evaluated,
                 });
                 entries.push(entry);
@@ -276,7 +289,7 @@ pub(crate) fn decode_index_records(bytes: &[u8], start_offset: usize) -> Result<
             }
             FrameAttempt::Invalid { message } => {
                 record_outcomes.push(IndexRecordOutcome {
-                    offset,
+                    offset: base + offset,
                     status: IndexRecordStatus::Failed { message },
                 });
                 match resync_to_next_magic(bytes, offset + 1, INDEX_MAGIC.as_slice()) {
@@ -324,33 +337,49 @@ pub(crate) fn replay_index_with_extent(layout: &RepositoryLayout) -> Result<(Ind
     Ok((replay, extent))
 }
 
-/// Decode only from `start_offset` onward -- the byte length an `ObjectWriteSession`'s snapshot
-/// already knows is current. Still reads the whole file (this path only runs when something else grew
-/// the index since the snapshot was taken, which is expected to be rare) but decodes only the new
-/// portion, reusing `decode_index_records`'s own frame parser entered partway through rather than
-/// re-deriving one. Counted identically to `replay_index_with_extent` -- a tail decode is still a real
-/// index decode, even if cheaper.
+/// Decode only from `start_offset` onward -- the byte length an `ObjectWriteSession`'s snapshot already knows is current -- **reading
+/// only those bytes**: `[start_offset, the file's length)`, by a bounded positioned read. (It used to read the whole file and decode only
+/// the new portion; the session's own write makes it run after **every** object write, so the whole-index read was quadratic in the number
+/// of objects -- RFC 102, the append-length round.) The result equals `decode_index_records(&whole_file, start_offset)` exactly: the
+/// entries, `trailing_partial_bytes`, every outcome's offset and every message's offset are the file's, and the returned extent is the
+/// file's length less the torn tail. A file no longer than `start_offset` (repaired or truncated under the session) gives no entries and its
+/// own length as the extent, as the whole-file decode did. The decision stays stat-then-decode; counted identically to
+/// `replay_index_with_extent` -- a tail decode is still a real index decode, even if cheaper.
 pub(crate) fn replay_index_tail_with_extent(
     layout: &RepositoryLayout,
     start_offset: u64,
 ) -> Result<(IndexReplay, u64)> {
     let relative = layout.repository_relative(&layout.container_index_path())?;
-    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
-        return Ok((
-            IndexReplay {
-                entries: Vec::new(),
-                trailing_partial_bytes: 0,
-                record_outcomes: Vec::new(),
-            },
-            0,
-        ));
+    let empty = || IndexReplay {
+        entries: Vec::new(),
+        trailing_partial_bytes: 0,
+        record_outcomes: Vec::new(),
+    };
+    let Some(stat) = stat_file_state_if_exists(layout.repository_mutation_root(), &relative)?
+    else {
+        return Ok((empty(), 0));
     };
     #[cfg(test)]
     record_replay_index_decode_for_test();
+    let length = stat.size;
+    if length <= start_offset {
+        return Ok((empty(), length));
+    }
     let start = usize::try_from(start_offset)
         .map_err(|_| PrikkError::Integrity("index start offset exceeds usize".to_string()))?;
-    let replay = decode_index_records(&bytes, start)?;
-    let extent = len_to_u64(bytes.len().saturating_sub(replay.trailing_partial_bytes))?;
+    let wanted = usize::try_from(length - start_offset)
+        .map_err(|_| PrikkError::Integrity("index tail length exceeds usize".to_string()))?;
+    let Some(tail) = read_file_range_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+        start_offset,
+        wanted,
+    )?
+    else {
+        return Ok((empty(), 0));
+    };
+    let replay = decode_index_records_at(&tail, 0, start)?;
+    let extent = len_to_u64(start + tail.len().saturating_sub(replay.trailing_partial_bytes))?;
     Ok((replay, extent))
 }
 

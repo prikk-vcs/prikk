@@ -32,8 +32,8 @@ mod support;
 mod budget;
 
 /// **Unit budgets** (the handoff's §3; stops itself at twice each).
-const M1_BUDGET: Duration = Duration::from_secs(15 * 60);
-const M2_BUDGET: Duration = Duration::from_secs(10 * 60);
+const M1_BUDGET: Duration = Duration::from_secs(5 * 60);
+const M2_BUDGET: Duration = Duration::from_secs(5 * 60);
 
 /// M1's points: `(files, bytes per file)`.
 const M1_POINTS: [(usize, usize); 4] = [

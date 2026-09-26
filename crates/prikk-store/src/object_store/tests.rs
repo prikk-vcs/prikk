@@ -153,6 +153,57 @@ fn write_session_rewriting_the_same_object_is_a_no_op() -> prikk_error::Result<(
     Ok(())
 }
 
+/// **Control (RFC 102, the append-length round, site C) -- a session's own write reads only the index bytes it appended.** A session
+/// opens on a repository that already holds sixty objects, then writes forty more; the anchored reader's tally for the object index shows
+/// **exactly the bytes those forty writes appended** read back (the tail since the snapshot, not the whole index). A positive control
+/// reads the whole index and sees the tally move by the whole file.
+/// **Perturb:** make `replay_index_tail_with_extent` read the whole file (`read_file_if_exists`) and decode from `start_offset`, as it
+/// did before this round: the tally is the whole index forty times over and the equality goes red.
+#[test]
+fn a_write_sessions_own_write_reads_only_the_index_bytes_it_appended() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("write-session-tail-read");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let relative = layout.repository_relative(&layout.container_index_path())?;
+    let write = |session: &mut ObjectWriteSession, index: usize| -> prikk_error::Result<()> {
+        let mut envelope = ObjectEnvelope::unsigned(
+            ObjectType::Blob,
+            1,
+            format!("session-blob-{index}").into_bytes(),
+        );
+        envelope.add_signature(dummy_signature())?;
+        session.write_object(&envelope)?;
+        Ok(())
+    };
+    {
+        let mut first = ObjectWriteSession::open(&layout)?;
+        for index in 0..60 {
+            write(&mut first, index)?;
+        }
+    }
+    let mut session = ObjectWriteSession::open(&layout)?;
+    let before = std::fs::metadata(layout.container_index_path())?.len();
+    crate::foundation::fsutil::read_tally::reset();
+    for index in 60..100 {
+        write(&mut session, index)?;
+    }
+    let after = std::fs::metadata(layout.container_index_path())?.len();
+    assert!(after > before, "the forty writes grew the index");
+    assert_eq!(
+        crate::foundation::fsutil::read_tally::bytes_read(&relative),
+        after - before,
+        "a session reads back exactly what its own writes appended, not the index"
+    );
+    crate::foundation::fsutil::read_tally::reset();
+    crate::foundation::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)?;
+    assert_eq!(
+        crate::foundation::fsutil::read_tally::bytes_read(&relative),
+        after,
+        "fixture sanity: the tally sees a whole read of the index"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 #[test]
 fn write_session_rejects_a_same_id_rewrite_with_different_bytes() -> prikk_error::Result<()> {
     let root = unique_temp_dir("write-session-conflict");
