@@ -192,5 +192,5 @@ the architect pushes the whole round, and it closes on a green Windows mutation 
 - confirmed that the damaged-header `verify` no longer aborts;
 - perturbed the tail offset and the frame-length check himself.
 
-**Closes when the Windows mutation suite is green on the pushed commit.** The `verify` blind spot the report noted in its
+**CLOSED 2026-09-26:** pushed at `e21c674f`, CI run `36242389896` 16/16, the Windows mutation suite green by name. The `verify` blind spot the report noted in its
 §7.2 goes to the RFC 160 round.

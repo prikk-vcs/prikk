@@ -9,6 +9,8 @@
 - P5 (the template's store-size row) and P7 (the architect's own discipline) are the architect's to apply, P5 at 0.48.0
   prep and P7 from now on; P6's reopening of RFC 133's residual is reported by 0.48.0 prep.
 
+Handoff, **live 2026-09-26**: `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/recurrence-guards-handoff-v1.md`.
+
 *History:* **PROPOSED 2026-09-26 by the architect**, on the owner's instruction: *"I want you to consider carefully
 recurrence prevention measures on the case(s)."*
 
