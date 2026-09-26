@@ -141,6 +141,15 @@ This happened when two commands that both write objects ran at the same moment �
 refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
 exists for repositories damaged before that.
 
+## `error: integrity error: active WAL has a damaged record (damaged record at byte offset N; K sound record(s) follow it); …`
+
+A record in the queue of unsealed commits is damaged, and **K intact records stand behind it**. `prikk verify` and `prikk doctor` name
+it and exit non-zero. `prikk doctor --repair-wal-tail` will **refuse** and leave the file exactly as it is: that switch truncates only a
+*torn tail*, the incomplete last record left by an interrupted commit, and this is not one (a sound record follows the damage). Keep the
+repository as it is and copy `.prikk/active/` aside before doing anything else: the intact records can still be read. A torn tail, by
+contrast, shows as `trailing partial WAL bytes: N` and a `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` warning, and `--repair-wal-tail` is the
+right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail and the repair deleted the intact records after it.)
+
 ## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 
 The block you asked to check out has no snapshot, which is the normal state of most blocks: `seal`

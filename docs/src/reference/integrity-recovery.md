@@ -124,7 +124,8 @@ Current doctor severities are `info`, `warning`, and `error`.
 | Code | Severity | Meaning |
 |---|---|---|
 | `PRIKK-DOCTOR-VERIFY-OK` | `info` | The structural verification scan completed; later issue lines still determine health. |
-| `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` | `warning` | Active WAL has trailing bytes that look like an incomplete final record. |
+| `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` | `warning` | Active WAL has trailing bytes that are a prefix of one incomplete final record (a true torn tail); `--repair-wal-tail` truncates exactly these. |
+| `PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE` | `error` | A WAL record failed verification, including a partial frame with a sound record behind it (damage, not a tail); the message says how many sound records follow. No repair switch touches it. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING` | `error` | Active WAL has records but active ref metadata is missing. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED` | `error` | Active WAL has records but active ref metadata is malformed. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS` | `warning` | Active WAL is empty but stale valid ref metadata remains. |

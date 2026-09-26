@@ -32,8 +32,43 @@ has an index entry, because the index is written after the record is durable, so
 record no index entry names, with the same header, is still a torn tail. A trust-policy record claiming 2^32 keys with a matching
 checksum (the checksums are unkeyed) reserved about 100 GB for them and aborted the process; it now reserves no more than its bytes
 could hold and is refused. `init` on an existing repository no longer reads every object container and the object index whole only
-to see that they exist. **Not yet reported:** a WAL, object index or author key file whose first record claims another length than it
-holds still reads as a torn tail, so `verify` exits 0 over it as before.
+to see that they exist.
+
+### Fixed — `doctor --repair-wal-tail` could delete intact queued commits after a damaged record
+
+Every framed reader (the WAL, the object containers and index, the ref log, the pointer, received, author-key and trust indexes, the
+generation file) took a frame whose header claimed **more bytes than remained** for a *torn tail*, the harmless remnant of an
+interrupted append, **whatever sound records followed it**. A damaged length in the first of two queued commits therefore made the second
+commit part of the "tail": `verify` and `doctor` exited 0, and **`doctor --repair-wal-tail` truncated every byte** (measured on 0.47.0: a
+702-byte WAL, "truncated 702 byte(s), preserved 0 record(s)"). The WAL's trailing-partial classification and the repair verb are both in
+the source at every tag checked (0.0.1, 0.1.1, 0.10.0, 0.19.0, 0.30.0, 0.40.0, 0.47.0), so every release from 0.0.1 is presumed affected;
+the loss itself was measured on 0.47.0 only. One rule now serves every reader: **a torn tail is a prefix of
+one well-formed frame, and nothing else.** If a sound frame (magic, valid header, a body that passes its checksum) starts anywhere in the
+remainder, the partial frame is **damage**: a failed item at its offset, decoding resumes at the sound frame, and only a true tail after the
+last sound frame counts as one. When the evidence is ambiguous (a sound frame inside the payload of a genuinely torn one) the answer is
+damage, never tail: the cost of a false "damage" is a refused repair and a manual step, the cost of a false "tail" is lost data. A repair
+never removes a sound frame: `doctor --repair-wal-tail` truncates only a true torn tail, exactly as before, and on damage it **refuses**
+and leaves the file byte for byte as it was, naming the damaged offset and the number of sound records behind it; `doctor --repair-index`
+rebuilds from containers read under the same rule, so the sound frames behind a damaged one are indexed; a ref publication beside a damaged
+ref-log record appends after it and truncates nothing. For the formats whose records have a fixed width (the object index, the generation
+file) or a bounded one (the two key indexes) a header that claims a length no record could have is malformed **even with nothing behind it**.
+`verify` and `doctor` now also report a damaged entry in the author key index and the trust key and trust policy containers (a policy
+snapshot whose body will not decode was refused by `trust maintainer list` and by nothing else). **Still a torn tail:** a WAL, container or
+ref-log file whose *only* damaged record has nothing sound behind it and a header that could be a real record's, since a genuine interrupted
+append looks exactly the same.
+
+### Output changes
+
+- `prikk doctor --repair-wal-tail` on a WAL with a damaged record: **refuses (exit 1) and leaves the file untouched**; it truncated the
+  file and exited 0 ("preserved 0 record(s)").
+- `prikk verify` and `prikk doctor` on a WAL, an unsealed object index, or an author key index whose first record claims a length that
+  is not its own, with a sound record behind it: **exit 1 with a finding** (`WAL record at offset 0 failed verification: … damage, not
+  a torn tail`, and `PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE` now adds `; N sound record(s) follow it and are intact`); they exited 0.
+- `prikk verify` and `prikk doctor` on an author key, trust key or trust policy container with a damaged entry (a snapshot whose body will
+  not decode included): **exit 1**, `<container> has a damaged entry; run doctor for diagnosis`; they exited 0.
+- The refusal of `prikk commit` (and of any command that mutates over a damaged active WAL) now names the damage and points to `doctor` for
+  diagnosis: `active WAL has a damaged record (damaged record at byte offset N; K sound record(s) follow it); run doctor for diagnosis
+  before committing`, where it said `active WAL has a damaged record; run doctor before committing`.
 
 ### Changed — `seal`, `merge` and a `sync` catch-up no longer walk the whole history
 

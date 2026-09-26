@@ -48,10 +48,18 @@ created later by `seal`.
 WAL replay reads valid records from the start of the file. Each complete record carries magic,
 version, sequence, body length, checksum, and the encoded signed envelope bytes.
 
-Incomplete trailing bytes are reported separately as trailing partial bytes. They represent the only
-current WAL truncation case that `doctor --repair-wal-tail` handles. A complete record with a checksum
-mismatch, malformed header, unsupported version, or malformed envelope is an integrity failure and is
-not a safe automatic truncation candidate.
+Incomplete trailing bytes are reported separately as trailing partial bytes. **A torn tail is a prefix
+of one well-formed frame, and nothing else**: the remnant of an append that was interrupted, at the end
+of the file. If a sound frame (magic, a valid header, a body that passes its checksum) starts anywhere in
+the remainder, the partial frame is not a tail; it is damage, reported as a failed record at its offset,
+and the sound records after it are still read. When the evidence is ambiguous the answer is damage, never
+tail. A true torn tail is the only WAL truncation case that `doctor --repair-wal-tail` handles. A complete
+record with a checksum mismatch, malformed header, unsupported version, or malformed envelope, and a
+partial frame with a sound frame behind it, are integrity failures and are not safe automatic truncation
+candidates: the repair refuses and leaves the file as it was, naming the damaged offset and how many sound
+records follow it. (Before 0.48.0 a damaged length was read as a tail whatever followed it, and the repair
+truncated the sound records away.) The same rule applies to every framed file: the object containers and
+index, the ref log and pointer index, the received, author-key and trust indexes, and the generation file.
 
 ## Active Ref Metadata
 
@@ -151,7 +159,8 @@ until signer-backed seal revalidates the transition, appends nothing, and remove
 
 The current doctor mutation is `doctor --repair-wal-tail`, which acquires the active lock and truncates
 incomplete trailing active-WAL bytes after an under-lock publication guard and verification have
-accepted the preceding WAL prefix. Doctor diagnoses ref-publication
+accepted the preceding WAL prefix. **It never removes a sound record**: it truncates only a true torn tail
+(see above), and on a damaged record it refuses and changes nothing. Doctor diagnoses ref-publication
 states but does not sign, append, promote, or reconstruct ref authority.
 
 The [integrity and recovery diagnostics](./integrity-recovery.md) reference owns the full diagnostic
