@@ -739,6 +739,17 @@ fn a_ranged_read_returns_the_range_and_refuses_what_a_whole_read_refuses() -> Re
         read_file_range_if_exists(mutation, relative, 500, 4)?,
         Some(Vec::new())
     );
+    // **A length read from a damaged header must not size an allocation** (Addendum 1 §1a): asked for `usize::MAX / 2` bytes of a
+    // ten-byte file, the read returns the ten bytes.
+    assert_eq!(
+        read_file_range_if_exists(mutation, relative, 0, usize::MAX / 2)?,
+        Some(b"0123456789".to_vec()),
+        "clamped to the file before anything is allocated"
+    );
+    assert_eq!(
+        read_file_range_if_exists(mutation, relative, 4, usize::MAX / 2)?,
+        Some(b"456789".to_vec())
+    );
     assert_eq!(
         read_file_range_if_exists(mutation, std::path::Path::new("nothing.bin"), 0, 4)?,
         None
@@ -863,6 +874,69 @@ fn a_fixed_run_of_appends_writes_the_same_index_and_containers_as_before() -> Re
         found, expected,
         "the index and every container are byte-identical to what the code before this round wrote"
     );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **A damaged header, or a disagreeing index length, is an integrity error and never an allocation** (Addendum 1 §1b). Three records:
+/// one whose header claims a body of 2^62 bytes, one whose index entry records a length one byte too long, and one one byte too short.
+/// Each read returns an `Integrity` error that names the object id and the container's offset, **before the frame is read**.
+/// **Perturb:** drop the length comparison in `read_object_envelope_at`: the two disagreeing cases read successfully (or fail with the
+/// wrong message) and this goes red. (Dropping the reader's clamp is shown red by the ranged-read control above; it aborts.)
+#[test]
+fn a_frame_that_claims_another_length_than_the_index_recorded_is_an_integrity_error() -> Result<()>
+{
+    let root = crate::test_gates::test_support::unique_temp_dir("index-read-claims-length");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut entries = Vec::new();
+    for index in 0..3 {
+        entries.push(append_object_to_container(
+            &layout,
+            ObjectType::Blob,
+            &blob_envelope(&format!("blob-{index}"), 500),
+        )?);
+    }
+    let container = layout.container_slot_path(ObjectType::Blob, ContainerSlot::A);
+    let mut bytes = std::fs::read(&container)?;
+    // Record 0: the header's body length (big-endian u64 at bytes 10..18 of the frame) is 2^62.
+    let at = entries[0].offset as usize + 10;
+    bytes[at..at + 8].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(&container, &bytes)?;
+    let message = |entry: &super::IndexEntry| -> String {
+        super::read_object_envelope_at(&layout, entry)
+            .expect_err("the read is refused")
+            .to_string()
+    };
+    for (label, entry) in [
+        ("a header claiming 2^62 bytes", entries[0]),
+        (
+            "an index entry one byte too long",
+            super::IndexEntry {
+                length: entries[1].length + 1,
+                ..entries[1]
+            },
+        ),
+        (
+            "an index entry one byte too short",
+            super::IndexEntry {
+                length: entries[2].length - 1,
+                ..entries[2]
+            },
+        ),
+    ] {
+        let text = message(&entry);
+        assert!(
+            text.starts_with("integrity error: container record at offset "),
+            "{label}: {text}"
+        );
+        assert!(
+            text.contains(&format!("offset {} for {}", entry.offset, entry.object_id)),
+            "{label}: {text}"
+        );
+        assert!(text.contains("claims a frame of"), "{label}: {text}");
+    }
+    // The undamaged record still reads.
+    assert!(super::read_object_envelope_at(&layout, &entries[2]).is_ok());
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

@@ -210,6 +210,13 @@ impl AnchoredReader for PosixReader {
                 "read target is not a regular file".to_string(),
             ));
         }
+        // **Never allocate more than the file holds from `offset`.** `len` is often a length read from disk (an object read passes
+        // the frame length its own header claims), so it is clamped to the file's size from this descriptor's `fstat` *before* the
+        // buffer is made: a damaged header cannot ask for an allocation the file cannot fill.
+        let available = u64::try_from(stat.st_size)
+            .unwrap_or(0)
+            .saturating_sub(offset);
+        let len = len.min(usize::try_from(available).unwrap_or(usize::MAX));
         let file = File::from(fd);
         let mut bytes = vec![0_u8; len];
         let mut filled = 0_usize;
@@ -353,6 +360,9 @@ impl AnchoredReader for WindowsReader {
         let Some(file) = open_existing_file_no_follow(&path, &mut options)? else {
             return Ok(None);
         };
+        // Never allocate more than the file holds from `offset` (see the Posix reader): clamp `len` to the handle's own length first.
+        let available = file.metadata()?.len().saturating_sub(offset);
+        let len = len.min(usize::try_from(available).unwrap_or(usize::MAX));
         let mut bytes = vec![0_u8; len];
         let mut filled = 0_usize;
         while filled < len {
@@ -475,10 +485,18 @@ impl AnchoredReader for PathOnlyReader {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(fallback_io_error(&path, "read", error)),
         };
+        // Clamped to the file's own length as the other readers are; `Take::read_to_end` reserves nothing from its limit (it grows the
+        // buffer only as bytes arrive), so a damaged claim could not force an allocation here either, but the clamp makes that a
+        // property of this function and not of a standard-library detail.
+        let available = file
+            .metadata()
+            .map_err(|error| fallback_io_error(&path, "stat", error))?
+            .len()
+            .saturating_sub(offset);
         file.seek(SeekFrom::Start(offset))
             .map_err(|error| fallback_io_error(&path, "seek", error))?;
         let mut bytes = Vec::new();
-        file.take(len as u64)
+        file.take((len as u64).min(available))
             .read_to_end(&mut bytes)
             .map_err(|error| fallback_io_error(&path, "read", error))?;
         Ok(Some(bytes))

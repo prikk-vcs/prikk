@@ -447,6 +447,15 @@ pub(crate) fn read_object_envelope_at(
                 "container record at offset {offset} failed to validate: {err}"
             ))
         })?;
+    // The frame the header claims must be the frame the index recorded (both are header plus body, as `append_object_to_container`
+    // writes them): a damaged header, or an index entry that disagrees with its container, is an integrity finding named here, **before
+    // the frame is read** -- never an allocation sized by a length read from disk.
+    if u64::try_from(frame_len).ok() != Some(entry.length) {
+        return Err(PrikkError::Integrity(format!(
+            "container record at offset {offset} for {} claims a frame of {frame_len} bytes, but the index recorded {}",
+            entry.object_id, entry.length
+        )));
+    }
     let Some(window) = read_file_range_if_exists(
         layout.repository_mutation_root(),
         &container_relative,
