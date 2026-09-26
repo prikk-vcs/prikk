@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Fixed — every object write read its whole object container to learn its length
+
+Writing an object appends its record to a container file and records the record's offset in the index; the offset is the container's length
+just before the append, and it was learned by **reading the whole container into memory**. So a command's memory followed everything the
+repository stored, and a first commit or import of many files read quadratic bytes. A second whole-file read of the same kind sat in reading
+an object back: the container was read in full to decode one record at a known offset. The offset now comes from a stat of the very file
+the record is appended to, and an object is read from a positioned read of its own frame; nothing about what is stored changes (the same
+index entries, byte for byte, and the same refusals: a symlink, a directory, a FIFO or a missing container is still refused; a directory or
+a FIFO now reports the operating system's error where it used to report "not a regular file"). Measured on the release build against
+0.47.0's, on this machine at a 1-minute load of about 2: a `commit` that adds **one small file** to a repository whose blob container is
+256 MiB peaked at **266 MiB, and now at 23 MiB** (64 MiB container: 74 → 23 MiB; 8 MiB container: 22.0 → 21.7 MiB, so it no longer
+follows the container: +4.4 % from 8 to 256 MiB); a **first commit** of 4,000 files of 20 KB read **162 GB and now reads 1.1 GB** (15.0 s →
+0.3 s; 1,000 files: 10.1 GB → 87 MB, 2,000 files: 40.5 GB → 306 MB). What still grows faster than the content is the object index: after
+each object write the writer re-reads the whole index (about 133 bytes per object), which is quadratic in the number of objects and now
+the larger part of what a first commit reads (93 % of the 1.1 GB at 4,000 files; a first commit of 8,000 files of 40 bytes reads 4.3 GB,
+almost all of it the index, against 9.4 GB before); it is not changed here.
+
 ### Changed — `seal`, `merge` and a `sync` catch-up no longer walk the whole history
 
 Sealing a block derived the state it signs by replaying every ancestor block from the start, keeping a copy of

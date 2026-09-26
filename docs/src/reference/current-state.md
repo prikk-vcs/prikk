@@ -125,6 +125,12 @@ of sealed blocks.
 - **Incremental commit memory is flat up to a few thousand tracked files, then grows linearly** at
   roughly 1.7 KiB per file beyond that — measured peak around 11.6 MiB at 100 files and 113 MiB at
   64,000 (release, three samples at each of seven sizes).
+- **Before 0.48.0, a command's memory also followed the size of what the repository stored.** Every object write read its whole object
+  container into memory only to learn its length, and reading an object back read the whole container to decode one record. A `commit` that
+  added one small file to a repository with a 256 MiB blob container peaked at 266 MiB on 0.47.0; **on 0.48.0 it peaks at 23 MiB**, the same
+  as with an 8 MiB container (22 MiB; release build, three samples each, container sizes 8, 64 and 256 MiB). A first `commit` of 4,000
+  files of 20 KB read 162 GB on 0.47.0 and reads 1.1 GB on 0.48.0 (15.0 s → 0.3 s). The object index is still re-read after every object
+  write, which is quadratic in the number of objects (93 % of those 1.1 GB), and is not changed in 0.48.0.
 
 A few things worth knowing about these numbers before relying on them:
 
