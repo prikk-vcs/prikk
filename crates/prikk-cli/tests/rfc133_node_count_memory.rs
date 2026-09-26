@@ -255,11 +255,12 @@ mod budget;
 /// report. Each is set from a **measured** wall time with a **1.5x margin**, rounded up, unless its line says it is an estimate:
 ///
 /// - step costs: measured 988 s (2026-09-26, one N = 64,000 sample, release, load 1.8) -> 1,500 s;
-/// - the four-arm comparison ([`ARMS_BUDGET`]): 75 minutes as Addendum 1 declares it, stopped at 150. It is **not** from a measurement of this
-///   unit: the round's earlier two-arm comparison took 2,306 s (2026-09-26, load 2.2) and this one runs four arms, five samples each;
-/// - release-gate profile: **an estimate, not a measurement** -- about 730 s summed from the new form's own steps in that comparison run
-///   (N = 100 negligible, 32,000 about 100 s, 64,000 about 620 s), x 1.6 -> 1,200 s. The round's §5 run of the profile itself has
-///   **not** been made (held on the architect's ruling of the §2 acceptance); it replaces this figure when it is;
+/// - the four-arm comparison ([`ARMS_BUDGET`]): 75 minutes **as Addendum 1 declares it**, stopped at 150. **Measured: 6,106 s (102 minutes, 136 %
+///   of the budget) on 2026-09-26, boot `0b419a8a`, load 2.1** -- the fresh-build arms at N = 64,000 are the cost. A rerun should declare
+///   9,000 s (1.5x measured, rounded up); the constant keeps the architect's figure until that is ruled;
+/// - release-gate profile: **measured** -- four end-to-end runs of the trimmed profile on 2026-09-26 (boot `0b419a8a`, load 1.0-2.2 at each
+///   start): 762 s and 672 s on HEAD, 763 s and 770 s on 0.47.0's release commit with this instrument overlaid; the longest, 770 s, x 1.5
+///   rounds up to 1,200 s;
 /// - full sweep: **an estimate, never measured under the watcher** -- the last full sweep took 77 minutes before it gained its `tree`/`diff`
 ///   columns, and one N = 64,000 sample alone is now 988 s; 4 h is a stated guess until its first run under the watcher sets it.
 const STEP_COSTS_BUDGET: Duration = Duration::from_secs(1_500);
