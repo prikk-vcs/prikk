@@ -76,7 +76,15 @@ later, since none of those names exist at `init` time and a per-name file would 
 
 Every file above is created by `init` and is empty until first use. **No name under `.prikk/` is created
 after `init`** — that is a design invariant, not an implementation detail, and it is what makes the
-repository durable on filesystems that cannot make a new directory entry durable.
+repository durable on filesystems that cannot make a new directory entry durable. **The one exception is `recovery/`**
+(next paragraph), which is never authority and is created only by a repair, on demand: where the filesystem cannot make it durable the repair
+**refuses and removes nothing**.
+
+`recovery/` holds the bytes a repair removed. `prikk doctor --repair-wal-tail` writes exactly the bytes it is about to truncate to
+`.prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes` (the file synced, renamed into place, the directory synced, all under the active lock)
+**before** it truncates, and its output names the file. It exists so that a repair can be wrong about what it removed (a torn tail and a lone
+damaged record look the same) without anything being lost. It is **never authority**: nothing reads it back and `verify` ignores it. It is not
+`quarantine/`, which is retired.
 
 `init` also creates `refs/tmp/`, which is **allocated but never written to**. It is a remnant of a
 retired candidate-publication mechanism, not authority for anything, but its **absence is an error**:
@@ -319,6 +327,7 @@ persist across key removal, so it stays a single append-only file, never compact
 | `cache/` | Initialized, rebuildable, non-root | Never authority; a corrupt or absent cache file is not an error and does not change any result. |
 | `refs/tmp/` | Initialized, unwritten, required | `init` still allocates it; nothing writes into it since ref publication moved into containers, but `verify` lists it on every run, so its absence fails verification. Not authority for anything. |
 | `objects/` (and its six type subdirectories), `quarantine/`, `refs/by-id/`, `refs/logs/` | Retired, no longer initialized | `init` no longer creates these; nothing has written into any of them since object and ref publication state moved into containers. Not validated at open, so a repository initialized before this change keeps them harmlessly. Not authority for anything. `objects/` alone still has one dormant reader — see [Object Store](#object-store). |
+| `recovery/` | Created on demand by `doctor --repair-wal-tail`, never authority | The exact bytes a WAL repair removed, one file per repair (`wal-<session>-at-<offset>-<hash>.bytes`), written durably before the truncation. Nothing reads it back and `verify` ignores it; delete it when you no longer need it. |
 | `gc/` | Deferred/not present | No current initialized directory or released behavior. |
 
 ## Deferred and Not Stable

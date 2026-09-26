@@ -58,8 +58,25 @@ record with a checksum mismatch, malformed header, unsupported version, or malfo
 partial frame with a sound frame behind it, are integrity failures and are not safe automatic truncation
 candidates: the repair refuses and leaves the file as it was, naming the damaged offset and how many sound
 records follow it. (Before 0.48.0 a damaged length was read as a tail whatever followed it, and the repair
-truncated the sound records away.) The same rule applies to every framed file: the object containers and
+truncated the sound records away.)
+
+**A repair keeps every byte it removes.** A record whose only fault is a damaged length, with nothing sound behind it, is
+indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it writes exactly the bytes it will remove to
+`.prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes` (durably, under the same lock), and only then truncates; its output names the file. The
+file is the raw WAL bytes, so a record that was removed by mistake can be read back from it: the removed region starts at the named offset of the
+old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` ignores it, and it can be
+deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage. The same rule applies to every framed file: the object containers and
 index, the ref log and pointer index, the received, author-key and trust indexes, and the generation file.
+One consequence to know: a crash-torn append of a blob **whose content is itself a prikk container file** leaves a partial frame with a sound frame in
+its payload; by the rule that is damage, and `doctor --repair-index` indexes the embedded frame as an object. That object is content-addressed and
+nothing references it, so it changes no state root and no signed output.
+
+**An interrupted append in an object container is not damage when nothing names it.** A container record is made durable before its index entry is
+appended, so an unparseable frame that **no index entry names** was never committed: it is what a crash between the two leaves, and whatever was
+written after it. `verify` and `doctor` report it as a warning (`interrupted appends (unreferenced, not damage)`,
+`PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND`) naming the offset, and exit 0; every later object is still scanned and read. A frame an index entry
+**does** name stays a failed item. The active WAL has no such case (an append refuses past a tail, so an interior partial frame is always damage), and
+the ref log keeps a failed item for it today, because nothing at the reader names a ref-log record.
 
 ## Active Ref Metadata
 
