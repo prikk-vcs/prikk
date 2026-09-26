@@ -218,6 +218,10 @@ Each stage is one round, reviewed before the next. Every control must be shown f
   (the measurement of §1, repeated) with peak memory bounded by a constant, not by the file; content byte-identical;
   an interrupted write leaves no partial destination file.
 - Perturbation: one path buffers the whole file again — the memory control fails.
+- **Architect's note, 2026-09-26 (for the Stage B design, not a ruling):** a commit of **many** files also holds their
+  content together. Measured on a release build of `6edb17b5`: a first commit of 64 × 4 MiB random files peaks at
+  284 MiB (290,692 KiB), about 1.1 × the total. That is after the append-length fix (RFC 102, 2026-09-26) removed the second copy.
+  Stage B's memory control should include a commit whose **total** exceeds the bound, not only one large file.
 
 **Stage C — chunk manifests, format 8.**
 - Controls: a one-byte change in a large file stores **only the affected chunks** (measured, against §1's full copy);

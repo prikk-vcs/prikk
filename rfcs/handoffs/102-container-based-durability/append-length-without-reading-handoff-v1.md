@@ -111,3 +111,76 @@ Also not run: corpus-depth histories.
 
 **Windows:** local gates compile Windows but run none of its tests. The architect pushes the fix and reads the
 **Windows mutation test suite** by name. The round closes only when that job is green.
+
+## Addendum 1 — 2026-09-26: S-2 kept with a required bound, site C ruled in, and the class change accepted
+
+Report: `.git-exclude/review-request/append-length-without-reading-report-v1.md`; review
+`.git-exclude/reviewed/append-length-without-reading-review-v1.md`. **Item 1 is accepted as delivered.** The handoff's
+account of M2 was the architect's error: the one-small-file commit's peak came from its **reads** (site B) as well as
+the append. You found that and said so.
+
+**Not pushed yet.** Nothing of this round goes to `origin` until item 1 below lands, because S-2 as committed aborts
+`prikk verify` on a damaged container.
+
+1. **Required: bound the ranged read (S-2 is kept, on this condition).** `read_file_range_if_exists` allocates
+   `vec![0_u8; len]` **before** reading. `len` is the frame header's `body_len`, a `u64` taken from disk. The architect
+   measured it on a release build of `6edb17b5`:
+   - an unsealed repository, its one blob's header `body_len` set to 2⁶², then 2⁴⁰;
+   - `prikk verify` **aborts**: `memory allocation of 4611686018427387954 bytes failed`, exit 134;
+   - 0.47.0's asset on the same repository exits 0, with no abort.
+
+   The whole-file read that S-2 replaced was bounded by the file's real size. The positioned read must be too. **Both of
+   these land:**
+   - **(a) In every reader** (Posix, Windows, path-only): never allocate more than the file holds from `offset`. Clamp
+     `len` to the length from `fstat` (or the Windows handle's metadata) minus `offset` before allocating. Confirm the
+     path-only reader's `take(len).read_to_end` reserves nothing from `len`, and say so.
+   - **(b) In `read_object_envelope_at`:** the frame length the header claims must equal the index entry's `length`
+     (both are header plus body, as `append_object_to_container` writes them). A mismatch is an `Integrity` error naming
+     the object id and the container's offset, returned **before** the frame read.
+
+   **Controls, each shown red:**
+   - the reader with `len = usize::MAX / 2` on a 10-byte file returns the 10 bytes;
+   - an object read whose header claims 2⁶² returns an `Integrity` error, and so does one whose header disagrees with
+     its index length;
+   - **the CLI control:** a **sealed** repository with a blob header claiming 2⁶² makes `prikk verify` report the
+     damage and exit non-zero, with no abort. State what 0.47.0 reports on the same repository.
+
+   A perturbation that removes the clamp may abort the test binary. That is acceptable as red if the report shows the
+   suite failing. Run such a case in a child process if you prefer.
+2. **Site C: option (A), in this round.**
+   - `replay_index_tail_with_extent` reads only `[start_offset, current length)` with the bounded positioned read, and
+     decodes it with the offsets it reports shifted by `start_offset`. Every result must equal today's
+     `decode_index_records(&whole, start)`: entries, `trailing_partial_bytes`, `record_outcomes` offsets and `extent`.
+   - **A file shorter than `start_offset`** (repaired or truncated under the session) takes exactly the path it takes
+     today. Show that path with a control.
+   - The decision stays stat-then-decode, and RFC 111's decode counter counts a tail decode as it does now.
+   - **Option (B), trusting the session's own append length, is refused**: it re-opens the B1 question RFC 111 closed.
+   - **Controls:**
+     - equality with the whole-file decode over a run of appends, **including a torn index tail and a truncated file**;
+       perturb the shift by one and it goes red;
+     - the pinned-digest control `a_fixed_run_of_appends_writes_the_same_index_and_containers_as_before` stays green;
+     - the read tally shows a session's own write reading only the new index bytes; put the whole read back and it
+       goes red.
+
+   **Scope, as the architect reads the owner's ruling:** *"The fix should be put in 0.48.0"* covers the defect RFC 102
+   ruled on 2026-09-26, that is, per-write reads that grow with the store. Site C is its second instance, found by that
+   ruling's own sweep. If the owner holds site C to 0.49.0, this item is removed and the CHANGELOG keeps the remaining
+   index re-read sentence.
+3. **The refusal-class change (report §7.b): accepted.** Every failure exits 1 whatever its class. The case is a
+   damaged repository, the append is still refused before anything is written or indexed, a FIFO is still never
+   blocked on, and the new messages name their cause. Nothing to change. Name the two new message classes in the
+   CHANGELOG entry's last sentence.
+4. **Sites D, E and F: no change.** Each is bounded by something other than the store (D by a ref publication's few
+   writes, E by the patch queue, F by tracked files). The report's table is the record.
+
+**Measurement, units and budgets up front:** re-run **M1** (budget 5 min) and **M2** (budget 5 min) on the final
+commit against the same 0.47.0 binary, alternating, as before. **Acceptance:**
+- **M1 is now linear:** ×2 ±25 % per doubling across 1,000 / 2,000 / 4,000 × 20 KB; at 4,000 files, bytes read at most
+  3 × (worktree + final containers); the 8,000 × 40 B point far below today's 4,257 MB.
+- **M2 unchanged:** within 10 %.
+
+**Docs:** the CHANGELOG entry drops the remaining index re-read sentence if item 2 lands, and gives the new M1 figures
+and the `verify` robustness in one line.
+
+Gates on the exact final commit. Report: `.git-exclude/review-request/append-length-without-reading-report-v2.md`. Then
+the architect pushes the whole round, and it closes on a green Windows mutation suite.
