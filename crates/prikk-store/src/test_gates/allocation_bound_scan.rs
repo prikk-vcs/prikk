@@ -158,7 +158,12 @@ fn strip_inline_test_modules(text: &str) -> String {
         let after_attrs = rest.trim_start();
         let leading = rest.len() - after_attrs.len();
         let is_inline_mod = {
-            let line = after_attrs.lines().next().unwrap_or_default().trim_start();
+            // The first line that is not another attribute (`#[allow(..)]` may sit between `#[cfg(test)]` and `mod`).
+            let line = after_attrs
+                .lines()
+                .map(str::trim_start)
+                .find(|line| !line.starts_with("#["))
+                .unwrap_or_default();
             let line = line
                 .strip_prefix("pub(crate) ")
                 .or_else(|| line.strip_prefix("pub(super) "))
@@ -572,6 +577,7 @@ fn encode(body: &[u8], items: &[u8]) {
 // Vec::with_capacity(count as usize)
 fn production() {}
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     fn helper() { let v = vec![0_u8; n]; let w = Vec::with_capacity(count as usize); }
 }
@@ -579,7 +585,7 @@ fn after_the_test_module() { let x = Vec::with_capacity(count as usize); }
 "#;
     let found = sites_in("z.rs", ignored);
     assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].line, 8);
+    assert_eq!(found[0].line, 9);
 }
 
 /// An allowlist row is worth what its witness is worth: a site with a row but no witness in its file is reported, and a row that no
