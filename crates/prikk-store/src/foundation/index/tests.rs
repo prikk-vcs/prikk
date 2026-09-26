@@ -371,3 +371,228 @@ fn a_format_7_repository_merges_another_signers_copy() -> Result<()> {
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+// ---- RFC 102, the append-length round: an object append learns its container's length from a stat of the descriptor it appends
+// ---- to, never by reading the container. Controls 1-4 of `rfcs/handoffs/102-container-based-durability/
+// ---- append-length-without-reading-handoff-v1.md` (control 5, the race controls, stays where it was: `object_store/tests.rs`).
+
+fn container_relative(layout: &RepositoryLayout, object_type: ObjectType) -> std::path::PathBuf {
+    layout
+        .repository_relative(&layout.container_slot_path(object_type, ContainerSlot::A))
+        .expect("the container is under the repository")
+}
+
+fn blob_envelope(label: &str, size: usize) -> ObjectEnvelope {
+    let mut payload = label.as_bytes().to_vec();
+    payload.resize(size.max(payload.len()), b'.');
+    ObjectEnvelope::unsigned(ObjectType::Blob, 1, payload)
+}
+
+/// **Control 1 -- an append does not read its container.** Forty blobs are appended to a repository's blob container through the file
+/// store's own append path; the anchored reader's tally (`read_tally`, `cfg(test)`) shows **no byte** of that container read. A
+/// positive control reads one object back -- which does read the container -- and sees the tally move, so the counter is known to be
+/// able to see a container read.
+/// **Perturb:** put `read_file_if_exists(container)?.map_or(0, |bytes| bytes.len())` back in `append_object_to_container` (the
+/// whole-container read this round removed): the first assertion goes red.
+#[test]
+fn an_object_append_does_not_read_its_container() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-append-reads-nothing");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let relative = container_relative(&layout, ObjectType::Blob);
+    crate::foundation::fsutil::read_tally::reset();
+    let mut last = None;
+    for index in 0..40 {
+        let envelope = blob_envelope(&format!("blob-{index}"), 4096);
+        last = Some(append_object_to_container(
+            &layout,
+            ObjectType::Blob,
+            &envelope,
+        )?);
+    }
+    assert_eq!(
+        crate::foundation::fsutil::read_tally::bytes_read(&relative),
+        0,
+        "forty appends read nothing of the container"
+    );
+    // The counter can see a container read: reading one object back reads the container.
+    let entry = last.expect("appended");
+    crate::foundation::index::read_object_envelope_at(&layout, &entry)?;
+    assert!(
+        crate::foundation::fsutil::read_tally::bytes_read(&relative) > 0,
+        "fixture sanity: an object read reads the container, and the tally sees it"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Control 2 -- offsets unchanged.** A real repository -- sealed history, so patches, blocks, blobs, ref states -- is checked entry
+/// by entry: within each container, sorted by offset, every entry's offset equals the sum of the lengths of the records before it, the
+/// first is 0, and the last ends exactly at the container's length; and `verify` finds nothing.
+/// **Perturb:** `offset + 1` in `append_object_to_container`: red.
+#[test]
+fn every_index_entry_offset_is_the_sum_of_the_records_before_it_and_verify_is_clean() -> Result<()>
+{
+    let history = crate::test_gates::test_support::AnchoredHistory::standard("index-offsets", 30);
+    let layout = &history.layout;
+    let replay = crate::foundation::index::replay_index(layout)?;
+    assert!(replay.entries.len() > 60, "fixture sanity: many objects");
+    let mut by_container: std::collections::BTreeMap<String, Vec<(u64, u64)>> =
+        std::collections::BTreeMap::new();
+    for entry in &replay.entries {
+        by_container
+            .entry(format!("{:?}/{:?}", entry.object_type, entry.slot))
+            .or_default()
+            .push((entry.offset, entry.length));
+    }
+    assert!(
+        by_container.len() >= 3,
+        "fixture sanity: mixed object types"
+    );
+    for (container, mut records) in by_container {
+        records.sort_unstable();
+        let mut expected = 0_u64;
+        for (offset, length) in &records {
+            assert_eq!(
+                *offset, expected,
+                "{container}: an entry's offset is the sum of the records before it"
+            );
+            expected += length;
+        }
+        let object_type = replay
+            .entries
+            .iter()
+            .find(|entry| format!("{:?}/{:?}", entry.object_type, entry.slot) == container)
+            .map(|entry| entry.object_type)
+            .expect("an entry");
+        let file_len =
+            std::fs::metadata(layout.container_slot_path(object_type, ContainerSlot::A))?.len();
+        assert_eq!(
+            expected, file_len,
+            "{container}: the last record ends at the container's length"
+        );
+    }
+    let verification = crate::verify_repository(layout)?;
+    assert!(
+        !verification.has_item_failure() && !verification.has_stage_failure(),
+        "verify is clean: {verification:?}"
+    );
+    Ok(())
+}
+
+/// **Control 3 -- a torn tail counts in the length, exactly as the read counted it.** Garbage bytes appended to the end of a container
+/// (what an interrupted append leaves) are part of the file; the next object's recorded offset is the container's **full** length,
+/// torn bytes included. The same scenario ran on 0.47.0's code before this change and gave the same offset.
+/// **Perturb:** take the length only up to the last complete frame (`offset` minus the garbage): red.
+#[test]
+fn a_torn_tail_counts_in_the_next_objects_offset() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-append-torn-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    for index in 0..3 {
+        append_object_to_container(
+            &layout,
+            ObjectType::Blob,
+            &blob_envelope(&format!("before-{index}"), 300),
+        )?;
+    }
+    let container = layout.container_slot_path(ObjectType::Blob, ContainerSlot::A);
+    let mut file = std::fs::OpenOptions::new().append(true).open(&container)?;
+    std::io::Write::write_all(&mut file, &[0xAB; 7])?;
+    drop(file);
+    let full_length = std::fs::metadata(&container)?.len();
+    let entry =
+        append_object_to_container(&layout, ObjectType::Blob, &blob_envelope("after", 300))?;
+    assert_eq!(
+        entry.offset, full_length,
+        "the offset is the whole file's length, the 7 torn bytes included"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Run `work` on a thread and wait at most `limit`: a regression that made an append **block** on a FIFO must fail this control, not
+/// hang the suite.
+fn within<T: Send + 'static>(
+    limit: std::time::Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver.recv_timeout(limit).ok()
+}
+
+/// **Control 4 -- refusals unchanged.** A container replaced by a directory, by a symlink (to a real file, which must not be appended
+/// to) and by a FIFO (which must never be blocked on) is refused, and a missing container is refused; each leaves the index empty.
+/// **Perturb:** follow the final component (drop `OFlags::NOFOLLOW` from `open_existing_regular`): the symlink case goes red.
+#[test]
+fn an_append_to_a_container_that_is_not_a_regular_file_or_is_missing_is_refused() -> Result<()> {
+    let attempt =
+        |setup: &dyn Fn(&std::path::Path, &std::path::Path) -> Result<()>| -> Result<(bool, u64)> {
+            let root = crate::test_gates::test_support::unique_temp_dir("index-append-refusals");
+            let layout = RepositoryLayout::init(root.clone())?;
+            let container = layout.container_slot_path(ObjectType::Blob, ContainerSlot::A);
+            setup(&container, &root)?;
+            let result = within(std::time::Duration::from_secs(10), {
+                let layout = layout.clone();
+                move || {
+                    append_object_to_container(
+                        &layout,
+                        ObjectType::Blob,
+                        &blob_envelope("refused", 300),
+                    )
+                    .is_err()
+                }
+            });
+            let index_len = std::fs::metadata(layout.container_index_path())?.len();
+            let _ = std::fs::remove_dir_all(&root);
+            Ok((
+                result.expect("the append returned (it did not block)"),
+                index_len,
+            ))
+        };
+    // A missing container.
+    let (refused, index_len) = attempt(&|container, _| Ok(std::fs::remove_file(container)?))?;
+    assert!(refused, "a missing container is refused");
+    assert_eq!(index_len, 0, "and nothing is indexed");
+    // A directory.
+    let (refused, index_len) = attempt(&|container, _| {
+        std::fs::remove_file(container)?;
+        Ok(std::fs::create_dir(container)?)
+    })?;
+    assert!(refused, "a directory is refused");
+    assert_eq!(index_len, 0);
+    #[cfg(unix)]
+    {
+        // A symlink to a real file: refused, and the target is not appended to.
+        let target = std::env::temp_dir().join(format!(
+            "prikk-append-symlink-target-{}",
+            std::process::id()
+        ));
+        std::fs::write(&target, b"target bytes")?;
+        let (refused, index_len) = attempt(&|container, _| {
+            std::fs::remove_file(container)?;
+            Ok(std::os::unix::fs::symlink(&target, container)?)
+        })?;
+        assert!(refused, "a symlink at the final component is not followed");
+        assert_eq!(index_len, 0);
+        assert_eq!(
+            std::fs::read(&target)?,
+            b"target bytes",
+            "the symlink's target was not appended to"
+        );
+        let _ = std::fs::remove_file(&target);
+        // A FIFO: refused, never blocked on.
+        let (refused, index_len) = attempt(&|container, _| {
+            std::fs::remove_file(container)?;
+            let status = std::process::Command::new("mkfifo")
+                .arg(container)
+                .status()?;
+            assert!(status.success(), "mkfifo");
+            Ok(())
+        })?;
+        assert!(refused, "a FIFO is refused");
+        assert_eq!(index_len, 0);
+    }
+    Ok(())
+}

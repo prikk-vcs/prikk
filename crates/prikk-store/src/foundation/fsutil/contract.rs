@@ -96,7 +96,24 @@ pub(crate) trait DurabilityContract {
     /// requires the file to already exist -- does not create it, unlike this trait's other two
     /// "existing" methods' shared name might suggest before this note. This doc was stale from
     /// `d8f5240` until Stage 5 round 3 caught it; see that commit for why creating on append is unsafe.
-    fn durable_append(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()>;
+    fn durable_append(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {
+        self.durable_append_reporting_offset(root, relative, bytes)
+            .map(|_| ())
+    }
+
+    /// [`Self::durable_append`], and **the file's length immediately before the append, read from the very descriptor the record is
+    /// appended to** (`fstat` on that open file; no second open and no read of the file's content). This is what an object container's
+    /// index entry records as its offset (RFC 102, the append-length round): the offset used to be the length of the whole container
+    /// *read into memory* for the purpose, which made every object append read everything the store held. Every property of
+    /// `durable_append` is unchanged -- the final component is never followed through a symlink, a non-regular file is refused, a
+    /// missing file is refused, and a torn tail counts in the length -- because it is the same open, validated the same way.
+    /// The caller holds the object-store lock, so nothing else appends between the `fstat` and the write.
+    fn durable_append_reporting_offset(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> Result<u64>;
 
     /// Durably truncate an existing regular file to `len`.
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()>;

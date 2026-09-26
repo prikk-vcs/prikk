@@ -28,7 +28,8 @@ use crate::foundation::container::{self, ContainerRecordStatus, container_magic}
 use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::resync_to_next_magic;
 use crate::foundation::fsutil::{
-    append_file_required, len_to_u64, read_file_if_exists, write_file_atomically,
+    append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
+    write_file_atomically,
 };
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
@@ -536,7 +537,7 @@ pub(crate) fn append_object_to_container(
 
     // RFC 102, ruled 2026-09-12: **this function must run under the object-store lock**, which
     // `object_store::append_object_under_lock` -- its only production caller -- holds across the
-    // whole call. The exclusive region has to span from the length read just below through the index
+    // whole call. The exclusive region has to span from the length taken by the append just below through the index
     // append at the end of this function, and nothing shorter is correct: `offset` is derived from
     // the container's length *before* the append and recorded in the index *after* it, so two
     // writers that read the same length both record the same offset and one index entry ends up
@@ -552,16 +553,24 @@ pub(crate) fn append_object_to_container(
     // this placement on the first attempt). `append_object_under_lock` is the single chokepoint that
     // enforces it, and `every_object_append_goes_through_the_locked_wrapper` is the test that keeps
     // it the only one.
-    let existing_len = read_file_if_exists(layout.repository_mutation_root(), &container_relative)?
-        .map_or(0, |bytes| bytes.len());
-    let offset = len_to_u64(existing_len)?;
     let length = len_to_u64(record_bytes.len())?;
     let container_checksum = frame_checksum(object_type, &record_bytes)?;
 
     // Step 1: append the object record to its container. Must be durable before step 2 -- a crash
     // here leaves nothing indexed yet, which is not a problem: nothing durable claims this object
     // exists, so there is nothing for a reader to find prematurely.
-    append_file_required(
+    //
+    // **The offset is the container's length immediately before this append, read from the descriptor
+    // the record is appended to** (`append_file_reporting_offset_required`: one open, one `fstat`, one
+    // write, both syncs) -- not from reading the container. This used to be
+    // `read_file_if_exists(container)?.map_or(0, |bytes| bytes.len())`: the whole container read into
+    // memory on every object append, only to learn its length, so a commit's memory followed everything
+    // the store held and a first commit of many files read quadratic bytes (RFC 102, `MEASURED and RULED
+    // 2026-09-26`). The meaning is unchanged: the length before the append, inside the same lock hold
+    // (see above), a torn tail from an interrupted append counted in it exactly as the read counted it, a
+    // missing container refused by the append, a symlink at the final component never followed, and a
+    // non-regular file refused.
+    let offset = append_file_reporting_offset_required(
         layout.repository_mutation_root(),
         &container_relative,
         &record_bytes,

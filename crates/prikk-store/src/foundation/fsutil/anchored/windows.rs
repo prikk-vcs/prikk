@@ -316,14 +316,25 @@ impl DurabilityContract for WindowsDurability {
         fs::rename(&temp_full, &destination).map_err(|error| io_error(&destination, error))
     }
 
-    fn durable_append(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {
+    fn durable_append_reporting_offset(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> Result<u64> {
         let path = resolved_existing_path(root, relative)?;
         let mut file = required_existing_file_no_follow(&path, OpenOptions::new().append(true))?;
+        // The length before the append, from the handle the record is appended to (see the trait method's doc).
+        let offset = file
+            .metadata()
+            .map_err(|error| io_error(&path, error))?
+            .len();
         failpoints::append_write()?;
         file.write_all(bytes)
             .map_err(|error| io_error(&path, error))?;
         failpoints::required_file_sync()?;
-        file.sync_all().map_err(|error| io_error(&path, error))
+        file.sync_all().map_err(|error| io_error(&path, error))?;
+        Ok(offset)
     }
 
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()> {

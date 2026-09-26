@@ -32,6 +32,8 @@ mod windows;
 mod windows_authority;
 
 pub(crate) use directory::MutationRoot;
+#[cfg(test)]
+pub(crate) use read::read_tally;
 pub(crate) use read::{
     EntryKind, RootDirEntry, RootFileStat, inspect_entry, list_directory, read_file_if_exists,
     read_file_required, stat_file_state_if_exists,
@@ -109,6 +111,17 @@ pub(crate) fn append_file_required(
     bytes: &[u8],
 ) -> Result<()> {
     ACTIVE_DURABILITY.durable_append(root, relative, bytes)
+}
+
+/// [`append_file_required`], returning the file's length immediately before the append -- read from the descriptor the bytes are
+/// appended to, never by reading the file (`DurabilityContract::durable_append_reporting_offset`). The caller holds the lock that makes
+/// that length the record's offset.
+pub(crate) fn append_file_reporting_offset_required(
+    root: &MutationRoot,
+    relative: &Path,
+    bytes: &[u8],
+) -> Result<u64> {
+    ACTIVE_DURABILITY.durable_append_reporting_offset(root, relative, bytes)
 }
 
 /// Truncate an existing regular file to a retained length and sync its parent.

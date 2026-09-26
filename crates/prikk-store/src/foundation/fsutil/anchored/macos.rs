@@ -52,17 +52,25 @@ impl DurabilityContract for MacosDurability {
         directory.sync()
     }
 
-    fn durable_append(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {
+    fn durable_append_reporting_offset(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> Result<u64> {
         let directory = open_existing_directory_required(root, required_parent(relative)?)?;
         let name = required_file_name(relative)?;
         let fd = open_append_regular(&directory.fd, name)?;
         let mut file = File::from(fd);
+        // The length before the append, from the descriptor the record is appended to (see the trait method's doc).
+        let offset = file.metadata()?.len();
         failpoints::append_write()?;
         file.write_all(bytes)?;
         failpoints::required_file_sync()?;
         file.sync_all()?;
         failpoints::required_directory_sync()?;
-        directory.sync()
+        directory.sync()?;
+        Ok(offset)
     }
 
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()> {

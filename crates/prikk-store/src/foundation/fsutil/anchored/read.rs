@@ -85,7 +85,45 @@ const ACTIVE_READER: PathOnlyReader = PathOnlyReader;
 
 /// Read a regular file's bytes, returning `None` only when a path component is absent.
 pub(crate) fn read_file_if_exists(root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>> {
-    ACTIVE_READER.read_file_if_exists(root, relative)
+    let read = ACTIVE_READER.read_file_if_exists(root, relative)?;
+    #[cfg(test)]
+    if let Some(bytes) = &read {
+        read_tally::record(relative, bytes.len());
+    }
+    Ok(read)
+}
+
+/// **Test-only read tally** (RFC 102, the append-length round): the bytes this thread has read through [`read_file_if_exists`] (and so
+/// [`read_file_required`]), by root-relative path. The control "an object append does not read its container" reads the container's
+/// entry; a positive control reads an object back and sees the entry grow, so the counter is known to be able to see a container read.
+#[cfg(test)]
+pub(crate) mod read_tally {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    thread_local! {
+        static BYTES: RefCell<BTreeMap<PathBuf, u64>> = const { RefCell::new(BTreeMap::new()) };
+    }
+
+    pub(super) fn record(relative: &Path, bytes: usize) {
+        BYTES.with(|tally| {
+            *tally
+                .borrow_mut()
+                .entry(relative.to_path_buf())
+                .or_insert(0) += bytes as u64;
+        });
+    }
+
+    /// Bytes read through the anchored reader from `relative` since the last [`reset`] on this thread.
+    pub(crate) fn bytes_read(relative: &Path) -> u64 {
+        BYTES.with(|tally| tally.borrow().get(relative).copied().unwrap_or(0))
+    }
+
+    /// Zero this thread's tally.
+    pub(crate) fn reset() {
+        BYTES.with(|tally| tally.borrow_mut().clear());
+    }
 }
 
 /// Stat a regular file's size, mtime, and mode without opening or reading its content.

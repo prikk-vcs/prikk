@@ -30,7 +30,12 @@ impl DurabilityContract for NoDurability {
         unsupported_mutation()
     }
 
-    fn durable_append(&self, root: &MutationRoot, relative: &Path, bytes: &[u8]) -> Result<()> {
+    fn durable_append_reporting_offset(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> Result<u64> {
         let _ = (root, relative, bytes);
         unsupported_mutation()
     }
