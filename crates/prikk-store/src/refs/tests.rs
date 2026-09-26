@@ -1,5 +1,6 @@
 //! Ref publication tests.
 
+mod hostile_lengths;
 mod object_mismatch;
 mod publication_recovery;
 

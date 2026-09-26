@@ -126,7 +126,7 @@ fn decode_author_key_body(body: &[u8]) -> Result<AuthorKeyEntry> {
     Ok(AuthorKeyEntry { key_id, public_key })
 }
 
-fn encode_author_key_record(entry: &AuthorKeyEntry) -> Result<Vec<u8>> {
+pub(crate) fn encode_author_key_record(entry: &AuthorKeyEntry) -> Result<Vec<u8>> {
     let body = encode_author_key_body(entry)?;
     let body_len = len_to_u64(body.len())?;
     let checksum = author_key_checksum(body_len, &body);
@@ -227,7 +227,7 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
 
 /// Isolate-and-continue reading, matching every other container's decode loop in this codebase
 /// (`trust_index.rs::decode_trust_key_records` is the closest precedent).
-fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay> {
+pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay> {
     let mut entries = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;

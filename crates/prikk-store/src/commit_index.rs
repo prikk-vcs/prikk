@@ -162,7 +162,7 @@ fn index_path(layout: &RepositoryLayout) -> std::path::PathBuf {
     layout.cache_dir().join(INDEX_FILE_NAME)
 }
 
-fn serialize(index: &CommitIndex) -> Vec<u8> {
+pub(crate) fn serialize(index: &CommitIndex) -> Vec<u8> {
     let mut out = String::new();
     out.push_str(INDEX_MAGIC);
     out.push('\n');
@@ -190,7 +190,7 @@ fn serialize(index: &CommitIndex) -> Vec<u8> {
 /// index rather than propagate a corrupt cache as a repository error. Repository paths are
 /// ASCII-only with no control characters (`prikk_object::validate_repo_path`), so a plain tab/
 /// newline-delimited line format never needs escaping.
-fn parse(bytes: &[u8]) -> Option<CommitIndex> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<CommitIndex> {
     let text = std::str::from_utf8(bytes).ok()?;
     let mut lines = text.lines();
     if lines.next()? != INDEX_MAGIC {

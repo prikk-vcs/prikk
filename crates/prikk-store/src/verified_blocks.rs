@@ -28,7 +28,7 @@ use crate::foundation::fsutil::{read_file_if_exists, write_file_atomically};
 use crate::foundation::layout::RepositoryLayout;
 
 const RECORD_FILE_NAME: &str = "replay-verified-blocks.v1";
-const RECORD_MAGIC: &[u8] = b"PRIKK-REPLAY-VERIFIED-BLOCKS-v1\0";
+pub(crate) const RECORD_MAGIC: &[u8] = b"PRIKK-REPLAY-VERIFIED-BLOCKS-v1\0";
 const RECORD_SCHEMA_VERSION: u32 = 1;
 /// The replay semantics a recorded verdict was reached under.
 const REPLAY_SEMANTICS_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -66,7 +66,7 @@ pub(crate) fn record_verified_blocks(
     let _ = write_file_atomically(layout.repository_mutation_root(), &relative, &encode(&set));
 }
 
-fn encode(set: &BTreeSet<ObjectId>) -> Vec<u8> {
+pub(crate) fn encode(set: &BTreeSet<ObjectId>) -> Vec<u8> {
     let version = REPLAY_SEMANTICS_VERSION.as_bytes();
     let mut body = Vec::with_capacity(4 + 2 + version.len() + 4 + 32 * set.len());
     body.extend_from_slice(&RECORD_SCHEMA_VERSION.to_be_bytes());
@@ -87,7 +87,7 @@ fn encode(set: &BTreeSet<ObjectId>) -> Vec<u8> {
     out
 }
 
-fn decode(bytes: &[u8]) -> Option<BTreeSet<ObjectId>> {
+pub(crate) fn decode(bytes: &[u8]) -> Option<BTreeSet<ObjectId>> {
     let after_magic = bytes.strip_prefix(RECORD_MAGIC)?;
     let (checksum, body) = after_magic.split_at_checked(32)?;
     if prikk_hash::sha256(body) != checksum {

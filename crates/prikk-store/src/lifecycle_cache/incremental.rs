@@ -25,7 +25,7 @@ use crate::path::RepoPath;
 use super::{ReplayDerivedLifecycleState, replay, replay_derived_state};
 
 const CACHE_FILE_NAME: &str = "lifecycle-state.v1";
-const CACHE_MAGIC: &[u8] = b"PRIKK-LIFECYCLE-INCREMENTAL-CACHE-v1\0";
+pub(crate) const CACHE_MAGIC: &[u8] = b"PRIKK-LIFECYCLE-INCREMENTAL-CACHE-v1\0";
 const CACHE_SCHEMA_VERSION: u32 = 1;
 
 // After `CHECKPOINT_CADENCE` consecutive incremental steps on one lineage, the next commit is forced
@@ -36,7 +36,7 @@ const CACHE_SCHEMA_VERSION: u32 = 1;
 // reanchor bound and the snapshot checkpoint cadence one number.
 use crate::snapshot::CHECKPOINT_CADENCE;
 
-struct IncrementalCache {
+pub(crate) struct IncrementalCache {
     baseline_block_id: ObjectId,
     horizon_id: ObjectId,
     steps_since_reanchor: u32,
@@ -316,7 +316,7 @@ fn encode(cache: &IncrementalCache) -> Vec<u8> {
     out
 }
 
-fn decode(bytes: &[u8]) -> Option<IncrementalCache> {
+pub(crate) fn decode(bytes: &[u8]) -> Option<IncrementalCache> {
     let after_magic = bytes.strip_prefix(CACHE_MAGIC)?;
     if after_magic.len() < 32 {
         return None;

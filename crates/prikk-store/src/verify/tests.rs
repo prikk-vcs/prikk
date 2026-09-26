@@ -895,6 +895,105 @@ fn verify_repository_detects_index_entry_resolving_to_a_different_object() -> Re
     Ok(())
 }
 
+/// **RFC 160 §7 -- an indexed record that cannot be read is a finding, not a torn tail.** A patch is written through the store (so it
+/// has an index entry), then its container frame's header is rewritten to claim a body of 2^62 bytes. The container scan reads that as a
+/// torn tail (a frame claiming more than remains) and tolerates it; the index pass used to skip the entry the same way, so `verify`
+/// reported `0 scanned, 0 failed` and exited 0. It now reports a `Failed` item naming the object id and the offset.
+/// **Perturb:** restore the `continue` on a failed read in `verify/objects.rs`'s index pass: red.
+#[test]
+#[allow(clippy::indexing_slicing)]
+fn verify_reports_an_indexed_record_whose_header_claims_an_absurd_length() -> Result<()> {
+    let root = unique_temp_dir("verify-indexed-absurd-length");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+    let envelope = signed_patch_envelope();
+    let id = store.write_object(&envelope)?;
+    let healthy = verify_repository(&layout)?;
+    assert!(
+        !healthy.has_item_failure(),
+        "fixture sanity: the repository verifies clean before the damage: {healthy:?}"
+    );
+    let container = layout.container_slot_path(
+        ObjectType::Patch,
+        crate::foundation::layout::ContainerSlot::A,
+    );
+    let mut bytes = std::fs::read(&container)?;
+    bytes[10..18].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(&container, bytes)?;
+
+    let report = verify_repository(&layout)?;
+    assert_object_item_failed(
+        &report,
+        &format!("index entry for {id} names a record at offset 0"),
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **The other half of the same ruling: no double report, and no false one.** (1) A record the container scan already reports as
+/// failed (a byte flipped inside its checksummed body) is reported **once**, by the scan -- the index pass adds nothing at that
+/// offset. (2) The same absurd header on a record **no index entry names** is a genuine torn tail's shape, and is still tolerated: no
+/// failure.
+/// **Perturb:** drop the `already_reported` check: (1) reports twice. Report every torn tail: (2) goes red.
+#[test]
+#[allow(clippy::indexing_slicing)]
+fn an_unreadable_indexed_record_is_reported_once_and_an_unindexed_torn_tail_is_still_tolerated()
+-> Result<()> {
+    // (1) checksum damage: one Failed item at that offset.
+    let root = unique_temp_dir("verify-indexed-checksum-damage");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+    store.write_object(&signed_patch_envelope())?;
+    let container = layout.container_slot_path(
+        ObjectType::Patch,
+        crate::foundation::layout::ContainerSlot::A,
+    );
+    let mut bytes = std::fs::read(&container)?;
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xff;
+    std::fs::write(&container, bytes)?;
+    let report = verify_repository(&layout)?;
+    let failed = report
+        .object_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome.status, ObjectItemStatus::Failed { .. }))
+        .count();
+    assert!(
+        report.has_item_failure(),
+        "the damage is a failure: {report:?}"
+    );
+    assert_eq!(
+        failed, 1,
+        "reported once, by the container scan: {:?}",
+        report.object_outcomes
+    );
+    let _ = std::fs::remove_dir_all(root);
+
+    // (2) no index entry: the same header is a torn tail, tolerated.
+    let root = unique_temp_dir("verify-unindexed-torn-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let record = crate::foundation::container::encode_container_record_for_test(
+        ObjectType::Patch,
+        &signed_patch_envelope(),
+    )?;
+    let mut torn = record;
+    torn[10..18].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(
+        layout.container_slot_path(
+            ObjectType::Patch,
+            crate::foundation::layout::ContainerSlot::A,
+        ),
+        torn,
+    )?;
+    let report = verify_repository(&layout)?;
+    assert!(
+        !report.has_item_failure(),
+        "an unindexed frame claiming more than remains is a torn tail, tolerated as before: {report:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 /// DC-95 Stage 1, round 3, re-targeted for RFC 102 Stage 3: `verify_object_file`'s envelope-type-
 /// mismatch check moved into `container::parse_frame_at` itself (found and fixed during this very
 /// re-target -- the container magic alone does not constrain what `object_type` the body's own

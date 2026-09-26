@@ -461,7 +461,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
 /// this WAL's own content, which is why the return type stays `Result` at all: none exist below,
 /// `decode_records` cannot fail, kept fallible for API stability and because `parse_header`'s errors
 /// are folded into `FrameAttempt::Invalid` rather than raised.
-fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
+pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;

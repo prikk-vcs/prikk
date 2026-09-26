@@ -300,7 +300,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
 /// 3 already followed): a frame that fails to validate no longer aborts replay -- its offset and
 /// error are recorded as a `Failed` outcome, and `frame_resync::resync_to_next_magic` finds the next
 /// candidate frame so every subsequent sound record, for every ref, is still read.
-pub(in crate::refs) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerReplay> {
+pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerReplay> {
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;

@@ -147,9 +147,20 @@ pub(super) fn verify_objects(
     // item defect into a whole-stage abort. Only a location that decodes *successfully but to the
     // wrong id* is a genuine index-integrity defect, not merely a damaged record the index happens to
     // point at.
+    //
+    // **But an indexed entry whose record cannot be read at all is reported by nobody unless it is reported here** (RFC 160 §7). The
+    // container scan tolerates a frame whose header claims more bytes than remain as a *torn tail* -- the harmless remnant of an
+    // interrupted append -- and a genuine torn tail can never have an index entry, because the index is appended only after the
+    // record is durable. So an entry that names a record no read can produce is damage the scan calls a torn tail; it is collected
+    // here and reported as its own `Failed` item after the scan, unless the scan already reported a failure at that same offset.
+    let mut unreadable: Vec<(&crate::foundation::index::IndexEntry, String)> = Vec::new();
     for entry in &index_replay.entries {
-        let Ok(envelope) = crate::foundation::index::read_object_envelope_at(layout, entry) else {
-            continue;
+        let envelope = match crate::foundation::index::read_object_envelope_at(layout, entry) {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                unreadable.push((entry, err.to_string()));
+                continue;
+            }
         };
         let computed = envelope.object_id();
         if computed != entry.object_id {
@@ -169,6 +180,29 @@ pub(super) fn verify_objects(
             &mut pending_v3_blocks,
             &indexed_ids,
         )?);
+    }
+    for (entry, message) in unreadable {
+        let locator = layout
+            .container_slot_path(entry.object_type, entry.slot)
+            .join(format!("#{}", entry.offset));
+        let already_reported = summary.item_outcomes.iter().any(|outcome| {
+            outcome.object_type == entry.object_type
+                && outcome.path == locator
+                && matches!(outcome.status, ObjectItemStatus::Failed { .. })
+        });
+        if already_reported {
+            continue;
+        }
+        summary.item_outcomes.push(ObjectItemOutcome {
+            object_type: entry.object_type,
+            path: locator,
+            status: ObjectItemStatus::Failed {
+                message: format!(
+                    "index entry for {} names a record at offset {} that cannot be read: {message}",
+                    entry.object_id, entry.offset
+                ),
+            },
+        });
     }
     summary.temp_paths = scan_loose_file_temp_debris(layout)?;
 
