@@ -1,6 +1,7 @@
 # A time budget and a watcher for every measurement — handoff v1
 
-**Live 2026-09-26, and it is next.** RFC 159's implementation is accepted (review `rfc159-implementation-review-v1`).
+**Live 2026-09-26, next after RFC 159's Addendum 2** (the Windows test-path fix; `main` must be green first).
+RFC 159's implementation is accepted (review `rfc159-implementation-review-v1`).
 **Next after this:** 0.48.0 release prep, which uses what this round delivers.
 
 **Approved by the owner 2026-09-26** (*"Approved. Yes. Write the handoff."*), after the architect's account of why

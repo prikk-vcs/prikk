@@ -156,3 +156,24 @@ instruments. The acceptance figure is already in hand: one `seal` at depth 1,024
 14/14 gates re-run by the architect; the acceptance figure reproduced on the final commit's own release binary: an ordinary
 `seal` at depth 1,024 peaks at about 30 MiB, against 0.47.0's 1.8 GiB). **This handoff is closed.** Next, live:
 `rfcs/handoffs/133-performance-cost-and-its-evidence/measurement-budget-handoff-v1.md`.
+
+## Addendum 2 — 2026-09-26: `main` is red on Windows; fix first, before the measurement-budget round
+
+**Live, and it is next.** CI run `36202895907` on `08c87271`: 15/16 green, **Windows mutation test suite red**.
+`block_state::anchored_parent::tests::no_environment_knob_and_no_production_never` flags
+`crates\prikk-store\src\snapshot\tests\writer.rs:1086` as a production file naming `StateAnchoring::Never`. The scan
+skips test files by matching the **string** `"/tests/"`. On Windows the path uses `\`, so the test file is not
+skipped. **A test defect, not a product defect.** Linux and macOS are green because their separator is `/`.
+
+1. **Classify by path components, not by the path's spelling.** For example, skip when any component of the path
+   *relative to `src`* is `tests`, the file name ends with `tests.rs`, or a component is `test_gates`. Grep the whole
+   workspace for other string-matched `/tests/` or `/` path filters in test code, and fix them the same way; list each
+   one you find, or say there are none.
+2. **The control keeps its teeth.** Put `StateAnchoring::Never` into `merge/execute.rs` again: the test goes red **on
+   Linux**, as before.
+3. **Proof is the Windows job itself.** Local gates run no Windows tests (cross-target clippy only compiles). The
+   architect pushes your fix and reads the **Windows mutation test suite by name**. The round is closed only when it is
+   green.
+
+Gates on the exact final commit, as always. Report: `.git-exclude/review-request/rfc159-windows-path-fix-report-v1.md`.
+Then the measurement-budget round, which is unchanged.
