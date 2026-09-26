@@ -2,6 +2,8 @@
 //! allocation. An object read used to take the frame length from the header on disk and size a buffer from it; a damaged header made
 //! `prikk verify` abort with `memory allocation of N bytes failed`. It is now an integrity error that `verify` reports.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+
 mod support;
 
 use std::path::Path;
