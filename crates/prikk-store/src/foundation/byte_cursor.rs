@@ -14,6 +14,16 @@ impl<'a> ByteCursor<'a> {
         Self { bytes, pos: 0 }
     }
 
+    /// The capacity to reserve for `count` elements about to be decoded from what is left, **each at least `min_element_len` bytes
+    /// long**: `min(count, remaining bytes / min_element_len)`. A `count` read from a record (whose checksum, where there is one, is
+    /// unkeyed) says what the record *claims*; the bytes left say what it *can* hold, and a decode loop that runs past them fails
+    /// with "unexpected end of record" anyway. So a claimed count of 2^32 reserves what the buffer could hold, not 100 GB (RFC 160 P3;
+    /// allocation failure aborts, so an oversized reservation is a process that dies instead of an error).
+    pub(crate) fn bounded_capacity(&self, count: usize, min_element_len: usize) -> usize {
+        let remaining = self.bytes.len().saturating_sub(self.pos);
+        count.min(remaining / min_element_len.max(1))
+    }
+
     /// Return true when all bytes were consumed.
     pub(crate) fn is_finished(&self) -> bool {
         self.pos == self.bytes.len()

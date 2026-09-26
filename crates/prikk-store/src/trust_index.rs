@@ -341,7 +341,10 @@ fn encode_trust_policy_body(entry: &TrustPolicySnapshotEntry) -> Result<Vec<u8>>
 fn decode_trust_policy_body(body: &[u8]) -> Result<TrustPolicySnapshotEntry> {
     let mut cursor = ByteCursor::new(body);
     let count = cursor.read_u32()?;
-    let mut key_ids = Vec::with_capacity(count as usize);
+    // Each key id is a u16-length-prefixed string: at least two bytes. A `count` that the bytes cannot hold reserves no more than they
+    // can (the loop below then fails with "unexpected end of record"); the record's checksum is unkeyed, so a matching checksum does
+    // not vouch for the count (RFC 160 P3).
+    let mut key_ids = Vec::with_capacity(cursor.bounded_capacity(count as usize, 2));
     for _ in 0..count {
         key_ids.push(cursor.read_string_u16()?);
     }

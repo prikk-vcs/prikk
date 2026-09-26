@@ -5,9 +5,15 @@
 //! (despite the name family) and is not one of these eight.
 
 #[cfg(test)]
+pub(crate) mod allocation_bound_scan;
+#[cfg(test)]
 pub(crate) mod dc55_identity_evidence;
 #[cfg(test)]
 pub(crate) mod format_stability_gate;
+#[cfg(test)]
+pub(crate) mod hostile_length_support;
+#[cfg(test)]
+pub(crate) mod hostile_lengths;
 #[cfg(test)]
 pub(crate) mod release_compatibility_gate;
 #[cfg(test)]
