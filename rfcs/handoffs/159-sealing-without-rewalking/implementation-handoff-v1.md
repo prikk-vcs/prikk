@@ -177,3 +177,6 @@ skipped. **A test defect, not a product defect.** Linux and macOS are green beca
 
 Gates on the exact final commit, as always. Report: `.git-exclude/review-request/rfc159-windows-path-fix-report-v1.md`.
 Then the measurement-budget round, which is unchanged.
+
+**Addendum 2 ACCEPTED 2026-09-26** (`7c8e79e1`, pushed alone; CI run `36209595770` 16/16, Windows mutation suite green by
+name; review `rfc159-windows-path-fix-review-v1`). `main` is green again.
