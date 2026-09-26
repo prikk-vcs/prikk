@@ -338,3 +338,42 @@ refused`, both writers `Ok` — serialised, not overlapping). The "exactly one" 
 timing-dependent by construction; it is to become `conflicts <= 1 && succeeded >= 1` plus the offset
 property, with the deterministic held-lock test carrying the refusal half. Handed with the RFC 148
 round.
+
+## MEASURED and RULED 2026-09-26 — every object append reads its whole container to learn its length
+
+**Found by the architect while reviewing the measurement-budget round** (review `measurement-budget-review-v1`).
+`foundation/index.rs::append_object_to_container` derives the new record's offset like this:
+`read_file_if_exists(…container…)?.map_or(0, |bytes| bytes.len())`. That reads **the whole container into memory**
+on every object append, for every object type, under the object-store lock, only to take its length.
+
+**Measured** on a release build of `0a5d6ead` (the code dates from Stage 3, so every release since has it). Bytes read
+come from `rchar`, peak memory from `getrusage`:
+- **A first commit reads quadratic bytes.** 2,000 × 20 KB files read 40.5 GB, and 4,000 × 20 KB read **162 GB**
+  (×4 per doubling). Read syscalls stay linear, at about 8 per file.
+- **A commit adding one small file peaks at the container's size.** 17 / 73 / **265 MiB** against a blob container of
+  8 / 64 / 256 MiB.
+
+So once a repository stores N GB, every command that writes an object allocates N GB per object written, and a bulk
+import reads O(N²) bytes. Offsets are correct; only the cost is wrong. **It is an availability defect, not an
+integrity one.**
+
+**RULED:**
+1. **The offset comes from a stat, not a read,** and nothing about the offset's meaning changes. It is still the
+   container's length immediately before the append, taken inside the same object-store lock hold. The rules are:
+   - symlinks are refused as today;
+   - a non-regular file is refused as today;
+   - an absent container is 0, as today;
+   - a torn tail from an interrupted append counts in the length, as it does today.
+
+   Preferred form: the length of **the descriptor the record is appended to** (open, `fstat`, append), so the length
+   and the write name one file. An anchored stat of the same path under the lock is acceptable if that open-then-stat
+   shape cannot be had on every platform; the report says which was used, and why.
+2. **Sweep for the same shape**: any per-append or per-write read whose size grows with the store (the whole object
+   index re-decoded per write on `FileObjectStore::write_object`, `wal.rs`'s length read, anything the sweep finds).
+   Measure each one's share by `rchar` after (1). **Fix only what is as mechanical as (1); report the rest** for a
+   ruling.
+3. **No format change and no change to any output.** The index entries a history produces are byte-identical before
+   and after.
+
+Handoff: `rfcs/handoffs/102-container-based-durability/append-length-without-reading-handoff-v1.md`. **Scheduled before
+0.48.0 release prep** (the architect's proposal; the owner may swap it behind the cut).

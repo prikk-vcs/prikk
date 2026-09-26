@@ -65,13 +65,21 @@ over the runs give both in minutes.
    size-capped tmpfs that a concurrent build or gate run can fill out from under it. **The measurement
    owns the machine while it runs — including gates, from the architect's own side, not only builds.**
 
-   **Wall-clock cost: being measured, not yet recorded.** Two prior clean runs reported ~88-94 minutes
-   for this profile, longer than the full sweep's own historical ~75 minutes — arithmetically impossible
-   for a strict subset of that sweep's work, so that figure is **withdrawn**, along with the earlier
-   "~10 minutes" estimate it replaced. Both entry points now print and report per-point elapsed time
-   (an "elapsed (s)" column in the incremental table of both reports), so the next clean run — on a
-   committed revision, on an idle machine, with nothing else running — records a real number here, and a
-   run interrupted mid-sweep still leaves per-point timings for whatever it completed.
+   **Wall-clock cost, measured, not promised:** the trimmed profile took **672–770 s (11–13 minutes) per
+   run**, measured on 2026-09-26 at a 1-minute load of 1.0–2.2, over four runs: two on 0.47.0's release
+   commit with the instrument overlaid, two on HEAD. The profile's in-source budget is 1,200 s, and its
+   watcher stops it at 2,400 s with a partial report. The pre-trim profile took 6,008 s at 0.47.0's prep.
+   Since the measurement-budget round (`74e7c4ac`), each N's baseline is built once and copied
+   **preserving timestamps**, so the commit index sees the same files it would see after a fresh build.
+   No worktree diff runs before the measured commit.
+
+   **Compare like for like.** The previous release's figure is its figure **under this profile**. For
+   0.48.0 that is **0.47.0's 1.916×** (runs 1.922 and 1.910), measured on 2026-09-26 in
+   `measurement-budget-review-v1`. It is **never** the pre-trim profile's 1.910×. For scale, 0.47.0's two
+   runs of this same profile differ by 0.6 %. A move inside that is not evidence of a change, and a move
+   outside it stops the cut until explained. A round that changed what a commit reads or allocates
+   (0.48.0: the object append no longer reads its whole container) is the explanation to **check** against
+   the new figures, not to assume.
 
    **This profile is not a substitute for the full sweep everywhere.** A round that adds or changes a
    replay-shaped reader (a `tree` row, a `diff` row, anything the incremental or genesis series exercises

@@ -146,3 +146,12 @@ A method change of that size cannot be accepted blind. **Option A is refused.**
 - **The full sweep's 4-hour budget** stays a stated guess until it is next run under the watcher. That run replaces it.
 
 Gates on the exact final commit, then the report, with §2's arm table, the chosen form, and the re-baseline figures.
+
+**ACCEPTED 2026-09-26** (`67b6ee3c`, `8cf2f9f3`, `22242330`, `07280736`, `91ff9516`, `74e7c4ac`; review
+`measurement-budget-review-v1`; 14/14 gates re-run by the architect on `74e7c4ac`, controls perturbed by the architect).
+The chosen gate form is (iv), a baseline copied preserving timestamps: the commit index trusts size and mtime
+(`commit_index.rs:50`), so only (iv) gives the measured commit the reference form's input. The data cannot tell the
+four arms apart. **0.47.0 under the trimmed profile: 1.916×** (runs 1.922 and 1.910), measured 672–770 s per run. The
+release-prep template carries both. **This handoff is closed.** Next, live:
+`rfcs/handoffs/102-container-based-durability/append-length-without-reading-handoff-v1.md` (a defect this review found),
+then 0.48.0 release prep.
