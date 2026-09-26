@@ -622,7 +622,7 @@ fn an_object_read_reads_its_record_and_not_its_container() -> Result<()> {
     }
     let container_len =
         std::fs::metadata(layout.container_slot_path(ObjectType::Blob, ContainerSlot::A))?.len();
-    let entry = entries[20].clone();
+    let entry = entries[20];
     crate::foundation::fsutil::read_tally::reset();
     let read = super::read_object_envelope_at(&layout, &entry)?;
     assert_eq!(read, written[20], "the envelope that was written");
@@ -665,14 +665,14 @@ fn object_read_errors_name_the_containers_offsets_as_they_always_did() -> Result
     };
     // Past the end, and inside the last header.
     let length = std::fs::metadata(&container)?.len();
-    let mut beyond = entries[5].clone();
+    let mut beyond = entries[5];
     beyond.offset = length;
     assert!(
         message(&beyond).contains("names an offset past its container's end"),
         "{}",
         message(&beyond)
     );
-    let mut torn = entries[5].clone();
+    let mut torn = entries[5];
     torn.offset = length - 10;
     assert!(
         message(&torn).contains("names an offset past its container's end"),
