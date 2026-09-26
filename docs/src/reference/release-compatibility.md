@@ -214,8 +214,8 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
 3. **Push, then CI green** on every job, including the Windows and macOS suites — the only place
    platform code runs.
 4. **Tag.** Annotated, GPG-signed with the repository's configured key, verified with `git tag -v`,
-   then pushed. From 0.48.0 the tag's message is the subject `prikk X.Y.Z`, a blank line, then two
-   lines:
+   then pushed. From 0.48.0 the tag's message has as its subject the project name followed by the
+   version (for 0.48.0: prikk 0.48.0), then a blank line, then two lines:
    - `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`;
    - a link to `CHANGELOG.md` pinned to the tag.
 
