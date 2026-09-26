@@ -255,14 +255,14 @@ mod budget;
 /// report. Each is set from a **measured** wall time with a **1.5x margin**, rounded up, unless its line says it is an estimate:
 ///
 /// - step costs: measured 988 s (2026-09-26, one N = 64,000 sample, release, load 1.8) -> 1,500 s;
-/// - gate-figure comparison: measured 2,306 s (2026-09-26, alternating, release, load 2.2) -> 3,600 s;
+/// - the four-arm comparison ([`ARMS_BUDGET`]): 75 minutes as Addendum 1 declares it, stopped at 150. It is **not** from a measurement of this
+///   unit: the round's earlier two-arm comparison took 2,306 s (2026-09-26, load 2.2) and this one runs four arms, five samples each;
 /// - release-gate profile: **an estimate, not a measurement** -- about 730 s summed from the new form's own steps in that comparison run
 ///   (N = 100 negligible, 32,000 about 100 s, 64,000 about 620 s), x 1.6 -> 1,200 s. The round's §5 run of the profile itself has
 ///   **not** been made (held on the architect's ruling of the §2 acceptance); it replaces this figure when it is;
 /// - full sweep: **an estimate, never measured under the watcher** -- the last full sweep took 77 minutes before it gained its `tree`/`diff`
 ///   columns, and one N = 64,000 sample alone is now 988 s; 4 h is a stated guess until its first run under the watcher sets it.
 const STEP_COSTS_BUDGET: Duration = Duration::from_secs(1_500);
-const GATE_COMPARISON_BUDGET: Duration = Duration::from_secs(3_600);
 const RELEASE_GATE_BUDGET: Duration = Duration::from_secs(1_200);
 const FULL_SWEEP_BUDGET: Duration = Duration::from_secs(4 * 60 * 60);
 
@@ -1170,11 +1170,15 @@ struct SampleOutcome {
 /// `through_measured_commit` ends the sample after the measured commit and the cache-file control: nothing after them can change
 /// what the measured commit read, so the §2 comparison (which reads only that figure) skips the `tree`, second-seal and two-point
 /// diff steps and keeps the worktree diff, which runs **before** the commit and could.
+///
+/// `worktree_diff` is whether the bare `prikk diff` runs before the measured commit (the old form always did; arm (ii) of the
+/// Addendum 1 comparison does not). When it does not run the outcome's `diff_worktree_kib` is `None`.
 fn measure_incremental_sample_rebuilding(
     unit: &budget::Unit,
     node_count: usize,
     sample_index: usize,
     through_measured_commit: bool,
+    worktree_diff: bool,
 ) -> SampleOutcome {
     let label = format!("N={node_count} sample {sample_index}");
     let root = unique_dir(&format!("incremental-{node_count}-{sample_index}"));
@@ -1201,8 +1205,10 @@ fn measure_incremental_sample_rebuilding(
     let baseline_block = tip_block_id(&root);
     // RFC 153's worktree row: a bare `prikk diff` of the same one-file change, before it is committed --
     // the baseline read plus a read of every worktree file, in a fresh process.
-    let diff_worktree_kib = unit.step(&format!("{label}: worktree diff"), || {
-        measure_diff_rss_kib(&root, &[])
+    let diff_worktree_kib = worktree_diff.then(|| {
+        unit.step(&format!("{label}: worktree diff"), || {
+            measure_diff_rss_kib(&root, &[])
+        })
     });
     let peak_kib = unit.step(&format!("{label}: measured commit"), || {
         measure_commit_rss_kib(&root, "heads/main", "rfc133-bench: incremental")
@@ -1216,7 +1222,7 @@ fn measure_incremental_sample_rebuilding(
             peak_kib,
             cache_bytes,
             tree_peak_kib: None,
-            diff_worktree_kib: Some(diff_worktree_kib),
+            diff_worktree_kib,
             diff_points_kib: None,
         };
     }
@@ -1237,7 +1243,7 @@ fn measure_incremental_sample_rebuilding(
         peak_kib,
         cache_bytes,
         tree_peak_kib: Some(tree_peak_kib),
-        diff_worktree_kib: Some(diff_worktree_kib),
+        diff_worktree_kib,
         diff_points_kib: Some(diff_points_kib),
     }
 }
@@ -1282,8 +1288,38 @@ fn prepare_baseline(unit: &budget::Unit, node_count: usize) -> Baseline {
     Baseline { root, files }
 }
 
-/// One sample **from a baseline built once**: copy it, make this sample's one-file change from its own seed, then measure. The
-/// measured commit and the cache-file control are read in both scopes; the `tree`, `diff` and second-seal rows only in
+/// How a sample's copy of the baseline is made (measurement-budget handoff Addendum 1: a copy that gives every file a fresh mtime
+/// may make the "incremental" commit re-read files it would otherwise skip, which would be a different operation).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CopyMode {
+    /// Every file and directory gets the time of the copy (`std::fs::copy`).
+    FreshTimes,
+    /// Every file and directory keeps its modification time (`cp -a`).
+    PreserveTimes,
+}
+
+/// The copy the release-gate profile and the full sweep use. **Set by the Addendum 1 comparison's verdict** (see the arms test).
+const GATE_COPY_MODE: CopyMode = CopyMode::FreshTimes;
+
+/// Copy `from` to `to` preserving every timestamp, mode and dotfile: `cp -a from/. to/` (this workspace forbids `unsafe`, and
+/// `std` has no portable way to set a directory's time; the harness is Linux-only already).
+fn copy_dir_preserving_times(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    let source = format!("{}/.", from.display());
+    let output = Command::new("cp")
+        .args(["-a", &source])
+        .arg(to)
+        .output()
+        .expect("spawning cp -a");
+    assert!(
+        output.status.success(),
+        "cp -a failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// One sample **from a baseline built once**: copy it (as `copy` says), make this sample's one-file change from its own seed, then
+/// measure. The measured commit and the cache-file control are read in both scopes; the `tree`, `diff` and second-seal rows only in
 /// [`Scope::Full`].
 fn measure_incremental_sample_from(
     unit: &budget::Unit,
@@ -1291,12 +1327,17 @@ fn measure_incremental_sample_from(
     node_count: usize,
     sample_index: usize,
     scope: Scope,
+    copy: CopyMode,
 ) -> SampleOutcome {
     let label = format!("N={node_count} sample {sample_index}");
     let root = unique_dir(&format!("incremental-{node_count}-{sample_index}"));
-    unit.step(&format!("{label}: copy the baseline"), || {
-        support::copy_dir_recursive(&baseline.root, &root);
-    });
+    unit.step(
+        &format!("{label}: copy the baseline ({copy:?})"),
+        || match copy {
+            CopyMode::FreshTimes => support::copy_dir_recursive(&baseline.root, &root),
+            CopyMode::PreserveTimes => copy_dir_preserving_times(&baseline.root, &root),
+        },
+    );
     let mut rng = SplitMix64::new(
         CONTENT_SEED
             .wrapping_add(0xC0FF_EE00)
@@ -1354,8 +1395,14 @@ fn measure_incremental_point(
     let mut diff_worktree_kib = Vec::new();
     let mut diff_points_kib = Vec::new();
     for sample_index in 0..SAMPLES_PER_POINT {
-        let sample =
-            measure_incremental_sample_from(unit, &baseline, node_count, sample_index, scope);
+        let sample = measure_incremental_sample_from(
+            unit,
+            &baseline,
+            node_count,
+            sample_index,
+            scope,
+            GATE_COPY_MODE,
+        );
         peak_kib.push(sample.peak_kib);
         cache_bytes.push(sample.cache_bytes);
         tree_peak_kib.extend(sample.tree_peak_kib);
@@ -1562,7 +1609,8 @@ fn rfc133_step_costs_one_sample() {
         &measurements_dir().join(revision.file_name("step-costs")),
     );
     let load_at_start = budget::load_average();
-    let sample = measure_incremental_sample_rebuilding(&unit, STEP_COSTS_NODE_COUNT, 0, false);
+    let sample =
+        measure_incremental_sample_rebuilding(&unit, STEP_COSTS_NODE_COUNT, 0, false, true);
     let table = unit.finish();
     let report = format!(
         "# RFC 133 -- what one N = {STEP_COSTS_NODE_COUNT} sample costs, step by step (release)\n\n\
@@ -1578,20 +1626,126 @@ fn rfc133_step_costs_one_sample() {
     revision.write_report("step-costs", &report);
 }
 
-/// Units of the §2 comparison (measurement-budget handoff §2).
+/// N of the §2 comparison (measurement-budget handoff §2, Addendum 1).
 const GATE_COMPARISON_NODE_COUNTS: [usize; 2] = [32_000, 64_000];
-/// **Copy-per-sample must leave the gate figure unchanged** (measurement-budget handoff §2, control 5): at N = 32,000 and 64,000, in one
-/// session, **alternate** the form the gate had before the round (every sample builds its repository from nothing, through the
-/// measured commit) with the form it has now (one baseline built once, copied per sample), sample by sample, and report the median and
-/// spread of the measured commit's peak RSS for both. **The acceptance rule: each new median lies within the old run's min-max.** If it
-/// does not, the report says so, this fails, and nothing is adjusted to fit.
+/// Samples per arm and N in the Addendum 1 comparison.
+const ARMS_SAMPLES: usize = 5;
+/// **The decision rule, fixed before the run** (Addendum 1 §3): the chosen form's median must lie within this many percent of arm
+/// (i)'s median at each N, **and** its 64,000/32,000 ratio within this many percent of arm (i)'s ratio. Half the smallest
+/// release-to-release swing on record (1.0%).
+const ARM_TOLERANCE_PERCENT: f64 = 0.5;
+/// The four-arm unit's budget (Addendum 1 §2): 75 minutes, stopped at 150. (A rough sum of the round's own measured per-sample times
+/// is about 105 minutes: the fresh-build arms at N = 64,000 are the cost. It stops itself at 150.)
+const ARMS_BUDGET: Duration = Duration::from_secs(75 * 60);
+
+/// The four forms compared (Addendum 1 §2). (i) is the reference: what the release gate did before this round.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Arm {
+    /// (i) fresh build, with the worktree diff before the measured commit.
+    FreshWithDiff,
+    /// (ii) fresh build, without it.
+    FreshNoDiff,
+    /// (iii) a baseline built once, copied with fresh mtimes, without the diff (the form delivered in `8cf2f9f3`).
+    CopyFreshTimes,
+    /// (iv) a baseline built once, copied preserving every timestamp, without the diff.
+    CopyKeepTimes,
+}
+
+const ARMS: [Arm; 4] = [
+    Arm::FreshWithDiff,
+    Arm::FreshNoDiff,
+    Arm::CopyFreshTimes,
+    Arm::CopyKeepTimes,
+];
+
+impl Arm {
+    fn label(self) -> &'static str {
+        match self {
+            Self::FreshWithDiff => "(i) fresh build, with the worktree diff",
+            Self::FreshNoDiff => "(ii) fresh build, no diff",
+            Self::CopyFreshTimes => "(iii) copy, fresh mtimes, no diff",
+            Self::CopyKeepTimes => "(iv) copy, mtimes preserved, no diff",
+        }
+    }
+}
+
+/// What one arm measured: the median peak RSS at each N, and what one sample of it cost (wall seconds, its share of the baseline built
+/// once included).
+struct ArmResult {
+    arm: Arm,
+    median_by_n: Vec<(usize, i64)>,
+    cost_secs_per_sample: f64,
+}
+
+/// One trimmed arm judged against the rule.
+#[derive(Debug)]
+struct ArmVerdict {
+    arm: Arm,
+    /// The median's distance from arm (i)'s at each N, in percent (absolute).
+    median_deviation_percent: Vec<f64>,
+    /// The 64,000/32,000 ratio's distance from arm (i)'s ratio, in percent (absolute).
+    ratio_deviation_percent: f64,
+    meets: bool,
+    cost_secs_per_sample: f64,
+}
+
+/// The rule of Addendum 1 §3, as a pure function so it can be controlled without running the instrument: each trimmed arm meets it iff
+/// its median is within `tolerance_percent` of arm (i)'s at **every** N and its ratio (largest N over smallest) within
+/// `tolerance_percent` of arm (i)'s ratio; the chosen form is the **cheapest** arm that meets it; `None` if none does.
+fn evaluate_arms(results: &[ArmResult], tolerance_percent: f64) -> (Vec<ArmVerdict>, Option<Arm>) {
+    let reference = results
+        .iter()
+        .find(|result| result.arm == Arm::FreshWithDiff)
+        .expect("arm (i) is the reference");
+    let ratio = |result: &ArmResult| {
+        let first = result.median_by_n.first().expect("a median").1 as f64;
+        let last = result.median_by_n.last().expect("a median").1 as f64;
+        last / first
+    };
+    let percent = |value: f64, reference: f64| 100.0 * (value - reference).abs() / reference;
+    let verdicts: Vec<ArmVerdict> = results
+        .iter()
+        .filter(|result| result.arm != Arm::FreshWithDiff)
+        .map(|result| {
+            let median_deviation_percent: Vec<f64> = result
+                .median_by_n
+                .iter()
+                .zip(&reference.median_by_n)
+                .map(|((_, value), (_, reference))| percent(*value as f64, *reference as f64))
+                .collect();
+            let ratio_deviation_percent = percent(ratio(result), ratio(reference));
+            let meets = median_deviation_percent
+                .iter()
+                .all(|deviation| *deviation <= tolerance_percent)
+                && ratio_deviation_percent <= tolerance_percent;
+            ArmVerdict {
+                arm: result.arm,
+                median_deviation_percent,
+                ratio_deviation_percent,
+                meets,
+                cost_secs_per_sample: result.cost_secs_per_sample,
+            }
+        })
+        .collect();
+    let chosen = verdicts
+        .iter()
+        .filter(|verdict| verdict.meets)
+        .min_by(|a, b| a.cost_secs_per_sample.total_cmp(&b.cost_secs_per_sample))
+        .map(|verdict| verdict.arm);
+    (verdicts, chosen)
+}
+
+/// **The four-arm comparison** (measurement-budget handoff Addendum 1): at N = 32,000 and 64,000, in one session, **alternating** with the
+/// arm order rotated each round, [`ARMS_SAMPLES`] samples per arm of the four forms in [`Arm`], the measured commit's peak RSS for
+/// each. It decides by [`evaluate_arms`] -- fixed before the run -- and writes the arm table, each arm's deviation from arm (i), and the
+/// chosen form; **if no arm meets the rule this fails and says stop** (nothing is adjusted to fit).
 ///
 /// ```text
-/// cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_gate_figure_old_vs_new
+/// cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_gate_form_arms
 /// ```
 #[test]
-#[ignore = "measurement instrument (old form against new, alternating); run deliberately"]
-fn rfc133_gate_figure_old_vs_new() {
+#[ignore = "measurement instrument (four arms, alternating); run deliberately"]
+fn rfc133_gate_form_arms() {
     let revision = RunRevision::capture();
     let probe = Command::new("python3").arg("--version").output();
     assert!(
@@ -1599,79 +1753,236 @@ fn rfc133_gate_figure_old_vs_new() {
         "python3 is needed for getrusage(RUSAGE_CHILDREN) (see module docs)"
     );
     let unit = budget::Unit::begin(
-        "rfc133 gate figure, old form against new (alternating)",
-        GATE_COMPARISON_BUDGET,
-        &measurements_dir().join(revision.file_name("gate-figure-comparison")),
+        "rfc133 gate form, four arms (alternating)",
+        ARMS_BUDGET,
+        &measurements_dir().join(revision.file_name("gate-form-arms")),
     );
     let load_at_start = budget::load_average();
-    let mut rows = String::from(
-        "| N | old min | old median | old max | new min | new median | new max | new median within the old min-max |\n|---:|---:|---:|---:|---:|---:|---:|---|\n",
+    let mut results: Vec<ArmResult> = ARMS
+        .iter()
+        .map(|&arm| ArmResult {
+            arm,
+            median_by_n: Vec::new(),
+            cost_secs_per_sample: 0.0,
+        })
+        .collect();
+    let mut raw = String::from(
+        "| N | arm | samples (KiB) | min | median | max | mean seconds per sample |\n|---:|---|---|---:|---:|---:|---:|\n",
     );
-    let mut all_within = true;
     for &node_count in &GATE_COMPARISON_NODE_COUNTS {
+        // One baseline for both copy arms, built once and timed, its cost shared between them.
+        let baseline_started = std::time::Instant::now();
         let baseline = prepare_baseline(&unit, node_count);
-        let (mut old, mut new) = (Vec::new(), Vec::new());
-        for sample_index in 0..SAMPLES_PER_POINT {
-            // Alternating, within the session and within the point: an old sample, then a new one.
-            old.push(
-                measure_incremental_sample_rebuilding(&unit, node_count, sample_index, true)
-                    .peak_kib,
-            );
-            new.push(
-                measure_incremental_sample_from(
-                    &unit,
-                    &baseline,
-                    node_count,
-                    sample_index,
-                    Scope::ReleaseGate,
-                )
-                .peak_kib,
-            );
+        let baseline_secs = baseline_started.elapsed().as_secs_f64();
+        let mut peaks: Vec<Vec<i64>> = vec![Vec::new(); ARMS.len()];
+        let mut secs: Vec<f64> = vec![0.0; ARMS.len()];
+        for sample_index in 0..ARMS_SAMPLES {
+            // Alternating, and rotated: no arm is always first (or always last) in a round.
+            for offset in 0..ARMS.len() {
+                let slot = (offset + sample_index) % ARMS.len();
+                let started = std::time::Instant::now();
+                let outcome = match ARMS[slot] {
+                    Arm::FreshWithDiff => measure_incremental_sample_rebuilding(
+                        &unit,
+                        node_count,
+                        sample_index,
+                        true,
+                        true,
+                    ),
+                    Arm::FreshNoDiff => measure_incremental_sample_rebuilding(
+                        &unit,
+                        node_count,
+                        sample_index,
+                        true,
+                        false,
+                    ),
+                    Arm::CopyFreshTimes => measure_incremental_sample_from(
+                        &unit,
+                        &baseline,
+                        node_count,
+                        sample_index,
+                        Scope::ReleaseGate,
+                        CopyMode::FreshTimes,
+                    ),
+                    Arm::CopyKeepTimes => measure_incremental_sample_from(
+                        &unit,
+                        &baseline,
+                        node_count,
+                        sample_index,
+                        Scope::ReleaseGate,
+                        CopyMode::PreserveTimes,
+                    ),
+                };
+                secs[slot] += started.elapsed().as_secs_f64();
+                peaks[slot].push(outcome.peak_kib);
+            }
         }
         let _ = std::fs::remove_dir_all(&baseline.root);
-        let (old, new) = (
-            RssSeries {
+        for (slot, arm) in ARMS.iter().enumerate() {
+            let series = RssSeries {
                 node_count,
-                peak_kib: old,
-            },
-            RssSeries {
-                node_count,
-                peak_kib: new,
-            },
-        );
-        let within = new.median() >= old.min() && new.median() <= old.max();
-        all_within &= within;
-        rows.push_str(&format!(
-            "| {node_count} | {} | {} | {} | {} | {} | {} | {} |\n",
-            old.min(),
-            old.median(),
-            old.max(),
-            new.min(),
-            new.median(),
-            new.max(),
-            if within { "**yes**" } else { "**NO**" }
-        ));
-        eprintln!(
-            "N={node_count}: old {:?} KiB, new {:?} KiB",
-            old.peak_kib, new.peak_kib
-        );
-    }
-    let table = unit.finish();
-    let report = format!(
-        "# RFC 133 -- the gate figure, old form against new (release)\n\n\
-         Revision `{}`. Peak RSS (KiB, `getrusage`) of the measured incremental commit, {SAMPLES_PER_POINT} samples each, **alternating** \
-         old, new, old, new... in one session. *Old*: every sample builds its repository from nothing (init, tree, commit, seal, the \
-         worktree diff, the measured commit). *New*: one baseline per N built once and copied per sample. Load at start: {load_at_start}. \
-         Acceptance: **each new median lies within the old run's min-max**.\n\n{rows}\n{}\n\n{table}",
-        revision.stamp(),
-        if all_within {
-            "**Every new median is within the old min-max: the gate figure is unchanged.**"
-        } else {
-            "**A new median is OUTSIDE the old min-max. Stop and report; nothing was adjusted to fit.**"
+                peak_kib: peaks[slot].clone(),
+            };
+            let shared_baseline = match arm {
+                Arm::CopyFreshTimes | Arm::CopyKeepTimes => baseline_secs / 2.0,
+                _ => 0.0,
+            };
+            let mean_secs = (secs[slot] + shared_baseline) / ARMS_SAMPLES as f64;
+            raw.push_str(&format!(
+                "| {node_count} | {} | {:?} | {} | {} | {} | {mean_secs:.1} |\n",
+                arm.label(),
+                series.peak_kib,
+                series.min(),
+                series.median(),
+                series.max()
+            ));
+            results[slot]
+                .median_by_n
+                .push((node_count, series.median()));
+            results[slot].cost_secs_per_sample += mean_secs;
         }
+        eprintln!("N={node_count}: {peaks:?}");
+    }
+    let (verdicts, chosen) = evaluate_arms(&results, ARM_TOLERANCE_PERCENT);
+    let mut rule_table = String::from(
+        "| arm | median vs arm (i) at each N (%) | 64,000/32,000 ratio vs arm (i)'s (%) | meets the rule | cost (s per sample, both N) |\n|---|---|---|---|---:|\n",
     );
-    revision.write_report("gate-figure-comparison", &report);
-    assert!(all_within, "the gate figure changed; see the report");
+    for verdict in &verdicts {
+        rule_table.push_str(&format!(
+            "| {} | {} | {:.2} | {} | {:.1} |\n",
+            verdict.arm.label(),
+            verdict
+                .median_deviation_percent
+                .iter()
+                .map(|value| format!("{value:.2}"))
+                .collect::<Vec<_>>()
+                .join(" / "),
+            verdict.ratio_deviation_percent,
+            if verdict.meets { "**yes**" } else { "no" },
+            verdict.cost_secs_per_sample
+        ));
+    }
+    let reference = &results[0];
+    let ratio_line = results
+        .iter()
+        .map(|result| {
+            let first = result.median_by_n.first().unwrap().1 as f64;
+            let last = result.median_by_n.last().unwrap().1 as f64;
+            format!("{}: {:.4}", result.arm.label(), last / first)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let table = unit.finish();
+    let conclusion = chosen.map_or_else(
+        || "**NO arm meets the rule. Stop and report again; nothing was adjusted.**".to_string(),
+        |arm| {
+            format!(
+                "**Chosen form: {}** (the cheapest arm that meets the rule).",
+                arm.label()
+            )
+        },
+    );
+    let report = format!(
+        "# RFC 133 -- the gate form, four arms (release)\n\n\
+         Revision `{}`. Peak RSS (KiB, `getrusage`) of the measured incremental commit, {ARMS_SAMPLES} samples per arm and N, **alternating** with the \
+         arm order rotated each round, in one session (boot `{}`; load at start {load_at_start}). **The rule, fixed before the run:** the chosen form's \
+         median within **{ARM_TOLERANCE_PERCENT} %** of arm (i)'s at each N, and its {}/{} ratio within **{ARM_TOLERANCE_PERCENT} %** of arm (i)'s ratio; \
+         the chosen form is the cheapest arm that meets it.\n\n{raw}\n{rule_table}\nRatios ({}/{}): {ratio_line}. Arm (i) median at each N: {:?}.\n\n{conclusion}\n\n{table}",
+        revision.stamp(),
+        budget::boot_id(),
+        GATE_COMPARISON_NODE_COUNTS[1],
+        GATE_COMPARISON_NODE_COUNTS[0],
+        GATE_COMPARISON_NODE_COUNTS[1],
+        GATE_COMPARISON_NODE_COUNTS[0],
+        reference.median_by_n,
+    );
+    revision.write_report("gate-form-arms", &report);
+    assert!(chosen.is_some(), "no arm meets the rule; see the report");
+}
+
+/// **Arm (iv) is what it says**: the preserving copy keeps every file's and directory's modification time (and a dotfile tree), and
+/// the fresh-times copy of arm (iii) does not -- so the two arms really differ in the one thing Addendum 1's hypothesis is about.
+/// *Perturb: `cp -r` instead of `cp -a` in [`copy_dir_preserving_times`]: this goes red.*
+#[test]
+fn the_preserving_copy_keeps_modification_times_and_the_fresh_copy_does_not() {
+    let base = unique_dir("copy-times-control");
+    let source = base.join("src");
+    std::fs::create_dir_all(source.join("d/.hidden")).unwrap();
+    let file = source.join("d/.hidden/f.txt");
+    std::fs::write(&file, b"x").unwrap();
+    let old = std::time::SystemTime::now() - Duration::from_secs(90 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let modified = |path: &Path| std::fs::metadata(path).unwrap().modified().unwrap();
+    let preserved = base.join("preserved");
+    copy_dir_preserving_times(&source, &preserved);
+    assert_eq!(
+        modified(&preserved.join("d/.hidden/f.txt")),
+        old,
+        "the preserving copy keeps the file's time"
+    );
+    let fresh = base.join("fresh");
+    support::copy_dir_recursive(&source, &fresh);
+    assert_ne!(
+        modified(&fresh.join("d/.hidden/f.txt")),
+        old,
+        "the fresh-times copy does not"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// **Control for the rule itself** (Addendum 1 §3, pre-stated): a trimmed arm meets it only if its median is within the tolerance at **every**
+/// N **and** its ratio is; the chosen form is the cheapest of those; none meeting it means no form is chosen. Synthetic numbers, never a
+/// run. *Perturb: raise `tolerance_percent` far above the deviations, or drop the ratio condition: this goes red.*
+#[test]
+fn the_arm_rule_chooses_the_cheapest_arm_within_tolerance_and_refuses_when_none_is() {
+    let result = |arm, medians: [i64; 2], cost| ArmResult {
+        arm,
+        median_by_n: vec![(32_000, medians[0]), (64_000, medians[1])],
+        cost_secs_per_sample: cost,
+    };
+    // Reference: 100,000 and 190,000 (ratio 1.9).
+    let reference = result(Arm::FreshWithDiff, [100_000, 190_000], 500.0);
+    // (ii) meets, costs 300; (iii) meets, costs 100 -> chosen; (iv) misses one N by 0.6 %.
+    let arms = [
+        reference,
+        result(Arm::FreshNoDiff, [100_100, 190_100], 300.0),
+        result(Arm::CopyFreshTimes, [100_200, 190_300], 100.0),
+        result(Arm::CopyKeepTimes, [100_600, 190_000], 90.0),
+    ];
+    let (verdicts, chosen) = evaluate_arms(&arms, 0.5);
+    assert_eq!(chosen, Some(Arm::CopyFreshTimes), "{verdicts:#?}");
+    assert!(
+        !verdicts
+            .iter()
+            .find(|v| v.arm == Arm::CopyKeepTimes)
+            .unwrap()
+            .meets
+    );
+    // Both medians within tolerance but the ratio is not: 100,400 and 189,300 -> ratio 1.8853 against 1.9 (0.78 %).
+    let ratio_only = [
+        result(Arm::FreshWithDiff, [100_000, 190_000], 500.0),
+        result(Arm::FreshNoDiff, [100_400, 189_300], 300.0),
+    ];
+    let (verdicts, chosen) = evaluate_arms(&ratio_only, 0.5);
+    assert_eq!(chosen, None, "the ratio alone refuses it: {verdicts:#?}");
+    assert!(
+        verdicts[0]
+            .median_deviation_percent
+            .iter()
+            .all(|d| *d <= 0.5)
+    );
+    assert!(verdicts[0].ratio_deviation_percent > 0.5);
+    // None meets: no form is chosen.
+    let none = [
+        result(Arm::FreshWithDiff, [100_000, 190_000], 500.0),
+        result(Arm::FreshNoDiff, [101_000, 190_000], 300.0),
+    ];
+    assert_eq!(evaluate_arms(&none, 0.5).1, None);
 }
 
 /// The release-gate profile (the measurement-cost handoff §1, trimmed by the measurement-budget handoff §3): the incremental commit's
