@@ -604,10 +604,56 @@ fn a_checkpoint_is_written_over_a_damaged_live_blob_below_the_anchor_and_verify_
     );
 }
 
+/// Whether a source file, given by its path **relative to `src`**, is test code: some component is `tests` or
+/// `test_gates`, or its file name ends in `tests.rs`. **By components, never by the path's spelling**: a rendered path
+/// spells its separator `\` on Windows, so a `contains("/tests/")` test skipped nothing there and this scan flagged a test
+/// file as production (CI run 36202895907, Windows mutation suite, RFC 159 Addendum 2). `Path` compares and splits by
+/// component on every platform.
+fn is_test_source(relative: &std::path::Path) -> bool {
+    relative
+        .components()
+        .any(|part| part.as_os_str() == "tests" || part.as_os_str() == "test_gates")
+        || relative
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with("tests.rs"))
+}
+
+/// **The classifier, on paths built from components** -- what a Windows directory walk yields (`a\b\c.rs`) is a path
+/// whose components are `a`, `b`, `c.rs`, exactly as `PathBuf::from_iter` builds it here. Linux and macOS cannot render a
+/// backslash path, so this control proves the component reading, and the Windows mutation suite proves the platform.
+/// **Perturb:** classify by `relative.to_string_lossy().contains("/tests/")`: this stays green on Linux (its separator
+/// is `/`), which is the defect's whole shape; the scan below is what the Windows job runs.
+#[test]
+fn test_sources_are_classified_by_component_not_by_spelling() {
+    use std::path::PathBuf;
+    let path = |parts: &[&str]| parts.iter().collect::<PathBuf>();
+    assert!(is_test_source(&path(&["snapshot", "tests", "writer.rs"])));
+    assert!(is_test_source(&path(&[
+        "block_state",
+        "tests",
+        "deep",
+        "x.rs"
+    ])));
+    assert!(is_test_source(&path(&["merge", "execute", "tests.rs"])));
+    assert!(is_test_source(&path(&["seal_from_accepted", "tests.rs"])));
+    assert!(is_test_source(&path(&["test_gates", "test_support.rs"])));
+    assert!(!is_test_source(&path(&["block_state.rs"])));
+    assert!(!is_test_source(&path(&[
+        "block_state",
+        "anchored_parent.rs"
+    ])));
+    assert!(!is_test_source(&path(&["merge", "execute.rs"])));
+    // A component that merely contains the word is not the directory.
+    assert!(!is_test_source(&path(&["contests", "x.rs"])));
+    assert!(!is_test_source(&path(&["tests_helper.rs"])));
+}
+
 /// **The anchored derivation names no function of the environment.** No knob decides how a signed root is derived: this
 /// source never reads a process environment variable, and only a control (`cfg(test)` / `test-support`) names
 /// `StateAnchoring::Never` (the RFC 159 handoff §1.7, in the pattern of `every_read_only_anchor_caller_is_a_read_only_report`).
-/// **Perturb:** put `std::env::var(...)` into `anchored_parent.rs`, or `StateAnchoring::Never` into `merge/execute.rs`.
+/// Files are classified by their path **relative to `src`, by component** ([`is_test_source`]).
+/// **Perturb (each shown red on Linux):** name a `PRIKK_RFC159*` variable in `anchored_parent.rs`, or put
+/// `StateAnchoring::Never` into `merge/execute.rs`.
 #[test]
 fn no_environment_knob_and_no_production_never() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -624,22 +670,24 @@ fn no_environment_knob_and_no_production_never() {
     }
     let mut files = Vec::new();
     walk(&src, &mut files);
+    let mut scanned = 0_usize;
     for path in files {
-        let name = path.to_string_lossy().to_string();
+        let relative = path.strip_prefix(&src).unwrap_or(&path).to_path_buf();
         // Test modules and controls may name both.
-        if name.contains("/tests/") || name.ends_with("tests.rs") || name.contains("test_gates") {
+        if is_test_source(&relative) {
             continue;
         }
+        scanned += 1;
+        let name = relative.display().to_string();
         let text = std::fs::read_to_string(&path).unwrap();
         if text.contains("PRIKK_RFC159") {
             offenders.push(format!("{name}: names a PRIKK_RFC159 variable"));
         }
         // `StateAnchoring::Never` may appear only where it is declared or handled behind `cfg(any(test, ..))`.
+        let declares_it = relative == std::path::Path::new("block_state.rs")
+            || relative == std::path::Path::new("block_state").join("anchored_parent.rs");
         for (line_no, line) in text.lines().enumerate() {
-            if line.contains("StateAnchoring::Never")
-                && !name.ends_with("block_state.rs")
-                && !name.ends_with("anchored_parent.rs")
-            {
+            if line.contains("StateAnchoring::Never") && !declares_it {
                 offenders.push(format!(
                     "{name}:{}: names StateAnchoring::Never",
                     line_no + 1
@@ -647,6 +695,10 @@ fn no_environment_knob_and_no_production_never() {
             }
         }
     }
+    assert!(
+        scanned > 100,
+        "fixture sanity: the scan read the production sources ({scanned} files)"
+    );
     assert!(offenders.is_empty(), "{offenders:#?}");
 }
 
