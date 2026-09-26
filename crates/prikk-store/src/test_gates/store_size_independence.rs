@@ -115,6 +115,39 @@ enum Axis {
     Content,
     /// The same bytes of content in [`SMALL_OBJECTS`] and [`LARGE_OBJECTS`] objects.
     Count,
+    /// The same tiny files, committed and sealed [`SMALL_HISTORY`] and [`LARGE_HISTORY`] times: the ref log and the block chain grow.
+    History,
+}
+
+const SMALL_HISTORY: usize = 4;
+const LARGE_HISTORY: usize = 64;
+
+/// A repository with `generations` committed-and-sealed generations of one tiny file each (RFC 111's cost gates build theirs the same
+/// way).
+fn store_of_history(generations: usize) -> Result<(RepositoryLayout, std::path::PathBuf)> {
+    let root = unique_temp_dir(&format!("p2-history-{generations}"));
+    let layout = RepositoryLayout::init(root.clone())?;
+    let maintainer = maintainer();
+    add_trusted_maintainer(
+        &layout,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    for index in 0..generations {
+        std::fs::write(
+            layout.root().join(format!("g{index}.txt")),
+            format!("generation {index}\n"),
+        )?;
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "p2 generation",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )?;
+        simulate_one_seal(&layout, REF_NAME, &maintainer)?;
+    }
+    Ok((layout, root))
 }
 
 const SMALL_OBJECTS: usize = 16;
@@ -139,6 +172,9 @@ enum Expectation {
     /// row asserts the finding *still holds* (`large >= small + 8 MiB`), so that fixing it makes the row fail until it is promoted to
     /// `Flat` -- the debt cannot be paid without the table noticing.
     FollowsContent { finding: &'static str },
+    /// **An open finding on the history axis**: the operation reads more as the history grows (`large >= small + 16 KiB`), the ref log
+    /// and the object index being what grows. Same promotion rule as [`Expectation::FollowsContent`].
+    FollowsHistory { finding: &'static str },
 }
 
 fn small_blob(label: &str) -> ObjectEnvelope {
@@ -281,6 +317,26 @@ const OPERATIONS: &[Operation] = &[
         why: "the tail since the stale snapshot: one or two index entries, not the index",
         run: index_refresh_after_an_own_write,
     },
+    Operation {
+        name: "one-file commit (history depth)",
+        axis: Axis::History,
+        expectation: Expectation::FollowsHistory {
+            finding: "F1 in the report: reads that follow the history -- the ref log whole up to three times per publication, the pointer index and the object index whole (AUD-01), earlier blocks and ref states by frame",
+        },
+        allowance: 4096,
+        why: "authoring one patch after 4 or 64 sealed generations",
+        run: one_file_commit,
+    },
+    Operation {
+        name: "one-block seal (history depth)",
+        axis: Axis::History,
+        expectation: Expectation::FollowsHistory {
+            finding: "F1 in the report: reads that follow the history -- the ref log whole up to three times per publication, the pointer index and the object index whole (AUD-01), earlier blocks, patches and ref states by frame",
+        },
+        allowance: 4096,
+        why: "one seal after 4 or 64 sealed generations",
+        run: one_block_seal,
+    },
 ];
 
 /// The small and the large store of the operation's own axis: `(small, large)` are the two sizes on that axis.
@@ -288,6 +344,7 @@ fn sizes(axis: Axis) -> (usize, usize) {
     match axis {
         Axis::Content => (SMALL_CONTENT, LARGE_CONTENT),
         Axis::Count => (SMALL_OBJECTS, LARGE_OBJECTS),
+        Axis::History => (SMALL_HISTORY, LARGE_HISTORY),
     }
 }
 
@@ -299,6 +356,7 @@ fn measure(operation: &Operation, size: usize) -> Result<(u64, Tally)> {
     let (layout, root) = match operation.axis {
         Axis::Content => store_of(size)?,
         Axis::Count => store_of_count(size)?,
+        Axis::History => store_of_history(size)?,
     };
     read_tally::reset();
     (operation.run)(&layout)?;
@@ -354,6 +412,11 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
             )),
             Expectation::FollowsContent { finding } if large < small + (8 << 20) => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes on the small / large store: it is flat. Promote the \
+                 row to `Expectation::Flat` and remove the finding",
+                operation.name
+            )),
+            Expectation::FollowsHistory { finding } if large < small + (16 << 10) => failures.push(format!(
+                "{}: an open finding ({finding}) now reads {small} / {large} bytes at the shallow / deep history: it is flat. Promote the \
                  row to `Expectation::Flat` and remove the finding",
                 operation.name
             )),

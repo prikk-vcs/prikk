@@ -283,7 +283,10 @@ mod tests {
             "containers/index.container",
             "refs/containers/log-a.container",
         ] {
-            let path = Path::new(relative);
+            // Built from components, so the separators are the platform's (the message names the path as `Path::display` prints it).
+            let path: std::path::PathBuf = relative.split('/').collect();
+            let path = path.as_path();
+            let printed = path.display().to_string();
             let refused = catch_unwind(AssertUnwindSafe(|| read_file_if_exists(mutation, path)));
             let payload = refused.expect_err(relative);
             let message = payload
@@ -291,7 +294,7 @@ mod tests {
                 .cloned()
                 .unwrap_or_default();
             assert!(
-                message.contains("outside every declared scope") && message.contains(relative),
+                message.contains("outside every declared scope") && message.contains(&printed),
                 "{relative}: {message}"
             );
             {
