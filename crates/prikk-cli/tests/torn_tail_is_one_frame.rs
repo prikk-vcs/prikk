@@ -59,6 +59,49 @@ fn run(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
     )
 }
 
+/// The recovery file a `doctor --repair-wal-tail` run names (`.prikk/recovery/wal-…bytes`), as an absolute path.
+fn named_recovery_file(repo: &Path, output: &str) -> PathBuf {
+    let start = output
+        .find(".prikk/recovery/")
+        .unwrap_or_else(|| panic!("the repair names its recovery file\n{output}"));
+    let name: String = output[start..]
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != '(')
+        .collect();
+    repo.join(name)
+}
+
+/// **Addendum 1, control 1 -- a lone damaged record: the repair truncates it, and keeps it.** One queued commit, its length set to
+/// 2^62: nothing sound is behind it, so it reads as a torn tail (the ambiguity no rule can resolve) and `--repair-wal-tail` removes it.
+/// **The recovery file the output names holds exactly the removed bytes, byte for byte**: a repair that was wrong about what it
+/// removed lost nothing, and the record can be read back.
+/// **Perturb:** truncate without saving: the output names no file and this goes red.
+#[test]
+fn a_repair_of_a_lone_damaged_record_saves_the_record_byte_for_byte() {
+    let repo = support::unique_repo("f3-wal-lone");
+    support::init(&repo);
+    std::fs::write(repo.join("one.txt"), "the only queued commit\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "queued"), "commit");
+    let wal = wal_path(&repo);
+    let mut bytes = std::fs::read(&wal).unwrap();
+    bytes[18..26].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(&wal, &bytes).unwrap();
+
+    let (repair, text) = run(&repo, &["doctor", "--repair-wal-tail"]);
+    assert_eq!(repair, Some(0), "{text}");
+    assert!(
+        std::fs::read(&wal).unwrap().is_empty(),
+        "the lone record is removed"
+    );
+    let saved = named_recovery_file(&repo, &text);
+    assert_eq!(
+        std::fs::read(&saved).unwrap(),
+        bytes,
+        "the recovery file is the removed record, whole"
+    );
+    let _ = std::fs::remove_dir_all(repo);
+}
+
 /// **Control 1 -- the data-loss case, end to end.** Two queued commits, the first record's length set to 2^62. `verify` and `doctor`
 /// exit non-zero and name the damaged record; **`doctor --repair-wal-tail` refuses and leaves the WAL byte for byte as it was**, and the
 /// second record is still there and still read (`checked WAL records: 1`).
@@ -166,6 +209,18 @@ fn a_true_torn_wal_tail_is_still_tolerated_and_still_truncated_by_the_repair() {
         std::fs::read(&wal).unwrap(),
         bytes[..first_end].to_vec(),
         "exactly the torn bytes are gone and the record before them is untouched"
+    );
+    // RFC 160 F3 Addendum 1: the removed bytes are kept, exactly, in a file the output names.
+    let saved = named_recovery_file(&repo, &repair_text);
+    assert_eq!(
+        std::fs::read(&saved).unwrap(),
+        bytes[first_end..cut].to_vec(),
+        "the recovery file holds exactly the removed bytes"
+    );
+    assert_eq!(
+        run(&repo, &["verify"]).0,
+        Some(0),
+        "verify ignores the recovery file (never authority)"
     );
     let _ = std::fs::remove_dir_all(repo);
 }

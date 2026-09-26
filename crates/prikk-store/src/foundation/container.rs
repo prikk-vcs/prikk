@@ -76,6 +76,10 @@ pub(crate) enum ContainerRecordStatus {
     Failed {
         /// The error this frame's own validation raised.
         message: String,
+        /// The frame's **checksum verified**: a complete frame that is wrong in some other way (an envelope that will not decode, the
+        /// wrong type). An interrupted append leaves a *prefix* of a frame, never a checksum-valid one, so `verify` never calls such a
+        /// frame an interrupted append, whatever names it (RFC 160 F3 Addendum 1).
+        complete: bool,
     },
 }
 
@@ -161,6 +165,9 @@ enum FrameAttempt {
     },
     Invalid {
         message: String,
+        /// The frame's checksum verified: a **complete** frame that is wrong in some other way (an envelope that will not decode, the
+        /// wrong type), which an interrupted append -- a prefix of a frame -- can never leave (RFC 160 F3 Addendum 1).
+        complete: bool,
     },
 }
 
@@ -200,17 +207,20 @@ fn parse_frame_at_reporting(
         Err(err) => {
             return FrameAttempt::Invalid {
                 message: err.to_string(),
+                complete: false,
             };
         }
     };
     let Ok(body_len) = usize::try_from(header_values.body_len) else {
         return FrameAttempt::Invalid {
             message: "container body length does not fit usize".to_string(),
+            complete: false,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
         return FrameAttempt::Invalid {
             message: "container body end overflow".to_string(),
+            complete: false,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
@@ -220,6 +230,7 @@ fn parse_frame_at_reporting(
     if expected != header_values.checksum {
         return FrameAttempt::Invalid {
             message: format!("container checksum mismatch at byte offset {report_offset}"),
+            complete: false,
         };
     }
     let envelope = match decode_envelope_file(body) {
@@ -227,6 +238,7 @@ fn parse_frame_at_reporting(
         Err(err) => {
             return FrameAttempt::Invalid {
                 message: err.to_string(),
+                complete: true,
             };
         }
     };
@@ -243,6 +255,7 @@ fn parse_frame_at_reporting(
                  envelope type is {}",
                 envelope.object_type
             ),
+            complete: true,
         };
     }
     FrameAttempt::Record {
@@ -281,7 +294,7 @@ pub(crate) fn decode_container_record_in_window(
     match parse_frame_at_reporting(object_type, magic, window, 0, container_offset) {
         FrameAttempt::Record { record, .. } => Ok(Some(record)),
         FrameAttempt::TrailingPartial { .. } => Ok(None),
-        FrameAttempt::Invalid { message } => Err(PrikkError::Integrity(format!(
+        FrameAttempt::Invalid { message, .. } => Err(PrikkError::Integrity(format!(
             "container record at offset {container_offset} failed to validate: {message}"
         ))),
     }
@@ -336,14 +349,17 @@ pub(crate) fn decode_container_records(
                 let message = partial_before_sound_frame_message(offset, next);
                 record_outcomes.push(ContainerRecordOutcome {
                     offset,
-                    status: ContainerRecordStatus::Failed { message },
+                    status: ContainerRecordStatus::Failed {
+                        message,
+                        complete: false,
+                    },
                 });
                 offset = next;
             }
-            FrameAttempt::Invalid { message } => {
+            FrameAttempt::Invalid { message, complete } => {
                 record_outcomes.push(ContainerRecordOutcome {
                     offset,
-                    status: ContainerRecordStatus::Failed { message },
+                    status: ContainerRecordStatus::Failed { message, complete },
                 });
                 match resync_to_next_magic(bytes, offset + 1, magic.as_slice()) {
                     Some(next) => offset = next,

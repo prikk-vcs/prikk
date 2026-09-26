@@ -323,7 +323,7 @@ use crate::trust::PublicationTrustIssue;
 use crate::wal::Wal;
 
 use objects::verify_objects;
-pub use objects::{ObjectItemOutcome, ObjectItemStatus};
+pub use objects::{InterruptedAppend, ObjectItemOutcome, ObjectItemStatus};
 use trust::PublicationTrustVerifier;
 
 /// Verification summary for a single persisted object.
@@ -619,6 +619,9 @@ pub struct RepositoryVerification {
     pub publication_trust_issues: Vec<PublicationTrustIssue>,
     /// Recognized non-authoritative object publication temps left for explicit maintenance.
     pub object_temp_paths: Vec<PathBuf>,
+    /// Frames in object containers that do not parse **and that no index entry names**: interrupted appends, reported as warnings and
+    /// never as damage (RFC 160 F3 Addendum 1). Empty when the objects stage did not evaluate.
+    pub object_interrupted_appends: Vec<InterruptedAppend>,
     /// Number of trailing bytes in the active WAL that look like an incomplete final record. `None`
     /// when the WAL-replay stage did not evaluate to completion.
     pub trailing_partial_wal_bytes: Option<usize>,
@@ -1016,6 +1019,10 @@ pub fn verify_repository_with_options(
         verify_objects(layout, &object_store, &mut trust_verifier),
     );
     let objects_evaluated = object_summary.is_some();
+    let object_interrupted_appends = object_summary
+        .as_ref()
+        .map(|summary| summary.interrupted_appends.clone())
+        .unwrap_or_default();
     let (
         object_outcomes,
         block_state_outcomes,
@@ -1311,6 +1318,7 @@ pub fn verify_repository_with_options(
         checked_publication_trust_records,
         publication_trust_issues: trust_verifier.issues,
         object_temp_paths,
+        object_interrupted_appends,
         trailing_partial_wal_bytes: replay.as_ref().map(|replay| replay.trailing_partial_bytes),
         active_wal_metadata_status,
         commit_index_divergences,

@@ -187,6 +187,14 @@ pub(crate) fn print_active_session_repairs(active_repairs: &[ActiveSessionRepair
                 for patch_id in &wal_repair.preserved_patch_ids {
                     println!("  preserved queued patch {patch_id}");
                 }
+                // RFC 160 F3 Addendum 1: every byte a repair removes is kept.
+                if let Some(file) = &wal_repair.recovery_file {
+                    println!(
+                        "  the {} removed byte(s) are saved, exactly, in .prikk/{} (never authority; `verify` ignores it)",
+                        wal_repair.truncated_bytes,
+                        file.display().to_string().replace('\\', "/")
+                    );
+                }
             }
             ActiveSessionRepairStatus::Skipped { reason } => {
                 println!(
@@ -425,6 +433,19 @@ pub(crate) fn print_verify_report(
             .and_then(|value| value.to_str())
             .unwrap_or("<non-UTF-8 object temp>");
         println!("warning: non-authoritative object publication temp: {name}");
+    }
+    // RFC 160 F3 Addendum 1: an unparseable frame that no index entry names is an interrupted append, a warning and not damage.
+    println!(
+        "interrupted appends (unreferenced, not damage): {}",
+        report.object_interrupted_appends.len()
+    );
+    for append in &report.object_interrupted_appends {
+        println!(
+            "warning: interrupted append in {:?} at {}: {}; no index entry names it, so nothing references it",
+            append.object_type,
+            append.path.display(),
+            append.message
+        );
     }
     println!(
         "trailing partial WAL bytes: {}",

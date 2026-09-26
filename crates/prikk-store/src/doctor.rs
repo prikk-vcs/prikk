@@ -753,6 +753,19 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     "preserve the format-1 bytes for inspection; do not normalize or reuse the envelope for mutation",
                 ));
             }
+            for append in &verification.object_interrupted_appends {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND",
+                    format!(
+                        "object container {:?} has a frame at {} that does not parse ({}), and no index entry names it",
+                        append.object_type,
+                        append.path.display(),
+                        append.message
+                    ),
+                    "no repair is required: the index is written after the container record is durable, so a frame nothing names was \
+                     never committed (an interrupted append, and whatever was written after it); nothing references it",
+                ));
+            }
             for path in &verification.object_temp_paths {
                 let name = path
                     .file_name()
@@ -812,6 +825,7 @@ fn empty_wal_repair() -> WalRepair {
         preserved_records: 0,
         truncated_bytes: 0,
         preserved_patch_ids: Vec::new(),
+        recovery_file: None,
     }
 }
 

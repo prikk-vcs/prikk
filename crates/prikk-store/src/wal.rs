@@ -15,8 +15,8 @@ use crate::foundation::frame_resync::{
     partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
 };
 use crate::foundation::fsutil::{
-    MutationRoot, append_file_required, len_to_u64, read_file_if_exists,
-    truncate_existing_file_required, truncate_file_empty_required,
+    MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
+    truncate_existing_file_required, truncate_file_empty_required, write_file_atomically,
 };
 use crate::foundation::layout::RepositoryLayout;
 
@@ -130,6 +130,10 @@ pub struct WalRepair {
     /// queue of N must say *which* authors' work survived, not just how many records — "3 records
     /// preserved" does not answer that for N > 1 the way it unambiguously did for N = 1.
     pub preserved_patch_ids: Vec<ObjectId>,
+    /// The recovery file (relative to `.prikk/`) holding **exactly the bytes this repair removed**, written durably before the
+    /// truncation (RFC 160 F3 Addendum 1): a repair can be wrong about what it removed, torn tail or damage, without anything being
+    /// lost. `None` when nothing was removed. Never authority: `verify` ignores it.
+    pub recovery_file: Option<PathBuf>,
 }
 
 /// File-backed active-session WAL.
@@ -288,6 +292,7 @@ impl Wal {
                 preserved_records: 0,
                 truncated_bytes: 0,
                 preserved_patch_ids: Vec::new(),
+                recovery_file: None,
             });
         };
         let replay = decode_records(&bytes)?;
@@ -310,6 +315,7 @@ impl Wal {
                 preserved_records: replay.records.len(),
                 truncated_bytes: 0,
                 preserved_patch_ids,
+                recovery_file: None,
             });
         }
         let current_len = u64::try_from(bytes.len())
@@ -321,11 +327,21 @@ impl Wal {
             PrikkError::MalformedData("trailing WAL byte count exceeds file length".to_string())
         })?;
         let (root, relative) = self.mutation()?;
+        // **Keep every byte this repair removes** (RFC 160 F3 Addendum 1). A lone damaged record and a true torn tail look the same
+        // to the reader, so the repair may be wrong about which it is removing; it must never be wrong *destructively*. The removed
+        // bytes go to a recovery file first -- durably (the file synced, then renamed into place, then the directory synced), under
+        // the same lock the caller holds -- and only then is the WAL truncated. If the truncation then fails, the WAL is untouched
+        // and the recovery file is complete; if it succeeds, the file is the only copy of what was removed.
+        let removed = bytes
+            .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
+            .unwrap_or_default();
+        let recovery_file = save_removed_bytes(root, relative, repaired_len, removed)?;
         truncate_existing_file_required(root, relative, repaired_len)?;
         Ok(WalRepair {
             preserved_records: replay.records.len(),
             truncated_bytes: replay.trailing_partial_bytes,
             preserved_patch_ids,
+            recovery_file: Some(recovery_file),
         })
     }
 
@@ -500,6 +516,30 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
 /// this WAL's own content, which is why the return type stays `Result` at all: none exist below,
 /// `decode_records` cannot fail, kept fallible for API stability and because `parse_header`'s errors
 /// are folded into `FrameAttempt::Invalid` rather than raised.
+/// Durably write `removed` -- the bytes a WAL repair is about to truncate away -- to `recovery/wal-<session>-at-<offset>-<hash>.bytes`
+/// under `.prikk/`, and return that path (relative to `.prikk/`). The name says the session and the offset the removed bytes started at,
+/// and carries the first bytes of their SHA-256, so a second repair of a different tail never overwrites the first's file and a
+/// repeat of the same one rewrites the same bytes. **Never authority**: nothing reads it back, `verify` ignores it, and it is not
+/// `quarantine/`, which is retired.
+fn save_removed_bytes(
+    root: &MutationRoot,
+    wal_relative: &Path,
+    offset: u64,
+    removed: &[u8],
+) -> Result<PathBuf> {
+    let session = wal_relative.parent().and_then(Path::file_name).map_or_else(
+        || "wal".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let digest = prikk_hash::to_hex(&sha256(removed));
+    let short = digest.get(..16).unwrap_or(&digest);
+    let directory = PathBuf::from("recovery");
+    let file = directory.join(format!("wal-{session}-at-{offset}-{short}.bytes"));
+    ensure_directory_required(root, &directory)?;
+    write_file_atomically(root, &file, removed)?;
+    Ok(file)
+}
+
 pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();

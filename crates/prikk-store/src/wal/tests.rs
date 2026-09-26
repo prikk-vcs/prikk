@@ -277,3 +277,124 @@ fn wal_replay_and_append_remain_on_retained_repository_root() -> prikk_error::Re
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+// ---- RFC 160 F3 Addendum 1: a repair keeps every byte it removes ------------------------------------------------------------------
+
+fn recovery_bytes(layout: &RepositoryLayout, file: &std::path::Path) -> Vec<u8> {
+    std::fs::read(layout.prikk_dir().join(file)).unwrap_or_default()
+}
+
+/// **A true torn tail: the recovery file holds exactly the removed bytes.** Two queued records and seven bytes of a torn third: the
+/// repair saves those seven bytes, byte for byte, to `recovery/` **before** it truncates, names the file in its report, and leaves
+/// the two records.
+/// **Perturb:** truncate without saving (skip `save_removed_bytes`): `recovery_file` is `None` and this goes red.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_repair_saves_exactly_the_torn_bytes_it_removes() -> prikk_error::Result<()> {
+    use std::io::Write;
+
+    let root = unique_temp_dir("wal-repair-saves-torn-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    wal.append_patch(&signed_patch_envelope())?;
+    wal.append_patch(&rollback_patch_envelope())?;
+    let intact = std::fs::read(wal.path())?;
+    let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+    file.write_all(b"partial")?;
+    drop(file);
+
+    let repair = wal.truncate_trailing_partial()?;
+    let saved = repair
+        .recovery_file
+        .expect("the repair names its recovery file");
+    assert_eq!(
+        recovery_bytes(&layout, &saved),
+        b"partial",
+        "the file holds exactly the removed bytes"
+    );
+    assert!(
+        saved.to_string_lossy().contains("recovery")
+            && !saved.to_string_lossy().contains("quarantine"),
+        "{saved:?}"
+    );
+    assert_eq!(
+        std::fs::read(wal.path())?,
+        intact,
+        "and the WAL is the two records"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **A lone damaged record: the repair truncates it (it cannot tell it from a torn append), and the recovery file holds it whole.**
+/// One queued record whose length field is set to 2^62. The repair removes every byte of the file and the recovery file is that file,
+/// byte for byte -- so a repair that was wrong about what it removed lost nothing.
+/// **Perturb:** truncate without saving: red.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_repair_of_a_lone_damaged_record_keeps_the_record_byte_for_byte() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("wal-repair-saves-lone-record");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    wal.append_patch(&signed_patch_envelope())?;
+    let mut bytes = std::fs::read(wal.path())?;
+    bytes[18..26].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(wal.path(), &bytes)?;
+
+    let repair = wal.truncate_trailing_partial()?;
+    assert_eq!(repair.preserved_records, 0);
+    assert_eq!(repair.truncated_bytes, bytes.len());
+    let saved = repair.recovery_file.expect("named");
+    assert_eq!(
+        recovery_bytes(&layout, &saved),
+        bytes,
+        "the removed record is saved whole"
+    );
+    assert!(std::fs::read(wal.path())?.is_empty());
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **A failpoint between the save and the truncation** leaves the WAL untouched and the recovery file complete; the retry succeeds
+/// and rewrites the same file (its name carries the offset and a hash of the bytes).
+/// **Perturb:** truncate before saving (swap the two statements): the failpoint fails the truncation first, no recovery file was
+/// written, and this goes red.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_failure_between_the_save_and_the_truncation_leaves_the_wal_and_a_complete_recovery_file()
+-> prikk_error::Result<()> {
+    use std::io::Write;
+
+    let root = unique_temp_dir("wal-repair-failpoint-after-save");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    wal.append_patch(&signed_patch_envelope())?;
+    let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+    file.write_all(b"partial")?;
+    drop(file);
+    let before = std::fs::read(wal.path())?;
+
+    fail_once_for_test(TestFailPoint::Truncate);
+    assert!(wal.truncate_trailing_partial().is_err());
+    assert_eq!(std::fs::read(wal.path())?, before, "the WAL is untouched");
+    let recovery: Vec<_> = std::fs::read_dir(layout.prikk_dir().join("recovery"))?
+        .flatten()
+        .collect();
+    assert_eq!(recovery.len(), 1, "one recovery file");
+    assert_eq!(
+        std::fs::read(recovery[0].path())?,
+        b"partial",
+        "and it is complete"
+    );
+
+    let repair = wal.truncate_trailing_partial()?;
+    let saved = repair.recovery_file.expect("named");
+    assert_eq!(recovery_bytes(&layout, &saved), b"partial");
+    assert_eq!(
+        std::fs::read_dir(layout.prikk_dir().join("recovery"))?.count(),
+        1,
+        "the retry rewrote the same file"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

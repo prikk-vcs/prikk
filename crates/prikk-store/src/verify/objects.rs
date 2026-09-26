@@ -60,6 +60,22 @@ pub struct ObjectItemOutcome {
     pub status: ObjectItemStatus,
 }
 
+/// A frame in an object container that does not parse **and that no index entry names**: an **interrupted append** (RFC 160 F3
+/// Addendum 1). The object index is appended only after the container record is durable, so a frame nothing names was never
+/// committed -- it is what a crash between the two leaves, followed by whatever was written after. It is reported, as a warning, and
+/// is not damage. **A frame an index entry names is never here**: it stays a [`ObjectItemStatus::Failed`] item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterruptedAppend {
+    /// The object-type container the frame is in.
+    pub object_type: ObjectType,
+    /// A display-only locator, as [`ObjectItemOutcome::path`]'s.
+    pub path: PathBuf,
+    /// The frame's byte offset in its container.
+    pub offset: usize,
+    /// Why the frame does not parse.
+    pub message: String,
+}
+
 pub(super) struct ObjectSummary {
     /// Phase A: one outcome per object record scanned, in scan order (container order, per type, in
     /// `persisted_object_types()` order).
@@ -72,6 +88,8 @@ pub(super) struct ObjectSummary {
     pub(super) signature_issues: Vec<SignatureEnvelopeIssue>,
     pub(super) merge_baseline_divergences: Vec<super::MergeBaselineDivergence>,
     pub(super) block_seals: Vec<BlockSealVerification>,
+    /// Unparseable frames nothing names (see [`InterruptedAppend`]).
+    pub(super) interrupted_appends: Vec<InterruptedAppend>,
 }
 
 impl ObjectSummary {
@@ -83,6 +101,7 @@ impl ObjectSummary {
             signature_issues: Vec::new(),
             merge_baseline_divergences: Vec::new(),
             block_seals: Vec::new(),
+            interrupted_appends: Vec::new(),
         }
     }
 
@@ -94,6 +113,7 @@ impl ObjectSummary {
         self.merge_baseline_divergences
             .extend(other.merge_baseline_divergences);
         self.block_seals.extend(other.block_seals);
+        self.interrupted_appends.extend(other.interrupted_appends);
     }
 }
 
@@ -204,6 +224,12 @@ pub(super) fn verify_objects(
             trust_verifier,
             &mut pending_v3_blocks,
             &indexed_ids,
+            &index_replay
+                .entries
+                .iter()
+                .filter(|entry| entry.object_type == object_type)
+                .map(|entry| entry.offset)
+                .collect(),
         )?);
     }
     for (entry, message) in unreadable {
@@ -244,6 +270,7 @@ fn verify_object_type_container(
     trust_verifier: &mut PublicationTrustVerifier<'_>,
     pending_v3_blocks: &mut Vec<(ObjectId, BlockPayload)>,
     indexed_ids: &HashSet<ObjectId>,
+    named_offsets: &HashSet<u64>,
 ) -> Result<ObjectSummary> {
     let mut summary = ObjectSummary::empty();
     #[cfg(test)]
@@ -264,18 +291,34 @@ fn verify_object_type_container(
     for outcome in &replay.record_outcomes {
         let locator = container_path.join(format!("#{}", outcome.offset));
         let ContainerRecordStatus::Evaluated { .. } = &outcome.status else {
-            let ContainerRecordStatus::Failed { message } = &outcome.status else {
+            let ContainerRecordStatus::Failed { message, complete } = &outcome.status else {
                 return Err(PrikkError::Integrity(
                     "container record outcome is neither Evaluated nor Failed".to_string(),
                 ));
             };
-            summary.item_outcomes.push(ObjectItemOutcome {
-                object_type,
-                path: locator,
-                status: ObjectItemStatus::Failed {
+            // RFC 160 F3 Addendum 1: a frame that does not parse is damage only if the index names it. The index is appended after the
+            // record is durable, so a frame **no entry names was never committed**: an interrupted append (and whatever was written
+            // after it), reported as a warning. A frame an entry names stays a failed item, exactly as RFC 160 §7 ruled.
+            let named =
+                u64::try_from(outcome.offset).is_ok_and(|offset| named_offsets.contains(&offset));
+            // ... and only if the frame is not *complete*: a frame whose checksum verified (an envelope that will not decode, the wrong type)
+            // is not what an interrupted append leaves, which is a prefix of a frame.
+            if named || *complete {
+                summary.item_outcomes.push(ObjectItemOutcome {
+                    object_type,
+                    path: locator,
+                    status: ObjectItemStatus::Failed {
+                        message: message.clone(),
+                    },
+                });
+            } else {
+                summary.interrupted_appends.push(InterruptedAppend {
+                    object_type,
+                    path: locator,
+                    offset: outcome.offset,
                     message: message.clone(),
-                },
-            });
+                });
+            }
             continue;
         };
         let Some(record) = records.next() else {

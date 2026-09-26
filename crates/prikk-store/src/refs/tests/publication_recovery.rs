@@ -267,6 +267,51 @@ fn a_publish_beside_a_damaged_early_ref_log_record_appends_after_it_and_truncate
     Ok(())
 }
 
+/// **RFC 160 F3 Addendum 1, the ref log: an interrupted append followed by another ref's publish is KEPT a failed item, and this test
+/// pins that decision.** `heads/main` publishes; a crash then leaves a torn copy of its next update in the shared log; `heads/other`
+/// publishes past it (the design permits it: another ref's crash never blocks a publish). The torn frame is now interior, followed by
+/// a sound record. For **object containers** the same state is "unreferenced, so a warning": the index names every committed object.
+/// **No such witness exists for the ref log at the reader**: the pointer index names only a ref's *tip*, and a record's identity is
+/// inside the envelope the torn frame cannot yield. Deciding "nothing durable names this frame" would need the ref's whole RefState
+/// chain and its pointer (a complete sequence from 1 whose last update is the pointer's tip) *inside* `replay_ref_subsequence`, which
+/// every consumer shares (publication, `log`, resolution, `verify`, the mutation guards): a change to the publication protocol's
+/// fail-closed core, not to `verify`. So the frame stays `Failed` -- `verify` exits 1 for `heads/main`, and `heads/main`'s next
+/// publish refuses -- exactly as on 0.47.0; the report gives the rule and asks for a ruling. **Never silence a record something names.**
+#[test]
+fn an_interrupted_ref_log_append_past_which_another_ref_published_stays_a_failed_item()
+-> prikk_error::Result<()> {
+    let root = unique_temp_dir("rfc160-ref-log-interrupted-append");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let store = RefStore::new(layout.clone());
+    let first = root_publication(&layout, "heads/main")?;
+    store.publish(&first)?;
+    let second = next_publication(&layout, &first)?;
+    append_torn_ref_log_tail_for_test(
+        &layout,
+        ref_name_key_bytes("heads/main"),
+        &second.ref_update,
+    )?;
+    let other = root_publication(&layout, "heads/other")?;
+    store.publish(&other)?;
+
+    assert!(
+        store.replay_log("heads/main")?.has_item_failure(),
+        "the interior torn frame is a failed record of heads/main"
+    );
+    assert!(!store.replay_log("heads/other")?.has_item_failure());
+    let report = verify_repository(&layout)?;
+    assert!(report.ref_item_outcomes.iter().any(|outcome| {
+        outcome.ref_name == "heads/main"
+            && matches!(outcome.status, crate::RefItemStatus::Failed { .. })
+    }));
+    assert!(
+        store.publish(&second).is_err(),
+        "heads/main's next publish refuses: run doctor"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 #[test]
 fn format2_ahead_log_refuses_pointer_promotion() -> prikk_error::Result<()> {
     let root = unique_temp_dir("dc38-legacy-ahead");
