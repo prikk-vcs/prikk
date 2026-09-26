@@ -101,3 +101,56 @@ This is a correctness round, and nothing else is measured.
 - anything here that is not true at source.
 
 **Windows:** the architect pushes, and the round closes on a green Windows mutation suite.
+
+## Addendum 1 — 2026-09-27: keep every removed byte, accept the phantom, and an interrupted append is not damage
+
+Report: `.git-exclude/review-request/torn-tail-is-one-frame-report-v1.md`; review
+`.git-exclude/reviewed/torn-tail-is-one-frame-review-v1.md`. **What you delivered is accepted.** The architect re-ran the
+gates (14/14 on `77d2d0d1`), reproduced the refusal with the WAL byte-identical, and perturbed the rule under a cap.
+**Nothing is pushed until this addendum lands.**
+
+1. **The WAL repair keeps every byte it removes** (your §7.1: neither (b) nor (c)).
+   - Before `doctor --repair-wal-tail` truncates anything, it writes exactly the bytes it will remove to a recovery file
+     under `.prikk/`. Choose the name; it names the session and the offset, and it is **not** `quarantine/`, which is
+     retired.
+   - The write is durable (file and directory synced), under the same lock, and **only then** comes the truncation. The
+     output names the file.
+   - `verify` ignores the file; `repository-layout.md` lists it as never authority; `durability-recovery.md` says how to
+     look at it.
+   - This covers the lone damaged record and the true torn tail alike.
+   - **Controls:**
+     - a lone damaged WAL record: the repair truncates it, and the recovery file holds **exactly** the removed bytes,
+       byte for byte;
+     - a true torn tail: the same property;
+     - a failpoint between the save and the truncation leaves the WAL untouched and the recovery file complete;
+     - **perturb:** truncate without saving. It goes red.
+2. **The phantom object from `--repair-index` over an embedded frame: accepted** (your §7.2). One sentence in the
+   recovery reference: what it is, that nothing references it, and that it changes no state.
+3. **An interrupted append followed by later writes is not damage when nothing names it** (your §7.3, widened). The
+   architect measured it (`/home/nabbisen/.pgtmp/arch-seal/torn_then_append_probe.py`): a crash-torn blob frame, with
+   later commits appended past it.
+   - **On 0.47.0 `verify` already exits 1 for good** when the later bytes run past the torn frame's claim ("container
+     checksum mismatch", and no repair).
+   - When they fall short, 0.47.0 silently skipped the later objects ("1 scanned").
+   - **The rule:**
+     - **object containers:** a frame that fails to parse (a partial before a sound frame, **or** a checksum or shape
+       failure) **and that no index entry names** is an **interrupted append**. `verify` and `doctor` report it as a
+       warning line (offset, and that nothing references it), and the stage does not fail. **A frame an index entry
+       names stays `Failed`** (RFC 160 §7, unchanged);
+     - **the WAL:** no change. Append refuses past a tail, so an interior partial frame is always damage;
+     - **the ref log:** determine what durably names a ref-log record (the pointer index, a ref's resolved tip), and
+       apply the same principle. If it cannot be decided safely, keep `Failed` and report why. **Never silence a record
+       that something names.**
+   - **Controls:**
+     - both of the probe's shapes: `verify` exits 0 with the warning, and **every** later object is scanned and read;
+     - the same torn frame, but named by an index entry: `Failed`, exit 1;
+     - **perturb:** treat an unindexed frame as failed. The first control goes red. Treat an indexed one as
+       unindexed. The second goes red.
+
+**Units:** G2 re-run, budget 5 min; nothing else is measured. **CHANGELOG (RFC 161 shape):**
+- `### Output changes`: `verify` exits 0, with a warning, on a repository whose only fault is an interrupted append;
+  and the repair now writes a recovery file;
+- `### Fixed`: the crash-then-write false failure, with 0.47.0 named as affected.
+
+**Run every perturbation under an address-space cap and a timeout**, as you now do. Gates on the exact final commit.
+Report: `.git-exclude/review-request/torn-tail-is-one-frame-report-v2.md`.
