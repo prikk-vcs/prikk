@@ -213,3 +213,13 @@ of one frame; a repair never removes a sound frame); F4 in 0.48.0 if its fix nee
 The round closed on 2026-09-27 at `e6404f46` (CI 16/16, Windows green). **F3 handoff, live:**
 `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/torn-tail-is-one-frame-handoff-v1.md`. The F4 design
 round follows it.
+
+**F3 progress, 2026-09-27:** Addendum 1 delivered (`9c7067b2`, `221ac5e9`; review `torn-tail-is-one-frame-review-v2`).
+- **A WAL repair now saves every byte it removes** to `.prikk/recovery/` before truncating, and a lone damaged record
+  loses nothing.
+- **An unindexed interrupted append in an object container is a warning**, where 0.47.0 failed `verify` for good after a
+  crash plus one more write.
+- **The ref log keeps `Failed`,** as on 0.47.0. The safe rule (a complete sequence, and the pointer's tip matching)
+  belongs in `replay_ref_subsequence`, with protocol tests, **in 0.49.0 together with F1**.
+
+Addendum 2, `#[non_exhaustive]` on the report types with a breaking-once CHANGELOG entry, is before the push.

@@ -154,3 +154,26 @@ gates (14/14 on `77d2d0d1`), reproduced the refusal with the WAL byte-identical,
 
 **Run every perturbation under an address-space cap and a timeout**, as you now do. Gates on the exact final commit.
 Report: `.git-exclude/review-request/torn-tail-is-one-frame-report-v2.md`.
+
+## Addendum 2 — 2026-09-27: the behavior is accepted; the public additions must not break callers silently
+
+Report v2 and review `.git-exclude/reviewed/torn-tail-is-one-frame-review-v2.md`. **The behavior is accepted.** The
+architect reproduced the recovery file (exactly the removed bytes), both interrupted-append shapes (exit 0, every
+object scanned) and the refusal (byte-identical), and perturbed the save under a cap. **Your §6 rulings:**
+- **ref log:** `Failed` for 0.48.0, and your rule goes to 0.49.0 with F1;
+- **`recovery/` on demand:** accepted as the one exception;
+- **the public additions:** below.
+
+1. **`InterruptedAppend` is `#[non_exhaustive]`** (the release-prep template, item 4: every new report type).
+2. **`RepositoryVerification` and `WalRepair` become `#[non_exhaustive]` in this round.** They gained public fields,
+   which already breaks struct-literal construction and exhaustive destructuring outside the crate. Making them
+   non-exhaustive now means the next field does not break anyone again (0.44.0 did the same for `BundleImportReport` and
+   `AcceptReport`). Fix any in-workspace construction that needs it; report what changed.
+3. **CHANGELOG, in RFC 161's spelling:** move the two field additions and the new type out of Output changes into
+   `### Changed — breaking once: RepositoryVerification and WalRepair gain fields and are now #[non_exhaustive]` (a short
+   paragraph), with one line under `### Upgrading` (construct them only through the crate; match with `..`).
+4. **The Windows proof for `recovery/`:** name, in the report, the CLI test that exercises the recovery file. The
+   architect reads it green by name in the Windows mutation suite before the round closes.
+
+Gates on the exact final commit. Report: `.git-exclude/review-request/torn-tail-is-one-frame-report-v3.md`. Then the
+architect pushes the round.
