@@ -29,15 +29,32 @@
 //!   repository is copied to `<KEEP_DIR>/sealed-d<depth>` (sample 0) or `<KEEP_DIR>/s<sample>-sealed-d<depth>` (the
 //!   first `PRIKK_BCC_KEEP_SAMPLES` samples, default 1), outside any timed step, for the memory, catch-up and identity
 //!   instruments to run against the same history.
+//!
+//! **Measurement-budget round additions.**
+//!
+//! - **A budget and a watcher** (`support/budget.rs`): the unit declares [`BUDGET_PER_SAMPLE`] in source -- the 2-hour rule's own
+//!   limit, per sample -- and every sample's build is a timed step whose start, end, elapsed time and boot id are appended to the
+//!   report as it happens. At twice the unit's budget the unit stops itself with `STOPPED: over budget`.
+//! - **A kept history is reused, when it is the same history.** `PRIKK_BCC_REUSE_KEPT=1` with a keep directory skips the build
+//!   when every kept depth carries a provenance record whose **commit** (this tree's `HEAD`) and **binary sha256** match; a record that
+//!   does not match is refused, the reason is printed, and the history is rebuilt. Reuse produces no new curve: it says so.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use prikk_corpus::{Profile, execute};
 
 mod support;
+
+#[path = "support/budget.rs"]
+mod budget;
+
+/// The unit's budget **per sample**, declared in source and never read from the environment: the 2-hour rule's limit
+/// (`PRIKK_BCC_MAX_HOURS`, default 2) is what a sample is expected to stay within, and the unit stops itself at twice the
+/// budget of all its samples.
+const BUDGET_PER_SAMPLE: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// RFC 139 §6's floor: 32 `REANCHOR_BOUND` (64) intervals.
 const FLOOR_DEPTH: u64 = 2048;
@@ -105,6 +122,101 @@ fn power_fit(points: &[(f64, f64)]) -> (f64, f64) {
 struct Keep<'a> {
     spec: &'a (PathBuf, Vec<u64>),
     sample: usize,
+    /// What a kept history's provenance record names: this tree's commit and the measured binary's sha256.
+    commit: &'a str,
+    binary_sha256: &'a str,
+}
+
+/// Where a kept history lives: `<dir>/sealed-d<depth>` for sample 0, `<dir>/s<sample>-sealed-d<depth>` after.
+fn kept_path(directory: &Path, sample: usize, depth: u64) -> PathBuf {
+    if sample == 0 {
+        directory.join(format!("sealed-d{depth}"))
+    } else {
+        directory.join(format!("s{sample}-sealed-d{depth}"))
+    }
+}
+
+/// The record beside a kept history that says what built it.
+fn provenance_path(kept: &Path) -> PathBuf {
+    let mut name = kept.file_name().unwrap_or_default().to_os_string();
+    name.push(".provenance.json");
+    kept.with_file_name(name)
+}
+
+fn write_provenance(kept: &Path, depth: u64, commit: &str, binary_sha256: &str) {
+    let record = serde_json::json!({
+        "depth": depth,
+        "commit": commit,
+        "binary_sha256": binary_sha256,
+        "plan_floor_depth": FLOOR_DEPTH,
+    });
+    std::fs::write(
+        provenance_path(kept),
+        serde_json::to_string_pretty(&record).unwrap(),
+    )
+    .expect("writing the provenance of a kept history");
+}
+
+/// Whether the kept history at `kept` may be reused: it exists, its provenance record exists and reads, and the **commit**, the
+/// **binary sha256** and the **depth** it records equal what this run would build. `Err` names the first thing that does not.
+fn kept_history_reusable(
+    kept: &Path,
+    depth: u64,
+    commit: &str,
+    binary_sha256: &str,
+) -> Result<(), String> {
+    if !kept.is_dir() {
+        return Err(format!("no kept history at {}", kept.display()));
+    }
+    let text = std::fs::read_to_string(provenance_path(kept))
+        .map_err(|err| format!("no provenance record for {}: {err}", kept.display()))?;
+    let record: serde_json::Value = serde_json::from_str(&text).map_err(|err| {
+        format!(
+            "the provenance record of {} does not parse: {err}",
+            kept.display()
+        )
+    })?;
+    let field = |name: &str| {
+        record
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+    };
+    if field("commit") != commit {
+        return Err(format!(
+            "{} was built at commit {} and this run is at {commit}",
+            kept.display(),
+            field("commit")
+        ));
+    }
+    if field("binary_sha256") != binary_sha256 {
+        return Err(format!(
+            "{} was built by a binary with sha256 {} and this run measures {binary_sha256}",
+            kept.display(),
+            field("binary_sha256")
+        ));
+    }
+    if record.get("depth").and_then(serde_json::Value::as_u64) != Some(depth) {
+        return Err(format!(
+            "{} records another depth than {depth}",
+            kept.display()
+        ));
+    }
+    Ok(())
+}
+
+/// This tree's `HEAD`, or `unknown` (the same source the RFC 133 instrument stamps its reports with).
+fn tree_commit() -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map_or_else(
+            || "unknown".to_string(),
+            |output| String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        )
 }
 
 /// Grow one repository. `stop_at` fixes the depth (samples after the first); `None` applies the projection rule.
@@ -148,16 +260,15 @@ fn grow(
         if let Some(Keep {
             spec: (directory, depths),
             sample,
+            commit,
+            binary_sha256,
         }) = keep
         {
             if depths.contains(&depth) {
-                let destination = if sample == 0 {
-                    directory.join(format!("sealed-d{depth}"))
-                } else {
-                    directory.join(format!("s{sample}-sealed-d{depth}"))
-                };
+                let destination = kept_path(directory, sample, depth);
                 let _ = std::fs::remove_dir_all(&destination);
                 support::copy_dir_all(&repo_root, &destination);
+                write_provenance(&destination, depth, commit, binary_sha256);
                 eprintln!(
                     "[{label}] kept the repository at depth {depth}: {}",
                     destination.display()
@@ -237,6 +348,52 @@ fn build_cost_curve() {
         identity.path, identity.version_output, identity.sha256
     );
 
+    let commit = tree_commit();
+    let report_path = out_dir().join(format!("build-cost-curve-{label}.md"));
+    let unit = budget::Unit::begin(
+        &format!("build-cost-curve {label}"),
+        BUDGET_PER_SAMPLE * u32::try_from(samples.max(1)).unwrap_or(1),
+        &report_path,
+    );
+
+    // A kept history is reused when it is the same history (measurement-budget handoff §4).
+    if std::env::var("PRIKK_BCC_REUSE_KEPT").is_ok_and(|value| value == "1") {
+        if let Some((directory, depths)) = keep.as_ref() {
+            let checks: Vec<Result<(), String>> = (0..keep_samples)
+                .flat_map(|sample| depths.iter().map(move |&depth| (sample, depth)))
+                .map(|(sample, depth)| {
+                    kept_history_reusable(
+                        &kept_path(directory, sample, depth),
+                        depth,
+                        &commit,
+                        &identity.sha256,
+                    )
+                })
+                .collect();
+            let refusals: Vec<&String> = checks.iter().filter_map(|c| c.as_ref().err()).collect();
+            if !checks.is_empty() && refusals.is_empty() {
+                let steps = unit.finish();
+                let report = format!(
+                    "# RFC 139 §6 -- corpus build-cost curve ({build}): kept histories REUSED\n\n\
+                     Every kept history under `{}` (depths {depths:?}, {keep_samples} sample(s)) carries a provenance record for commit `{commit}` and \
+                     binary sha256 `{}`, so **nothing was rebuilt and no curve was measured**.\n\n{steps}",
+                    directory.display(),
+                    identity.sha256
+                );
+                std::fs::write(&report_path, &report).expect("writing the report");
+                eprintln!("{report}");
+                return;
+            }
+            for refusal in refusals {
+                eprintln!("kept history NOT reused, rebuilding: {refusal}");
+            }
+        } else {
+            eprintln!(
+                "PRIKK_BCC_REUSE_KEPT=1 without PRIKK_BCC_KEEP_DIR: nothing to reuse, building"
+            );
+        }
+    }
+
     let mut runs: Vec<Run> = Vec::new();
     let mut manifest = manifest;
     manifest.commits.truncate(max_depth as usize);
@@ -244,17 +401,24 @@ fn build_cost_curve() {
         let stop_at = runs
             .first()
             .map(|first| first.blocks.last().map_or(0, |(depth, _, _)| *depth));
-        let run = grow(
-            binary,
-            &profile,
-            &manifest,
-            stop_at,
-            max_hours,
-            &format!("bcc-{label}-{sample}"),
-            keep.as_ref()
-                .filter(|_| sample < keep_samples)
-                .map(|spec| Keep { spec, sample }),
-        );
+        let run = unit.step(&format!("sample {sample}: grow and seal"), || {
+            grow(
+                binary,
+                &profile,
+                &manifest,
+                stop_at,
+                max_hours,
+                &format!("bcc-{label}-{sample}"),
+                keep.as_ref()
+                    .filter(|_| sample < keep_samples)
+                    .map(|spec| Keep {
+                        spec,
+                        sample,
+                        commit: &commit,
+                        binary_sha256: &identity.sha256,
+                    }),
+            )
+        });
         let mut tsv = String::from("depth\tcommit_ms\tseal_ms\n");
         for (depth, commit_ms, seal_ms) in &run.blocks {
             tsv.push_str(&format!("{depth}\t{commit_ms:.3}\t{seal_ms:.3}\n"));
@@ -396,10 +560,43 @@ fn build_cost_curve() {
         ));
     }
     report.push_str("\nPer-block times: `build-curve-*-run*.tsv` beside this file; exponents are fitted from them (`fit_build_curve.py`).\n");
-    std::fs::write(
-        out_dir().join(format!("build-cost-curve-{label}.md")),
-        &report,
-    )
-    .expect("writing the report");
+    report.push_str(&format!("\n{}", unit.finish()));
+    std::fs::write(&report_path, &report).expect("writing the report");
     eprintln!("{report}");
+}
+
+/// **Measurement-budget handoff §6.4 -- reuse is checked.** A kept history is reused only when its provenance record names this tree's
+/// commit, the measured binary's sha256 and the depth; a record that does not match, or is missing, is refused with the reason.
+/// *Perturb: drop the commit comparison (or the binary comparison) in `kept_history_reusable`: the matching case still passes and the
+/// mismatching one goes red.*
+#[test]
+fn a_kept_history_is_reused_only_when_its_commit_and_binary_match() {
+    let dir = std::env::temp_dir().join(format!("prikk-kept-history-reuse-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let kept = kept_path(&dir, 0, 8);
+    std::fs::create_dir_all(&kept).unwrap();
+    // No record yet: refused, and says so.
+    let refusal = kept_history_reusable(&kept, 8, "aaaa", "1111").unwrap_err();
+    assert!(refusal.contains("no provenance record"), "{refusal}");
+    write_provenance(&kept, 8, "aaaa", "1111");
+    assert_eq!(kept_history_reusable(&kept, 8, "aaaa", "1111"), Ok(()));
+    let other_commit = kept_history_reusable(&kept, 8, "bbbb", "1111").unwrap_err();
+    assert!(
+        other_commit.contains("built at commit aaaa") && other_commit.contains("bbbb"),
+        "{other_commit}"
+    );
+    let other_binary = kept_history_reusable(&kept, 8, "aaaa", "2222").unwrap_err();
+    assert!(
+        other_binary.contains("sha256 1111") && other_binary.contains("2222"),
+        "{other_binary}"
+    );
+    let other_depth = kept_history_reusable(&kept, 16, "aaaa", "1111").unwrap_err();
+    assert!(other_depth.contains("another depth"), "{other_depth}");
+    let missing = kept_history_reusable(&kept_path(&dir, 1, 8), 8, "aaaa", "1111").unwrap_err();
+    assert!(missing.contains("no kept history"), "{missing}");
+    // A damaged record is a refusal, not a pass.
+    std::fs::write(provenance_path(&kept), "{ not json").unwrap();
+    let damaged = kept_history_reusable(&kept, 8, "aaaa", "1111").unwrap_err();
+    assert!(damaged.contains("does not parse"), "{damaged}");
+    let _ = std::fs::remove_dir_all(dir);
 }

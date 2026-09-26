@@ -201,6 +201,22 @@
 //! cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_release_gate
 //! ```
 //!
+//! ## The measurement-budget round (measurement-budget handoff)
+//!
+//! - **Every step is timed, and the unit has a budget.** Both entry points (and `tools/corpus/tests/build_cost_curve.rs`) run under a
+//!   [`budget::Unit`] (`tools/corpus/tests/support/budget.rs`, shared by inclusion): it declares its budget in source
+//!   ([`RELEASE_GATE_BUDGET`], [`FULL_SWEEP_BUDGET`]), appends every step's start, end, elapsed time and the boot id to the report file as
+//!   it happens, and at twice the budget kills what it started, writes `STOPPED: over budget` and fails. There is no environment
+//!   variable for a budget.
+//! - **The baseline is built once.** For each N the tree is generated and committed and sealed **once**
+//!   ([`prepare_baseline`]); each sample copies that repository and makes its own one-file change from its own seed
+//!   ([`measure_incremental_sample_from`]). Before, every sample rebuilt everything
+//!   ([`measure_incremental_sample_rebuilding`], kept only for `rfc133_step_costs_one_sample` and the comparison below).
+//!   `rfc133_gate_figure_old_vs_new` alternates the two forms at N = 32,000 and 64,000 and requires each new median to lie within the
+//!   old run's min-max.
+//! - **The release-gate profile measures only what release prep gates on**: the incremental commit's peak RSS and the cache-file
+//!   control ([`Scope::ReleaseGate`]); the `tree` and `diff` rows and the second seal are in the full sweep ([`Scope::Full`]).
+//!
 //! `#[ignore]`d: these are measurement instruments, not correctness tests, and their dominant cost
 //! (repositories up to tens of thousands of files, three samples per point) does not belong in the
 //! default suite.
@@ -1133,18 +1149,24 @@ struct IncrementalPoint {
 struct SampleOutcome {
     peak_kib: i64,
     cache_bytes: u64,
-    tree_peak_kib: i64,
-    diff_worktree_kib: i64,
-    diff_points_kib: i64,
+    /// The context rows (`tree`, the two `diff`s): `None` when the scope does not measure them.
+    tree_peak_kib: Option<i64>,
+    diff_worktree_kib: Option<i64>,
+    diff_points_kib: Option<i64>,
 }
 
 /// One sample, **built from nothing** -- the form this instrument had before the measurement-budget round: create a repository, write
 /// `node_count` files, commit, seal, then measure. **Every step is timed** through the unit (`step`), so a report shows where a
 /// sample's time goes; nothing else about the sample changed.
+///
+/// `through_measured_commit` ends the sample after the measured commit and the cache-file control: nothing after them can change
+/// what the measured commit read, so the §2 comparison (which reads only that figure) skips the `tree`, second-seal and two-point
+/// diff steps and keeps the worktree diff, which runs **before** the commit and could.
 fn measure_incremental_sample_rebuilding(
     unit: &budget::Unit,
     node_count: usize,
     sample_index: usize,
+    through_measured_commit: bool,
 ) -> SampleOutcome {
     let label = format!("N={node_count} sample {sample_index}");
     let root = unique_dir(&format!("incremental-{node_count}-{sample_index}"));
@@ -1180,6 +1202,16 @@ fn measure_incremental_sample_rebuilding(
     let cache_bytes = cache_file_size(&root).unwrap_or_else(|| {
         panic!("no lifecycle-state.v1 cache file after an incremental commit at N={node_count}")
     });
+    if through_measured_commit {
+        let _ = std::fs::remove_dir_all(&root);
+        return SampleOutcome {
+            peak_kib,
+            cache_bytes,
+            tree_peak_kib: None,
+            diff_worktree_kib: Some(diff_worktree_kib),
+            diff_points_kib: None,
+        };
+    }
     // RFC 157's `tree` row: the same repository's sealed N-node tip, listed in a fresh process.
     let tree_peak_kib = unit.step(&format!("{label}: tree"), || {
         measure_tree_rss_kib(&root, "heads/main")
@@ -1196,35 +1228,143 @@ fn measure_incremental_sample_rebuilding(
     SampleOutcome {
         peak_kib,
         cache_bytes,
+        tree_peak_kib: Some(tree_peak_kib),
+        diff_worktree_kib: Some(diff_worktree_kib),
+        diff_points_kib: Some(diff_points_kib),
+    }
+}
+
+/// Which rows a point measures. The release-gate profile measures **only** what release prep gates on; the full sweep keeps
+/// the `tree` and `diff` rows and the second seal (measurement-budget handoff §3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Full,
+    ReleaseGate,
+}
+
+/// One N's baseline, **built once**: a repository holding `node_count` files, committed and sealed (measurement-budget handoff §2).
+/// Each sample copies it and makes its own one-file change from its own seed.
+struct Baseline {
+    root: PathBuf,
+    files: Vec<PathBuf>,
+}
+
+fn prepare_baseline(unit: &budget::Unit, node_count: usize) -> Baseline {
+    let label = format!("N={node_count} baseline (built once)");
+    let root = unique_dir(&format!("baseline-{node_count}"));
+    std::fs::create_dir_all(&root).unwrap();
+    unit.step(&format!("{label}: init"), || support::init(&root));
+    let mut rng = SplitMix64::new(
+        CONTENT_SEED
+            .wrapping_add(0x8000_0000)
+            .wrapping_add(node_count as u64),
+    );
+    let files = unit.step(&format!("{label}: generate the tree"), || {
+        generate_tree(&root, node_count, &mut rng)
+    });
+    unit.step(&format!("{label}: baseline commit"), || {
+        support::ok(
+            &support::commit(&root, "heads/main", "rfc133-bench: baseline"),
+            "baseline commit",
+        );
+    });
+    unit.step(&format!("{label}: baseline seal"), || {
+        support::ok(&support::seal(&root, "heads/main"), "baseline seal");
+    });
+    Baseline { root, files }
+}
+
+/// One sample **from a baseline built once**: copy it, make this sample's one-file change from its own seed, then measure. The
+/// measured commit and the cache-file control are read in both scopes; the `tree`, `diff` and second-seal rows only in
+/// [`Scope::Full`].
+fn measure_incremental_sample_from(
+    unit: &budget::Unit,
+    baseline: &Baseline,
+    node_count: usize,
+    sample_index: usize,
+    scope: Scope,
+) -> SampleOutcome {
+    let label = format!("N={node_count} sample {sample_index}");
+    let root = unique_dir(&format!("incremental-{node_count}-{sample_index}"));
+    unit.step(&format!("{label}: copy the baseline"), || {
+        support::copy_dir_recursive(&baseline.root, &root);
+    });
+    let mut rng = SplitMix64::new(
+        CONTENT_SEED
+            .wrapping_add(0xC0FF_EE00)
+            .wrapping_add(node_count as u64)
+            .wrapping_add(sample_index as u64),
+    );
+    mutate_one_file(&root, &baseline.files, &mut rng);
+    let full = scope == Scope::Full;
+    let baseline_block = full.then(|| tip_block_id(&root));
+    let diff_worktree_kib = full.then(|| {
+        unit.step(&format!("{label}: worktree diff"), || {
+            measure_diff_rss_kib(&root, &[])
+        })
+    });
+    let peak_kib = unit.step(&format!("{label}: measured commit"), || {
+        measure_commit_rss_kib(&root, "heads/main", "rfc133-bench: incremental")
+    });
+    let cache_bytes = cache_file_size(&root).unwrap_or_else(|| {
+        panic!("no lifecycle-state.v1 cache file after an incremental commit at N={node_count}")
+    });
+    let (tree_peak_kib, diff_points_kib) = if let Some(baseline_block) = baseline_block {
+        let tree = unit.step(&format!("{label}: tree"), || {
+            measure_tree_rss_kib(&root, "heads/main")
+        });
+        unit.step(&format!("{label}: second seal"), || {
+            support::ok(&support::seal(&root, "heads/main"), "incremental seal");
+        });
+        let diff = unit.step(&format!("{label}: two-point diff"), || {
+            measure_diff_rss_kib(&root, &["--from", &baseline_block, "--to", "heads/main"])
+        });
+        (Some(tree), Some(diff))
+    } else {
+        (None, None)
+    };
+    let _ = std::fs::remove_dir_all(&root);
+    SampleOutcome {
+        peak_kib,
+        cache_bytes,
         tree_peak_kib,
         diff_worktree_kib,
         diff_points_kib,
     }
 }
 
-fn measure_incremental_point(unit: &budget::Unit, node_count: usize) -> IncrementalPoint {
+fn measure_incremental_point(
+    unit: &budget::Unit,
+    node_count: usize,
+    scope: Scope,
+) -> IncrementalPoint {
     let started = std::time::Instant::now();
+    let baseline = prepare_baseline(unit, node_count);
     let mut peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
     let mut cache_bytes = Vec::with_capacity(SAMPLES_PER_POINT);
-    let mut tree_peak_kib = Vec::with_capacity(SAMPLES_PER_POINT);
-    let mut diff_worktree_kib = Vec::with_capacity(SAMPLES_PER_POINT);
-    let mut diff_points_kib = Vec::with_capacity(SAMPLES_PER_POINT);
+    let mut tree_peak_kib = Vec::new();
+    let mut diff_worktree_kib = Vec::new();
+    let mut diff_points_kib = Vec::new();
     for sample_index in 0..SAMPLES_PER_POINT {
-        let sample = measure_incremental_sample_rebuilding(unit, node_count, sample_index);
+        let sample =
+            measure_incremental_sample_from(unit, &baseline, node_count, sample_index, scope);
         peak_kib.push(sample.peak_kib);
         cache_bytes.push(sample.cache_bytes);
-        tree_peak_kib.push(sample.tree_peak_kib);
-        diff_worktree_kib.push(sample.diff_worktree_kib);
-        diff_points_kib.push(sample.diff_points_kib);
+        tree_peak_kib.extend(sample.tree_peak_kib);
+        diff_worktree_kib.extend(sample.diff_worktree_kib);
+        diff_points_kib.extend(sample.diff_points_kib);
     }
+    let _ = std::fs::remove_dir_all(&baseline.root);
     let elapsed_secs = started.elapsed().as_secs_f64();
     eprintln!(
         "incremental N={node_count}: RSS {peak_kib:?} KiB, cache {cache_bytes:?} bytes, elapsed \
          {elapsed_secs:.1}s"
     );
-    eprintln!("tree N={node_count}: RSS {tree_peak_kib:?} KiB");
-    eprintln!("diff (worktree) N={node_count}: RSS {diff_worktree_kib:?} KiB");
-    eprintln!("diff (two points) N={node_count}: RSS {diff_points_kib:?} KiB");
+    if scope == Scope::Full {
+        eprintln!("tree N={node_count}: RSS {tree_peak_kib:?} KiB");
+        eprintln!("diff (worktree) N={node_count}: RSS {diff_worktree_kib:?} KiB");
+        eprintln!("diff (two points) N={node_count}: RSS {diff_points_kib:?} KiB");
+    }
     IncrementalPoint {
         rss: RssSeries {
             node_count,
@@ -1302,7 +1442,7 @@ fn rfc133_node_count_memory() {
     let mut diff_worktree_series = Vec::new();
     let mut diff_points_series = Vec::new();
     for &node_count in &NODE_COUNTS {
-        let point = measure_incremental_point(&unit, node_count);
+        let point = measure_incremental_point(&unit, node_count, Scope::Full);
         incremental_rss_series.push(point.rss);
         incremental_elapsed_secs.push(point.elapsed_secs);
         tree_rss_series.push(point.tree_rss);
@@ -1336,9 +1476,6 @@ fn render_release_gate_report(
     incremental_rss: &[RssSeries],
     incremental_elapsed_secs: &[f64],
     incremental_cache: &[CacheSeries],
-    tree_rss: &[RssSeries],
-    diff_worktree_rss: &[RssSeries],
-    diff_points_rss: &[RssSeries],
 ) -> String {
     assert_eq!(
         incremental_rss.len(),
@@ -1348,15 +1485,17 @@ fn render_release_gate_report(
     );
     let mut out = String::new();
     out.push_str(
-        "# RFC 133 §6b.3 step 1 — node-count memory measurement, RELEASE-GATE PROFILE, report v1\n\n",
+        "# RFC 133 §6b.3 step 1 — node-count memory measurement, RELEASE-GATE PROFILE, report v2\n\n",
     );
     out.push_str(&format!(
-        "**This is the release-gate profile, not the full sweep.** It runs the incremental series \
-         only -- the gate is the incremental-commit peak-RSS ratio, and genesis is secondary by the \
-         full report's own words -- at N = {RELEASE_GATE_NODE_COUNTS:?} ({} points, \
-         {SAMPLES_PER_POINT} samples each). For every series at every point, run `cargo test -p prikk \
-         --release --locked --test rfc133_node_count_memory -- --ignored --nocapture \
-         rfc133_node_count_memory` instead.\n\n",
+        "**This is the release-gate profile, not the full sweep.** It measures **only** what release prep gates on: \
+         (1) the **incremental commit's peak RSS** -- the gate is its ratio between the two largest N -- and (2) the \
+         **persisted cache file size** control (`.prikk/cache/lifecycle-state.v1`). It runs the incremental series only, \
+         at N = {RELEASE_GATE_NODE_COUNTS:?} ({} points, {SAMPLES_PER_POINT} samples each). **It does not measure `prikk tree`, \
+         `prikk diff` (either row) or the second seal**: those stay in the full sweep, which the release-prep template \
+         requires whenever a round changes those commands -- run `cargo test -p prikk --release --locked --test \
+         rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory` for them. Each N's baseline \
+         repository is built **once** and copied for each sample; every sample makes its own one-file change from its own seed.\n\n",
         RELEASE_GATE_NODE_COUNTS.len(),
     ));
     out.push_str("Generated by `cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_release_gate`.\n");
@@ -1366,51 +1505,13 @@ fn render_release_gate_report(
     out.push_str(
         "\n## Incremental series (the gate: the peak-RSS ratio between the two largest N)\n\n",
     );
-    out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS, and wall time for this point's own samples across every series measured on the same repository (the measurement-cost handoff Addendum 1's per-point elapsed time -- the same N in the full driver's own report is a machine-drift check):\n\n");
+    out.push_str("Repository already committed and sealed at N nodes, then exactly one file changed and committed. Peak RSS, and wall time for this point (its baseline built once, and every sample):\n\n");
     out.push_str(
         "| N | min (KiB) | median (KiB) | max (KiB) | elapsed (s) |\n|---|---|---|---|---|\n",
     );
     for (series, elapsed_secs) in incremental_rss.iter().zip(incremental_elapsed_secs) {
         out.push_str(&format!(
             "| {} | {} | {} | {} | {elapsed_secs:.1} |\n",
-            series.node_count,
-            series.min(),
-            series.median(),
-            series.max()
-        ));
-    }
-
-    out.push_str("\n## `prikk tree` series (context, RFC 157 §3)\n\n");
-    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
-    for series in tree_rss {
-        out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
-            series.node_count,
-            series.min(),
-            series.median(),
-            series.max()
-        ));
-    }
-
-    out.push_str("\n## `prikk diff` series (context, RFC 153 §5)\n\n");
-    out.push_str(
-        "**Worktree** -- a bare `prikk diff` of the one-file change before it is committed:\n\n",
-    );
-    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
-    for series in diff_worktree_rss {
-        out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
-            series.node_count,
-            series.min(),
-            series.median(),
-            series.max()
-        ));
-    }
-    out.push_str("\n**Two points** -- the sealed baseline block against the sealed tip:\n\n");
-    out.push_str("| N | min (KiB) | median (KiB) | max (KiB) |\n|---|---|---|---|\n");
-    for series in diff_points_rss {
-        out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
             series.node_count,
             series.min(),
             series.median(),
@@ -1435,9 +1536,9 @@ fn render_release_gate_report(
 }
 
 /// **The before-picture** (measurement-budget handoff §1): **one** sample at N = 64,000 in the release build, in the form the release
-/// gate has today (repository built from nothing), with **every step timed** -- init, tree generation, baseline commit, baseline seal,
-/// worktree diff, measured commit, `tree`, second seal, two-point diff -- and the boot id beside each. It tells which of the setup and
-/// the trimming matters most. Writes `step-costs-<revision>.md` under `.git-exclude/measurements/rfc133/`.
+/// gate had before this round (repository built from nothing), with **every step timed** -- init, tree generation, baseline commit,
+/// baseline seal, worktree diff, measured commit, `tree`, second seal, two-point diff -- and the boot id beside each. It tells which of
+/// the setup and the trimming matters most. Writes `step-costs-<revision>.md` under `.git-exclude/measurements/rfc133/`.
 ///
 /// ```text
 /// cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_step_costs_one_sample
@@ -1453,26 +1554,125 @@ fn rfc133_step_costs_one_sample() {
         &measurements_dir().join(revision.file_name("step-costs")),
     );
     let load_at_start = budget::load_average();
-    let sample = measure_incremental_sample_rebuilding(&unit, STEP_COSTS_NODE_COUNT, 0);
+    let sample = measure_incremental_sample_rebuilding(&unit, STEP_COSTS_NODE_COUNT, 0, false);
     let table = unit.finish();
     let report = format!(
         "# RFC 133 -- what one N = {STEP_COSTS_NODE_COUNT} sample costs, step by step (release)\n\n\
-         Revision `{}`. One sample in the form the release gate has today (repository built from nothing). Load at start: {load_at_start}.\n\n\
+         Revision `{}`. One sample in the form the release gate had before the measurement-budget round (repository built from nothing). Load at start: {load_at_start}.\n\n\
          Peak RSS of the measured commit: {} KiB; cache file {} bytes; `tree` {} KiB; worktree diff {} KiB; two-point diff {} KiB.\n\n{table}",
         revision.stamp(),
         sample.peak_kib,
         sample.cache_bytes,
-        sample.tree_peak_kib,
-        sample.diff_worktree_kib,
-        sample.diff_points_kib
+        sample.tree_peak_kib.unwrap(),
+        sample.diff_worktree_kib.unwrap(),
+        sample.diff_points_kib.unwrap()
     );
     revision.write_report("step-costs", &report);
 }
 
-/// The release-gate profile (the measurement-cost handoff §1): the incremental series only, at
-/// [`RELEASE_GATE_NODE_COUNTS`] -- the number the release-prep template's own memory-ratio step
-/// needs, without the full sweep's cost. Shares its one measurement step
-/// ([`measure_incremental_point`]) with [`rfc133_node_count_memory`] -- see that function's own doc.
+/// Units of the §2 comparison (measurement-budget handoff §2).
+const GATE_COMPARISON_NODE_COUNTS: [usize; 2] = [32_000, 64_000];
+/// PROVISIONAL, like the others above: set from the measured wall time in the round's final commit.
+const GATE_COMPARISON_BUDGET: Duration = Duration::from_secs(3 * 60 * 60);
+
+/// **Copy-per-sample must leave the gate figure unchanged** (measurement-budget handoff §2, control 5): at N = 32,000 and 64,000, in one
+/// session, **alternate** the form the gate had before the round (every sample builds its repository from nothing, through the
+/// measured commit) with the form it has now (one baseline built once, copied per sample), sample by sample, and report the median and
+/// spread of the measured commit's peak RSS for both. **The acceptance rule: each new median lies within the old run's min-max.** If it
+/// does not, the report says so, this fails, and nothing is adjusted to fit.
+///
+/// ```text
+/// cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_gate_figure_old_vs_new
+/// ```
+#[test]
+#[ignore = "measurement instrument (old form against new, alternating); run deliberately"]
+fn rfc133_gate_figure_old_vs_new() {
+    let revision = RunRevision::capture();
+    let probe = Command::new("python3").arg("--version").output();
+    assert!(
+        probe.is_ok_and(|probe| probe.status.success()),
+        "python3 is needed for getrusage(RUSAGE_CHILDREN) (see module docs)"
+    );
+    let unit = budget::Unit::begin(
+        "rfc133 gate figure, old form against new (alternating)",
+        GATE_COMPARISON_BUDGET,
+        &measurements_dir().join(revision.file_name("gate-figure-comparison")),
+    );
+    let load_at_start = budget::load_average();
+    let mut rows = String::from(
+        "| N | old min | old median | old max | new min | new median | new max | new median within the old min-max |\n|---:|---:|---:|---:|---:|---:|---:|---|\n",
+    );
+    let mut all_within = true;
+    for &node_count in &GATE_COMPARISON_NODE_COUNTS {
+        let baseline = prepare_baseline(&unit, node_count);
+        let (mut old, mut new) = (Vec::new(), Vec::new());
+        for sample_index in 0..SAMPLES_PER_POINT {
+            // Alternating, within the session and within the point: an old sample, then a new one.
+            old.push(
+                measure_incremental_sample_rebuilding(&unit, node_count, sample_index, true)
+                    .peak_kib,
+            );
+            new.push(
+                measure_incremental_sample_from(
+                    &unit,
+                    &baseline,
+                    node_count,
+                    sample_index,
+                    Scope::ReleaseGate,
+                )
+                .peak_kib,
+            );
+        }
+        let _ = std::fs::remove_dir_all(&baseline.root);
+        let (old, new) = (
+            RssSeries {
+                node_count,
+                peak_kib: old,
+            },
+            RssSeries {
+                node_count,
+                peak_kib: new,
+            },
+        );
+        let within = new.median() >= old.min() && new.median() <= old.max();
+        all_within &= within;
+        rows.push_str(&format!(
+            "| {node_count} | {} | {} | {} | {} | {} | {} | {} |\n",
+            old.min(),
+            old.median(),
+            old.max(),
+            new.min(),
+            new.median(),
+            new.max(),
+            if within { "**yes**" } else { "**NO**" }
+        ));
+        eprintln!(
+            "N={node_count}: old {:?} KiB, new {:?} KiB",
+            old.peak_kib, new.peak_kib
+        );
+    }
+    let table = unit.finish();
+    let report = format!(
+        "# RFC 133 -- the gate figure, old form against new (release)\n\n\
+         Revision `{}`. Peak RSS (KiB, `getrusage`) of the measured incremental commit, {SAMPLES_PER_POINT} samples each, **alternating** \
+         old, new, old, new... in one session. *Old*: every sample builds its repository from nothing (init, tree, commit, seal, the \
+         worktree diff, the measured commit). *New*: one baseline per N built once and copied per sample. Load at start: {load_at_start}. \
+         Acceptance: **each new median lies within the old run's min-max**.\n\n{rows}\n{}\n\n{table}",
+        revision.stamp(),
+        if all_within {
+            "**Every new median is within the old min-max: the gate figure is unchanged.**"
+        } else {
+            "**A new median is OUTSIDE the old min-max. Stop and report; nothing was adjusted to fit.**"
+        }
+    );
+    revision.write_report("gate-figure-comparison", &report);
+    assert!(all_within, "the gate figure changed; see the report");
+}
+
+/// The release-gate profile (the measurement-cost handoff §1, trimmed by the measurement-budget handoff §3): the incremental commit's
+/// peak RSS and the cache-file control only, at [`RELEASE_GATE_NODE_COUNTS`] -- the number the release-prep template's own
+/// memory-ratio step needs, without the full sweep's cost. Shares its one measurement step ([`measure_incremental_point`]) with
+/// [`rfc133_node_count_memory`], which passes [`Scope::Full`]; this passes [`Scope::ReleaseGate`].
 ///
 /// ```text
 /// cargo test -p prikk --release --locked --test rfc133_node_count_memory -- --ignored --nocapture rfc133_node_count_memory_release_gate
@@ -1502,16 +1702,10 @@ fn rfc133_node_count_memory_release_gate() {
     let mut incremental_rss_series = Vec::new();
     let mut incremental_elapsed_secs = Vec::new();
     let mut incremental_cache_series = Vec::new();
-    let mut tree_rss_series = Vec::new();
-    let mut diff_worktree_series = Vec::new();
-    let mut diff_points_series = Vec::new();
     for &node_count in &RELEASE_GATE_NODE_COUNTS {
-        let point = measure_incremental_point(&unit, node_count);
+        let point = measure_incremental_point(&unit, node_count, Scope::ReleaseGate);
         incremental_rss_series.push(point.rss);
         incremental_elapsed_secs.push(point.elapsed_secs);
-        tree_rss_series.push(point.tree_rss);
-        diff_worktree_series.push(point.diff_worktree_rss);
-        diff_points_series.push(point.diff_points_rss);
         incremental_cache_series.push(point.cache);
     }
 
@@ -1520,9 +1714,6 @@ fn rfc133_node_count_memory_release_gate() {
         &incremental_rss_series,
         &incremental_elapsed_secs,
         &incremental_cache_series,
-        &tree_rss_series,
-        &diff_worktree_series,
-        &diff_points_series,
     );
     let report = format!("{report}\n{}", unit.finish());
     revision.write_report("node-count-memory-measurement-release-gate", &report);
@@ -1936,11 +2127,12 @@ fn a_run_whose_head_moved_refuses_to_write_its_report() {
     );
 }
 
-/// Measurement-cost handoff §2, control 1: the release-gate profile's own report states plainly, in
-/// its header, that it is the release-gate profile and not the full sweep, and its tables carry
-/// exactly [`RELEASE_GATE_NODE_COUNTS`] -- never a point the profile does not name. Asserted on the
-/// report text with synthetic series, never by running the instrument ("do not run the instrument to
-/// test the instrument").
+/// Measurement-cost handoff §2, control 1, and measurement-budget handoff §6.3: the release-gate profile's own report states plainly, in
+/// its header, that it is the release-gate profile and not the full sweep **and which rows it measures**, and its tables carry exactly
+/// [`RELEASE_GATE_NODE_COUNTS`] -- never a point the profile does not name -- and **no `tree`, `diff` or second-seal row**. Asserted on
+/// the report text with synthetic series, never by running the instrument ("do not run the instrument to test the instrument").
+/// *Perturb: render a `## \`prikk tree\` series` section in the profile's report (or drop the header's "does not measure" sentence):
+/// this goes red.*
 #[test]
 fn release_gate_report_names_itself_and_runs_exactly_its_own_node_counts() {
     let rss_series: Vec<RssSeries> = RELEASE_GATE_NODE_COUNTS
@@ -1958,21 +2150,44 @@ fn release_gate_report_names_itself_and_runs_exactly_its_own_node_counts() {
         })
         .collect();
     let elapsed_secs = vec![12.5; RELEASE_GATE_NODE_COUNTS.len()];
-    let report = render_release_gate_report(
-        "deadbeefcafe",
-        &rss_series,
-        &elapsed_secs,
-        &cache_series,
-        &rss_series,
-        &rss_series,
-        &rss_series,
-    );
+    let report =
+        render_release_gate_report("deadbeefcafe", &rss_series, &elapsed_secs, &cache_series);
 
     assert!(
         report.contains("RELEASE-GATE PROFILE") && report.contains("not the full sweep"),
         "the header must state plainly that this is the release-gate profile, not the full sweep: \
          {report}"
     );
+    assert!(
+        report.contains("measures **only** what release prep gates on")
+            && report.contains("incremental commit's peak RSS")
+            && report.contains("**persisted cache file size**")
+            && report.contains("does not measure `prikk tree`"),
+        "the header must name the rows the profile measures and the ones it does not: {report}"
+    );
+    // The row set: the incremental series and the cache control, and nothing else.
+    let headings: Vec<&str> = report
+        .lines()
+        .filter(|line| line.starts_with("## "))
+        .collect();
+    assert_eq!(
+        headings.len(),
+        2,
+        "exactly two sections, the incremental series and the cache-file control: {headings:?}"
+    );
+    assert!(headings[0].contains("Incremental series"), "{headings:?}");
+    assert!(headings[1].contains("cache file size"), "{headings:?}");
+    for forbidden in [
+        "## `prikk tree` series",
+        "## `prikk diff` series",
+        "Two points",
+        "Worktree**",
+    ] {
+        assert!(
+            !report.contains(forbidden),
+            "the release-gate report must not carry the {forbidden:?} rows: {report}"
+        );
+    }
 
     assert!(
         report.contains("elapsed (s)"),
@@ -2034,12 +2249,12 @@ fn the_full_drivers_defaults_are_pinned() {
 fn the_release_gate_profile_shares_the_full_drivers_measurement_step() {
     let source = include_str!("rfc133_node_count_memory.rs");
     // Assembled, not written contiguously, so this assertion's own source does not match itself.
-    let call_needle = ["measure_incremental", "_point(&unit, node_count)"].concat();
+    let call_needle = ["measure_incremental", "_point(&unit, node_count, Scope::"].concat();
     assert_eq!(
         source.matches(&call_needle).count(),
         2,
-        "the shared measurement step must be called exactly twice, with this exact argument: once \
-         by rfc133_node_count_memory, once by rfc133_node_count_memory_release_gate -- sharing the \
-         one step, not a duplicate of it"
+        "the shared measurement step must be called exactly twice, with this exact call shape: once \
+         by rfc133_node_count_memory (Scope::Full), once by rfc133_node_count_memory_release_gate \
+         (Scope::ReleaseGate) -- sharing the one step, not a duplicate of it"
     );
 }
