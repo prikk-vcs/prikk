@@ -252,11 +252,19 @@ mod budget;
 
 /// **Unit budgets** (measurement-budget handoff §4): declared here, in source, never read from the environment, so nothing can raise
 /// one for a run. A unit stops itself at twice its budget ([`budget::OVER_BUDGET_FACTOR`]), writing `STOPPED: over budget` into its
-/// report. **PROVISIONAL in this commit** -- generous, so the first measurement (§1) can run; the round's final commit sets each from
-/// a measured wall time with a stated margin.
-const STEP_COSTS_BUDGET: Duration = Duration::from_secs(60 * 60);
-const RELEASE_GATE_BUDGET: Duration = Duration::from_secs(3 * 60 * 60);
-const FULL_SWEEP_BUDGET: Duration = Duration::from_secs(6 * 60 * 60);
+/// report. Each is set from a **measured** wall time with a **1.5x margin**, rounded up, unless its line says it is an estimate:
+///
+/// - step costs: measured 988 s (2026-09-26, one N = 64,000 sample, release, load 1.8) -> 1,500 s;
+/// - gate-figure comparison: measured 2,306 s (2026-09-26, alternating, release, load 2.2) -> 3,600 s;
+/// - release-gate profile: **an estimate, not a measurement** -- about 730 s summed from the new form's own steps in that comparison run
+///   (N = 100 negligible, 32,000 about 100 s, 64,000 about 620 s), x 1.6 -> 1,200 s. The round's §5 run of the profile itself has
+///   **not** been made (held on the architect's ruling of the §2 acceptance); it replaces this figure when it is;
+/// - full sweep: **an estimate, never measured under the watcher** -- the last full sweep took 77 minutes before it gained its `tree`/`diff`
+///   columns, and one N = 64,000 sample alone is now 988 s; 4 h is a stated guess until its first run under the watcher sets it.
+const STEP_COSTS_BUDGET: Duration = Duration::from_secs(1_500);
+const GATE_COMPARISON_BUDGET: Duration = Duration::from_secs(3_600);
+const RELEASE_GATE_BUDGET: Duration = Duration::from_secs(1_200);
+const FULL_SWEEP_BUDGET: Duration = Duration::from_secs(4 * 60 * 60);
 
 /// Node-count points. §2's original series stopped at 8,000, exactly where §6a.3 found it departs
 /// from "flat" — this extends past it as the handoff requires (minimum 16,000/32,000) and one point
@@ -1572,9 +1580,6 @@ fn rfc133_step_costs_one_sample() {
 
 /// Units of the §2 comparison (measurement-budget handoff §2).
 const GATE_COMPARISON_NODE_COUNTS: [usize; 2] = [32_000, 64_000];
-/// PROVISIONAL, like the others above: set from the measured wall time in the round's final commit.
-const GATE_COMPARISON_BUDGET: Duration = Duration::from_secs(3 * 60 * 60);
-
 /// **Copy-per-sample must leave the gate figure unchanged** (measurement-budget handoff §2, control 5): at N = 32,000 and 64,000, in one
 /// session, **alternate** the form the gate had before the round (every sample builds its repository from nothing, through the
 /// measured commit) with the form it has now (one baseline built once, copied per sample), sample by sample, and report the median and
