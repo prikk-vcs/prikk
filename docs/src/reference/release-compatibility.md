@@ -220,10 +220,13 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
 
    The Release workflow builds four targets and publishes the assets. **The Release page carries that
    version's CHANGELOG section in full**, so the notes are read there and not behind a link to a file
-   that is reorganised over time. **A tag is never moved or re-signed**; a mistake ships as the next patch
+   that is reorganised over time. The signed tag is what authenticates them: the section is part of the
+   tagged commit, so anyone can check a Release page by verifying the tag (`git tag -v X.Y.Z`) and
+   reading the same section from the tagged tree (`git show X.Y.Z:CHANGELOG.md`). **A tag is never moved or re-signed**; a mistake ships as the next patch
    release. Tags before 0.48.0 keep their bare version message.
 5. **Verify the artifact.** Download the Linux asset, check its sha256 against the published file, read
-   its build-info (commit and tag), run its `--version`, and run the smoke script against it: what is
+   its build-info (commit and tag), run its `--version`, compare the Release page's notes with the
+   tagged CHANGELOG section, and run the smoke script against it: what is
    checked is the bytes users get, not the tree they came from.
 6. **Publish on the owner's word, per release.** The eight crates in dependency order from a detached
    worktree at the tag, each confirmed on the registry index; then `cargo install prikk --version X`

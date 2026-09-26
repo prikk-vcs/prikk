@@ -175,5 +175,10 @@ object scanned) and the refusal (byte-identical), and perturbed the save under a
 4. **The Windows proof for `recovery/`:** name, in the report, the CLI test that exercises the recovery file. The
    architect reads it green by name in the Windows mutation suite before the round closes.
 
+5. **Run your gates, tests and perturbations in their own cgroup scope, from now on** (RFC 160 §9, R1): `systemd-run --user
+   --scope -p MemoryMax=32G -p MemorySwapMax=0 timeout <limit> …`. A runaway is then killed inside its scope, never the
+   terminal. The architect proved it on this machine: exit 137, and the parent survives. The address-space cap you use
+   for perturbations stays as well. Say in the report that the gate run used the scope.
+
 Gates on the exact final commit. Report: `.git-exclude/review-request/torn-tail-is-one-frame-report-v3.md`. Then the
 architect pushes the round.

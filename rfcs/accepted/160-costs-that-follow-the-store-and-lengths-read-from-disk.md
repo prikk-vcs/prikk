@@ -223,3 +223,40 @@ round follows it.
   belongs in `replay_ref_subsequence`, with protocol tests, **in 0.49.0 together with F1**.
 
 Addendum 2, `#[non_exhaustive]` on the report types with a breaking-once CHANGELOG entry, is before the push.
+
+## 9. Proposed 2026-09-27 — a loop that never ends must not take the machine with it (awaiting the owner)
+
+**The incident.** During the F3 round, a control's perturbation made a decode loop stop advancing, so it pushed failed
+outcomes forever. About 1,300 tests ran it in parallel. `systemd-oomd` killed the **whole terminal scope** (92 processes:
+the session and everything else in that terminal) at 06:53 and at 07:12 on 2026-09-27 (`journalctl -b 0`).
+- It was the perturbation, not the product.
+- **But nothing would have stopped a real bug of the same shape.** The product's decode loops have no progress guard.
+  The architect's and the dev team's gate runs had no memory ceiling and no timeout. None of the 15 CI jobs sets
+  `timeout-minutes`, so GitHub's default of 6 hours applies.
+
+**What exists today, all of it process:**
+- the dev team's memory note, and their perturbations now run under an address-space cap and a timeout;
+- P4's hostile-length cases run in child processes under a 4 GiB cap;
+- since 2026-09-27, the architect's gate runs go through a systemd scope with a ceiling (R1).
+
+**The measures:**
+1. **R1 — every local gate and test run in its own cgroup scope** (process, applied now):
+   `systemd-run --user --scope -p MemoryMax=32G -p MemorySwapMax=0 timeout <limit> …`. A runaway is killed inside its
+   scope, and never the terminal or the owner's other work. Proven on this machine: a runaway exits 137 and the parent
+   survives. The architect applies it to every gate, probe and perturbation run from today, and the dev team does the
+   same.
+2. **R2 — no decode loop can stop advancing** (product):
+   - every framed reader's resume point goes through one helper that returns an `Integrity` error when the next offset
+     is not strictly greater than the current one;
+   - a loop that would spin becomes an error on the spot;
+   - **Control:** a perturbation that returns a non-advancing offset yields an error, not a hang. It runs under R1.
+3. **R3 — every framed reader terminates on arbitrary bytes** (test):
+   - random and mutated inputs of bounded size, fed to each reader in a child process under a cap and a timeout;
+   - each must finish, and **no reader may report more outcomes than there are input bytes**, since each outcome
+     consumes at least one byte;
+   - P4's harness is reused.
+4. **R4 — every CI job has `timeout-minutes`**, set from its measured duration with a margin, so a runaway fails in
+   minutes instead of hours.
+
+**Proposed scheduling:** R1 now. R2 to R4 as one small round in 0.48.0, after F3 closes and before F4's design round.
+The owner decides.

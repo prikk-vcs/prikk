@@ -142,3 +142,17 @@ optimized periodically."*
 **Not decided here (offered to the owner):** a Release page body can be edited on GitHub after publication, and it is
 not signed. The signed tag is. The tag message could also carry the SHA-256 of the notes as published, so the page can
 be checked against the signed tag.
+
+**Decided 2026-09-27, on the owner's word** (*"it is better to add it for release safety. However, it should be only if it
+is reasonable."*). **The SHA-256 of the notes in the tag message is not added: it is not reasonable, because it adds no
+guarantee.**
+- The signed tag already authenticates the notes. The CHANGELOG section is part of the tagged commit's tree, and the
+  Release page is generated from exactly that section.
+- A digest in the message would be a manual step at every cut that can go wrong, and would protect nothing the
+  signature does not.
+
+**What is added instead, and it is what actually catches an edited page:**
+1. **At release step 5, the architect compares the published page's section with the section in the tagged
+   `CHANGELOG.md`**, byte for byte. This is done by hand at 0.48.0, and by `release-policy` in §6.2's round.
+2. **`release-compatibility.md` tells a reader how to make the same check:** verify the tag, then read the section from
+   the tagged tree.
