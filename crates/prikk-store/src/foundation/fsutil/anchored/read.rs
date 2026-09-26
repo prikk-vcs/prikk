@@ -652,6 +652,11 @@ pub(crate) mod read_tally {
         BYTES.with(|tally| tally.borrow().get(relative).copied().unwrap_or(0))
     }
 
+    /// Every path this thread has read through the anchored reader since the last [`reset`], with the bytes read from each.
+    pub(crate) fn snapshot() -> BTreeMap<PathBuf, u64> {
+        BYTES.with(|tally| tally.borrow().clone())
+    }
+
     /// Zero this thread's tally.
     pub(crate) fn reset() {
         BYTES.with(|tally| tally.borrow_mut().clear());

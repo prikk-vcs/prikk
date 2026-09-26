@@ -122,6 +122,11 @@ fn current_scope() -> Option<&'static str> {
 /// Called by the anchored whole read before it reads: fail the running test if `relative` is store-growing and no declared scope
 /// covers the read (or, in report-only mode, record it).
 pub(super) fn check_whole_read(relative: &Path) {
+    // Measurement only (RFC 160 G1: what the guard costs the suite): `PRIKK_WHOLE_READ_GUARD=off` skips the check, so one build can be
+    // timed with and without it. Nothing else sets it; a suite run with it set proves nothing about whole reads.
+    if std::env::var_os("PRIKK_WHOLE_READ_GUARD").is_some_and(|value| value == "off") {
+        return;
+    }
     let Some(kind) = store_growing_kind(relative) else {
         return;
     };
@@ -265,8 +270,10 @@ mod tests {
         use crate::foundation::fsutil::{read_file_if_exists, read_file_range_if_exists};
         use crate::foundation::layout::RepositoryLayout;
 
-        if std::env::var("PRIKK_WHOLE_READ_REPORT").is_ok() {
-            return; // report-only mode records instead of failing; this control is about the failing mode
+        if std::env::var("PRIKK_WHOLE_READ_REPORT").is_ok()
+            || std::env::var_os("PRIKK_WHOLE_READ_GUARD").is_some()
+        {
+            return; // report-only and measurement modes do not fail; this control is about the failing mode
         }
         let root = crate::test_gates::test_support::unique_temp_dir("whole-read-guard-fires");
         let layout = RepositoryLayout::init(root.clone()).expect("init");

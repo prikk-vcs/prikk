@@ -23,6 +23,8 @@ pub(crate) mod rfc111_seal_decode_cost_gate;
 #[cfg(test)]
 pub(crate) mod signature_contract_tests;
 #[cfg(test)]
+pub(crate) mod store_size_independence;
+#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
 pub(crate) mod test_support_gating;
