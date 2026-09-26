@@ -1,9 +1,16 @@
 # RFC 160 — Guards against costs that follow the store, and against lengths read from disk
 
-**Status.** **PROPOSED 2026-09-26 by the architect**, on the owner's instruction: *"I want you to consider carefully
-recurrence prevention measures on the case(s)."* The owner's acceptance of the direction (§3) is needed before any
-handoff. **Proposed scheduling:** one round in 0.48.0, after the RFC 102 append-length round closes and before 0.48.0
-release prep. §6 gives the alternative.
+**Status.** **ACCEPTED by the project owner 2026-09-26** (*"1. Accepted. 2. 0.48.0"*, answering §6's two decisions).
+**The architect's reading, stated so it can be corrected:**
+- all seven measures of §3 (P1–P7) are accepted as written, with nothing dropped;
+- they ship in **0.48.0** as **one round**, live when the RFC 102 append-length round closes (Addendum 1 accepted and the
+  Windows mutation suite green), and before 0.48.0 release prep;
+- 0.48.0 is not cut without this round;
+- P5 (the template's store-size row) and P7 (the architect's own discipline) are the architect's to apply, P5 at 0.48.0
+  prep and P7 from now on; P6's reopening of RFC 133's residual is reported by 0.48.0 prep.
+
+*History:* **PROPOSED 2026-09-26 by the architect**, on the owner's instruction: *"I want you to consider carefully
+recurrence prevention measures on the case(s)."*
 
 Author-review independence: the architect proposes and will review. Every guard in §3 must be shown red by putting
 back the defect it exists to catch (§5). A guard that cannot fail that way is not accepted.
