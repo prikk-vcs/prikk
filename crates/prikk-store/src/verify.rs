@@ -539,6 +539,7 @@ pub struct StageOutcome {
 
 /// Repository verification summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RepositoryVerification {
     /// Outcome of each stage in [`VerificationStage::ALL`] (DC-95 Stage 2 Level 1), in pipeline
     /// order. Always exactly one entry per [`VerificationStage::ALL`] member — no stage may be

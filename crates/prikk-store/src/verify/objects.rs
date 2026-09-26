@@ -65,6 +65,7 @@ pub struct ObjectItemOutcome {
 /// committed -- it is what a crash between the two leaves, followed by whatever was written after. It is reported, as a warning, and
 /// is not damage. **A frame an index entry names is never here**: it stays a [`ObjectItemStatus::Failed`] item.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InterruptedAppend {
     /// The object-type container the frame is in.
     pub object_type: ObjectType,

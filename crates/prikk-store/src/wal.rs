@@ -121,6 +121,7 @@ impl WalReplay {
 
 /// Result of a safe WAL tail truncation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WalRepair {
     /// Number of valid records preserved after repair.
     pub preserved_records: usize,

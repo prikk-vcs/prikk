@@ -58,6 +58,14 @@ ref-log file whose *only* damaged record has nothing sound behind it and a heade
 append looks exactly the same; so `doctor --repair-wal-tail` **saves every byte it removes** to `.prikk/recovery/` (durably, before it truncates,
 naming the file), and a repair that was wrong about what it removed loses nothing.
 
+### Changed — breaking once: `RepositoryVerification` and `WalRepair` gain fields and are now `#[non_exhaustive]`
+
+`RepositoryVerification` gains `object_interrupted_appends` (the unparseable object-container frames no index entry names, each an
+`InterruptedAppend`, a new report type, itself `#[non_exhaustive]`), and `WalRepair` gains `recovery_file` (the file that holds the bytes a WAL
+repair removed, `None` when it removed none). A struct literal, or an exhaustive destructuring, of either type outside `prikk-store` stops
+compiling; both types are now `#[non_exhaustive]`, so the next field does not break anyone again. Read their fields and match with `..`. The
+command line is unaffected.
+
 ### Fixed — a repository that only crashed failed `verify` for good after its next write
 
 An object container's record is made durable before its index entry is appended, and the writer appends past a crash-torn frame by design.
@@ -68,6 +76,11 @@ append*, reported as a warning naming its offset (`verify` exits 0, `doctor` war
 index entry names is still a failed item.** The active WAL has no such case (its append refuses past a tail); the shared ref log keeps a failed
 item for a torn frame that another ref published past, because nothing at the reader names a ref-log record (a tail that is still the last frame
 is tolerated as before).
+
+### Upgrading
+
+- Rust callers of `prikk-store`: construct `RepositoryVerification`, `WalRepair` and `InterruptedAppend` only through the crate, and match
+  them with `..` (they are `#[non_exhaustive]`, and the first two gained a field each).
 
 ### Output changes
 
@@ -80,10 +93,9 @@ is tolerated as before).
   not decode included): **exit 1**, `<container> has a damaged entry; run doctor for diagnosis`; they exited 0.
 - `prikk verify` and `prikk doctor` on a repository whose only fault is an **interrupted append** in an object container (an unparseable frame no
   index entry names): **exit 0 with a warning** (`interrupted appends (unreferenced, not damage): N`, and `PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND`);
-  `verify` exited 1 ("container checksum mismatch") or scanned too few objects. `RepositoryVerification` gains a public field,
-  `object_interrupted_appends`.
+  `verify` exited 1 ("container checksum mismatch") or scanned too few objects.
 - `prikk doctor --repair-wal-tail` now **writes a recovery file first**: its output gains `the N removed byte(s) are saved, exactly, in
-  .prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes`; `WalRepair` gains a public field, `recovery_file`.
+  .prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes`.
 - The refusal of `prikk commit` (and of any command that mutates over a damaged active WAL) now names the damage and points to `doctor` for
   diagnosis: `active WAL has a damaged record (damaged record at byte offset N; K sound record(s) follow it); run doctor for diagnosis
   before committing`, where it said `active WAL has a damaged record; run doctor before committing`.
