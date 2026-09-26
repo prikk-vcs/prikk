@@ -36,9 +36,20 @@ over the runs give both in minutes.
    synopsis; every synopsis *description* is still true (0.40.0 shipped `setup … and print the exports`
    after RFC 148 made that false for the default path). Diff `commands.rs` against the CHANGELOG's
    `Unreleased` entries.
-2. **CHANGELOG `## Unreleased` completeness**: every user-visible commit since the last tag has an entry
-   under the right heading (`### Added` / `### Changed` / `### Fixed`); internal-only commits have none;
-   breaking-once changes say so.
+2. **CHANGELOG `## Unreleased` completeness and shape (RFC 161 §3, from 0.48.0).**
+   - Every user-visible commit since the last tag has an entry under the right heading (`### Added — …`,
+     `### Changed — …`, `### Fixed — …`). Internal-only commits have none.
+   - The section **opens** with these blocks, in this order, each only when it has an entry:
+     - **`### Security`**: one bullet per fix reachable by untrusted input (a received bundle, an exchange
+       artifact, a peer's objects), whether or not an advisory exists, each with its advisory id if published,
+       the affected versions and what a user should do;
+     - **`### Upgrading`**: one line per thing a user or script must know or do after upgrading, including every
+       breaking change's one-line migration;
+     - **`### Output changes`**: one line per change to what the CLI prints that a program may read (JSON fields and
+       values, exit codes, message text, listing membership), with the command, the before and the after. The
+       consumer letters are drafted from this block.
+   - A breaking change's heading is spelled exactly `### Changed — breaking once: <what>`. No other `###` heading
+     kinds are used.
 3. **Docs currency**: every message the release changes is quoted correctly in `troubleshooting.md`,
    `commands.md`, and the guide pages that show it.
 4. **Root-export name diff** from the last tag (`LC_ALL=C sort` + `comm`), plus `git diff <tag>..HEAD |

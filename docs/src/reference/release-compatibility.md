@@ -168,8 +168,8 @@ cargo +1.85.0 build --workspace --locked
 
 **MSRV rise policy.** The floor above cannot go lower — it is the edition-2024 minimum — but it can
 rise. It rises only when a dependency or language requirement forces it, never for convenience, and a
-rise is a minor-version event: the release's `CHANGELOG.md` carries a `### Breaking change` entry
-naming the specific dependency or language feature that forced it. A rise whose cause is not recorded
+rise is a minor-version event: the release's `CHANGELOG.md` carries a `### Changed — breaking once:`
+entry naming the specific dependency or language feature that forced it, and a line under `### Upgrading`. A rise whose cause is not recorded
 is indistinguishable from a rise for convenience, which this policy forbids.
 
 Current-stable quality gates are separate from minimum-version compatibility. In particular, strict
@@ -214,16 +214,27 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
 3. **Push, then CI green** on every job, including the Windows and macOS suites — the only place
    platform code runs.
 4. **Tag.** Annotated, GPG-signed with the repository's configured key, verified with `git tag -v`,
-   then pushed. The Release workflow builds four targets and publishes the assets. **A tag is never
-   moved or re-signed**; a mistake ships as the next patch release.
+   then pushed. From 0.48.0 the tag's message is the subject `prikk X.Y.Z`, a blank line, then two
+   lines:
+   - `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`;
+   - a link to `CHANGELOG.md` pinned to the tag.
+
+   The Release workflow builds four targets and publishes the assets, with notes generated from that
+   version's CHANGELOG section. **A tag is never moved or re-signed**; a mistake ships as the next patch
+   release. Tags before 0.48.0 keep their bare version message.
 5. **Verify the artifact.** Download the Linux asset, check its sha256 against the published file, read
    its build-info (commit and tag), run its `--version`, and run the smoke script against it: what is
    checked is the bytes users get, not the tree they came from.
 6. **Publish on the owner's word, per release.** The eight crates in dependency order from a detached
    worktree at the tag, each confirmed on the registry index; then `cargo install prikk --version X`
    and the smoke script once more against what crates.io serves.
-7. **Tell the consumers.** The CHANGELOG is the record; a project building on something a release
-   changed hears about it directly.
+7. **Tell the consumers.** The CHANGELOG is the record. A project building on something a release
+   changed hears about it directly, starting from the section's `### Output changes`.
+
+Each release section leads with what a reader must know, each block only when it has something in it:
+`### Security` (with the advisory id where one is published), `### Upgrading` (what to do after
+upgrading), and `### Output changes` (what a program reading the CLI will see differently). Then come the
+`Added`, `Changed` and `Fixed` entries ([RFC 161](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/161-release-notes-a-reader-and-a-consumer-can-use.md)).
 
 **What blocks a cut, without exception:** any red gate; any commit on `main` the architect has not
 reviewed; CI not green on the release tree; a `--help` text that is false on the shipped binary.
