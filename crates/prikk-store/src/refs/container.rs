@@ -49,7 +49,9 @@ use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::layout::RepositoryLayout;
 use crate::refs::require_signed_type;
@@ -339,11 +341,30 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                 offset = next_offset;
             }
             FrameAttempt::TrailingPartial { remaining } => {
-                return Ok(RefContainerReplay {
-                    records,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, REF_CONTAINER_MAGIC.as_slice(), |c| {
+                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(RefContainerReplay {
+                        records,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                let claimed = bytes
+                    .get(offset + 10..offset + 42)
+                    .and_then(|key| <[u8; 32]>::try_from(key).ok());
+                record_outcomes.push(RefContainerRecordOutcome {
+                    offset,
+                    status: RefContainerRecordStatus::Failed {
+                        message,
+                        claimed_ref_name_key: claimed,
+                    },
                 });
+                offset = next;
             }
             FrameAttempt::Invalid {
                 message,

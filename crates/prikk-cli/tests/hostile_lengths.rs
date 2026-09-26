@@ -73,6 +73,10 @@ fn discover(repo: &Path) -> Vec<Target> {
     found
 }
 
+/// A second author's seed (any 32 bytes that differ from the harness's).
+const SECOND_AUTHOR_SEED_HEX: &str =
+    "7373737373737373737373737373737373737373737373737373737373737373";
+
 fn unsealed_repository(tag: &str) -> PathBuf {
     let repo = support::unique_repo(tag);
     support::init(&repo);
@@ -84,6 +88,19 @@ fn unsealed_repository(tag: &str) -> PathBuf {
         .unwrap();
     }
     support::ok(&support::commit(&repo, "heads/main", "damage me"), "commit");
+    // A **second** commit by a **second** author: the WAL holds two records and the author key index two keys, so that damage to the
+    // first of each has a sound record behind it (RFC 160 F3: a partial frame is a torn tail only when nothing sound follows it).
+    std::fs::write(repo.join("second.txt"), "the second commit\n").unwrap();
+    let second = support::prikk(&repo)
+        .env("PRIKK_AUTHOR_KEY_ID", "second-author")
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(SECOND_AUTHOR_SEED_HEX),
+        )
+        .args(["commit", "--ref", "heads/main", "-m", "second"])
+        .output()
+        .unwrap();
+    support::ok(&second, "second commit");
     repo
 }
 
@@ -133,33 +150,13 @@ fn damage(repo: &Path, target: &Target, claimed: u64) {
 
 const CLAIMED: u64 = 1 << 62;
 
-/// **Rows that exit 0 today, on 0.47.0 as well** -- damage the tools cannot tell from an interrupted append, named for a ruling in the
-/// round's report (F3). They must still end by an exit status and print no allocation failure; they are the only rows allowed to exit
-/// 0, and the list is here so that it is a list, not a habit. (Each one is a file whose reader classifies a frame that claims more
-/// bytes than remain as a *torn tail*, and no index or checksum exists to say otherwise: the WAL, the object index -- whose entries are
-/// fixed-width, so a header that claims another length is in fact malformed -- and the author key index.)
-const OPEN: &[(&str, &str, &str)] = &[
-    (
-        "unsealed",
-        "active/default/queue.wal",
-        "WAL: a torn tail is repairable by `doctor --repair-wal-tail`; a damaged header reads as one",
-    ),
-    (
-        "unsealed",
-        "containers/index.container",
-        "object index: a header claiming another length than the fixed width reads as a torn tail",
-    ),
-    (
-        "sealed",
-        "trust/author-keys.container",
-        "author key index: a first frame that claims more than remains reads as a torn tail",
-    ),
-    (
-        "unsealed",
-        "trust/author-keys.container",
-        "author key index: as above",
-    ),
-];
+/// **Rows allowed to exit 0: none** (RFC 160 F3). Before the round these four exited 0 on 0.47.0 as well -- the unsealed WAL, the
+/// unsealed object index and the author key index (sealed and unsealed): each reader took a frame that claims more bytes than remain
+/// for a *torn tail*, whatever sound records followed it. The fixtures now hold **two** records of each (two queued commits by two
+/// authors), so the damaged first record has a sound one behind it; the rule is "a torn tail is a prefix of one frame", and the
+/// object index's fixed width makes its damaged header malformed regardless. **A file whose only record is damaged, with nothing behind
+/// it, is still indistinguishable from an interrupted append** and stays a tail (the report's ambiguous cases).
+const OPEN: &[(&str, &str, &str)] = &[];
 
 /// One row of the matrix.
 struct Row {
@@ -262,6 +259,56 @@ fn verify_and_doctor_end_by_an_exit_status_and_say_something_on_every_damaged_fi
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
+/// **An undecodable trust-policy snapshot** (RFC 160 F3): a record whose body claims 2^32 - 1 keys and holds none, with a **matching**
+/// checksum (the checksums are unkeyed), replaces the policy. `trust maintainer list` has always refused it ("run doctor before
+/// reading"); `verify` and `doctor` used to exit 0, because the policy is read only when a block or ref state needs its signer
+/// checked. Both must now exit non-zero and say so.
+/// **Perturb:** drop the trust policy row of `verify_objects`'s container check: both rows exit 0 and this goes red.
+#[test]
+fn an_undecodable_trust_policy_snapshot_is_reported_by_verify_and_doctor() {
+    for (kind, build) in [
+        ("sealed", sealed_repository as fn(&str) -> PathBuf),
+        ("unsealed", unsealed_repository as fn(&str) -> PathBuf),
+    ] {
+        let repo = build(&format!("hostile-policy-{kind}"));
+        // An unsealed repository has no adopted maintainer yet: adopt one, so there is a policy container to damage.
+        support::trust_maintainer(&repo);
+        let container = repo.join(".prikk/trust/policy-a.container");
+        let before = std::fs::read(&container).unwrap();
+        assert!(
+            before.len() > 50,
+            "{kind}: a policy snapshot exists to replace"
+        );
+        let header = &before[..10]; // magic and version
+        let body = u32::MAX.to_be_bytes().to_vec();
+        let body_len = (body.len() as u64).to_be_bytes();
+        let mut preimage = header.to_vec();
+        preimage.extend_from_slice(&body_len);
+        preimage.extend_from_slice(&body);
+        let mut hostile = header.to_vec();
+        hostile.extend_from_slice(&body_len);
+        hostile.extend_from_slice(&prikk_hash::sha256(&preimage));
+        hostile.extend_from_slice(&body);
+        std::fs::write(&container, hostile).unwrap();
+        for command in ["verify", "doctor"] {
+            let ran = run(None, &repo, &[command]);
+            assert!(
+                ran.code.is_some_and(|code| code != 0),
+                "{kind} / {command}: exit {:?} over a policy snapshot that cannot be decoded\n{}",
+                ran.code,
+                ran.text
+            );
+            assert!(
+                ran.text
+                    .contains("trust policy container has a damaged entry"),
+                "{kind} / {command}: the finding names the container\n{}",
+                ran.text
+            );
+        }
+        let _ = std::fs::remove_dir_all(repo);
+    }
 }
 
 #[path = "../../../tools/corpus/tests/support/budget.rs"]

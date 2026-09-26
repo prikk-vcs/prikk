@@ -61,7 +61,9 @@ use std::path::Path;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::push_string_u16;
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{
     append_file_required, create_new_file_required, len_to_u64, read_file_if_exists,
 };
@@ -71,6 +73,8 @@ use crate::lock::ActiveLock;
 const AUTHOR_KEY_MAGIC: &[u8; 8] = b"PAUTKEY1";
 const AUTHOR_KEY_VERSION: u16 = 1;
 const AUTHOR_KEY_HEADER_LEN: usize = 8 + 2 + 8 + 32;
+/// The longest body a key record can have: a `u16`-length key id, then a 32-byte Ed25519 key.
+const MAX_KEY_BODY_LEN: u64 = 2 + 65_535 + 32;
 
 /// One recorded AUTHOR key's material.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +199,15 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
             message: format!("unsupported author key record version {version}"),
         };
     }
+    // RFC 160 F3: a header that claims a body **longer than any record of this format can hold** (a `u16`-prefixed key id and a 32-byte
+    // key) is not a prefix of one: malformed, whatever follows, never a "torn tail".
+    if body_len > MAX_KEY_BODY_LEN {
+        return AuthorKeyFrameAttempt::Invalid {
+            message: format!(
+                "author key record at byte offset {offset} claims a body of {body_len} bytes, more than the {MAX_KEY_BODY_LEN} a record of this format can hold"
+            ),
+        };
+    }
     let Ok(body_len_usize) = usize::try_from(body_len) else {
         return AuthorKeyFrameAttempt::Invalid {
             message: "author key body length does not fit usize".to_string(),
@@ -242,11 +255,27 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
                 offset = next_offset;
             }
             AuthorKeyFrameAttempt::TrailingPartial { remaining } => {
-                return Ok(AuthorKeyReplay {
-                    entries,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, AUTHOR_KEY_MAGIC.as_slice(), |c| {
+                        matches!(
+                            parse_author_key_frame_at(bytes, c),
+                            AuthorKeyFrameAttempt::Record { .. }
+                        )
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(AuthorKeyReplay {
+                        entries,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                record_outcomes.push(AuthorKeyRecordOutcome {
+                    offset,
+                    status: AuthorKeyRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             AuthorKeyFrameAttempt::Invalid { message } => {
                 record_outcomes.push(AuthorKeyRecordOutcome {
@@ -268,7 +297,7 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
     }
 }
 
-fn replay_author_keys(layout: &RepositoryLayout) -> Result<AuthorKeyReplay> {
+pub(crate) fn replay_author_keys(layout: &RepositoryLayout) -> Result<AuthorKeyReplay> {
     let relative = layout.repository_relative(&layout.author_key_container_path())?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         // A repository initialized before this container existed has no such file; that reads

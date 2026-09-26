@@ -28,7 +28,9 @@ use prikk_object::ObjectId;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::RepositoryLayout;
@@ -244,11 +246,24 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                 offset = next_offset;
             }
             FrameAttempt::TrailingPartial { remaining } => {
-                return Ok(PointerIndexReplay {
-                    entries,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, POINTER_INDEX_MAGIC.as_slice(), |c| {
+                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(PointerIndexReplay {
+                        entries,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                record_outcomes.push(PointerIndexRecordOutcome {
+                    offset,
+                    status: PointerIndexRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             FrameAttempt::Invalid { message } => {
                 record_outcomes.push(PointerIndexRecordOutcome {

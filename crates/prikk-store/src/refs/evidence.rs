@@ -21,10 +21,11 @@ pub(super) fn has_incomplete_active_cleanup(layout: &RepositoryLayout) -> Result
     // this function's own established shape: only report on an issue once metadata already
     // implicates this WAL), before the emptiness check below.
     if replay.has_item_failure() {
-        return Err(PrikkError::Integrity(
-            "active WAL has a damaged record; run doctor before mutating this repository"
-                .to_string(),
-        ));
+        return Err(PrikkError::Integrity(format!(
+            "active WAL has a damaged record ({}); run doctor for diagnosis before mutating this repository (a damaged record with \
+             sound ones behind it is not a torn tail, and no automatic repair applies to it)",
+            replay.damage_summary().unwrap_or_default()
+        )));
     }
     if replay.records.is_empty() {
         return Ok(false);

@@ -37,7 +37,9 @@ use prikk_hash::sha256;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_string_u16, push_u16, push_u32};
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::RepositoryLayout;
@@ -45,6 +47,8 @@ use crate::foundation::layout::RepositoryLayout;
 const TRUST_KEY_MAGIC: &[u8; 8] = b"PTRUKEY1";
 const TRUST_KEY_VERSION: u16 = 1;
 const TRUST_KEY_HEADER_LEN: usize = 8 + 2 + 8 + 32;
+/// The longest body a key record can have: a `u16`-length key id, then a 32-byte Ed25519 key.
+const MAX_KEY_BODY_LEN: u64 = 2 + 65_535 + 32;
 
 const TRUST_POLICY_MAGIC: &[u8; 8] = b"PTRUPOL1";
 const TRUST_POLICY_VERSION: u16 = 1;
@@ -177,6 +181,15 @@ fn parse_trust_key_frame_at(bytes: &[u8], offset: usize) -> TrustKeyFrameAttempt
             message: format!("unsupported trust key record version {version}"),
         };
     }
+    // RFC 160 F3: a header that claims a body **longer than any record of this format can hold** (a `u16`-prefixed key id and a 32-byte
+    // key) is not a prefix of one: malformed, whatever follows, never a "torn tail".
+    if body_len > MAX_KEY_BODY_LEN {
+        return TrustKeyFrameAttempt::Invalid {
+            message: format!(
+                "trust key record at byte offset {offset} claims a body of {body_len} bytes, more than the {MAX_KEY_BODY_LEN} a record of this format can hold"
+            ),
+        };
+    }
     let Ok(body_len_usize) = usize::try_from(body_len) else {
         return TrustKeyFrameAttempt::Invalid {
             message: "trust key body length does not fit usize".to_string(),
@@ -223,11 +236,27 @@ pub(crate) fn decode_trust_key_records(bytes: &[u8]) -> Result<TrustKeyReplay> {
                 offset = next_offset;
             }
             TrustKeyFrameAttempt::TrailingPartial { remaining } => {
-                return Ok(TrustKeyReplay {
-                    entries,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, TRUST_KEY_MAGIC.as_slice(), |c| {
+                        matches!(
+                            parse_trust_key_frame_at(bytes, c),
+                            TrustKeyFrameAttempt::Record { .. }
+                        )
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(TrustKeyReplay {
+                        entries,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                record_outcomes.push(TrustKeyRecordOutcome {
+                    offset,
+                    status: TrustKeyRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             TrustKeyFrameAttempt::Invalid { message } => {
                 record_outcomes.push(TrustKeyRecordOutcome {
@@ -482,11 +511,27 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
                 offset = next_offset;
             }
             TrustPolicyFrameAttempt::TrailingPartial { remaining } => {
-                return Ok(TrustPolicyReplay {
-                    entries,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, TRUST_POLICY_MAGIC.as_slice(), |c| {
+                        matches!(
+                            parse_trust_policy_frame_at(bytes, c),
+                            TrustPolicyFrameAttempt::Record { .. }
+                        )
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(TrustPolicyReplay {
+                        entries,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                record_outcomes.push(TrustPolicyRecordOutcome {
+                    offset,
+                    status: TrustPolicyRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             TrustPolicyFrameAttempt::Invalid { message } => {
                 record_outcomes.push(TrustPolicyRecordOutcome {

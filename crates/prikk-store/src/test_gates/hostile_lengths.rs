@@ -383,6 +383,56 @@ pub(crate) fn check(format: &Format) {
     }
 }
 
+/// **RFC 160 F3, one rule for every framed reader: a torn tail is a prefix of ONE frame.** For a format, with `V` a valid record:
+/// - **damage**: `V` with its length field claiming 2^62, then a second sound record. The partial frame is a **failed item**, the
+///   sound record after it **decodes**, and `trailing_partial_bytes` is 0 (before the rule: no failure, no record, the whole
+///   remainder a "tail" -- which `doctor --repair-wal-tail` then truncated);
+/// - **crash recovery unchanged**: one sound record and then a **prefix** of a second (every length from one byte to all but the
+///   last), is one record, no failure, and the prefix is the tail -- the interrupted append every reader must still tolerate;
+/// - **ambiguity resolves to damage**: a sound record *inside the payload of a partial frame* (`claiming(V) ‖ V` read as if the
+///   partial frame's body held a whole frame) is damage, not a tail.
+///
+/// **Perturb:** make `sound_frame_after_partial` return `None` (the old classification): every format's damage row goes red.
+pub(crate) fn check_partial_frames(format: &Format) {
+    let valid = (format.valid)();
+    let one = |bytes: &[u8]| (format.decode)(bytes).expect("decodes without an error");
+
+    // Damage: a partial frame with a sound frame behind it.
+    let mut damaged = claiming(&valid, format.pre, 1 << 62);
+    damaged.extend_from_slice(&valid);
+    let seen = one(&damaged);
+    assert_eq!(
+        (seen.records, seen.failed, seen.trailing_partial_bytes),
+        (1, 1, 0),
+        "{}: a partial frame before a sound one is a failed item, the sound one decodes, and there is no tail: {seen:?}",
+        format.name
+    );
+
+    // Crash recovery unchanged: a prefix of the last frame is a tail, tolerated.
+    for cut in [1, 9, 10, valid.len() / 2, valid.len() - 1] {
+        let mut torn = valid.clone();
+        torn.extend_from_slice(&valid[..cut]);
+        let seen = one(&torn);
+        assert_eq!(
+            (seen.records, seen.failed, seen.trailing_partial_bytes),
+            (1, 0, cut),
+            "{}: a {cut}-byte prefix of the last frame is a torn tail, tolerated as before: {seen:?}",
+            format.name
+        );
+    }
+
+    // Ambiguity resolves to damage: the "body" of a partial frame that holds a sound frame.
+    let mut embedded = valid[..valid.len() - 1].to_vec();
+    embedded.extend_from_slice(&claiming(&valid, format.pre, 1 << 40));
+    embedded.extend_from_slice(&valid);
+    let seen = one(&embedded);
+    assert!(
+        seen.failed >= 1 && seen.trailing_partial_bytes == 0 && seen.records >= 1,
+        "{}: a sound frame inside a partial one reads as damage, never as a tail: {seen:?}",
+        format.name
+    );
+}
+
 fn check_named(name: &str) {
     let all = formats();
     let format = all
@@ -547,6 +597,14 @@ fn commit_index() {
     );
 }
 
+/// RFC 160 F3, the table: every framed reader in this file's list (`refs/tests/hostile_lengths.rs` runs the two `refs` ones).
+#[test]
+fn every_framed_reader_treats_a_partial_frame_before_a_sound_frame_as_damage() {
+    for format in formats() {
+        check_partial_frames(&format);
+    }
+}
+
 hostile_case!(hostile_length_container_frame, container_frame);
 hostile_case!(hostile_length_object_index, object_index);
 hostile_case!(hostile_length_wal, wal);
@@ -558,6 +616,32 @@ hostile_case!(hostile_length_generation, generation_file);
 hostile_case!(hostile_length_verified_blocks, verified_blocks_record);
 hostile_case!(hostile_length_lifecycle_cache, lifecycle_cache);
 hostile_case!(hostile_length_commit_index, commit_index);
+
+/// **RFC 160 F3, fixed width (and bounded width): a header no record of the format could have is malformed, whatever follows -- even
+/// when nothing does.** A torn append leaves a **correct** header, so for the object index (its entry body is exactly the fixed
+/// width), the generation file (one byte) and the two key formats (a `u16`-prefixed key id and a 32-byte key: at most 65,569 bytes)
+/// a header claiming another length is not a prefix of a record. Alone, with nothing behind it, it is a failed item and **not** a
+/// tail: the "ambiguous case" of a lone damaged frame is unambiguous here.
+/// **Perturb:** remove the width check from the index reader (or the bound from a key reader): that format's row goes red.
+#[test]
+fn a_header_no_record_of_the_format_could_have_is_malformed_even_alone() {
+    for format in formats() {
+        if !["object index", "generation", "trust key", "author key"].contains(&format.name) {
+            continue;
+        }
+        let valid = (format.valid)();
+        for claimed in [1_u64 << 62, u64::MAX, 65_570_u64 + valid.len() as u64] {
+            let seen = (format.decode)(&claiming(&valid, format.pre, claimed))
+                .expect("decodes without an error");
+            assert_eq!(
+                (seen.records, seen.failed, seen.trailing_partial_bytes),
+                (0, 1, 0),
+                "{}: a lone header claiming {claimed} bytes is malformed, not a torn tail: {seen:?}",
+                format.name
+            );
+        }
+    }
+}
 
 /// **`ByteCursor::bounded_capacity`**: `min(count, remaining bytes / smallest element)`, never more than what is left could hold, and
 /// it shrinks as the cursor advances.

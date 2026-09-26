@@ -127,6 +127,31 @@ pub(super) fn verify_objects(
                 .to_string(),
         ));
     }
+    // RFC 160 F3: **the small record containers `verify` would otherwise read only by chance.** The author key index is consulted only
+    // when a patch sits in a container, the trust policy only when a block or ref state needs its signer checked, and an unsealed
+    // repository needs neither -- so a damaged entry in either (a header whose length no record could have, a snapshot whose body will
+    // not decode) was reported by nobody unless some other check happened to read it. Each is reported here, on the same footing as
+    // the object index above: a stage failure naming the container, before anything is classified against it.
+    for (name, damaged) in [
+        (
+            "author key container",
+            crate::author::author_key_index::replay_author_keys(layout)?.has_item_failure(),
+        ),
+        (
+            "trust key container",
+            crate::trust_index::replay_trust_keys(layout)?.has_item_failure(),
+        ),
+        (
+            "trust policy container",
+            crate::trust_index::replay_trust_policy(layout)?.has_item_failure(),
+        ),
+    ] {
+        if damaged {
+            return Err(PrikkError::Integrity(format!(
+                "{name} has a damaged entry; run doctor for diagnosis (nothing is repaired automatically)"
+            )));
+        }
+    }
     let indexed_ids: HashSet<ObjectId> = index_replay
         .entries
         .iter()

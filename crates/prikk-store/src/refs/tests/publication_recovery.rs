@@ -215,6 +215,58 @@ fn fully_framed_checksum_failure_is_never_truncated() -> prikk_error::Result<()>
     Ok(())
 }
 
+/// **RFC 160 F3, control 7 -- a publish never truncates over damage.** `heads/main` publishes twice, then `heads/other` once; the
+/// container's first record (`heads/main`'s) has its length field set to 2^62, with sound records behind it. Before the rule that
+/// frame was a "torn tail" swallowing the rest of the log: every publish refused ("unauthorized incomplete log tail") and the one
+/// path that truncates a tail (`truncate_incomplete_tail`) was one prefix-match away from deleting sound records. Now the frame is
+/// damage: a publish to **another** ref proceeds, appends **after** the damage, and the container's earlier bytes are exactly as
+/// they were (nothing truncated); a publish to `heads/main` itself refuses, naming a damaged record.
+/// **Perturb:** the old classification (`sound_frame_after_partial` -> `None`): the publish to `heads/other` refuses as an
+/// unauthorized incomplete tail, and this goes red.
+#[test]
+#[allow(clippy::indexing_slicing)]
+fn a_publish_beside_a_damaged_early_ref_log_record_appends_after_it_and_truncates_nothing()
+-> prikk_error::Result<()> {
+    let root = unique_temp_dir("rfc160-publish-beside-damage");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let store = RefStore::new(layout.clone());
+    let first = root_publication(&layout, "heads/main")?;
+    store.publish(&first)?;
+    let second = next_publication(&layout, &first)?;
+    store.publish(&second)?;
+    let other = root_publication(&layout, "heads/other")?;
+
+    let path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let mut bytes = std::fs::read(&path)?;
+    // The first record: magic(8) version(2) ref key(32) then the u64 length.
+    bytes[42..50].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(&path, &bytes)?;
+
+    let replay = store.replay_log("heads/other")?;
+    assert!(replay.records.is_empty());
+
+    store.publish(&other)?;
+    let after = std::fs::read(&path)?;
+    assert!(
+        after.len() > bytes.len() && after[..bytes.len()] == bytes[..],
+        "the publish appended after the damage and every earlier byte is unchanged (nothing truncated)"
+    );
+    assert_eq!(store.replay_log("heads/other")?.records.len(), 1);
+    let third = next_publication(&layout, &second)?;
+    assert!(
+        store.publish(&third).is_err(),
+        "a publish to the ref whose log has the damaged record refuses"
+    );
+    assert_eq!(std::fs::read(&path)?, after, "and it writes nothing");
+    let report = verify_repository(&layout)?;
+    assert!(
+        report.has_item_failure(),
+        "verify reports the damaged record"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 #[test]
 fn format2_ahead_log_refuses_pointer_promotion() -> prikk_error::Result<()> {
     let root = unique_temp_dir("dc38-legacy-ahead");

@@ -1074,3 +1074,40 @@ fn a_frame_that_claims_another_length_than_the_index_recorded_is_an_integrity_er
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+// ---- RFC 160 F3: `--repair-index` reads containers under the one rule ---------------------------------------------------------
+
+/// **`--repair-index` indexes the sound frames behind a damaged one.** A blob container holding a frame whose length field claims 2^62
+/// and, behind it, two sound frames: the rebuild reads the container under the torn-tail rule (a partial frame with a sound frame
+/// behind it is damage, not a tail), so both sound objects are indexed. Before the rule the damaged frame swallowed them as a "torn
+/// tail" and the rebuilt index silently lacked both.
+/// **Perturb:** the old classification (`sound_frame_after_partial` -> `None`): the rebuilt index is empty and this goes red.
+#[test]
+fn the_index_rebuild_indexes_the_sound_frames_behind_a_damaged_one() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-rebuild-behind-damage");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let damaged =
+        container::encode_container_record(ObjectType::Blob, &blob_envelope("damaged", 100))?;
+    let mut hostile = damaged.clone();
+    hostile[10..18].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    let one = blob_envelope("sound one", 100);
+    let two = blob_envelope("sound two", 100);
+    let mut bytes = hostile;
+    bytes.extend_from_slice(&container::encode_container_record(ObjectType::Blob, &one)?);
+    bytes.extend_from_slice(&container::encode_container_record(ObjectType::Blob, &two)?);
+    std::fs::write(
+        layout.container_slot_path(ObjectType::Blob, ContainerSlot::A),
+        &bytes,
+    )?;
+
+    let rebuilt = rebuild_index_from_containers(&layout)?;
+    let ids: std::collections::BTreeSet<_> = rebuilt.iter().map(|entry| entry.object_id).collect();
+    assert!(
+        ids.contains(&one.object_id()),
+        "the first sound frame behind the damage is indexed"
+    );
+    assert!(ids.contains(&two.object_id()), "and the second");
+    assert_eq!(rebuilt.len(), 2, "and the damaged frame is not");
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

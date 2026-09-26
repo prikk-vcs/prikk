@@ -16,7 +16,9 @@ use crate::refs::pointer_index::{
     encode_pointer_index_record,
 };
 use crate::test_gates::hostile_length_support::{Seen, hostile_case};
-use crate::test_gates::hostile_lengths::{Format, check, envelope_bodies, ref_name_length_bodies};
+use crate::test_gates::hostile_lengths::{
+    Format, check, check_partial_frames, envelope_bodies, ref_name_length_bodies,
+};
 use crate::test_gates::test_support::signed_ref_update_envelope;
 
 fn ref_container_valid() -> Vec<u8> {
@@ -85,3 +87,33 @@ fn pointer_index() {
 
 hostile_case!(hostile_length_ref_container, ref_container);
 hostile_case!(hostile_length_pointer_index, pointer_index);
+
+/// RFC 160 F3 for the two `refs` readers (the rule, and its controls, are documented on `check_partial_frames`): a partial frame before
+/// a sound one is damage (in the ref log, attributed to the ref its header names); a prefix of the last frame is still a tail.
+#[test]
+fn the_ref_readers_treat_a_partial_frame_before_a_sound_frame_as_damage() {
+    for (name, pre, valid, decode, bodies) in [
+        (
+            "ref container",
+            32,
+            ref_container_valid as fn() -> Vec<u8>,
+            ref_container_decode as fn(&[u8]) -> Result<Seen>,
+            envelope_bodies as fn(&[u8]) -> Vec<crate::test_gates::hostile_lengths::HostileBody>,
+        ),
+        (
+            "pointer index",
+            0,
+            pointer_index_valid,
+            pointer_index_decode,
+            ref_name_length_bodies,
+        ),
+    ] {
+        check_partial_frames(&Format {
+            name,
+            pre,
+            valid,
+            decode,
+            hostile_bodies: bodies,
+        });
+    }
+}

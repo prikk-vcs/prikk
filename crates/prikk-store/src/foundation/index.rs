@@ -26,7 +26,9 @@ use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::container::{self, ContainerRecordStatus, container_magic};
 use crate::foundation::file_codec::push_u16;
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{
     append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
     read_file_range_if_exists, stat_file_state_if_exists, write_file_atomically,
@@ -216,6 +218,17 @@ fn parse_frame_at_reporting(bytes: &[u8], offset: usize, base: usize) -> FrameAt
             };
         }
     };
+    // RFC 160 F3: **a fixed-width record's header states its width**. A torn append leaves a correct header, so a header that claims
+    // any other length is not a prefix of an index entry: it is malformed, whatever follows (and never a "torn tail").
+    if u64::try_from(INDEX_BODY_LEN).ok() != Some(header_values.body_len) {
+        return FrameAttempt::Invalid {
+            message: format!(
+                "index record at byte offset {} claims a body of {} bytes, but every index entry's body is exactly {INDEX_BODY_LEN}",
+                base + offset,
+                header_values.body_len
+            ),
+        };
+    }
     let Ok(body_len) = usize::try_from(header_values.body_len) else {
         return FrameAttempt::Invalid {
             message: "index body length does not fit usize".to_string(),
@@ -281,11 +294,27 @@ pub(crate) fn decode_index_records_at(
                 offset = next_offset;
             }
             FrameAttempt::TrailingPartial { remaining } => {
-                return Ok(IndexReplay {
-                    entries,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, INDEX_MAGIC.as_slice(), |c| {
+                        matches!(
+                            parse_frame_at_reporting(bytes, c, base),
+                            FrameAttempt::Record { .. }
+                        )
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(IndexReplay {
+                        entries,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(base + offset, base + next);
+                record_outcomes.push(IndexRecordOutcome {
+                    offset: base + offset,
+                    status: IndexRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             FrameAttempt::Invalid { message } => {
                 record_outcomes.push(IndexRecordOutcome {

@@ -11,7 +11,9 @@ use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, len_to_u64, read_file_if_exists,
     truncate_existing_file_required, truncate_file_empty_required,
@@ -81,6 +83,39 @@ impl WalReplay {
         self.record_outcomes
             .iter()
             .any(|outcome| matches!(outcome.status, WalRecordStatus::Failed { .. }))
+    }
+
+    /// The refusal a command gives when the active WAL holds a damaged record: it names the damage and points to `doctor` for
+    /// **diagnosis** (never to the truncating repair, which applies to a torn tail only).
+    #[must_use]
+    pub fn damaged_record_error(&self, before: &str) -> PrikkError {
+        PrikkError::Integrity(format!(
+            "active WAL has a damaged record ({}); run doctor for diagnosis before {before}",
+            self.damage_summary().unwrap_or_default()
+        ))
+    }
+
+    /// The first damaged frame's byte offset and how many **sound** records follow it, when there is one (RFC 160 F3: a repair must
+    /// say what it refuses to touch -- a damaged record with intact records behind it is not a torn tail, and truncating "the tail"
+    /// would delete them).
+    #[must_use]
+    pub fn damage_summary(&self) -> Option<String> {
+        let first = self
+            .record_outcomes
+            .iter()
+            .find(|outcome| matches!(outcome.status, WalRecordStatus::Failed { .. }))?;
+        let sound_after = self
+            .record_outcomes
+            .iter()
+            .filter(|outcome| {
+                outcome.offset > first.offset
+                    && matches!(outcome.status, WalRecordStatus::Evaluated)
+            })
+            .count();
+        Some(format!(
+            "damaged record at byte offset {}; {sound_after} sound record(s) follow it",
+            first.offset
+        ))
     }
 }
 
@@ -257,9 +292,13 @@ impl Wal {
         };
         let replay = decode_records(&bytes)?;
         if replay.has_item_failure() {
-            return Err(PrikkError::Integrity(
-                "WAL has a damaged record; repair does not modify it".to_string(),
-            ));
+            // A damaged record is not a torn tail, and this repair truncates only a torn tail: it refuses, and the file is left byte for
+            // byte as it was, saying what it will not touch (RFC 160 F3; on 0.47.0 a damaged length was taken for a tail and every
+            // record behind it was truncated away).
+            return Err(PrikkError::Integrity(format!(
+                "WAL has a damaged record ({}); repair does not modify it",
+                replay.damage_summary().unwrap_or_default()
+            )));
         }
         let preserved_patch_ids: Vec<ObjectId> = replay
             .records
@@ -479,11 +518,24 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
                 offset = next_offset;
             }
             FrameAttempt::TrailingPartial { remaining } => {
-                return Ok(WalReplay {
-                    records,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, WAL_RECORD_MAGIC.as_slice(), |c| {
+                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(WalReplay {
+                        records,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                record_outcomes.push(WalRecordOutcome {
+                    offset,
+                    status: WalRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             FrameAttempt::Invalid { message } => {
                 record_outcomes.push(WalRecordOutcome {

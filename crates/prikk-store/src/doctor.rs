@@ -704,8 +704,12 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                         DoctorIssue::error(
                             "PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE",
                             format!(
-                                "WAL record at offset {} failed verification: {message}",
-                                outcome.offset
+                                "WAL record at offset {} failed verification: {message}{}",
+                                outcome.offset,
+                                sound_after_damage_note(
+                                    &verification.wal_record_outcomes,
+                                    outcome.offset
+                                )
                             ),
                             "preserve the repository and inspect the failing WAL record before \
                              attempting repair",
@@ -1022,6 +1026,23 @@ fn add_active_wal_metadata_issues(
         ActiveWalMetadataStatus::MissingForEmptyWal
         | ActiveWalMetadataStatus::ValidForNonEmptyWal { .. } => {}
     }
+}
+
+/// `; N sound record(s) follow it and are intact; --repair-wal-tail will not touch them` -- what a damaged WAL record leaves standing,
+/// so the operator sees that the repair verb (which truncates only a torn tail) is not the answer (RFC 160 F3).
+fn sound_after_damage_note(outcomes: &[crate::wal::WalRecordOutcome], offset: usize) -> String {
+    let sound_after = outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.offset > offset && matches!(outcome.status, WalRecordStatus::Evaluated)
+        })
+        .count();
+    if sound_after == 0 {
+        return String::new();
+    }
+    format!(
+        "; {sound_after} sound record(s) follow it and are intact, and `--repair-wal-tail` (which truncates only a torn tail) will not touch them"
+    )
 }
 
 fn issue_for_verification_error(error: PrikkError) -> DoctorIssue {

@@ -27,10 +27,14 @@ use prikk_hash::sha256;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::push_u16;
-use crate::foundation::frame_resync::resync_to_next_magic;
+use crate::foundation::frame_resync::{
+    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+};
 use crate::foundation::fsutil::{append_file_required, read_file_if_exists};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
+/// A generation record's body is one byte: the live slot's code.
+const GENERATION_BODY_LEN: usize = 1;
 const GENERATION_MAGIC: &[u8; 8] = b"PGENREC1";
 const GENERATION_VERSION: u16 = 1;
 const GENERATION_HEADER_LEN: usize = 8 + 2 + 8 + 32;
@@ -169,6 +173,15 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
             };
         }
     };
+    // RFC 160 F3: a fixed-width record's header states its width; any other length is malformed, never a torn tail.
+    if u64::try_from(GENERATION_BODY_LEN).ok() != Some(header_values.0) {
+        return GenerationFrameAttempt::Invalid {
+            message: format!(
+                "generation record at byte offset {offset} claims a body of {} bytes, but every generation record's body is exactly {GENERATION_BODY_LEN}",
+                header_values.0
+            ),
+        };
+    }
     let Ok(body_len) = usize::try_from(header_values.0) else {
         return GenerationFrameAttempt::Invalid {
             message: "generation record body length does not fit usize".to_string(),
@@ -240,11 +253,27 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                 offset = next_offset;
             }
             GenerationFrameAttempt::TrailingPartial { remaining } => {
-                return Ok(GenerationReplay {
-                    records,
-                    trailing_partial_bytes: remaining,
-                    record_outcomes,
+                // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, GENERATION_MAGIC.as_slice(), |c| {
+                        matches!(
+                            parse_generation_frame_at(bytes, c),
+                            GenerationFrameAttempt::Record { .. }
+                        )
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(GenerationReplay {
+                        records,
+                        trailing_partial_bytes: remaining,
+                        record_outcomes,
+                    });
+                };
+                let message = partial_before_sound_frame_message(offset, next);
+                record_outcomes.push(GenerationRecordOutcome {
+                    offset,
+                    status: GenerationRecordStatus::Failed { message },
                 });
+                offset = next;
             }
             GenerationFrameAttempt::Invalid { message } => {
                 record_outcomes.push(GenerationRecordOutcome {
