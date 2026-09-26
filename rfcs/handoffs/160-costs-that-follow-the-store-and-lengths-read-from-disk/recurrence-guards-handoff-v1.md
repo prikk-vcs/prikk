@@ -85,3 +85,12 @@ Put each defect back, one at a time, and show which guard goes red. **Restore by
 
 **Windows:** P1–P4 must run on Windows too wherever the platform allows. The architect reads the Windows mutation suite
 on the pushed commit, and the round closes only when it is green.
+
+**ACCEPTED 2026-09-26** (`1b96ae9c` … `261e1ee6`, plus the architect's docs fix `6a896f38`; review
+`rfc160-recurrence-guards-review-v1`). The architect:
+- re-ran the 14 gates on `6a896f38`: 2397 / 0 / 54 on both toolchains;
+- perturbed the `trust_index.rs` fix (3 red) and the append's whole read (494 red);
+- reproduced F3-WAL and F4 on release binaries.
+
+**Closes when the Windows mutation suite is green on the pushed commit.** Findings F1–F4 go to RFC 160 §8, and their
+scheduling to the owner.

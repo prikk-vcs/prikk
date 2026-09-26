@@ -181,3 +181,31 @@ durable (RFC 102's write protocol). So an indexed entry whose record cannot be r
 
 This is within the accepted direction ("a damaged repository never crashes the tools that diagnose it"): a tool that
 exits 0 over damage it could see is the same failure, quieter.
+
+## 8. DELIVERED 2026-09-26 — what the guards found, and what this RFC got wrong
+
+**Round accepted** (`1b96ae9c` … `261e1ee6`; review `rfc160-recurrence-guards-review-v1`). P1–P4 are in the ordinary
+test run. Each was shown red by its own defect. The guard's cost to the store suite is +0.3 % to +0.6 %.
+
+**Corrections to this RFC** (the report's §11, accepted):
+- §3.1's scope list was incomplete. The inventory also found `init`'s existence check, which was a defect and is fixed,
+  the ref log's per-publication replays (F1), the type enumerations (F2) and `FileObjectStore`'s per-call index decode
+  (AUD-01).
+- §4's P2 cell for site C holds only on an object-count axis, which the round added.
+- §1's "that aborts" for `trust_index.rs:344` depends on the host's memory policy. It aborts under an address-space
+  limit, and a 59 GiB overcommitting host satisfies it lazily. The fix is right either way.
+- §3.4's matching-checksum rule cannot apply to a frame's own length, which is never checksummed when it overruns.
+
+**Findings, open:**
+- **F1** — a ref publication replays the whole ref log three times. Seal and commit reads grow about 4.3 KB per
+  generation.
+- **F2** — listing by type reads the whole container, on `sync seal`'s path too.
+- **F3** — a partial frame is taken for a torn tail even when a sound frame follows it. `verify` and `doctor` are silent
+  on four files, and **`doctor --repair-wal-tail` then deletes every intact record after the damage** (measured: 702 →
+  0 bytes, "preserved 0 record(s)", on 0.47.0 and on this build).
+- **F4** — a one-file `commit` reads every stored blob, to learn each one's kind: 1 / 16 / 64 MiB of content → 1.1 /
+  16.8 / 67.1 MB read.
+
+The architect's proposal, **awaiting the owner:** F3 as the next 0.48.0 round, under one rule (a torn tail is a prefix
+of one frame; a repair never removes a sound frame); F4 in 0.48.0 if its fix needs no format change; F1 and F2 in
+0.49.0.
