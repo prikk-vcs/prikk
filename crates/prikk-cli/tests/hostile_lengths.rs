@@ -264,24 +264,37 @@ fn verify_and_doctor_end_by_an_exit_status_and_say_something_on_every_damaged_fi
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
-/// **G2** -- the same matrix on this build and on an older binary (`PRIKK_HOSTILE_BASELINE_BINARY`), printed as a table of exit
-/// statuses for the report. Run deliberately (`--ignored --nocapture`); it asserts nothing.
+#[path = "../../../tools/corpus/tests/support/budget.rs"]
+#[cfg(target_os = "linux")]
+mod budget;
+
+/// **G2's budget**, a constant of this file as an instrument's is: the unit stops itself at twice this.
+#[cfg(target_os = "linux")]
+const G2_BUDGET: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// **G2** -- the same matrix on this build and on an older binary (`PRIKK_HOSTILE_BASELINE_BINARY`), under the measurement watcher
+/// (budget 5 min), printed as a table of exit statuses and written to `.git-exclude/measurements/rfc160/`. Run deliberately
+/// (`--ignored --nocapture`); it asserts nothing.
 #[test]
 #[ignore = "measurement unit G2 (RFC 160 P4's CLI matrix on this build and 0.47.0); run deliberately"]
+#[cfg(target_os = "linux")]
 fn hostile_lengths_g2_table() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.git-exclude/measurements/rfc160");
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("g2-hostile-lengths-cli-matrix.md");
+    let unit = budget::Unit::begin("RFC 160 G2: P4's CLI matrix", G2_BUDGET, &report);
     let baseline = std::env::var("PRIKK_HOSTILE_BASELINE_BINARY").ok();
-    let mine = matrix(None);
+    let mine = unit.step("this build: the matrix", || matrix(None));
     let theirs = baseline
         .as_deref()
-        .map(|path| matrix(Some(Path::new(path))));
+        .map(|path| unit.step("0.47.0: the matrix", || matrix(Some(Path::new(path)))));
     let show = |ran: &Ran| match ran.code {
         Some(code) => format!("exit {code}"),
         None => "SIGNAL".to_string(),
     };
-    println!(
-        "| repository | file | this: verify | this: doctor | 0.47.0: verify | 0.47.0: doctor |"
+    let mut table = String::from(
+        "| repository | file | this: verify | this: doctor | 0.47.0: verify | 0.47.0: doctor |\n|---|---|---|---|---|---|\n",
     );
-    println!("|---|---|---|---|---|---|");
     for (index, row) in mine.iter().enumerate() {
         let (old_verify, old_doctor) = theirs
             .as_ref()
@@ -289,14 +302,23 @@ fn hostile_lengths_g2_table() {
             .map_or(("-".to_string(), "-".to_string()), |old| {
                 (show(&old.verify), show(&old.doctor))
             });
-        println!(
-            "| {} | `{}` | {} | {} | {} | {} |",
+        table.push_str(&format!(
+            "| {} | `{}` | {} | {} | {} | {} |\n",
             row.repository,
             row.target,
             show(&row.verify),
             show(&row.doctor),
             old_verify,
             old_doctor
-        );
+        ));
     }
+    let steps = unit.finish();
+    println!("{table}\n{steps}");
+    let mut text = std::fs::read_to_string(&report).unwrap_or_default();
+    text.push_str(&format!(
+        "\n## Results (boot `{}`, load {})\n\n{table}",
+        budget::boot_id(),
+        budget::load_average()
+    ));
+    std::fs::write(&report, text).unwrap();
 }
