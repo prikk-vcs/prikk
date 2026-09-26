@@ -11,7 +11,7 @@ use super::{
     rebuild_index_from_containers,
 };
 use crate::foundation::container;
-use crate::foundation::fsutil::append_file_required;
+use crate::foundation::fsutil::{append_file_required, read_file_if_exists};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::test_gates::test_support::{
     sample_object_id, signed_patch_blob_envelope, signed_patch_envelope,
@@ -414,13 +414,14 @@ fn an_object_append_does_not_read_its_container() -> Result<()> {
         0,
         "forty appends read nothing of the container"
     );
-    // The counter can see a container read: reading one object back reads the container.
+    // The counter can see a container read: a whole read of the container moves it.
     let entry = last.expect("appended");
-    crate::foundation::index::read_object_envelope_at(&layout, &entry)?;
+    read_file_if_exists(layout.repository_mutation_root(), &relative)?;
     assert!(
         crate::foundation::fsutil::read_tally::bytes_read(&relative) > 0,
-        "fixture sanity: an object read reads the container, and the tally sees it"
+        "fixture sanity: the tally sees a container read"
     );
+    let _ = entry;
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
@@ -594,5 +595,169 @@ fn an_append_to_a_container_that_is_not_a_regular_file_or_is_missing_is_refused(
         assert!(refused, "a FIFO is refused");
         assert_eq!(index_len, 0);
     }
+    Ok(())
+}
+
+// ---- The sweep's one in-round fix (S-2): an object read reads its record, not its container -------------------------------------
+
+/// **An object read reads its record, not its container.** Forty blobs are appended; reading one back through
+/// `read_object_envelope_at` reads exactly its frame header and its frame -- `FRAME_HEADER_LEN + length` bytes of the container -- and
+/// returns the envelope that was written. (It used to read all forty records to decode one.)
+/// **Perturb:** read the whole container in `read_object_envelope_at` again: the byte count goes red.
+#[test]
+fn an_object_read_reads_its_record_and_not_its_container() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-read-one-record");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let relative = container_relative(&layout, ObjectType::Blob);
+    let mut entries = Vec::new();
+    let mut written = Vec::new();
+    for index in 0..40 {
+        let envelope = blob_envelope(&format!("blob-{index}"), 4096);
+        entries.push(append_object_to_container(
+            &layout,
+            ObjectType::Blob,
+            &envelope,
+        )?);
+        written.push(envelope);
+    }
+    let container_len =
+        std::fs::metadata(layout.container_slot_path(ObjectType::Blob, ContainerSlot::A))?.len();
+    let entry = entries[20].clone();
+    crate::foundation::fsutil::read_tally::reset();
+    let read = super::read_object_envelope_at(&layout, &entry)?;
+    assert_eq!(read, written[20], "the envelope that was written");
+    let read_bytes = crate::foundation::fsutil::read_tally::bytes_read(&relative);
+    assert_eq!(
+        read_bytes,
+        container::FRAME_HEADER_LEN as u64 + entry.length,
+        "exactly the frame header, then the frame -- of a {container_len}-byte container"
+    );
+    assert!(
+        read_bytes * 20 < container_len,
+        "a small fraction of the container"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Object-read errors read as they did.** A frame damaged in its body (checksum), a frame with a bad magic, an entry whose offset
+/// lands past the container's end or inside its last header, and a missing container each give the message they gave when the whole
+/// container was read: the same scenarios were run on the code before this change and gave these strings.
+/// **Perturb:** report the window's offset (0) instead of the container's in `decode_container_record_in_window`'s messages: the
+/// checksum case goes red.
+#[test]
+fn object_read_errors_name_the_containers_offsets_as_they_always_did() -> Result<()> {
+    let root = crate::test_gates::test_support::unique_temp_dir("index-read-errors");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut entries = Vec::new();
+    for index in 0..6 {
+        entries.push(append_object_to_container(
+            &layout,
+            ObjectType::Blob,
+            &blob_envelope(&format!("blob-{index}"), 500),
+        )?);
+    }
+    let container = layout.container_slot_path(ObjectType::Blob, ContainerSlot::A);
+    let message = |entry: &super::IndexEntry| -> String {
+        super::read_object_envelope_at(&layout, entry)
+            .expect_err("the read fails")
+            .to_string()
+    };
+    // Past the end, and inside the last header.
+    let length = std::fs::metadata(&container)?.len();
+    let mut beyond = entries[5].clone();
+    beyond.offset = length;
+    assert!(
+        message(&beyond).contains("names an offset past its container's end"),
+        "{}",
+        message(&beyond)
+    );
+    let mut torn = entries[5].clone();
+    torn.offset = length - 10;
+    assert!(
+        message(&torn).contains("names an offset past its container's end"),
+        "{}",
+        message(&torn)
+    );
+    // A body byte flipped in record 3: checksum mismatch at the *container's* offset.
+    let mut bytes = std::fs::read(&container)?;
+    let target = entries[3].offset as usize;
+    bytes[target + container::FRAME_HEADER_LEN + 5] ^= 0xFF;
+    // A bad magic at record 4.
+    let bad_magic = entries[4].offset as usize;
+    bytes[bad_magic] ^= 0xFF;
+    std::fs::write(&container, &bytes)?;
+    assert_eq!(
+        message(&entries[3]),
+        format!(
+            "integrity error: container record at offset {} failed to validate: container checksum mismatch at byte offset {}",
+            entries[3].offset, entries[3].offset
+        )
+    );
+    let bad = message(&entries[4]);
+    assert!(
+        bad.contains(&format!(
+            "container record at offset {} failed to validate",
+            entries[4].offset
+        )),
+        "{bad}"
+    );
+    // A missing container.
+    std::fs::remove_file(&container)?;
+    assert!(
+        message(&entries[0]).contains("which does not exist"),
+        "{}",
+        message(&entries[0])
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **The ranged read itself**: `len` bytes from `offset`; fewer where the file ends; none at or past the end; `None` for a missing
+/// file; a directory and a symlink are refused, as for a whole read.
+#[test]
+fn a_ranged_read_returns_the_range_and_refuses_what_a_whole_read_refuses() -> Result<()> {
+    use crate::foundation::fsutil::read_file_range_if_exists;
+    let root = crate::test_gates::test_support::unique_temp_dir("index-ranged-read");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mutation = layout.repository_mutation_root();
+    std::fs::write(layout.root().join(".prikk/ranged.bin"), b"0123456789")?;
+    let relative = std::path::Path::new("ranged.bin");
+    assert_eq!(
+        read_file_range_if_exists(mutation, relative, 2, 4)?,
+        Some(b"2345".to_vec())
+    );
+    assert_eq!(
+        read_file_range_if_exists(mutation, relative, 6, 100)?,
+        Some(b"6789".to_vec())
+    );
+    assert_eq!(
+        read_file_range_if_exists(mutation, relative, 10, 4)?,
+        Some(Vec::new())
+    );
+    assert_eq!(
+        read_file_range_if_exists(mutation, relative, 500, 4)?,
+        Some(Vec::new())
+    );
+    assert_eq!(
+        read_file_range_if_exists(mutation, std::path::Path::new("nothing.bin"), 0, 4)?,
+        None
+    );
+    std::fs::create_dir(layout.root().join(".prikk/a-directory"))?;
+    assert!(
+        read_file_range_if_exists(mutation, std::path::Path::new("a-directory"), 0, 4).is_err()
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            layout.root().join(".prikk/ranged.bin"),
+            layout.root().join(".prikk/a-link"),
+        )?;
+        assert!(
+            read_file_range_if_exists(mutation, std::path::Path::new("a-link"), 0, 4).is_err(),
+            "a symlink at the final component is not followed"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

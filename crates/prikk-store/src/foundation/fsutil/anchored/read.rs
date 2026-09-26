@@ -67,6 +67,15 @@ pub(crate) struct RootDirEntry {
 /// no change to the four public functions below.
 trait AnchoredReader {
     fn read_file_if_exists(&self, root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>>;
+    /// [`read_file_if_exists`] for `len` bytes starting at `offset` (fewer if the file ends first; none if `offset` is at or past its
+    /// end): the same no-follow, regular-file-only open, then a positioned read -- the file is never read whole.
+    fn read_file_range_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>>;
     fn stat_file_state_if_exists(
         &self,
         root: &MutationRoot,
@@ -86,6 +95,24 @@ const ACTIVE_READER: PathOnlyReader = PathOnlyReader;
 /// Read a regular file's bytes, returning `None` only when a path component is absent.
 pub(crate) fn read_file_if_exists(root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>> {
     let read = ACTIVE_READER.read_file_if_exists(root, relative)?;
+    #[cfg(test)]
+    if let Some(bytes) = &read {
+        read_tally::record(relative, bytes.len());
+    }
+    Ok(read)
+}
+
+/// Read `len` bytes of a regular file starting at `offset` (fewer if the file ends first), returning `None` only when a path component
+/// is absent. Opened exactly as [`read_file_if_exists`] opens (no final-component symlink, regular files only), but read with a
+/// positioned read: **the file is never read whole** (RFC 102, the append-length round: an object read used to read its entire
+/// container to decode one record at a known offset).
+pub(crate) fn read_file_range_if_exists(
+    root: &MutationRoot,
+    relative: &Path,
+    offset: u64,
+    len: usize,
+) -> Result<Option<Vec<u8>>> {
+    let read = ACTIVE_READER.read_file_range_if_exists(root, relative, offset, len)?;
     #[cfg(test)]
     if let Some(bytes) = &read {
         read_tally::record(relative, bytes.len());
@@ -184,6 +211,54 @@ impl AnchoredReader for PosixReader {
         }
         let mut bytes = Vec::new();
         File::from(fd).read_to_end(&mut bytes)?;
+        Ok(Some(bytes))
+    }
+
+    fn read_file_range_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        use std::os::unix::fs::FileExt;
+        let Some(directory) = open_existing_directory_for_read(root, required_parent(relative)?)?
+        else {
+            return Ok(None);
+        };
+        failpoints::required_open()?;
+        let fd = match fs::openat(
+            &directory.fd,
+            required_file_name(relative)?,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(io_error(error)),
+        };
+        let stat = fs::fstat(&fd).map_err(io_error)?;
+        if !FileType::from_raw_mode(stat.st_mode).is_file() {
+            return Err(PrikkError::Integrity(
+                "read target is not a regular file".to_string(),
+            ));
+        }
+        let file = File::from(fd);
+        let mut bytes = vec![0_u8; len];
+        let mut filled = 0_usize;
+        while filled < len {
+            let at = offset
+                .checked_add(filled as u64)
+                .ok_or_else(|| PrikkError::Integrity("read range overflows u64".to_string()))?;
+            let slot = bytes.get_mut(filled..).unwrap_or_default();
+            match file.read_at(slot, at) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        bytes.truncate(filled);
         Ok(Some(bytes))
     }
 
@@ -292,6 +367,43 @@ impl AnchoredReader for WindowsReader {
         Ok(Some(bytes))
     }
 
+    fn read_file_range_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        use std::os::windows::fs::FileExt;
+        let Some(parent) =
+            open_existing_windows_directory_for_read(root, required_parent(relative)?)?
+        else {
+            return Ok(None);
+        };
+        let path = parent.join(required_file_name(relative)?);
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        let Some(file) = open_existing_file_no_follow(&path, &mut options)? else {
+            return Ok(None);
+        };
+        let mut bytes = vec![0_u8; len];
+        let mut filled = 0_usize;
+        while filled < len {
+            let at = offset
+                .checked_add(filled as u64)
+                .ok_or_else(|| PrikkError::Integrity("read range overflows u64".to_string()))?;
+            let slot = bytes.get_mut(filled..).unwrap_or_default();
+            match file.seek_read(slot, at) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        bytes.truncate(filled);
+        Ok(Some(bytes))
+    }
+
     fn stat_file_state_if_exists(
         &self,
         root: &MutationRoot,
@@ -380,6 +492,29 @@ impl AnchoredReader for PathOnlyReader {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(fallback_io_error(&path, "read", error)),
         }
+    }
+
+    fn read_file_range_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = root.fallback_path(relative)?;
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(fallback_io_error(&path, "read", error)),
+        };
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| fallback_io_error(&path, "seek", error))?;
+        let mut bytes = Vec::new();
+        file.take(len as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| fallback_io_error(&path, "read", error))?;
+        Ok(Some(bytes))
     }
 
     fn stat_file_state_if_exists(

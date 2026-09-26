@@ -170,6 +170,19 @@ fn parse_frame_at(
     bytes: &[u8],
     offset: usize,
 ) -> FrameAttempt {
+    parse_frame_at_reporting(object_type, magic, bytes, offset, offset)
+}
+
+/// [`parse_frame_at`] over a buffer that is **not the whole container**: `report_offset` is where the frame sits in the container, so
+/// the messages that name a byte offset name the container's, not the buffer's (an object read decodes one record from a window read
+/// at its offset -- RFC 102, the append-length round -- and its errors must read as they always did).
+fn parse_frame_at_reporting(
+    object_type: ObjectType,
+    magic: &[u8; 8],
+    bytes: &[u8],
+    offset: usize,
+    report_offset: usize,
+) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < CONTAINER_HEADER_LEN {
         return FrameAttempt::TrailingPartial { remaining };
@@ -204,7 +217,7 @@ fn parse_frame_at(
     let expected = record_checksum(magic, header_values.body_len, body);
     if expected != header_values.checksum {
         return FrameAttempt::Invalid {
-            message: format!("container checksum mismatch at byte offset {offset}"),
+            message: format!("container checksum mismatch at byte offset {report_offset}"),
         };
     }
     let envelope = match decode_envelope_file(body) {
@@ -224,7 +237,7 @@ fn parse_frame_at(
     if envelope.object_type != object_type {
         return FrameAttempt::Invalid {
             message: format!(
-                "container record at byte offset {offset} is under type {object_type} but \
+                "container record at byte offset {report_offset} is under type {object_type} but \
                  envelope type is {}",
                 envelope.object_type
             ),
@@ -237,26 +250,37 @@ fn parse_frame_at(
     }
 }
 
-/// Decode exactly the frame at `offset` -- the "one seek" side of item 4's ruling (design §12/§10.3):
-/// a reader that already knows an object's location (from the index) validates and decodes directly
-/// at that offset, rather than scanning every record before it via [`decode_container_records`]. A
-/// frame that fails to validate here (bad magic, checksum mismatch, an offset that does not land on a
-/// real frame boundary) is exactly the "index points somewhere wrong" case the ruling calls a
-/// reported defect, not a silent fallback to scanning -- so this returns `Err`, never `Ok(None)`,
-/// for a bad frame. Only "not enough bytes remain" (`TrailingPartial`) is folded into `Ok(None)`,
-/// since a location that runs off the end of the file is the same class of defect stated slightly
-/// differently.
-pub(crate) fn decode_container_record_at(
+/// The container header's own length in bytes (magic, version, body length, checksum): what an object read fetches first to learn how
+/// long the frame at a known offset is.
+pub(crate) const FRAME_HEADER_LEN: usize = CONTAINER_HEADER_LEN;
+
+/// The total length (header + body) the frame whose first [`FRAME_HEADER_LEN`] bytes are `header` claims, or the same `Err` a full parse
+/// gives for a bad magic or version. `header` must be [`FRAME_HEADER_LEN`] bytes.
+pub(crate) fn frame_len_from_header(object_type: ObjectType, header: &[u8]) -> Result<usize> {
+    let magic = container_magic(object_type)?;
+    let values = parse_header(magic, header)?;
+    let body_len = usize::try_from(values.body_len).map_err(|_| {
+        PrikkError::Integrity("container body length does not fit usize".to_string())
+    })?;
+    CONTAINER_HEADER_LEN
+        .checked_add(body_len)
+        .ok_or_else(|| PrikkError::Integrity("container body end overflow".to_string()))
+}
+
+/// [`decode_container_record_at`] for a `window` that starts at the frame: the record at the window's first byte, where that frame sits
+/// at `container_offset` in its container (used only in messages, so they name the container's offset). `Ok(None)` when the window is
+/// shorter than the frame it holds.
+pub(crate) fn decode_container_record_in_window(
     object_type: ObjectType,
-    bytes: &[u8],
-    offset: usize,
+    window: &[u8],
+    container_offset: usize,
 ) -> Result<Option<ContainerRecord>> {
     let magic = container_magic(object_type)?;
-    match parse_frame_at(object_type, magic, bytes, offset) {
+    match parse_frame_at_reporting(object_type, magic, window, 0, container_offset) {
         FrameAttempt::Record { record, .. } => Ok(Some(record)),
         FrameAttempt::TrailingPartial { .. } => Ok(None),
         FrameAttempt::Invalid { message } => Err(PrikkError::Integrity(format!(
-            "container record at offset {offset} failed to validate: {message}"
+            "container record at offset {container_offset} failed to validate: {message}"
         ))),
     }
 }

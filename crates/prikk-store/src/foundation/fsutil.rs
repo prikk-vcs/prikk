@@ -42,10 +42,10 @@ mod tests;
 pub(crate) use anchored::{
     EntryKind, MutationRoot, RootDirEntry, RootFileStat, append_file_reporting_offset_required,
     append_file_required, create_new_file_required, ensure_directory_required, inspect_entry,
-    list_directory, read_file_if_exists, read_file_required, remove_file_cleanup_best_effort,
-    remove_worktree_file_required, set_regular_file_mode_required, stat_file_state_if_exists,
-    sync_directory_required, truncate_existing_file_required, truncate_file_empty_required,
-    write_file_atomically, write_worktree_file_atomically,
+    list_directory, read_file_if_exists, read_file_range_if_exists, read_file_required,
+    remove_file_cleanup_best_effort, remove_worktree_file_required, set_regular_file_mode_required,
+    stat_file_state_if_exists, sync_directory_required, truncate_existing_file_required,
+    truncate_file_empty_required, write_file_atomically, write_worktree_file_atomically,
 };
 
 #[cfg(all(test, target_os = "linux"))]

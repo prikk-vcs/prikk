@@ -29,7 +29,7 @@ use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::resync_to_next_magic;
 use crate::foundation::fsutil::{
     append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
-    write_file_atomically,
+    read_file_range_if_exists, write_file_atomically,
 };
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
@@ -411,22 +411,53 @@ pub(crate) fn read_object_envelope_at(
 ) -> Result<ObjectEnvelope> {
     let container_relative =
         layout.repository_relative(&layout.container_slot_path(entry.object_type, entry.slot))?;
-    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &container_relative)?
-    else {
-        return Err(PrikkError::Integrity(format!(
+    let missing = || {
+        PrikkError::Integrity(format!(
             "index names container {:?} slot {:?}, which does not exist",
             entry.object_type, entry.slot
-        )));
+        ))
+    };
+    let past_the_end = || {
+        PrikkError::Integrity(format!(
+            "index entry for {} names an offset past its container's end",
+            entry.object_id
+        ))
+    };
+    // **A positioned read, not a whole-container read** (RFC 102, the append-length round): this used to read the entire container into
+    // memory to decode one record at a known offset, so an object read's memory followed the container's size. Now the frame's own
+    // header is read first (it says how long the frame is, exactly as the full-buffer parse trusted it), then exactly that frame; the
+    // frame is validated and decoded as before, and every error reads as it did.
+    let Some(header) = read_file_range_if_exists(
+        layout.repository_mutation_root(),
+        &container_relative,
+        entry.offset,
+        container::FRAME_HEADER_LEN,
+    )?
+    else {
+        return Err(missing());
     };
     let offset = usize::try_from(entry.offset)
         .map_err(|_| PrikkError::Integrity("index entry offset exceeds usize".to_string()))?;
-    let record = container::decode_container_record_at(entry.object_type, &bytes, offset)?
-        .ok_or_else(|| {
+    if header.len() < container::FRAME_HEADER_LEN {
+        return Err(past_the_end());
+    }
+    let frame_len =
+        container::frame_len_from_header(entry.object_type, &header).map_err(|err| {
             PrikkError::Integrity(format!(
-                "index entry for {} names an offset past its container's end",
-                entry.object_id
+                "container record at offset {offset} failed to validate: {err}"
             ))
         })?;
+    let Some(window) = read_file_range_if_exists(
+        layout.repository_mutation_root(),
+        &container_relative,
+        entry.offset,
+        frame_len,
+    )?
+    else {
+        return Err(missing());
+    };
+    let record = container::decode_container_record_in_window(entry.object_type, &window, offset)?
+        .ok_or_else(past_the_end)?;
     Ok(record.envelope)
 }
 
