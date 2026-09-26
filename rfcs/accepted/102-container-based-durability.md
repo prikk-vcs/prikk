@@ -376,4 +376,4 @@ integrity one.**
    and after.
 
 Handoff: `rfcs/handoffs/102-container-based-durability/append-length-without-reading-handoff-v1.md`. **Scheduled before
-0.48.0 release prep** (the architect's proposal; the owner may swap it behind the cut).
+0.48.0 release prep; the owner ruled it into 0.48.0** (2026-09-26: *"Yes. The fix should be put in 0.48.0."*).

@@ -1,7 +1,7 @@
 # An object append that does not read its container — RFC 102, handoff v1
 
-**Live 2026-09-26, and it is next**, before 0.48.0 release prep. This is the architect's scheduling. The owner may
-move it behind the 0.48.0 cut; if so, this handoff waits and says so at its head.
+**Live 2026-09-26, and it is next**, before 0.48.0 release prep. **The owner ruled it into 0.48.0** (2026-09-26:
+*"Yes. The fix should be put in 0.48.0."*). 0.48.0 is not cut without it.
 
 **Read first:**
 - `rfcs/accepted/102-container-based-durability.md`, its last section, `MEASURED and RULED 2026-09-26`;
