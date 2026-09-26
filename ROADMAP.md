@@ -241,6 +241,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- `160-costs-that-follow-the-store-and-lengths-read-from-disk.md` — **PROPOSED 2026-09-26** by the architect on the owner's instruction to consider recurrence prevention after RFC 102's whole-container reads and the S-2 unbounded allocation: seven guards (a `cfg(test)` whole-read guard, store-size independence tests, an allocation-bound source scan with the `trust_index.rs:344` fix, a hostile-length damage suite, a release-prep store-size row, the attribution-residual rule, handoff/review discipline); awaiting the owner's acceptance and scheduling (recommended: 0.48.0, after the RFC 102 round).
+
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an
 omission.** The gate binds `rfcs/proposed/` in both directions, so an `accepted/` file named here

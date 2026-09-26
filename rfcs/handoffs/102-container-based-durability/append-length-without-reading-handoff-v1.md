@@ -164,8 +164,8 @@ the append. You found that and said so.
 
    **Scope, as the architect reads the owner's ruling:** *"The fix should be put in 0.48.0"* covers the defect RFC 102
    ruled on 2026-09-26, that is, per-write reads that grow with the store. Site C is its second instance, found by that
-   ruling's own sweep. If the owner holds site C to 0.49.0, this item is removed and the CHANGELOG keeps the remaining
-   index re-read sentence.
+   ruling's own sweep. **Authorized by the owner 2026-09-26** (*"Authorized."*, answering that reading): site C is in
+   this round and in 0.48.0.
 3. **The refusal-class change (report §7.b): accepted.** Every failure exits 1 whatever its class. The case is a
    damaged repository, the append is still refused before anything is written or indexed, a FIFO is still never
    blocked on, and the new messages name their cause. Nothing to change. Name the two new message classes in the
