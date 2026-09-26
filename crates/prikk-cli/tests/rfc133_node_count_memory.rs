@@ -1298,8 +1298,11 @@ enum CopyMode {
     PreserveTimes,
 }
 
-/// The copy the release-gate profile and the full sweep use. **Set by the Addendum 1 comparison's verdict** (see the arms test).
-const GATE_COPY_MODE: CopyMode = CopyMode::FreshTimes;
+/// The copy the release-gate profile and the full sweep use. **Set by the Addendum 1 comparison's verdict** (`rfc133_gate_form_arms`, run
+/// 2026-09-26, boot `0b419a8a`, five samples per arm): arm (iv), a baseline built once and copied **preserving every timestamp**, with no
+/// worktree diff, was the cheapest arm to meet the rule fixed in [`ARM_TOLERANCE_PERCENT`] (medians 0.44 % and 0.00 % from arm (i)'s,
+/// ratio 0.44 %). Arms (ii) and (iii) missed it on the ratio (0.53 % each).
+const GATE_COPY_MODE: CopyMode = CopyMode::PreserveTimes;
 
 /// Copy `from` to `to` preserving every timestamp, mode and dotfile: `cp -a from/. to/` (this workspace forbids `unsafe`, and
 /// `std` has no portable way to set a directory's time; the harness is Linux-only already).
