@@ -94,6 +94,9 @@ const ACTIVE_READER: PathOnlyReader = PathOnlyReader;
 
 /// Read a regular file's bytes, returning `None` only when a path component is absent.
 pub(crate) fn read_file_if_exists(root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>> {
+    // P1 (RFC 160): a whole read of a store-growing file fails the test that does it, unless a declared scope covers it.
+    #[cfg(test)]
+    super::whole_read_guard::check_whole_read(relative);
     let read = ACTIVE_READER.read_file_if_exists(root, relative)?;
     #[cfg(test)]
     if let Some(bytes) = &read {

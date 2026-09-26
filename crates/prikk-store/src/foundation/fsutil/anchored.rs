@@ -26,6 +26,8 @@ mod macos;
 mod none;
 mod read;
 mod regular;
+#[cfg(test)]
+pub(crate) mod whole_read_guard;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]

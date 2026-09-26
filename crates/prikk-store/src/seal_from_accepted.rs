@@ -447,6 +447,10 @@ fn enumerate_stored_claims(
         persisted_object_types().contains(&ObjectType::RecognitionClaim),
         "RecognitionClaim must remain a persisted, containerized object type"
     );
+
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("type-enumeration");
     let container_path = layout.container_slot_path(ObjectType::RecognitionClaim, ContainerSlot::A);
     let relative = layout.repository_relative(&container_path)?;
     let mut claims: Vec<(ObjectId, RecognitionClaimPayload)> = Vec::new();

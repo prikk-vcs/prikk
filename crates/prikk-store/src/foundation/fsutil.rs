@@ -54,6 +54,8 @@ pub(in crate::foundation::fsutil) use anchored::LinuxDurability;
 pub(in crate::foundation::fsutil) use anchored::MacosDurability;
 #[cfg(test)]
 pub(crate) use anchored::read_tally;
+#[cfg(test)]
+pub(crate) use anchored::whole_read_guard;
 // DC-97: conformance.rs's own architecture -- one shared `assert_*` body, a thin per-platform
 // `#[test]` wrapper naming a concrete type -- is what a new platform plugs into. Windows is that
 // platform now.

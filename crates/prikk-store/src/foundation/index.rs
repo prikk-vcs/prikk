@@ -319,6 +319,9 @@ pub(crate) fn replay_index(layout: &RepositoryLayout) -> Result<IndexReplay> {
 /// write for "decoded" (RFC 111 §6.1 addendum §3.2). Counted identically to `replay_index` (same
 /// call, underneath).
 pub(crate) fn replay_index_with_extent(layout: &RepositoryLayout) -> Result<(IndexReplay, u64)> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("index-whole-decode");
     let relative = layout.repository_relative(&layout.container_index_path())?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok((
@@ -697,6 +700,8 @@ fn frame_checksum(object_type: ObjectType, record_bytes: &[u8]) -> Result<[u8; 3
 /// writes nothing -- the atomic replacement is that function's job, deliberately kept separate so
 /// this one stays a pure scan that tests can assert against without touching the index on disk.
 pub(crate) fn rebuild_index_from_containers(layout: &RepositoryLayout) -> Result<Vec<IndexEntry>> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("index-rebuild");
     let mut entries = Vec::new();
     for object_type in persisted_object_types() {
         let relative = layout
@@ -780,6 +785,8 @@ pub struct IndexRepairReport {
 /// destination, sync the parent. A crash before the rename leaves the old index whole; after it,
 /// the new one. There is no window in which a reader sees a partial index.
 pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<IndexRepairReport> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("index-rebuild");
     let index_relative = layout.repository_relative(&layout.container_index_path())?;
     let existing_bytes = read_file_if_exists(layout.repository_mutation_root(), &index_relative)?
         .unwrap_or_default();

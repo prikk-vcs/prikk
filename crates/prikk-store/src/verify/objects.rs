@@ -187,6 +187,8 @@ fn verify_object_type_container(
     indexed_ids: &HashSet<ObjectId>,
 ) -> Result<ObjectSummary> {
     let mut summary = ObjectSummary::empty();
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("verify-scan");
     let container_path = layout.container_slot_path(object_type, ContainerSlot::A);
     let relative = layout.repository_relative(&container_path)?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {

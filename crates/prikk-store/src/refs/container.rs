@@ -433,6 +433,8 @@ pub(in crate::refs) fn replay_ref_subsequence(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<RefLogReplay> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
     let relative = layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
@@ -521,6 +523,8 @@ pub(in crate::refs) fn incomplete_tail_matches(
     ref_name_key: [u8; 32],
     expected: &ObjectEnvelope,
 ) -> Result<bool> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
     let relative = layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
@@ -549,6 +553,8 @@ pub(in crate::refs) fn incomplete_tail_matches(
 /// nothing sound is ever removed. Mirrors `refs::log::truncate_incomplete_tail`, generalized from a
 /// per-ref file to the shared container.
 pub(in crate::refs) fn truncate_incomplete_tail(layout: &RepositoryLayout) -> Result<usize> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
     let relative = layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;

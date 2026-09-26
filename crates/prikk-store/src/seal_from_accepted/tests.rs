@@ -12,7 +12,6 @@ use prikk_object::{
 
 use super::{SealFromAcceptedOutcome, seal_from_accepted_claim};
 use crate::author::author_signing::author_signature;
-use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME};
 use crate::maintainer_signing::{
     Ed25519MaintainerSigner, MaintainerSigner as _, maintainer_signature,
@@ -148,9 +147,10 @@ fn current_tip(layout: &RepositoryLayout) -> Result<Option<ObjectId>> {
 /// The raw bytes of the Block container's primary slot -- a byte-for-byte proof that no new Block
 /// was written, not merely that the ref's own tip didn't move.
 fn block_container_bytes(layout: &RepositoryLayout) -> Result<Vec<u8>> {
-    let relative = layout
-        .repository_relative(&layout.container_slot_path(ObjectType::Block, ContainerSlot::A))?;
-    Ok(read_file_if_exists(layout.repository_mutation_root(), &relative)?.unwrap_or_default())
+    Ok(
+        std::fs::read(layout.container_slot_path(ObjectType::Block, ContainerSlot::A))
+            .unwrap_or_default(),
+    )
 }
 
 /// The base fixture every other test builds on: one repository, one adopted+trusted maintainer

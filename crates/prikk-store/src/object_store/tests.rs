@@ -194,7 +194,13 @@ fn a_write_sessions_own_write_reads_only_the_index_bytes_it_appended() -> prikk_
         "a session reads back exactly what its own writes appended, not the index"
     );
     crate::foundation::fsutil::read_tally::reset();
-    crate::foundation::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)?;
+    // A ranged read of every byte: the whole-read guard forbids a whole read of the index outside a declared scope.
+    crate::foundation::fsutil::read_file_range_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+        0,
+        usize::MAX,
+    )?;
     assert_eq!(
         crate::foundation::fsutil::read_tally::bytes_read(&relative),
         after,

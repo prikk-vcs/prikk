@@ -8,7 +8,8 @@ use prikk_object::{ObjectId, ObjectType, is_windows_reserved_name};
 
 use crate::foundation::fsutil::{
     EntryKind, MutationRoot, create_new_file_required, ensure_directory_required, inspect_entry,
-    list_directory, read_file_if_exists, read_file_required, write_file_atomically,
+    list_directory, read_file_if_exists, read_file_range_if_exists, read_file_required,
+    write_file_atomically,
 };
 
 const REPO_DIR: &str = ".prikk";
@@ -1004,7 +1005,10 @@ pub(crate) fn validate_maintainer_key_id_storage_safety(key_id: &str) -> Result<
 /// layout creates.
 fn create_empty_file_once(layout: &RepositoryLayout, path: &Path) -> Result<()> {
     let relative = layout.repository_relative(path)?;
-    if read_file_if_exists(layout.repository_mutation_root(), &relative)?.is_none() {
+    // An existence check, not a read: a zero-length ranged read opens exactly as the whole read did (same refusals, same failpoint)
+    // and reads no byte. It used to read the whole file, so `init` over an existing repository read every container and the index
+    // whole (RFC 160 P1's inventory found it; the whole-read guard is red if it is put back).
+    if read_file_range_if_exists(layout.repository_mutation_root(), &relative, 0, 0)?.is_none() {
         create_new_file_required(layout.repository_mutation_root(), &relative, &[])?;
     }
     Ok(())

@@ -69,7 +69,6 @@ use std::path::{Path, PathBuf};
 use prikk_object::{BlobPayload, BlockPayload, ObjectType, RecognitionClaimPayload, TagPayload};
 
 use crate::foundation::container::decode_container_records;
-use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use crate::patch_replay::decode::decode_patch_operations;
 
@@ -176,13 +175,10 @@ fn check_type_decodes(
     object_type: ObjectType,
 ) -> Result<Vec<u32>, String> {
     let container_path = layout.container_slot_path(object_type, ContainerSlot::A);
-    let relative = layout
-        .repository_relative(&container_path)
-        .map_err(|err| err.to_string())?;
-    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)
-        .map_err(|err| err.to_string())?
-    else {
-        return Ok(Vec::new());
+    let bytes = match std::fs::read(&container_path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.to_string()),
     };
     let replay = decode_container_records(object_type, &bytes).map_err(|err| err.to_string())?;
     let mut schema_versions = Vec::new();

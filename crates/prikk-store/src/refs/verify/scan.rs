@@ -200,6 +200,8 @@ pub(super) fn read_logs(
     BTreeMap<[u8; 32], String>,
     Vec<RefFileOutcome>,
 )> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("verify-scan");
     let relative =
         layout.repository_relative(&layout.ref_log_container_slot_path(ContainerSlot::A))?;
     let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(

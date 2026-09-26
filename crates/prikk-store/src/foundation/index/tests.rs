@@ -11,7 +11,7 @@ use super::{
     rebuild_index_from_containers,
 };
 use crate::foundation::container;
-use crate::foundation::fsutil::{append_file_required, read_file_if_exists};
+use crate::foundation::fsutil::{append_file_required, read_file_range_if_exists};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::test_gates::test_support::{
     sample_object_id, signed_patch_blob_envelope, signed_patch_envelope,
@@ -416,7 +416,8 @@ fn an_object_append_does_not_read_its_container() -> Result<()> {
     );
     // The counter can see a container read: a whole read of the container moves it.
     let entry = last.expect("appended");
-    read_file_if_exists(layout.repository_mutation_root(), &relative)?;
+    // A positive control for the tally: a ranged read of the container's every byte (the whole-read guard forbids a whole read here).
+    read_file_range_if_exists(layout.repository_mutation_root(), &relative, 0, usize::MAX)?;
     assert!(
         crate::foundation::fsutil::read_tally::bytes_read(&relative) > 0,
         "fixture sanity: the tally sees a container read"

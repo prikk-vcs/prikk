@@ -9,7 +9,6 @@
 use prikk_error::Result;
 use prikk_object::{BlockKind, CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType, TagPayload};
 
-use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::ContainerSlot;
 use crate::test_gates::test_support::{
     maintainer_signature, signed_block, signed_ref_state_envelope, signed_ref_update_envelope,
@@ -162,9 +161,10 @@ pub(super) fn container_bytes(
     layout: &RepositoryLayout,
     object_type: ObjectType,
 ) -> Result<Vec<u8>> {
-    let relative =
-        layout.repository_relative(&layout.container_slot_path(object_type, ContainerSlot::A))?;
-    Ok(read_file_if_exists(layout.repository_mutation_root(), &relative)?.unwrap_or_default())
+    Ok(
+        std::fs::read(layout.container_slot_path(object_type, ContainerSlot::A))
+            .unwrap_or_default(),
+    )
 }
 
 /// Every persisted object type's own container bytes, in `persisted_object_types()`'s own fixed
