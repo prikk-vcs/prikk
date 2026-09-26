@@ -82,9 +82,9 @@ used in a section from 0.48.0 on.
 2. **Advisories are named where they were fixed.** A table of published advisories (id, fixed-in version) lives in
    `SECURITY.md`. Each id must appear under `### Security` in the section of the version that fixed it.
 3. **The tag names its notes.** Before a tag is pushed, a release-policy command reads the local tag's message. It
-   requires the subject `prikk X.Y.Z`, then a line `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`
-   and a line with `CHANGELOG.md` pinned to the tag. That makes it checked, where peisear's own rule is written down
-   but not checked. **Tags before 0.48.0 are not rewritten:** a tag is never moved.
+   requires the subject `prikk X.Y.Z`, then a line `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`.
+   **Amended 2026-09-27 (§8): the tag does not link `CHANGELOG.md`.** That makes the tag's pointer checked, where
+   peisear's own rule is written down but not checked. **Tags before 0.48.0 are not rewritten:** a tag is never moved.
 4. **The archive (§5)**, with RFC 127's gate taught to find each released version's heading in `CHANGELOG.md` or in
    its archive.
 
@@ -122,3 +122,23 @@ someone made to an anchor of `CHANGELOG.md` on `main` breaks when its series mov
   this project's own answers to its own evidence (§1.2, §1.3).
 - Generating the CHANGELOG from commits: the prose is written for a reader.
 - Rewriting any past section beyond §6.1's annotations.
+
+## 8. Amended by the owner, 2026-09-27 — the notes live on the Release page, not behind a link
+
+The owner: *"It may be better to put digest release notes (or just copy of the section in `CHANGELOG.md`) directly on
+each of GitHub Release, for the content linked from the release can not be verified because `CHANGELOG.md` is
+optimized periodically."*
+
+**The architect's reading, stated so it can be corrected:**
+- **Each GitHub Release page carries that version's CHANGELOG section in full.** This is already how the Release
+  workflow works (RFC 107's notes assembler copies the section, then adds the platforms and the integrity statement).
+  The architect checked it on the published 0.47.0 page: its 116-line section appears verbatim in the page's 140-line
+  body. It stays that way, and a reader never has to follow a link to a file §5 will reorganise.
+- **The tag message links only the Release page** (§4.3 amended). The `CHANGELOG.md` link is dropped from §4.3, §6.1 and
+  `release-compatibility.md`.
+- **The shape of §3 (Security, Upgrading, Output changes first) is what a reader sees first on the Release page**, so it
+  is also the page's digest.
+
+**Not decided here (offered to the owner):** a Release page body can be edited on GitHub after publication, and it is
+not signed. The signed tag is. The tag message could also carry the SHA-256 of the notes as published, so the page can
+be checked against the signed tag.

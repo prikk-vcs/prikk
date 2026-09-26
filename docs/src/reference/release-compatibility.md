@@ -215,12 +215,12 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
    platform code runs.
 4. **Tag.** Annotated, GPG-signed with the repository's configured key, verified with `git tag -v`,
    then pushed. From 0.48.0 the tag's message has as its subject the project name followed by the
-   version (for 0.48.0: prikk 0.48.0), then a blank line, then two lines:
-   - `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`;
-   - a link to `CHANGELOG.md` pinned to the tag.
+   version (for 0.48.0: prikk 0.48.0), then a blank line, then the line
+   `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`.
 
-   The Release workflow builds four targets and publishes the assets, with notes generated from that
-   version's CHANGELOG section. **A tag is never moved or re-signed**; a mistake ships as the next patch
+   The Release workflow builds four targets and publishes the assets. **The Release page carries that
+   version's CHANGELOG section in full**, so the notes are read there and not behind a link to a file
+   that is reorganised over time. **A tag is never moved or re-signed**; a mistake ships as the next patch
    release. Tags before 0.48.0 keep their bare version message.
 5. **Verify the artifact.** Download the Linux asset, check its sha256 against the published file, read
    its build-info (commit and tag), run its `--version`, and run the smoke script against it: what is
