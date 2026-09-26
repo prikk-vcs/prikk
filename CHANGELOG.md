@@ -22,6 +22,19 @@ non-zero, as 0.47.0 did with a different message, and never aborts. Two refusals
 now reports the operating system's "Is a directory", and one that is a FIFO with no reader "No such device or address", where both reported
 "not a regular file"; each is still refused before anything is written or indexed, and a FIFO is still never blocked on.
 
+### Fixed — `verify` reported an unreadable indexed record as clean, and a damaged length could abort a command
+
+`prikk verify` on a repository whose object index names a record that cannot be read now reports it as a failed object item, naming
+the object id and the offset, and exits 1. Before, a container frame whose header claimed more bytes than remained was tolerated as a
+torn tail (the harmless remnant of an interrupted append) and the index pass skipped the entry that named it, so a repository whose
+only blob had a header claiming 2^62 bytes printed `object items: 0 scanned, 0 failed` and **exited 0**; an interrupted append never
+has an index entry, because the index is written after the record is durable, so an indexed record that cannot be read is damage. A
+record no index entry names, with the same header, is still a torn tail. A trust-policy record claiming 2^32 keys with a matching
+checksum (the checksums are unkeyed) reserved about 100 GB for them and aborted the process; it now reserves no more than its bytes
+could hold and is refused. `init` on an existing repository no longer reads every object container and the object index whole only
+to see that they exist. **Not yet reported:** a WAL, object index or author key file whose first record claims another length than it
+holds still reads as a torn tail, so `verify` exits 0 over it as before.
+
 ### Changed — `seal`, `merge` and a `sync` catch-up no longer walk the whole history
 
 Sealing a block derived the state it signs by replaying every ancestor block from the start, keeping a copy of
