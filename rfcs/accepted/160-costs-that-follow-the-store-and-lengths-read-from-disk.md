@@ -224,7 +224,7 @@ round follows it.
 
 Addendum 2, `#[non_exhaustive]` on the report types with a breaking-once CHANGELOG entry, is before the push.
 
-## 9. Proposed 2026-09-27 — a loop that never ends must not take the machine with it (awaiting the owner)
+## 9. ACCEPTED 2026-09-27 — a loop that never ends must not take the machine with it
 
 **The incident.** During the F3 round, a control's perturbation made a decode loop stop advancing, so it pushed failed
 outcomes forever. About 1,300 tests ran it in parallel. `systemd-oomd` killed the **whole terminal scope** (92 processes:
@@ -260,3 +260,7 @@ the session and everything else in that terminal) at 06:53 and at 07:12 on 2026-
 
 **Proposed scheduling:** R1 now. R2 to R4 as one small round in 0.48.0, after F3 closes and before F4's design round.
 The owner decides.
+
+**§9 ACCEPTED by the owner 2026-09-27** (*"All approved and authorized."*). **The architect's reading:**
+- R1 applies now, to the architect's runs and the dev team's;
+- **R2–R4 are one round in 0.48.0**, live when F3 closes, before F4's design round.

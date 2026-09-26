@@ -182,3 +182,9 @@ object scanned) and the refusal (byte-identical), and perturbed the save under a
 
 Gates on the exact final commit. Report: `.git-exclude/review-request/torn-tail-is-one-frame-report-v3.md`. Then the
 architect pushes the round.
+
+**ACCEPTED 2026-09-27** (`a0d8e548` … `03fdf238`; reviews `torn-tail-is-one-frame-review-v1`, `-v2`, `-v3`; 14/14 gates
+re-run by the architect on `b2e8e4cf` in a capped cgroup scope, 2414 / 0 / 54). **Item 5 of Addendum 2 was added after the
+team had delivered.** It is carried in review v3, where they will read it. **Closes when the Windows mutation suite is
+green on the pushed commit**, reading `a_repair_of_a_lone_damaged_record_saves_the_record_byte_for_byte` and
+`a_true_torn_wal_tail_is_still_tolerated_and_still_truncated_by_the_repair` by name.
