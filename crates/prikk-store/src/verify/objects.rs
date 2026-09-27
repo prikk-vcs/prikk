@@ -137,19 +137,20 @@ pub(super) fn verify_objects(
     let mut pending_v3_blocks: Vec<(ObjectId, BlockPayload)> = Vec::new();
     let mut summary = ObjectSummary::empty();
 
-    // RFC 102 Stage 2: a damaged index entry blocks `index::lookup_object_location` (a single
-    // lookup), but Phase A here needs *membership*, not a single lookup -- a container-scale
-    // question the index's own item-containment already answers via `record_outcomes`, not
-    // something this loop needs to re-derive. A damaged index is therefore reported as this whole
-    // stage's own structural failure (matching how a damaged repository directory shape already
-    // aborts `verify_objects` today), not silently treated as "nothing is indexed."
+    // RFC 162 rule 1: the object index is a pure cache, and a reader never refuses while the
+    // containers are sound. This used to abort the whole `Objects` stage on any index item failure
+    // (RFC 102 Stage 2's own reasoning, since superseded); now, when the index itself is damaged, its
+    // membership is derived from a fresh in-memory container scan instead -- the same fallback
+    // `object_store.rs::resolve_object_location` uses for every other reader, chosen here for the same
+    // reason: `verify` is documented read-only end to end (RFC 111 §6.1), so it must not persist a
+    // repair the way `doctor --repair-index` does.
     let index_replay = replay_index(layout)?;
-    if index_replay.has_item_failure() {
-        return Err(PrikkError::Integrity(
-            "object index has a damaged entry; run doctor before verify can classify indexing"
-                .to_string(),
-        ));
-    }
+    let index_entries: Vec<crate::foundation::index::IndexEntry> =
+        if index_replay.has_item_failure() {
+            crate::foundation::index::rebuild_index_from_containers(layout)?
+        } else {
+            index_replay.entries.clone()
+        };
     // RFC 160 F3: **the small record containers `verify` would otherwise read only by chance.** The author key index is consulted only
     // when a patch sits in a container, the trust policy only when a block or ref state needs its signer checked, and an unsealed
     // repository needs neither -- so a damaged entry in either (a header whose length no record could have, a snapshot whose body will
@@ -175,11 +176,8 @@ pub(super) fn verify_objects(
             )));
         }
     }
-    let indexed_ids: HashSet<ObjectId> = index_replay
-        .entries
-        .iter()
-        .map(|entry| entry.object_id)
-        .collect();
+    let indexed_ids: HashSet<ObjectId> =
+        index_entries.iter().map(|entry| entry.object_id).collect();
 
     // design-v1.md §12/§10.2's ruling: "the bytes found are validated by recomputing the content
     // hash... a mismatch is a reported defect." Ordinary reads (`FileObjectStore::read_object`) check
@@ -202,7 +200,7 @@ pub(super) fn verify_objects(
     // record is durable. So an entry that names a record no read can produce is damage the scan calls a torn tail; it is collected
     // here and reported as its own `Failed` item after the scan, unless the scan already reported a failure at that same offset.
     let mut unreadable: Vec<(&crate::foundation::index::IndexEntry, String)> = Vec::new();
-    for entry in &index_replay.entries {
+    for entry in &index_entries {
         let envelope = match crate::foundation::index::read_object_envelope_at(layout, entry) {
             Ok(envelope) => envelope,
             Err(err) => {

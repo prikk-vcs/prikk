@@ -150,13 +150,33 @@ fn damage(repo: &Path, target: &Target, claimed: u64) {
 
 const CLAIMED: u64 = 1 << 62;
 
-/// **Rows allowed to exit 0: none** (RFC 160 F3). Before the round these four exited 0 on 0.47.0 as well -- the unsealed WAL, the
-/// unsealed object index and the author key index (sealed and unsealed): each reader took a frame that claims more bytes than remain
-/// for a *torn tail*, whatever sound records followed it. The fixtures now hold **two** records of each (two queued commits by two
-/// authors), so the damaged first record has a sound one behind it; the rule is "a torn tail is a prefix of one frame", and the
-/// object index's fixed width makes its damaged header malformed regardless. **A file whose only record is damaged, with nothing behind
-/// it, is still indistinguishable from an interrupted append** and stays a tail (the report's ambiguous cases).
-const OPEN: &[(&str, &str, &str)] = &[];
+/// **Rows allowed to exit 0: the object index, on both repository kinds** (RFC 162 rule 1). Before
+/// that round these four exited 0 on 0.47.0 as well -- the unsealed WAL, the unsealed object index and
+/// the author key index (sealed and unsealed): each reader took a frame that claims more bytes than
+/// remain for a *torn tail*, whatever sound records followed it. The fixtures now hold **two** records
+/// of each (two queued commits by two authors), so the damaged first record has a sound one behind it;
+/// the rule is "a torn tail is a prefix of one frame", and the object index's fixed width makes its
+/// damaged header malformed regardless. **A file whose only record is damaged, with nothing behind it,
+/// is still indistinguishable from an interrupted append** and stays a tail (the report's ambiguous
+/// cases). **RFC 162 rule 1 then widened the object index's own row deliberately**: "the index is
+/// never evidence of anything" -- a reader (or, for `doctor --repair-index`, a writer) rebuilds it from
+/// the containers instead of refusing, on *any* damage to the index file, structural or otherwise, so
+/// `containers/index.container` exits 0 on both repository kinds now. This is not a blind spot: the
+/// containers themselves are what `verify` still checks (this fixture's damage never touches them),
+/// and `m1_a_queued_patch_referencing_a_damaged_blob_...` (`rfc162_recovery_matrix.rs`) proves the
+/// index's own rebuildability does not let a *referenced* object's own damage go unreported.
+const OPEN: &[(&str, &str, &str)] = &[
+    (
+        "sealed",
+        "containers/index.container",
+        "RFC 162 rule 1: the object index is a pure cache and no command refuses over damage to it",
+    ),
+    (
+        "unsealed",
+        "containers/index.container",
+        "RFC 162 rule 1: the object index is a pure cache and no command refuses over damage to it",
+    ),
+];
 
 /// One row of the matrix.
 struct Row {
