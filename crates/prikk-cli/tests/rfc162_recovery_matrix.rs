@@ -500,6 +500,20 @@ fn m2_a_torn_index_append_then_a_write_no_longer_refuses_everything() {
         "M2: verify after the write\n{after_text}"
     );
 
+    // The stronger claim: the write itself rebuilt the index cleanly (rule 1's own "a write never
+    // buries a torn index tail"), not merely that `verify` tolerates whatever the write left behind --
+    // a subsequent `--repair-index` must find nothing left to do.
+    let (repair_code, repair_text) = run(&repo, &["doctor", "--repair-index"]);
+    assert_eq!(
+        repair_code,
+        Some(0),
+        "M2: a repair after the write\n{repair_text}"
+    );
+    assert!(
+        repair_text.contains("nothing to repair"),
+        "M2: the write must have already left the index clean, not merely tolerated\n{repair_text}"
+    );
+
     let _ = std::fs::remove_dir_all(repo);
 }
 

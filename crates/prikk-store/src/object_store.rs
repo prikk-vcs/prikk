@@ -219,7 +219,12 @@ fn resolve_object_location_locked(
     id: ObjectId,
 ) -> Result<Option<IndexEntry>> {
     let replay = index::replay_index(layout)?;
-    let entries = if replay.has_item_failure() {
+    // RFC 162 rule 1: "a write never buries a torn index tail." A trailing partial with no `Failed`
+    // item is not refused on read (a reader just does not see whatever is in it), but a *writer* is
+    // about to append new bytes at the file's current end -- if that end is a torn tail, the append
+    // would land behind it, sandwiching the tail between two sound regions and turning a clean tail
+    // into interior damage. So the writer rebuilds first on *either* condition, not only on damage.
+    let entries = if replay.has_item_failure() || replay.trailing_partial_bytes != 0 {
         index::repair_index_from_containers(layout)?;
         index::replay_index(layout)?.entries
     } else {
@@ -411,7 +416,15 @@ impl IndexSnapshot {
             return Ok(());
         }
         let (tail, new_extent) = index::replay_index_tail_with_extent(layout, self.known_length)?;
-        if !tail.has_item_failure() {
+        // RFC 162 rule 1: "a write never buries a torn index tail." A locked caller is about to append
+        // behind whatever is at the file's current end; a trailing partial there, even with no `Failed`
+        // item, must trigger the same rebuild an item failure does, or the append would sandwich the
+        // tail into interior damage. An unlocked caller (a plain re-check, not about to append) has no
+        // such hazard: extending past a trailing partial is exactly what a tail decode already does
+        // correctly.
+        let must_rebuild =
+            tail.has_item_failure() || (already_locked && tail.trailing_partial_bytes != 0);
+        if !must_rebuild {
             self.entries.extend(tail.entries);
             self.known_length = new_extent;
             return Ok(());
