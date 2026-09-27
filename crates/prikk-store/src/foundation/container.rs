@@ -15,7 +15,6 @@
 //! `refs/log.rs`, not a third copy of the same logic.
 
 use prikk_error::{PrikkError, Result};
-use prikk_hash::sha256;
 use prikk_object::{ObjectEnvelope, ObjectType};
 
 use crate::foundation::byte_cursor::ByteCursor;
@@ -23,7 +22,8 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::len_to_u64;
 
@@ -329,7 +329,7 @@ pub(crate) fn decode_container_records(
                     },
                 });
                 records.push(record);
-                offset = next_offset;
+                offset = require_progress("container", offset, next_offset)?;
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -354,7 +354,7 @@ pub(crate) fn decode_container_records(
                         complete: false,
                     },
                 });
-                offset = next;
+                offset = require_progress("container", offset, next)?;
             }
             FrameAttempt::Invalid { message, complete } => {
                 record_outcomes.push(ContainerRecordOutcome {
@@ -409,7 +409,7 @@ fn record_checksum(magic: &[u8; 8], body_len: u64, body: &[u8]) -> [u8; 32] {
     preimage.extend_from_slice(&CONTAINER_VERSION.to_be_bytes());
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 #[cfg(test)]

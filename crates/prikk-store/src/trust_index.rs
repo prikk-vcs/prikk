@@ -33,12 +33,12 @@
 
 use prikk_crypto::ED25519_KEY_LEN;
 use prikk_error::{PrikkError, Result};
-use prikk_hash::sha256;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_string_u16, push_u16, push_u32};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -131,7 +131,7 @@ fn trust_key_checksum(body_len: u64, body: &[u8]) -> [u8; 32] {
     preimage.extend_from_slice(&TRUST_KEY_VERSION.to_be_bytes());
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 enum TrustKeyFrameAttempt {
@@ -233,7 +233,7 @@ pub(crate) fn decode_trust_key_records(bytes: &[u8]) -> Result<TrustKeyReplay> {
                     status: TrustKeyRecordStatus::Evaluated,
                 });
                 entries.push(entry);
-                offset = next_offset;
+                offset = require_progress("trust key", offset, next_offset)?;
             }
             TrustKeyFrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -256,7 +256,7 @@ pub(crate) fn decode_trust_key_records(bytes: &[u8]) -> Result<TrustKeyReplay> {
                     offset,
                     status: TrustKeyRecordStatus::Failed { message },
                 });
-                offset = next;
+                offset = require_progress("trust key", offset, next)?;
             }
             TrustKeyFrameAttempt::Invalid { message } => {
                 record_outcomes.push(TrustKeyRecordOutcome {
@@ -416,7 +416,7 @@ fn trust_policy_checksum(body_len: u64, body: &[u8]) -> [u8; 32] {
     preimage.extend_from_slice(&TRUST_POLICY_VERSION.to_be_bytes());
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 enum TrustPolicyFrameAttempt {
@@ -508,7 +508,7 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
                     status: TrustPolicyRecordStatus::Evaluated,
                 });
                 entries.push(entry);
-                offset = next_offset;
+                offset = require_progress("trust policy", offset, next_offset)?;
             }
             TrustPolicyFrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -531,7 +531,7 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
                     offset,
                     status: TrustPolicyRecordStatus::Failed { message },
                 });
-                offset = next;
+                offset = require_progress("trust policy", offset, next)?;
             }
             TrustPolicyFrameAttempt::Invalid { message } => {
                 record_outcomes.push(TrustPolicyRecordOutcome {

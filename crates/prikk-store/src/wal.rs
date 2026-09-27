@@ -12,7 +12,8 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
@@ -556,7 +557,7 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
                     status: WalRecordStatus::Evaluated,
                 });
                 records.push(record);
-                offset = next_offset;
+                offset = require_progress("wal", offset, next_offset)?;
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -576,7 +577,7 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
                     offset,
                     status: WalRecordStatus::Failed { message },
                 });
-                offset = next;
+                offset = require_progress("wal", offset, next)?;
             }
             FrameAttempt::Invalid { message } => {
                 record_outcomes.push(WalRecordOutcome {
@@ -638,7 +639,7 @@ fn record_checksum(seq: u64, body_len: u64, body: &[u8]) -> [u8; 32] {
     preimage.extend_from_slice(&seq.to_be_bytes());
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 // DC-71: every test here sets up its scenario via real repository mutation (RepositoryLayout::init

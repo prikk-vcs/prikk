@@ -23,12 +23,12 @@
 //! that caller now.
 
 use prikk_error::{PrikkError, Result};
-use prikk_hash::sha256;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, read_file_if_exists};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
@@ -96,7 +96,7 @@ fn generation_checksum(body_len: u64, body: &[u8]) -> [u8; 32] {
     preimage.extend_from_slice(&GENERATION_VERSION.to_be_bytes());
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 /// Encode one generation record. Promoted from Step 1's `#[cfg(test)]`-only helper (`encode_
@@ -250,7 +250,7 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                     status: GenerationRecordStatus::Evaluated,
                 });
                 records.push(record);
-                offset = next_offset;
+                offset = require_progress("generation", offset, next_offset)?;
             }
             GenerationFrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -273,7 +273,7 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                     offset,
                     status: GenerationRecordStatus::Failed { message },
                 });
-                offset = next;
+                offset = require_progress("generation", offset, next)?;
             }
             GenerationFrameAttempt::Invalid { message } => {
                 record_outcomes.push(GenerationRecordOutcome {

@@ -42,7 +42,6 @@
 //! before the restructure, so it is not repeated here on purpose.
 
 use prikk_error::{PrikkError, Result};
-use prikk_hash::sha256;
 use prikk_object::{ObjectEnvelope, ObjectType, RefUpdatePayload};
 
 use crate::foundation::byte_cursor::ByteCursor;
@@ -50,7 +49,8 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::layout::RepositoryLayout;
@@ -167,7 +167,7 @@ pub(in crate::refs) struct RefContainerRecordOutcome {
 
 /// Ref-log container replay result -- every ref's records, interleaved, in physical (write) order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::refs) struct RefContainerReplay {
+pub(crate) struct RefContainerReplay {
     /// Valid records read from the container, in file order -- includes records found after a
     /// damaged one, not merely a prefix up to the first failure.
     pub(in crate::refs) records: Vec<RefContainerRecord>,
@@ -175,6 +175,21 @@ pub(in crate::refs) struct RefContainerReplay {
     pub(in crate::refs) trailing_partial_bytes: usize,
     /// One outcome per attempted frame, in scan order -- both `Evaluated` and `Failed`.
     pub(in crate::refs) record_outcomes: Vec<RefContainerRecordOutcome>,
+}
+
+impl RefContainerReplay {
+    /// `(records decoded, frames reported failed, trailing partial bytes)`, the same shape and for the same reason as
+    /// `PointerIndexReplay::counts` -- without leaking `RefContainerRecordStatus` (`pub(in crate::refs)`) past this module.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
+        let failed = self
+            .record_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome.status, RefContainerRecordStatus::Failed { .. }))
+            .count();
+        (self.records.len(), failed, self.trailing_partial_bytes)
+    }
 }
 
 /// Encode one signed RefUpdate envelope as a durable ref-log container record. `ref_name_key` is
@@ -338,7 +353,7 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                         });
                     }
                 }
-                offset = next_offset;
+                offset = require_progress("ref container", offset, next_offset)?;
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -364,7 +379,7 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                         claimed_ref_name_key: claimed,
                     },
                 });
-                offset = next;
+                offset = require_progress("ref container", offset, next)?;
             }
             FrameAttempt::Invalid {
                 message,
@@ -670,7 +685,7 @@ fn record_checksum(ref_name_key: [u8; 32], body_len: u64, body: &[u8]) -> [u8; 3
     preimage.extend_from_slice(&ref_name_key);
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 #[cfg(test)]

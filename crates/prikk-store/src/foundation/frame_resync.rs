@@ -14,6 +14,8 @@
 //! the *next* magic from `start`, it does not know whether a caller's full-frame validation at that
 //! offset will succeed.
 
+use prikk_error::{PrikkError, Result};
+
 /// Scan `bytes` byte-wise from `start` for the next occurrence of `magic`. Returns `None` once fewer
 /// than `magic.len()` bytes remain -- nothing further to find.
 pub(crate) fn resync_to_next_magic(bytes: &[u8], start: usize, magic: &[u8]) -> Option<usize> {
@@ -75,3 +77,56 @@ pub(crate) fn partial_before_sound_frame_message(
 
 #[cfg(test)]
 mod tests;
+
+/// **RFC 160 §9 R2 -- no decode loop can stop advancing.** Every framed reader's resume point is a byte offset computed either from a
+/// parsed frame's own length (`next_offset`, from `header_end + body_len`, both positive) or from [`resync_to_next_magic`], which
+/// always searches from `offset + 1`. Both are strictly greater than the current offset **by construction** -- but "by construction"
+/// is exactly the property a bug can break silently (RFC 160 F3's own perturbation did, unconditionally returning the buffer's end).
+/// This turns the invariant into a checked one: every reader's loop advances through this call, so a computation that stops making
+/// progress becomes an `Integrity` error at the exact place a spin would otherwise start, never a hang and never an unbounded
+/// `Vec` of outcomes.
+pub(crate) fn require_progress(reader: &'static str, offset: usize, next: usize) -> Result<usize> {
+    if next <= offset {
+        return Err(PrikkError::Integrity(format!(
+            "{reader} decode did not advance past byte offset {offset} (computed next offset {next}); refusing rather than looping"
+        )));
+    }
+    Ok(next)
+}
+
+/// **RFC 160 §9 R3 (the external review's M5): bytes hashed, tallied.** Every framed reader's checksum is `sha256(preimage)` where
+/// `preimage` includes the frame's whole claimed body -- the quantity that made a torn tail packed with frame headers, each claiming a
+/// body to the end of the file, quadratic: `sound_frame_after_partial` fully hashes every candidate's claimed body, and on that input
+/// nearly every candidate claims nearly the whole remaining file. Every format's checksum function calls this instead of
+/// `prikk_hash::sha256` directly, so the property tests can bound bytes hashed per input byte the same way P2 already bounds bytes read.
+pub(crate) fn tallied_sha256(bytes: &[u8]) -> [u8; 32] {
+    #[cfg(test)]
+    hash_tally::record(bytes.len());
+    prikk_hash::sha256(bytes)
+}
+
+/// **Test-only tally** (RFC 160 §9 R3 / the external review's M5): bytes passed to [`tallied_sha256`] on this thread since the last
+/// [`reset`]. Mirrors `fsutil::anchored::read_tally` exactly, for the same reason: a property test can assert "this reader hashed at
+/// most K times its input" only if something counts the hashing.
+#[cfg(test)]
+pub(crate) mod hash_tally {
+    use std::cell::Cell;
+
+    thread_local! {
+        static BYTES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record(len: usize) {
+        BYTES.with(|total| total.set(total.get() + len as u64));
+    }
+
+    /// Bytes hashed by [`super::tallied_sha256`] on this thread since the last [`reset`].
+    pub(crate) fn bytes_hashed() -> u64 {
+        BYTES.with(Cell::get)
+    }
+
+    /// Zero this thread's tally.
+    pub(crate) fn reset() {
+        BYTES.with(|total| total.set(0));
+    }
+}

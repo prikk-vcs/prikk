@@ -27,7 +27,8 @@ use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::container::{self, ContainerRecordStatus, container_magic};
 use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, resync_to_next_magic, sound_frame_after_partial,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
@@ -36,7 +37,6 @@ use crate::foundation::fsutil::{
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
 };
-use prikk_hash::sha256;
 use std::collections::BTreeMap;
 
 const INDEX_MAGIC: &[u8; 8] = b"PIDXENT1";
@@ -156,7 +156,7 @@ fn index_record_checksum(body_len: u64, body: &[u8]) -> [u8; 32] {
     preimage.extend_from_slice(&INDEX_VERSION.to_be_bytes());
     preimage.extend_from_slice(&body_len.to_be_bytes());
     preimage.extend_from_slice(body);
-    sha256(&preimage)
+    tallied_sha256(&preimage)
 }
 
 struct IndexHeader {
@@ -291,7 +291,7 @@ pub(crate) fn decode_index_records_at(
                     status: IndexRecordStatus::Evaluated,
                 });
                 entries.push(entry);
-                offset = next_offset;
+                offset = require_progress("object index", offset, next_offset)?;
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
@@ -314,7 +314,7 @@ pub(crate) fn decode_index_records_at(
                     offset: base + offset,
                     status: IndexRecordStatus::Failed { message },
                 });
-                offset = next;
+                offset = require_progress("object index", offset, next)?;
             }
             FrameAttempt::Invalid { message } => {
                 record_outcomes.push(IndexRecordOutcome {

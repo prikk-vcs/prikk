@@ -1,4 +1,4 @@
-use super::resync_to_next_magic;
+use super::{require_progress, resync_to_next_magic};
 
 const MAGIC: &[u8] = b"MAGIC123";
 
@@ -46,4 +46,21 @@ fn empty_buffer_returns_none() {
 fn start_past_the_buffer_end_returns_none_rather_than_panicking() {
     let bytes = vec![0xAA; 4];
     assert_eq!(resync_to_next_magic(&bytes, 100, MAGIC), None);
+}
+
+// ---- RFC 160 §9 R2: no decode loop can stop advancing --------------------------------------------------------------------------
+
+/// **The invariant, checked.** `require_progress` accepts a strictly greater offset and refuses one that stands still or goes
+/// backward, naming the reader and both offsets so a report reads which decoder and where.
+/// **This is R2 itself**: every framed reader's resume point is `offset = require_progress(name, offset, computed)?`, so a
+/// computation that stops advancing becomes exactly this error, at the exact place a spin would otherwise start.
+#[test]
+#[allow(clippy::unwrap_used)]
+fn require_progress_accepts_strictly_greater_and_refuses_equal_or_less() {
+    assert_eq!(require_progress("wal", 10, 11).unwrap(), 11);
+    assert_eq!(require_progress("wal", 0, 1).unwrap(), 1);
+    let stalled = require_progress("wal", 10, 10).unwrap_err();
+    assert!(stalled.to_string().contains("wal") && stalled.to_string().contains("byte offset 10"));
+    let backward = require_progress("wal", 10, 9).unwrap_err();
+    assert!(backward.to_string().contains("byte offset 10"));
 }
