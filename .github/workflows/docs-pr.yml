@@ -27,6 +27,7 @@ jobs:
   build:
     name: build book
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     defaults:
       run:

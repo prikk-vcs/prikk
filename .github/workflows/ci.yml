@@ -18,6 +18,7 @@ jobs:
   stable:
     name: stable
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       # RFC 127: `boundary::tests::workspace_and_product_boundaries_hold` (exercised by `cargo test
       # --workspace` below) now asserts every released tag has exactly one CHANGELOG.md heading --
@@ -62,6 +63,7 @@ jobs:
   policy:
     name: policy
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,6 +83,7 @@ jobs:
   msrv-1-85-0:
     name: msrv-1.85.0
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment above) applies identically here.
       - uses: actions/checkout@v7
@@ -112,6 +115,7 @@ jobs:
         os: [windows-latest, macos-latest]
     name: non-linux build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -129,6 +133,7 @@ jobs:
   macos-mutation:
     name: macOS mutation test suite
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
@@ -162,6 +167,7 @@ jobs:
   windows-mutation:
     name: Windows mutation test suite
     runs-on: windows-latest
+    timeout-minutes: 65
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
@@ -188,6 +194,7 @@ jobs:
   fixture:
     name: build read-only fixture repository
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
       PRIKK_AUTHOR_SEED_FILE: ${{ github.workspace }}/.ci-keys/author.seed
@@ -281,6 +288,7 @@ jobs:
         os: [windows-latest, macos-latest]
     name: non-linux read-only conformance (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
     needs: fixture
     steps:
       - uses: actions/checkout@v7
@@ -355,6 +363,7 @@ jobs:
   windows-mutate:
     name: mutate the fixture on Windows
     runs-on: windows-latest
+    timeout-minutes: 5
     needs: fixture
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
@@ -418,6 +427,7 @@ jobs:
   linux-mutate-reference:
     name: mutate the fixture on Linux (reference)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: fixture
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
@@ -492,6 +502,7 @@ jobs:
   verify-cross-platform-history:
     name: cross-platform history identity (Windows mutation, Linux verification)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [windows-mutate, linux-mutate-reference]
     steps:
       - uses: actions/checkout@v7
@@ -539,6 +550,7 @@ jobs:
   receiver-prepare:
     name: cross-host sync -- prepare receiver (Windows)
     runs-on: windows-latest
+    timeout-minutes: 5
     needs: fixture
     steps:
       - uses: actions/checkout@v7
@@ -575,6 +587,7 @@ jobs:
   sender-build:
     name: cross-host sync -- build the exchange artifact (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [fixture, receiver-prepare]
     env:
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer
@@ -617,6 +630,7 @@ jobs:
   receiver-accept:
     name: cross-host sync -- accept and seal (Windows)
     runs-on: windows-latest
+    timeout-minutes: 5
     needs: [receiver-prepare, sender-build]
     env:
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer

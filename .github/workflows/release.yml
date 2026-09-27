@@ -9,7 +9,30 @@ permissions:
   contents: read
 
 jobs:
+  # RFC 160 §9 D3: a release is mechanically tied to a green CI run. Nothing else here checked this -- the release fires on any
+  # matching tag, runs no tests of its own, and never asked whether the commit it is releasing passed CI. This job is the first
+  # thing that runs, `build` and `publish` both depend on it (transitively, through `build`), and it fails the whole workflow
+  # unless the most recent "CI" workflow run for this exact commit concluded `success` -- which it can only do if every job in
+  # `ci.yml` succeeded, the Windows and macOS mutation suites included, since one failing job makes the whole run's own
+  # conclusion non-`success`. Read-only: `gh run list`/`gh run view` with this workflow's own `GITHUB_TOKEN`, no write scope.
+  ci-status-gate:
+    name: require a green CI run for this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require the most recent CI run for this commit to have succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: cargo run -p prikk-release-policy --locked -- ci-status-check "$REPO" "$SHA"
+
   build:
+    needs: ci-status-gate
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +52,7 @@ jobs:
             os: windows-latest
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -148,6 +172,7 @@ jobs:
     name: publish release assets
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:

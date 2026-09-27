@@ -4,6 +4,9 @@
 
 mod args;
 mod boundary;
+mod ci_status_check;
+#[cfg(test)]
+mod ci_timeouts;
 mod command_scan;
 mod error;
 mod installer;

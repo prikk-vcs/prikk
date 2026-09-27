@@ -31,6 +31,7 @@ jobs:
   cargo-audit:
     name: cargo audit (fresh advisory database)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
