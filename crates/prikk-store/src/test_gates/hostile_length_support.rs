@@ -23,6 +23,7 @@
 )]
 
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// What a decode of hostile bytes did, in the terms every format's replay can be reduced to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,63 @@ pub(crate) const CLAIMS: &[u64] = &[u64::MAX, u64::MAX - 49, 1 << 63, 1 << 62, 1
 /// A regression that allocates the claimed size makes the **child** abort (SIGABRT) and this test fail naming the case; it never
 /// takes the suite with it. On non-Linux targets there is no limit, so an allocation the machine can satisfy lazily does not
 /// abort there: the decode's *outcome* is still asserted, and the abort detection is the Linux run's.
+/// [`isolated`], but the parent also enforces a **wall-clock timeout** on the child (RFC 160 §9 R1/R3): if the child has not exited
+/// by `timeout`, it is killed and the call fails naming the case, instead of the test harness blocking forever. R2 should make a hang
+/// structurally impossible, but this is the same belt-and-suspenders R1 already applies to every gate and probe run: a decode loop
+/// that somehow still spins is caught here, not left to hang the suite.
+pub(crate) fn isolated_with_timeout(module: &str, case: &str, timeout: Duration, body: fn()) {
+    if std::env::var("PRIKK_HOSTILE_CHILD").as_deref() == Ok(case) {
+        limit_address_space();
+        body();
+        return;
+    }
+    let path = format!(
+        "{}::{case}",
+        module.strip_prefix("prikk_store::").unwrap_or(module)
+    );
+    let mut child = Command::new(std::env::current_exe().expect("this test binary"))
+        .args(["--exact", &path, "--nocapture", "--test-threads=1"])
+        .env("PRIKK_HOSTILE_CHILD", case)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawning the child test process");
+    let began = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("polling the child") {
+            break Some(status);
+        }
+        if began.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    use std::io::Read as _;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut stdout);
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut stderr);
+    }
+    let Some(status) = status else {
+        panic!(
+            "{case}: the child did not finish within {timeout:?} -- killed (R2 should make this unreachable)\nstdout: {stdout}\nstderr: {stderr}"
+        );
+    };
+    assert!(
+        status.success(),
+        "{case}: the child process did not exit cleanly ({status:?})\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "{case}: the child ran no test: {stdout}"
+    );
+}
+
 pub(crate) fn isolated(module: &str, case: &str, body: fn()) {
     if std::env::var("PRIKK_HOSTILE_CHILD").as_deref() == Ok(case) {
         limit_address_space();

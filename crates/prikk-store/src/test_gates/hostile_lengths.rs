@@ -286,7 +286,7 @@ fn no_bodies(_: &[u8]) -> Vec<HostileBody> {
     Vec::new()
 }
 
-fn formats() -> Vec<Format> {
+pub(crate) fn formats() -> Vec<Format> {
     vec![
         Format {
             name: "container frame",

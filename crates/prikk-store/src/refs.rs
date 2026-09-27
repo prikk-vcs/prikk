@@ -22,7 +22,8 @@ mod verify;
 pub(in crate::refs) use container::append_ref_container_record;
 #[cfg(test)]
 pub(crate) use container::{
-    append_torn_ref_log_tail_for_test, encode_ref_container_record_for_test,
+    append_torn_ref_log_tail_for_test, decode_ref_container_records,
+    encode_ref_container_record_for_test,
 };
 #[cfg(feature = "test-support")]
 pub use pointer_index::{
@@ -38,6 +39,8 @@ pub(crate) use pointer_index::{
 // outside `refs`, so these need re-exporting here the same way `verify_refs` already is below --
 // `pointer_index` itself stays a private submodule; only the specific items a caller outside `refs`
 // needs are widened.
+#[cfg(test)]
+pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
     PointerIndexEntry, encode_pointer_index_record, replay_pointer_index,
 };
