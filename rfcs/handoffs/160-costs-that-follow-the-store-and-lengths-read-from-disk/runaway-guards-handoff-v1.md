@@ -89,3 +89,21 @@ Report: `.git-exclude/review-request/runaway-guards-report-v1.md`. It covers:
 - the controls with their perturbations;
 - T1;
 - the R4 table.
+
+## Addendum 1 — 2026-09-27: two tests, then the push
+
+Report `runaway-guards-report-v1.md`; review `.git-exclude/reviewed/runaway-guards-review-v1.md`. **The behavior is
+accepted.** The architect re-ran the gates (14/14 on `59c085a8`, in R1's scope) and perturbed R2 under a cap: a
+non-advancing resume is an `Integrity` error in 0.00 s. **M5's fix goes to 0.49.0**, as its own design round.
+
+1. **M5 gets a standing guard.** A non-ignored case at a small size (32 and 64 KiB) asserts bytes hashed at or below
+   **1.5 × today's measurement**, with a comment that the 0.49.0 fix replaces it with the 8× bound. **Perturb:** re-hash
+   each candidate twice. It goes red.
+2. **`isolated_with_timeout` is exercised by a committed test:** a child that never exits is reported as a timeout
+   within its limit, and the parent survives. **Perturb:** remove the kill, bounded by R1, and report what happened.
+
+The handoff's control 2 was ill-specified by the architect. It is replaced by a `require_progress` source scan in
+0.49.0, and is not owed here.
+
+Gates on the exact final commit, **in R1's scope**. Report: `.git-exclude/review-request/runaway-guards-report-v2.md`.
+Then the architect pushes, and the round closes on a green Windows mutation suite.
