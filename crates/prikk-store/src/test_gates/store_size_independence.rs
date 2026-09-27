@@ -171,10 +171,21 @@ enum Expectation {
     /// **An open finding**: the operation reads about as much more as the store holds more, and the report names it for a ruling. The
     /// row asserts the finding *still holds* (`large >= small + 8 MiB`), so that fixing it makes the row fail until it is promoted to
     /// `Flat` -- the debt cannot be paid without the table noticing.
-    FollowsContent { finding: &'static str },
+    FollowsContent {
+        finding: &'static str,
+        /// **RFC 160 §9's ceiling on P2's open rows** (the external review's D11): the floor (`FollowsContent`'s own promotion rule)
+        /// catches a fix; this catches a *regression* -- the finding growing worse without anyone noticing, since before this a row
+        /// failed only when the finding disappeared. Set to 1.5x what the operation measured when this ceiling was written; the
+        /// report gives the exact numbers.
+        ceiling: u64,
+    },
     /// **An open finding on the history axis**: the operation reads more as the history grows (`large >= small + 16 KiB`), the ref log
     /// and the object index being what grows. Same promotion rule as [`Expectation::FollowsContent`].
-    FollowsHistory { finding: &'static str },
+    FollowsHistory {
+        finding: &'static str,
+        /// Same ceiling, same reason, for the history axis.
+        ceiling: u64,
+    },
 }
 
 fn small_blob(label: &str) -> ObjectEnvelope {
@@ -280,6 +291,7 @@ const OPERATIONS: &[Operation] = &[
         axis: Axis::Content,
         expectation: Expectation::FollowsContent {
             finding: "F4 in the report: `replay_lineage` -> `blob_kind` reads every stored blob's frame to learn its kind, on every commit",
+            ceiling: 25_178_865, // 1.5x the 16,785,910 bytes measured for RFC 160 R3's report
         },
         allowance: 4096,
         why: "authoring one patch: the baseline replay reads the block and patch records it needs, the same on both stores",
@@ -322,6 +334,7 @@ const OPERATIONS: &[Operation] = &[
         axis: Axis::History,
         expectation: Expectation::FollowsHistory {
             finding: "F1 in the report: reads that follow the history -- the ref log whole up to three times per publication, the pointer index and the object index whole (AUD-01), earlier blocks and ref states by frame",
+            ceiling: 402_989, // 1.5x the 268,659 bytes measured for RFC 160 R3's report
         },
         allowance: 4096,
         why: "authoring one patch after 4 or 64 sealed generations",
@@ -332,6 +345,7 @@ const OPERATIONS: &[Operation] = &[
         axis: Axis::History,
         expectation: Expectation::FollowsHistory {
             finding: "F1 in the report: reads that follow the history -- the ref log whole up to three times per publication, the pointer index and the object index whole (AUD-01), earlier blocks, patches and ref states by frame",
+            ceiling: 411_386, // 1.5x the 274,257 bytes measured for RFC 160 R3's report
         },
         allowance: 4096,
         why: "one seal after 4 or 64 sealed generations",
@@ -410,14 +424,24 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
                 operation.allowance,
                 operation.why
             )),
-            Expectation::FollowsContent { finding } if large < small + (8 << 20) => failures.push(format!(
+            Expectation::FollowsContent { finding, ceiling } if large < small + (8 << 20) => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes on the small / large store: it is flat. Promote the \
                  row to `Expectation::Flat` and remove the finding",
                 operation.name
             )),
-            Expectation::FollowsHistory { finding } if large < small + (16 << 10) => failures.push(format!(
+            Expectation::FollowsContent { finding, ceiling } if large > *ceiling => failures.push(format!(
+                "{}: an open finding ({finding}) reads {large} bytes on the large store, over its {ceiling}-byte ceiling (1.5x what it \
+                 measured when the ceiling was set): the finding is getting worse, not just failing to improve",
+                operation.name
+            )),
+            Expectation::FollowsHistory { finding, ceiling } if large < small + (16 << 10) => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes at the shallow / deep history: it is flat. Promote the \
                  row to `Expectation::Flat` and remove the finding",
+                operation.name
+            )),
+            Expectation::FollowsHistory { finding, ceiling } if large > *ceiling => failures.push(format!(
+                "{}: an open finding ({finding}) reads {large} bytes at the deep history, over its {ceiling}-byte ceiling (1.5x what it \
+                 measured when the ceiling was set): the finding is getting worse, not just failing to improve",
                 operation.name
             )),
             _ => {}
