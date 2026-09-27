@@ -273,3 +273,15 @@ The owner decides.
 It also found M2 and M3 in the files next door. The recovery rules are redesigned in **RFC 162** (proposed). M5's bound
 and a fix, if mechanical, go into the R2–R4 round, which is now live:
 `runaway-guards-handoff-v1.md`.
+
+**§9 R2–R4 ACCEPTED 2026-09-27** (`023ea46c` … `3e56d604`). The pieces:
+- a progress guard at all twenty advance points of the framed readers;
+- a termination-and-work corpus;
+- `timeout-minutes` on every job of the five workflows;
+- `release.yml` refusing a commit without a completed, successful CI run.
+
+**M5 correction:** there are two quadratic resync paths.
+- RFC 102's `Invalid`→resync: 0.28 → 3.48 s on 0.47.0 already.
+- F3's partial-frame scan: 0.00 s on 0.47.0, 0.22 → 3.48 s on `bb81b0fb`.
+
+The first has a standing ceiling. The second gets one in the RFC 162 round. The fix for both is 0.49.0.

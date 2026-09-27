@@ -107,3 +107,11 @@ The handoff's control 2 was ill-specified by the architect. It is replaced by a 
 
 Gates on the exact final commit, **in R1's scope**. Report: `.git-exclude/review-request/runaway-guards-report-v2.md`.
 Then the architect pushes, and the round closes on a green Windows mutation suite.
+
+**ACCEPTED 2026-09-27** (`023ea46c` … `3e56d604`; reviews `runaway-guards-review-v1`, `-v2`; 14/14 gates re-run by the
+architect on `3e56d604` in R1's scope, 2435 / 0 / 56). **M5 has two quadratic paths, measured by the architect:**
+- RFC 102's `Invalid`→resync, long-standing, is guarded by this round's standing ceiling;
+- F3's partial-frame scan, new in this cycle and the external review's own case, gets its ceiling in the RFC 162
+  implementation round, which rewrites that path.
+
+Both fixes go to 0.49.0. **Closes when the Windows mutation suite is green on the pushed commit.**
