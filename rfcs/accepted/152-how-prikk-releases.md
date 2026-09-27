@@ -109,7 +109,7 @@ hold. The definition of "stable" is the owner's, and the external review's six p
 
 **The process changes, approved by the owner** (*"Approved."*), and **which of them are permanent.** The owner asked
 whether they hold until 0.48.0 or for good, noting that external reviewers are temporary. They are not exclusive to this
-project. Designing and reviewing is the architect's role, and after 0.48.0 the architect asks the owner, or external
+project (the owner confirmed this 2026-09-27: *"They are NOT exclusive to our project."*). Designing and reviewing is the architect's role, and after 0.48.0 the architect asks the owner, or external
 help, when it is actually necessary. **The architect's reading, stated so it can be corrected:**
 
 | rule | lasts | why |
