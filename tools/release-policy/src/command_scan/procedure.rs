@@ -10,6 +10,7 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
                 || publication(tail).is_some()
                 || release_notes_procedure(tail)
                 || generate_installer_procedure(tail)
+                || ci_status_check_procedure(tail)
                 || policy_gate_procedure(tail)
                 || tail
                     .split_first()
@@ -246,6 +247,23 @@ fn release_notes_procedure(tail: &[String]) -> bool {
         "dist",
         ">",
         "release-notes.md",
+    ]
+}
+
+/// `cargo run -p prikk-release-policy --locked -- ci-status-check "$REPO" "$SHA"` (RFC 160 §9 D3). Mirrors
+/// `release_notes_procedure`'s shape-matching for the same reason: the repository is fixed (always this project's own), but the
+/// commit sha varies with every tag, so `$SHA` is the one free-varying token -- `$REPO`, like `$TAG` above, is a shell variable
+/// this job's own `env:` sets from a GitHub Actions expression, never a literal `${{ }}` in the command line itself.
+fn ci_status_check_procedure(tail: &[String]) -> bool {
+    tail == [
+        "run",
+        "-p",
+        "prikk-release-policy",
+        "--locked",
+        "--",
+        "ci-status-check",
+        "$REPO",
+        "$SHA",
     ]
 }
 

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::boundary;
+use crate::ci_status_check;
 use crate::error::{Error, Result};
 use crate::installer;
 use crate::oracle;
@@ -22,12 +23,22 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         "produce-release-evidence" => produce_release_evidence_command(&root, rest),
         "release-notes" => release_notes_command(&root, rest),
         "generate-installer" => generate_installer_command(rest),
+        "ci-status-check" => ci_status_check_command(rest),
         "-h" | "--help" | "help" if rest.is_empty() => {
             println!("{}", usage());
             Ok(())
         }
         _ => Err(Error::new(usage())),
     }
+}
+
+fn ci_status_check_command(arguments: &[String]) -> Result<()> {
+    let [repo, sha] = arguments else {
+        return Err(Error::new(
+            "usage: ci-status-check <owner/repo> <sha>".to_string(),
+        ));
+    };
+    ci_status_check::run(repo, sha)
 }
 
 fn oracle_check(root: &std::path::Path, arguments: &[String]) -> Result<()> {
