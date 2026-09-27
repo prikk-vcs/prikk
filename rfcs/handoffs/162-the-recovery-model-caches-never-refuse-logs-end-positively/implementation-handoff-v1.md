@@ -122,3 +122,13 @@ of `f74401a4`. **Nothing is pushed until this lands.** These items complete RFC 
 
 Every run in R1's scope, perturbations capped and timed. Gates on the exact final commit. Report:
 `.git-exclude/review-request/rfc162-recovery-model-report-v2.md`.
+
+**ACCEPTED 2026-09-27** (`5ac71e96` … `11d50cc4`; reviews `rfc162-recovery-model-review-v1`, `-v2`; 14/14 gates re-run by
+the architect on `11d50cc4` in R1's scope, 2445 / 0 / 56). The architect ran the external `reproduce.sh` on their own
+release build:
+- **M1, M2 and M3 are closed**; after M1's repair, `verify` and `doctor` both exit 1;
+- **M5 is at `bb81b0fb`'s level.** The architect's own diagnosis of its doubling was wrong; the team found the real
+  cause, a second WAL decode in the connectivity stage;
+- nothing is silent.
+
+**Closes when the Windows mutation suite is green on the pushed commit.**

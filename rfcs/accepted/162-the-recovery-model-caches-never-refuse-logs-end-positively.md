@@ -109,3 +109,18 @@ M1, M2 and M3 are its first failing rows. The matrix is the start of what the re
 4. 0.48.0 prep, including D2, D4, D5 and D9.
 5. A candidate, which the external architect re-runs against.
 6. The cut, **without the word "stable"**.
+
+## 7. DELIVERED 2026-09-27
+
+Accepted at `11d50cc4` (reviews `rfc162-recovery-model-review-v1`, `-v2`).
+- **Rule 1:** readers scan in memory and never persist from an unlocked path; writers rebuild before appending; the
+  repair rewrites unless the index is byte-identical to its sound encoding.
+- **Rule 2:** a connectivity stage covers the queued patches of every active session; `doctor` fails with it; the
+  repair names and saves the ids it loses; a frame is never called harmless while a referenced object of its type is
+  missing.
+- **Rule 3:** the WAL and the pointer index end at their last sound record, and the pointer index gets its own tail
+  repair, because it leads the log by design.
+- **The matrix:** four files × seven faults, with I2, I3 and I4 asserted, and a report line per cell.
+
+The external `reproduce.sh`, run by the architect on the final commit, shows M1, M2 and M3 closed and M5 back at
+`bb81b0fb`'s cost.
