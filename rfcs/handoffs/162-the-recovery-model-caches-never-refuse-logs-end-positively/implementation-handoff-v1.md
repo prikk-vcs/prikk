@@ -87,3 +87,38 @@ something else, report it; do not fix it here.
 - X1–X3;
 - the pointer-index answer;
 - anything in RFC 162 that is not true at source.
+
+## Addendum 1 — 2026-09-27: M1's other half, nothing silent, and M5 no worse
+
+Report `rfc162-recovery-model-report-v1.md`; review `.git-exclude/reviewed/rfc162-recovery-model-review-v1.md`. **M2 and M3
+are fixed.** The architect re-ran the gates (14/14 on `f74401a4`) and ran the external `reproduce.sh` on a release build
+of `f74401a4`. **Nothing is pushed until this lands.** These items complete RFC 162 as written; they add no new semantics.
+
+1. **`doctor` fails where `verify` fails on connectivity.** After M1's repair, `verify` exits 1 and `doctor` exits 0
+   with `errors=0`. I2 holds for `doctor` too.
+   - **Control:** the M1 pair asserts `doctor` non-zero after the repair.
+   - **Perturb:** drop connectivity from `doctor`. It goes red.
+2. **No frame is called harmless while a referenced object is missing.** After the repair, the damaged blob's frame is
+   still printed as `interrupted append … (unreferenced, not damage)` / `no index entry names it`, beside the
+   connectivity error for the same blob.
+   - While connectivity reports any missing or unreadable referenced object, an unparseable frame is reported as
+     possibly holding it, naming the object. It is never "unreferenced" or "not damage".
+   - The index wording goes from every message.
+   - **Control:** M1 after the repair prints neither phrase.
+3. **Nothing is silent.**
+   - A trailing partial and interior garbage in the **object index** get a warning or info line in `verify` and
+     `doctor`, as the WAL does. The exit stays 0, because it is a cache.
+   - The pointer index's tail and interior damage are reported too.
+   - **The matrix asserts a report line per cell.** **Perturb:** silence the index line. It goes red.
+4. **M5 no worse after rule 3.**
+   - The architect measured, with `reproduce.sh` on hostile input, 0.48 / 1.91 / 7.18 / 28.64 s at 256 KiB → 2 MiB,
+     against `bb81b0fb`'s 0.25 / 0.88 / 3.49 / 14.02 s. That is **2.0×**, because the WAL's `Invalid` arm now scans too.
+   - **Remove the duplicate work.** "None found" ends the decode as a tail; "found" resumes there, and a rejected
+     candidate is never re-examined.
+   - **Reset shape B's ceiling to `bb81b0fb`'s measured cost** at 32 and 64 KiB, not to the doubled figure.
+5. **Run X2:** `reproduce.sh` against your release build of the final commit and of `bb81b0fb` (a worktree at that
+   commit). Attach both outputs. Acceptance: every M1 cell non-zero after the repair, M2 and M3 as now, and M5 at or
+   below `bb81b0fb`.
+
+Every run in R1's scope, perturbations capped and timed. Gates on the exact final commit. Report:
+`.git-exclude/review-request/rfc162-recovery-model-report-v2.md`.
