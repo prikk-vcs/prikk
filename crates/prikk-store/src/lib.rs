@@ -302,9 +302,9 @@ pub use trust::{
 pub use unlock::{HeldLock, PidLiveness, clear_lock, find_held_lock, list_held_locks};
 pub use verify::{
     ActiveWalMetadataStatus, ActiveWalOrderingIssue, AuthorSignatureVerification,
-    BlockSealVerification, InterruptedAppend, ObjectItemOutcome, ObjectItemStatus,
-    ObjectVerification, RepositoryVerification, StageOutcome, StageStatus, VerificationStage,
-    VerifyOptions, verify_repository, verify_repository_with_options,
+    BlockSealVerification, ConnectivityIssue, InterruptedAppend, ObjectItemOutcome,
+    ObjectItemStatus, ObjectVerification, RepositoryVerification, StageOutcome, StageStatus,
+    VerificationStage, VerifyOptions, verify_repository, verify_repository_with_options,
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};

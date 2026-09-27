@@ -284,6 +284,42 @@ pub(crate) fn decode_patch_operations(
     Ok(operations)
 }
 
+/// Every Blob a Patch's own operations reference, independently of any Block's `snapshot_blob_ref`
+/// (RFC 162 rule 2: connectivity from queued and sealed patches alike). `CreateFile.blob_id`,
+/// `ReplaceBinary.{old_blob_id,new_blob_id}`, and a file-kind `DeleteNode`'s `old_blob_id` are the only
+/// blob-carrying operation fields (`EditText`/`RenamePath`/`ChangePerm`/`CreateSymlink`/a symlink
+/// `DeleteNode` carry none). Mirrors `bundle.rs`'s existing inline match over the same three kinds,
+/// extracted so `verify`'s new connectivity check does not triplicate it.
+pub(crate) fn patch_referenced_blob_ids(
+    bytes: &[u8],
+    schema_version: u32,
+) -> Result<Vec<ObjectId>> {
+    let mut blob_ids = Vec::new();
+    for operation in decode_patch_operations(bytes, schema_version)? {
+        match operation.kind {
+            DecodedOperationKind::CreateFile { blob_id, .. } => blob_ids.push(blob_id),
+            DecodedOperationKind::ReplaceBinary {
+                old_blob_id,
+                new_blob_id,
+                ..
+            } => {
+                blob_ids.push(old_blob_id);
+                blob_ids.push(new_blob_id);
+            }
+            DecodedOperationKind::DeleteNode {
+                preimage: DecodedDeletePreimage::File { old_blob_id, .. },
+                ..
+            } => blob_ids.push(old_blob_id),
+            DecodedOperationKind::DeleteNode { .. }
+            | DecodedOperationKind::EditText { .. }
+            | DecodedOperationKind::RenamePath { .. }
+            | DecodedOperationKind::ChangePerm { .. }
+            | DecodedOperationKind::CreateSymlink { .. } => {}
+        }
+    }
+    Ok(blob_ids)
+}
+
 /// Decode a Patch's retired `parent_patch_ids` (tag 2, repeated `object_id`) from its canonical
 /// payload bytes -- legal only on a schema-1 patch, and every schema-1 authoring path has always
 /// written it empty (RFC 115 Stage 3 handoff §0/§4.2 item 6; retired outright at

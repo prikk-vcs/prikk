@@ -88,7 +88,8 @@ fn removing_a_declaration_names_its_file() {
         // RFC 156 §5b: its format-6 match accepts format 7 too, 1,690 -> 1,691.
         // RFC 160 F3 Addendum 1: verify reports the object containers' interrupted appends (the new field and its extraction), 1,691 -> 1,699.
         // RFC 160 F3 Addendum 2: `RepositoryVerification` is `#[non_exhaustive]`, 1,699 -> 1,700.
-        detail.contains("1700"),
+        // RFC 162 rule 2: the ObjectConnectivity stage, ConnectivityIssue, and verify_queued_patch_connectivity, 1,700 -> 1,786.
+        detail.contains("1786"),
         "the line count is in the message: {detail}"
     );
     assert!(

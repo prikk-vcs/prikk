@@ -506,6 +506,11 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
         | VerificationStage::LifecycleCache
         | VerificationStage::ReceivedRefs
         | VerificationStage::LocalTagTrust => None,
+        // RFC 162: unlike the six WAL-scoped stages above, this one reads *every* active session's
+        // own WAL (not only `default`'s), so a failure cannot be attributed to one session alone --
+        // repository-wide, the same conservative reading `PublicationReclassification`'s ambiguous
+        // case already uses.
+        VerificationStage::ObjectConnectivity => None,
     }
 }
 

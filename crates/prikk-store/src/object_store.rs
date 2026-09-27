@@ -9,7 +9,7 @@ use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
 use crate::foundation::index::{
     self, IndexEntry, WriteDecision, append_object_to_container, decide_write_outcome,
-    lookup_object_location, read_object_envelope_at,
+    read_object_envelope_at,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 use crate::lock::acquire_container_locks;
@@ -77,7 +77,7 @@ impl FileObjectStore {
             return false;
         }
         matches!(
-            lookup_object_location(&self.layout, id),
+            resolve_object_location(&self.layout, id),
             Ok(Some(entry)) if entry.object_type == object_type
         )
     }
@@ -85,7 +85,7 @@ impl FileObjectStore {
 
 impl ObjectReader for FileObjectStore {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
-        let Some(entry) = lookup_object_location(&self.layout, id)? else {
+        let Some(entry) = resolve_object_location(&self.layout, id)? else {
             return Ok(None);
         };
         read_object_at_entry(&self.layout, &entry, id)
@@ -93,7 +93,7 @@ impl ObjectReader for FileObjectStore {
 
     fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
         Ok(matches!(
-            lookup_object_location(&self.layout, id)?,
+            resolve_object_location(&self.layout, id)?,
             Some(entry) if entry.object_type == object_type
         ))
     }
@@ -119,7 +119,7 @@ impl ObjectWriter for FileObjectStore {
         // is then, so a concurrent writer's record for the same id is seen and merged, never lost.
         let layout = &self.layout;
         append_object_under_lock(layout, envelope.object_type, || {
-            let existing = lookup_object_location(layout, envelope.object_id())?;
+            let existing = resolve_object_location_locked(layout, envelope.object_id())?;
             locked_write(layout, envelope, existing.as_ref())
         })
     }
@@ -169,6 +169,66 @@ fn append_object_under_lock<'a>(
     };
     let envelope: &ObjectEnvelope = &appended;
     append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)
+}
+
+/// The index file's current raw byte length, independent of what any decode of it produced --
+/// needed after a reader's scan fallback (below), whose `entries` come from the containers, not from
+/// decoding this file, so there is no decode-derived extent to reuse.
+fn current_index_file_length(layout: &RepositoryLayout) -> Result<u64> {
+    let relative = layout.repository_relative(&layout.container_index_path())?;
+    Ok(crate::foundation::fsutil::stat_file_state_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    .map_or(0, |stat| stat.size))
+}
+
+/// RFC 162 rule 1: the object index is a pure cache, and a reader never refuses while the containers
+/// are sound. Unlike `foundation::index::lookup_object_location` (kept as the foundation-layer
+/// primitive that still refuses on damage -- `foundation` must not depend on `crate::lock`, so it
+/// cannot rebuild itself), this is the object-store layer's own lookup: if the index is damaged, it
+/// scans the containers in memory (`rebuild_index_from_containers`, the same scan `doctor
+/// --repair-index` uses, but without installing anything) and searches the scanned entries -- this is
+/// the round's chosen half of rule 1's "a reader falls back to scanning the containers, or rebuilds
+/// under the lock." Scanning, not persisting, was chosen for every unlocked caller specifically
+/// because persisting from here would be a hidden write: this function's callers include `verify`
+/// (documented read-only end to end, RFC 111 §6.1) and `ObjectWriteSession`'s own pre-lock decision
+/// path, whose refusal (`import_bundle`'s own contract) must leave the repository exactly as it found
+/// it. The cost is measured in the round's report (X3): the common, sound case costs exactly what it
+/// always did (one index decode, no lock, no scan), and only the rare damaged case pays for a full
+/// container rescan.
+fn resolve_object_location(layout: &RepositoryLayout, id: ObjectId) -> Result<Option<IndexEntry>> {
+    let replay = index::replay_index(layout)?;
+    let entries = if replay.has_item_failure() {
+        index::rebuild_index_from_containers(layout)?
+    } else {
+        replay.entries
+    };
+    Ok(entries
+        .into_iter()
+        .rev()
+        .find(|entry| entry.object_id == id))
+}
+
+/// Like [`resolve_object_location`], but for use only from inside `append_object_under_lock`'s hold --
+/// this is rule 1's writer half: called before the write decision is made, so a writer that finds the
+/// index damaged rebuilds it **on disk** (the lock it already holds makes this safe to persist) and
+/// never appends behind damage.
+fn resolve_object_location_locked(
+    layout: &RepositoryLayout,
+    id: ObjectId,
+) -> Result<Option<IndexEntry>> {
+    let replay = index::replay_index(layout)?;
+    let entries = if replay.has_item_failure() {
+        index::repair_index_from_containers(layout)?;
+        index::replay_index(layout)?.entries
+    } else {
+        replay.entries
+    };
+    Ok(entries
+        .into_iter()
+        .rev()
+        .find(|entry| entry.object_id == id))
 }
 
 /// What a writer does once it holds the object-store lock.
@@ -267,16 +327,22 @@ struct IndexSnapshot {
 }
 
 impl IndexSnapshot {
+    /// RFC 162 rule 1: a reader never refuses while the containers are sound. Never called from inside
+    /// `append_object_under_lock`'s hold (every production caller opens a snapshot before attempting
+    /// any write), and never persists anything on damage -- see `resolve_object_location`'s own doc for
+    /// why an unlocked path must not have a hidden write side effect (`verify`'s read-only contract,
+    /// `import_bundle`'s all-or-nothing refusal). Scans the containers in memory instead.
     fn open(layout: &RepositoryLayout) -> Result<Self> {
         let (replay, known_length) = index::replay_index_with_extent(layout)?;
-        if replay.has_item_failure() {
-            return Err(PrikkError::Integrity(
-                "object index has a damaged entry; run doctor before reading".to_string(),
-            ));
+        if !replay.has_item_failure() {
+            return Ok(Self {
+                entries: replay.entries,
+                known_length,
+            });
         }
         Ok(Self {
-            entries: replay.entries,
-            known_length,
+            entries: index::rebuild_index_from_containers(layout)?,
+            known_length: current_index_file_length(layout)?,
         })
     }
 
@@ -298,6 +364,23 @@ impl IndexSnapshot {
     /// decode. `ObjectReadSnapshot` never calls this: a reader's staleness is already accepted and
     /// bounded (RFC 111 Q3/Q4), so charging every read a stat here would buy nothing.
     fn ensure_current(&mut self, layout: &RepositoryLayout) -> Result<()> {
+        self.ensure_current_impl(layout, false)
+    }
+
+    /// Like [`Self::ensure_current`], but for use only from inside `append_object_under_lock`'s hold --
+    /// never acquires the object-store lock itself. This is `write_object`'s own re-check under the
+    /// lock (RFC 156 Stage 2b); RFC 162 rule 1's writer half rides along with it: if the index is found
+    /// damaged here, it is rebuilt before the write decision is made, so a writer never appends behind
+    /// damage.
+    fn ensure_current_locked(&mut self, layout: &RepositoryLayout) -> Result<()> {
+        self.ensure_current_impl(layout, true)
+    }
+
+    fn ensure_current_impl(
+        &mut self,
+        layout: &RepositoryLayout,
+        already_locked: bool,
+    ) -> Result<()> {
         let relative = layout.repository_relative(&layout.container_index_path())?;
         let current_length = crate::foundation::fsutil::stat_file_state_if_exists(
             layout.repository_mutation_root(),
@@ -308,24 +391,46 @@ impl IndexSnapshot {
             return Ok(());
         }
         if current_length < self.known_length {
-            // The object index is append-only and must never shrink (it is not one of the four
-            // compactable containers). A shorter file than this snapshot last knew means either the
-            // file was rebuilt out from under an open session or something is badly wrong -- fail
-            // closed rather than decode from an offset past the new end (RFC 111 §6.1 addendum §3.1).
-            return Err(PrikkError::Integrity(format!(
-                "object index shrank from {} to {current_length} bytes since it was last read; \
-                 the object index is append-only and must never shrink -- run doctor",
-                self.known_length
-            )));
+            // RFC 162 rule 1: the object index is a pure cache and can be rebuilt in place (`doctor
+            // --repair-index`, or a writer's own rebuild-before-append), which can legitimately shrink
+            // it -- a rebuild holds exactly the sound entries a container scan finds, discarding
+            // whatever stale, duplicate, or damaged bytes the old file carried. Reload fully and accept
+            // it only if the shorter file is now clean; otherwise this is still the genuine "something
+            // is badly wrong" case the original check existed for (RFC 111 §6.1 addendum §3.1).
+            let (fresh, fresh_length) = index::replay_index_with_extent(layout)?;
+            if fresh.has_item_failure() {
+                return Err(PrikkError::Integrity(format!(
+                    "object index shrank from {} to {current_length} bytes since it was last read, \
+                     and is still damaged; the object index only shrinks through a clean rebuild -- \
+                     run doctor",
+                    self.known_length
+                )));
+            }
+            self.entries = fresh.entries;
+            self.known_length = fresh_length;
+            return Ok(());
         }
         let (tail, new_extent) = index::replay_index_tail_with_extent(layout, self.known_length)?;
-        if tail.has_item_failure() {
-            return Err(PrikkError::Integrity(
-                "object index has a damaged entry; run doctor before reading".to_string(),
-            ));
+        if !tail.has_item_failure() {
+            self.entries.extend(tail.entries);
+            self.known_length = new_extent;
+            return Ok(());
         }
-        self.entries.extend(tail.entries);
-        self.known_length = new_extent;
+        // RFC 162 rule 1: rebuild rather than refuse. A rebuild (or a scan standing in for one)
+        // reorders the whole file relative to a tail decode's own assumptions (containers are walked
+        // in type order, not write order), so discard this snapshot's entries/known_length entirely
+        // rather than trying to extend them. `already_locked` decides whether that rebuild may be
+        // persisted: only `ensure_current_locked`'s caller, inside `append_object_under_lock`'s hold,
+        // may -- every unlocked caller scans in memory instead, for the same reason `open` above does.
+        if already_locked {
+            index::repair_index_from_containers(layout)?;
+            let (fresh, fresh_length) = index::replay_index_with_extent(layout)?;
+            self.entries = fresh.entries;
+            self.known_length = fresh_length;
+        } else {
+            self.entries = index::rebuild_index_from_containers(layout)?;
+            self.known_length = current_index_file_length(layout)?;
+        }
         Ok(())
     }
 }
@@ -462,7 +567,7 @@ impl ObjectWriter for ObjectWriteSession {
                 let layout = &self.layout;
                 let snapshot = &mut self.snapshot;
                 let object_id = append_object_under_lock(layout, envelope.object_type, || {
-                    snapshot.ensure_current(layout)?;
+                    snapshot.ensure_current_locked(layout)?;
                     let existing = snapshot.lookup(envelope.object_id()).copied();
                     locked_write(layout, envelope, existing.as_ref())
                 })?;

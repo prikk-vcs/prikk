@@ -1,5 +1,6 @@
 //! Repository verification tests.
 
+mod connectivity;
 mod every_signature;
 mod local_tag_trust;
 mod received_refs;

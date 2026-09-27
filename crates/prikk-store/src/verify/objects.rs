@@ -60,10 +60,12 @@ pub struct ObjectItemOutcome {
     pub status: ObjectItemStatus,
 }
 
-/// A frame in an object container that does not parse **and that no index entry names**: an **interrupted append** (RFC 160 F3
-/// Addendum 1). The object index is appended only after the container record is durable, so a frame nothing names was never
-/// committed -- it is what a crash between the two leaves, followed by whatever was written after. It is reported, as a warning, and
-/// is not damage. **A frame an index entry names is never here**: it stays a [`ObjectItemStatus::Failed`] item.
+/// A frame in an object container that does not parse and is not *complete* (its own checksum never verified, so it cannot be a
+/// structurally sound envelope that merely failed a later check): an **interrupted append** (RFC 162 rule 2, superseding RFC 160 F3
+/// Addendum 1's index-membership rule -- "the index is never evidence of anything"). It is reported here as a warning, unconditionally
+/// -- not damage by default. Separately, `verify.rs`'s own connectivity pass checks whether anything that still matters (a sealed
+/// block's state, a queued patch, a ref tip) references an object this scan could not read; if so, *that* check fails and names the
+/// referencing work directly, regardless of whether the corresponding frame is reported here as a remnant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct InterruptedAppend {
@@ -225,12 +227,6 @@ pub(super) fn verify_objects(
             trust_verifier,
             &mut pending_v3_blocks,
             &indexed_ids,
-            &index_replay
-                .entries
-                .iter()
-                .filter(|entry| entry.object_type == object_type)
-                .map(|entry| entry.offset)
-                .collect(),
         )?);
     }
     for (entry, message) in unreadable {
@@ -241,6 +237,14 @@ pub(super) fn verify_objects(
             outcome.object_type == entry.object_type
                 && outcome.path == locator
                 && matches!(outcome.status, ObjectItemStatus::Failed { .. })
+        });
+        // RFC 162 rule 2: the container scan no longer knows about index membership, so it always
+        // classifies this same frame as an unreferenced remnant first (`interrupted_appends`) -- an
+        // entry that still names it, promoted to `Failed` here, is damage, not an unreferenced one, so
+        // drop the now-contradictory warning for the same offset before adding the failed item.
+        let entry_offset = usize::try_from(entry.offset).ok();
+        summary.interrupted_appends.retain(|remnant| {
+            !(remnant.object_type == entry.object_type && Some(remnant.offset) == entry_offset)
         });
         if already_reported {
             continue;
@@ -271,7 +275,6 @@ fn verify_object_type_container(
     trust_verifier: &mut PublicationTrustVerifier<'_>,
     pending_v3_blocks: &mut Vec<(ObjectId, BlockPayload)>,
     indexed_ids: &HashSet<ObjectId>,
-    named_offsets: &HashSet<u64>,
 ) -> Result<ObjectSummary> {
     let mut summary = ObjectSummary::empty();
     #[cfg(test)]
@@ -297,14 +300,13 @@ fn verify_object_type_container(
                     "container record outcome is neither Evaluated nor Failed".to_string(),
                 ));
             };
-            // RFC 160 F3 Addendum 1: a frame that does not parse is damage only if the index names it. The index is appended after the
-            // record is durable, so a frame **no entry names was never committed**: an interrupted append (and whatever was written
-            // after it), reported as a warning. A frame an entry names stays a failed item, exactly as RFC 160 §7 ruled.
-            let named =
-                u64::try_from(outcome.offset).is_ok_and(|offset| named_offsets.contains(&offset));
-            // ... and only if the frame is not *complete*: a frame whose checksum verified (an envelope that will not decode, the wrong type)
-            // is not what an interrupted append leaves, which is a prefix of a frame.
-            if named || *complete {
+            // RFC 162 rule 2: **index membership is no longer the witness.** A frame that does not parse is an unreferenced remnant,
+            // reported as a warning, unless it is *complete*: a frame whose own checksum verified (an envelope that will not decode, the
+            // wrong type) is not what an interrupted append leaves, which is a prefix of a frame. Connectivity -- whether anything still
+            // referencing work (a sealed block's state, a queued patch, a ref tip) names an object this scan cannot read -- is checked
+            // separately, in `verify.rs`'s own connectivity pass, and names the referencing work directly rather than reclassifying the
+            // frame itself (RFC 160 F3 Addendum 1's index-membership rule is what this replaces).
+            if *complete {
                 summary.item_outcomes.push(ObjectItemOutcome {
                     object_type,
                     path: locator,

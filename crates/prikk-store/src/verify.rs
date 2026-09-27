@@ -473,6 +473,13 @@ verification_stages! {
     /// (a pre-mutation guard, not `prikk verify`) also calls. A received, not-yet-adopted tag is
     /// never reached here: `list_ref_pointers` never enumerates the received namespace.
     LocalTagTrust => "local-tag-trust",
+    /// RFC 162 rule 2: connectivity from every active session's queued patches to the blobs their
+    /// own operations reference (`CreateFile`, `ReplaceBinary`, a file-kind `DeleteNode`) --
+    /// independently of any Block's `snapshot_blob_ref`, since a queued patch is not yet part of any
+    /// sealed Block. No upstream stage dependency: enumerates every active session directly, the same
+    /// way `doctor.rs`'s own non-default-session scan does, rather than reading `WalReplay`'s
+    /// `DEFAULT_ACTIVE_NAME`-only replay.
+    ObjectConnectivity => "object-connectivity",
 }
 
 impl std::fmt::Display for VerificationStage {
@@ -670,6 +677,9 @@ pub struct RepositoryVerification {
     /// here to a *coverage* absence rather than a missing-directory one. Sourced from
     /// `RepositoryLayout::active_session_names`, never a second, independently derived count.
     pub active_session_count: usize,
+    /// RFC 162 rule 2: objects a queued patch (in any active session) references but that cannot be
+    /// read. Empty when the `ObjectConnectivity` stage itself did not evaluate.
+    pub connectivity_issues: Vec<ConnectivityIssue>,
 }
 
 /// A `Merge` block (DC-75) whose recorded `merge_baseline_block_id` is not a common ancestor of its
@@ -687,6 +697,23 @@ pub struct MergeBaselineDivergence {
     pub mainline_parent_id: ObjectId,
     /// The block's secondary parent.
     pub secondary_parent_id: ObjectId,
+}
+
+/// RFC 162 rule 2: an object a queued patch's own operations reference, that cannot be read. What
+/// used to be classified by index membership (RFC 160 F3 Addendum 1, since replaced) is now
+/// classified by connectivity: this is the finding that names the referencing work directly, rather
+/// than reclassifying the referenced object's own (possibly unparseable) container frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ConnectivityIssue {
+    /// The object that could not be read.
+    pub object_id: ObjectId,
+    /// Its expected type.
+    pub object_type: ObjectType,
+    /// The work that references it (e.g. `"queued patch <id> in active session <name>"`).
+    pub referencing_work: String,
+    /// Why it could not be read: `"missing"`, or the read error's own message.
+    pub problem: String,
 }
 
 /// One active-WAL record whose sequence did not strictly increase over the previous record.
@@ -765,6 +792,7 @@ impl RepositoryVerification {
                 .received_ref_item_outcomes
                 .iter()
                 .any(|outcome| matches!(outcome.status, RefItemStatus::Failed { .. }))
+            || !self.connectivity_issues.is_empty()
     }
 
     /// Return true if the active WAL contained an incomplete trailing record. `None` (the WAL-replay
@@ -1281,6 +1309,15 @@ pub fn verify_repository_with_options(
         Vec::new()
     };
 
+    // Stage: ObjectConnectivity (RFC 162 rule 2). No upstream stage dependency -- enumerates every
+    // active session itself, independently of `WalReplay`'s `DEFAULT_ACTIVE_NAME`-only replay.
+    let connectivity_issues = pipeline
+        .run(
+            VerificationStage::ObjectConnectivity,
+            verify_queued_patch_connectivity(layout, &object_store),
+        )
+        .unwrap_or_default();
+
     let checked_publication_trust_records =
         (objects_evaluated && ref_update_schema_trust_evaluated && local_tag_trust_evaluated)
             .then_some(trust_verifier.checked_records);
@@ -1329,6 +1366,7 @@ pub fn verify_repository_with_options(
         block_seals,
         received_ref_item_outcomes,
         active_session_count,
+        connectivity_issues,
     })
 }
 
@@ -1648,6 +1686,54 @@ fn verify_merge_baseline(
             secondary_parent_id,
         }))
     }
+}
+
+/// RFC 162 rule 2: every active session's queued patches, checked against the blobs their own
+/// operations reference. Independent of `WalReplay` (which only ever replays `DEFAULT_ACTIVE_NAME`):
+/// enumerates every active session itself, matching `doctor.rs`'s own non-default-session scan
+/// (`push_non_default_active_session_wal_issues`) rather than reading that stage's output.
+fn verify_queued_patch_connectivity(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+) -> Result<Vec<ConnectivityIssue>> {
+    let mut issues = Vec::new();
+    for name in layout.active_session_names()? {
+        // An active session's WAL that cannot even be replayed (RFC 108 §D3.3's own example: an
+        // inadmissible schema version) is reported by `doctor`'s own per-active-session scan
+        // (`push_non_default_active_session_wal_issues`) or, for `default`, by `WalReplay` -- not this
+        // check's job to interpret. Skip it rather than aborting connectivity checking for every
+        // *other* active session, preserving the per-active-session isolation RFC 108 established.
+        let Ok(replay) = Wal::for_layout(layout, &name).replay() else {
+            continue;
+        };
+        for record in &replay.records {
+            let patch_id = record.envelope.object_id();
+            let blob_ids = crate::patch_replay::decode::patch_referenced_blob_ids(
+                &record.envelope.canonical_payload,
+                record.envelope.schema_version,
+            )?;
+            for blob_id in blob_ids {
+                let referencing_work =
+                    format!("queued patch {patch_id} in active session {name:?}");
+                match object_store.read_typed(blob_id, ObjectType::Blob) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => issues.push(ConnectivityIssue {
+                        object_id: blob_id,
+                        object_type: ObjectType::Blob,
+                        referencing_work,
+                        problem: "missing".to_string(),
+                    }),
+                    Err(err) => issues.push(ConnectivityIssue {
+                        object_id: blob_id,
+                        object_type: ObjectType::Blob,
+                        referencing_work,
+                        problem: err.to_string(),
+                    }),
+                }
+            }
+        }
+    }
+    Ok(issues)
 }
 
 fn ensure_object_exists(

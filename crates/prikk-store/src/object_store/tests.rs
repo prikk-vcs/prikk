@@ -338,7 +338,14 @@ fn write_session_catches_up_after_a_nested_unmediated_writer() -> prikk_error::R
 fn every_object_store_writer_goes_through_a_locked_caller() {
     let crate_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
-    let mut locked_calls = 0_usize;
+    // RFC 162 rule 1: `repair_index_from_containers` now has several legitimate locked callers
+    // (`doctor.rs`'s own repair verb, plus `object_store.rs`'s writer-rebuild and reader-rebuild
+    // paths) -- one flag per `GUARDED[i].locked_calls[j]`, so every expected call site is checked
+    // individually rather than only a total count.
+    let mut locked_call_seen: Vec<Vec<bool>> = GUARDED
+        .iter()
+        .map(|guarded| vec![false; guarded.locked_calls.len()])
+        .collect();
 
     let mut files_scanned = 0_usize;
     let mut stack = vec![crate_src.clone()];
@@ -370,7 +377,7 @@ fn every_object_store_writer_goes_through_a_locked_caller() {
             files_scanned += 1;
             let relative = path.strip_prefix(&crate_src).unwrap_or(&path).to_path_buf();
             for (number, line) in text.lines().enumerate() {
-                for guarded in GUARDED {
+                for (guarded_index, guarded) in GUARDED.iter().enumerate() {
                     if !line.contains(guarded.name) {
                         continue;
                     }
@@ -379,10 +386,25 @@ fn every_object_store_writer_goes_through_a_locked_caller() {
                         || line.contains("use crate::foundation::index");
                     let is_comment =
                         line.trim_start().starts_with("//") || line.trim_start().starts_with("///");
-                    let in_locked_caller = relative == std::path::Path::new(guarded.caller_file)
-                        && line.contains(guarded.locked_call);
-                    if in_locked_caller {
-                        locked_calls += 1;
+                    // Exact match on the trimmed line, not `contains`: a shallower-indented expected
+                    // call text (e.g. 8 spaces) is otherwise a substring of a deeper-indented
+                    // occurrence of the very same statement (e.g. 12 spaces inside an `if`), which
+                    // would satisfy the wrong list entry and leave the real one looking unseen.
+                    let matched_locked_call =
+                        guarded
+                            .locked_calls
+                            .iter()
+                            .position(|(caller_file, locked_call)| {
+                                relative == std::path::Path::new(caller_file)
+                                    && line.trim() == *locked_call
+                            });
+                    if let Some(call_index) = matched_locked_call {
+                        if let Some(seen) = locked_call_seen
+                            .get_mut(guarded_index)
+                            .and_then(|seen| seen.get_mut(call_index))
+                        {
+                            *seen = true;
+                        }
                         continue;
                     }
                     if is_definition || is_import || is_comment {
@@ -406,12 +428,17 @@ fn every_object_store_writer_goes_through_a_locked_caller() {
         files_scanned > 100,
         "expected to scan the whole production tree; scanned only {files_scanned} files"
     );
-    assert_eq!(
-        locked_calls,
-        GUARDED.len(),
-        "each guarded function's own locked call must still be seen -- a lower count means the scan \
-         is not reading what it thinks it is"
-    );
+    for (guarded, seen) in GUARDED.iter().zip(&locked_call_seen) {
+        for (call_index, was_seen) in seen.iter().enumerate() {
+            assert!(
+                *was_seen,
+                "{}'s expected locked call {:?} was never seen -- a lower count means the scan is \
+                 not reading what it thinks it is",
+                guarded.name,
+                guarded.locked_calls.get(call_index)
+            );
+        }
+    }
     assert!(
         offenders.is_empty(),
         "these production sites reach the object store without its lock: {offenders:#?}"
@@ -422,22 +449,37 @@ fn every_object_store_writer_goes_through_a_locked_caller() {
 struct GuardedFunction {
     name: &'static str,
     definition: &'static str,
-    caller_file: &'static str,
-    locked_call: &'static str,
+    /// Every `(caller_file, locked_call)` pair this function is legitimately called from, each
+    /// already holding the object-store lock (freshly acquired, or inherited from an enclosing
+    /// `append_object_under_lock` hold -- RFC 162 rule 1 added the latter kind).
+    locked_calls: &'static [(&'static str, &'static str)],
 }
 
 const GUARDED: &[GuardedFunction] = &[
     GuardedFunction {
         name: "append_object_to_container",
         definition: "pub(crate) fn append_object_to_container",
-        caller_file: "object_store.rs",
-        locked_call: "    append_object_to_container(layout, object_type, envelope)",
+        locked_calls: &[(
+            "object_store.rs",
+            "append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)",
+        )],
     },
     GuardedFunction {
         name: "repair_index_from_containers",
         definition: "pub(crate) fn repair_index_from_containers",
-        caller_file: "doctor.rs",
-        locked_call: "    crate::foundation::index::repair_index_from_containers(layout)",
+        // RFC 162 rule 1: `object_store.rs` now has two locked callers (the writer's own pre-append
+        // rebuild, and `ensure_current_locked`'s re-check under the lock) -- both match this one
+        // trimmed line, whatever their own indentation, so one entry covers both.
+        locked_calls: &[
+            (
+                "doctor.rs",
+                "crate::foundation::index::repair_index_from_containers(layout)",
+            ),
+            (
+                "object_store.rs",
+                "index::repair_index_from_containers(layout)?;",
+            ),
+        ],
     },
 ];
 

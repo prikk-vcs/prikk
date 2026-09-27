@@ -443,6 +443,14 @@ pub(crate) fn replay_index_decode_count_for_test() -> usize {
 /// index read, then a linear search of its (already-decoded) entries -- no container scan. Refuses
 /// if the index itself has a damaged entry, rather than silently searching around it: an index this
 /// read depends on being sound is not the same question as which entries in it are damaged.
+///
+/// **Test-only since RFC 162 rule 1**: the index is a pure cache, and a reader must never refuse while
+/// the containers are sound -- `foundation` cannot itself rebuild a damaged index (the coupling gate
+/// forbids `foundation -> lock`), so the object-store layer's own `resolve_object_location`
+/// (`object_store.rs`) is production's real lookup, composing this function's exact refusal with a
+/// rebuild-and-retry under the object-store lock. Kept here, unchanged, as the low-level primitive that
+/// tests the foundation-layer contract directly.
+#[cfg(test)]
 pub(crate) fn lookup_object_location(
     layout: &RepositoryLayout,
     object_id: ObjectId,
@@ -819,7 +827,8 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
     let index_relative = layout.repository_relative(&layout.container_index_path())?;
     let existing_bytes = read_file_if_exists(layout.repository_mutation_root(), &index_relative)?
         .unwrap_or_default();
-    let before = decode_index_records(&existing_bytes, 0)?.entries;
+    let existing_replay = decode_index_records(&existing_bytes, 0)?;
+    let before = existing_replay.entries.clone();
 
     let rebuilt = rebuild_index_from_containers(layout)?;
 
@@ -869,7 +878,18 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
     };
     existing_sorted.sort_by_key(sort_key);
     rebuilt_sorted.sort_by_key(sort_key);
-    let already_correct = existing_sorted == rebuilt_sorted;
+    // RFC 162 rule 1: "`--repair-index` rewrites whenever the file is not byte for byte the encoding of
+    // its sound entries." The set comparison above catches a relocated/orphaned/duplicate entry (M1),
+    // but not a file that decodes to the right sound entries while *also* carrying extra bytes beyond
+    // them -- a torn append (M2), or any other damaged/trailing bytes the isolate-and-continue decoder
+    // tolerated rather than raised. `existing_replay.trailing_partial_bytes == 0 &&
+    // !existing_replay.has_item_failure()` is exactly "the file is nothing but a clean concatenation of
+    // its own decoded entries, in their own order" (the index's encoding is lossless and
+    // order-preserving for sound frames), so this is the byte-for-byte check without re-encoding and
+    // comparing bytes directly.
+    let existing_is_clean =
+        existing_replay.trailing_partial_bytes == 0 && !existing_replay.has_item_failure();
+    let already_correct = existing_is_clean && existing_sorted == rebuilt_sorted;
     if !already_correct {
         write_file_atomically(
             layout.repository_mutation_root(),
