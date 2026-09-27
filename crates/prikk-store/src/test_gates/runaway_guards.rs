@@ -350,13 +350,43 @@ fn hostile_tail(total_len: usize) -> Vec<u8> {
     bytes
 }
 
-/// **RFC 160 §9 Addendum 1, item 1 -- M5 gets a standing guard, not only an `#[ignore]`d measurement.** At a size small enough to
-/// run in every ordinary `cargo test` (a fraction of a second even in a debug build), the hostile WAL tail's bytes-hashed stays at
-/// or below **1.5x what it measured when this ceiling was written** -- the same ceiling shape P2's open rows use (`store_size_
-/// independence.rs`), so a regression that makes the quadratic worse is caught even though the quadratic itself is not fixed until
-/// 0.49.0 (RFC 160 §9's M5 ruling: the fix, and the real bound this ceiling is replaced by, is a design round, not this one).
-/// **Perturb:** hash each candidate twice (call `tallied_sha256` an extra time on the same bytes before comparing): both sizes'
-/// hashed counts double, over the ceiling, and this goes red.
+/// **RFC 162 §5 controls -- M5's second path.** The external review's own `mkhostile.py`: one **leading** header whose claimed body
+/// clearly does not fit (`sound_frame_after_partial`'s own reachability, from `TrailingPartial`, not `Invalid` -- **F3's addition, new
+/// this cycle**, unlike shape A's long-standing `Invalid`-arm resync), followed by the same stacked-candidate-headers pattern
+/// [`hostile_tail`] uses to make the *scan itself* expensive. Rule 3's own scan must still reach "no sound record follows" before it
+/// calls the rest a tail, which is exactly this shape's own cost.
+fn hostile_tail_shape_b(total_len: usize) -> Vec<u8> {
+    const WAL_HEADER_LEN: usize = 8 + 2 + 8 + 8 + 32;
+    let magic = b"PWALR001";
+    let mut bytes = Vec::with_capacity(total_len);
+    bytes.extend_from_slice(magic);
+    bytes.extend_from_slice(&1_u16.to_be_bytes());
+    bytes.extend_from_slice(&2_u64.to_be_bytes()); // seq
+    bytes.extend_from_slice(&(1_u64 << 40).to_be_bytes()); // claimed body: clearly does not fit
+    bytes.extend_from_slice(&[0_u8; 32]); // checksum, irrelevant: TrailingPartial never reaches it
+    let mut seq = 3_u64;
+    while bytes.len() + WAL_HEADER_LEN <= total_len {
+        let start = bytes.len();
+        let claimed = (total_len - start - WAL_HEADER_LEN) as u64; // claims a body reaching exactly to the end: it "fits"
+        bytes.extend_from_slice(magic);
+        bytes.extend_from_slice(&1_u16.to_be_bytes());
+        bytes.extend_from_slice(&seq.to_be_bytes());
+        bytes.extend_from_slice(&claimed.to_be_bytes());
+        bytes.extend_from_slice(&[0_u8; 32]);
+        seq += 1;
+    }
+    bytes.resize(total_len, 0);
+    bytes
+}
+
+/// **RFC 160 §9 Addendum 1, item 1 -- M5 gets a standing guard, not only an `#[ignore]`d measurement. RFC 162 §5 extends it to shape
+/// B.** At a size small enough to run in every ordinary `cargo test` (a fraction of a second even in a debug build), each hostile
+/// WAL tail shape's bytes-hashed stays at or below **1.5x what it measured when this ceiling was written** -- the same ceiling shape
+/// P2's open rows use (`store_size_independence.rs`), so a regression that makes the quadratic worse is caught even though the
+/// quadratic itself is not fixed until 0.49.0 (RFC 160 §9's M5 ruling: the fix, and the real bound this ceiling is replaced by, is a
+/// design round, not this one).
+/// **Perturb:** hash each candidate twice (call `tallied_sha256` an extra time on the same bytes before comparing): every size's
+/// hashed count doubles, over its ceiling, and this goes red.
 #[test]
 fn hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size() {
     use crate::wal::decode_records;
@@ -372,13 +402,32 @@ fn hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size() {
         // finding every candidate's checksum invalid is unaffected either way -- same candidates, same hashing.
         assert_eq!(
             replay.trailing_partial_bytes, size,
-            "{size}: every candidate is checksum-invalid and none is followed by a sound record, so the whole buffer \
+            "shape A {size}: every candidate is checksum-invalid and none is followed by a sound record, so the whole buffer \
              is tail under RFC 162 rule 3"
         );
         assert!(
             hashed <= ceiling,
-            "{size}: hashed {hashed} bytes, over its {ceiling}-byte ceiling (1.5x the 9,254,676 / 37,022,168 bytes this measured, \
-             debug build, when the ceiling was written)"
+            "shape A {size}: hashed {hashed} bytes, over its {ceiling}-byte ceiling (1.5x the 9,254,676 / 37,022,168 bytes this \
+             measured, debug build, when the ceiling was written)"
+        );
+    }
+
+    // RFC 162 §5: shape B, the external review's own `mkhostile`. Measured (debug build, this machine, when this ceiling was
+    // written): 32 KiB -> 9,221,940 bytes hashed; 64 KiB -> 36,956,664 bytes hashed. Both ceilings are 1.5x those.
+    for (size, ceiling) in [(32 * 1024, 13_832_910_u64), (64 * 1024, 55_434_996_u64)] {
+        let bytes = hostile_tail_shape_b(size);
+        crate::foundation::frame_resync::hash_tally::reset();
+        let replay = decode_records(&bytes).expect("no source of an outer Err here");
+        let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+        assert_eq!(
+            replay.trailing_partial_bytes, size,
+            "shape B {size}: the leading oversized claim, and every stacked candidate behind it, resolve to one tail \
+             under RFC 162 rule 3"
+        );
+        assert!(
+            hashed <= ceiling,
+            "shape B {size}: hashed {hashed} bytes, over its {ceiling}-byte ceiling (1.5x what this measured, debug \
+             build, when the ceiling was written)"
         );
     }
 }
