@@ -100,6 +100,7 @@ pub(super) fn read_pointers(
     BTreeMap<String, PointerState>,
     BTreeMap<[u8; 32], String>,
     Vec<RefFileOutcome>,
+    usize,
 )> {
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
@@ -109,6 +110,10 @@ pub(super) fn read_pointers(
                 .to_string(),
         ));
     }
+    // Addendum 1 fix 3: the pointer index's own tail, captured here so `verify_refs` can report it --
+    // unlike the interior-damage arm just above, a torn tail is tolerated (RFC 162 rule 3: a log ends
+    // at its last sound record), so nothing else on this path ever surfaces it.
+    let trailing_partial_pointer_index_bytes = replay.trailing_partial_bytes;
     // "Last entry wins" (Step 0 §13.4): iterate in append order, keep overwriting -- the final
     // value per `ref_name_key` after the loop is the same one `lookup_ref_pointer`'s reverse scan
     // would find, and each entry also carries the offset it was found at, for the locator.
@@ -145,7 +150,12 @@ pub(super) fn read_pointers(
             }
         }
     }
-    Ok((pointers, failures_by_key, outcomes))
+    Ok((
+        pointers,
+        failures_by_key,
+        outcomes,
+        trailing_partial_pointer_index_bytes,
+    ))
 }
 
 fn read_one_pointer_entry(

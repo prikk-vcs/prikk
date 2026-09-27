@@ -320,7 +320,7 @@ use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
 };
 use crate::trust::PublicationTrustIssue;
-use crate::wal::Wal;
+use crate::wal::{Wal, WalReplay};
 
 use objects::verify_objects;
 pub use objects::{InterruptedAppend, ObjectItemOutcome, ObjectItemStatus};
@@ -680,6 +680,24 @@ pub struct RepositoryVerification {
     /// RFC 162 rule 2: objects a queued patch (in any active session) references but that cannot be
     /// read. Empty when the `ObjectConnectivity` stage itself did not evaluate.
     pub connectivity_issues: Vec<ConnectivityIssue>,
+    /// RFC 162 rule 1, Addendum 1 fix 3: number of trailing bytes in the object index that look like
+    /// an incomplete final record. The index is a pure cache (rule 1), so this is never itself a
+    /// failure -- but "accepted" must not mean "unreported," the same reasoning
+    /// `trailing_partial_wal_bytes` already carries for the WAL. `None` when the `Objects` stage
+    /// itself did not evaluate.
+    pub trailing_partial_object_index_bytes: Option<usize>,
+    /// RFC 162 rule 1, Addendum 1 fix 3: whether the object index has an interior record that failed
+    /// to decode (not merely a trailing partial). Rule 1 already recovers from this by rescanning the
+    /// containers in memory rather than trusting the damaged index; this flag is what keeps that
+    /// recovery from being silent. `None` when the `Objects` stage itself did not evaluate.
+    pub object_index_interior_damage: Option<bool>,
+    /// RFC 162 rule 3, Addendum 1 fix 3: number of trailing bytes in the ref pointer index that look
+    /// like an incomplete final record. Interior damage in the pointer index is not a separate field
+    /// here: unlike the object index, it already fails the `Refs` stage outright (`read_pointers`
+    /// refuses on any damaged entry, by design -- see the module doc's "fails closed" row), so it is
+    /// already reported through `stage_outcomes`, never silently. `None` when the `Refs` stage itself
+    /// did not evaluate.
+    pub trailing_partial_pointer_index_bytes: Option<usize>,
 }
 
 /// A `Merge` block (DC-75) whose recorded `merge_baseline_block_id` is not a common ancestor of its
@@ -714,6 +732,11 @@ pub struct ConnectivityIssue {
     pub referencing_work: String,
     /// Why it could not be read: `"missing"`, or the read error's own message.
     pub problem: String,
+    /// The active session the referencing queued patch belongs to -- Addendum 1 fix 1: `doctor`
+    /// scopes its own `DoctorIssue` for this finding to this active session
+    /// (`DoctorIssue::for_active_session`), the same way every other per-active-session finding is
+    /// scoped, rather than refusing every active session's repair over one session's own damage.
+    pub active_session: std::ffi::OsString,
 }
 
 /// One active-WAL record whose sequence did not strictly increase over the previous record.
@@ -1052,6 +1075,12 @@ pub fn verify_repository_with_options(
         .as_ref()
         .map(|summary| summary.interrupted_appends.clone())
         .unwrap_or_default();
+    let trailing_partial_object_index_bytes = object_summary
+        .as_ref()
+        .map(|summary| summary.trailing_partial_index_bytes);
+    let object_index_interior_damage = object_summary
+        .as_ref()
+        .map(|summary| summary.index_interior_damage);
     let (
         object_outcomes,
         block_state_outcomes,
@@ -1150,6 +1179,7 @@ pub fn verify_repository_with_options(
         pointer_outcomes,
         log_outcomes,
         ref_item_outcomes,
+        trailing_partial_pointer_index_bytes,
     ) = match ref_verification {
         Some(rv) => (
             Some(rv.pointer_count),
@@ -1159,6 +1189,7 @@ pub fn verify_repository_with_options(
             rv.pointer_outcomes,
             rv.log_outcomes,
             rv.ref_item_outcomes,
+            Some(rv.trailing_partial_pointer_index_bytes),
         ),
         None => (
             None,
@@ -1168,6 +1199,7 @@ pub fn verify_repository_with_options(
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
         ),
     };
 
@@ -1311,10 +1343,14 @@ pub fn verify_repository_with_options(
 
     // Stage: ObjectConnectivity (RFC 162 rule 2). No upstream stage dependency -- enumerates every
     // active session itself, independently of `WalReplay`'s `DEFAULT_ACTIVE_NAME`-only replay.
+    // Addendum 1 fix 4: `default`'s own replay is passed in rather than redone -- a second full
+    // decode of the same (possibly hostile) WAL bytes was the real cost behind M5's regression, not
+    // rule 3's own scan (measured: `wal::decode_records` hashes the identical byte count for shape B
+    // on this commit and on `bb81b0fb` -- see the round's report).
     let connectivity_issues = pipeline
         .run(
             VerificationStage::ObjectConnectivity,
-            verify_queued_patch_connectivity(layout, &object_store),
+            verify_queued_patch_connectivity(layout, &object_store, replay.as_ref()),
         )
         .unwrap_or_default();
 
@@ -1367,6 +1403,9 @@ pub fn verify_repository_with_options(
         received_ref_item_outcomes,
         active_session_count,
         connectivity_issues,
+        trailing_partial_object_index_bytes,
+        object_index_interior_damage,
+        trailing_partial_pointer_index_bytes,
     })
 }
 
@@ -1695,16 +1734,33 @@ fn verify_merge_baseline(
 fn verify_queued_patch_connectivity(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
+    default_replay: Option<&WalReplay>,
 ) -> Result<Vec<ConnectivityIssue>> {
     let mut issues = Vec::new();
     for name in layout.active_session_names()? {
-        // An active session's WAL that cannot even be replayed (RFC 108 §D3.3's own example: an
-        // inadmissible schema version) is reported by `doctor`'s own per-active-session scan
-        // (`push_non_default_active_session_wal_issues`) or, for `default`, by `WalReplay` -- not this
-        // check's job to interpret. Skip it rather than aborting connectivity checking for every
-        // *other* active session, preserving the per-active-session isolation RFC 108 established.
-        let Ok(replay) = Wal::for_layout(layout, &name).replay() else {
-            continue;
+        // Addendum 1 fix 4: `default`'s own bytes were already decoded by the `WalReplay` stage --
+        // reusing that result here (rather than calling `Wal::replay()` a second time) is what keeps
+        // a hostile WAL's decode cost from being paid twice. Every other active session has no such
+        // shared result, so it is still replayed fresh.
+        let replay_owned;
+        let replay = if name == DEFAULT_ACTIVE_NAME {
+            match default_replay {
+                Some(replay) => replay,
+                // `WalReplay` did not evaluate at all (e.g. `default`'s WAL is missing outright) --
+                // nothing to check connectivity against for this name.
+                None => continue,
+            }
+        } else {
+            // An active session's WAL that cannot even be replayed (RFC 108 §D3.3's own example: an
+            // inadmissible schema version) is reported by `doctor`'s own per-active-session scan
+            // (`push_non_default_active_session_wal_issues`) -- not this check's job to interpret.
+            // Skip it rather than aborting connectivity checking for every *other* active session,
+            // preserving the per-active-session isolation RFC 108 established.
+            let Ok(fresh) = Wal::for_layout(layout, &name).replay() else {
+                continue;
+            };
+            replay_owned = fresh;
+            &replay_owned
         };
         for record in &replay.records {
             let patch_id = record.envelope.object_id();
@@ -1722,12 +1778,14 @@ fn verify_queued_patch_connectivity(
                         object_type: ObjectType::Blob,
                         referencing_work,
                         problem: "missing".to_string(),
+                        active_session: name.clone(),
                     }),
                     Err(err) => issues.push(ConnectivityIssue {
                         object_id: blob_id,
                         object_type: ObjectType::Blob,
                         referencing_work,
                         problem: err.to_string(),
+                        active_session: name.clone(),
                     }),
                 }
             }

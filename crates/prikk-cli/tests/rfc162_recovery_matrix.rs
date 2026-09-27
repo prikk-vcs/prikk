@@ -268,6 +268,41 @@ fn the_matrix_verify_exit_matches_each_rules_own_shape() {
                     if refused { "refused" } else { "accepted" }
                 ));
             }
+            // Addendum 1 fix 3: "accepted" (the object index tolerating any of these faults, and the
+            // pointer index tolerating its tail-shaped ones) must never mean unreported -- a report
+            // line is asserted here per cell, not only the exit code above.
+            match target {
+                // Addendum 1 fix 3: the object index's own decode does not draw the same
+                // tail-shaped/interior line rule 3 gives the WAL and pointer index (out of rule 3's
+                // scope by design -- see `foundation/index.rs`'s own `Invalid` arm, unchanged) -- a
+                // fault that fully fits a header's width but fails its magic or checksum is `Failed`
+                // (the interior-damage line) even when this matrix calls it "tail-shaped," while one
+                // that does not even fill a header is the trailing-partial line instead. Either is a
+                // report; only both absent is silent.
+                TargetFile::ObjectIndex
+                    if text.contains("trailing partial object index bytes: 0")
+                        && !text.contains(
+                            "object index has an interior record that failed to decode",
+                        ) =>
+                {
+                    failures.push(format!(
+                        "{} / {}: accepted with no report line at all\n{text}",
+                        target.name(),
+                        fault.name()
+                    ));
+                }
+                TargetFile::PointerIndex
+                    if fault.is_tail_shaped()
+                        && text.contains("trailing partial pointer index bytes: 0") =>
+                {
+                    failures.push(format!(
+                        "{} / {}: accepted with no trailing-partial report line\n{text}",
+                        target.name(),
+                        fault.name()
+                    ));
+                }
+                _ => {}
+            }
             let _ = std::fs::remove_dir_all(repo);
         }
     }
@@ -454,6 +489,28 @@ fn m1_a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_re
     assert!(
         after_text.contains("connectivity") || after_text.contains("references"),
         "M1: the failure names the connectivity problem\n{after_text}"
+    );
+    assert!(
+        !after_text.contains("is a harmless remnant")
+            && !after_text.contains("connectivity finds nothing"),
+        "M1: the interrupted-append line must not call the frame harmless while connectivity \
+         still needs it\n{after_text}"
+    );
+    assert!(
+        after_text.contains("not a harmless remnant"),
+        "M1: the interrupted-append line must name the missing object instead\n{after_text}"
+    );
+
+    // Addendum 1 fix 1: I2 applies to `doctor` too -- the documented path is repair, then `doctor`,
+    // and it must not read clean while the queued commit still references the damaged blob.
+    let (doctor_code, doctor_text) = run(&repo, &["doctor"]);
+    assert!(
+        doctor_code.is_some_and(|code| code != 0),
+        "M1: doctor must fail where verify fails on connectivity\n{doctor_text}"
+    );
+    assert!(
+        doctor_text.contains("PRIKK-DOCTOR-OBJECT-CONNECTIVITY"),
+        "M1: doctor names the connectivity problem\n{doctor_text}"
     );
 
     let _ = std::fs::remove_dir_all(repo);

@@ -93,6 +93,9 @@ pub(crate) struct RefVerification {
     /// Level 2). A ref whose own pointer/log file failed to read is still included here -- see
     /// `RefItemStatus::Failed`'s own doc -- so no ref name known to exist is silently absent.
     pub ref_item_outcomes: Vec<RefItemOutcome>,
+    /// RFC 162 rule 3, Addendum 1 fix 3: number of trailing bytes in the ref pointer index that look
+    /// like an incomplete final record.
+    pub trailing_partial_pointer_index_bytes: usize,
 }
 
 impl RefVerification {
@@ -130,7 +133,8 @@ pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> 
     // not require: RFC 111's own gate measures decode *count*, not construction count, and each of
     // these two snapshots is still exactly one decode regardless of repository size.
     let objects = ObjectReadSnapshot::open(layout)?;
-    let (pointers, pointer_failures_by_key, pointer_outcomes) = read_pointers(layout, &objects)?;
+    let (pointers, pointer_failures_by_key, pointer_outcomes, trailing_partial_pointer_index_bytes) =
+        read_pointers(layout, &objects)?;
     let (logs, log_record_count, ref_log_envelopes, log_failures_by_key, log_outcomes) =
         read_logs(layout, &objects, &pointers)?;
     // DC-95 Stage 2 Level 2 handoff §7 Q4, ruled: stays a whole-set precheck. RFC 103: with format-1
@@ -211,6 +215,7 @@ pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> 
         pointer_outcomes,
         log_outcomes,
         ref_item_outcomes,
+        trailing_partial_pointer_index_bytes,
     })
 }
 

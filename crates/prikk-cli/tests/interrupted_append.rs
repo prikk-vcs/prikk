@@ -77,7 +77,8 @@ fn an_interrupted_append_that_nothing_names_is_a_warning_and_every_later_object_
             "{shape}: verify tolerates an interrupted append\n{text}"
         );
         assert!(
-            text.contains(&format!("#{torn_at}")) && text.contains("no index entry names it"),
+            text.contains(&format!("#{torn_at}"))
+                && text.contains("connectivity finds nothing that still needs it"),
             "{shape}: the warning names the offset and says nothing references it\n{text}"
         );
         assert!(
@@ -135,8 +136,7 @@ fn the_same_torn_frame_named_by_an_index_entry_is_a_failed_item() {
     // reports an entry it cannot read; the container scan reports the frame), so the control asserts the second's half too -- the
     // frame is not among the interrupted-append warnings.
     assert!(
-        text.contains("interrupted appends (unreferenced, not damage): 0")
-            && !text.contains("warning: interrupted append"),
+        text.contains("interrupted appends: 0") && !text.contains("warning: interrupted append"),
         "{text}"
     );
     let (doctor, doctor_text) = run(&repo, &["doctor"]);

@@ -434,18 +434,52 @@ pub(crate) fn print_verify_report(
             .unwrap_or("<non-UTF-8 object temp>");
         println!("warning: non-authoritative object publication temp: {name}");
     }
-    // RFC 160 F3 Addendum 1: an unparseable frame that no index entry names is an interrupted append, a warning and not damage.
+    // RFC 162 rule 2: an object a queued patch's own operations reference but cannot be read.
+    println!("connectivity issues: {}", report.connectivity_issues.len());
+    for issue in &report.connectivity_issues {
+        println!(
+            "connectivity: {} {} cannot be read ({}), referenced by {}",
+            issue.object_type, issue.object_id, issue.problem, issue.referencing_work
+        );
+    }
+    // RFC 160 F3 Addendum 1, superseded by RFC 162 rule 2 / Addendum 1 fix 2: an unparseable frame is
+    // a warning, not a failure -- but while connectivity above reports a missing or unreadable object
+    // of this same container's type, the frame is not called harmless: it may be holding exactly that
+    // object.
     println!(
-        "interrupted appends (unreferenced, not damage): {}",
+        "interrupted appends: {}",
         report.object_interrupted_appends.len()
     );
     for append in &report.object_interrupted_appends {
-        println!(
-            "warning: interrupted append in {:?} at {}: {}; no index entry names it, so nothing references it",
-            append.object_type,
-            append.path.display(),
-            append.message
-        );
+        let possibly_missing: Vec<_> = report
+            .connectivity_issues
+            .iter()
+            .filter(|issue| issue.object_type == append.object_type)
+            .collect();
+        if possibly_missing.is_empty() {
+            println!(
+                "warning: interrupted append in {:?} at {}: {}; connectivity finds nothing that \
+                 still needs it, so it is a harmless remnant, not damage",
+                append.object_type,
+                append.path.display(),
+                append.message
+            );
+        } else {
+            let missing_ids: Vec<String> = possibly_missing
+                .iter()
+                .map(|issue| issue.object_id.to_string())
+                .collect();
+            println!(
+                "warning: interrupted append in {:?} at {}: {}; connectivity reports {} missing \
+                 {:?} object(s) ({}) that this frame may hold -- not a harmless remnant until repaired",
+                append.object_type,
+                append.path.display(),
+                append.message,
+                possibly_missing.len(),
+                append.object_type,
+                missing_ids.join(", ")
+            );
+        }
     }
     println!(
         "trailing partial WAL bytes: {}",
@@ -453,6 +487,29 @@ pub(crate) fn print_verify_report(
     );
     if report.has_trailing_partial_wal() {
         println!("warning: active WAL contains an incomplete trailing record");
+    }
+    println!(
+        "trailing partial object index bytes: {}",
+        format_count(report.trailing_partial_object_index_bytes)
+    );
+    if report
+        .trailing_partial_object_index_bytes
+        .is_some_and(|n| n != 0)
+    {
+        println!("warning: object index contains an incomplete trailing record");
+    }
+    if report.object_index_interior_damage == Some(true) {
+        println!("warning: object index has an interior record that failed to decode");
+    }
+    println!(
+        "trailing partial pointer index bytes: {}",
+        format_count(report.trailing_partial_pointer_index_bytes)
+    );
+    if report
+        .trailing_partial_pointer_index_bytes
+        .is_some_and(|n| n != 0)
+    {
+        println!("warning: ref pointer index contains an incomplete trailing record");
     }
     match &report.active_wal_metadata_status {
         Some(status) => print_active_wal_metadata_status(status),

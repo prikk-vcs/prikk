@@ -93,6 +93,13 @@ pub(super) struct ObjectSummary {
     pub(super) block_seals: Vec<BlockSealVerification>,
     /// Unparseable frames nothing names (see [`InterruptedAppend`]).
     pub(super) interrupted_appends: Vec<InterruptedAppend>,
+    /// RFC 162 Addendum 1 fix 3: the object index's own trailing-partial byte count, set once from
+    /// the same `index_replay` rule 1 already scans -- never merged by [`Self::add`], since it is a
+    /// whole-index fact, not a per-container-type one.
+    pub(super) trailing_partial_index_bytes: usize,
+    /// RFC 162 Addendum 1 fix 3: whether the object index has an interior record that failed to
+    /// decode. Same non-merge rule as `trailing_partial_index_bytes`.
+    pub(super) index_interior_damage: bool,
 }
 
 impl ObjectSummary {
@@ -105,6 +112,8 @@ impl ObjectSummary {
             merge_baseline_divergences: Vec::new(),
             block_seals: Vec::new(),
             interrupted_appends: Vec::new(),
+            trailing_partial_index_bytes: 0,
+            index_interior_damage: false,
         }
     }
 
@@ -145,6 +154,11 @@ pub(super) fn verify_objects(
     // reason: `verify` is documented read-only end to end (RFC 111 §6.1), so it must not persist a
     // repair the way `doctor --repair-index` does.
     let index_replay = replay_index(layout)?;
+    // Addendum 1 fix 3: "accepted" (rule 1's own scan-fallback below) must not mean "unreported" --
+    // captured once here, from the same replay rule 1 already pays for, before it is either kept or
+    // discarded in favor of a fresh container scan.
+    summary.trailing_partial_index_bytes = index_replay.trailing_partial_bytes;
+    summary.index_interior_damage = index_replay.has_item_failure();
     let index_entries: Vec<crate::foundation::index::IndexEntry> =
         if index_replay.has_item_failure() {
             crate::foundation::index::rebuild_index_from_containers(layout)?

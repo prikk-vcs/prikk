@@ -18,15 +18,24 @@ use crate::{
 
 use crate::test_gates::test_support::{
     maintainer_signature as legacy_maintainer_signature, rollback_author_signature,
-    sample_object_id, signed_patch_envelope, unique_temp_dir,
+    sample_object_id, signed_patch_blob_envelope, signed_patch_envelope, signed_text_blob_envelope,
+    unique_temp_dir,
 };
 use crate::wal::{WalRecord, encode_record_for_test};
 
-/// A `Normal`-purpose Patch envelope distinguished by `label` (via `sample_object_id`), for tests
-/// that need two or more genuinely different patches to tell apart by identity, not just count --
-/// `signed_patch_envelope()` always produces the same fixed content and therefore the same object
-/// id. Mirrors `verify/tests/wal_cluster.rs::normal_patch_envelope`'s own shape (kept file-local
-/// rather than shared, matching this test tree's established per-file-helper convention).
+/// The `Blob` a [`distinct_patch_envelope`] with this same `label` refers to, signed -- real,
+/// writable content (unlike [`sample_object_id`], documented as "a stable id nothing stores"), so a
+/// caller that writes it keeps RFC 162 rule 2's connectivity check from finding this fixture's own
+/// patch damaged.
+fn distinct_patch_blob_envelope(label: &str) -> ObjectEnvelope {
+    signed_text_blob_envelope(format!("distinct fixture: {label}\n").as_bytes())
+}
+
+/// A `Normal`-purpose Patch envelope distinguished by `label` (via its own referenced blob's
+/// content), for tests that need two or more genuinely different patches to tell apart by identity,
+/// not just count -- `signed_patch_envelope()` always produces the same fixed content and therefore
+/// the same object id. Mirrors `verify/tests/wal_cluster.rs::normal_patch_envelope`'s own shape (kept
+/// file-local rather than shared, matching this test tree's established per-file-helper convention).
 fn distinct_patch_envelope(label: &str) -> prikk_error::Result<ObjectEnvelope> {
     let payload = PatchPayload {
         operations: vec![Operation {
@@ -36,7 +45,7 @@ fn distinct_patch_envelope(label: &str) -> prikk_error::Result<ObjectEnvelope> {
             kind: OperationKind::CreateFile(prikk_object::CreateFile {
                 path: "a.txt".to_string(),
                 node_id: NodeId::from_bytes([0x61; 32]),
-                blob_id: sample_object_id(label),
+                blob_id: distinct_patch_blob_envelope(label).object_id(),
                 mode: 0o100_644,
             }),
         }],
@@ -387,6 +396,11 @@ fn doctor_repair_truncates_only_trailing_partial_wal() {
     if let Ok(layout) = layout {
         let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
         assert!(write_active_ref_metadata(&layout, "heads/main").is_ok());
+        // RFC 162 rule 2 (Addendum 1 fix 1): the queued patch's own blob must actually be readable,
+        // or the connectivity stage finds it missing and this test's real subject (the trailing WAL
+        // tail) is masked by an unrelated connectivity error.
+        let mut store = FileObjectStore::new(layout.clone());
+        assert!(store.write_object(&signed_patch_blob_envelope()).is_ok());
         assert!(wal.append_patch(&signed_patch_envelope()).is_ok());
         let mut file = std::fs::OpenOptions::new()
             .append(true)
@@ -440,6 +454,10 @@ fn doctor_reports_non_empty_active_wal_missing_metadata_as_error() {
     assert!(layout.is_ok());
     if let Ok(layout) = layout {
         let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+        // RFC 162 rule 2 (Addendum 1 fix 1): a readable blob keeps the count below at exactly this
+        // test's own subject (the missing metadata), not also a connectivity finding.
+        let mut store = FileObjectStore::new(layout.clone());
+        assert!(store.write_object(&signed_patch_blob_envelope()).is_ok());
         assert!(wal.append_patch(&signed_patch_envelope()).is_ok());
 
         let report = doctor_repository(&layout);
@@ -833,6 +851,9 @@ fn repair_repository_still_repairs_default_when_second_wal_is_unreadable() -> pr
     let layout = RepositoryLayout::init(root.clone())?;
     let default_wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     write_active_ref_metadata(&layout, "heads/main")?;
+    // RFC 162 rule 2 (Addendum 1 fix 1): `default`'s own blob must be readable, or its own
+    // connectivity finding is what gets it skipped, not `second`'s (unrelated) damage.
+    FileObjectStore::new(layout.clone()).write_object(&signed_patch_blob_envelope())?;
     default_wal.append_patch(&signed_patch_envelope())?;
     {
         let mut file = std::fs::OpenOptions::new()
@@ -885,6 +906,9 @@ fn repair_repository_still_repairs_default_when_second_ref_metadata_is_missing()
     let layout = RepositoryLayout::init(root.clone())?;
     let default_wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     write_active_ref_metadata(&layout, "heads/main")?;
+    // RFC 162 rule 2 (Addendum 1 fix 1): `default`'s own blob must be readable, or its own
+    // connectivity finding is what gets it skipped, not `second`'s (unrelated) damage.
+    FileObjectStore::new(layout.clone()).write_object(&signed_patch_blob_envelope())?;
     default_wal.append_patch(&signed_patch_envelope())?;
     {
         let mut file = std::fs::OpenOptions::new()
@@ -988,6 +1012,13 @@ fn repair_repository_recovers_each_active_sessions_own_records_independently()
     let root = unique_temp_dir("repair-two-actives-independent-recovery");
     let layout = RepositoryLayout::init(root.clone())?;
 
+    // RFC 162 rule 2 (Addendum 1 fix 1): each fixture's own blob must be readable, or connectivity
+    // findings mask this control's real subject -- which active session's own record a repair
+    // recovers.
+    let mut store = FileObjectStore::new(layout.clone());
+    store.write_object(&distinct_patch_blob_envelope("default-record"))?;
+    store.write_object(&distinct_patch_blob_envelope("second-record"))?;
+
     let default_wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     write_active_ref_metadata(&layout, "heads/main")?;
     let default_envelope = distinct_patch_envelope("default-record")?;
@@ -1069,6 +1100,9 @@ fn repair_repository_does_not_fail_the_whole_run_when_one_active_sessions_lock_i
     let root = unique_temp_dir("repair-second-lock-busy");
     let layout = RepositoryLayout::init(root.clone())?;
     write_active_ref_metadata(&layout, "heads/main")?;
+    // RFC 162 rule 2 (Addendum 1 fix 1): a readable blob keeps this control about the busy lock, not
+    // also about a connectivity finding on `default`.
+    FileObjectStore::new(layout.clone()).write_object(&signed_patch_blob_envelope())?;
     Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME).append_patch(&signed_patch_envelope())?;
     {
         let mut file = std::fs::OpenOptions::new()

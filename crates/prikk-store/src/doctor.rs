@@ -758,17 +758,116 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     "preserve the format-1 bytes for inspection; do not normalize or reuse the envelope for mutation",
                 ));
             }
+            // Addendum 1 fix 1: I2 applies to `doctor` too -- a connectivity failure `verify` reports
+            // must also keep `doctor` from reading clean, the same way every other item-level failure
+            // above already does.
+            for issue in &verification.connectivity_issues {
+                issues.push(
+                    DoctorIssue::error(
+                        "PRIKK-DOCTOR-OBJECT-CONNECTIVITY",
+                        format!(
+                            "{} {} cannot be read ({}), referenced by {}",
+                            issue.object_type,
+                            issue.object_id,
+                            issue.problem,
+                            issue.referencing_work
+                        ),
+                        "preserve the repository and inspect the referenced object before \
+                         attempting repair; doctor does not repair a missing or unreadable object",
+                    )
+                    .for_active_session(issue.active_session.clone()),
+                );
+            }
+            // Addendum 1 fix 2: a frame that does not parse is not automatically harmless -- while
+            // connectivity above reports a missing or unreadable object of this same container's
+            // type, the frame may be holding exactly that object, so it is named rather than the
+            // frame being called an unreferenced remnant.
             for append in &verification.object_interrupted_appends {
+                let possibly_missing: Vec<_> = verification
+                    .connectivity_issues
+                    .iter()
+                    .filter(|issue| issue.object_type == append.object_type)
+                    .collect();
+                if possibly_missing.is_empty() {
+                    issues.push(DoctorIssue::warning(
+                        "PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND",
+                        format!(
+                            "object container {:?} has a frame at {} that does not parse ({})",
+                            append.object_type,
+                            append.path.display(),
+                            append.message
+                        ),
+                        "no repair is required: the container record is made durable before its \
+                         index entry, so a frame nothing still needs was never committed (an \
+                         interrupted append, and whatever was written after it)",
+                    ));
+                } else {
+                    let missing_ids = possibly_missing
+                        .iter()
+                        .map(|issue| issue.object_id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    issues.push(DoctorIssue::warning(
+                        "PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND",
+                        format!(
+                            "object container {:?} has a frame at {} that does not parse ({}); \
+                             connectivity reports {} missing {:?} object(s) ({missing_ids}) that \
+                             this frame may hold -- do not treat it as a harmless remnant",
+                            append.object_type,
+                            append.path.display(),
+                            append.message,
+                            possibly_missing.len(),
+                            append.object_type
+                        ),
+                        "preserve the repository; the connectivity finding above names what needs \
+                         repair, not this frame directly",
+                    ));
+                }
+            }
+            // Addendum 1 fix 3: the object index is a pure cache (rule 1), so its own damage is never
+            // a failure -- but it must not be silent either.
+            if verification
+                .trailing_partial_object_index_bytes
+                .is_some_and(|n| n != 0)
+            {
                 issues.push(DoctorIssue::warning(
-                    "PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND",
+                    "PRIKK-DOCTOR-OBJECT-INDEX-TRAILING-PARTIAL",
                     format!(
-                        "object container {:?} has a frame at {} that does not parse ({}), and no index entry names it",
-                        append.object_type,
-                        append.path.display(),
-                        append.message
+                        "object index has {} trailing byte(s) that look like an incomplete final \
+                         record",
+                        verification
+                            .trailing_partial_object_index_bytes
+                            .unwrap_or_default()
                     ),
-                    "no repair is required: the index is written after the container record is durable, so a frame nothing names was \
-                     never committed (an interrupted append, and whatever was written after it); nothing references it",
+                    "no repair is required: readers already rescan the containers in memory when \
+                     the index is damaged (rule 1); run `prikk doctor --repair-index` to rebuild it \
+                     on disk if desired",
+                ));
+            }
+            if verification.object_index_interior_damage == Some(true) {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-OBJECT-INDEX-INTERIOR-DAMAGE",
+                    "object index has an interior record that failed to decode",
+                    "no repair is required: readers already rescan the containers in memory when \
+                     the index is damaged (rule 1); run `prikk doctor --repair-index` to rebuild it \
+                     on disk if desired",
+                ));
+            }
+            if verification
+                .trailing_partial_pointer_index_bytes
+                .is_some_and(|n| n != 0)
+            {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-POINTER-INDEX-TRAILING-PARTIAL",
+                    format!(
+                        "ref pointer index has {} trailing byte(s) that look like an incomplete \
+                         final record",
+                        verification
+                            .trailing_partial_pointer_index_bytes
+                            .unwrap_or_default()
+                    ),
+                    "run `prikk doctor --repair-pointer-index-tail` to truncate only the \
+                     incomplete final pointer-index bytes",
                 ));
             }
             for path in &verification.object_temp_paths {

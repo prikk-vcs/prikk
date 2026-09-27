@@ -107,7 +107,7 @@ pub(crate) fn rollback_patch_blob_envelope() -> ObjectEnvelope {
     signed_text_blob_envelope(b"rollback fixture\n")
 }
 
-fn signed_text_blob_envelope(content: &[u8]) -> ObjectEnvelope {
+pub(crate) fn signed_text_blob_envelope(content: &[u8]) -> ObjectEnvelope {
     let payload = BlobPayload::new(BlobKind::Text, content.to_vec());
     let bytes = payload.to_canonical_bytes().unwrap_or_default();
     let mut envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, bytes);

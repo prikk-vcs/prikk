@@ -89,7 +89,11 @@ fn removing_a_declaration_names_its_file() {
         // RFC 160 F3 Addendum 1: verify reports the object containers' interrupted appends (the new field and its extraction), 1,691 -> 1,699.
         // RFC 160 F3 Addendum 2: `RepositoryVerification` is `#[non_exhaustive]`, 1,699 -> 1,700.
         // RFC 162 rule 2: the ObjectConnectivity stage, ConnectivityIssue, and verify_queued_patch_connectivity, 1,700 -> 1,786.
-        detail.contains("1786"),
+        // RFC 162 Addendum 1: the object/pointer-index trailing-partial and interior-damage reporting fields, and
+        // reusing `default`'s own WAL replay in `verify_queued_patch_connectivity` instead of redoing it, 1,786 -> 1,837.
+        // RFC 162 Addendum 1 fix 1 follow-up: `ConnectivityIssue.active_session`, so `doctor` scopes the finding to
+        // one active session instead of refusing the whole repair run, 1,837 -> 1,844.
+        detail.contains("1844"),
         "the line count is in the message: {detail}"
     );
     assert!(
