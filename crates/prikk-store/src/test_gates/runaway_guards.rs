@@ -7,12 +7,20 @@
 //! at least one frame header, so this can never be violated by a sound reader), and it does **bounded work**: bytes hashed
 //! (`frame_resync::tallied_sha256`) stay within a fixed multiple of the input size.
 //!
-//! **The external review's M5** found the one case where that last bound does not hold today: a torn tail packed with frame headers
-//! each claiming a body reaching to the end of the file makes `sound_frame_after_partial` fully hash nearly the whole remaining file
-//! for nearly every candidate, which is quadratic in the file's size. [`hostile_wal_tail_quadratic_is_measured_and_bounded`] reproduces
-//! it, measures it, and documents the ratio; it is **not** included in the per-format bound corpus below (that corpus stays at 64 KiB,
-//! where the ratio is still small, and asserts the ordinary 8x bound). No mechanical fix landed this round -- see the round's report
-//! for why, and the ruling asked.
+//! **The external review's M5** found the one case where that last bound does not hold today: a WAL buffer packed with real frame
+//! headers, each claiming a body reaching **exactly** to the end of the file (so it *fits* the length check), decodes each one as a
+//! **complete, checksum-failing record** -- `Invalid`, not `TrailingPartial` -- and RFC 102 Stage 2's own isolate-and-continue rule
+//! (unchanged by F3: `resync_to_next_magic` from the `Invalid` arm, not `sound_frame_after_partial`, which only ever runs from a
+//! `TrailingPartial` arm) fully parses and hashes the next candidate the same way. Since nearly every candidate's claim reaches
+//! nearly the whole remaining file, this is quadratic in the file's size -- a defect in the container/WAL/etc. decode loop shared
+//! since RFC 102 Stage 2, not something F3's `sound_frame_after_partial` introduced (confirmed by construction: this buffer's only
+//! `TrailingPartial` classification is the single genuine short tail at the very end).
+//! [`hostile_wal_tail_quadratic_is_measured_and_bounded`] reproduces it, measures it, and documents the ratio; it is **not** included
+//! in the per-format bound corpus below (that corpus stays at 64 KiB, where the ratio is still small, and asserts the ordinary 8x
+//! bound). No mechanical fix landed this round -- see the round's report for why, and the ruling asked.
+//! [`hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size`] is the **standing** guard (RFC 160 §9 Addendum 1): a small,
+//! fast case asserting hashed bytes stay at or below 1.5x what it measured when the ceiling was written, so a regression that makes
+//! the (still unfixed) quadratic worse is caught even though the quadratic itself is not.
 //!
 //! The whole set (T1) runs under the R1 cgroup scope, like every other run in this round.
 
@@ -323,26 +331,57 @@ fn every_format_has_a_runaway_guard_case() {
 /// 256 KiB -> 2 MiB on their machine); this machine's numbers are printed, not asserted, because wall time is not portable across
 /// machines (only the doubling shape is the point). **Not fixed this round** -- see the report for why a mechanical fix was not
 /// attempted with confidence at this size, and the ruling asked. Run deliberately (`--ignored`); it is a measurement, not a gate.
+/// A buffer packed with real WAL frame headers, one every `WAL_HEADER_LEN` bytes, each claiming a body reaching **exactly** to the
+/// end of the file (so it "fits" the length check and is fully parsed and hashed, then rejected on its checksum). Shared between
+/// the ignored full measurement below and [`hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size`]'s standing guard.
+fn hostile_tail(total_len: usize) -> Vec<u8> {
+    const WAL_HEADER_LEN: usize = 8 + 2 + 8 + 8 + 32;
+    let magic = b"PWALR001";
+    let mut bytes = vec![0_u8; total_len];
+    let mut at = 0;
+    while at + WAL_HEADER_LEN <= total_len {
+        bytes[at..at + 8].copy_from_slice(magic);
+        bytes[at + 8..at + 10].copy_from_slice(&1_u16.to_be_bytes());
+        bytes[at + 10..at + 18].copy_from_slice(&0_u64.to_be_bytes()); // seq
+        let claimed = (total_len - at - WAL_HEADER_LEN) as u64; // claims a body reaching exactly to the end of the file: it "fits"
+        bytes[at + 18..at + 26].copy_from_slice(&claimed.to_be_bytes());
+        at += WAL_HEADER_LEN;
+    }
+    bytes
+}
+
+/// **RFC 160 §9 Addendum 1, item 1 -- M5 gets a standing guard, not only an `#[ignore]`d measurement.** At a size small enough to
+/// run in every ordinary `cargo test` (a fraction of a second even in a debug build), the hostile WAL tail's bytes-hashed stays at
+/// or below **1.5x what it measured when this ceiling was written** -- the same ceiling shape P2's open rows use (`store_size_
+/// independence.rs`), so a regression that makes the quadratic worse is caught even though the quadratic itself is not fixed until
+/// 0.49.0 (RFC 160 §9's M5 ruling: the fix, and the real bound this ceiling is replaced by, is a design round, not this one).
+/// **Perturb:** hash each candidate twice (call `tallied_sha256` an extra time on the same bytes before comparing): both sizes'
+/// hashed counts double, over the ceiling, and this goes red.
+#[test]
+fn hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size() {
+    use crate::wal::decode_records;
+
+    for (size, ceiling) in [(32 * 1024, 13_882_014_u64), (64 * 1024, 55_533_252_u64)] {
+        let bytes = hostile_tail(size);
+        crate::foundation::frame_resync::hash_tally::reset();
+        let replay = decode_records(&bytes).expect("no source of an outer Err here");
+        let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+        assert!(
+            replay.has_item_failure(),
+            "{size}: the packed tail's rejected candidates are reported"
+        );
+        assert!(
+            hashed <= ceiling,
+            "{size}: hashed {hashed} bytes, over its {ceiling}-byte ceiling (1.5x the 9,254,676 / 37,022,168 bytes this measured, \
+             debug build, when the ceiling was written)"
+        );
+    }
+}
+
 #[test]
 #[ignore = "RFC 160 R3/M5 measurement: the hostile-WAL-tail quadratic; run deliberately, prints its own numbers"]
 fn hostile_wal_tail_quadratic_is_measured_and_bounded() {
     use crate::wal::decode_records;
-
-    fn hostile_tail(total_len: usize) -> Vec<u8> {
-        const WAL_HEADER_LEN: usize = 8 + 2 + 8 + 8 + 32;
-        let magic = b"PWALR001";
-        let mut bytes = vec![0_u8; total_len];
-        let mut at = 0;
-        while at + WAL_HEADER_LEN <= total_len {
-            bytes[at..at + 8].copy_from_slice(magic);
-            bytes[at + 8..at + 10].copy_from_slice(&1_u16.to_be_bytes());
-            bytes[at + 10..at + 18].copy_from_slice(&0_u64.to_be_bytes()); // seq
-            let claimed = (total_len - at - WAL_HEADER_LEN) as u64; // claims a body reaching exactly to the end of the file: it "fits"
-            bytes[at + 18..at + 26].copy_from_slice(&claimed.to_be_bytes());
-            at += WAL_HEADER_LEN;
-        }
-        bytes
-    }
 
     let mut previous: Option<f64> = None;
     for size in [256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024] {

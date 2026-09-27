@@ -214,3 +214,49 @@ macro_rules! hostile_case {
     };
 }
 pub(crate) use hostile_case;
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::isolated_with_timeout;
+
+    /// Spins on purpose, doing no allocation (so the address-space cap never intervenes -- this test is specifically about the
+    /// **timeout**, not the memory limit).
+    fn spins_forever() {
+        let mut counter: u64 = 0;
+        loop {
+            counter = std::hint::black_box(counter.wrapping_add(1));
+        }
+    }
+
+    /// **RFC 160 §9 Addendum 1, item 2 -- `isolated_with_timeout` is exercised by a committed test.** The child this test spawns
+    /// (a re-invocation of this very test, recognized by `PRIKK_HOSTILE_CHILD`, exactly as every `hostile_case!` test does) never
+    /// exits on its own; the parent must report that as a timeout **within its own limit** (a panic, not a silent pass) and must
+    /// itself return -- it must not block waiting for a process that will never finish.
+    /// **Perturb:** remove the `child.kill()` call from `isolated_with_timeout`: the killed-on-timeout half is gone, but the parent
+    /// still returns at the same wall-clock bound (`began.elapsed() > timeout` no longer kills, but the loop's own `try_wait` never
+    /// succeeds either, so the *test* would block past its own outer bound -- run under R1's cap and timeout, this is exactly the
+    /// hang the addendum asks be shown, and the round's report states what happened rather than leaving an orphaned process behind).
+    #[test]
+    fn isolated_with_timeout_reports_a_hung_child_as_a_timeout_and_the_parent_survives() {
+        let began = Instant::now();
+        let outcome = std::panic::catch_unwind(|| {
+            isolated_with_timeout(
+                module_path!(),
+                "isolated_with_timeout_reports_a_hung_child_as_a_timeout_and_the_parent_survives",
+                Duration::from_millis(300),
+                spins_forever,
+            );
+        });
+        let elapsed = began.elapsed();
+        assert!(
+            outcome.is_err(),
+            "a child that never exits is reported as a failure (a timeout), not silently accepted"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the parent returned promptly instead of blocking on a child that will never finish: {elapsed:?}"
+        );
+    }
+}
