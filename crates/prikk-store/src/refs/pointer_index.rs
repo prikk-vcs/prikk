@@ -28,8 +28,8 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    partial_before_sound_frame_message, require_progress, sound_frame_after_partial,
+    tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -280,20 +280,26 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                 offset = require_progress("pointer index", offset, next)?;
             }
             FrameAttempt::Invalid { message } => {
+                // RFC 162 rule 3: a log ends at its last sound record. An invalid frame is damage only if a sound
+                // frame follows it somewhere in the rest of the buffer -- otherwise this frame and everything after
+                // it is tail, whatever its shape (see `wal.rs::decode_records`'s identical fix for the full
+                // reasoning and the M3 mechanism this replaces).
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, POINTER_INDEX_MAGIC.as_slice(), |c| {
+                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(PointerIndexReplay {
+                        entries,
+                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        record_outcomes,
+                    });
+                };
                 record_outcomes.push(PointerIndexRecordOutcome {
                     offset,
                     status: PointerIndexRecordStatus::Failed { message },
                 });
-                match resync_to_next_magic(bytes, offset + 1, POINTER_INDEX_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
-                    None => {
-                        return Ok(PointerIndexReplay {
-                            entries,
-                            trailing_partial_bytes: 0,
-                            record_outcomes,
-                        });
-                    }
-                }
+                offset = require_progress("pointer index", offset, next)?;
             }
         }
     }

@@ -366,9 +366,14 @@ fn hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size() {
         crate::foundation::frame_resync::hash_tally::reset();
         let replay = decode_records(&bytes).expect("no source of an outer Err here");
         let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
-        assert!(
-            replay.has_item_failure(),
-            "{size}: the packed tail's rejected candidates are reported"
+        // RFC 162 rule 3: no candidate in this buffer is ever genuinely sound, so nothing sound follows any of them --
+        // the whole thing is now one `trailing_partial_bytes` tail (rule 3's own scan reaches the same conclusion a
+        // reader would), not a pile of stuck `Failed` items as it read under F3's shape-based rule. The bytes hashed
+        // finding every candidate's checksum invalid is unaffected either way -- same candidates, same hashing.
+        assert_eq!(
+            replay.trailing_partial_bytes, size,
+            "{size}: every candidate is checksum-invalid and none is followed by a sound record, so the whole buffer \
+             is tail under RFC 162 rule 3"
         );
         assert!(
             hashed <= ceiling,
@@ -391,9 +396,11 @@ fn hostile_wal_tail_quadratic_is_measured_and_bounded() {
         let replay = decode_records(&bytes).expect("no source of an outer Err here");
         let elapsed = began.elapsed().as_secs_f64();
         let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
-        assert!(
-            replay.has_item_failure(),
-            "the packed tail is reported as damage"
+        // RFC 162 rule 3: no candidate here is ever sound, so the whole buffer is tail, not damage --
+        // see the standing guard above for why. The quadratic hashing cost is unaffected.
+        assert_eq!(
+            replay.trailing_partial_bytes, size,
+            "the packed tail is reported, now as a tail under RFC 162 rule 3"
         );
         let ratio = previous.map(|last| elapsed / last);
         println!(

@@ -181,11 +181,22 @@ fn damaged_entry_fails_closed_rather_than_silently_resolving_a_stale_entry() -> 
     let path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
     let mut existing = std::fs::read(&path)?;
     existing.extend_from_slice(&damaged);
+    // RFC 162 rule 3: a corrupted entry with nothing sound after it is now a repairable tail, not
+    // damage -- so a third, genuinely sound entry follows the damaged one, keeping this fixture
+    // interior damage (a sound entry follows it), which is what this test is actually about.
+    let other_key = ref_name_key_bytes("heads/other");
+    let other_entry = PointerIndexEntry {
+        ref_name_key: other_key,
+        ref_name: "heads/other".to_string(),
+        ref_state_id: sample_object_id("other-state"),
+    };
+    existing.extend_from_slice(&encode_pointer_index_record(&other_entry)?);
     std::fs::write(&path, existing)?;
 
     assert!(replay_pointer_index(&layout)?.has_item_failure());
     assert!(lookup_ref_pointer(&layout, main_key).is_err());
     assert!(lookup_ref_pointer(&layout, topic_key).is_err());
+    assert!(lookup_ref_pointer(&layout, other_key).is_err());
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

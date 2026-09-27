@@ -12,8 +12,8 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    partial_before_sound_frame_message, require_progress, sound_frame_after_partial,
+    tallied_sha256,
 };
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
@@ -580,20 +580,29 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
                 offset = require_progress("wal", offset, next)?;
             }
             FrameAttempt::Invalid { message } => {
+                // RFC 162 rule 3: a log ends at its last sound record. An invalid frame (bad magic, checksum mismatch, a malformed
+                // envelope) is damage **only if a sound frame follows it somewhere in the rest of the buffer** -- otherwise this
+                // frame and everything after it is tail, whatever its shape (zeros, random bytes, a stray magic-like sequence),
+                // exactly as `TrailingPartial`'s own arm above already treats a header that runs past the end of the buffer. Before
+                // this fix, an invalid frame with nothing sound after it was pushed as a permanent `Failed` outcome and
+                // `trailing_partial_bytes` was left at `0` -- the exact mechanism behind M3's "100 zero bytes" / "4,096 zero bytes" /
+                // "100 random bytes" rows staying refused forever, since nothing ever reported them as a repairable tail.
+                let sound_after =
+                    sound_frame_after_partial(bytes, offset, WAL_RECORD_MAGIC.as_slice(), |c| {
+                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
+                    });
+                let Some(next) = sound_after else {
+                    return Ok(WalReplay {
+                        records,
+                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        record_outcomes,
+                    });
+                };
                 record_outcomes.push(WalRecordOutcome {
                     offset,
                     status: WalRecordStatus::Failed { message },
                 });
-                match resync_to_next_magic(bytes, offset + 1, WAL_RECORD_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
-                    None => {
-                        return Ok(WalReplay {
-                            records,
-                            trailing_partial_bytes: 0,
-                            record_outcomes,
-                        });
-                    }
-                }
+                offset = require_progress("wal", offset, next)?;
             }
         }
     }

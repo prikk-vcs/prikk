@@ -366,9 +366,14 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
     publish_update(&store, &mut objects, "heads/main", None, 1)?;
 
     let live_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    // RFC 162 rule 3: a corrupted entry with nothing sound after it is now a repairable tail, not
+    // damage -- so a second, genuinely sound entry follows the corrupted first one, keeping this
+    // fixture interior damage (a sound entry follows it), which is what this test is about.
+    let first_entry_len = std::fs::read(&live_path)?.len();
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?;
     let sound_bytes = std::fs::read(&live_path)?;
     let mut damaged = sound_bytes.clone();
-    let last = damaged.len() - 1;
+    let last = first_entry_len - 1;
     damaged[last] ^= 0x01;
     std::fs::write(&live_path, &damaged)?;
 
@@ -384,7 +389,7 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
 
     std::fs::write(&live_path, &sound_bytes)?;
     let report = compact_ref_pointer_index(&layout)?;
-    assert_eq!(report.entries_after, 1);
+    assert_eq!(report.entries_after, 2);
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

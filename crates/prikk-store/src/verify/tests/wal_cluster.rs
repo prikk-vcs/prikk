@@ -118,16 +118,23 @@ fn verify_repository_detects_wal_checksum_mismatch() -> Result<()> {
     envelope.add_signature(rollback_author_signature())?;
 
     let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
-    wal.append_patch(&envelope)?;
 
-    let mut bytes = std::fs::read(wal.path())?;
+    // RFC 162 rule 3: a corrupted record with nothing sound after it is now a repairable tail, not
+    // damage (the tail is defined by position, not shape) -- so a second, genuinely sound record
+    // must follow the corrupted one for this fixture to still exercise interior damage, which is
+    // what this test is actually about.
+    let mut bytes = encode_record_for_test(&WalRecord {
+        seq: 1,
+        envelope: envelope.clone(),
+    })?;
     let last_byte = bytes
         .last_mut()
         .ok_or_else(|| prikk_error::PrikkError::Io {
             kind: None,
-            context: "WAL file unexpectedly empty".to_string(),
+            context: "WAL record unexpectedly empty".to_string(),
         })?;
     *last_byte ^= 0x01;
+    bytes.extend(encode_record_for_test(&WalRecord { seq: 2, envelope })?);
     std::fs::write(wal.path(), &bytes)?;
 
     let report = verify_repository(&layout)?;
@@ -493,7 +500,11 @@ fn verify_repository_reports_two_independently_damaged_wal_records_with_offsets(
     let layout = RepositoryLayout::init(root.clone())?;
     let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
 
-    let offsets = append_distinct_records(&wal, &["alpha", "beta", "gamma"])?;
+    // RFC 162 rule 3: a corrupted record with nothing sound after it is now a repairable tail, not
+    // damage -- so a fourth, genuinely sound record follows index 2's corruption, keeping both
+    // corrupted records interior damage (a sound record follows each), which is what this test is
+    // about.
+    let offsets = append_distinct_records(&wal, &["alpha", "beta", "gamma", "delta"])?;
     let mut bytes = std::fs::read(wal.path())?;
     let bounds = record_bounds(&offsets, bytes.len());
     corrupt_records_last_byte(&mut bytes, &bounds, &[0, 2]);

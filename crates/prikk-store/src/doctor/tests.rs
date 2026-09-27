@@ -797,11 +797,18 @@ fn repair_repository_still_refuses_when_the_wal_replay_stage_fails() -> prikk_er
     let layout = RepositoryLayout::init(root.clone())?;
     let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     assert!(write_active_ref_metadata(&layout, "heads/main").is_ok());
-    assert!(wal.append_patch(&signed_patch_envelope()).is_ok());
-    let mut bytes = std::fs::read(wal.path())?;
+    // RFC 162 rule 3: a corrupted record with nothing sound after it is now a repairable tail, not
+    // damage -- so a second, genuinely sound record follows the corrupted one, keeping this fixture
+    // interior damage (a sound record follows it), which is what this test is actually about.
+    let envelope = signed_patch_envelope();
+    let mut bytes = encode_record_for_test(&WalRecord {
+        seq: 1,
+        envelope: envelope.clone(),
+    })?;
     if let Some(last_byte) = bytes.last_mut() {
         *last_byte ^= 0x01;
     }
+    bytes.extend(encode_record_for_test(&WalRecord { seq: 2, envelope })?);
     std::fs::write(wal.path(), &bytes)?;
 
     let before = doctor_repository(&layout);

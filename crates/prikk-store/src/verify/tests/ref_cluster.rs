@@ -431,6 +431,10 @@ fn verify_repository_fails_closed_on_a_damaged_pointer_index_entry() -> Result<(
     })?;
     *last ^= 0x01;
     std::fs::write(&path, bytes)?;
+    // RFC 162 rule 3: a corrupted entry with nothing sound after it is now a repairable tail, not
+    // damage -- so a second, genuinely sound entry follows the corrupted one, keeping this fixture
+    // interior damage (a sound entry follows it), which is what this test is about.
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/topic", ref_state_id)?;
 
     let report = verify_repository(&layout)?;
     assert_stage_failed(
