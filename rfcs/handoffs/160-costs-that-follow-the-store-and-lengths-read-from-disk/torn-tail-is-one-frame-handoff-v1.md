@@ -188,3 +188,7 @@ re-run by the architect on `b2e8e4cf` in a capped cgroup scope, 2414 / 0 / 54). 
 team had delivered.** It is carried in review v3, where they will read it. **Closes when the Windows mutation suite is
 green on the pushed commit**, reading `a_repair_of_a_lone_damaged_record_saves_the_record_byte_for_byte` and
 `a_true_torn_wal_tail_is_still_tolerated_and_still_truncated_by_the_repair` by name.
+
+**CLOSED 2026-09-27:** pushed at `bb81b0fb`. CI run `36280930300` went 16/16, with both named tests `ok` in the Windows
+mutation suite. **The external review of this same commit then found M1 and M5 in this round's own rules.** The fix is
+RFC 162, a redesign, not a further addendum here.

@@ -241,6 +241,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- `162-the-recovery-model-caches-never-refuse-logs-end-positively.md` — **PROPOSED 2026-09-27** by the architect after the external review of `bb81b0fb` (M1–M3, all reproduced): the object index a pure cache that never makes a command refuse; commitment proven by connectivity (sealed blocks, queued patches, ref tips) instead of index membership; a log ends at its last sound record, with removed bytes saved; the first rows of a crash-and-corruption matrix. For the owner's reading before acceptance; blocks 0.48.0.
+
 
 
 **Accepted-but-unshipped RFCs are not in this list, and that is RFC 120's own scope, not an

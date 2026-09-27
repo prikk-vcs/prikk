@@ -264,3 +264,12 @@ The owner decides.
 **§9 ACCEPTED by the owner 2026-09-27** (*"All approved and authorized."*). **The architect's reading:**
 - R1 applies now, to the architect's runs and the dev team's;
 - **R2–R4 are one round in 0.48.0**, live when F3 closes, before F4's design round.
+
+**F3 CLOSED 2026-09-27** at `bb81b0fb` (CI 16/16, Windows green by name). **The external review of `bb81b0fb`** (letter
+014) then measured two defects that F3's own Addendum 1 introduced, and the architect reproduced both:
+- **M1:** the index as the witness of commitment, which a repair can rebuild away;
+- **M5:** resync hashes every candidate, which is quadratic on hostile content.
+
+It also found M2 and M3 in the files next door. The recovery rules are redesigned in **RFC 162** (proposed). M5's bound
+and a fix, if mechanical, go into the R2–R4 round, which is now live:
+`runaway-guards-handoff-v1.md`.
