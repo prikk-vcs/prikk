@@ -65,6 +65,21 @@ fn a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_repai
         repair.objects_recovered, 0,
         "the damaged blob cannot be recovered by the rebuild"
     );
+    // RFC 162 rule 2: "`--repair-index` never forgets silently" -- the blob's own id, named by the old
+    // index, is not re-derivable and must be recorded, not dropped without a trace.
+    assert_eq!(
+        repair.lost_ids,
+        vec![blob_id],
+        "the repair must name exactly the one id it could not re-derive"
+    );
+    let recovery_file = repair.recovery_file.as_ref().ok_or_else(|| {
+        prikk_error::PrikkError::Integrity("expected a recovery file".to_string())
+    })?;
+    let recovered = std::fs::read_to_string(layout.prikk_dir().join(recovery_file))?;
+    assert!(
+        recovered.contains(&blob_id.to_string()),
+        "the recovery file must name the lost id: {recovered}"
+    );
     let after = verify_repository(&layout)?;
     assert!(
         after.has_item_failure(),

@@ -31,13 +31,15 @@ use crate::foundation::frame_resync::{
     sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
-    append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
-    read_file_range_if_exists, stat_file_state_if_exists, write_file_atomically,
+    append_file_reporting_offset_required, append_file_required, ensure_directory_required,
+    len_to_u64, read_file_if_exists, read_file_range_if_exists, stat_file_state_if_exists,
+    write_file_atomically,
 };
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 const INDEX_MAGIC: &[u8; 8] = b"PIDXENT1";
 const INDEX_VERSION: u16 = 1;
@@ -802,6 +804,16 @@ pub struct IndexRepairReport {
     /// was written. Not byte equality: see `repair_index_from_containers` on why order differs
     /// between a healthy index and its own rebuild.
     pub already_correct: bool,
+    /// RFC 162 rule 2: object ids the old index named that a fresh container scan could not
+    /// re-derive -- gone from the rebuilt index, because their own container frame is itself damaged
+    /// or unreadable. **Never silent**: when non-empty, these are also durably recorded in
+    /// `recovery_file`, and the repair's own caller must name any work that still references them
+    /// (`verify`'s connectivity check, RFC 162 rule 2) and exit non-zero.
+    pub lost_ids: Vec<ObjectId>,
+    /// The recovery file (relative to `.prikk/`) holding exactly `lost_ids`, written durably before
+    /// the rebuilt index is installed -- mirrors the WAL repair's own `recovery/` contract
+    /// (`wal.rs::save_removed_bytes`). `None` when `lost_ids` is empty.
+    pub recovery_file: Option<PathBuf>,
 }
 
 /// Rebuild the object index from the containers and install it atomically.
@@ -890,6 +902,20 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
     let existing_is_clean =
         existing_replay.trailing_partial_bytes == 0 && !existing_replay.has_item_failure();
     let already_correct = existing_is_clean && existing_sorted == rebuilt_sorted;
+
+    // RFC 162 rule 2: "`--repair-index` never forgets silently." An id the old index named, that a
+    // fresh container scan cannot re-derive at all, is about to be dropped from the index by this very
+    // rebuild -- durably record it *before* installing the rebuild, the same "save first" discipline
+    // the WAL repair already uses (`wal.rs::save_removed_bytes`, called before its own truncation).
+    let before_ids: BTreeSet<ObjectId> = before.iter().map(|entry| entry.object_id).collect();
+    let rebuilt_ids: BTreeSet<ObjectId> = rebuilt.iter().map(|entry| entry.object_id).collect();
+    let lost_ids: Vec<ObjectId> = before_ids.difference(&rebuilt_ids).copied().collect();
+    let recovery_file = if lost_ids.is_empty() {
+        None
+    } else {
+        Some(save_lost_ids(layout.repository_mutation_root(), &lost_ids)?)
+    };
+
     if !already_correct {
         write_file_atomically(
             layout.repository_mutation_root(),
@@ -904,7 +930,33 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
         entries_relocated,
         objects_recovered,
         already_correct,
+        lost_ids,
+        recovery_file,
     })
+}
+
+/// Durably write `lost_ids` (sorted, one hex id per line) to
+/// `recovery/index-lost-ids-<hash>.bytes` under `.prikk/`, and return that path (relative to
+/// `.prikk/`) -- mirrors `wal.rs::save_removed_bytes` exactly: never authority, nothing reads it back,
+/// `verify` ignores it.
+fn save_lost_ids(
+    root: &crate::foundation::fsutil::MutationRoot,
+    lost_ids: &[ObjectId],
+) -> Result<PathBuf> {
+    let mut sorted = lost_ids.to_vec();
+    sorted.sort();
+    let mut contents = String::new();
+    for id in &sorted {
+        contents.push_str(&id.to_string());
+        contents.push('\n');
+    }
+    let digest = prikk_hash::to_hex(&prikk_hash::sha256(contents.as_bytes()));
+    let short = digest.get(..16).unwrap_or(&digest);
+    let directory = PathBuf::from("recovery");
+    let file = directory.join(format!("index-lost-ids-{short}.bytes"));
+    ensure_directory_required(root, &directory)?;
+    write_file_atomically(root, &file, contents.as_bytes())?;
+    Ok(file)
 }
 
 /// Remove exactly one object's index entry, leaving its container bytes untouched -- the container-

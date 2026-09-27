@@ -977,6 +977,7 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // repairs and independently of them -- the two share no state, and combining the flags runs both
     // rather than making one win. Like `--repair-wal-tail`, it is explicit: `doctor` with no flag
     // still only diagnoses.
+    let mut index_lost_ids = false;
     if doctor_args.repair_index {
         let report = prikk_store::repair_object_index(&layout).map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
@@ -993,13 +994,45 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
             println!("  entries relocated: {}", report.entries_relocated);
             println!("  objects recovered: {}", report.objects_recovered);
         }
+        // RFC 162 rule 2: "`--repair-index` never forgets silently." An id the old index named that
+        // the rebuild could not re-derive is named on stderr, along with any work `verify`'s own
+        // connectivity check still finds referencing it -- reusing that check rather than a second,
+        // duplicate scan here.
+        if !report.lost_ids.is_empty() {
+            index_lost_ids = true;
+            eprintln!(
+                "error: {} object id(s) named by the old index could not be re-derived from the \
+                 containers:",
+                report.lost_ids.len()
+            );
+            let connectivity_issues = prikk_store::verify_repository(&layout)
+                .map(|verification| verification.connectivity_issues)
+                .unwrap_or_default();
+            for lost_id in &report.lost_ids {
+                let referencing: Vec<&str> = connectivity_issues
+                    .iter()
+                    .filter(|issue| issue.object_id == *lost_id)
+                    .map(|issue| issue.referencing_work.as_str())
+                    .collect();
+                if referencing.is_empty() {
+                    eprintln!("  {lost_id}: not referenced by anything this scan can see");
+                } else {
+                    for work in referencing {
+                        eprintln!("  {lost_id}: referenced by {work}");
+                    }
+                }
+            }
+            if let Some(recovery_file) = &report.recovery_file {
+                eprintln!("  lost ids recorded at: {}", recovery_file.display());
+            }
+        }
         if !doctor_args.repair_wal_tail
             && !doctor_args.repair_main_ref
             && !doctor_args.repair_pointer_index_tail
         {
             let after = doctor_repository(&layout);
             print_doctor_report(&layout, &after);
-            return if after.is_healthy() {
+            return if after.is_healthy() && !index_lost_ids {
                 Ok(())
             } else {
                 Err("doctor reported unresolved repository issues"
@@ -1032,7 +1065,7 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
         if !doctor_args.repair_wal_tail && !doctor_args.repair_main_ref {
             let after = doctor_repository(&layout);
             print_doctor_report(&layout, &after);
-            return if after.is_healthy() {
+            return if after.is_healthy() && !index_lost_ids {
                 Ok(())
             } else {
                 Err("doctor reported unresolved repository issues"
@@ -1077,7 +1110,7 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                     .to_string()
                     .into(),
             )
-        } else if repair.after.is_healthy() {
+        } else if repair.after.is_healthy() && !index_lost_ids {
             Ok(())
         } else {
             Err("doctor repair finished but repository health errors remain"
