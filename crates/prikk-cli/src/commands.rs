@@ -323,6 +323,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk doctor [path]                       Run health diagnostics",
             "  prikk doctor [path] --repair-wal-tail     Truncate incomplete trailing WAL bytes",
             "  prikk doctor [path] --repair-index        Rebuild the object index from the containers",
+            "  prikk doctor [path] --repair-pointer-index-tail  Truncate incomplete trailing pointer-index bytes",
             "  prikk doctor [path] --repair-main-ref     Recognized, always refused: no repair is implemented",
         ],
     },

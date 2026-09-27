@@ -12,8 +12,7 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, sound_frame_after_partial,
-    tallied_sha256,
+    partial_before_sound_frame_message, require_progress, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,

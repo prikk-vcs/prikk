@@ -869,6 +869,24 @@ pub fn repair_object_index(
     crate::foundation::index::repair_index_from_containers(layout)
 }
 
+/// Safely truncate an incomplete trailing pointer-index record, if one exists —
+/// `prikk doctor --repair-pointer-index-tail` (RFC 162 rule 3).
+///
+/// Separate from [`repair_repository`] for the same reason [`repair_object_index`] is: this touches no
+/// active session, no WAL, and no object container -- only the ref-pointer-index container, under its
+/// own lock. **Holds [`LockableContainer::RefPointerIndex`] for the whole repair**, matching
+/// `compact_ref_pointer_index`'s own lock discipline (`compact.rs`): the read (to compute the tail) and
+/// the write (to truncate it) are one exclusive region, so a concurrent publish cannot append between
+/// them.
+pub fn repair_pointer_index_tail(
+    layout: &RepositoryLayout,
+) -> Result<crate::refs::PointerIndexRepair> {
+    layout.require_current_format()?;
+    let _pointer_index_lock =
+        acquire_container_locks(layout, &[LockableContainer::RefPointerIndex])?;
+    crate::refs::truncate_pointer_index_trailing_partial(layout)
+}
+
 /// Run an explicitly requested, narrow repair action, now per-active-session (RFC 108 §D3.3,
 /// increment 3d).
 ///

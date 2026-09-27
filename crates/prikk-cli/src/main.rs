@@ -993,6 +993,42 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
             println!("  entries relocated: {}", report.entries_relocated);
             println!("  objects recovered: {}", report.objects_recovered);
         }
+        if !doctor_args.repair_wal_tail
+            && !doctor_args.repair_main_ref
+            && !doctor_args.repair_pointer_index_tail
+        {
+            let after = doctor_repository(&layout);
+            print_doctor_report(&layout, &after);
+            return if after.is_healthy() {
+                Ok(())
+            } else {
+                Err("doctor reported unresolved repository issues"
+                    .to_string()
+                    .into())
+            };
+        }
+    }
+    // RFC 162 rule 3: the pointer-index tail repair, handled the same way `--repair-index` is above --
+    // before the WAL/active-session repairs, independently of them (it shares no state: it touches no
+    // active session, no WAL, and no object container, only the ref-pointer-index container).
+    if doctor_args.repair_pointer_index_tail {
+        let report =
+            prikk_store::repair_pointer_index_tail(&layout).map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        if report.truncated_bytes == 0 {
+            println!(
+                "pointer index: nothing to repair ({} entries)",
+                report.preserved_entries
+            );
+        } else {
+            println!(
+                "pointer index: truncated {} trailing byte(s), {} entries preserved",
+                report.truncated_bytes, report.preserved_entries
+            );
+            if let Some(recovery_file) = &report.recovery_file {
+                println!("  removed bytes saved to: {}", recovery_file.display());
+            }
+        }
         if !doctor_args.repair_wal_tail && !doctor_args.repair_main_ref {
             let after = doctor_repository(&layout);
             print_doctor_report(&layout, &after);

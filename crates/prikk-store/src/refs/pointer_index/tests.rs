@@ -5,7 +5,7 @@ use prikk_error::Result;
 use super::{
     PointerIndexEntry, PointerIndexRecordStatus, append_ref_pointer_entry,
     decode_pointer_index_records, encode_pointer_index_record, lookup_ref_pointer,
-    replay_pointer_index,
+    replay_pointer_index, truncate_pointer_index_trailing_partial,
 };
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
 use crate::test_gates::test_support::{sample_object_id, unique_temp_dir};
@@ -197,6 +197,105 @@ fn damaged_entry_fails_closed_rather_than_silently_resolving_a_stale_entry() -> 
     assert!(lookup_ref_pointer(&layout, main_key).is_err());
     assert!(lookup_ref_pointer(&layout, topic_key).is_err());
     assert!(lookup_ref_pointer(&layout, other_key).is_err());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 162 rule 3: a genuinely torn pointer-index tail (fewer bytes than one header) is truncated,
+/// the removed bytes are saved, and every sound entry survives -- the pointer-index analogue of
+/// `wal.rs::wal_truncate_preserves_all_complete_records_in_a_torn_queue_and_reports_their_ids`.
+#[test]
+fn truncate_pointer_index_trailing_partial_truncates_a_torn_tail_and_saves_the_bytes() -> Result<()>
+{
+    let root = unique_temp_dir("pointer-index-repair-torn-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let main_key = ref_name_key_bytes("heads/main");
+    let entry = PointerIndexEntry {
+        ref_name_key: main_key,
+        ref_name: "heads/main".to_string(),
+        ref_state_id: sample_object_id("main-state"),
+    };
+    append_ref_pointer_entry(&layout, &entry)?;
+
+    let path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let mut bytes = std::fs::read(&path)?;
+    let torn = vec![0xAB_u8; 7];
+    bytes.extend_from_slice(&torn);
+    std::fs::write(&path, &bytes)?;
+
+    assert!(!replay_pointer_index(&layout)?.has_item_failure());
+    assert_eq!(replay_pointer_index(&layout)?.trailing_partial_bytes, 7);
+
+    let repair = truncate_pointer_index_trailing_partial(&layout)?;
+    assert_eq!(repair.preserved_entries, 1);
+    assert_eq!(repair.truncated_bytes, 7);
+    let recovery_file = repair.recovery_file.as_ref().ok_or_else(|| {
+        prikk_error::PrikkError::Integrity(
+            "a repair that truncated bytes names its recovery file".to_string(),
+        )
+    })?;
+    assert_eq!(
+        std::fs::read(layout.prikk_dir().join(recovery_file))?,
+        torn,
+        "the recovery file holds exactly the removed bytes"
+    );
+
+    let replay = replay_pointer_index(&layout)?;
+    assert_eq!(replay.trailing_partial_bytes, 0);
+    assert_eq!(replay.entries, vec![entry]);
+
+    // Idempotent: a second run finds nothing left to truncate.
+    let second = truncate_pointer_index_trailing_partial(&layout)?;
+    assert_eq!(second.truncated_bytes, 0);
+    assert_eq!(second.recovery_file, None);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 162 rule 3: genuine interior damage (a sound entry follows a damaged one) is not a tail, and
+/// this repair refuses it rather than truncating past it -- the pointer-index analogue of
+/// `wal.rs::wal_truncate_failure_retains_partial_tail_and_retry_repairs_it`'s refusal half.
+#[test]
+fn truncate_pointer_index_trailing_partial_refuses_on_interior_damage() -> Result<()> {
+    let root = unique_temp_dir("pointer-index-repair-refuses-damage");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let main_key = ref_name_key_bytes("heads/main");
+    append_ref_pointer_entry(
+        &layout,
+        &PointerIndexEntry {
+            ref_name_key: main_key,
+            ref_name: "heads/main".to_string(),
+            ref_state_id: sample_object_id("main-state"),
+        },
+    )?;
+
+    let path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let mut bytes = std::fs::read(&path)?;
+    let mut damaged = encode_pointer_index_record(&PointerIndexEntry {
+        ref_name_key: ref_name_key_bytes("heads/topic"),
+        ref_name: "heads/topic".to_string(),
+        ref_state_id: sample_object_id("topic-state"),
+    })?;
+    let last = damaged
+        .last_mut()
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("expected a record".to_string()))?;
+    *last ^= 0x01;
+    bytes.extend_from_slice(&damaged);
+    bytes.extend_from_slice(&encode_pointer_index_record(&PointerIndexEntry {
+        ref_name_key: ref_name_key_bytes("heads/other"),
+        ref_name: "heads/other".to_string(),
+        ref_state_id: sample_object_id("other-state"),
+    })?);
+    std::fs::write(&path, &bytes)?;
+
+    assert!(truncate_pointer_index_trailing_partial(&layout).is_err());
+    assert_eq!(
+        std::fs::read(&path)?,
+        bytes,
+        "a refused repair must leave the file byte for byte as it was"
+    );
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

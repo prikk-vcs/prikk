@@ -156,7 +156,7 @@ pub use diff::{
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
     DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,
-    repair_repository,
+    repair_pointer_index_tail, repair_repository,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;
@@ -247,9 +247,10 @@ pub use ref_resolution::{
     ReceivedRefs, is_unpublished_local_branch, require_existing_ref, resolve_point,
 };
 pub use refs::{
-    RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord, RefLogReplay,
-    RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate, RefStore,
-    current_branch, resolve_ref_tip_block, validate_local_branch_ref, validate_local_tag_ref,
+    PointerIndexRepair, RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord,
+    RefLogReplay, RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate,
+    RefStore, current_branch, resolve_ref_tip_block, validate_local_branch_ref,
+    validate_local_tag_ref,
 };
 #[cfg(feature = "test-support")]
 pub use refs::{

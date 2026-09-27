@@ -22,16 +22,20 @@
 //! a container append instead of a candidate-write-then-promote file dance. `refs/tmp/`'s candidate
 //! mechanism has no equivalent here because there is nothing left for it to stage.
 
+use std::path::PathBuf;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, sound_frame_after_partial,
-    tallied_sha256,
+    partial_before_sound_frame_message, require_progress, sound_frame_after_partial, tallied_sha256,
 };
-use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
+use crate::foundation::fsutil::{
+    MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
+    truncate_existing_file_required, write_file_atomically,
+};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::RepositoryLayout;
 
@@ -320,6 +324,94 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
         });
     };
     decode_pointer_index_records(&bytes)
+}
+
+/// Result of a safe pointer-index tail truncation (RFC 162 rule 3). **Not derivable from the ref log**:
+/// a single durable append here *is* the publish, made **before** the corresponding ref-log record
+/// (see the module doc) -- so a crash between the two leaves the pointer index legitimately ahead of the
+/// ref log (`"PRIKK-VERIFY-REF-POINTER-LEADS-LOG"`, `refs/verify.rs`), a state the pointer index alone
+/// records. It therefore cannot be rebuilt from the ref log the way the object index is rebuilt from the
+/// containers (rule 1); it gets the WAL's own positional tail repair instead, mirroring
+/// [`crate::wal::WalRepair`] exactly in shape and contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PointerIndexRepair {
+    /// Number of valid entries preserved after repair.
+    pub preserved_entries: usize,
+    /// Number of trailing partial bytes truncated.
+    pub truncated_bytes: usize,
+    /// The recovery file (relative to `.prikk/`) holding exactly the bytes this repair removed, written
+    /// durably before the truncation -- mirrors the WAL repair's own contract
+    /// (`wal.rs::save_removed_bytes`). `None` when nothing was removed. Never authority: `verify`
+    /// ignores it.
+    pub recovery_file: Option<PathBuf>,
+}
+
+/// Durably write `removed` to `recovery/pointer-index-at-<offset>-<hash>.bytes` under `.prikk/`, and
+/// return that path (relative to `.prikk/`) -- mirrors `wal.rs::save_removed_bytes` exactly, one copy
+/// per framed file rather than a shared abstraction introduced mid-round.
+fn save_removed_bytes(root: &MutationRoot, offset: u64, removed: &[u8]) -> Result<PathBuf> {
+    let digest = prikk_hash::to_hex(&prikk_hash::sha256(removed));
+    let short = digest.get(..16).unwrap_or(&digest);
+    let directory = PathBuf::from("recovery");
+    let file = directory.join(format!("pointer-index-at-{offset}-{short}.bytes"));
+    ensure_directory_required(root, &directory)?;
+    write_file_atomically(root, &file, removed)?;
+    Ok(file)
+}
+
+/// Safely truncate an incomplete trailing pointer-index record, if one exists (RFC 162 rule 3: a log
+/// ends at its last sound record). Mirrors `Wal::truncate_trailing_partial` exactly in shape and
+/// contract: refuses on genuine interior damage (a sound entry follows a damaged one, so the "tail" is
+/// not positionally the end of the file), and otherwise truncates only the positionally-defined tail,
+/// saving every removed byte first. The caller holds `LockableContainer::RefPointerIndex` for the whole
+/// call, matching `compact_ref_pointer_index`'s own lock discipline (this module does not acquire it
+/// itself -- see `index.rs::repair_index_from_containers`'s identical division of responsibility).
+pub(crate) fn truncate_pointer_index_trailing_partial(
+    layout: &RepositoryLayout,
+) -> Result<PointerIndexRepair> {
+    let slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
+    let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
+    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
+        return Ok(PointerIndexRepair {
+            preserved_entries: 0,
+            truncated_bytes: 0,
+            recovery_file: None,
+        });
+    };
+    let replay = decode_pointer_index_records(&bytes)?;
+    if replay.has_item_failure() {
+        // A damaged entry is not a torn tail, and this repair truncates only a torn tail: it refuses,
+        // and the file is left byte for byte as it was.
+        return Err(PrikkError::Integrity(
+            "pointer index has a damaged entry; repair does not modify it".to_string(),
+        ));
+    }
+    if replay.trailing_partial_bytes == 0 {
+        return Ok(PointerIndexRepair {
+            preserved_entries: replay.entries.len(),
+            truncated_bytes: 0,
+            recovery_file: None,
+        });
+    }
+    let current_len = len_to_u64(bytes.len())?;
+    let trailing = len_to_u64(replay.trailing_partial_bytes)?;
+    let repaired_len = current_len.checked_sub(trailing).ok_or_else(|| {
+        PrikkError::MalformedData(
+            "trailing pointer index byte count exceeds file length".to_string(),
+        )
+    })?;
+    let removed = bytes
+        .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
+        .unwrap_or_default();
+    let root = layout.repository_mutation_root();
+    let recovery_file = save_removed_bytes(root, repaired_len, removed)?;
+    truncate_existing_file_required(root, &relative, repaired_len)?;
+    Ok(PointerIndexRepair {
+        preserved_entries: replay.entries.len(),
+        truncated_bytes: replay.trailing_partial_bytes,
+        recovery_file: Some(recovery_file),
+    })
 }
 
 /// Look up one ref's current published pointer: the last entry matching `ref_name_key`, matching

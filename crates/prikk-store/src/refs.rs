@@ -39,10 +39,12 @@ pub(crate) use pointer_index::{
 // outside `refs`, so these need re-exporting here the same way `verify_refs` already is below --
 // `pointer_index` itself stays a private submodule; only the specific items a caller outside `refs`
 // needs are widened.
+pub use pointer_index::PointerIndexRepair;
 #[cfg(test)]
 pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
     PointerIndexEntry, encode_pointer_index_record, replay_pointer_index,
+    truncate_pointer_index_trailing_partial,
 };
 
 use prikk_error::{PrikkError, Result};
