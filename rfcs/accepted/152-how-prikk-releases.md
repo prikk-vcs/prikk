@@ -100,3 +100,25 @@ rewritten and is available if §5's first bullet ever needs it. `EXECUTION-ORDER
 points here. `MILESTONES.md`'s row on the signer bootstrap is the owner's to reword — this RFC suggests
 *"release governance: RFC 152"*. `docs/src/reference/` release and compatibility text says what §3 and
 §4 say. `release-signers.toml` is unchanged.
+
+## 7. Amended 2026-09-27, after the external review of `bb81b0fb` (letter 014)
+
+**Where the project stands** (owner, 2026-09-27): *"We are out of 'early implementation' but not in 'stable version'."*
+**0.48.0 is cut without the word "stable".** The release notes and the consumer letters say precisely which promises
+hold. The definition of "stable" is the owner's, and the external review's six promises are the starting proposal.
+
+**The process changes, approved by the owner** (*"Approved."*), and **which of them are permanent.** The owner asked
+whether they hold until 0.48.0 or for good, noting that external reviewers are temporary. They are not exclusive to this
+project. Designing and reviewing is the architect's role, and after 0.48.0 the architect asks the owner, or external
+help, when it is actually necessary. **The architect's reading, stated so it can be corrected:**
+
+| rule | lasts | why |
+|---|---|---|
+| a fix round carries only the fix; new classifications, outputs or costs get their own RFC section and review | **permanent** | it costs nothing, and both new defects of the F3 cycle came in through a fix round |
+| a round that needs a second addendum stops for a design re-read (an RFC) before the next handoff in that area | **permanent** | internal |
+| an RFC that changes what a command reports or costs is presented for reading, and accepted in a later exchange | **permanent** | internal (RFC 162 was the first) |
+| the architect's own commits to code, `docs/src` or workflows are reviewed by the development team before the architect pushes them; RFC records, handoffs and reviews are exempt | **permanent** | the one internal check of the architect; the three architect errors of the cycle were all of this kind |
+| a release is cut from a **candidate**: the release commit passes the gates, CI and the crash-and-corruption matrix before it is tagged; a finding against an invariant restarts the candidate | **permanent** | mechanical, needs no outside party |
+| the release workflow refuses a tag whose commit has any CI job not concluded successfully | **permanent** | mechanical (R2–R4 round, item 4) |
+| an **independent adversary** tries to break the candidate (the external architect re-runs their script and matrix) | **0.48.0**, then **when necessary** | external help is temporary. After 0.48.0 the matrix, growing as findings arrive, carries the invariants. The architect asks the owner for an outside adversary before any claim of stability, a format change (format 8), or a new trust boundary |
+| the candidate is exercised by both consumers against their own suites | **when a stability claim is made** | it depends on the consumers' time, and it belongs to the word "stable", not to every release |

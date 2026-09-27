@@ -1,9 +1,13 @@
 # RFC 162 — The recovery model: caches never refuse, logs end positively, `verify` checks what is referenced
 
-**Status.** **PROPOSED 2026-09-27 by the architect**, after the external review of `bb81b0fb` (letter 014, answered the
-same day). **For reading before acceptance:** this RFC changes what `verify`, `doctor` and the repairs report and do. Per
-the review's advice on pace (its §5, question 5), it should not be accepted in the session it is proposed. Nothing here
-is handed off until the owner accepts it.
+**Status.** **ACCEPTED by the project owner 2026-09-27** (*"Reviewed and accepted."*). It was presented for reading in
+one message and accepted in a later one, as the external review advised. **The architect's reading, stated so it can be
+corrected:**
+- the three rules of §2 are accepted as written, with the invariants of §4 and the first matrix rows of §5;
+- the implementation is **one round in 0.48.0**, live when the R2–R4 round closes, before 0.48.0 prep;
+- §3 (a self-vouching header, chained frames) stays format-8 design input and is not 0.48.0 work.
+
+*History:* **PROPOSED 2026-09-27 by the architect**, after the external review of `bb81b0fb` (letter 014).
 
 **Author-review independence:** the architect proposes, and it was the architect's own F3 Addendum 1 ruling that
 produced M1. Two things compensate:
