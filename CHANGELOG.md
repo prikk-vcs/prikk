@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### Fixed — an index repair could make `verify` blind to a damaged object, a torn index append made every command refuse, and a WAL or pointer-index tail was fatal or repairable depending on its shape (RFC 162)
+
+Three defects the external review measured, all introduced within this cycle (by the round that closed incident 6, F3 Addendum 1's own
+ruling that the object index witnesses commitment):
+
+- **`doctor --repair-index` could turn a detected damaged object into a clean `verify`.** The repair rebuilt the index from the containers
+  and dropped the entry it could not re-derive; `verify` then read the corresponding frame as an *interrupted append* ("no index entry
+  names it, so nothing references it") rather than damage, even though a queued or sealed commit still referenced the object. **The object
+  index is now a pure cache and is never evidence of anything.** A reader (`prikk cat`, `verify`, …) that finds it damaged scans the
+  containers in memory instead of refusing; a writer that finds it damaged — or carrying an unresolved trailing partial, even without an
+  outright item failure — rebuilds it on disk, under the object-store lock, before appending, so a write never buries a torn index tail.
+  `verify` no longer asks the index whether an unparseable object-container frame is damage. It asks connectivity instead: every object a
+  sealed block's state, a queued patch in any active session's WAL, or a ref tip references must exist and read; an unparseable frame is
+  damage only if something still referencing it cannot resolve, and an unreferenced remnant (a warning) otherwise. `--repair-index` itself
+  never forgets silently: an id the old index named that the rebuild cannot re-derive is written to a durable file under `.prikk/recovery/`,
+  named on stderr together with any work `verify`'s own connectivity check still finds referencing it, and the command exits non-zero.
+- **A torn object-index append, then one commit, made every command refuse** ("nothing to repair" from `--repair-index`, since it compared
+  only the *set* of sound entries, which the torn bytes never changed). `--repair-index` now rewrites whenever the file is not byte for
+  byte the encoding of its sound entries — a torn tail included, not only a relocated or missing entry.
+- **A WAL or pointer-index tail was fatal or repairable depending on its length and content**, because a tail was defined by shape (a
+  header that claims more bytes than remain) rather than position: 30 zero bytes repaired, 100 or 4,096 did not, because they parsed as an
+  *invalid* frame rather than a partial one, and an invalid frame with nothing sound behind it was reported as damage forever, not as a
+  tail. **A WAL or pointer-index tail is now everything after the last sound record, when no sound record follows, whatever its shape** —
+  zeros, garbage, or a torn prefix. `doctor --repair-wal-tail` and the new `doctor --repair-pointer-index-tail` truncate it and save every
+  removed byte first, exactly as before; a sound record anywhere behind the partial frame is still damage and still refused. The pointer
+  index cannot be derived from the ref log (a single durable append there *is* the publish, made before the corresponding ref-log record,
+  so a crash between the two leaves the pointer index legitimately ahead of the log — a state the pointer index alone records), so it gets
+  the WAL's own tail repair rather than the object index's rebuild-from-elsewhere treatment.
+
+### Changed — `RepositoryVerification` gains a connectivity stage and field, `IndexRepairReport` gains lost-id fields, and a new `PointerIndexRepair` type
+
+`RepositoryVerification` gains the `ObjectConnectivity` stage and `connectivity_issues: Vec<ConnectivityIssue>` (a new, `#[non_exhaustive]`
+report type: the referenced object, its type, the referencing work, and why it could not be read). `IndexRepairReport` gains `lost_ids:
+Vec<ObjectId>` and `recovery_file: Option<PathBuf>`. `doctor --repair-pointer-index-tail` is a new command, backed by a new
+`PointerIndexRepair` type (`#[non_exhaustive]`, shaped like `WalRepair`). All three existing types were already `#[non_exhaustive]`; no
+existing field changes meaning, and no struct literal or exhaustive match outside `prikk-store` was already possible for any of them.
+
+### Output changes
+
+- `prikk doctor --repair-index` on an index that is not byte-for-byte the encoding of its sound entries (a torn append, even with the
+  right entries as a set): **rewrites it**; it answered "nothing to repair".
+- `prikk doctor --repair-index` when an id the old index named cannot be re-derived from the containers: **exits non-zero**, names every
+  lost id on stderr together with any work still referencing it, and names the recovery file it wrote them to; it exited 0.
+- `prikk verify` and `prikk doctor` on a repository whose only fault is damage to the object index itself (any shape, structural or a torn
+  tail): **exit 0** (a reader scans the containers instead of refusing); they exited 1, naming the damaged index.
+- `prikk verify` on a repository where a sealed block's state, a queued patch, or a ref tip references an object that cannot be read:
+  **fails, naming the referencing work** (`object-connectivity` stage); before, the same defect was invisible whenever the object's own
+  index entry had already been dropped (by a prior `--repair-index` run, or because it was never indexed).
+- `prikk verify` and `prikk doctor` on a WAL or pointer-index tail of 100 or 4,096 zero bytes, or 100 random bytes, with nothing sound
+  behind it: **exit 0 with a warning**, and `doctor --repair-wal-tail` (or the new `--repair-pointer-index-tail`) repairs it; they exited 1
+  forever, and the repair refused.
+- `prikk doctor --repair-pointer-index-tail` is new: truncates an incomplete trailing pointer-index record, saving the removed bytes to
+  `.prikk/recovery/`, exactly as `--repair-wal-tail` does for the WAL.
+
+### Upgrading
+
+- Rust callers of `prikk-store`: `IndexRepairReport` and `RepositoryVerification` each gained fields (`#[non_exhaustive]`, so this compiles
+  unchanged if constructed and matched only through the crate, per the existing convention).
+- A script that greps `prikk verify`/`prikk doctor` output for "interrupted append… no index entry names it" should instead check for the
+  `object-connectivity` stage and `connectivity_issues`, and for the plain "interrupted append" warning (index membership is no longer part
+  of either message).
+
 ### Fixed — every object write read its whole object container to learn its length
 
 Writing an object appends its record to a container file and records the record's offset in the index; the offset is the container's length
