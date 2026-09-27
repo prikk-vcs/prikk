@@ -7,6 +7,8 @@ corrected:**
 - the implementation is **one round in 0.48.0**, live when the R2–R4 round closes, before 0.48.0 prep;
 - §3 (a self-vouching header, chained frames) stays format-8 design input and is not 0.48.0 work.
 
+Implementation handoff, **live 2026-09-27**: `rfcs/handoffs/162-the-recovery-model-caches-never-refuse-logs-end-positively/implementation-handoff-v1.md`.
+
 *History:* **PROPOSED 2026-09-27 by the architect**, after the external review of `bb81b0fb` (letter 014).
 
 **Author-review independence:** the architect proposes, and it was the architect's own F3 Addendum 1 ruling that

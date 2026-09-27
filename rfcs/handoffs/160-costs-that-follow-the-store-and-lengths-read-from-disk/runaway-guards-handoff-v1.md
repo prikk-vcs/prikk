@@ -114,4 +114,5 @@ architect on `3e56d604` in R1's scope, 2435 / 0 / 56). **M5 has two quadratic pa
 - F3's partial-frame scan, new in this cycle and the external review's own case, gets its ceiling in the RFC 162
   implementation round, which rewrites that path.
 
-Both fixes go to 0.49.0. **Closes when the Windows mutation suite is green on the pushed commit.**
+Both fixes go to 0.49.0. **CLOSED 2026-09-27:** pushed at `87dc151f`, CI run `36307290831` 16/16, the Windows mutation suite
+green.
