@@ -39,7 +39,7 @@ impl SizeBound {
                 bytes: default as u64,
                 description: format!(
                     "the default limit of {default} bytes ({}) -- set ${name} to raise or lower it",
-                    mib(default as u64)
+                    human_bytes(default as u64)
                 ),
             });
         };
@@ -55,7 +55,7 @@ impl SizeBound {
             description: format!(
                 "the limit of {value} bytes ({}), set by ${name} -- change that variable to raise \
                  or lower it",
-                mib(value as u64)
+                human_bytes(value as u64)
             ),
         })
     }
@@ -67,7 +67,7 @@ impl SizeBound {
             bytes: bytes as u64,
             description: format!(
                 "the fixed limit of {bytes} bytes ({}) for {what} -- this bound cannot be changed",
-                mib(bytes as u64)
+                human_bytes(bytes as u64)
             ),
         }
     }
@@ -78,7 +78,7 @@ impl SizeBound {
             bytes,
             description: format!(
                 "the limit of {bytes} bytes ({}), set by --max-object-bytes",
-                mib(bytes)
+                human_bytes(bytes)
             ),
         }
     }
@@ -91,7 +91,7 @@ impl SizeBound {
             bytes,
             description: format!(
                 "the limit of {bytes} bytes ({}), set by incoming.max-object-bytes in `prikk config`",
-                mib(bytes)
+                human_bytes(bytes)
             ),
         }
     }
@@ -109,7 +109,7 @@ impl SizeBound {
             bytes: bytes as u64,
             description: format!(
                 "the default limit of {bytes} bytes ({}) -- {change_it}",
-                mib(bytes as u64)
+                human_bytes(bytes as u64)
             ),
         }
     }
@@ -131,8 +131,15 @@ pub(crate) fn parse_max_object_bytes_value(value: &str) -> Result<u64, CliError>
     Ok(parsed)
 }
 
-fn mib(bytes: u64) -> String {
-    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+/// Renders in KiB under 1 MiB, so a small bound (a few thousand bytes, common for `--max-object-bytes`
+/// on a test fixture or a tight `prikk config` setting) does not print the useless "0.0 MiB" every
+/// refusal used to show.
+fn human_bytes(bytes: u64) -> String {
+    if bytes < 1024 * 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 /// The generic form of the bounded read (handoff §1's own three steps), taking an already-open

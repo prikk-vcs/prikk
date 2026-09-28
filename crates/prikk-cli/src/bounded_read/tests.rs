@@ -103,3 +103,14 @@ fn a_bound_of_u64_max_reads_a_source_that_fits_it() {
     let result = read_bounded("test artifact", "test", 10, &mut source, &bound);
     assert_eq!(result.unwrap().len(), SOURCE_TOTAL);
 }
+
+/// A bound under 1 MiB describes itself in KiB, not as a useless "0.0 MiB" -- release prep 0.48.0,
+/// owed since 0.47.0's own report flagged the cosmetic bug. A bound at or above 1 MiB is unaffected.
+#[test]
+fn a_bound_under_one_mebibyte_describes_itself_in_kib() {
+    assert_eq!(human_bytes(5068), "4.9 KiB");
+    assert_eq!(human_bytes(1024), "1.0 KiB");
+    assert_eq!(human_bytes(1024 * 1024 - 1), "1024.0 KiB");
+    assert_eq!(human_bytes(1024 * 1024), "1.0 MiB");
+    assert_eq!(human_bytes(256 * 1024 * 1024), "256.0 MiB");
+}

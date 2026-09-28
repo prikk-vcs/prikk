@@ -288,11 +288,19 @@ impl DurabilityContract for WindowsDurability {
         // was investigated to three independent primary sources and found genuinely undeterminable
         // (`narrow-round-ruling-v1.md` §1). `std::fs::rename` is used with no durability lever
         // asserted -- content is written and flushed before the rename, but the rename itself is
-        // not claimed durable on return. **Acceptable only because this method's remaining
-        // callers are the two rebuildable caches** (`commit_index.rs`, `lifecycle_cache.rs`), whose
-        // absence or corruption after an interrupted replace changes no result. If a future caller
-        // puts durability-bearing state behind this method, that premise no longer holds and this
-        // comment -- not the reader's expectations -- is what has to change.
+        // not claimed durable on return. **Acceptable for the rebuildable callers** (`commit_index.rs`,
+        // `lifecycle_cache.rs`, and the object index's own rebuilt install in `foundation/index.rs`,
+        // RFC 162 rule 1: a reader falls back to scanning the containers when it is missing or
+        // damaged), whose absence or corruption after an interrupted replace changes no result.
+        // **Not equally true of the recovery files** `wal.rs::save_removed_bytes`,
+        // `refs/pointer_index.rs`'s own copy, and `foundation/index.rs::save_lost_ids` write through
+        // this same path (RFC 162 rule 3's "a repair keeps every byte it removes"; each caller's own
+        // repair only proceeds after this call returns `Ok`, so nothing is ever truncated or dropped
+        // without an attempted save first) -- but on Windows this call's own durability is weaker than
+        // that promise: `durability-recovery.md` states the caveat. If a future caller puts
+        // durability-bearing state behind this method that a crash losing it would make unsafe (not
+        // merely a weaker forensic record), this comment -- not the reader's expectations -- is what
+        // has to change.
         let parent = required_parent(relative)?;
         let name = required_file_name(relative)?;
         let resolved_parent = prepare_windows_directory_required(root, parent)?;

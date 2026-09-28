@@ -7,10 +7,17 @@ code, and it changes what a contribution should look like.
 ## How work is reviewed here
 
 **A drive-by pull request is not the expected shape of a contribution.** Every change that has
-landed in this repository went through a written proposal (an RFC, under `rfcs/`), independent
-design review, and then implementation against a fixed gate set — in that order, not implementation
-first. `rfcs/EXECUTION-ORDER.md` is the single ordered view of what is open and what it is waiting
-on.
+landed in this repository went through a written proposal (an RFC, under `rfcs/`), design review,
+and then implementation against a fixed gate set, reviewed independently of whoever wrote it — in
+that order, not implementation first. `rfcs/EXECUTION-ORDER.md` is the single ordered view of what
+is open and what it is waiting on.
+
+**What "independent" covers, and what it does not.** Implementation is reviewed independently of
+its own author: the person (or agent) that writes the code never reviews it. Design review is not
+independent in that same sense today — the architect proposes an RFC and also rules on its design
+— except for one external review of direction and process, commissioned before the 0.48.0 release
+(review 014, pinned at commit `bb81b0fb`). There is no standing independent check of the architect's
+own design judgment.
 
 The sequence, for anything beyond a small, obviously-correct fix:
 

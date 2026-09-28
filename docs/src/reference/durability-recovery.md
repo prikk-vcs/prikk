@@ -65,18 +65,36 @@ indistinguishable from an interrupted append, so `--repair-wal-tail` truncates i
 `.prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes` (durably, under the same lock), and only then truncates; its output names the file. The
 file is the raw WAL bytes, so a record that was removed by mistake can be read back from it: the removed region starts at the named offset of the
 old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` ignores it, and it can be
-deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage. The same rule applies to every framed file: the object containers and
-index, the ref log and pointer index, the received, author-key and trust indexes, and the generation file.
+deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage.
+**The torn-tail-is-a-prefix-of-one-frame classification applies to every framed file** — the object containers and
+index, the ref log and pointer index, the received, author-key and trust indexes, and the generation file — but
+**only the WAL repair and the object index's own rebuild (its lost ids, when it cannot re-derive an entry) write a
+recovery file today.** The pointer index's own `--repair-pointer-index-tail` does too (mirroring the WAL exactly). The
+ref log's own tail truncation, run automatically as part of a signer-backed seal's interrupted-publication recovery
+rather than as its own `doctor` verb, truncates directly and saves nothing first: a ref-log record removed by mistake
+this way cannot be read back.
+
+**On Windows, the recovery file's own save is not claimed durable.** It writes through the same platform
+durability contract as every other atomic replace on this repository (`foundation/fsutil/anchored/windows.rs`), and that
+contract's own Windows implementation does not assert `std::fs::rename`'s durability on return — a documented gap, not
+an oversight, since `MOVEFILE_WRITE_THROUGH`'s same-volume guarantee could not be established from primary sources.
+Nothing is ever truncated without the save call returning success first, so a repair still never *drops* bytes silently
+on any platform; what is weaker on Windows is only the recovery file's own guarantee of surviving a crash between that
+return and the next durable point. "A repair keeps every byte it removes" holds as written on Linux and macOS.
 One consequence to know: a crash-torn append of a blob **whose content is itself a prikk container file** leaves a partial frame with a sound frame in
 its payload; by the rule that is damage, and `doctor --repair-index` indexes the embedded frame as an object. That object is content-addressed and
 nothing references it, so it changes no state root and no signed output.
 
-**An interrupted append in an object container is not damage when nothing names it.** A container record is made durable before its index entry is
-appended, so an unparseable frame that **no index entry names** was never committed: it is what a crash between the two leaves, and whatever was
-written after it. `verify` and `doctor` report it as a warning (`interrupted appends (unreferenced, not damage)`,
-`PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND`) naming the offset, and exit 0; every later object is still scanned and read. A frame an index entry
-**does** name stays a failed item. The active WAL has no such case (an append refuses past a tail, so an interior partial frame is always damage), and
-the ref log keeps a failed item for it today, because nothing at the reader names a ref-log record.
+**An interrupted append in an object container is not damage unless something still needs it.** A container record is made durable before its index
+entry is appended, so a frame that fails to parse (a genuine prefix, not a complete-but-invalid record) is what a crash between the two leaves.
+**The object index is never the witness of this** (it is a pure cache; see above) — `verify` checks connectivity instead: every object a sealed
+Block's state, a queued Patch in any active session's WAL, or a ref tip references must exist and read. An unparseable frame is reported as
+*possibly holding* a missing object, and named as one, only while connectivity reports something of that container's own type still missing;
+otherwise it is a harmless remnant. `verify` and `doctor` report it as a warning (`interrupted appends: N`, `PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND`)
+naming the offset, and exit 0 unless connectivity itself fails — which fails `doctor` too, not only `verify`; every later object is still scanned
+and read. A frame an index entry names, that the containers cannot actually produce, stays a failed item. The active WAL has no such case (an
+append refuses past a tail, so an interior partial frame is always damage), and the ref log keeps a failed item for it today, because nothing at
+the reader names a ref-log record.
 
 ## Active Ref Metadata
 
@@ -174,11 +192,15 @@ until signer-backed seal revalidates the transition, appends nothing, and remove
 
 ## Doctor Repair Boundary
 
-The current doctor mutation is `doctor --repair-wal-tail`, which acquires the active lock and truncates
-incomplete trailing active-WAL bytes after an under-lock publication guard and verification have
-accepted the preceding WAL prefix. **It never removes a sound record**: it truncates only a true torn tail
-(see above), and on a damaged record it refuses and changes nothing. Doctor diagnoses ref-publication
-states but does not sign, append, promote, or reconstruct ref authority.
+`doctor --repair-wal-tail` acquires the active lock and truncates incomplete trailing active-WAL bytes
+after an under-lock publication guard and verification have accepted the preceding WAL prefix.
+`doctor --repair-index` rebuilds the object index from the containers under the object-store lock — the
+index is a pure cache, never touched by any other repair. `doctor --repair-pointer-index-tail` truncates
+an incomplete trailing pointer-index record under the pointer-index lock, mirroring `--repair-wal-tail`
+exactly. **None of the three ever removes a sound record**: each truncates or rebuilds only what a true
+torn tail or a pure-cache rebuild covers (see above), and on genuine damage each refuses and changes
+nothing. Doctor diagnoses ref-publication states but does not sign, append, promote, or reconstruct ref
+authority.
 
 The [integrity and recovery diagnostics](./integrity-recovery.md) reference owns the full diagnostic
 catalog: verification checks, `DoctorIssue` codes, severities, and diagnostic interpretation. This

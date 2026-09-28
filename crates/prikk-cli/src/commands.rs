@@ -204,6 +204,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk bundle import --input <file> [--max-object-bytes N]  Import a bundle as an untrusted received pointer",
             "  prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
             "  prikk bundle verify --input <file> [--max-object-bytes N]  Check a bundle offline; writes nothing, needs no repository",
+            "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
         ],
     },
     Command {
@@ -360,6 +361,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk sync build <ref> --have <file> --output <file> [--force]  Build a PEXCH002 artifact closing the gap",
             "  note: a built sync artifact contains repository content in the clear -- prikk does not encrypt it; move it only over a channel you trust",
             "  prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]  Accept a PEXCH002 artifact (prints claim ids; optionally writes them)",
+            "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
             "  prikk sync pending                        List accepted-but-unsealed patches",
             "  prikk sync seal <ref> --claim <id>        Seal one accepted claim's patches into a block",
             "  prikk sync seal <ref> --claims <file>     Seal a batch of claims, ordered by parent block first",

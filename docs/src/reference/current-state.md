@@ -42,6 +42,36 @@ Prikk is not yet the right tool if you need:
   patterns like `*.log` do not work; and a file swept into history by mistake still cannot be
   removed later.
 
+## Known limitations, measured
+
+Disclosed here rather than left implicit, each with the figure it was measured at and the release it is
+planned for. None of these blocks 0.48.0; each is a cost or a silence, not a correctness defect.
+
+- **A ref publication replays the whole ref log three times.** It grows about 4.3 KB per generation.
+  Planned for 0.49.0.
+- **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.
+  Planned for 0.49.0.
+- **A one-file `commit` reads every stored blob to learn its kind**: 1 MiB of stored content read 1.1 MB,
+  16 MiB read 16.8 MB, 64 MiB read 67.1 MB. Not yet fixed; a design round is next.
+- **`verify` is silent over garbage bytes in the ref log.** 100 zero bytes appended to the ref log
+  container: `verify` and `doctor` exit 0 with no warning, a `seal` appends behind them, and `verify`
+  stays 0 with the garbage in the middle of the file. The state is harmless (ref-log records are signed
+  and chained), but nothing reports the bytes. Planned for 0.49.0, alongside the ref publication fix above.
+- **Resynchronisation over hostile content is quadratic.** `verify` over a WAL torn tail packed with fake
+  frame headers, release build: 256 KiB 0.24 s, 512 KiB 0.88 s, 1 MiB 3.48 s, 2 MiB 13.98 s (a plain,
+  unpacked tail costs 0.01–0.02 s at every size). Each doubling costs about four times as much; 64 MiB
+  extrapolates to hours. A standing test keeps this from getting worse; the structural fix (a header that
+  vouches for itself, so a candidate is never fully re-parsed to be rejected) is planned for 0.49.0.
+- **A `commit`'s cost follows the number of refs, roughly squared.** Branches created from `heads/main`,
+  one tiny commit timed at each point: 1 ref 1.4 ms, 50 refs 3.0 ms, 100 refs 7.2 ms, 200 refs 21.4 ms,
+  400 refs 72.1 ms. `status` stays flat (0.6–1.4 ms) at every point, which shows the cost is the write
+  path's own precondition check, not a read. Disclosed here in 0.48.0; the fix (the ref publication
+  replay above) is planned for 0.49.0.
+- **A `commit` holds all new file content in memory at once.** 64 files of 4 MiB each peaks at about
+  284 MiB. Streaming and chunking (large objects, Stages B–D) are not yet built.
+- **The object index's own lookup is a linear scan**, and the whole index is held resident in memory for
+  the duration of a write session. Not yet fixed.
+
 ## What scale to expect
 
 The list above is about missing features. Scale is a separate question, and worth stating on its

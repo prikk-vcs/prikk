@@ -245,10 +245,12 @@ reviewed; CI not green on the release tree; a `--help` text that is false on the
 ## What protects a release, and what deliberately does not exist
 
 **Protects:** signed tags on a key one known person holds; checksums and build-info published beside
-every asset; `cargo audit` and the release-policy gates on every push in CI; the smoke script run
-against the artifact, not the tree; publication by a person after the artifact is verified; and never
-unpublishing — a bad version is superseded by a patch release, and yanked only on the owner's word
-with a CHANGELOG line saying why.
+every asset; the release-policy gates on every push in CI, and `cargo audit` against a fresh advisory
+database on its own weekly schedule (not per push — a new advisory can arrive with nobody touching the
+code, so it needs a schedule of its own, in `security-audit.yml`); the smoke script run against the
+artifact, not the tree; publication by a person after the artifact is verified; and never unpublishing
+— a bad version is superseded by a patch release, and yanked only on the owner's word with a CHANGELOG
+line saying why.
 
 **Does not exist, on purpose, in v0:** a second signer; a support window; a stability promise for the
 object format, the CLI's JSON schemas or the library API. A checksum on a downloaded binary proves

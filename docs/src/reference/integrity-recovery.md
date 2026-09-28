@@ -35,6 +35,11 @@ verification covers:
 - joint ref pointer, RefState-chain, and ref-log-chain consistency;
 - signed RefUpdate log record decoding;
 - active WAL replay, including trailing partial WAL byte reporting;
+- object-index and pointer-index trailing-partial and interior-damage reporting (the object index is a
+  pure cache — a reader scans the containers in memory when it is damaged, rather than refusing — so this
+  is never a failure by itself; see [durability and crash recovery](./durability-recovery.md));
+- connectivity: every object a sealed Block's state, a queued Patch in any active session's WAL, or a ref
+  tip references must exist and be readable;
 - whether active WAL Patch records already exist as persisted Patch objects;
 - active WAL ref metadata health;
 - active rollback-draft WAL record classification;
@@ -72,10 +77,11 @@ platform.
 
 The current CLI prints counters for checked objects, Blocks, rollback Blocks, sealed rollback Patches,
 WAL records, persisted WAL Patches, refs, ref-log records, rollback draft WAL records, publication
-trust records, publication trust issues, ref-publication issues, and trailing partial WAL bytes. It
-also prints the active WAL metadata state. Object findings are ordered by numeric object type and raw
-ObjectId bytes, followed by active WAL sequence, then unsigned UTF-8 ref-name bytes and ref-log
-sequence.
+trust records, publication trust issues, ref-publication issues, connectivity issues, trailing partial
+WAL bytes, trailing partial object-index bytes, whether the object index has interior damage, and
+trailing partial pointer-index bytes. It also prints the active WAL metadata state. Object findings are
+ordered by numeric object type and raw ObjectId bytes, followed by active WAL sequence, then unsigned
+UTF-8 ref-name bytes and ref-log sequence.
 
 The command exits with failure when:
 
@@ -83,10 +89,16 @@ The command exits with failure when:
 - the report has a non-empty active WAL with missing or malformed active ref metadata; or
 - the report has publication-trust issues; or
 - the report has a blocking ref-publication issue such as a one-transition pointer lead, matching
-  active state retained after completed publication, or an unproved pointer/log divergence.
+  active state retained after completed publication, or an unproved pointer/log divergence; or
+- the report has a connectivity issue: an object a sealed Block's state, a queued Patch, or a ref tip
+  references that cannot be read. `prikk doctor` fails on the same condition (`PRIKK-DOCTOR-OBJECT-
+  CONNECTIVITY`), scoped to the active session whose queued Patch references it when that is the source.
 
-Trailing partial WAL bytes are printed as a warning in the report. The recovery mechanics and safe
-truncation boundary are covered by the [durability and crash recovery](./durability-recovery.md)
+Trailing partial WAL bytes, trailing partial object-index bytes, object-index interior damage, and
+trailing partial pointer-index bytes are each printed as a warning in the report — the object and
+pointer index are caches or repairable tails, so this is never itself a failure, but it is never silent
+either. The recovery mechanics and safe truncation boundary are covered by the
+[durability and crash recovery](./durability-recovery.md)
 reference.
 
 ## Active WAL Metadata States
@@ -126,7 +138,11 @@ Current doctor severities are `info`, `warning`, and `error`.
 | `PRIKK-DOCTOR-VERIFY-OK` | `info` | The structural verification scan completed; later issue lines still determine health. |
 | `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` | `warning` | Active WAL has trailing bytes that are a prefix of one incomplete final record (a true torn tail); `--repair-wal-tail` truncates exactly these. |
 | `PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE` | `error` | A WAL record failed verification, including a partial frame with a sound record behind it (damage, not a tail); the message says how many sound records follow. No repair switch touches it. |
-| `PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND` | `warning` | An object container has a frame that does not parse and no index entry names (an interrupted append and what was written after it); nothing references it, no repair is required. |
+| `PRIKK-DOCTOR-OBJECT-CONNECTIVITY` | `error` | An object a sealed Block's state, a queued Patch, or a ref tip references cannot be read. Scoped to the active session whose queued Patch references it, when that is the source; no repair switch touches it. |
+| `PRIKK-DOCTOR-OBJECT-INTERRUPTED-APPEND` | `warning` | An object container has a frame that does not parse. Reported as possibly holding a missing object, and named as one, whenever a `PRIKK-DOCTOR-OBJECT-CONNECTIVITY` finding names an object of this same container's type; otherwise reported as a harmless remnant. No repair is required either way — connectivity, not index membership, is what decides whether this is damage. |
+| `PRIKK-DOCTOR-OBJECT-INDEX-TRAILING-PARTIAL` | `warning` | The object index has trailing bytes that look like an incomplete final record. The object index is a pure cache (readers rescan the containers when it is damaged), so this is never a failure; `--repair-index` rebuilds it. |
+| `PRIKK-DOCTOR-OBJECT-INDEX-INTERIOR-DAMAGE` | `warning` | The object index has an interior record that failed to decode. Same non-failure reasoning as the trailing-partial row; `--repair-index` rebuilds it. |
+| `PRIKK-DOCTOR-POINTER-INDEX-TRAILING-PARTIAL` | `warning` | The pointer index has trailing bytes that look like an incomplete final record. `--repair-pointer-index-tail` truncates exactly these; unlike the object index, a *damaged* pointer-index entry (not merely a trailing partial) already fails the `Refs` stage outright rather than reaching this code. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING` | `error` | Active WAL has records but active ref metadata is missing. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED` | `error` | Active WAL has records but active ref metadata is malformed. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS` | `warning` | Active WAL is empty but stale valid ref metadata remains. |
@@ -144,9 +160,22 @@ issues by themselves.
 
 ## Doctor Repair Boundary
 
-Doctor's supported repair switches are `--repair-wal-tail` and `--repair-index`.
-`--repair-main-ref` is a recognized input that performs no repair and is always refused.
-`--repair-wal-tail` saves the bytes it removes to `.prikk/recovery/` before truncating (see [durability and crash recovery](./durability-recovery.md)).
+Doctor's supported repair switches are `--repair-wal-tail`, `--repair-index`, and
+`--repair-pointer-index-tail`. `--repair-main-ref` is a recognized input that performs no repair and is
+always refused. `--repair-wal-tail` and `--repair-pointer-index-tail` each save the bytes they remove to
+`.prikk/recovery/` before truncating (see [durability and crash recovery](./durability-recovery.md)).
+`--repair-index` saves the ids it cannot re-derive, when any, the same way (`recovery/index-lost-ids-
+<hash>.bytes`).
+
+### `--repair-pointer-index-tail`
+
+Truncates an incomplete trailing pointer-index record — a torn tail, positionally: the last record ends
+past the file's own length, and nothing sound follows it. Mirrors `--repair-wal-tail` exactly in shape
+and contract, including saving the removed bytes first. Refuses, unchanged, on a genuinely damaged entry
+(not merely a trailing partial): the pointer index leads the ref log by design (a durable append there
+*is* the publish, made before the corresponding ref-log record), so it cannot be rebuilt from the log the
+way the object index is rebuilt from the containers — a damaged entry has no other source to recover from.
+Holds the pointer-index lock for its whole run, matching `--repair-index`'s own discipline.
 
 ### `--repair-index`
 
