@@ -235,10 +235,13 @@ target — fails CI immediately rather than being found by a user or the next tr
 (RFC 122), against a fixture repository authored on Linux, so this is a demonstrated property, not
 merely a successful compile.
 
-**`macos-mutation` and `windows-mutation`** (DC-81, DC-87 Stage 2) run the full workspace test suite
-natively on `macos-latest` and `windows-latest`, since neither developer nor architect can run either
-platform locally as part of this project's own environment — the CI job existing and being green *is*
-the verification for each backend, not a supplement to one done elsewhere.
+**The macOS mutation test suite and Windows mutation test suite CI jobs** (DC-81, DC-87 Stage 2) run
+the suite that compiles there natively on `macos-latest` and `windows-latest` — not every test in the
+workspace: some are gated to Linux only (a test that only makes sense against a Linux-specific
+fixture or path shape, `#[cfg(target_os = "linux")]` or equivalent), so each platform's own count is
+smaller than `stable`'s. Neither developer nor architect can run either platform locally as part of
+this project's own environment, so the CI job existing and being green *is* the verification for each
+backend, not a supplement to one done elsewhere.
 
 **`windows-mutate` → `linux-mutate-reference` → `verify-cross-platform-history`** (DC-87 Stage 2
 criterion 7) close the one property none of the jobs above can: that repository *authored on Linux,

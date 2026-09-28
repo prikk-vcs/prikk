@@ -255,9 +255,9 @@ mod budget;
 /// report. Each is set from a **measured** wall time with a **1.5x margin**, rounded up, unless its line says it is an estimate:
 ///
 /// - step costs: measured 988 s (2026-09-26, one N = 64,000 sample, release, load 1.8) -> 1,500 s;
-/// - the four-arm comparison ([`ARMS_BUDGET`]): 75 minutes **as Addendum 1 declares it**, stopped at 150. **Measured: 6,106 s (102 minutes, 136 %
-///   of the budget) on 2026-09-26, boot `0b419a8a`, load 2.1** -- the fresh-build arms at N = 64,000 are the cost. A rerun should declare
-///   9,000 s (1.5x measured, rounded up); the constant keeps the architect's figure until that is ruled;
+/// - the four-arm comparison ([`ARMS_BUDGET`]): **measured** 6,106 s (102 minutes, 136% of Addendum 1's original 75-minute budget) on
+///   2026-09-26, boot `0b419a8a`, load 2.1 -- the fresh-build arms at N = 64,000 are the cost. 1.5x that, rounded up, is 9,000 s
+///   (150 minutes); set at 0.48.0 release prep, owed since the measurement-budget round;
 /// - release-gate profile: **measured** -- four end-to-end runs of the trimmed profile on 2026-09-26 (boot `0b419a8a`, load 1.0-2.2 at each
 ///   start): 762 s and 672 s on HEAD, 763 s and 770 s on 0.47.0's release commit with this instrument overlaid; the longest, 770 s, x 1.5
 ///   rounds up to 1,200 s;
@@ -1638,9 +1638,10 @@ const ARMS_SAMPLES: usize = 5;
 /// (i)'s median at each N, **and** its 64,000/32,000 ratio within this many percent of arm (i)'s ratio. Half the smallest
 /// release-to-release swing on record (1.0%).
 const ARM_TOLERANCE_PERCENT: f64 = 0.5;
-/// The four-arm unit's budget (Addendum 1 §2): 75 minutes, stopped at 150. (A rough sum of the round's own measured per-sample times
-/// is about 105 minutes: the fresh-build arms at N = 64,000 are the cost. It stops itself at 150.)
-const ARMS_BUDGET: Duration = Duration::from_secs(75 * 60);
+/// The four-arm unit's budget (Addendum 1 §2, owed since the measurement-budget round, set at 0.48.0 release
+/// prep): 150 minutes, 1.5x the 102 minutes measured 2026-09-26 (boot `0b419a8a`, load 2.1) -- the fresh-build
+/// arms at N = 64,000 are the cost. It stops itself at 300.
+const ARMS_BUDGET: Duration = Duration::from_secs(9_000);
 
 /// The four forms compared (Addendum 1 §2). (i) is the reference: what the release gate did before this round.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

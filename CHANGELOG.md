@@ -21,8 +21,11 @@
   `trailing_partial_pointer_index_bytes`, `active_wal_ordering_issues`, `received_ref_item_outcomes`,
   `active_session_count`), `WalRepair` gained `recovery_file`, and `IndexRepairReport` gained `lost_ids` and
   `recovery_file`. `InterruptedAppend`, `ConnectivityIssue` and `PointerIndexRepair` are new,
-  `#[non_exhaustive]` types. Every one of these types was already `#[non_exhaustive]`, so this compiles unchanged
-  if constructed and matched only through the crate, per the existing convention — construct and match with `..`.
+  `#[non_exhaustive]` types, and `repair_pointer_index_tail` is a new function. Every one of these types was
+  already `#[non_exhaustive]`, so this compiles unchanged if constructed and matched only through the crate, per
+  the existing convention — construct and match with `..`. `WalReplay` gains two methods, `damage_summary` and
+  `damaged_record_error` (the text behind the "run doctor for diagnosis" refusal in Output changes below); adding
+  a method is additive, not a break, for any caller that does not itself define a trait of the same shape.
 - A script that greps `prikk verify`/`prikk doctor` output for "interrupted append… no index entry names it" should
   instead check for the `object-connectivity` stage and `connectivity_issues`, and for the plain "interrupted
   append" warning (index membership is no longer part of either message).
