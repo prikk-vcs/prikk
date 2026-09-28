@@ -2,6 +2,16 @@
 
 ## 0.48.0 — 2026-09-29
 
+### Security
+
+- **Memory and bytes read followed everything the repository stored** (RFC 102): every object write read its whole
+  container into memory to learn its own length, and every object read did too, to decode one record. Content
+  received from a peer through `bundle import` or `sync accept` is bounded per object (0.47.0), but not in total, so
+  received content could make every later command's memory and reads grow in proportion to everything already
+  stored, not to what that command itself touches. **Affected: 0.20.0 to 0.47.0. No advisory. Action: upgrade.**
+- **Known, not fixed:** `verify`'s resynchronisation is quadratic on crafted content in a damaged or torn file (about
+  14 s at 2 MiB) — see the known limitations in `current-state.md` (M5). Fixed in 0.49.0.
+
 ### Upgrading
 
 - **The first `seal` (or `merge`, or `sync seal`) after upgrading walks the whole history once**, the same full
@@ -268,6 +278,9 @@ independent full replay that guards against a corrupted cache still happens with
 256-block history (release build, three interleaved runs, on a machine at load 2.5–4): the second and third `commit`
 at one sealed tip 480 and 475 → 39 and 41 ms, `worktree-status` followed by a `commit` 507 → 44 ms; a `commit` after a
 seal, and `worktree-status` itself, are unchanged.
+
+Security note, added 2026-09-29: the entry below is security-relevant (memory exhaustion by an untrusted
+artifact). No advisory.
 
 ### Fixed — a bundle or sync file over its size bound was read in full before being refused
 
@@ -622,6 +635,9 @@ refuses any second copy, naming `prikk format upgrade`.
 `sync accept` refuse — the whole operation, nothing written — any object they would store, new or already
 held, carrying more. A MAINTAINER signature by an adopted key that verifies does not count. Local writers
 never check the limit, but their own AUTHOR signatures count toward it.
+
+Security note, added 2026-09-29: the entry below is security-relevant (a second signature that did not
+verify went unreported). No advisory.
 
 ### Fixed — `verify` checked only the first signature of a role
 
