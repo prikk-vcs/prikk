@@ -131,4 +131,4 @@ release build:
   cause, a second WAL decode in the connectivity stage;
 - nothing is silent.
 
-**Closes when the Windows mutation suite is green on the pushed commit.**
+**CLOSED 2026-09-27:** pushed at `d89b5d7d`, CI run `36322845875` 16/16, the Windows mutation suite green.
