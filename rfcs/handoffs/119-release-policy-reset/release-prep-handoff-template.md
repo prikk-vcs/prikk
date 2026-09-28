@@ -76,7 +76,9 @@ over the runs give both in minutes.
    size-capped tmpfs that a concurrent build or gate run can fill out from under it. **The measurement
    owns the machine while it runs — including gates, from the architect's own side, not only builds.**
 
-   **Wall-clock cost, measured, not promised:** the trimmed profile took **672–770 s (11–13 minutes) per
+   **Wall-clock cost, measured, not promised:** on the 0.48.0 candidate the trimmed profile took **19.9 s**
+   (2026-09-29): RFC 102, 159 and 162 removed the quadratic baseline commit and seal (N = 64,000: commit 61.1 → 3.8 s,
+   seal 199 → 2.7 s). A drop that size is the product, never load. On 0.47.0 it took **672–770 s (11–13 minutes) per
    run**, measured on 2026-09-26 at a 1-minute load of 1.0–2.2, over four runs: two on 0.47.0's release
    commit with the instrument overlaid, two on HEAD. The profile's in-source budget is 1,200 s, and its
    watcher stops it at 2,400 s with a partial report. The pre-trim profile took 6,008 s at 0.47.0's prep.

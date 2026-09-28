@@ -111,3 +111,24 @@ owner's ruling).
 | P3 | the external `reproduce.sh`, candidate and 0.47.0 | 5 min |
 
 Report: `.git-exclude/review-request/release-0.48.0-prep-report-v1.md`.
+
+## Addendum 1 — 2026-09-29: the Security block, then the candidate
+
+Report `release-0.48.0-prep-report-v1.md`; review `.git-exclude/reviewed/release-0.48.0-prep-review-v1.md`. **The sweep
+and the release commit `0f0ea817` are accepted.** The architect:
+- re-ran the gates (14/14);
+- ran the external `reproduce.sh` on the candidate (M1–M3 closed, M5 at `bb81b0fb`'s level);
+- measured the store-size row, which the round skipped: memory flat at about 13 MB, and bytes read following content
+  (F4, disclosed).
+
+1. **Write `### Security` in the 0.48.0 section, first**, per the review's §3:
+   - **one entry:** memory and bytes read followed everything the repository stored (RFC 102). It is reachable through
+     received content, bounded per object but not in total. Affected 0.20.0–0.47.0, no advisory, upgrade;
+   - **one line:** M5 is known and not fixed, and points to the known limitations.
+2. **Two dated annotations**, one line each, no advisory:
+   - **0.47.0**'s "read in full before being refused" entry is security-relevant (memory exhaustion by an untrusted
+     artifact);
+   - **0.45.0**'s "`verify` checked only the first signature of a role" entry is security-relevant.
+
+**One sweep commit** on top of `0f0ea817`. **The candidate is that commit**, and the version-bump commit stays exactly
+three files. Gates on it, in R1's scope. Report: `.git-exclude/review-request/release-0.48.0-prep-report-v2.md`.
