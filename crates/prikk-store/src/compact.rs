@@ -83,7 +83,8 @@ fn run_ref_pointer_index_compaction(
     layout.require_current_format()?;
     let _lock = acquire_container_locks(layout, &[LockableContainer::RefPointerIndex])?;
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
-    let live_slot = generation::resolve_live_slot(layout, &generation_log_path)?;
+    let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
 
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
@@ -103,6 +104,16 @@ fn run_ref_pointer_index_compaction(
     let entries_after = compacted.len();
 
     if mode == CompactionMode::Execute {
+        // RFC 163 §9: the generation log's own write-side tail guard, checked only here -- a
+        // `--plan-only` run writes nothing and must not refuse over a tail it will never write behind
+        // (Addendum 1 item 2's own "refuse only when the operation will append" rule, applied here).
+        // Fires before this compaction's first byte, not only before the generation record.
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the ref pointer index's generation log",
+            generation_trailing_partial_bytes,
+            generation_tail_offset,
+            "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.ref_pointer_index_slot_path(target_slot))?;
@@ -147,7 +158,8 @@ fn run_received_index_compaction(
     layout.require_current_format()?;
     let _lock = acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
     let generation_log_path = layout.received_index_generation_log_path();
-    let live_slot = generation::resolve_live_slot(layout, &generation_log_path)?;
+    let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
 
     let replay = replay_received_index(layout)?;
     if replay.has_item_failure() {
@@ -167,6 +179,13 @@ fn run_received_index_compaction(
     let entries_after = compacted.len();
 
     if mode == CompactionMode::Execute {
+        // RFC 163 §9: see the identical guard in `run_ref_pointer_index_compaction` above.
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the received index's generation log",
+            generation_trailing_partial_bytes,
+            generation_tail_offset,
+            "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.received_index_slot_path(target_slot))?;
@@ -210,7 +229,8 @@ fn run_trust_policy_compaction(
     layout.require_current_format()?;
     let _lock = acquire_container_locks(layout, &[LockableContainer::TrustPolicy])?;
     let generation_log_path = layout.trust_policy_generation_log_path();
-    let live_slot = generation::resolve_live_slot(layout, &generation_log_path)?;
+    let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
 
     let replay = replay_trust_policy(layout)?;
     if replay.has_item_failure() {
@@ -225,6 +245,13 @@ fn run_trust_policy_compaction(
     let entries_after = usize::from(last_snapshot.is_some());
 
     if mode == CompactionMode::Execute {
+        // RFC 163 §9: see the identical guard in `run_ref_pointer_index_compaction` above.
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the trust policy container's generation log",
+            generation_trailing_partial_bytes,
+            generation_tail_offset,
+            "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.trust_policy_container_slot_path(target_slot))?;

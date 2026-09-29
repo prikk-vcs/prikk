@@ -61,6 +61,9 @@ pub(crate) struct GenerationRecordOutcome {
 pub(crate) struct GenerationReplay {
     pub(crate) records: Vec<GenerationRecord>,
     pub(crate) trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins (RFC 163 §9's refusal names it). Only
+    /// meaningful when `trailing_partial_bytes != 0`.
+    pub(crate) tail_offset: usize,
     pub(crate) record_outcomes: Vec<GenerationRecordOutcome>,
 }
 
@@ -265,6 +268,7 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                     return Ok(GenerationReplay {
                         records,
                         trailing_partial_bytes: remaining,
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -286,6 +290,7 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                         return Ok(GenerationReplay {
                             records,
                             trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
                             record_outcomes,
                         });
                     }
@@ -304,6 +309,7 @@ fn replay_generation_log(
         return Ok(GenerationReplay {
             records: Vec::new(),
             trailing_partial_bytes: 0,
+            tail_offset: 0,
             record_outcomes: Vec::new(),
         });
     };
@@ -313,21 +319,36 @@ fn replay_generation_log(
 /// Resolve which slot is currently live for one compacting container's generation log. `A` when no
 /// generation record has ever been written -- Step 1's only reachable outcome, since nothing appends
 /// one yet. Fails closed on a damaged record rather than silently resolving to an older, stale
-/// generation (see module doc).
+/// generation (see module doc). A reader: never refuses on the log's own trailing-partial tail (RFC
+/// 163 §9's write-side guard, below, is what does that) -- every ordinary append to the container this
+/// log names (a publication, a trust-policy snapshot, a received-ref import) resolves its target slot
+/// through this function and must stay unaffected by a generation-log tail that has nothing to do with
+/// it.
 pub(crate) fn resolve_live_slot(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
 ) -> Result<ContainerSlot> {
+    Ok(resolve_live_slot_with_tail(layout, generation_log_path)?.0)
+}
+
+/// Like [`resolve_live_slot`], but also returns the log's own tail status from the same replay --
+/// RFC 163 §9's write-side guard (`compact.rs`, its only caller) is built on this call so it never
+/// pays for a second whole read just to learn what `resolve_live_slot` already decoded.
+pub(crate) fn resolve_live_slot_with_tail(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+) -> Result<(ContainerSlot, usize, usize)> {
     let replay = replay_generation_log(layout, generation_log_path)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "generation log has a damaged record; run doctor before reading".to_string(),
         ));
     }
-    Ok(replay
+    let slot = replay
         .records
         .last()
-        .map_or(ContainerSlot::A, |record| record.live_slot))
+        .map_or(ContainerSlot::A, |record| record.live_slot);
+    Ok((slot, replay.trailing_partial_bytes, replay.tail_offset))
 }
 
 #[cfg(test)]

@@ -227,11 +227,11 @@ until signer-backed seal revalidates the transition, appends nothing, and remove
 
 ## A Write Never Buries a Crash State (RFC 163)
 
-**The rule, at five files: before an append, the writer confirms under its lock that the file ends at
+**The rule, at six files: before an append, the writer confirms under its lock that the file ends at
 its last sound record. If it does not, it refuses before writing anything**, naming the file, the byte
 offset where the sound content ends, how many bytes follow, and the way out. Before this round, a torn
 tail that `verify` already accepted as harmless (the pointer index, under RFC 162 rule 3 above) or said
-nothing about at all (the other four, still under the pre-0.48.0 shape rule, N2) was invisible to the
+nothing about at all (the other five, still under the pre-0.48.0 shape rule, N2) was invisible to the
 *next ordinary write* at these files: the write appended behind it, blind, and turned an accepted crash
 state into permanent damage — `verify` failing for good, and on some of these files a `seal` or `commit`
 refused too.
@@ -243,7 +243,7 @@ appends nothing, and is unaffected by a tail on the file it would otherwise have
 still runs, and still reads what the operation already reads; it is the *refusal* that is conditioned on
 whether an append is actually about to happen, not the read.
 
-**The five files, and the way out:**
+**The six files, and the way out:**
 
 - **The pointer index.** Every publication (`seal`, `branch create`, `tag create`, `merge`) reads the
   pointer index for its own compare-and-swap check immediately before it would append; that same read
@@ -261,13 +261,21 @@ whether an append is actually about to happen, not the read.
   the write that refused. A tail of zeros or random bytes at these four files is damage under their own
   shape rule, not something this refusal covers at all — see `current-state.md` and
   `troubleshooting.md`'s own entry for that message.
+- **The generation log, at each of the three compacting containers** (the pointer index, the received
+  index, the trust policy container). `compact` refuses the same way, **before its first write** — before
+  the retired slot is truncated, not only before the generation record itself — and only in `--execute`
+  mode: a `--plan-only` preview writes nothing and is unaffected by a tail on a log it will never write
+  behind. No repair verb exists for this in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see
+  `current-state.md`'s known limitations). The way out is the same manual truncate-then-`verify` as the
+  four files above.
 
 **Where each check reads from.** No new whole read was added where an existing one could carry the
 answer: the pointer index's guard rides the same replay `ensure_current_matches`'s own compare-and-swap
 check already performs; the trust-key and trust-policy guards ride the same replay
 `add_trusted_maintainer`/`remove_trusted_maintainer` already perform to compute the current key id list
 and look up the key being added; the author-key guard rides the same replay
-`check_author_key_conflict` already performs. Only the received index's guard is a new read, moved to
+`check_author_key_conflict` already performs; the generation-log guard rides the same replay
+`resolve_live_slot` already performs to pick the live slot. Only the received index's guard is a new read, moved to
 `bundle import`'s own pre-write phase: `write_received_pointer` reads nothing before appending today
 (there is no CAS to enforce), so there was no existing read to build the check on. It grows with every
 import that records a pointer, not only with the number of distinct remote refs (`compact` is what

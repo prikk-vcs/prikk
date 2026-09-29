@@ -63,6 +63,13 @@ planned for. None of these blocks 0.48.0.
   each refuse with "\<container\> has a damaged entry; run doctor before reading"; and `doctor` has
   nothing that repairs it. A tail defined by position for these four files, the same way rule 3 already
   works for the WAL and the pointer index, is 0.49.0 work.
+- **The generation log at each compacting container has no repair verb, and `verify` says nothing about
+  a tail on it on its own.** RFC 163 §9 fixed the burying: `compact` now refuses before its first write
+  (before the retired slot is truncated, not only before the generation record) when its own generation
+  log ends in an unclean tail, the same way the pointer index and the other four files above already do.
+  What remains, same as N2's remainder: no repair verb yet, so the way out is manual (back the file up,
+  truncate it to the named offset, then run `prikk verify`); and `verify` on its own still says nothing
+  about a torn generation-log tail. A repair verb and a `verify` line are planned for 0.49.0.
 - **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
   different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
   `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same

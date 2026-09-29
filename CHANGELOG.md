@@ -111,6 +111,10 @@
   records**, naming how many: `the N removed byte(s) include M complete record(s) -- a write the WAL's
   own shape says finished, not one a crash interrupted`; before, a removed record the user had been told
   was committed was indistinguishable in the output from a genuine interrupted append (RFC 163, N6).
+- `prikk compact` (`--pointer-index`, `--received-index`, `--trust-policy`) now **refuses before writing
+  anything** when that container's own generation log ends in an unclean tail, naming the byte offset and
+  the manual way out; before, `compact` appended its new generation record behind the tail, and `verify`
+  then failed for good after (RFC 163, §9). `compact --plan-only` is unaffected, since it writes nothing.
 
 ### Fixed — an index repair could make `verify` blind to a damaged object, a torn index append made every command refuse, and a WAL or pointer-index tail was fatal or repairable depending on its shape (RFC 162)
 
@@ -286,18 +290,19 @@ damaged is therefore no longer stopped at a checkpoint seal, and `prikk verify` 
 This checkpoint-seal change touches no public Rust API on its own; see the `### Changed — breaking once` entry
 above for what this release does break.
 
-### Fixed — a write could still bury a crash state at the ref pointer index, trust keys, trust policy, author keys and the received index (RFC 163)
+### Fixed — a write could still bury a crash state at the ref pointer index, trust keys, trust policy, author keys, the received index and each compacting container's generation log (RFC 163)
 
 RFC 162 rule 1 ("never appends behind damage") was applied to the object index only. Every other appended file
-still appended blind: a torn tail these five files' own readers already tolerated (the pointer index, as a
-repairable tail; the other four, silently — `verify` says nothing about a tail on them at all, N7, still open)
+still appended blind: a torn tail these six files' own readers already tolerated (the pointer index, as a
+repairable tail; the other five, silently — `verify` says nothing about a tail on them at all, N7, still open)
 became permanent damage the moment the next ordinary write landed behind it. **Confirmed in the released 0.47.0
 binary** (the external architect's own reproduction, letter 015's assessment): `seal`, `branch create` and
 `tag create` each exit 1 having already appended, after which `verify` fails for good and
 `--repair-pointer-index-tail` is refused as interior damage (N1); `trust maintainer add` exits 1 having
 appended, after which `seal` is refused too (N2); a crash inside `branch create`/`tag create` followed by a
 `seal` of a different ref buries the torn ref-log record the same way (N3, ref log, not fixed this round — see
-below). Earlier releases were not independently checked this round.
+below); `compact` on a torn generation log appended its own new slot behind it, blind, the same way (§9, also
+reproduced in the released 0.47.0 binary). Earlier releases were not independently checked this round.
 
 - **The ref pointer index (N1) is fixed the same way the WAL already was**: `ensure_current_matches`, the
   compare-and-swap check every publication (`seal`, `branch create`, `tag create`, `merge`) already runs
@@ -332,11 +337,19 @@ below). Earlier releases were not independently checked this round.
   records, so a removed commit the user was told had succeeded is never silent about it (see Output changes,
   above). The witness that would tell a genuine crash apart from later damage to an already-durable record is
   0.49.0 work.
-- **A new shared check, `foundation::tail_guard`**, used at every one of the five sites above: refuse before an
+- **§9: each compacting container's own generation log (the ref pointer index, the received index, the trust
+  policy container) is fixed the same way, one layer up.** `resolve_live_slot` already reads the generation log
+  to pick the live slot; `compact` now also refuses there, before its first write — before the retired slot is
+  truncated, not only before the new generation record — when the log ends in an unclean tail, no second read
+  added. **Refuses only in `--execute` mode**: a `--plan-only` run writes nothing and is unaffected by a tail it
+  will never write behind. None of the three has a repair verb in 0.48.0; the way out is the same manual
+  truncate-then-`verify` as the four files above, and `troubleshooting.md` gets one entry for it. A repair verb
+  and a `verify` line are 0.49.0, alongside N7's remainder.
+- **A new shared check, `foundation::tail_guard`**, used at every one of the sites above: refuse before an
   append when the file does not end at its last sound record, naming the file, the byte offset, how many bytes
   follow, and the way out. Its addition is the reason `refs` and `trust` are newly declared coupling-graph hubs
-  (`tools/release-policy/src/boundary/coupling.rs`'s own `DECLARED_HUBS`) — one shared check three already
-  wide-fan-in modules now call, not three drifting copies of it.
+  (`tools/release-policy/src/boundary/coupling.rs`'s own `DECLARED_HUBS`) — one shared check now called from
+  every one of these sites, not a drifting copy at each.
 
 ## 0.47.0 — 2026-09-25
 

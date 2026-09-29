@@ -199,6 +199,18 @@ object write, the same as every other decision an import makes. (`sync accept` n
 file; a received/`remotes/*` ref is only ever created by `bundle import`.) Back the file up, truncate it
 to the named offset, run `prikk verify`, then retry the import.
 
+## `error: integrity error: the <container>'s generation log has an incomplete tail at byte offset N (M byte(s) follow); …`
+
+`prikk compact` refuses **before writing anything at all** — before the retired slot is truncated, not
+only before the new generation record — when the container's own generation log (`<container>` is "ref
+pointer index", "received index", or "trust policy container", whichever `compact` flag you ran) ends in
+a torn tail from an interrupted `compact`. This is the same rule as the five container refusals above,
+one layer up: `compact` already reads the generation log to pick the live slot, and this check rides that
+same read rather than performing a new one. **`compact --plan-only` is unaffected**: a plan-only run
+writes nothing, so it never refuses over a tail it would never write behind. Back the file up, truncate
+it to the named offset, run `prikk verify` to confirm the repository is sound, then retry `compact`.
+There is no `doctor` repair verb for this file yet (planned for 0.49.0).
+
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
 Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,
