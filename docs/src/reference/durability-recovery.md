@@ -48,17 +48,21 @@ created later by `seal`.
 WAL replay reads valid records from the start of the file. Each complete record carries magic,
 version, sequence, body length, checksum, and the encoded signed envelope bytes.
 
-Incomplete trailing bytes are reported separately as trailing partial bytes. **A torn tail is a prefix
-of one well-formed frame, and nothing else**: the remnant of an append that was interrupted, at the end
-of the file. If a sound frame (magic, a valid header, a body that passes its checksum) starts anywhere in
-the remainder, the partial frame is not a tail; it is damage, reported as a failed record at its offset,
-and the sound records after it are still read. When the evidence is ambiguous the answer is damage, never
-tail. A true torn tail is the only WAL truncation case that `doctor --repair-wal-tail` handles. A complete
-record with a checksum mismatch, malformed header, unsupported version, or malformed envelope, and a
-partial frame with a sound frame behind it, are integrity failures and are not safe automatic truncation
-candidates: the repair refuses and leaves the file as it was, naming the damaged offset and how many sound
-records follow it. (Before 0.48.0 a damaged length was read as a tail whatever followed it, and the repair
-truncated the sound records away.)
+Incomplete trailing bytes are reported separately as trailing partial bytes. **For the WAL, the tail is
+everything after the last sound record, when no sound record follows it — whatever its shape** (RFC 162
+rule 3): a genuine interrupted-append prefix, zeros, garbage, or a last record whose header parses but
+whose own checksum does not match. If a sound frame (magic, a valid header, a body that passes its
+checksum) starts anywhere in the remainder, the frame at that offset is not a tail; it is **interior
+damage**, reported as a failed record at its offset, and the sound records after it are still read. When
+the evidence is ambiguous the answer is damage, never tail. A true tail is the only case
+`doctor --repair-wal-tail` truncates. (Before 0.48.0 the tail was the narrower, shape-defined case only —
+a structurally incomplete frame, too few bytes for its own header or claimed body. A complete-but-invalid
+last record — a checksum mismatch, an unsupported version, a malformed envelope — was refused as damage
+even with nothing sound behind it, the same as interior damage still is. RFC 162 rule 3 widened the tail
+from a question of shape to a question of position: not "does this parse as a legitimate partial frame"
+but "is this the last thing in the file, with no sound record after it." Widening loses nothing, because a
+repair keeps every byte it removes, below — including, now, a record that was in fact a real write, torn
+in a way this file cannot tell apart from a crash.)
 
 **A repair keeps every byte it removes.** A record whose only fault is a damaged length, with nothing sound behind it, is
 indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it writes exactly the bytes it will remove to
@@ -66,9 +70,23 @@ indistinguishable from an interrupted append, so `--repair-wal-tail` truncates i
 file is the raw WAL bytes, so a record that was removed by mistake can be read back from it: the removed region starts at the named offset of the
 old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` ignores it, and it can be
 deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage.
-**The torn-tail-is-a-prefix-of-one-frame classification applies to every framed file** — the object containers and
-index, the ref log and pointer index, the received, author-key and trust indexes, and the generation file — but
-**only three repairs write a recovery file today:** the WAL repair, the pointer index's own
+**What counts as a tail is not one rule for every framed file** (RFC 162):
+
+- **The WAL and the pointer index** end at their last sound record — the position rule above — because the
+  pointer index leads the log by design and gets the same repair as the WAL.
+- **The object index** is a pure cache (rule 1): a damaged tail or interior record there is never refused.
+  A writer rebuilds it from the containers before appending; a reader falls back to scanning them.
+- **The object containers** are classified by connectivity, not by position (rule 2, above): an unparseable
+  frame is a harmless remnant unless something still committed — a sealed block's state, a queued patch, a
+  ref tip — still needs the object it might have held.
+- **The ref log** keeps its own positive rule, unchanged: it truncates only a suffix that is a prefix of the
+  record it expected to write next.
+- **The rest** — the received, author-key and trust-key indexes, the trust-policy container, and the
+  generation file — still use the shape rule this section described before 0.48.0: a torn tail is a prefix
+  of one well-formed frame, and nothing else; a complete record that fails its own checksum there is damage,
+  refused, not truncated.
+
+**Only three repairs write a recovery file today:** the WAL repair, the pointer index's own
 `--repair-pointer-index-tail` (mirroring the WAL exactly), and the object index's own rebuild (its lost ids, when it
 cannot re-derive an entry). The
 ref log's own tail truncation, run automatically as part of a signer-backed seal's interrupted-publication recovery

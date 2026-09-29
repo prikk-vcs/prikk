@@ -218,7 +218,8 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
    version (for 0.48.0: prikk 0.48.0), then a blank line, then the line
    `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`.
 
-   The Release workflow builds four targets and publishes the assets. **The Release page carries that
+   The Release workflow refuses to build unless the commit's most recent CI run on `main` completed
+   successfully. The Release workflow builds four targets and publishes the assets. **The Release page carries that
    version's CHANGELOG section in full**, so the notes are read there and not behind a link to a file
    that is reorganised over time. The signed tag is what authenticates them: the section is part of the
    tagged commit, so anyone can check a Release page by verifying the tag (`git tag -v X.Y.Z`) and

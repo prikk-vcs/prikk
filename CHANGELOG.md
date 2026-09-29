@@ -87,8 +87,8 @@
 
 ### Fixed — an index repair could make `verify` blind to a damaged object, a torn index append made every command refuse, and a WAL or pointer-index tail was fatal or repairable depending on its shape (RFC 162)
 
-Three defects the external review measured, all introduced within this cycle (by the round that closed incident 6, F3 Addendum 1's own
-ruling that the object index witnesses commitment):
+Three defects the external review measured. **Only the first was introduced within this cycle** (by the round that closed incident 6,
+F3 Addendum 1's own ruling that the object index witnesses commitment); **the other two are older, and a user of 0.47.0 is affected:**
 
 - **`doctor --repair-index` could turn a detected damaged object into a clean `verify`.** The repair rebuilt the index from the containers
   and dropped the entry it could not re-derive; `verify` then read the corresponding frame as an *interrupted append* ("no index entry
@@ -108,7 +108,10 @@ ruling that the object index witnesses commitment):
   warning line from both `verify` and `doctor` -- accepted, since each is a cache or a repairable tail, but no longer silent about it.
 - **A torn object-index append, then one commit, made every command refuse** ("nothing to repair" from `--repair-index`, since it compared
   only the *set* of sound entries, which the torn bytes never changed). `--repair-index` now rewrites whenever the file is not byte for
-  byte the encoding of its sound entries — a torn tail included, not only a relocated or missing entry.
+  byte the encoding of its sound entries — a torn tail included, not only a relocated or missing entry. **Not new in this cycle:**
+  measured in the released 0.46.0 and 0.47.0 binaries by the external review; `--repair-index`, added in 0.40.0, never closed this exact
+  case, and before 0.40.0 the same class of index damage failed `verify` for good with no repair a user could reach at all (this
+  project's own 0.40.0 entry: "there was no way forward"). Affected at least since 0.40.0.
 - **A WAL or pointer-index tail was fatal or repairable depending on its length and content**, because a tail was defined by shape (a
   header that claims more bytes than remain) rather than position: 30 zero bytes repaired, 100 or 4,096 did not, because they parsed as an
   *invalid* frame rather than a partial one, and an invalid frame with nothing sound behind it was reported as damage forever, not as a
@@ -117,7 +120,10 @@ ruling that the object index witnesses commitment):
   removed byte first, exactly as before; a sound record anywhere behind the partial frame is still damage and still refused. The pointer
   index cannot be derived from the ref log (a single durable append there *is* the publish, made before the corresponding ref-log record,
   so a crash between the two leaves the pointer index legitimately ahead of the log — a state the pointer index alone records), so it gets
-  the WAL's own tail repair rather than the object index's rebuild-from-elsewhere treatment.
+  the WAL's own tail repair rather than the object index's rebuild-from-elsewhere treatment. **Not new in this cycle:** measured in the
+  released 0.46.0 and 0.47.0 binaries by the external review. The WAL's shape-based tail classification predates this cycle by a wide
+  margin — present in the source at every tag this project has checked directly, 0.0.1 through 0.47.0 (see the `--repair-wal-tail` entry
+  below). The pointer index side has had no way out at all since the pointer index itself first shipped, in 0.20.0.
 
 ### Changed — `RepositoryVerification` gains a connectivity stage and field, `IndexRepairReport` gains lost-id fields, and a new `PointerIndexRepair` type
 
@@ -188,22 +194,24 @@ naming the file), and a repair that was wrong about what it removed loses nothin
 
 ### Changed — breaking once: `RepositoryVerification` and `WalRepair` gain fields and are now `#[non_exhaustive]`
 
-`RepositoryVerification` gains `object_interrupted_appends` (the unparseable object-container frames no index entry names, each an
-`InterruptedAppend`, a new report type, itself `#[non_exhaustive]`), and `WalRepair` gains `recovery_file` (the file that holds the bytes a WAL
-repair removed, `None` when it removed none). A struct literal, or an exhaustive destructuring, of either type outside `prikk-store` stops
+`RepositoryVerification` gains `object_interrupted_appends` (the unparseable, incomplete object-container frames, reported as remnants
+unless the object-connectivity stage separately finds referencing work that still needs the object one might have held — index
+membership plays no part, above — each an `InterruptedAppend`, a new report type, itself `#[non_exhaustive]`), and `WalRepair` gains
+`recovery_file` (the file that holds the bytes a WAL repair removed, `None` when it removed none). A struct literal, or an exhaustive destructuring, of either type outside `prikk-store` stops
 compiling; both types are now `#[non_exhaustive]`, so the next field does not break anyone again. Read their fields and match with `..`. The
 command line is unaffected.
 
-### Fixed — a repository that only crashed failed `verify` for good after its next write
+### Fixed — an object container or the object index that only crashed failed `verify` for good after its next write
 
 An object container's record is made durable before its index entry is appended, and the writer appends past a crash-torn frame by design.
 On 0.47.0 (and earlier) a torn frame followed by later commits made `prikk verify` fail permanently ("container checksum mismatch", with no
 repair) when the later bytes ran past the torn frame's claimed length, and silently skipped the later objects when they fell short of it
-(`1 scanned` where three were stored). An unparseable frame **that no index entry names was never committed**: it is now an *interrupted
-append*, reported as a warning naming its offset (`verify` exits 0, `doctor` warns), and every later object is scanned and read. **A frame an
-index entry names is still a failed item.** The active WAL has no such case (its append refuses past a tail); the shared ref log keeps a failed
-item for a torn frame that another ref published past, because nothing at the reader names a ref-log record (a tail that is still the last frame
-is tolerated as before).
+(`1 scanned` where three were stored). **An unparseable frame is now classified by connectivity, not by index membership** (RFC 162 rule 2,
+above): it is an *interrupted append* — a warning naming its offset, `verify` exits 0, `doctor` warns — when connectivity finds nothing of
+that container's own type still missing; it is a failed item, naming the referencing work, when connectivity finds something missing. Every
+later object is scanned and read either way. The active WAL has no such case (its append refuses past a tail); the shared ref log keeps a
+failed item for a torn frame that another ref published past, because nothing at the reader names a ref-log record (a tail that is still the
+last frame is tolerated as before).
 
 ### Changed — `seal`, `merge` and a `sync` catch-up no longer walk the whole history
 

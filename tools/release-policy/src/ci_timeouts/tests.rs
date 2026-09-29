@@ -44,8 +44,10 @@ fn every_ci_job_has_a_timeout() {
 }
 
 /// **The parser, checked against known-bad and known-good text**, so "no missing jobs" cannot come from a parser that stopped
-/// matching. Covers a matrix job (`runs-on: ${{ matrix.os }}`), a job with no steps yet, and a job whose `timeout-minutes` line
-/// comes after several other keys.
+/// matching. Covers a matrix job (`runs-on: ${{ matrix.os }}`), a job with no steps yet, a job whose `timeout-minutes` line
+/// comes after several other keys, a job with a step-level `uses:` (which must NOT exempt it -- only a job-level `uses:` does),
+/// and a call job (`uses:` in place of `runs-on:`/`steps:`, letter 015 N4's shape), which is exempt because GitHub Actions
+/// refuses `timeout-minutes` on one at all.
 #[test]
 fn parse_jobs_finds_every_job_and_whether_it_has_a_timeout() {
     let text = r#"
@@ -63,6 +65,7 @@ jobs:
     name: missing timeout
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       - run: echo hi
 
   matrix-job:
@@ -84,6 +87,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - run: echo hi
+
+  calls-a-reusable-workflow:
+    uses: ./.github/workflows/some-other.yml
+    permissions:
+      contents: read
 "#;
     let jobs = parse_jobs(text);
     assert_eq!(
@@ -93,6 +101,7 @@ jobs:
             ("missing-timeout".to_string(), false),
             ("matrix-job".to_string(), true),
             ("timeout-comes-late".to_string(), true),
+            ("calls-a-reusable-workflow".to_string(), true),
         ]
     );
 }

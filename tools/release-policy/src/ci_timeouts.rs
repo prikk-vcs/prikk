@@ -10,6 +10,12 @@
 //! the YAML, by indentation, not by a full YAML parser (this crate has none as a dependency, and adding one for one gate was not
 //! judged worth it). A job "has" `timeout-minutes` when a line reading exactly that (at four-space indent, directly under the job,
 //! any value) appears before the next job key or end of file.
+//!
+//! **A job that calls a reusable workflow (`uses:` at the same four-space indent, in place of `runs-on:`/`steps:`) is exempt**:
+//! GitHub Actions does not accept `timeout-minutes` on a call job at all -- the called workflow's own job carries it. Letter 015's
+//! N4 round added `release.yml`'s `ci-status-gate` job in this shape; its budget lives in `ci-status-gate.yml`'s own job, which
+//! this same scan (`check_all`, over every `*.yml` in the directory) checks directly, so the property this gate exists for --
+//! nothing runs unbounded -- still holds for that job, just not on the calling line.
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +55,17 @@ pub(crate) fn parse_jobs(text: &str) -> Vec<(String, bool)> {
         if line.trim_start().starts_with("timeout-minutes:") {
             if let Some(last) = jobs.last_mut() {
                 last.1 = true;
+            }
+        }
+        // A four-space-indented `uses:` is a call to a reusable workflow, in place of `runs-on:`/`steps:` -- GitHub Actions
+        // refuses `timeout-minutes` there outright, so this job is exempt (see the module doc). A step's own `uses:` (inside
+        // `steps:`) is more deeply indented and a list item (`      - uses: ...`), so `strip_prefix("    ")` alone (no further
+        // indent, no leading `-`) distinguishes the two the same way the job-key check above does.
+        if let Some(rest) = line.strip_prefix("    ") {
+            if !rest.starts_with(' ') && rest.starts_with("uses:") {
+                if let Some(last) = jobs.last_mut() {
+                    last.1 = true;
+                }
             }
         }
     }

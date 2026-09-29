@@ -1,0 +1,37 @@
+name: CI Status Gate
+
+# RFC 160 §9 D3, letter 015 N4: the release-day check -- the commit being tagged must have a
+# completed, successful CI run on `main` -- extracted into its own reusable workflow so it can be
+# rehearsed without cutting a release. `release.yml` calls this (`workflow_call`); it is also
+# `workflow_dispatch`-able directly, against any commit, for exactly that rehearsal. It publishes
+# nothing: read-only, `gh run list` against this workflow's own `GITHUB_TOKEN`.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit SHA to check (defaults to this run's own commit)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  ci-status-gate:
+    name: require a green CI run for this commit, on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require the most recent CI run on main for this commit to have succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.commit || github.sha }}
+        run: cargo run -p prikk-release-policy --locked -- ci-status-check "$REPO" "$SHA"

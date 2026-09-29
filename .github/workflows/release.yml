@@ -12,24 +12,19 @@ jobs:
   # RFC 160 §9 D3: a release is mechanically tied to a green CI run. Nothing else here checked this -- the release fires on any
   # matching tag, runs no tests of its own, and never asked whether the commit it is releasing passed CI. This job is the first
   # thing that runs, `build` and `publish` both depend on it (transitively, through `build`), and it fails the whole workflow
-  # unless the most recent "CI" workflow run for this exact commit concluded `success` -- which it can only do if every job in
-  # `ci.yml` succeeded, the Windows and macOS mutation suites included, since one failing job makes the whole run's own
-  # conclusion non-`success`. Read-only: `gh run list`/`gh run view` with this workflow's own `GITHUB_TOKEN`, no write scope.
+  # unless the most recent CI run **on `main`** for this exact commit concluded `success` -- which it can only do if every job
+  # in `ci.yml` succeeded, the Windows and macOS mutation suites included, since one failing job makes the whole run's own
+  # conclusion non-`success`. Read-only throughout: `gh run list` with this workflow's own `GITHUB_TOKEN`, no write scope.
+  #
+  # Letter 015, N4: a tag push is a push, and `ci.yml` fires on every push -- so the commit being tagged has *two* CI runs, one
+  # on `main` and one started by the tag push itself, created in the same second as this workflow. The gate now lives in its
+  # own reusable workflow (`ci-status-gate.yml`) precisely so it filters to the `main` run and can be rehearsed with
+  # `workflow_dispatch` against a commit that already has a tag run, without cutting a release to find out.
   ci-status-gate:
-    name: require a green CI run for this commit
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    uses: ./.github/workflows/ci-status-gate.yml
     permissions:
       actions: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Require the most recent CI run for this commit to have succeeded
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: cargo run -p prikk-release-policy --locked -- ci-status-check "$REPO" "$SHA"
+      contents: read
 
   build:
     needs: ci-status-gate
