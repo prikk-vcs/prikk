@@ -23,7 +23,8 @@ use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::maintainer_signing::MaintainerSigner;
 use crate::trust_index::{
     TrustKeyEntry, append_trust_key_entry, append_trust_policy_snapshot, lookup_trust_key_entry,
-    read_current_trust_policy_snapshot,
+    lookup_trust_key_entry_with_tail, read_current_trust_policy_snapshot,
+    read_current_trust_policy_snapshot_with_tail,
 };
 
 /// One publication-trust issue found during repository verification.
@@ -111,7 +112,18 @@ pub fn add_trusted_maintainer(
     // idempotent or TOFU-refusal re-add of the same key id is unaffected.
     validate_no_maintainer_key_id_collision(&key_ids, key_id)?;
 
-    match lookup_trust_key_entry(layout, key_id)? {
+    // RFC 163 §2: the trust-key container's own write-side tail guard, at the one whole read this
+    // function already performs before its own conditional `append_trust_key_entry` below -- no
+    // second read added.
+    let (existing_entry, trailing_partial_bytes, tail_offset) =
+        lookup_trust_key_entry_with_tail(layout, key_id)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the trust key container",
+        trailing_partial_bytes,
+        tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
+    match existing_entry {
         Some(existing) if existing.public_key == public_key => {}
         // RFC 147 §2d: a trust-on-first-use collision, detected before anything is verified -- no
         // signature was checked here, so `InvalidSignature` named the wrong axis. The arm above is
@@ -188,8 +200,22 @@ pub fn remove_trusted_maintainer(layout: &RepositoryLayout, key_id: &str) -> Res
 /// policy`'s own "missing policy" error: adding the *first* key in a fresh repository is not a trust
 /// failure, so this treats "never configured" and "add" as compatible, while `load_maintainer_trust_
 /// policy` (read-only callers, `verify`) must keep treating it as a hard error.
+/// RFC 163 §2: both of this function's callers (`add_trusted_maintainer`, `remove_trusted_maintainer`)
+/// go on to append a new trust-policy snapshot, so this is also the write-side tail guard for that
+/// container -- refusing here, at the one whole read both callers already perform, means the append
+/// below never happens behind an unclean tail. `current_adopted_key_ids` has no other caller (checked
+/// from source): every read-only trust-policy question goes through `read_current_trust_policy_snapshot`
+/// directly instead, which stays lenient.
 fn current_adopted_key_ids(layout: &RepositoryLayout) -> Result<Vec<String>> {
-    Ok(read_current_trust_policy_snapshot(layout)?.unwrap_or_default())
+    let (snapshot, trailing_partial_bytes, tail_offset) =
+        read_current_trust_policy_snapshot_with_tail(layout)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the trust policy container",
+        trailing_partial_bytes,
+        tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
+    Ok(snapshot.unwrap_or_default())
 }
 
 /// Reject a maintainer key id whose ASCII-folded form collides with a *currently adopted* key id

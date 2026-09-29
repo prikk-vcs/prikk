@@ -234,6 +234,127 @@ fn wal_truncate_preserves_all_complete_records_in_a_torn_queue_and_reports_their
     Ok(())
 }
 
+/// RFC 163 §4 (N6): a damaged **last** record -- its own bytes all present, checksum failed -- is,
+/// by rule 3, indistinguishable from a genuine crash-torn tail once nothing sound follows it: the
+/// repair truncates it and keeps its bytes, same as any other tail. The output must not be silent
+/// about *what* it removed: this asserts `complete_records_removed` names it, distinguishing a real
+/// (if damaged) write from a genuine interrupted append.
+#[test]
+fn wal_truncate_reports_when_the_removed_tail_includes_a_complete_damaged_record()
+-> prikk_error::Result<()> {
+    let root = unique_temp_dir("wal-damaged-last-record");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let first = signed_patch_envelope();
+    let second = rollback_patch_envelope();
+    assert_eq!(wal.append_patch(&first)?, 1);
+    assert_eq!(wal.append_patch(&second)?, 2);
+
+    // Flip the file's own last byte: inside the second record's checksum or body, never its header
+    // (the header ends well before the file's own end for any record with a real payload), so the
+    // record's own claimed length is untouched -- exactly what "the bytes were all present, but
+    // damaged" means.
+    let mut bytes = std::fs::read(wal.path())?;
+    if let Some(last) = bytes.last_mut() {
+        *last ^= 0x01;
+    }
+    std::fs::write(wal.path(), &bytes)?;
+
+    // RFC 162 rule 3: `verify`'s own replay must accept this as a tail (nothing sound follows the
+    // damaged record), not damage -- the precondition this test's own claim depends on.
+    let replay = wal.replay()?;
+    assert_eq!(
+        replay.records.len(),
+        1,
+        "only the first, undamaged record replays"
+    );
+    assert!(
+        !replay.has_item_failure(),
+        "rule 3: nothing sound follows the damaged record, so it is a tail, not an item failure"
+    );
+    assert_ne!(
+        replay.trailing_partial_bytes, 0,
+        "the damaged last record must be classified as tail bytes"
+    );
+
+    let repair = wal.truncate_trailing_partial()?;
+    assert_eq!(repair.preserved_records, 1);
+    assert_eq!(
+        repair.complete_records_removed, 1,
+        "the removed tail is one whole, if damaged, record -- not a genuine short fragment"
+    );
+    assert_eq!(
+        repair.preserved_patch_ids,
+        vec![first.object_id()],
+        "only the first patch survives; the damaged second is what was removed"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Control, run for real**: a genuinely short (structurally incomplete) tail must never be reported
+/// as a complete record removed -- `complete_records_removed` is `0` for the exact fixture
+/// [`wal_truncate_preserves_all_complete_records_in_a_torn_queue_and_reports_their_ids`] above
+/// already builds (a real interrupted append, `b"partial"` appended after two sound records).
+#[test]
+fn wal_truncate_reports_zero_complete_records_for_a_genuine_short_tail() -> prikk_error::Result<()>
+{
+    use std::io::Write;
+
+    let root = unique_temp_dir("wal-genuine-short-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    assert_eq!(wal.append_patch(&signed_patch_envelope())?, 1);
+    let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+    file.write_all(b"partial")?;
+    drop(file);
+
+    let repair = wal.truncate_trailing_partial()?;
+    assert_eq!(repair.truncated_bytes, 7);
+    assert_eq!(
+        repair.complete_records_removed, 0,
+        "7 bytes of a torn append is not a complete record, whatever its content"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Control, run for real**: M3's own zeros/garbage tail rows (100 zero bytes, 100 random bytes --
+/// too long to be a structurally-incomplete fragment, but no plausible header either) must never be
+/// miscounted as "complete records removed" -- they are noise, not writes.
+#[test]
+fn wal_truncate_reports_zero_complete_records_for_zeros_and_garbage_tails()
+-> prikk_error::Result<()> {
+    use std::io::Write;
+
+    for (label, tail_bytes) in [
+        ("100 zero bytes", vec![0_u8; 100]),
+        (
+            "100 deterministic non-zero bytes",
+            (0..100_u32).map(|n| (n % 251) as u8 + 1).collect(),
+        ),
+    ] {
+        let root = unique_temp_dir(&format!("wal-garbage-tail-{}", label.replace(' ', "-")));
+        let layout = RepositoryLayout::init(root.clone())?;
+        let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+        assert_eq!(wal.append_patch(&signed_patch_envelope())?, 1);
+        let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+        file.write_all(&tail_bytes)?;
+        drop(file);
+
+        let repair = wal.truncate_trailing_partial()?;
+        assert_eq!(
+            repair.complete_records_removed, 0,
+            "{label}: garbage must never be counted as a complete record"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+    Ok(())
+}
+
 #[test]
 fn existing_wal_append_write_failure_is_retryable() -> prikk_error::Result<()> {
     let root = unique_temp_dir("wal-append-write-failure");

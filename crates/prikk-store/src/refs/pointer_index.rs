@@ -82,6 +82,10 @@ pub(in crate::refs) struct PointerIndexRecordOutcome {
 pub(crate) struct PointerIndexReplay {
     pub(crate) entries: Vec<PointerIndexEntry>,
     pub(in crate::refs) trailing_partial_bytes: usize,
+    /// The byte offset where the last sound record ends -- equivalently, where `trailing_partial_bytes`
+    /// (if any) begins. RFC 163 §2's refusal names this directly, so it comes from the same decode loop
+    /// that already stops here, rather than a second pass over `bytes.len() - trailing_partial_bytes`.
+    pub(in crate::refs) tail_offset: usize,
     pub(in crate::refs) record_outcomes: Vec<PointerIndexRecordOutcome>,
 }
 
@@ -273,6 +277,7 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                     return Ok(PointerIndexReplay {
                         entries,
                         trailing_partial_bytes: remaining,
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -296,6 +301,7 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                     return Ok(PointerIndexReplay {
                         entries,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -320,6 +326,7 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
         return Ok(PointerIndexReplay {
             entries: Vec::new(),
             trailing_partial_bytes: 0,
+            tail_offset: 0,
             record_outcomes: Vec::new(),
         });
     };
@@ -416,22 +423,38 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
 
 /// Look up one ref's current published pointer: the last entry matching `ref_name_key`, matching
 /// `index::lookup_object_location`'s own "last entry wins" reverse search exactly. Refuses if the
-/// index itself has a damaged entry, rather than silently searching around it.
+/// index itself has a damaged entry, rather than silently searching around it. Also returns the
+/// index's own tail status (`trailing_partial_bytes`, `tail_offset`) from the same replay -- a reader
+/// never refuses on it (rule 1), but RFC 163's write-side guard (`RefStore::ensure_current_matches`)
+/// is built on this same call so it never pays for a second whole read just to learn what this one
+/// already decoded.
 pub(in crate::refs) fn lookup_ref_pointer(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
-) -> Result<Option<PointerIndexEntry>> {
+) -> Result<(Option<PointerIndexEntry>, PointerIndexTailStatus)> {
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "ref pointer index has a damaged entry; run doctor before reading".to_string(),
         ));
     }
-    Ok(replay
+    let tail = PointerIndexTailStatus {
+        trailing_partial_bytes: replay.trailing_partial_bytes,
+        tail_offset: replay.tail_offset,
+    };
+    let entry = replay
         .entries
         .into_iter()
         .rev()
-        .find(|entry| entry.ref_name_key == ref_name_key))
+        .find(|entry| entry.ref_name_key == ref_name_key);
+    Ok((entry, tail))
+}
+
+/// The pointer index's own tail status, as of one replay -- what RFC 163 §2's write-side refusal names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::refs) struct PointerIndexTailStatus {
+    pub(in crate::refs) trailing_partial_bytes: usize,
+    pub(in crate::refs) tail_offset: usize,
 }
 
 /// Test-only convenience matching the retired `refs/pointer.rs::write_ref_pointer_candidate`'s own

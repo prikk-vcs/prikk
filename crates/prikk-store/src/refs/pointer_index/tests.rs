@@ -22,10 +22,10 @@ fn write_then_lookup_round_trips() -> Result<()> {
     };
     append_ref_pointer_entry(&layout, &entry)?;
 
-    let found = lookup_ref_pointer(&layout, key)?;
+    let (found, _tail) = lookup_ref_pointer(&layout, key)?;
     assert_eq!(found, Some(entry));
     assert_eq!(
-        lookup_ref_pointer(&layout, ref_name_key_bytes("heads/other"))?,
+        lookup_ref_pointer(&layout, ref_name_key_bytes("heads/other"))?.0,
         None
     );
 
@@ -54,7 +54,7 @@ fn a_second_publish_supersedes_the_first_at_lookup() -> Result<()> {
     append_ref_pointer_entry(&layout, &first)?;
     append_ref_pointer_entry(&layout, &second)?;
 
-    assert_eq!(lookup_ref_pointer(&layout, key)?, Some(second));
+    assert_eq!(lookup_ref_pointer(&layout, key)?.0, Some(second));
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

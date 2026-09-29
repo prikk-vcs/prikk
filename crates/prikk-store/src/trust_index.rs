@@ -81,6 +81,9 @@ pub(crate) struct TrustKeyRecordOutcome {
 pub(crate) struct TrustKeyReplay {
     pub(crate) entries: Vec<TrustKeyEntry>,
     pub(crate) trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins (RFC 163 §2's refusal names it). Only
+    /// meaningful when `trailing_partial_bytes != 0`.
+    pub(crate) tail_offset: usize,
     pub(crate) record_outcomes: Vec<TrustKeyRecordOutcome>,
 }
 
@@ -248,6 +251,7 @@ pub(crate) fn decode_trust_key_records(bytes: &[u8]) -> Result<TrustKeyReplay> {
                     return Ok(TrustKeyReplay {
                         entries,
                         trailing_partial_bytes: remaining,
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -269,6 +273,7 @@ pub(crate) fn decode_trust_key_records(bytes: &[u8]) -> Result<TrustKeyReplay> {
                         return Ok(TrustKeyReplay {
                             entries,
                             trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
                             record_outcomes,
                         });
                     }
@@ -284,6 +289,7 @@ pub(crate) fn replay_trust_keys(layout: &RepositoryLayout) -> Result<TrustKeyRep
         return Ok(TrustKeyReplay {
             entries: Vec::new(),
             trailing_partial_bytes: 0,
+            tail_offset: 0,
             record_outcomes: Vec::new(),
         });
     };
@@ -291,22 +297,34 @@ pub(crate) fn replay_trust_keys(layout: &RepositoryLayout) -> Result<TrustKeyRep
 }
 
 /// Look up one key id's last-appended key material. Refuses if the container has any damaged entry,
-/// matching `pointer_index::lookup_ref_pointer`'s fail-closed reasoning.
+/// matching `pointer_index::lookup_ref_pointer`'s fail-closed reasoning. A reader: never refuses on
+/// the container's own trailing-partial tail (unlike the write path, below).
 pub(crate) fn lookup_trust_key_entry(
     layout: &RepositoryLayout,
     key_id: &str,
 ) -> Result<Option<TrustKeyEntry>> {
+    Ok(lookup_trust_key_entry_with_tail(layout, key_id)?.0)
+}
+
+/// Like [`lookup_trust_key_entry`], but also returns the container's own tail status from the same
+/// replay -- RFC 163's write-side guard (`trust.rs::add_trusted_maintainer`) is built on this call so
+/// it never pays for a second whole read just to learn what this one already decoded.
+pub(crate) fn lookup_trust_key_entry_with_tail(
+    layout: &RepositoryLayout,
+    key_id: &str,
+) -> Result<(Option<TrustKeyEntry>, usize, usize)> {
     let replay = replay_trust_keys(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "trust key container has a damaged entry; run doctor before reading".to_string(),
         ));
     }
-    Ok(replay
+    let entry = replay
         .entries
         .into_iter()
         .rev()
-        .find(|entry| entry.key_id == key_id))
+        .find(|entry| entry.key_id == key_id);
+    Ok((entry, replay.trailing_partial_bytes, replay.tail_offset))
 }
 
 pub(crate) fn append_trust_key_entry(
@@ -344,6 +362,9 @@ pub(crate) struct TrustPolicyRecordOutcome {
 pub(crate) struct TrustPolicyReplay {
     pub(crate) entries: Vec<TrustPolicySnapshotEntry>,
     pub(crate) trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins (RFC 163 §2's refusal names it). Only
+    /// meaningful when `trailing_partial_bytes != 0`.
+    pub(crate) tail_offset: usize,
     pub(crate) record_outcomes: Vec<TrustPolicyRecordOutcome>,
 }
 
@@ -523,6 +544,7 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
                     return Ok(TrustPolicyReplay {
                         entries,
                         trailing_partial_bytes: remaining,
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -544,6 +566,7 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
                         return Ok(TrustPolicyReplay {
                             entries,
                             trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
                             record_outcomes,
                         });
                     }
@@ -562,6 +585,7 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
         return Ok(TrustPolicyReplay {
             entries: Vec::new(),
             trailing_partial_bytes: 0,
+            tail_offset: 0,
             record_outcomes: Vec::new(),
         });
     };
@@ -571,21 +595,33 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
 /// Read the current policy: the last complete snapshot record. `Ok(None)` means no snapshot has ever
 /// been appended -- a repository where no maintainer has ever been adopted -- which callers must treat
 /// as a missing policy, not an empty one (see module doc). Fails closed on any damaged record, so a
-/// corrupt latest snapshot never silently resolves to an older, stale one.
+/// corrupt latest snapshot never silently resolves to an older, stale one. A reader: never refuses on
+/// the container's own trailing-partial tail (unlike the write path, below).
 pub(crate) fn read_current_trust_policy_snapshot(
     layout: &RepositoryLayout,
 ) -> Result<Option<Vec<String>>> {
+    Ok(read_current_trust_policy_snapshot_with_tail(layout)?.0)
+}
+
+/// Like [`read_current_trust_policy_snapshot`], but also returns the container's own tail status from
+/// the same replay -- RFC 163's write-side guard (`trust.rs::current_adopted_key_ids`, its sole
+/// caller) is built on this call so it never pays for a second whole read just to learn what this one
+/// already decoded.
+pub(crate) fn read_current_trust_policy_snapshot_with_tail(
+    layout: &RepositoryLayout,
+) -> Result<(Option<Vec<String>>, usize, usize)> {
     let replay = replay_trust_policy(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "trust policy container has a damaged snapshot; run doctor before reading".to_string(),
         ));
     }
-    Ok(replay
+    let snapshot = replay
         .entries
         .into_iter()
         .next_back()
-        .map(|entry| entry.key_ids))
+        .map(|entry| entry.key_ids);
+    Ok((snapshot, replay.trailing_partial_bytes, replay.tail_offset))
 }
 
 /// Durably append a complete policy snapshot -- the publish moment for the whole adopted-key list.

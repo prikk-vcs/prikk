@@ -135,6 +135,13 @@ pub struct WalRepair {
     /// truncation (RFC 160 F3 Addendum 1): a repair can be wrong about what it removed, torn tail or damage, without anything being
     /// lost. `None` when nothing was removed. Never authority: `verify` ignores it.
     pub recovery_file: Option<PathBuf>,
+    /// RFC 163 §4 (N6): how many of the removed bytes are **complete** records -- their own claimed
+    /// length fully present, whatever their checksum -- as opposed to a genuine short fragment. A
+    /// crash-torn append can never produce one (its last frame is short by construction); a damaged
+    /// *last* record that was otherwise fully written can. Always `0` for a true interrupted-append
+    /// tail. Counted from the removed bytes alone, not from `preserved_records` or the file's sound
+    /// prefix.
+    pub complete_records_removed: usize,
 }
 
 /// File-backed active-session WAL.
@@ -294,6 +301,7 @@ impl Wal {
                 truncated_bytes: 0,
                 preserved_patch_ids: Vec::new(),
                 recovery_file: None,
+                complete_records_removed: 0,
             });
         };
         let replay = decode_records(&bytes)?;
@@ -317,6 +325,7 @@ impl Wal {
                 truncated_bytes: 0,
                 preserved_patch_ids,
                 recovery_file: None,
+                complete_records_removed: 0,
             });
         }
         let current_len = u64::try_from(bytes.len())
@@ -336,6 +345,7 @@ impl Wal {
         let removed = bytes
             .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
             .unwrap_or_default();
+        let complete_records_removed = count_complete_record_shapes(removed);
         let recovery_file = save_removed_bytes(root, relative, repaired_len, removed)?;
         truncate_existing_file_required(root, relative, repaired_len)?;
         Ok(WalRepair {
@@ -343,6 +353,7 @@ impl Wal {
             truncated_bytes: replay.trailing_partial_bytes,
             preserved_patch_ids,
             recovery_file: Some(recovery_file),
+            complete_records_removed,
         })
     }
 
@@ -505,6 +516,44 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
             message: err.to_string(),
         },
     }
+}
+
+/// RFC 163 §4 (N6): whether a full-length record frame's *shape* is present at `bytes[0..]` -- magic,
+/// version, and a claimed body that both fully fit -- whatever its checksum or envelope decode says.
+/// Distinct from [`parse_frame_at`]'s own job (which also validates the checksum and decides
+/// tail-vs-damage): this only answers "was every byte a complete record of this length would have
+/// present," so a damaged-but-otherwise-whole record counts and a genuinely short fragment or
+/// unparseable garbage (a bad magic, for instance) does not. Returns the shape's own length when one
+/// is present.
+fn full_length_record_shape_len(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < WAL_HEADER_LEN {
+        return None;
+    }
+    let header = bytes.get(..WAL_HEADER_LEN)?;
+    let header_values = parse_header(header).ok()?;
+    let body_len = usize::try_from(header_values.body_len).ok()?;
+    let header_end = WAL_HEADER_LEN;
+    let body_end = header_end.checked_add(body_len)?;
+    bytes.get(header_end..body_end)?;
+    Some(body_end)
+}
+
+/// RFC 163 §4 (N6): how many complete record shapes (see [`full_length_record_shape_len`]) are
+/// packed, back to back, at the start of `removed` -- the bytes a tail truncation is about to take
+/// away. Stops at the first byte range that is not a complete shape (a genuine short fragment, or
+/// bytes with no plausible header at all, such as zeros or random garbage): those are never counted,
+/// matching M3's own zeros/garbage tail rows, which must never be reported as "records removed."
+fn count_complete_record_shapes(removed: &[u8]) -> usize {
+    let mut offset = 0;
+    let mut count = 0;
+    while let Some(shape_len) = full_length_record_shape_len(removed.get(offset..).unwrap_or(&[])) {
+        count += 1;
+        let Some(next) = offset.checked_add(shape_len).filter(|next| *next > offset) else {
+            break;
+        };
+        offset = next;
+    }
+    count
 }
 
 /// RFC 102 Stage 2: isolate-and-continue reading. A frame that fails to validate no longer aborts

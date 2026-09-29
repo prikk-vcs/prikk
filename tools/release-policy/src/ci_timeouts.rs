@@ -11,11 +11,19 @@
 //! judged worth it). A job "has" `timeout-minutes` when a line reading exactly that (at four-space indent, directly under the job,
 //! any value) appears before the next job key or end of file.
 //!
-//! **A job that calls a reusable workflow (`uses:` at the same four-space indent, in place of `runs-on:`/`steps:`) is exempt**:
-//! GitHub Actions does not accept `timeout-minutes` on a call job at all -- the called workflow's own job carries it. Letter 015's
-//! N4 round added `release.yml`'s `ci-status-gate` job in this shape; its budget lives in `ci-status-gate.yml`'s own job, which
-//! this same scan (`check_all`, over every `*.yml` in the directory) checks directly, so the property this gate exists for --
+//! **A job that calls a *local* reusable workflow (`uses: ./.github/workflows/<file>.yml` at the same four-space indent, in
+//! place of `runs-on:`/`steps:`) is exempt, when that file is actually present in the scanned directory**: GitHub Actions
+//! does not accept `timeout-minutes` on a call job at all -- the called workflow's own job carries it. Letter 015's N4 round
+//! added `release.yml`'s `ci-status-gate` job in this shape; its budget lives in `ci-status-gate.yml`'s own job, which this
+//! same scan (`check_all`, over every `*.yml` in the directory) checks directly, so the property this gate exists for --
 //! nothing runs unbounded -- still holds for that job, just not on the calling line.
+//!
+//! **Part 1 review, §3 item 1: the exemption is scoped to a local call this scan can itself verify.** A job that calls
+//! *another repository's* workflow (`uses: owner/repo/.github/workflows/x.yml@ref`) is not exempt -- this scan has no way
+//! to check that workflow's own timeouts, so exempting it on `uses:` alone would let a job run unbounded with nobody
+//! noticing (the exact "a guard that sees less than its name says" shape the external review named, D11). Nor is a local
+//! `uses:` that names a file not actually present in the directory: a typo or a since-deleted file must not silently pass.
+//! Only `./.github/workflows/<name>` naming a file this same `check_all` call also scans is exempt.
 
 use std::path::{Path, PathBuf};
 
@@ -27,9 +35,24 @@ pub(crate) struct WorkflowTimeouts {
     pub(crate) job_count: usize,
 }
 
-/// Parse one workflow file's `jobs:` block into `(job key, has timeout-minutes)` pairs, by indentation.
-pub(crate) fn parse_jobs(text: &str) -> Vec<(String, bool)> {
-    let mut jobs: Vec<(String, bool)> = Vec::new();
+/// One job found under a workflow's `jobs:` key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct JobEntry {
+    pub(crate) key: String,
+    pub(crate) has_timeout: bool,
+    /// `Some(name)` when this job's own `uses:` (job-level, not a step's) names a local workflow file
+    /// (`./.github/workflows/<name>`) -- unresolved here, since `parse_jobs` sees only one file's text.
+    /// `check_file`/`check_all` resolve it against what is actually present in the scanned directory.
+    pub(crate) local_workflow_call: Option<String>,
+}
+
+/// The prefix a job-level `uses:` value must have to be a *local* reusable-workflow call, as opposed to one in another
+/// repository (`owner/repo/.github/workflows/x.yml@ref`, never exempt: see the module doc).
+const LOCAL_WORKFLOW_PREFIX: &str = "./.github/workflows/";
+
+/// Parse one workflow file's `jobs:` block into [`JobEntry`] rows, by indentation.
+pub(crate) fn parse_jobs(text: &str) -> Vec<JobEntry> {
+    let mut jobs: Vec<JobEntry> = Vec::new();
     let mut in_jobs = false;
     for line in text.lines() {
         if line == "jobs:" {
@@ -48,23 +71,33 @@ pub(crate) fn parse_jobs(text: &str) -> Vec<(String, bool)> {
                 && !rest.trim().is_empty()
             {
                 let key = rest.trim_end().trim_end_matches(':').to_string();
-                jobs.push((key, false));
+                jobs.push(JobEntry {
+                    key,
+                    has_timeout: false,
+                    local_workflow_call: None,
+                });
                 continue;
             }
         }
         if line.trim_start().starts_with("timeout-minutes:") {
             if let Some(last) = jobs.last_mut() {
-                last.1 = true;
+                last.has_timeout = true;
             }
         }
-        // A four-space-indented `uses:` is a call to a reusable workflow, in place of `runs-on:`/`steps:` -- GitHub Actions
-        // refuses `timeout-minutes` there outright, so this job is exempt (see the module doc). A step's own `uses:` (inside
-        // `steps:`) is more deeply indented and a list item (`      - uses: ...`), so `strip_prefix("    ")` alone (no further
-        // indent, no leading `-`) distinguishes the two the same way the job-key check above does.
+        // A four-space-indented `uses:` is a call to a reusable workflow, in place of `runs-on:`/`steps:`. A step's own
+        // `uses:` (inside `steps:`) is more deeply indented and a list item (`      - uses: ...`), so
+        // `strip_prefix("    ")` alone (no further indent, no leading `-`) distinguishes the two the same way the
+        // job-key check above does. Only a `./.github/workflows/` value is recorded as a candidate exemption; anything
+        // else (another repository's workflow) is left `None` and so stays reported as missing.
         if let Some(rest) = line.strip_prefix("    ") {
-            if !rest.starts_with(' ') && rest.starts_with("uses:") {
-                if let Some(last) = jobs.last_mut() {
-                    last.1 = true;
+            if !rest.starts_with(' ') {
+                if let Some(value) = rest.strip_prefix("uses:") {
+                    if let Some(last) = jobs.last_mut() {
+                        let value = value.trim();
+                        if let Some(name) = value.strip_prefix(LOCAL_WORKFLOW_PREFIX) {
+                            last.local_workflow_call = Some(name.to_string());
+                        }
+                    }
                 }
             }
         }
@@ -72,8 +105,23 @@ pub(crate) fn parse_jobs(text: &str) -> Vec<(String, bool)> {
     jobs
 }
 
-/// Check one workflow file.
-pub(crate) fn check_file(path: &Path) -> Result<WorkflowTimeouts, String> {
+/// Whether `job` counts as satisfying the timeout requirement: it literally has `timeout-minutes`, or it calls a local
+/// reusable workflow that `workflow_file_names` (every `*.yml`/`*.yaml` file name actually present in the scanned
+/// directory) confirms exists.
+fn satisfied(job: &JobEntry, workflow_file_names: &std::collections::HashSet<String>) -> bool {
+    job.has_timeout
+        || job
+            .local_workflow_call
+            .as_deref()
+            .is_some_and(|name| workflow_file_names.contains(name))
+}
+
+/// Check one workflow file. `workflow_file_names` is every workflow file name present in the same directory (for
+/// resolving a local `uses:` exemption); pass an empty set to treat every `uses:` as unresolved (reported as missing).
+pub(crate) fn check_file(
+    path: &Path,
+    workflow_file_names: &std::collections::HashSet<String>,
+) -> Result<WorkflowTimeouts, String> {
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let jobs = parse_jobs(&text);
@@ -85,8 +133,8 @@ pub(crate) fn check_file(path: &Path) -> Result<WorkflowTimeouts, String> {
     Ok(WorkflowTimeouts {
         jobs_without_timeout: jobs
             .iter()
-            .filter(|(_, has)| !has)
-            .map(|(key, _)| key.clone())
+            .filter(|job| !satisfied(job, workflow_file_names))
+            .map(|job| job.key.clone())
             .collect(),
         job_count: jobs.len(),
         file,
@@ -103,7 +151,16 @@ pub(crate) fn check_all(workflows_dir: &Path) -> Result<Vec<WorkflowTimeouts>, S
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("yml"))
         .collect();
     paths.sort();
-    paths.iter().map(|path| check_file(path)).collect()
+    let workflow_file_names: std::collections::HashSet<String> = paths
+        .iter()
+        .filter_map(|path| path.file_name())
+        .filter_map(|name| name.to_str())
+        .map(str::to_string)
+        .collect();
+    paths
+        .iter()
+        .map(|path| check_file(path, &workflow_file_names))
+        .collect()
 }
 
 mod tests;

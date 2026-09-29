@@ -930,6 +930,7 @@ fn empty_wal_repair() -> WalRepair {
         truncated_bytes: 0,
         preserved_patch_ids: Vec::new(),
         recovery_file: None,
+        complete_records_removed: 0,
     }
 }
 

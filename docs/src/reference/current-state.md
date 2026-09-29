@@ -45,8 +45,34 @@ Prikk is not yet the right tool if you need:
 ## Known limitations, measured
 
 Disclosed here rather than left implicit, each with the figure it was measured at and the release it is
-planned for. None of these blocks 0.48.0; each is a cost or a silence, not a correctness defect.
+planned for. None of these blocks 0.48.0.
 
+- **A write can still bury a crash state at four files: trust keys, trust policy, author keys, and the
+  received index (N2's remainder).** RFC 163 §2 fixed the pointer index (a write now refuses before it
+  appends behind an unclean tail, naming `prikk doctor --repair-pointer-index-tail`) and extended the
+  same refusal to these four files, so the burying itself is fixed here in 0.48.0 -- but none of the
+  four has a repair verb yet: the refusal names the byte offset, and the way out is manual (back the
+  file up, truncate it to the named offset, then run `prikk verify`; see
+  `durability-recovery.md`). `verify` also still says nothing about a tail on any of these four files on
+  its own (N7, with M4) -- the refusal above is the only place a torn tail on one of them is visible
+  today. Repair verbs and a `verify` line for each are planned for 0.49.0.
+- **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
+  different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
+  `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same
+  `branch create`/`tag create` answers "already exists" rather than finishing the interrupted
+  publication -- DC-38's own retry exists for `seal` only. A `seal` of an *unrelated* ref then succeeds,
+  appends behind the torn record, and from then on `verify` reports a damaged ref-log record and
+  `commit` is refused. A way to complete or withdraw the interrupted publication, and `seal` refusing
+  while another ref's publication is incomplete (the same refusal `commit` already gives), are planned
+  for 0.49.0 alongside F1.
+- **A damaged last WAL record is now a tail, and the repair removes it (N6).** RFC 162 rule 3 defines
+  the WAL's tail by position, not shape: a last record whose own bytes are all present but whose
+  checksum fails is indistinguishable, once nothing sound follows it, from a genuine crash-torn append.
+  `verify` exits 0; `doctor --repair-wal-tail` truncates it, keeping the removed bytes, and (0.48.0) now
+  says when what it removed includes one or more complete records, so a removed commit the user was
+  told had succeeded is never silent about it. What would close the gap itself -- telling a genuine
+  crash apart from later damage to an already-durable record -- is a witness written with each commit
+  (the count or end offset of committed records), planned for 0.49.0.
 - **A ref publication replays the whole ref log three times.** It grows about 4.3 KB per generation.
   Planned for 0.49.0.
 - **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.

@@ -53,9 +53,11 @@ everything after the last sound record, when no sound record follows it — what
 rule 3): a genuine interrupted-append prefix, zeros, garbage, or a last record whose header parses but
 whose own checksum does not match. If a sound frame (magic, a valid header, a body that passes its
 checksum) starts anywhere in the remainder, the frame at that offset is not a tail; it is **interior
-damage**, reported as a failed record at its offset, and the sound records after it are still read. When
-the evidence is ambiguous the answer is damage, never tail. A true tail is the only case
-`doctor --repair-wal-tail` truncates. (Before 0.48.0 the tail was the narrower, shape-defined case only —
+damage**, reported as a failed record at its offset, and the sound records after it are still read. **The
+only question that decides tail from damage is whether a sound record follows the fault** — not the
+fault's own shape, and not whether it merely looks parseable: a sound record anywhere behind it is always
+damage, and nothing behind it is always a tail, including a last record whose own checksum fails (above).
+A true tail is the only case `doctor --repair-wal-tail` truncates. (Before 0.48.0 the tail was the narrower, shape-defined case only —
 a structurally incomplete frame, too few bytes for its own header or claimed body. A complete-but-invalid
 last record — a checksum mismatch, an unsupported version, a malformed envelope — was refused as damage
 even with nothing sound behind it, the same as interior damage still is. RFC 162 rule 3 widened the tail
@@ -63,6 +65,17 @@ from a question of shape to a question of position: not "does this parse as a le
 but "is this the last thing in the file, with no sound record after it." Widening loses nothing, because a
 repair keeps every byte it removes, below — including, now, a record that was in fact a real write, torn
 in a way this file cannot tell apart from a crash.)
+
+**Disclosed, not fixed in 0.48.0: a damaged last record is a tail, and the repair can remove one the user was
+told had succeeded.** A record whose own bytes are all present but whose checksum fails (bit rot, a partial
+write the storage layer itself reordered, and similar) is, by rule 3, indistinguishable from a genuine
+crash-torn prefix once nothing sound follows it — `verify` exits 0, and `doctor --repair-wal-tail` truncates
+it, keeping the removed bytes. Because the trade is only good if nothing is silently lost, the repair's own
+output now says when what it removed includes one or more **complete** records (their own claimed length
+fully present, not merely a torn fragment), naming how many, so a removed record the user believed committed
+is never silent about it. A witness written with each commit — the count or end offset of records actually
+committed, checked independently of the WAL's own content — would let a tail beyond it be told apart from
+damage inside it; that is 0.49.0 work (RFC 163 §5).
 
 **A repair keeps every byte it removes.** A record whose only fault is a damaged length, with nothing sound behind it, is
 indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it writes exactly the bytes it will remove to
@@ -211,6 +224,49 @@ framed checksum-invalid or malformed records are never truncation-safe.
 Pointer/log agreement with the matching active WAL and metadata still retained is incomplete cleanup,
 not a healthy repository state. Verification returns non-zero and unrelated mutation remains blocked
 until signer-backed seal revalidates the transition, appends nothing, and removes active state.
+
+## A Write Never Buries a Crash State (RFC 163)
+
+**The rule, at five files: before an append, the writer confirms under its lock that the file ends at
+its last sound record. If it does not, it refuses before writing anything**, naming the file, the byte
+offset where the sound content ends, how many bytes follow, and the way out. Before this round, a torn
+tail that `verify` already accepted as harmless (the pointer index, under RFC 162 rule 3 above) or said
+nothing about at all (the other four, still under the pre-0.48.0 shape rule, N2) was invisible to the
+*next ordinary write* at these files: the write appended behind it, blind, and turned an accepted crash
+state into permanent damage — `verify` failing for good, and on some of these files a `seal` or `commit`
+refused too.
+
+**The five files, and the way out:**
+
+- **The pointer index.** Every publication (`seal`, `branch create`, `tag create`, `merge`) reads the
+  pointer index for its own compare-and-swap check immediately before it would append; that same read
+  now also refuses on an unclean tail, naming `prikk doctor --repair-pointer-index-tail` — the repair
+  already exists (RFC 162). After it, the same publication succeeds.
+- **Trust keys, trust policy, author keys, the received index.** `trust maintainer add` (both
+  containers), a commit by a new author, and `bundle import`/`sync accept` each refuse the same way. No
+  repair verb exists for these four in 0.48.0 (planned for 0.49.0, alongside a `verify` line for each —
+  see `current-state.md`'s known limitations, N2's remainder). **The way out is manual**: back the file
+  up, truncate it to the byte offset the refusal names, then run `prikk verify` to confirm the
+  repository is sound before retrying the write that refused.
+
+**Where each check reads from.** No new whole read was added where an existing one could carry the
+answer: the pointer index's guard rides the same replay `ensure_current_matches`'s own compare-and-swap
+check already performs; the trust-key and trust-policy guards ride the same replay
+`add_trusted_maintainer`/`remove_trusted_maintainer` already perform to compute the current key id list
+and look up the key being added; the author-key guard rides the same replay
+`check_author_key_conflict` already performs. Only the received index's guard is a new whole read:
+`write_received_pointer` reads nothing before appending today (there is no CAS to enforce), so there
+was no existing read to build the check on — accepted at the same cost class as the WAL's own
+unconditional replay-before-append, since the received index grows with the number of distinct remote
+refs ever imported, not with total store size.
+
+**Not covered, on purpose.** The object index keeps RFC 162 rule 1 (a writer rebuilds it before
+appending, rather than refusing). The object containers keep rule 2's connectivity classification. The
+ref log keeps its own positive truncation rule (it truncates only a suffix that is a prefix of the
+record it expected to write next) — **the ref log is not in this round's scope**: a crash inside
+`branch create`/`tag create` leaving its own ref-log record torn, and a later `seal` of a *different*
+ref appending behind it, is disclosed, not fixed, in `current-state.md`'s known limitations (N3),
+alongside F1 in 0.49.0.
 
 ## Doctor Repair Boundary
 

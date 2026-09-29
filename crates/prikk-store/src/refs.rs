@@ -387,10 +387,13 @@ impl RefStore {
         )
     }
 
-    /// Read the current RefState object ID for a ref name.
+    /// Read the current RefState object ID for a ref name. A reader: never refuses on the pointer
+    /// index's own trailing-partial tail (rule 1), the same as every other reader of a file RFC 163
+    /// guards on the write side.
     pub fn read_current_ref_state_id(&self, ref_name: &str) -> Result<Option<ObjectId>> {
         let key = crate::foundation::layout::ref_name_key_bytes(ref_name);
-        let Some(entry) = pointer_index::lookup_ref_pointer(&self.layout, key)? else {
+        let (entry, _tail) = pointer_index::lookup_ref_pointer(&self.layout, key)?;
+        let Some(entry) = entry else {
             return Ok(None);
         };
         if entry.ref_name != ref_name {
@@ -515,8 +518,28 @@ impl RefStore {
     /// exactly what would catch a future change that broke that locking discipline. Exercised
     /// directly (not through `publish`, which cannot reach the failing branch) by the
     /// `ensure_current_matches_refuses_a_mismatched_expectation` test.
+    /// RFC 163 §2: also the pointer index's own write-side tail guard. `publish_locked`'s `Ready`
+    /// branch calls this immediately before its own `append_ref_pointer_entry`, so the refusal below
+    /// runs at the one whole read that branch already performs -- no second read is added.
     fn ensure_current_matches(&self, ref_name: &str, expected: Option<ObjectId>) -> Result<()> {
-        let current = self.read_current_ref_state_id(ref_name)?;
+        let key = crate::foundation::layout::ref_name_key_bytes(ref_name);
+        let (entry, tail) = pointer_index::lookup_ref_pointer(&self.layout, key)?;
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the ref pointer index",
+            tail.trailing_partial_bytes,
+            tail.tail_offset,
+            "run `prikk doctor --repair-pointer-index-tail`, then retry",
+        )?;
+        let current = match entry {
+            Some(entry) if entry.ref_name == ref_name => Some(entry.ref_state_id),
+            Some(entry) => {
+                return Err(PrikkError::Integrity(format!(
+                    "ref pointer name mismatch: expected {ref_name}, got {}",
+                    entry.ref_name
+                )));
+            }
+            None => None,
+        };
         if current != expected {
             return Err(PrikkError::LockConflict(format!(
                 "ref CAS mismatch for {ref_name}: expected {:?}, got {:?}",

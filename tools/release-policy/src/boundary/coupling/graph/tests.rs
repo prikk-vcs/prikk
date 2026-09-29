@@ -134,7 +134,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // what `commit` would author, beside `worktree_files`: 142 -> 143. RFC 136 increment 2c added
     // `anchor_fallback` and `lifecycle_cache::anchored_text`: 143 -> 145. RFC 159 added `anchor_trust`, the one
     // anchor-trust function, and `block_state::anchored_parent`, the anchored seal derivation: 145 -> 147.
-    assert_eq!(modules.len(), 147, "modules: {modules:?}");
+    // RFC 163 added `foundation::tail_guard`, the one shared write-side tail check every scope-B append site
+    // calls: 147 -> 148.
+    assert_eq!(modules.len(), 148, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

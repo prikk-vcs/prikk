@@ -168,10 +168,14 @@ const LOWER_LAYER: [&str; 36] = [
 
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
-/// `min(fan_in, fan_out)` under RFC 131 §6c's qualified-node graph, today's ranking is 7
+/// `min(fan_in, fan_out)` under RFC 131 §6c's qualified-node graph, the ranking before RFC 163 was 7
 /// (`merge::evidence`, named `merge_evidence` until RFC 131 §6f grouped it), 6 (`patch_replay`,
 /// `active`, `wal`, `author::author_key_index`), then a clean drop to 5 (`trust`,
-/// `lifecycle_cache::replay`, `patch_set_digest`). The break sits between 6 and 5.
+/// `lifecycle_cache::replay`, `patch_set_digest`). **RFC 163 (2026-09-29) added one new fan-out edge,
+/// into the new `foundation::tail_guard` shared check, from three already wide-fan-in modules at
+/// once** (`refs`, `trust`, and one more into `author::author_key_index`, already declared): `refs`
+/// (29 fan-in, 6 fan-out) and `trust` (13/6) both newly cross the threshold and are declared below.
+/// The break still sits between 6 and 5.
 ///
 /// **History, resolved as of RFC 131 §6c.7: `active` and `wal` dropped out of the declared set at
 /// RFC 131 §2.2a's `foundation` grouping (2026-09-08)**, a real consolidation effect rather than a
@@ -186,7 +190,10 @@ const LOWER_LAYER: [&str; 36] = [
 /// `lifecycle_cache` (3/2) were removed from the declared set the same round: `min()` is
 /// deliberately about *bidirectional* traffic, and neither meets it any more once its own
 /// submodules (`refs::evidence`, `lifecycle_cache::replay`, ...) carry their own fan
-/// independently -- `refs` in particular is a sink (high fan-in, low fan-out), not a middle hub.
+/// independently -- `refs` in particular was a sink (high fan-in, low fan-out), not a middle hub, at
+/// the time. **RFC 163 gave it its sixth fan-out edge** (`foundation::tail_guard`, above), which is
+/// what makes it a middle hub again today, declared below with that specific reason -- the earlier
+/// removal is still the correct account of why it dropped out in the first place.
 const HUB_THRESHOLD: usize = 6;
 
 /// One declared cycle-forming edge: the reason it exists, and — the property that makes a cycle
@@ -352,7 +359,8 @@ struct DeclaredHub {
     reason: &'static str,
 }
 
-/// Today's five hubs by `min(fan_in, fan_out)`, reconciled at RFC 131 §6c.7 against the
+/// Today's seven hubs by `min(fan_in, fan_out)` -- five reconciled at RFC 131 §6c.7, plus `refs` and
+/// `trust` again as of RFC 163 (below) -- against the
 /// qualified-node graph (`cc15e616`): `refs` (28/4, min 4) and `lifecycle_cache` (3/2, min 2) are
 /// **removed** -- neither meets the threshold any more once their own submodules
 /// (`refs::evidence`, `lifecycle_cache::replay`, ...) carry their own fan independently; `refs`
@@ -372,7 +380,11 @@ struct DeclaredHub {
 /// grouped it 2026-09-12 and the entry below follows the module): `show` reuses
 /// `merge::evidence::lifecycle_state_at` rather than duplicating its private `lineage_horizon`/
 /// `replay_derived_state` call sequence, the same "add one narrow function instead of widening
-/// internals" shape RFC 131 §3 argued for.
+/// internals" shape RFC 131 §3 argued for. **`refs` and `trust` cross it again at RFC 163
+/// (2026-09-29)**, for an unrelated reason this time: both gained one new fan-out edge into the new
+/// `foundation::tail_guard` shared write-side tail check (§2's rule, at the pointer index and the
+/// trust key/policy containers respectively) -- `refs`'s earlier removal (28/4 at the time, a sink)
+/// is unaffected in kind, only in degree.
 const DECLARED_HUBS: &[DeclaredHub] = &[
     DeclaredHub {
         module: "lifecycle_cache::replay",
@@ -430,9 +442,29 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   distinct real consumers, not one caller reached six ways. Its own fan-out is \
                   entirely into this crate's shared durable-file toolkit (`foundation::byte_cursor`, \
                   `foundation::file_codec`, `foundation::frame_resync`, `foundation::fsutil`, \
-                  `foundation::layout`, plus `lock`) -- the same primitives every other durable \
-                  on-disk container in this crate already depends on to persist an index, not \
-                  reach that crept outward on its own",
+                  `foundation::layout`, `foundation::tail_guard`, plus `lock`) -- the same \
+                  primitives every other durable on-disk container in this crate already depends on \
+                  to persist an index, not reach that crept outward on its own",
+    },
+    DeclaredHub {
+        module: "refs",
+        reason: "RFC 163's write-side tail guard added the one new fan-out edge, into \
+                  `foundation::tail_guard`: `ensure_current_matches` (the pointer index's own \
+                  compare-and-swap check, run immediately before every publication's pointer-index \
+                  append) now also refuses there when that same read finds an unclean tail. `refs`'s \
+                  fan-in (29) is unrelated and pre-existing -- it is the module every ref-publishing \
+                  and ref-reading command in the crate already goes through, a sink by its own \
+                  nature (RFC 131 §6c.7's own note above). The new edge is the shared check every \
+                  scope-B append site in this round calls, not a second, drifting copy of it",
+    },
+    DeclaredHub {
+        module: "trust",
+        reason: "RFC 163's write-side tail guard added the one new fan-out edge, into \
+                  `foundation::tail_guard`, the same shared check `refs` (above) and \
+                  `author::author_key_index` now also call: `current_adopted_key_ids` (both \
+                  `add_trusted_maintainer` and `remove_trusted_maintainer`'s shared read before their \
+                  own trust-policy append) and `add_trusted_maintainer`'s own trust-key lookup each \
+                  refuse there on an unclean tail. One check reused at both call sites, not two",
     },
 ];
 

@@ -58,6 +58,9 @@ pub(crate) struct ReceivedIndexRecordOutcome {
 pub(crate) struct ReceivedIndexReplay {
     pub(crate) entries: Vec<ReceivedIndexEntry>,
     pub(crate) trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins (RFC 163 §2's refusal names it). Only
+    /// meaningful when `trailing_partial_bytes != 0`.
+    pub(crate) tail_offset: usize,
     pub(crate) record_outcomes: Vec<ReceivedIndexRecordOutcome>,
 }
 
@@ -235,6 +238,7 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
                     return Ok(ReceivedIndexReplay {
                         entries,
                         trailing_partial_bytes: remaining,
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -256,6 +260,7 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
                         return Ok(ReceivedIndexReplay {
                             entries,
                             trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
                             record_outcomes,
                         });
                     }
@@ -276,6 +281,7 @@ pub(crate) fn replay_received_index(layout: &RepositoryLayout) -> Result<Receive
         return Ok(ReceivedIndexReplay {
             entries: Vec::new(),
             trailing_partial_bytes: 0,
+            tail_offset: 0,
             record_outcomes: Vec::new(),
         });
     };
@@ -335,10 +341,25 @@ pub(crate) fn list_resolved_received_entries(
 /// existing entry first, matching `append_ref_pointer_entry`'s own reasoning exactly: "last entry
 /// wins" already makes a duplicate harmless, and `received.rs`'s own doc is explicit that a re-import
 /// has no CAS to enforce -- "this is what I have now."
+///
+/// RFC 163 §2: also the received index's own write-side tail guard. Unlike the other four scope-B
+/// files, this function's sole caller (`write_received_pointer`) reads nothing before appending -- "no
+/// CAS to enforce" means there is no existing read to build the guard on, so this is a genuinely new
+/// whole read (reported as such, not reused). The received index grows with the number of distinct
+/// remote refs ever imported, the same bound the ref pointer index has, not with total store size, so
+/// this is the same cost class the WAL's own unconditional `replay()`-before-`append_patch` already
+/// pays on every commit.
 pub(crate) fn append_received_index_entry(
     layout: &RepositoryLayout,
     entry: &ReceivedIndexEntry,
 ) -> Result<()> {
+    let existing = replay_received_index(layout)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the received index",
+        existing.trailing_partial_bytes,
+        existing.tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
     let record = encode_received_index_record(entry)?;
     // RFC 102 Stage 6 Step 2, design-v1.md §15.7/§15.9: resolver-routed, not hardcoded to `A` --
     // see `pointer_index::append_ref_pointer_entry`'s identical comment for why, and why this is

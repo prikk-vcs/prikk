@@ -29,7 +29,8 @@
 - Rust callers of `prikk-store`: `RepositoryVerification` gained ten fields across this release (`InterruptedAppend`
   handling, `connectivity_issues`, `trailing_partial_object_index_bytes`, `object_index_interior_damage`,
   `trailing_partial_pointer_index_bytes`, `active_wal_ordering_issues`, `received_ref_item_outcomes`,
-  `active_session_count`), `WalRepair` gained `recovery_file`, and `IndexRepairReport` gained `lost_ids` and
+  `active_session_count`), `WalRepair` gained `recovery_file` and `complete_records_removed` (RFC 163, N6: how
+  many of a truncated tail's bytes are complete, if damaged, records), and `IndexRepairReport` gained `lost_ids` and
   `recovery_file`. `InterruptedAppend`, `ConnectivityIssue` and `PointerIndexRepair` are new,
   `#[non_exhaustive]` types, and `repair_pointer_index_tail` is a new function. Every one of these types was
   already `#[non_exhaustive]`, so this compiles unchanged if constructed and matched only through the crate, per
@@ -84,6 +85,21 @@
   was silent about it).
 - A size-bound refusal or description under 1 MiB now renders in **KiB** instead of a useless "0.0 MiB"
   (`incoming.max-object-bytes` set to a few thousand bytes, for instance).
+- `seal`, `branch create`, `tag create` and `merge` now **refuse before writing anything** when the ref
+  pointer index ends in an unclean tail, naming the byte offset and `prikk doctor
+  --repair-pointer-index-tail`; before, the publication appended behind it, and `verify` then failed for
+  good after (RFC 163, N1).
+- `trust maintainer add`, `trust maintainer remove`, a commit by an author this repository has not
+  recorded key material for, and `bundle import`/`sync accept` now **refuse before writing anything**
+  when the trust-key, trust-policy, author-key or received-index container (respectively) ends in an
+  unclean tail, naming the byte offset and the manual way out (back the file up, truncate to the named
+  offset, run `verify`); before, the write appended behind it, and `verify` then failed for good, with
+  `seal`/`commit`/`compact` refused too depending on the file (RFC 163, N2's burying half; a repair verb
+  for these four is 0.49.0).
+- `prikk doctor --repair-wal-tail` now **names when the bytes it removed include one or more complete
+  records**, naming how many: `the N removed byte(s) include M complete record(s) -- a write the WAL's
+  own shape says finished, not one a crash interrupted`; before, a removed record the user had been told
+  was committed was indistinguishable in the output from a genuine interrupted append (RFC 163, N6).
 
 ### Fixed — an index repair could make `verify` blind to a damaged object, a torn index append made every command refuse, and a WAL or pointer-index tail was fatal or repairable depending on its shape (RFC 162)
 
@@ -258,6 +274,49 @@ damaged is therefore no longer stopped at a checkpoint seal, and `prikk verify` 
 
 This checkpoint-seal change touches no public Rust API on its own; see the `### Changed — breaking once` entry
 above for what this release does break.
+
+### Fixed — a write could still bury a crash state at the ref pointer index, trust keys, trust policy, author keys and the received index (RFC 163)
+
+RFC 162 rule 1 ("never appends behind damage") was applied to the object index only. Every other appended file
+still appended blind: a torn tail these five files' own readers already tolerated (the pointer index, as a
+repairable tail; the other four, silently — `verify` says nothing about a tail on them at all, N7, still open)
+became permanent damage the moment the next ordinary write landed behind it. **Confirmed in the released 0.47.0
+binary** (the external architect's own reproduction, letter 015's assessment): `seal`, `branch create` and
+`tag create` each exit 1 having already appended, after which `verify` fails for good and
+`--repair-pointer-index-tail` is refused as interior damage (N1); `trust maintainer add` exits 1 having
+appended, after which `seal` is refused too (N2); a crash inside `branch create`/`tag create` followed by a
+`seal` of a different ref buries the torn ref-log record the same way (N3, ref log, not fixed this round — see
+below). Earlier releases were not independently checked this round.
+
+- **The ref pointer index (N1) is fixed the same way the WAL already was**: `ensure_current_matches`, the
+  compare-and-swap check every publication (`seal`, `branch create`, `tag create`, `merge`) already runs
+  immediately before its own pointer-index append, now also refuses there on an unclean tail — no second read
+  added. The refusal names `prikk doctor --repair-pointer-index-tail`, which already exists; after it, the same
+  publication succeeds.
+- **Trust keys, trust policy, author keys, and the received index (N2's burying half) are fixed the same
+  way**, each riding a read its own write path already performs (`add_trusted_maintainer`'s and
+  `remove_trusted_maintainer`'s shared current-key-id-list read; `check_author_key_conflict`'s own lookup) —
+  except the received index, where `write_received_pointer` reads nothing before appending today (no CAS to
+  enforce), so its guard is a new whole read, at the WAL's own cost class (bounded by the number of distinct
+  remote refs ever imported, not by total store size). None of these four has a repair verb in 0.48.0: the
+  refusal names the byte offset, and `docs/src/guide/troubleshooting.md` gets one entry per file for the manual
+  way out (back the file up, truncate to the offset, run `verify`). Repairs are 0.49.0, alongside a `verify`
+  line for each of these four (N7, with M4).
+- **The ref log (N3) is out of this round's scope, and disclosed, not fixed** — it keeps its own positive
+  truncation rule; a way to complete or withdraw an interrupted `branch create`/`tag create`, and `seal`
+  refusing while another ref's publication is incomplete, are 0.49.0 work with F1. See the known limitations in
+  `current-state.md`.
+- **N6, disclosed:** RFC 162 rule 3 already means a damaged *last* WAL record (all its bytes present, checksum
+  failed) is a tail, not damage, once nothing sound follows it — `verify` exits 0 and `doctor --repair-wal-tail`
+  removes it, keeping the bytes. That output now says when what it removed includes one or more complete
+  records, so a removed commit the user was told had succeeded is never silent about it (see Output changes,
+  above). The witness that would tell a genuine crash apart from later damage to an already-durable record is
+  0.49.0 work.
+- **A new shared check, `foundation::tail_guard`**, used at every one of the five sites above: refuse before an
+  append when the file does not end at its last sound record, naming the file, the byte offset, how many bytes
+  follow, and the way out. Its addition is the reason `refs` and `trust` are newly declared coupling-graph hubs
+  (`tools/release-policy/src/boundary/coupling.rs`'s own `DECLARED_HUBS`) — one shared check three already
+  wide-fan-in modules now call, not three drifting copies of it.
 
 ## 0.47.0 — 2026-09-25
 

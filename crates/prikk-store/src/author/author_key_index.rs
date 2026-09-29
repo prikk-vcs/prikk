@@ -99,6 +99,9 @@ pub(crate) struct AuthorKeyRecordOutcome {
 pub(crate) struct AuthorKeyReplay {
     pub(crate) entries: Vec<AuthorKeyEntry>,
     pub(crate) trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins (RFC 163 §2's refusal names it). Only
+    /// meaningful when `trailing_partial_bytes != 0`.
+    pub(crate) tail_offset: usize,
     pub(crate) record_outcomes: Vec<AuthorKeyRecordOutcome>,
 }
 
@@ -267,6 +270,7 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
                     return Ok(AuthorKeyReplay {
                         entries,
                         trailing_partial_bytes: remaining,
+                        tail_offset: offset,
                         record_outcomes,
                     });
                 };
@@ -288,6 +292,7 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
                         return Ok(AuthorKeyReplay {
                             entries,
                             trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
                             record_outcomes,
                         });
                     }
@@ -306,6 +311,7 @@ pub(crate) fn replay_author_keys(layout: &RepositoryLayout) -> Result<AuthorKeyR
         return Ok(AuthorKeyReplay {
             entries: Vec::new(),
             trailing_partial_bytes: 0,
+            tail_offset: 0,
             record_outcomes: Vec::new(),
         });
     };
@@ -314,22 +320,35 @@ pub(crate) fn replay_author_keys(layout: &RepositoryLayout) -> Result<AuthorKeyR
 
 /// Every entry ever recorded for `key_id`, oldest first -- deliberately not just the most recent
 /// one; see the module doc's "no conflict rejection" note. Refuses if the container has any damaged
-/// entry, matching `trust_index::lookup_trust_key_entry`'s fail-closed reasoning.
+/// entry, matching `trust_index::lookup_trust_key_entry`'s fail-closed reasoning. A reader: never
+/// refuses on the container's own trailing-partial tail (unlike the write path, below) -- used by
+/// `verify_author_signature` and other pure reads, not only by the write path.
 pub(crate) fn lookup_author_key_entries(
     layout: &RepositoryLayout,
     key_id: &str,
 ) -> Result<Vec<AuthorKeyEntry>> {
+    Ok(lookup_author_key_entries_with_tail(layout, key_id)?.0)
+}
+
+/// Like [`lookup_author_key_entries`], but also returns the container's own tail status from the same
+/// replay -- RFC 163's write-side guard (`check_author_key_conflict`, below) is built on this call so
+/// it never pays for a second whole read just to learn what this one already decoded.
+fn lookup_author_key_entries_with_tail(
+    layout: &RepositoryLayout,
+    key_id: &str,
+) -> Result<(Vec<AuthorKeyEntry>, usize, usize)> {
     let replay = replay_author_keys(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "author key container has a damaged entry; run doctor before reading".to_string(),
         ));
     }
-    Ok(replay
+    let entries = replay
         .entries
         .into_iter()
         .filter(|entry| entry.key_id == key_id)
-        .collect())
+        .collect();
+    Ok((entries, replay.trailing_partial_bytes, replay.tail_offset))
 }
 
 /// Whether `key_id`/`public_key` is already on file, or would be a fresh append -- the read half of
@@ -390,7 +409,20 @@ pub(crate) fn check_author_key_conflict(
     // RFC 150 §2: the three-valued answer is computed once, in `author_key_binding` above, and this
     // function is the half that turns `Mismatch` into the refusal. `key status` reads the same
     // query, so the two cannot drift -- `author_binding_and_commit_agree` perturbs it to prove so.
-    let existing = lookup_author_key_entries(layout, key_id)?;
+    //
+    // RFC 163 §2: also the author-key container's own write-side tail guard. Every one of this
+    // function's own callers (`bundle` import, `patch_exchange::accept`, `record_author_key_material`)
+    // is on a write path, never a pure read (`key status` calls `author_key_binding` directly instead,
+    // which stays lenient) -- so refusing here, at the read this function already performs, is safe
+    // and adds no second read.
+    let (existing, trailing_partial_bytes, tail_offset) =
+        lookup_author_key_entries_with_tail(layout, key_id)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the author key container",
+        trailing_partial_bytes,
+        tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
     match author_key_binding(layout, key_id, public_key)? {
         AuthorKeyBinding::Matches => return Ok(AuthorKeyCheck::AlreadyRecorded),
         AuthorKeyBinding::Unrecorded => return Ok(AuthorKeyCheck::New),

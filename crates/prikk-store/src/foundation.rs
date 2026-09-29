@@ -10,3 +10,4 @@ pub(crate) mod fsutil;
 pub(crate) mod generation;
 pub(crate) mod index;
 pub(crate) mod layout;
+pub(crate) mod tail_guard;

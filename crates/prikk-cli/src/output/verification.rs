@@ -195,6 +195,17 @@ pub(crate) fn print_active_session_repairs(active_repairs: &[ActiveSessionRepair
                         file.display().to_string().replace('\\', "/")
                     );
                 }
+                // RFC 163 §4 (N6): a removed acknowledged commit is never silent. A true crash-torn
+                // append can never produce a complete record shape (its last frame is short by
+                // construction), so this line appears only when what was removed includes one or
+                // more records whose own claimed length was fully present -- a record the WAL's own
+                // shape says was completely written, damaged afterward, not interrupted mid-write.
+                if wal_repair.complete_records_removed > 0 {
+                    println!(
+                        "  the {} removed byte(s) include {} complete record(s) -- a write the WAL's own shape says finished, not one a crash interrupted; the bytes are kept in the recovery file above",
+                        wal_repair.truncated_bytes, wal_repair.complete_records_removed
+                    );
+                }
             }
             ActiveSessionRepairStatus::Skipped { reason } => {
                 println!(
