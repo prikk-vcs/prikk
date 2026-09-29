@@ -68,3 +68,8 @@ generation log. **Ruled: disclose in 0.48.0, fix in 0.49.0** with a positional t
 3. **CHANGELOG:** name it where the RFC 163 entry lists what remains.
 
 Full test gate (it is a `docs/src` change). **Report:** `.git-exclude/review-request/rfc163-generation-log-report-v2.md`.
+
+**ACCEPTED and CLOSED 2026-09-30** (`7354feb3` + `eeeb5b62`; reviews `rfc163-generation-log-review-v1`, `-v2`). The
+architect ran 14/14 gates on each commit, and probes on the release build at all three compactions, with a control on the
+previous build. One CHANGELOG attribution is corrected in candidate 3's sweep. **RFC 163 is fully delivered, §9
+included.** Next, live: `119-release-policy-reset/release-0.48.0-candidate-3-handoff-v1.md`.
