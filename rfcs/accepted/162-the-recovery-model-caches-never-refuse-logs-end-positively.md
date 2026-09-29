@@ -124,3 +124,14 @@ Accepted at `11d50cc4` (reviews `rfc162-recovery-model-review-v1`, `-v2`).
 
 The external `reproduce.sh`, run by the architect on the final commit, shows M1, M2 and M3 closed and M5 back at
 `bb81b0fb`'s cost.
+
+## 8. Corrections, 2026-09-29 (external review of the candidate, letter 015)
+
+- **§1 is wrong about M2 and M3.** "All three come from two rules the project adopted within the last day" holds for M1
+  only. M2 and M3 are in 0.46.0 and 0.47.0: the reviewer's 014 output, and the architect's run of their script on the
+  released 0.47.0 binary. The architect misread that output when sending letter 015.
+- **Rule 1's "never appends behind damage" was implemented for the object index only.** The pointer index, and the
+  trust-key, trust-policy, author-key and received-index files, append behind a torn tail (N1, N2), and the next ordinary
+  write turns a crash state `verify` passes into damage no command repairs. The architect's review did not ask which
+  other writers append. **A second addendum here would be the second, so this goes to RFC 163** (proposed): a write
+  never buries a crash state.

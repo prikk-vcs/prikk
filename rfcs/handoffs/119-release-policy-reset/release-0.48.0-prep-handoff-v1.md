@@ -137,3 +137,9 @@ three files. Gates on it, in R1's scope. Report: `.git-exclude/review-request/re
 reviewed by the development team (OK, gates re-run independently, 14/14) and is **the candidate**. Pushed at `41124dd2`:
 CI run `36546504271` 16/16, macOS 2,212 and Windows 2,153 tests against 2,446 on Linux, none failing. Next: letter 015
 to the external architect, for the owner to send. **No tag until their answer**, or until they say not to wait.
+
+**Letter 015 SENT and ANSWERED 2026-09-29: do not tag `41124dd2`.** Four blockers, all reproduced by the architect
+(assessment `external-review-015-assessment-v1`): N1 (a publication appends behind a torn pointer-index tail), N4 (the
+release gate would read the tag's own queued CI run), N5 (notes and docs still describe replaced rules), and the
+disclosure of N2, N3 and N6. **Next, live:** `release-0.48.0-candidate-2-handoff-v1.md` (N4, N5 1–4); then RFC 163
+(proposed, for the owner's reading) and its implementation round; then a new candidate.
