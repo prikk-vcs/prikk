@@ -158,3 +158,9 @@ it is RFC 163 §9, proposed to the owner, and if accepted it comes as its own ha
 - `reproduce.sh` v2 and `matrix.py` on a release build of the final commit. Explain every remaining I5 cell by name.
 
 **Report:** `.git-exclude/review-request/rfc163-write-never-buries-report-v2.md`.
+
+**ACCEPTED 2026-09-29** (`ddf1e82a` + `acef8f3a`; reviews `rfc163-write-never-buries-review-v1`, `-v2`). The architect
+ran 14/14 gates and probes on the release build, with a control on the previous build: a refused import leaves every
+`.prikk/` file identical, and a recorded author's commit is not refused. The reviewer's scripts show N1 and N2 closed;
+the remaining I5 cells are the disclosed garbage-tail case. **RFC 163 at scope B is delivered.** The generation log
+(§9) awaits the owner.
