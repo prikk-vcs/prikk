@@ -10,8 +10,9 @@ is accepted and pushed at `a884cfc1`, and CI run `36582775306` went 16/16. **Aft
 - **Every production append to a generation log** (`foundation/generation.rs::append_generation_record`, called from
   `compact.rs`) confirms under its lock that the log ends at its last sound record. If it does not, it refuses **before
   `compact` writes anything**: before the new slot's first byte, not only before the generation record.
-  - **List the phases** of each of the three compactions (pointer index, received index, and the third). Say where the
-    check fires relative to each one's first write.
+  - **The three compactions,** from source (`compact.rs`): the pointer index (`:85`, generation append `:115`), the
+    received index (`:149`, `:179`) and the trust policy (`:212`, `:236`). For each, say where the check fires relative
+    to its first write.
 - **No new read:** `resolve_live_slot` already reads the log. Carry its tail status to the check, as the pointer index's
   lookup does.
 - **The refusal** uses the shared `require_no_unclean_tail`. It names the log file, the offset and the byte count, and
