@@ -46,3 +46,25 @@ is accepted and pushed at `a884cfc1`, and CI run `36582775306` went 16/16. **Aft
 - `reproduce.sh` v2 and `matrix.py` on a release build of the final commit.
 
 **Report:** `.git-exclude/review-request/rfc163-generation-log-report-v1.md`.
+
+## Addendum 1 — 2026-09-30: disclose the garbage-shaped generation-log tail (text only)
+
+Report `rfc163-generation-log-report-v1.md`, commit `7354feb3`. **The code is accepted** (review
+`rfc163-generation-log-review-v1`). **Text only here: no code.**
+
+**The case, measured by the architect** on `7354feb3` and on 0.47.0: 100 zero bytes after the **pointer index's**
+generation log make every command refuse (`status`, `log`, `branch list`, `seal`, `commit`, `verify`, `doctor`) with
+"generation log has a damaged record; run doctor before reading". `doctor` has nothing for it. On the received-index and
+trust-policy generation logs, only `compact` is affected. This is long-standing, and it is N2's remainder in the
+generation log. **Ruled: disclose in 0.48.0, fix in 0.49.0** with a positional tail and repair verbs for all six files.
+
+1. **`current-state.md`, known limitations:** extend the garbage-tail bullet (or add one beside it) to the generation
+   logs. Say that on the pointer index's generation log such a tail stops **every** command, and on the other two only
+   `compact`. Say it is planned for 0.49.0.
+2. **`troubleshooting.md`:** one entry for "generation log has a damaged record; run doctor before reading". Say what it
+   means, and that no command repairs it in 0.48.0. **Give no truncation advice**, for the same reason as the
+   damaged-entry entry: nothing tells the user where the last sound record ends. Point to restoring the repository from
+   a copy or a clone.
+3. **CHANGELOG:** name it where the RFC 163 entry lists what remains.
+
+Full test gate (it is a `docs/src` change). **Report:** `.git-exclude/review-request/rfc163-generation-log-report-v2.md`.
