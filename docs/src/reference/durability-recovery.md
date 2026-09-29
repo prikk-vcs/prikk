@@ -236,29 +236,46 @@ nothing about at all (the other four, still under the pre-0.48.0 shape rule, N2)
 state into permanent damage — `verify` failing for good, and on some of these files a `seal` or `commit`
 refused too.
 
+**Refuses only when that write would actually append.** An operation that turns out to be a no-op for
+one of these files — re-adding a maintainer key already adopted under the same public key, removing one
+that was never adopted, a commit by an author whose key material this repository already recorded —
+appends nothing, and is unaffected by a tail on the file it would otherwise have written to. The check
+still runs, and still reads what the operation already reads; it is the *refusal* that is conditioned on
+whether an append is actually about to happen, not the read.
+
 **The five files, and the way out:**
 
 - **The pointer index.** Every publication (`seal`, `branch create`, `tag create`, `merge`) reads the
   pointer index for its own compare-and-swap check immediately before it would append; that same read
   now also refuses on an unclean tail, naming `prikk doctor --repair-pointer-index-tail` — the repair
   already exists (RFC 162). After it, the same publication succeeds.
-- **Trust keys, trust policy, author keys, the received index.** `trust maintainer add` (both
-  containers), a commit by a new author, and `bundle import`/`sync accept` each refuse the same way. No
-  repair verb exists for these four in 0.48.0 (planned for 0.49.0, alongside a `verify` line for each —
-  see `current-state.md`'s known limitations, N2's remainder). **The way out is manual**: back the file
-  up, truncate it to the byte offset the refusal names, then run `prikk verify` to confirm the
-  repository is sound before retrying the write that refused.
+- **Trust keys, trust policy, author keys, the received index.** `trust maintainer add`/`remove` (both
+  containers, only when adding or removing would append), a commit by an author key id not yet recorded,
+  and `bundle import` (never `sync accept`, which does not touch the received namespace) each refuse the
+  same way, **entirely before their first write** — for `bundle import`, before even the bundle's own
+  objects are written, the same pre-write phase the author-key check already ran in (0.44.0,
+  GHSA-px5q-233r-6hq5: a refused import must write nothing at all). No repair verb exists for these four
+  in 0.48.0 (planned for 0.49.0, alongside a `verify` line for each — see `current-state.md`'s known
+  limitations, N2's remainder). **The way out is manual**: back the file up, truncate it to the byte
+  offset the refusal names, then run `prikk verify` to confirm the repository is sound before retrying
+  the write that refused. A tail of zeros or random bytes at these four files is damage under their own
+  shape rule, not something this refusal covers at all — see `current-state.md` and
+  `troubleshooting.md`'s own entry for that message.
 
 **Where each check reads from.** No new whole read was added where an existing one could carry the
 answer: the pointer index's guard rides the same replay `ensure_current_matches`'s own compare-and-swap
 check already performs; the trust-key and trust-policy guards ride the same replay
 `add_trusted_maintainer`/`remove_trusted_maintainer` already perform to compute the current key id list
 and look up the key being added; the author-key guard rides the same replay
-`check_author_key_conflict` already performs. Only the received index's guard is a new whole read:
-`write_received_pointer` reads nothing before appending today (there is no CAS to enforce), so there
-was no existing read to build the check on — accepted at the same cost class as the WAL's own
-unconditional replay-before-append, since the received index grows with the number of distinct remote
-refs ever imported, not with total store size.
+`check_author_key_conflict` already performs. Only the received index's guard is a new read, moved to
+`bundle import`'s own pre-write phase: `write_received_pointer` reads nothing before appending today
+(there is no CAS to enforce), so there was no existing read to build the check on. It grows with every
+import that records a pointer, not only with the number of distinct remote refs (`compact` is what
+reclaims stale entries) — measured on a release build at 1,000 and 10,000 entries, a lean tail-only walk
+(no entry decoded, no allocation per record) against a full decode: 1,000 entries (159 KB), 182 µs
+against 256 µs; 10,000 entries (1.6 MB), 1.65 ms against 2.01 ms. Both are still linear in the file's own
+size — checksumming every byte is unavoidable for telling a sound record from damage — so this is a
+bounded saving, not a change of complexity class; at these sizes the absolute cost is small either way.
 
 **Not covered, on purpose.** The object index keeps RFC 162 rule 1 (a writer rebuilds it before
 appending, rather than refusing). The object containers keep rule 2's connectivity classification. The

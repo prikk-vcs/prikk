@@ -47,15 +47,22 @@ Prikk is not yet the right tool if you need:
 Disclosed here rather than left implicit, each with the figure it was measured at and the release it is
 planned for. None of these blocks 0.48.0.
 
-- **A write can still bury a crash state at four files: trust keys, trust policy, author keys, and the
-  received index (N2's remainder).** RFC 163 §2 fixed the pointer index (a write now refuses before it
-  appends behind an unclean tail, naming `prikk doctor --repair-pointer-index-tail`) and extended the
-  same refusal to these four files, so the burying itself is fixed here in 0.48.0 -- but none of the
-  four has a repair verb yet: the refusal names the byte offset, and the way out is manual (back the
-  file up, truncate it to the named offset, then run `prikk verify`; see
-  `durability-recovery.md`). `verify` also still says nothing about a tail on any of these four files on
-  its own (N7, with M4) -- the refusal above is the only place a torn tail on one of them is visible
-  today. Repair verbs and a `verify` line for each are planned for 0.49.0.
+- **Trust keys, trust policy, author keys, and the received index have no repair verb, and `verify` says
+  nothing about a tail on any of them on its own (N2's remainder).** The burying itself is fixed in
+  0.48.0: RFC 163 §2 fixed the pointer index (a write now refuses before it appends behind an unclean
+  tail, naming `prikk doctor --repair-pointer-index-tail`) and extended the same refusal to these four
+  files, each only when the write in question would actually append. What remains: none of the four has
+  a repair verb yet, so the way out a write's own refusal names is manual (back the file up, truncate it
+  to the named offset, then run `prikk verify`; see `durability-recovery.md`) -- and `verify` on its own,
+  without a write attempt to trigger the refusal, still says nothing about a torn tail on any of these
+  four files (N7, with M4). Repair verbs and a `verify` line for each are planned for 0.49.0.
+- **A tail of zeros or random bytes at these same four files is damage, not a repairable tail, and
+  nothing says so.** Their own shape rule (pre-0.48.0, unchanged this round) treats a torn *prefix* as a
+  tail but 100 or more zero/random bytes as an unparseable frame -- interior damage, not a position-based
+  tail RFC 162 rule 3 would cover. `verify` fails; `trust maintainer add`, a commit, and `bundle import`
+  each refuse with "\<container\> has a damaged entry; run doctor before reading"; and `doctor` has
+  nothing that repairs it. A tail defined by position for these four files, the same way rule 3 already
+  works for the WAL and the pointer index, is 0.49.0 work.
 - **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
   different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
   `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same

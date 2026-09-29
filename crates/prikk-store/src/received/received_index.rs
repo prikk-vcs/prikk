@@ -270,6 +270,64 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
     }
 }
 
+/// RFC 163 §2, Addendum 1 item 3: the tail-only walk `require_received_index_clean_tail` uses instead
+/// of a full [`decode_received_index_records`]. Same frame-by-frame walk (magic, header, checksum),
+/// but never decodes a sound frame's body into a [`ReceivedIndexEntry`] (no `ref_name` UTF-8 parse, no
+/// `String`/`Vec` allocation per record) -- the corruption check a tail guard needs is entirely in the
+/// header and the checksum; the entry's own fields are never read. Still reads and hashes every byte
+/// of the file (the checksum cannot be skipped without losing the ability to tell a sound record from
+/// damage), so this is a real but bounded saving, not a change of complexity class -- see the measured
+/// costs in `received/tests.rs`.
+fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize)> {
+    let mut offset = 0_usize;
+    loop {
+        match parse_frame_at(bytes, offset) {
+            FrameAttempt::Record { next_offset, .. } => {
+                offset = require_progress("received index", offset, next_offset)?;
+            }
+            FrameAttempt::TrailingPartial { remaining } => {
+                let sound_after = sound_frame_after_partial(
+                    bytes,
+                    offset,
+                    RECEIVED_INDEX_MAGIC.as_slice(),
+                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                );
+                let Some(next) = sound_after else {
+                    return Ok((remaining, offset));
+                };
+                offset = require_progress("received index", offset, next)?;
+            }
+            FrameAttempt::Invalid { .. } => {
+                match resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice()) {
+                    Some(next) => offset = next,
+                    None => return Ok((0, bytes.len())),
+                }
+            }
+        }
+    }
+}
+
+/// RFC 163 §2, Addendum 1 item 1: the received index's own write-side tail guard, decided in the
+/// pre-write phase (`bundle.rs::import_bundle`, alongside `check_author_key_conflict`) rather than
+/// inside `append_received_index_entry` -- a refused import must write nothing, and by the time the
+/// append itself runs, objects and author-key material are already durable (0.44.0, GHSA-px5q-233r-6hq5).
+/// Uses [`scan_received_index_tail`], not a full replay: this check does not need any entry's own
+/// fields, only whether the file ends at its last sound record.
+pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Result<()> {
+    let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
+    let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
+    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
+        return Ok(());
+    };
+    let (trailing_partial_bytes, tail_offset) = scan_received_index_tail(&bytes)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the received index",
+        trailing_partial_bytes,
+        tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )
+}
+
 /// Read and replay the on-disk received-ref index, off the durability path -- a missing file replays
 /// as empty, the same reader-equivalence rule Stage 1 established for the WAL and Stage 4 for the ref
 /// pointer index. Generation-aware (RFC 102 Stage 6 Step 1, design-v1.md §15.6): resolves to `A`
@@ -342,24 +400,16 @@ pub(crate) fn list_resolved_received_entries(
 /// wins" already makes a duplicate harmless, and `received.rs`'s own doc is explicit that a re-import
 /// has no CAS to enforce -- "this is what I have now."
 ///
-/// RFC 163 §2: also the received index's own write-side tail guard. Unlike the other four scope-B
-/// files, this function's sole caller (`write_received_pointer`) reads nothing before appending -- "no
-/// CAS to enforce" means there is no existing read to build the guard on, so this is a genuinely new
-/// whole read (reported as such, not reused). The received index grows with the number of distinct
-/// remote refs ever imported, the same bound the ref pointer index has, not with total store size, so
-/// this is the same cost class the WAL's own unconditional `replay()`-before-`append_patch` already
-/// pays on every commit.
+/// **Carries no tail guard of its own** (RFC 163 §2, Addendum 1 item 1): the sole production caller,
+/// `bundle.rs::import_bundle`, decides that in its own pre-write phase now
+/// (`require_received_index_clean_tail`, under the same received-index lock this append later runs
+/// under), so that a refused import writes nothing at all -- not even the objects a check running this
+/// late would have already durably written. Called by test fixtures too, which do not need the guard
+/// re-run per append the way production code, with its single well-defined entry point, does.
 pub(crate) fn append_received_index_entry(
     layout: &RepositoryLayout,
     entry: &ReceivedIndexEntry,
 ) -> Result<()> {
-    let existing = replay_received_index(layout)?;
-    crate::foundation::tail_guard::require_no_unclean_tail(
-        "the received index",
-        existing.trailing_partial_bytes,
-        existing.tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
-    )?;
     let record = encode_received_index_record(entry)?;
     // RFC 102 Stage 6 Step 2, design-v1.md §15.7/§15.9: resolver-routed, not hardcoded to `A` --
     // see `pointer_index::append_ref_pointer_entry`'s identical comment for why, and why this is

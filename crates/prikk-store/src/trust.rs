@@ -103,7 +103,8 @@ pub fn add_trusted_maintainer(
     validate_maintainer_key_id_storage_safety(key_id)?;
     let public_key = decode_public_key_hex(public_key_hex)?;
 
-    let mut key_ids = current_adopted_key_ids(layout)?;
+    let (mut key_ids, policy_trailing_partial_bytes, policy_tail_offset) =
+        current_adopted_key_ids(layout)?;
 
     // Runs before the key-material lookup, and unconditionally, so a case-insensitive collision can
     // never stand in for this check — see the function's own doc for why it now checks *active
@@ -114,15 +115,11 @@ pub fn add_trusted_maintainer(
 
     // RFC 163 §2: the trust-key container's own write-side tail guard, at the one whole read this
     // function already performs before its own conditional `append_trust_key_entry` below -- no
-    // second read added.
-    let (existing_entry, trailing_partial_bytes, tail_offset) =
+    // second read added. Addendum 1 item 2: the tail is checked only inside the `None` arm, the one
+    // branch that is about to append -- an already-recorded (matching) key, or a conflicting one this
+    // refuses regardless, appends nothing, so neither other arm needs it.
+    let (existing_entry, key_trailing_partial_bytes, key_tail_offset) =
         lookup_trust_key_entry_with_tail(layout, key_id)?;
-    crate::foundation::tail_guard::require_no_unclean_tail(
-        "the trust key container",
-        trailing_partial_bytes,
-        tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
-    )?;
     match existing_entry {
         Some(existing) if existing.public_key == public_key => {}
         // RFC 147 §2d: a trust-on-first-use collision, detected before anything is verified -- no
@@ -140,6 +137,12 @@ pub fn add_trusted_maintainer(
             )));
         }
         None => {
+            crate::foundation::tail_guard::require_no_unclean_tail(
+                "the trust key container",
+                key_trailing_partial_bytes,
+                key_tail_offset,
+                "back it up, truncate it to the named offset, then run `prikk verify`",
+            )?;
             append_trust_key_entry(
                 layout,
                 &TrustKeyEntry {
@@ -157,6 +160,12 @@ pub fn add_trusted_maintainer(
     if key_ids.iter().any(|existing| existing == key_id) {
         return Ok((adopted, false));
     }
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the trust policy container",
+        policy_trailing_partial_bytes,
+        policy_tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
     key_ids.push(key_id.to_string());
     append_trust_policy_snapshot(layout, &key_ids)?;
     Ok((adopted, true))
@@ -178,7 +187,7 @@ pub fn remove_trusted_maintainer(layout: &RepositoryLayout, key_id: &str) -> Res
     // additional to `ActiveLock`, per design-v1.md §15.7/§15.8.
     let _trust_policy_lock = acquire_container_locks(layout, &[LockableContainer::TrustPolicy])?;
     crate::refs::ensure_no_incomplete_publication(layout)?;
-    let mut key_ids = current_adopted_key_ids(layout)?;
+    let (mut key_ids, trailing_partial_bytes, tail_offset) = current_adopted_key_ids(layout)?;
     let original_len = key_ids.len();
     key_ids.retain(|existing| existing != key_id);
     if key_ids.len() == original_len {
@@ -191,6 +200,15 @@ pub fn remove_trusted_maintainer(layout: &RepositoryLayout, key_id: &str) -> Res
                 .to_string(),
         ));
     }
+    // RFC 163 §2, Addendum 1 item 2: checked here, not earlier -- a removal that turns out to be a
+    // no-op (the id was never adopted) or refused (it is the last key) appends nothing, and must not
+    // refuse over a tail it will never write behind.
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the trust policy container",
+        trailing_partial_bytes,
+        tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
     append_trust_policy_snapshot(layout, &key_ids)?;
     Ok(true)
 }
@@ -200,22 +218,20 @@ pub fn remove_trusted_maintainer(layout: &RepositoryLayout, key_id: &str) -> Res
 /// policy`'s own "missing policy" error: adding the *first* key in a fresh repository is not a trust
 /// failure, so this treats "never configured" and "add" as compatible, while `load_maintainer_trust_
 /// policy` (read-only callers, `verify`) must keep treating it as a hard error.
-/// RFC 163 §2: both of this function's callers (`add_trusted_maintainer`, `remove_trusted_maintainer`)
-/// go on to append a new trust-policy snapshot, so this is also the write-side tail guard for that
-/// container -- refusing here, at the one whole read both callers already perform, means the append
-/// below never happens behind an unclean tail. `current_adopted_key_ids` has no other caller (checked
-/// from source): every read-only trust-policy question goes through `read_current_trust_policy_snapshot`
-/// directly instead, which stays lenient.
-fn current_adopted_key_ids(layout: &RepositoryLayout) -> Result<Vec<String>> {
+/// RFC 163 §2: also carries the trust-policy container's own tail status, from the same read, for both
+/// callers (`add_trusted_maintainer`, `remove_trusted_maintainer`) to check -- **only when each is about
+/// to append** (Addendum 1 item 2): a key id already adopted, or a removal that would leave the last
+/// key, appends nothing, and must not refuse over a tail it will never write behind.
+/// `current_adopted_key_ids` has no other caller (checked from source): every read-only trust-policy
+/// question goes through `read_current_trust_policy_snapshot` directly instead, which stays lenient.
+fn current_adopted_key_ids(layout: &RepositoryLayout) -> Result<(Vec<String>, usize, usize)> {
     let (snapshot, trailing_partial_bytes, tail_offset) =
         read_current_trust_policy_snapshot_with_tail(layout)?;
-    crate::foundation::tail_guard::require_no_unclean_tail(
-        "the trust policy container",
+    Ok((
+        snapshot.unwrap_or_default(),
         trailing_partial_bytes,
         tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
-    )?;
-    Ok(snapshot.unwrap_or_default())
+    ))
 }
 
 /// Reject a maintainer key id whose ASCII-folded form collides with a *currently adopted* key id

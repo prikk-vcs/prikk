@@ -409,25 +409,28 @@ pub(crate) fn check_author_key_conflict(
     // RFC 150 §2: the three-valued answer is computed once, in `author_key_binding` above, and this
     // function is the half that turns `Mismatch` into the refusal. `key status` reads the same
     // query, so the two cannot drift -- `author_binding_and_commit_agree` perturbs it to prove so.
-    //
-    // RFC 163 §2: also the author-key container's own write-side tail guard. Every one of this
-    // function's own callers (`bundle` import, `patch_exchange::accept`, `record_author_key_material`)
-    // is on a write path, never a pure read (`key status` calls `author_key_binding` directly instead,
-    // which stays lenient) -- so refusing here, at the read this function already performs, is safe
-    // and adds no second read.
-    let (existing, trailing_partial_bytes, tail_offset) =
-        lookup_author_key_entries_with_tail(layout, key_id)?;
-    crate::foundation::tail_guard::require_no_unclean_tail(
-        "the author key container",
-        trailing_partial_bytes,
-        tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
-    )?;
     match author_key_binding(layout, key_id, public_key)? {
         AuthorKeyBinding::Matches => return Ok(AuthorKeyCheck::AlreadyRecorded),
-        AuthorKeyBinding::Unrecorded => return Ok(AuthorKeyCheck::New),
+        AuthorKeyBinding::Unrecorded => {
+            // RFC 163 §2, Addendum 1 item 2: the write-side tail guard belongs exactly here -- the one
+            // outcome that is about to append (`record_author_key_material`'s own `None` arm). A key
+            // this repository has already recorded (`Matches`, above) or a conflicting one this refuses
+            // regardless (`Mismatch`, below) appends nothing, so neither needs it -- checked from
+            // source across every caller of this function (`bundle` import's validation loop,
+            // `patch_exchange::accept`, `record_author_key_material` itself), each on a write path.
+            let (_, trailing_partial_bytes, tail_offset) =
+                lookup_author_key_entries_with_tail(layout, key_id)?;
+            crate::foundation::tail_guard::require_no_unclean_tail(
+                "the author key container",
+                trailing_partial_bytes,
+                tail_offset,
+                "back it up, truncate it to the named offset, then run `prikk verify`",
+            )?;
+            return Ok(AuthorKeyCheck::New);
+        }
         AuthorKeyBinding::Mismatch => {}
     }
+    let existing = lookup_author_key_entries(layout, key_id)?;
     if let Some(conflicting) = existing.first() {
         if key_id == LEGACY_AUTHOR_KEY_ID {
             return Err(PrikkError::Integrity(format!(

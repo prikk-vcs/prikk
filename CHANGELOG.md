@@ -89,13 +89,24 @@
   pointer index ends in an unclean tail, naming the byte offset and `prikk doctor
   --repair-pointer-index-tail`; before, the publication appended behind it, and `verify` then failed for
   good after (RFC 163, N1).
-- `trust maintainer add`, `trust maintainer remove`, a commit by an author this repository has not
-  recorded key material for, and `bundle import`/`sync accept` now **refuse before writing anything**
-  when the trust-key, trust-policy, author-key or received-index container (respectively) ends in an
-  unclean tail, naming the byte offset and the manual way out (back the file up, truncate to the named
-  offset, run `verify`); before, the write appended behind it, and `verify` then failed for good, with
+- `trust maintainer add`/`remove` (each only when it would actually append), a commit by an author key
+  id this repository has not recorded material for, and `bundle import` now **refuse before writing
+  anything at all** — for `bundle import`, before even the bundle's own objects are written — when the
+  trust-key, trust-policy, author-key or received-index container (respectively) ends in an unclean
+  tail, naming the byte offset and the manual way out (back the file up, truncate to the named offset,
+  run `verify`); before, the write appended behind it, and `verify` then failed for good, with
   `seal`/`commit`/`compact` refused too depending on the file (RFC 163, N2's burying half; a repair verb
-  for these four is 0.49.0).
+  for these four is 0.49.0). An operation that appends nothing to one of these files (re-adding an
+  already-adopted key, a commit by an already-recorded author) is unaffected by a tail on it. The
+  received-index check is a new whole read (`bundle import` reads nothing there today), measured on a
+  release build against a lean tail-only walk that decodes no entry: 1,000 entries (159 KB), 182 µs
+  against 256 µs for a full decode; 10,000 entries (1.6 MB), 1.65 ms against 2.01 ms — both linear in the
+  file's own size, a bounded saving rather than a different complexity class.
+- `trust maintainer add`, a commit, and `bundle import` on the trust-key, trust-policy, author-key or
+  received-index container with **100 or more zero or random trailing bytes** (damage under these four
+  files' own pre-0.48.0 shape rule, not a tail the refusal above covers): still `<container> has a
+  damaged entry; run doctor before reading`, unchanged in behavior, now with a `troubleshooting.md` entry
+  that says so and gives no truncation advice for it.
 - `prikk doctor --repair-wal-tail` now **names when the bytes it removed include one or more complete
   records**, naming how many: `the N removed byte(s) include M complete record(s) -- a write the WAL's
   own shape says finished, not one a crash interrupted`; before, a removed record the user had been told
@@ -296,12 +307,21 @@ below). Earlier releases were not independently checked this round.
 - **Trust keys, trust policy, author keys, and the received index (N2's burying half) are fixed the same
   way**, each riding a read its own write path already performs (`add_trusted_maintainer`'s and
   `remove_trusted_maintainer`'s shared current-key-id-list read; `check_author_key_conflict`'s own lookup) —
-  except the received index, where `write_received_pointer` reads nothing before appending today (no CAS to
-  enforce), so its guard is a new whole read, at the WAL's own cost class (bounded by the number of distinct
-  remote refs ever imported, not by total store size). None of these four has a repair verb in 0.48.0: the
-  refusal names the byte offset, and `docs/src/guide/troubleshooting.md` gets one entry per file for the manual
-  way out (back the file up, truncate to the offset, run `verify`). Repairs are 0.49.0, alongside a `verify`
-  line for each of these four (N7, with M4).
+  except the received index, where the read moved into `bundle import`'s own pre-write phase (see below), a
+  genuinely new one, measured (see Output changes) rather than assumed cheap. **Refuses only when the write
+  would actually append**: re-adding a maintainer key already adopted under the same public key, removing one
+  never adopted, or a commit by an author key id already recorded, appends nothing to the file in question and
+  is unaffected by a tail on it. None of these four has a repair verb in 0.48.0: the refusal names the byte
+  offset, and `docs/src/guide/troubleshooting.md` gets one entry per file for the manual way out (back the file
+  up, truncate to the offset, run `verify`) plus one more for the four files' own **garbage-shaped** tails (100+
+  zero or random bytes), which are damage under their pre-0.48.0 shape rule, not something this refusal covers,
+  and which no command repairs. Repairs and a position-defined tail for these four files are 0.49.0, alongside a
+  `verify` line for each (N7, with M4).
+- **A refused `bundle import` writes nothing at all, not only leaving the received index untouched.** The
+  received-index guard first landed inside the low-level append itself, after the bundle's own objects and any
+  author-key material were already durably written — the exact shape 0.44.0 closed for every other decision a
+  refused import makes (GHSA-px5q-233r-6hq5). Moved to the same pre-write phase the author-key check already
+  used, under the same lock, before the first object write.
 - **The ref log (N3) is out of this round's scope, and disclosed, not fixed** — it keeps its own positive
   truncation rule; a way to complete or withdraw an interrupted `branch create`/`tag create`, and `seal`
   refusing while another ref's publication is incomplete, are 0.49.0 work with F1. See the known limitations in

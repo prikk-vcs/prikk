@@ -334,6 +334,57 @@ fn trust_policy_a_write_refuses_on_an_unclean_tail_then_a_manual_truncate_lets_i
     trust_container_case("trust policy", trust_policy_path);
 }
 
+/// Addendum 1 item 2: re-adding the repository's own, **already-adopted** maintainer key (the fixed
+/// key `support::trust_maintainer` already adopted) appends nothing to either trust container -- an
+/// idempotent no-op -- so it must succeed despite a torn tail on either, and must not touch either
+/// file.
+#[test]
+fn trust_maintainer_add_of_the_already_adopted_key_is_unaffected_by_a_tail_on_either_container() {
+    let mut failures = Vec::new();
+    for (target_name, path_of) in [
+        ("trust keys", trust_key_path as fn(&Path) -> PathBuf),
+        ("trust policy", trust_policy_path as fn(&Path) -> PathBuf),
+    ] {
+        for (fault_name, fault) in SHAPE_RULE_FAULTS {
+            let repo = trust_repository(&format!(
+                "rfc163-{}-no-append-{}",
+                target_name.replace(' ', "-"),
+                fault_name.replace(' ', "-")
+            ));
+            let path = path_of(&repo);
+            fault(&path);
+            let corrupted = read_bytes(&path);
+            let label = format!("{target_name}, already-adopted key / {fault_name}");
+
+            let (code, text, _) = run(
+                &repo,
+                &[
+                    "trust",
+                    "maintainer",
+                    "add",
+                    "--key-id",
+                    support::MAINTAINER_KEY_ID,
+                    "--public-key",
+                    &support::maintainer_public_key_hex(),
+                ],
+            );
+            if code != Some(0) {
+                failures.push(format!(
+                    "{label}: re-adding the already-adopted key must succeed despite the tail\n{text}"
+                ));
+            }
+            if read_bytes(&path) != corrupted {
+                failures.push(format!(
+                    "{label}: the file must be untouched -- this call appends to neither container"
+                ));
+            }
+
+            let _ = std::fs::remove_dir_all(&repo);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
 // ---------------------------------------------------------------------------------------------
 // 3. Author keys -- a commit by a new author.
 // ---------------------------------------------------------------------------------------------
@@ -373,6 +424,43 @@ fn author_key_repository(tag: &str) -> PathBuf {
     std::fs::write(repo.join("a.txt"), "a\n".repeat(20)).unwrap();
     support::ok(&support::commit(&repo, "heads/main", "first"), "commit");
     repo
+}
+
+/// Addendum 1 item 2: a commit by the repository's own, **already-recorded** author appends nothing to
+/// the author-key container, so it must succeed despite a torn tail there -- and must not touch the
+/// file. Uses `support::commit` (the fixed, first author, already recorded by
+/// `author_key_repository`'s own setup commit).
+#[test]
+fn author_keys_a_commit_by_the_already_recorded_author_is_unaffected_by_a_tail() {
+    let mut failures = Vec::new();
+    for (fault_name, fault) in SHAPE_RULE_FAULTS {
+        let repo = author_key_repository(&format!(
+            "rfc163-author-keys-no-append-{}",
+            fault_name.replace(' ', "-")
+        ));
+        let path = author_key_path(&repo);
+        fault(&path);
+        let corrupted = read_bytes(&path);
+        let label = format!("author keys, already-recorded author / {fault_name}");
+
+        std::fs::write(repo.join("by-first-author.txt"), "first\n".repeat(5)).unwrap();
+        let commit = support::commit(&repo, "heads/main", "by the already-recorded author");
+        if !commit.status.success() {
+            failures.push(format!(
+                "{label}: a commit by the already-recorded author must succeed despite the tail\n{}{}",
+                String::from_utf8_lossy(&commit.stdout),
+                String::from_utf8_lossy(&commit.stderr)
+            ));
+        }
+        if read_bytes(&path) != corrupted {
+            failures.push(format!(
+                "{label}: the author-key container must be untouched -- this commit appends nothing to it"
+            ));
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
 #[test]
@@ -438,15 +526,27 @@ fn received_index_path(repo: &Path) -> PathBuf {
 
 /// A sender repository with one sealed commit, and its bundle already exported to `<receiver>/../sender.bundle`.
 fn export_a_bundle(tag: &str) -> PathBuf {
-    let sender = support::unique_repo(&format!("{tag}-sender"));
+    export_a_bundle_named(tag, "s.txt", "export.bundle")
+}
+
+/// Like [`export_a_bundle`], with the committed file and the bundle's own file name given explicitly --
+/// so two calls with two different `file_name`s produce two bundles carrying genuinely different
+/// objects (a second import of the second bundle would write *new* objects, unlike a second import of
+/// the same bundle, which writes none).
+fn export_a_bundle_named(tag: &str, file_name: &str, bundle_name: &str) -> PathBuf {
+    let sender = support::unique_repo(&format!("{tag}-sender-{file_name}"));
     support::init(&sender);
-    std::fs::write(sender.join("s.txt"), "s\n".repeat(20)).unwrap();
+    std::fs::write(sender.join(file_name), format!("{file_name}\n").repeat(20)).unwrap();
     support::ok(
-        &support::commit(&sender, "heads/main", "sender commit"),
+        &support::commit(
+            &sender,
+            "heads/main",
+            &format!("sender commit: {file_name}"),
+        ),
         "commit",
     );
     support::ok(&support::seal(&sender, "heads/main"), "seal");
-    let bundle = sender.join("export.bundle");
+    let bundle = sender.join(bundle_name);
     support::ok(
         &support::prikk(&sender)
             .args([
@@ -482,6 +582,66 @@ fn received_index_repository(tag: &str) -> (PathBuf, PathBuf) {
         "first bundle import",
     );
     (receiver, bundle)
+}
+
+/// Addendum 1 item 1 (blocks): **a refused `bundle import` writes nothing at all**, not only leaving
+/// the received index untouched -- 0.44.0's own guarantee (GHSA-px5q-233r-6hq5) for every other
+/// refusal, which the received-index guard's first shape violated by running inside
+/// `append_received_index_entry`, after the objects and author keys were already durable. The second
+/// bundle carries genuinely new objects (a different sender, a different committed file), so a check
+/// that fired too late would show up as new files under `.prikk/containers/`, not only a changed
+/// received-index file.
+#[test]
+fn received_index_a_refused_import_writes_nothing_at_all() {
+    let mut failures = Vec::new();
+    for (fault_name, fault) in SHAPE_RULE_FAULTS {
+        let tag = format!(
+            "rfc163-received-index-nothing-written-{}",
+            fault_name.replace(' ', "-")
+        );
+        let (repo, _first_bundle) = received_index_repository(&tag);
+        let second_bundle = export_a_bundle_named(&tag, "second-sender-file.txt", "second.bundle");
+
+        let path = received_index_path(&repo);
+        fault(&path);
+        let label = format!("received index, whole-repo / {fault_name}");
+
+        let before = support::store_bytes(&repo);
+        let (code, text, _) = run(
+            &repo,
+            &[
+                "bundle",
+                "import",
+                "--input",
+                second_bundle.to_str().unwrap(),
+            ],
+        );
+        if code.is_some_and(|code| code == 0) {
+            failures.push(format!(
+                "{label}: the import must refuse on the unclean tail, but exited 0\n{text}"
+            ));
+        }
+        let after = support::store_bytes(&repo);
+        if before != after {
+            let mut changed: Vec<String> = before
+                .keys()
+                .chain(after.keys())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .filter(|path| before.get(*path) != after.get(*path))
+                .map(|path| path.display().to_string())
+                .collect();
+            changed.sort();
+            changed.dedup();
+            failures.push(format!(
+                "{label}: every file under .prikk/ must be byte-identical after a refused import; changed: {changed:?}"
+            ));
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(second_bundle.parent().unwrap());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
 #[test]

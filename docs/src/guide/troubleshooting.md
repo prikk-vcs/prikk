@@ -152,11 +152,14 @@ right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail
 
 ## `error: integrity error: the trust key container has an incomplete tail at byte offset N (M byte(s) follow); …`
 
-`trust maintainer add` refuses before writing anything: the trust-key container's own last write was
-interrupted (a crash mid-append), and this command would otherwise append behind that torn tail, blind
-— turning a state `prikk verify` does not yet report into damage no repair verb can fix in 0.48.0. The
-bytes after the named offset are the torn tail; nothing before it is touched, and nothing has been
-written by this refusal. Back the file up first:
+`trust maintainer add` refuses before writing anything, but **only when adding this key would actually
+append to the file** — a new key id, or an existing one under a different (conflicting) public key. Both
+have to write to `.prikk/trust/keys.container`, and its own last write was interrupted (a crash
+mid-append); this command would otherwise append behind that torn tail, blind, turning a state `prikk
+verify` does not yet report into damage no repair verb can fix in 0.48.0. **Re-adding a key id already
+adopted with the same public key is unaffected**: it appends nothing, so it succeeds regardless of the
+tail. The bytes after the named offset are the torn tail; nothing before it is touched, and nothing has
+been written by this refusal. Back the file up first:
 
 ```sh
 cp .prikk/trust/keys.container .prikk/trust/keys.container.bak
@@ -171,25 +174,44 @@ backup means the manual truncate can be undone if it goes wrong.
 
 The same refusal as the trust-key one above, for the trust-policy container instead
 (`.prikk/trust/policy-a.container` or `-b.container`, whichever `prikk verify`'s own report names as
-live) — `trust maintainer add` and `trust maintainer remove` both read this container before appending
-their own new snapshot, and both refuse here rather than append behind a torn tail. The way out is the
-same: back the file up, truncate it to the named offset, run `prikk verify`, then retry.
+live) — `trust maintainer add` and `trust maintainer remove` both read this container, and both refuse
+here **only when they are about to append their own new snapshot**: `add` of a key id not yet in the
+policy, or `remove` of one that is (and is not the last one). Re-adding an already-adopted key, or
+removing one that was never adopted, appends nothing and is unaffected by a tail here. The way out is
+the same: back the file up, truncate it to the named offset, run `prikk verify`, then retry.
 
 ## `error: integrity error: the author key container has an incomplete tail at byte offset N (M byte(s) follow); …`
 
-A commit by an author key id this repository has not recorded material for refuses here when
-`.prikk/trust/author-keys.container` itself ends in a torn tail — the same shape as the two trust-store
-refusals above, for the file that records AUTHOR (not MAINTAINER) key material. Back the file up,
-truncate it to the named offset, run `prikk verify`, then retry the commit. A commit by an author key id
-this repository has already recorded material for is unaffected by this refusal only once the file is
-repaired — until then, every author's commit refuses, not only a new one's.
+A commit, a rollback draft, or a `bundle import`/`sync accept` refuses here **only for an author key id
+this repository has not recorded material for yet** — recording it would append to
+`.prikk/trust/author-keys.container`, and its own last write was interrupted (a crash mid-append); the
+same shape as the two trust-store refusals above, for the file that records AUTHOR (not MAINTAINER) key
+material. **A commit (or import) by an author key id this repository has already recorded material for
+is unaffected**: it appends nothing to this file, so it succeeds regardless of the tail. Back the file
+up, truncate it to the named offset, run `prikk verify`, then retry the write that refused.
 
 ## `error: integrity error: the received index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
-`bundle import` or `sync accept` refuses here when the received-ref index's own live slot
-(`.prikk/refs/containers/received-index-a.container` or `-b.container`) ends in a torn tail. Nothing
-from the bundle or sync source is written when this happens. Back the file up, truncate it to the named
-offset, run `prikk verify`, then retry the import or accept.
+`bundle import` refuses **before writing anything at all** — not only leaving the received-ref index's
+own live slot (`.prikk/refs/containers/received-index-a.container` or `-b.container`) untouched, but
+also the bundle's own objects and any author-key material it carries: the check runs before the first
+object write, the same as every other decision an import makes. (`sync accept` never writes to this
+file; a received/`remotes/*` ref is only ever created by `bundle import`.) Back the file up, truncate it
+to the named offset, run `prikk verify`, then retry the import.
+
+## `error: integrity error: <container> has a damaged entry; run doctor before reading`
+
+Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,
+author-key or received-index container. Unlike the four "incomplete tail" refusals above, this is not a
+crash-torn append: it is a record whose own header parses as claiming a plausible length, but whose
+bytes do not check out (a checksum mismatch, or an unparseable body) — most often seen after 100 or more
+zero or random bytes land at the end of one of these files, which this project's own shape rule for them
+treats as damage, not a tail (unlike the WAL and the pointer index). **`doctor` has nothing that repairs
+this today** (0.49.0 work), and this entry gives no truncation advice: unlike a genuine torn tail, there
+is no offset promised to be followed by nothing sound, so a truncation here is a guess, not a safe
+recovery step. If you believe the bytes after some offset really are nothing but trailing garbage, run
+`prikk verify` first and read its own report carefully before deciding to truncate anything by hand; when
+in doubt, back the file up and ask before changing it.
 
 ## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 

@@ -858,6 +858,11 @@ pub fn import_bundle(
     let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
     let _received_index_lock =
         acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
+    // RFC 163 §2, Addendum 1 item 1: the received index's own write-side tail guard belongs here too --
+    // before the first object write, under the same lock the pointer write later runs under, exactly
+    // like the author-key check below. It used to run inside `append_received_index_entry`, after
+    // every object and author-key write; a refused import left them behind.
+    crate::received::received_index::require_received_index_clean_tail(layout)?;
     for (key_id, public_key) in &contents.bundle_key_ids {
         check_author_key_conflict(layout, key_id, *public_key)?;
     }
