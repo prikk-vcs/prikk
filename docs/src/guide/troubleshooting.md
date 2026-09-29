@@ -211,6 +211,20 @@ writes nothing, so it never refuses over a tail it would never write behind. Bac
 it to the named offset, run `prikk verify` to confirm the repository is sound, then retry `compact`.
 There is no `doctor` repair verb for this file yet (planned for 0.49.0).
 
+## `error: integrity error: generation log has a damaged record; run doctor before reading`
+
+Seen from any command that reads a generation log's live slot — `status`, `log`, `branch list`, `seal`,
+`commit`, `verify`, `doctor`, and `compact` itself for that container. Like the "has a damaged entry"
+refusal below, this is not a crash-torn append: it is a record whose header parses as claiming a
+plausible length, but whose bytes do not check out (most often 100 or more zero or random bytes appended
+after the last sound record) — damage under this file's shape rule, not a tail RFC 163 §9's guard covers.
+**On the ref pointer index's own generation log, this stops every command that resolves a ref**, since
+every one of them reads it; on the received-index and trust-policy generation logs, only `compact` is
+affected. `doctor` has nothing that repairs this in 0.48.0 (0.49.0 work, alongside a positional tail and
+repair verb for all of RFC 163's files). **This entry gives no truncation advice**, for the same reason as
+the "has a damaged entry" entry below: no offset here is known to be followed by nothing sound, so a
+truncation would be a guess. Restore the repository from a backup or a clone instead.
+
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
 Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,

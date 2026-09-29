@@ -70,6 +70,14 @@ planned for. None of these blocks 0.48.0.
   What remains, same as N2's remainder: no repair verb yet, so the way out is manual (back the file up,
   truncate it to the named offset, then run `prikk verify`); and `verify` on its own still says nothing
   about a torn generation-log tail. A repair verb and a `verify` line are planned for 0.49.0.
+- **A tail of 100 or more zero or random bytes at a generation log is damage, not a repairable tail, and
+  nothing says so** -- the same shape-rule gap as the bullet above, at the generation log instead. On the
+  **pointer index's** generation log this stops every command that resolves a ref: `status`, `log`,
+  `branch list`, `seal`, `commit`, `verify` and `doctor` all refuse with "generation log has a damaged
+  record; run doctor before reading", and `doctor` has nothing that repairs it. On the received-index and
+  trust-policy generation logs, only `compact` is affected. Long-standing, confirmed on 0.47.0 as well as
+  this release. A tail defined by position, and a repair verb, for the four files above and the
+  generation logs alike, is planned for 0.49.0.
 - **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
   different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
   `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same

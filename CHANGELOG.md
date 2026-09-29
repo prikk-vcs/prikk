@@ -345,6 +345,13 @@ reproduced in the released 0.47.0 binary). Earlier releases were not independent
   will never write behind. None of the three has a repair verb in 0.48.0; the way out is the same manual
   truncate-then-`verify` as the four files above, and `troubleshooting.md` gets one entry for it. A repair verb
   and a `verify` line are 0.49.0, alongside N7's remainder.
+  **Disclosed, not fixed: a garbage-shaped generation-log tail (100+ zero or random bytes) is damage under this
+  file's own shape rule, not a tail this guard covers** — the same gap as the four N2 files, measured by the
+  external architect on `7354feb3` and confirmed on 0.47.0 as well. On the **ref pointer index's** generation
+  log it is the most severe instance of this case in the product: every command that resolves a ref refuses
+  (`status`, `log`, `branch list`, `seal`, `commit`, `verify`, `doctor`), and `doctor` repairs nothing. On the
+  received-index and trust-policy generation logs, only `compact` is affected. A positional tail and repair
+  verbs for all of RFC 163's files are 0.49.0 work.
 - **A new shared check, `foundation::tail_guard`**, used at every one of the sites above: refuse before an
   append when the file does not end at its last sound record, naming the file, the byte offset, how many bytes
   follow, and the way out. Its addition is the reason `refs` and `trust` are newly declared coupling-graph hubs
