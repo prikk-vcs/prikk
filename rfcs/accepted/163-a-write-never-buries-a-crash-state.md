@@ -116,10 +116,16 @@ of how rarely the files are written, and says one rule in the shared append path
 4. A new candidate: the gates, CI, the matrix. The external architect runs both scripts against it.
 5. The cut.
 
-## 9. Proposed amendment, 2026-09-29: the generation log (for the owner's reading)
+## 9. Amendment: the generation log
 
-**Status: PROPOSED by the architect, for the owner's reading.** It extends §3's scope, which is the owner's decision.
-It is presented in this exchange and accepted, changed or refused in a later one.
+**Status: ACCEPTED by the owner 2026-09-30** (*"Accepted."*). It was proposed by the architect on 2026-09-29 and read
+before acceptance. **The architect's reading, stated so it can be corrected:**
+- the generation log joins §3's scope in 0.48.0, under §2's rule unchanged (refuse before writing, never clear);
+- the check fires before `compact` writes anything, the new slot included, not only before the generation record;
+- the way out is manual in 0.48.0, like the four files without a repair verb; the repair verb and a `verify` line are
+  0.49.0;
+- this is its own handoff (`generation-log-handoff-v1.md`), not a second addendum to the implementation round. The
+  candidate follows it.
 
 **The finding.** The implementation round classified every other appender, as the handoff required, and found one
 that buries: the **generation log** of each compacting container (`foundation/generation.rs`, appended by `compact`).
