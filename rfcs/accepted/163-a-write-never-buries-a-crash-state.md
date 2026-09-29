@@ -1,7 +1,16 @@
 # RFC 163 — A write never buries a crash state
 
-**Status.** **PROPOSED 2026-09-29 by the architect, for the project owner's reading.** It is presented in this exchange
-and accepted, changed or refused in a later one (RFC 152 §7). One decision in it is the owner's: the scope in §3.
+**Status.** **ACCEPTED by the project owner 2026-09-29** (*"Accepted."*), **with scope B** (*"B"*). It was presented for
+reading in one exchange and accepted in a later one (RFC 152 §7). **The architect's reading, stated so it can be
+corrected:**
+- §2's rule is accepted as written: refuse before appending, never clear, no new whole read where one can be avoided;
+- **scope B:** the rule covers the pointer index, trust keys, trust policy, author keys and the received index in 0.48.0.
+  Their repair verbs stay 0.49.0, and §4's manual way out is documented for the four without one;
+- §5 (N6 and N3 disclosed, the WAL repair naming a removed whole record) and §6 (the matrix gains I5 and write-first
+  rows, with a control per site) are part of the same implementation round;
+- that round is **part 2 of candidate 2**. It goes live when part 1 (`release-0.48.0-candidate-2-handoff-v1.md`) closes.
+
+*History:* **PROPOSED 2026-09-29 by the architect**, after the external review of the candidate `41124dd2` (letter 015).
 
 **Why an RFC and not an addendum.** RFC 162 took one addendum already. By RFC 152 §7, a second one means the design is
 re-read. The external review of the candidate `41124dd2` (letter 015) found the case RFC 162 did not cover, and it names
