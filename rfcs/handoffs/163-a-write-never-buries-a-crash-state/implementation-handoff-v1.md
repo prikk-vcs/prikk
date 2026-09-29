@@ -109,3 +109,52 @@ In `rfc162_recovery_matrix.rs`:
 - each control with the rows it reddened;
 - both outputs of the reviewer's scripts;
 - the gates.
+
+## Addendum 1 — 2026-09-29: four fixes (review `rfc163-write-never-buries-review-v1`)
+
+Report `rfc163-write-never-buries-report-v1.md`, commit `ddf1e82a`. **Not accepted yet.** N1, and the burying at the four
+N2 files, are closed and reproduced by the architect. **Fixes only in this addendum.** The generation log is not in it:
+it is RFC 163 §9, proposed to the owner, and if accepted it comes as its own handoff.
+
+1. **A refused `bundle import` writes nothing again** (review §2.1; blocks).
+   - The received-index tail check must be decided **before the first object write**, with every other decision (the
+     phase that ends at `bundle.rs:893`'s "Past this point only I/O"). Today it fires inside
+     `append_received_index_entry`, after the objects and author keys are written.
+   - **Test:** a torn received-index tail, then `bundle import`. It exits non-zero, and **every file under `.prikk/` is
+     byte-identical** afterwards, not only the object containers.
+   - **Control:** move the check back after the writes. The test goes red.
+   - **Then check every other refusal RFC 163 added** against the same rule, for `bundle import` and `sync accept`, and
+     list each one with where it fires relative to the first write.
+2. **Refuse only when the operation will append to that file** (review §2.2).
+   - **Author keys:** a key already recorded appends nothing, so its writer does not refuse over the author-key tail.
+     This covers a commit by an already-recorded author, a rollback draft, and a `bundle import` or `sync accept` whose
+     keys are all recorded. When at least one key would be appended, the refusal still comes in the pre-write phase, as
+     item 1 requires.
+   - **Trust keys and trust policy:** the same, for `trust maintainer add` and `remove`: refuse only when that file will
+     be appended.
+   - **Tests:** with a torn author-key tail, a commit by the recorded author succeeds and leaves the file byte-identical.
+     A commit by a new author refuses.
+   - **Controls:** as before, one per site.
+3. **The received-index read** (review §2.3).
+   - Correct the comment: the file grows with every import that records a pointer, until `compact`.
+   - **Measure** the new replay's cost on a release build, at 1,000 and 10,000 received-index entries: time and bytes
+     read per import.
+   - Give the read a P1 scope row with its reason, or replace it with a header walk. Say which, and why.
+4. **Text** (review §2.4):
+   - **Known limitations:** retitle the N2 bullet to what remains (the four files have no repair verb, and `verify` says
+     nothing about their tails).
+   - **Disclose the garbage-shaped tails:** at these four files, a tail of zeros or random bytes is damage by their shape
+     rule. `verify` fails, the reading commands refuse with "has a damaged entry; run doctor before reading", and no
+     command repairs it (0.49.0, a tail defined by position). Add a `troubleshooting.md` entry for that message on these
+     files that says exactly this, and **gives no truncation advice unless the offset it names is shown to be followed by
+     nothing sound**.
+   - **Troubleshooting:** remove `sync accept` from the received-index entry. After item 1 its "nothing … is written" is
+     true, so a test holds it. Rewrite the author-key entry after item 2.
+   - **CHANGELOG:** make it match all of the above.
+
+**Before proposing:**
+- the 14 gates on the exact final commit, in R1's scope;
+- the matrix green;
+- `reproduce.sh` v2 and `matrix.py` on a release build of the final commit. Explain every remaining I5 cell by name.
+
+**Report:** `.git-exclude/review-request/rfc163-write-never-buries-report-v2.md`.

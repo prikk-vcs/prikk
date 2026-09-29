@@ -115,3 +115,39 @@ of how rarely the files are written, and says one rule in the shared append path
 3. One implementation round: §2 at the chosen scope, §4, §5, §6, and the disclosures.
 4. A new candidate: the gates, CI, the matrix. The external architect runs both scripts against it.
 5. The cut.
+
+## 9. Proposed amendment, 2026-09-29: the generation log (for the owner's reading)
+
+**Status: PROPOSED by the architect, for the owner's reading.** It extends §3's scope, which is the owner's decision.
+It is presented in this exchange and accepted, changed or refused in a later one.
+
+**The finding.** The implementation round classified every other appender, as the handoff required, and found one
+that buries: the **generation log** of each compacting container (`foundation/generation.rs`, appended by `compact`).
+Reproduced by the architect on the candidate build (`ddf1e82a`) and on the released 0.47.0, with the same result:
+
+| step | result |
+|---|---|
+| a torn 5-byte tail on `pointer-index-generation.log` | `verify` exits 0, and says nothing about it |
+| `commit` and `seal` | succeed; readers tolerate the tail |
+| `compact --pointer-index` | **exits 0 ("1 reclaimed")**, having appended a generation record behind the tail |
+| `commit` afterwards | refused: "generation log has a damaged record; run doctor before reading" |
+| `verify` afterwards | 1, for good |
+
+`doctor` has no diagnostic and no repair for the generation log. So a crash inside `compact`, then a second `compact`,
+leaves a repository that refuses to commit, with no way out. `compact` is a documented, supported command. **This is N1's
+defect, one layer up, and more severe than N2**, since it breaks every commit, not one operation.
+
+**Proposed:** add the generation log to §3's scope in 0.48.0.
+- `compact` confirms that the generation log ends at its last sound record, and refuses before writing anything if it
+  does not. `resolve_live_slot` already reads the log, so the check needs no new read.
+- The way out is manual, as for the four files without a repair verb: back the file up, truncate it to the named offset,
+  run `verify`. `troubleshooting.md` gets the entry. A repair verb, and a `verify` line for the generation log, are
+  0.49.0.
+- The matrix gains the write-first rows for it, with a control.
+- The known limitations say that `verify` is silent about a torn generation-log tail.
+
+**The cost of not doing it:** 0.48.0 would ship knowing that a crash inside `compact` followed by a second `compact`
+breaks every commit. It would have to be disclosed as such.
+
+**Recommendation: include it.** It is one site of the same rule, a read that already exists, and a refusal that leaves
+the repository fully usable (every reader already tolerates the tail).
