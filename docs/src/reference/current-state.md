@@ -109,7 +109,7 @@ of sealed blocks.
   how long it takes to build, or import, a deep history**, and it has been measured only to depth
   1,024; the build to 2,048 was not attempted (the 2-hour rule stopped it, its build having been
   projected at 2.3 hours). Nothing here is projected past 1,024.
-  **0.48.0 changes this** (in the CHANGELOG under Unreleased; not in a release yet). `seal`, `merge` and
+  **0.48.0 changes this.** `seal`, `merge` and
   `sync seal` start from the nearest checkpoint that an adopted maintainer signed and fold at most 63 blocks
   instead of walking the lineage. Release build, alternating with 0.47.0's, three samples each (a shared machine,
   1-minute load 1.0–2.8 at each step's start), medians:

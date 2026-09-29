@@ -68,8 +68,9 @@ old WAL, with the same framing. If saving the file fails, nothing is truncated. 
 deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage.
 **The torn-tail-is-a-prefix-of-one-frame classification applies to every framed file** — the object containers and
 index, the ref log and pointer index, the received, author-key and trust indexes, and the generation file — but
-**only the WAL repair and the object index's own rebuild (its lost ids, when it cannot re-derive an entry) write a
-recovery file today.** The pointer index's own `--repair-pointer-index-tail` does too (mirroring the WAL exactly). The
+**only three repairs write a recovery file today:** the WAL repair, the pointer index's own
+`--repair-pointer-index-tail` (mirroring the WAL exactly), and the object index's own rebuild (its lost ids, when it
+cannot re-derive an entry). The
 ref log's own tail truncation, run automatically as part of a signer-backed seal's interrupted-publication recovery
 rather than as its own `doctor` verb, truncates directly and saves nothing first: a ref-log record removed by mistake
 this way cannot be read back.
@@ -129,8 +130,9 @@ The implementation is designed so interruption recovery lands on a checkable pre
 checkable new published state. That statement is bounded by the current evidence: unit/integration
 tests, no completed crash-matrix or fuzzing campaign, and gates exercised on Linux, macOS, and Windows
 (the `macOS mutation test suite` and `Windows mutation test suite` CI jobs run the suite that compiles
-there natively on `macos-latest`/`windows-latest` — 2,211 and 2,152 tests respectively on the 0.48.0
-candidate, against 2,445 on Linux's `stable` job, since some tests are Linux-only) — with the caveat
+there natively on `macos-latest`/`windows-latest` — 2,211 and 2,152 tests respectively in CI on
+`914f959d`, the last commit before 0.48.0's release commit, against 2,445 on Linux's `stable` job,
+since some tests are Linux-only) — with the caveat
 that DC-76's negative controls (eight remain; G5 retired in DC-98) are only partly demonstrated on
 Windows: G1, G2, G4, and G9 are, but G3 and G8 still rely on a failpoint injection mechanism that
 exists only on Linux/macOS, and G6/G7 have no Windows analogue at all. See
