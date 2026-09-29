@@ -132,3 +132,8 @@ and the release commit `0f0ea817` are accepted.** The architect:
 
 **One sweep commit** on top of `0f0ea817`. **The candidate is that commit**, and the version-bump commit stays exactly
 three files. Gates on it, in R1's scope. Report: `.git-exclude/review-request/release-0.48.0-prep-report-v2.md`.
+
+**ACCEPTED 2026-09-29** (`e89503a4`; review `release-0.48.0-prep-review-v2`). The architect's docs fix `41124dd2` was
+reviewed by the development team (OK, gates re-run independently, 14/14) and is **the candidate**. Pushed at `41124dd2`:
+CI run `36546504271` 16/16, macOS 2,212 and Windows 2,153 tests against 2,446 on Linux, none failing. Next: letter 015
+to the external architect, for the owner to send. **No tag until their answer**, or until they say not to wait.
