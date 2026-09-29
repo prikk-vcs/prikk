@@ -8,7 +8,7 @@ corrected:**
   Their repair verbs stay 0.49.0, and §4's manual way out is documented for the four without one;
 - §5 (N6 and N3 disclosed, the WAL repair naming a removed whole record) and §6 (the matrix gains I5 and write-first
   rows, with a control per site) are part of the same implementation round;
-- that round is **part 2 of candidate 2**. It goes live when part 1 (`release-0.48.0-candidate-2-handoff-v1.md`) closes.
+- that round is **part 2 of candidate 2**: `rfcs/handoffs/163-a-write-never-buries-a-crash-state/implementation-handoff-v1.md`, live 2026-09-29.
 
 *History:* **PROPOSED 2026-09-29 by the architect**, after the external review of the candidate `41124dd2` (letter 015).
 

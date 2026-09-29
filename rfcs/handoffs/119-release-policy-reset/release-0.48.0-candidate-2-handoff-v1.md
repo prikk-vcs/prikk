@@ -88,3 +88,8 @@ forward.
   - the gate's diff, its tests and the control;
   - the new workflow file and the release-policy checks on it;
   - every CHANGELOG and docs place you changed, and the history evidence for item 1.
+
+**ACCEPTED and CLOSED 2026-09-29** (`903c8f6f`; review `release-0.48.0-candidate-2-part-1-review-v1`). The architect ran
+14/14 gates, a control on the filter (3 red), and the gate against GitHub's live record. The dispatched rehearsal run
+`36563922118` picked `main`'s run for 0.47.0's commit. CI run `36563890481` went 16/16. Two follow-ups are carried into
+part 2 as its item 0. **Next, live:** `rfcs/handoffs/163-a-write-never-buries-a-crash-state/implementation-handoff-v1.md`.
