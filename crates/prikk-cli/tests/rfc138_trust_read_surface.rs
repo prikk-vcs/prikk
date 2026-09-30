@@ -135,12 +135,32 @@ fn add(repo: &Path, key_id: &str, public_key_hex: &str) {
 /// same `Ok(None)`. That is a real, narrower and pre-existing ambiguity (shared by `seal`'s own
 /// `load_maintainer_trust_policy`), not what this control is testing: this writes 96 bytes with no
 /// valid magic anywhere in them, which can only decode as a genuine item failure.
+/// RFC 164 Rule A: garbage with *nothing sound after it* is now a tail, not damage (the same rule
+/// RFC 162 rule 3 already gives the WAL and the pointer index) -- readers tolerate it. A genuinely
+/// **sound** trust-policy record (an empty snapshot: magic, version 1, a 4-byte `count = 0` body,
+/// its own matching checksum) is appended after the garbage here, so this stays interior damage --
+/// a sound record follows -- which Rule A explicitly keeps refusing.
 fn corrupt_trust_policy_container(repo: &Path) {
     let layout =
         RepositoryLayout::open(repo).expect("repository must open to corrupt its container");
+    let mut bytes: Vec<u8> =
+        b"this container has been damaged beyond its own header length and carries no valid magic anywhere in it".to_vec();
+    const MAGIC: &[u8; 8] = b"PTRUPOL1";
+    const VERSION: u16 = 1;
+    let body = 0_u32.to_be_bytes().to_vec();
+    let body_len = (body.len() as u64).to_be_bytes();
+    let mut preimage = MAGIC.to_vec();
+    preimage.extend_from_slice(&VERSION.to_be_bytes());
+    preimage.extend_from_slice(&body_len);
+    preimage.extend_from_slice(&body);
+    bytes.extend_from_slice(MAGIC);
+    bytes.extend_from_slice(&VERSION.to_be_bytes());
+    bytes.extend_from_slice(&body_len);
+    bytes.extend_from_slice(&prikk_hash::sha256(&preimage));
+    bytes.extend_from_slice(&body);
     std::fs::write(
         layout.trust_policy_container_slot_path(ContainerSlot::A),
-        b"this container has been damaged beyond its own header length and carries no valid magic anywhere in it",
+        bytes,
     )
     .expect("write corrupt trust policy bytes");
 }

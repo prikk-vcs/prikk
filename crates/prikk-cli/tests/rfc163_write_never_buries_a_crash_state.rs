@@ -87,6 +87,56 @@ fn append_random_100(path: &Path) {
     std::fs::write(path, &bytes).unwrap();
 }
 
+/// A minimal but genuinely **sound** received-index record (empty `ref_name`, zeroed `ref_name_key`
+/// and `ref_state_id` -- `decode_entry_body` validates only UTF-8 and length, nothing about these
+/// fields' own real-world plausibility): appended after a fault's own bytes so `sound_frame_after_
+/// partial` finds it, keeping the fault genuine **interior damage** (RFC 164 Rule A: a sound record
+/// follows) rather than letting it become a tail.
+fn sound_received_index_record() -> Vec<u8> {
+    const MAGIC: &[u8; 8] = b"PRECVIX1";
+    const VERSION: u16 = 1;
+    let mut body = vec![0_u8; 32]; // ref_name_key
+    body.extend_from_slice(&0_u64.to_be_bytes()); // ref_name: zero-length
+    body.extend_from_slice(&[0_u8; 32]); // ref_state_id
+    let body_len = (body.len() as u64).to_be_bytes();
+    let mut preimage = MAGIC.to_vec();
+    preimage.extend_from_slice(&VERSION.to_be_bytes());
+    preimage.extend_from_slice(&body_len);
+    preimage.extend_from_slice(&body);
+    let mut record = MAGIC.to_vec();
+    record.extend_from_slice(&VERSION.to_be_bytes());
+    record.extend_from_slice(&body_len);
+    record.extend_from_slice(&prikk_hash::sha256(&preimage));
+    record.extend_from_slice(&body);
+    record
+}
+
+/// RFC 164 Rule A: 100 zero bytes with nothing sound after them is now a tail, not damage -- so N9's
+/// own "the received index refuses on a damaged entry, not only a torn tail" property needs a sound
+/// record after the fault bytes to still exercise genuine interior damage.
+fn append_zeros_100_then_sound_record(path: &Path) {
+    append_zeros_100(path);
+    let mut bytes = read_bytes(path);
+    bytes.extend(sound_received_index_record());
+    std::fs::write(path, &bytes).unwrap();
+}
+
+/// Same as [`append_zeros_100_then_sound_record`], for 4,096 zero bytes.
+fn append_zeros_4096_then_sound_record(path: &Path) {
+    append_zeros_4096(path);
+    let mut bytes = read_bytes(path);
+    bytes.extend(sound_received_index_record());
+    std::fs::write(path, &bytes).unwrap();
+}
+
+/// Same as [`append_zeros_100_then_sound_record`], for 100 random bytes.
+fn append_random_100_then_sound_record(path: &Path) {
+    append_random_100(path);
+    let mut bytes = read_bytes(path);
+    bytes.extend(sound_received_index_record());
+    std::fs::write(path, &bytes).unwrap();
+}
+
 /// A named fault: a label, and the function that applies it to a target file's path.
 type FaultFn = fn(&Path);
 
@@ -804,9 +854,18 @@ fn received_index_a_write_refuses_on_an_unclean_tail_then_a_manual_truncate_lets
 // ---------------------------------------------------------------------------------------------
 
 const RECEIVED_INDEX_DAMAGE_FAULTS: [(&str, FaultFn); 3] = [
-    ("100 zero bytes", append_zeros_100 as FaultFn),
-    ("4,096 zero bytes", append_zeros_4096 as FaultFn),
-    ("100 random bytes", append_random_100 as FaultFn),
+    (
+        "100 zero bytes, then a sound record",
+        append_zeros_100_then_sound_record as FaultFn,
+    ),
+    (
+        "4,096 zero bytes, then a sound record",
+        append_zeros_4096_then_sound_record as FaultFn,
+    ),
+    (
+        "100 random bytes, then a sound record",
+        append_random_100_then_sound_record as FaultFn,
+    ),
 ];
 
 #[test]

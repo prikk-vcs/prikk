@@ -120,7 +120,13 @@ fn decode_rejects_a_snapshot_listing_the_same_key_id_twice() -> Result<()> {
     let entry = TrustPolicySnapshotEntry {
         key_ids: vec!["alice".to_string(), "alice".to_string()],
     };
-    let bytes = encode_trust_policy_record(&entry)?;
+    let mut bytes = encode_trust_policy_record(&entry)?;
+    // RFC 164 Rule A: an undecodable record with nothing sound after it is now a tail, not damage --
+    // so a genuinely sound record follows here, keeping this fixture interior damage (a sound record
+    // follows), which Rule A explicitly keeps as a `Failed` outcome.
+    bytes.extend(encode_trust_policy_record(&TrustPolicySnapshotEntry {
+        key_ids: Vec::new(),
+    })?);
     let replay = decode_trust_policy_records(&bytes)?;
     assert!(replay.has_item_failure());
     assert!(replay.record_outcomes.iter().any(

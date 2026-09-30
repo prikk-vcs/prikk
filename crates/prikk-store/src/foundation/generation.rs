@@ -156,6 +156,12 @@ enum GenerationFrameAttempt {
     },
     Invalid {
         message: String,
+        /// RFC 160 F3, unchanged by RFC 164 Rule A: a fixed-width record's header states its width;
+        /// any other length is malformed by construction, whatever bytes follow -- a claim this
+        /// format's own records can never make is never the harmless remnant of an interrupted
+        /// append, so it is excluded from Rule A's "damage only if a sound record follows" check
+        /// (`decode_generation_records`'s own `Invalid` arm) and stays a failed item unconditionally.
+        never_a_tail: bool,
     },
 }
 
@@ -173,6 +179,7 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
         Err(err) => {
             return GenerationFrameAttempt::Invalid {
                 message: err.to_string(),
+                never_a_tail: false,
             };
         }
     };
@@ -183,16 +190,19 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
                 "generation record at byte offset {offset} claims a body of {} bytes, but every generation record's body is exactly {GENERATION_BODY_LEN}",
                 header_values.0
             ),
+            never_a_tail: true,
         };
     }
     let Ok(body_len) = usize::try_from(header_values.0) else {
         return GenerationFrameAttempt::Invalid {
             message: "generation record body length does not fit usize".to_string(),
+            never_a_tail: true,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
         return GenerationFrameAttempt::Invalid {
             message: "generation record body end overflow".to_string(),
+            never_a_tail: true,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
@@ -202,6 +212,7 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
     if expected != header_values.1 {
         return GenerationFrameAttempt::Invalid {
             message: format!("generation record checksum mismatch at byte offset {offset}"),
+            never_a_tail: false,
         };
     }
     match decode_generation_body(body) {
@@ -211,6 +222,7 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
         },
         Err(err) => GenerationFrameAttempt::Invalid {
             message: err.to_string(),
+            never_a_tail: false,
         },
     }
 }
@@ -279,13 +291,44 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                 });
                 offset = require_progress("generation", offset, next)?;
             }
-            GenerationFrameAttempt::Invalid { message } => {
+            GenerationFrameAttempt::Invalid {
+                message,
+                never_a_tail,
+            } => {
+                // RFC 164 Rule A: an invalid frame is damage only if a sound frame follows it
+                // somewhere in the rest of the buffer -- otherwise this frame and everything after
+                // it is a tail, whatever its shape (zeros, random bytes), the same rule RFC 162
+                // rule 3 already gives the WAL and the pointer index. Except a claim this format's
+                // own records can never make (`never_a_tail`), which stays damage unconditionally,
+                // resyncing past it like any other permanently-failed frame.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(bytes, offset, GENERATION_MAGIC.as_slice(), |c| {
+                            matches!(
+                                parse_generation_frame_at(bytes, c),
+                                GenerationFrameAttempt::Record { .. }
+                            )
+                        })
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
+                    return Ok(GenerationReplay {
+                        records,
+                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        tail_offset: offset,
+                        record_outcomes,
+                    });
+                }
                 record_outcomes.push(GenerationRecordOutcome {
                     offset,
                     status: GenerationRecordStatus::Failed { message },
                 });
-                match resync_to_next_magic(bytes, offset + 1, GENERATION_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => resync_to_next_magic(bytes, offset + 1, GENERATION_MAGIC.as_slice()),
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("generation", offset, next)?,
                     None => {
                         return Ok(GenerationReplay {
                             records,

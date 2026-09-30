@@ -20,8 +20,7 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    partial_before_sound_frame_message, require_progress, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -250,21 +249,29 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
                 offset = require_progress("received index", offset, next)?;
             }
             FrameAttempt::Invalid { message } => {
+                // RFC 164 Rule A: an invalid frame is damage only if a sound frame follows it
+                // somewhere in the rest of the buffer -- otherwise this frame and everything after
+                // it is a tail, whatever its shape (zeros, random bytes), the same rule RFC 162
+                // rule 3 already gives the WAL and the pointer index.
+                let sound_after = sound_frame_after_partial(
+                    bytes,
+                    offset,
+                    RECEIVED_INDEX_MAGIC.as_slice(),
+                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                );
+                let Some(next) = sound_after else {
+                    return Ok(ReceivedIndexReplay {
+                        entries,
+                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        tail_offset: offset,
+                        record_outcomes,
+                    });
+                };
                 record_outcomes.push(ReceivedIndexRecordOutcome {
                     offset,
                     status: ReceivedIndexRecordStatus::Failed { message },
                 });
-                match resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
-                    None => {
-                        return Ok(ReceivedIndexReplay {
-                            entries,
-                            trailing_partial_bytes: 0,
-                            tail_offset: bytes.len(),
-                            record_outcomes,
-                        });
-                    }
-                }
+                offset = require_progress("received index", offset, next)?;
             }
         }
     }
@@ -306,11 +313,18 @@ fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize, bool)> {
                 offset = require_progress("received index", offset, next)?;
             }
             FrameAttempt::Invalid { .. } => {
+                // RFC 164 Rule A: see the matching comment in `decode_received_index_records` above.
+                let sound_after = sound_frame_after_partial(
+                    bytes,
+                    offset,
+                    RECEIVED_INDEX_MAGIC.as_slice(),
+                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                );
+                let Some(next) = sound_after else {
+                    return Ok((bytes.len().saturating_sub(offset), offset, damaged));
+                };
                 damaged = true;
-                match resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
-                    None => return Ok((0, bytes.len(), damaged)),
-                }
+                offset = require_progress("received index", offset, next)?;
             }
         }
     }

@@ -130,6 +130,13 @@ fn a_damaged_generation_record_fails_closed_rather_than_resolving_silently() -> 
     });
     let last_index = bytes.len() - 1;
     bytes[last_index] ^= 0x01;
+    // RFC 164 Rule A: a checksum-mismatched record with nothing sound after it is now a tail, not
+    // damage (the same rule RFC 162 rule 3 already gives the WAL and the pointer index) -- so a
+    // genuinely sound record follows here, keeping this fixture interior damage (a sound record
+    // follows), which Rule A explicitly keeps failing closed.
+    bytes.extend(encode_generation_record(&GenerationRecord {
+        live_slot: ContainerSlot::A,
+    }));
     std::fs::write(&path, bytes)?;
 
     assert!(resolve_live_slot(&layout, &path).is_err());

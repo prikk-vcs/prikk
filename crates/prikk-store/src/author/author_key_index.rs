@@ -165,6 +165,11 @@ enum AuthorKeyFrameAttempt {
     },
     Invalid {
         message: String,
+        /// RFC 160 F3, unchanged by RFC 164 Rule A: a claim this format's own records can never
+        /// make (a body longer than any author-key record can hold) is never the harmless remnant
+        /// of an interrupted append, so it is excluded from Rule A's "damage only if a sound record
+        /// follows" check and stays a failed item unconditionally.
+        never_a_tail: bool,
     },
 }
 
@@ -189,17 +194,20 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         Err(err) => {
             return AuthorKeyFrameAttempt::Invalid {
                 message: err.to_string(),
+                never_a_tail: false,
             };
         }
     };
     if &magic != AUTHOR_KEY_MAGIC {
         return AuthorKeyFrameAttempt::Invalid {
             message: "invalid author key record magic".to_string(),
+            never_a_tail: false,
         };
     }
     if version != AUTHOR_KEY_VERSION {
         return AuthorKeyFrameAttempt::Invalid {
             message: format!("unsupported author key record version {version}"),
+            never_a_tail: false,
         };
     }
     // RFC 160 F3: a header that claims a body **longer than any record of this format can hold** (a `u16`-prefixed key id and a 32-byte
@@ -209,16 +217,19 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
             message: format!(
                 "author key record at byte offset {offset} claims a body of {body_len} bytes, more than the {MAX_KEY_BODY_LEN} a record of this format can hold"
             ),
+            never_a_tail: true,
         };
     }
     let Ok(body_len_usize) = usize::try_from(body_len) else {
         return AuthorKeyFrameAttempt::Invalid {
             message: "author key body length does not fit usize".to_string(),
+            never_a_tail: true,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len_usize) else {
         return AuthorKeyFrameAttempt::Invalid {
             message: "author key body end overflow".to_string(),
+            never_a_tail: true,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
@@ -228,6 +239,7 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
     if expected != checksum {
         return AuthorKeyFrameAttempt::Invalid {
             message: format!("author key checksum mismatch at byte offset {offset}"),
+            never_a_tail: false,
         };
     }
     match decode_author_key_body(body) {
@@ -237,6 +249,7 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         },
         Err(err) => AuthorKeyFrameAttempt::Invalid {
             message: err.to_string(),
+            never_a_tail: false,
         },
     }
 }
@@ -281,13 +294,43 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
                 });
                 offset = require_progress("author key", offset, next)?;
             }
-            AuthorKeyFrameAttempt::Invalid { message } => {
+            AuthorKeyFrameAttempt::Invalid {
+                message,
+                never_a_tail,
+            } => {
+                // RFC 164 Rule A: an invalid frame is damage only if a sound frame follows it
+                // somewhere in the rest of the buffer -- otherwise this frame and everything after
+                // it is a tail, whatever its shape (zeros, random bytes), the same rule RFC 162
+                // rule 3 already gives the WAL and the pointer index. Except a claim this format's
+                // own records can never make (`never_a_tail`), which stays damage unconditionally.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(bytes, offset, AUTHOR_KEY_MAGIC.as_slice(), |c| {
+                            matches!(
+                                parse_author_key_frame_at(bytes, c),
+                                AuthorKeyFrameAttempt::Record { .. }
+                            )
+                        })
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
+                    return Ok(AuthorKeyReplay {
+                        entries,
+                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        tail_offset: offset,
+                        record_outcomes,
+                    });
+                }
                 record_outcomes.push(AuthorKeyRecordOutcome {
                     offset,
                     status: AuthorKeyRecordStatus::Failed { message },
                 });
-                match resync_to_next_magic(bytes, offset + 1, AUTHOR_KEY_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => resync_to_next_magic(bytes, offset + 1, AUTHOR_KEY_MAGIC.as_slice()),
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("author key", offset, next)?,
                     None => {
                         return Ok(AuthorKeyReplay {
                             entries,

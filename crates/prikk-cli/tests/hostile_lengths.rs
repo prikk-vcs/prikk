@@ -285,6 +285,11 @@ fn verify_and_doctor_end_by_an_exit_status_and_say_something_on_every_damaged_fi
 /// checksum (the checksums are unkeyed), replaces the policy. `trust maintainer list` has always refused it ("run doctor before
 /// reading"); `verify` and `doctor` used to exit 0, because the policy is read only when a block or ref state needs its signer
 /// checked. Both must now exit non-zero and say so.
+///
+/// **RFC 164 Rule A**: a checksum-valid-but-undecodable record with *nothing sound after it* is now a tail, not damage (the same
+/// rule RFC 162 rule 3 already gives the WAL and the pointer index) -- so this fixture appends one further, genuinely sound policy
+/// record after the hostile one, making it **interior** damage (a sound record follows), which Rule A explicitly keeps as damage.
+/// A single-hostile-record-with-nothing-after fixture is covered separately, as a tail, by this round's own matrix rows.
 /// **Perturb:** drop the trust policy row of `verify_objects`'s container check: both rows exit 0 and this goes red.
 #[test]
 fn an_undecodable_trust_policy_snapshot_is_reported_by_verify_and_doctor() {
@@ -311,6 +316,19 @@ fn an_undecodable_trust_policy_snapshot_is_reported_by_verify_and_doctor() {
         hostile.extend_from_slice(&body_len);
         hostile.extend_from_slice(&prikk_hash::sha256(&preimage));
         hostile.extend_from_slice(&body);
+        // RFC 164 Rule A: a sound record after the hostile one, so this stays interior damage rather
+        // than becoming a tail -- an empty policy snapshot (count = 0, no key ids), the smallest valid
+        // body this format has.
+        let sound_body = 0_u32.to_be_bytes().to_vec();
+        let sound_body_len = (sound_body.len() as u64).to_be_bytes();
+        let mut sound_preimage = header.to_vec();
+        sound_preimage.extend_from_slice(&sound_body_len);
+        sound_preimage.extend_from_slice(&sound_body);
+        let mut sound_record = header.to_vec();
+        sound_record.extend_from_slice(&sound_body_len);
+        sound_record.extend_from_slice(&prikk_hash::sha256(&sound_preimage));
+        sound_record.extend_from_slice(&sound_body);
+        hostile.extend_from_slice(&sound_record);
         std::fs::write(&container, hostile).unwrap();
         for command in ["verify", "doctor"] {
             let ran = run(None, &repo, &[command]);
