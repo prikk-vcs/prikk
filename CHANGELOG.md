@@ -347,7 +347,11 @@ architect (§9). Earlier releases were not independently checked this round.
   received-index guard first landed inside the low-level append itself, after the bundle's own objects and any
   author-key material were already durably written — the exact shape 0.44.0 closed for every other decision a
   refused import makes (GHSA-px5q-233r-6hq5). Moved to the same pre-write phase the author-key check already
-  used, under the same lock, before the first object write.
+  used, under the same lock, before the first object write. **The guard itself only ever refused on a torn
+  tail, never on a damaged entry** (external review 016, N9): unlike the four sibling files, which refuse
+  through a lookup that fails on any damaged entry, a write here used to resync past 100 or more zero or
+  random bytes silently and append behind them, burying damage `verify` had already reported — now it refuses
+  the same way the siblings do, with their own "has a damaged entry" message, no new output.
 - **The ref log (N3) is out of this round's scope, and disclosed, not fixed** — it keeps its own positive
   truncation rule; a way to complete or withdraw an interrupted `branch create`/`tag create`, and `seal`
   refusing while another ref's publication is incomplete, are 0.49.0 work with F1. See the known limitations in

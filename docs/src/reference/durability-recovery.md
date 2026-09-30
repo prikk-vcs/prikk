@@ -271,9 +271,15 @@ whether an append is actually about to happen, not the read.
 - **The received index.** `bundle import` (never `sync accept`, which does not touch the received
   namespace) refuses the same way, **entirely before its first write** — before even the bundle's own
   objects are written, the same pre-write phase the author-key check already ran in (0.44.0,
-  GHSA-px5q-233r-6hq5: a refused import must write nothing at all). No repair verb exists for this file in
-  0.48.0 (planned for 0.49.0, alongside a `verify` line — see `current-state.md`'s known limitations, N2's
-  remainder). The way out is the same manual truncate-then-`verify`, then retry the import.
+  GHSA-px5q-233r-6hq5: a refused import must write nothing at all). **Also refuses on a damaged entry, not
+  only a torn tail** (external review 016, N9, fixed the same round the guard's tail-only walk was added):
+  before the fix, the same walk resynced silently past 100 or more zero or random bytes and appended
+  behind them, burying damage `verify` had already reported — the one guarded writer where that held,
+  since the four sibling files below already refuse through a lookup that fails on any damaged entry. No
+  repair verb exists for this file in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see
+  `current-state.md`'s known limitations, N2's remainder). The way out for a torn tail is the same manual
+  truncate-then-`verify`, then retry the import; a damaged entry gives no truncation advice, the same as
+  the four sibling files' own damaged-entry case below.
 - **The author-key container.** A commit by an author key id not yet recorded refuses the same way, but
   **only before appending to the author-key container itself, not before the commit's other writes**: the
   author-key check is the last thing a commit checks, immediately before the WAL append that would queue
@@ -284,10 +290,12 @@ whether an append is actually about to happen, not the read.
   this file in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see `current-state.md`'s known
   limitations, N2's remainder). The way out is the same manual truncate-then-`verify`, then retry the
   commit.
-- **A tail of zeros or random bytes, at any of these four files** (the trust-key, trust-policy,
-  author-key or received-index containers) is damage under their own pre-0.48.0 shape rule, not something
-  any of the refusals above covers at all — see `current-state.md` and `troubleshooting.md`'s own entry
-  for that message.
+- **A tail of zeros or random bytes, at the trust-key, trust-policy or author-key container**, is damage
+  under their own pre-0.48.0 shape rule, not something the tail-guard refusals above cover at all — those
+  three refuse on it regardless, but through their own pre-existing `has_item_failure()` read-side check,
+  not through RFC 163's own new guard. **At the received index, the guard above covers it directly** (N9,
+  above) — see `current-state.md` and `troubleshooting.md`'s own entry for the shared "has a damaged
+  entry" message all four files give.
 - **The generation log, at each of the three compacting containers** (the pointer index, the received
   index, the trust policy container). `compact` refuses the same way, **before its first write** — before
   the retired slot is truncated, not only before the generation record itself — and only in `--execute`

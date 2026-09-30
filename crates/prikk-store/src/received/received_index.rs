@@ -278,8 +278,15 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
 /// of the file (the checksum cannot be skipped without losing the ability to tell a sound record from
 /// damage), so this is a real but bounded saving, not a change of complexity class -- see the measured
 /// costs in `received/tests.rs`.
-fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize)> {
+/// Returns `(trailing_partial_bytes, tail_offset, damaged)`. `damaged` is set the moment any frame
+/// decodes as [`FrameAttempt::Invalid`] -- a checksum mismatch or an unparseable body, not a torn
+/// tail -- the same interior damage the four sibling files' own `has_item_failure()` already refuses
+/// on (external review 016, N9: this walk used to resync past such a frame silently, so a write could
+/// append behind it and bury it for good). No new read: the same checksum this walk already computes
+/// for every frame is what tells a sound record from damage.
+fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize, bool)> {
     let mut offset = 0_usize;
+    let mut damaged = false;
     loop {
         match parse_frame_at(bytes, offset) {
             FrameAttempt::Record { next_offset, .. } => {
@@ -293,14 +300,16 @@ fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize)> {
                     |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
                 );
                 let Some(next) = sound_after else {
-                    return Ok((remaining, offset));
+                    return Ok((remaining, offset, damaged));
                 };
+                damaged = true;
                 offset = require_progress("received index", offset, next)?;
             }
             FrameAttempt::Invalid { .. } => {
+                damaged = true;
                 match resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice()) {
                     Some(next) => offset = next,
-                    None => return Ok((0, bytes.len())),
+                    None => return Ok((0, bytes.len(), damaged)),
                 }
             }
         }
@@ -319,7 +328,15 @@ pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Re
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(());
     };
-    let (trailing_partial_bytes, tail_offset) = scan_received_index_tail(&bytes)?;
+    let (trailing_partial_bytes, tail_offset, damaged) = scan_received_index_tail(&bytes)?;
+    // External review 016, N9: interior damage (not a torn tail) used to resync past silently here,
+    // the only one of RFC 163's guarded writers that did -- the four sibling files already refuse on
+    // any damaged entry, via their own `has_item_failure()`. Same message, same "run doctor" advice.
+    if damaged {
+        return Err(PrikkError::Integrity(
+            "received-ref index has a damaged entry; run doctor before reading".to_string(),
+        ));
+    }
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the received index",
         trailing_partial_bytes,

@@ -71,6 +71,22 @@ fn append_zeros_30(path: &Path) {
     std::fs::write(path, &bytes).unwrap();
 }
 
+/// 4,096 zero bytes -- a full header's worth and then some, so every framed reader's `Invalid`-frame
+/// handling marks it damage (external review 016, N9's own second fault size).
+fn append_zeros_4096(path: &Path) {
+    let mut bytes = read_bytes(path);
+    bytes.extend(vec![0_u8; 4096]);
+    std::fs::write(path, &bytes).unwrap();
+}
+
+/// 100 bytes of a fixed (not random-per-run) byte pattern that is not all zero -- N9's third fault
+/// size, chosen fixed rather than from a real RNG so a failing run reproduces exactly.
+fn append_random_100(path: &Path) {
+    let mut bytes = read_bytes(path);
+    bytes.extend((0..100_u32).map(|index| (index.wrapping_mul(2654435761) >> 24) as u8));
+    std::fs::write(path, &bytes).unwrap();
+}
+
 /// A named fault: a label, and the function that applies it to a target file's path.
 type FaultFn = fn(&Path);
 
@@ -775,6 +791,226 @@ fn received_index_a_write_refuses_on_an_unclean_tail_then_a_manual_truncate_lets
 
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(bundle.parent().unwrap());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// 5. External review 016, N9 -- the received index refuses on a damaged entry, not only on a
+//    torn tail. Before this fix, `scan_received_index_tail` resynced silently past an `Invalid`
+//    frame the way a reader would, so `bundle import` appended behind already-disclosed damage
+//    and buried it for good -- the one guarded writer where `verify`'s own "has a damaged entry"
+//    refusal was not matched by a write-side refusal at all.
+// ---------------------------------------------------------------------------------------------
+
+const RECEIVED_INDEX_DAMAGE_FAULTS: [(&str, FaultFn); 3] = [
+    ("100 zero bytes", append_zeros_100 as FaultFn),
+    ("4,096 zero bytes", append_zeros_4096 as FaultFn),
+    ("100 random bytes", append_random_100 as FaultFn),
+];
+
+#[test]
+fn received_index_refuses_on_a_damaged_entry_before_the_first_write() {
+    let mut failures = Vec::new();
+    for (fault_name, fault) in RECEIVED_INDEX_DAMAGE_FAULTS {
+        let (repo, bundle) = received_index_repository(&format!(
+            "rfc163-received-index-damage-{}",
+            fault_name.replace(' ', "-").replace(',', "")
+        ));
+        let path = received_index_path(&repo);
+        fault(&path);
+        let label = format!("received index, damaged entry / {fault_name}");
+
+        let before = support::store_bytes(&repo);
+        let (code, text, _) = run(
+            &repo,
+            &["bundle", "import", "--input", bundle.to_str().unwrap()],
+        );
+        if code.is_some_and(|code| code == 0) {
+            failures.push(format!(
+                "{label}: re-importing must refuse on the damaged entry, but exited 0\n{text}"
+            ));
+        }
+        if !text.contains("has a damaged entry") {
+            failures.push(format!(
+                "{label}: the refusal must name the damaged entry\n{text}"
+            ));
+        }
+        let after = support::store_bytes(&repo);
+        if before != after {
+            let mut changed: Vec<String> = before
+                .keys()
+                .chain(after.keys())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .filter(|path| before.get(*path) != after.get(*path))
+                .map(|path| path.display().to_string())
+                .collect();
+            changed.sort();
+            changed.dedup();
+            failures.push(format!(
+                "{label}: every file under .prikk/ must be byte-identical after the refusal; changed: {changed:?}"
+            ));
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(bundle.parent().unwrap());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// 6. Prove the rule at every guarded writer, not only the received index (handoff §2): the same
+//    "100 zero bytes" fault against each of the six files RFC 163 guards, plus the three
+//    generation logs, then that file's own ordinary write. Only the received index used to fail
+//    this row (N9); the other seven already held it, via their own pre-existing `has_item_failure`
+//    (the four N2-shape files and the received index after this fix) or RFC 162 rule 3 (the
+//    pointer index) or the generation-log guard's own damaged-record check (§9).
+// ---------------------------------------------------------------------------------------------
+
+fn generation_log_repository_for(target: &str, tag: &str) -> (PathBuf, PathBuf) {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    let log_path = match target {
+        "pointer index" => {
+            std::fs::write(repo.join("a.txt"), "a\n".repeat(20)).unwrap();
+            support::ok(&support::commit(&repo, "heads/main", "first"), "commit");
+            support::ok(&support::seal(&repo, "heads/main"), "seal");
+            let (code, text, _) = run(&repo, &["compact", "--pointer-index"]);
+            assert_eq!(code, Some(0), "first compact (pointer index): {text}");
+            repo.join(".prikk/refs/containers/pointer-index-generation.log")
+        }
+        "received index" => {
+            let bundle = export_a_bundle(tag);
+            support::trust_maintainer(&repo);
+            support::ok(
+                &support::prikk(&repo)
+                    .args(["bundle", "import", "--input", bundle.to_str().unwrap()])
+                    .output()
+                    .unwrap(),
+                "bundle import",
+            );
+            let (code, text, _) = run(&repo, &["compact", "--received-index"]);
+            assert_eq!(code, Some(0), "first compact (received index): {text}");
+            repo.join(".prikk/refs/containers/received-index-generation.log")
+        }
+        "trust policy" => {
+            support::trust_maintainer(&repo);
+            let (code, text, _) = run(&repo, &["compact", "--trust-policy"]);
+            assert_eq!(code, Some(0), "first compact (trust policy): {text}");
+            repo.join(".prikk/trust/policy-generation.log")
+        }
+        _ => unreachable!(),
+    };
+    (log_path, repo)
+}
+
+#[test]
+fn every_rfc163_guarded_writer_refuses_on_a_damaged_guarded_file_and_leaves_it_unchanged() {
+    let mut failures = Vec::new();
+    let mut not_held: Vec<String> = Vec::new();
+
+    // The five ordinary files.
+    {
+        let repo = pointer_index_repository("rfc163-n9-sweep-pointer-index");
+        let path = pointer_index_path(&repo);
+        append_zeros_100(&path);
+        let corrupted = read_bytes(&path);
+        let (code, text) = pointer_index_write(&repo, "branch create", "n9sweep");
+        if code.is_some_and(|code| code == 0) || read_bytes(&path) != corrupted {
+            not_held.push(format!(
+                "pointer index (branch create): exit {code:?}\n{text}"
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    {
+        let repo = trust_repository("rfc163-n9-sweep-trust-keys");
+        let path = trust_key_path(&repo);
+        append_zeros_100(&path);
+        let corrupted = read_bytes(&path);
+        let (code, text) = add_second_maintainer(&repo);
+        if code.is_some_and(|code| code == 0) || read_bytes(&path) != corrupted {
+            not_held.push(format!(
+                "trust keys (trust maintainer add): exit {code:?}\n{text}"
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    {
+        let repo = trust_repository("rfc163-n9-sweep-trust-policy");
+        let path = trust_policy_path(&repo);
+        append_zeros_100(&path);
+        let corrupted = read_bytes(&path);
+        let (code, text) = add_second_maintainer(&repo);
+        if code.is_some_and(|code| code == 0) || read_bytes(&path) != corrupted {
+            not_held.push(format!(
+                "trust policy (trust maintainer add): exit {code:?}\n{text}"
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    {
+        let repo = author_key_repository("rfc163-n9-sweep-author-keys");
+        let path = author_key_path(&repo);
+        append_zeros_100(&path);
+        let corrupted = read_bytes(&path);
+        std::fs::write(repo.join("by-second.txt"), "second\n".repeat(5)).unwrap();
+        let (code, text) = commit_by_second_author(&repo, "n9 sweep, second author");
+        if code.is_some_and(|code| code == 0) || read_bytes(&path) != corrupted {
+            not_held.push(format!(
+                "author keys (a new author's commit): exit {code:?}\n{text}"
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    {
+        let (repo, bundle) = received_index_repository("rfc163-n9-sweep-received-index");
+        let path = received_index_path(&repo);
+        append_zeros_100(&path);
+        let corrupted = read_bytes(&path);
+        let (code, text, _) = run(
+            &repo,
+            &["bundle", "import", "--input", bundle.to_str().unwrap()],
+        );
+        if code.is_some_and(|code| code == 0) || read_bytes(&path) != corrupted {
+            not_held.push(format!(
+                "received index (bundle import): exit {code:?}\n{text}"
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(bundle.parent().unwrap());
+    }
+
+    // The three generation logs.
+    for target in ["pointer index", "received index", "trust policy"] {
+        let (log_path, repo) = generation_log_repository_for(
+            target,
+            &format!("rfc163-n9-sweep-genlog-{}", target.replace(' ', "-")),
+        );
+        append_zeros_100(&log_path);
+        let corrupted = read_bytes(&log_path);
+        let flag = match target {
+            "pointer index" => "--pointer-index",
+            "received index" => "--received-index",
+            "trust policy" => "--trust-policy",
+            _ => unreachable!(),
+        };
+        let (code, text, _) = run(&repo, &["compact", flag]);
+        if code.is_some_and(|code| code == 0) || read_bytes(&log_path) != corrupted {
+            not_held.push(format!(
+                "{target}'s generation log (compact {flag}): exit {code:?}\n{text}"
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    if !not_held.is_empty() {
+        failures.push(format!(
+            "the following did NOT hold the rule (refuse and leave the guarded file unchanged) \
+             against 100 zero bytes:\n{}",
+            not_held.join("\n---\n")
+        ));
     }
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }

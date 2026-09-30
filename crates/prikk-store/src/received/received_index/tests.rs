@@ -115,11 +115,13 @@ fn scan_received_index_tail_agrees_with_full_decode_on_a_clean_file() -> Result<
         bytes.extend(encode_received_index_record(&entry)?);
     }
     let full = decode_received_index_records(&bytes)?;
-    let (trailing_partial_bytes, tail_offset) = scan_received_index_tail(&bytes)?;
+    let (trailing_partial_bytes, tail_offset, damaged) = scan_received_index_tail(&bytes)?;
     assert_eq!(trailing_partial_bytes, full.trailing_partial_bytes);
     assert_eq!(tail_offset, full.tail_offset);
     assert_eq!(trailing_partial_bytes, 0);
     assert_eq!(tail_offset, bytes.len());
+    assert!(!damaged, "a clean file must not be reported as damaged");
+    assert_eq!(damaged, full.has_item_failure());
     Ok(())
 }
 
@@ -146,12 +148,13 @@ fn measure_received_index_tail_scan_cost() -> Result<()> {
         let full_elapsed = full_start.elapsed();
 
         let scan_start = std::time::Instant::now();
-        let (trailing_partial_bytes, tail_offset) = scan_received_index_tail(&bytes)?;
+        let (trailing_partial_bytes, tail_offset, damaged) = scan_received_index_tail(&bytes)?;
         let scan_elapsed = scan_start.elapsed();
 
         assert_eq!(full.entries.len(), count as usize);
         assert_eq!(trailing_partial_bytes, 0);
         assert_eq!(tail_offset, bytes.len());
+        assert!(!damaged);
 
         println!(
             "{count} entries, {} bytes: full decode {full_elapsed:?} ({} entries built), \
