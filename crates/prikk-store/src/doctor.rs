@@ -901,6 +901,21 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     ));
                 }
             }
+            // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never
+            // repaired -- Rule B only makes these report, per the review's ruling).
+            for status in &verification.object_container_tails {
+                if status.trailing_partial_bytes != 0 {
+                    issues.push(DoctorIssue::warning(
+                        "PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL",
+                        format!(
+                            "{} container has {} trailing byte(s) that look like an incomplete final record",
+                            status.object_type, status.trailing_partial_bytes
+                        ),
+                        "no automated repair; connectivity separately reports whether anything \
+                         still needs the object this frame may be holding",
+                    ));
+                }
+            }
             for path in &verification.object_temp_paths {
                 let name = path
                     .file_name()

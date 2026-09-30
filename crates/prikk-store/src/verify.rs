@@ -642,6 +642,12 @@ pub struct RepositoryVerification {
     /// Frames in object containers that do not parse **and that no index entry names**: interrupted appends, reported as warnings and
     /// never as damage (RFC 160 F3 Addendum 1). Empty when the objects stage did not evaluate.
     pub object_interrupted_appends: Vec<InterruptedAppend>,
+    /// RFC 164 Addendum 1 (N7): one entry per persisted object type, naming its own container's
+    /// trailing partial byte count (0 for a clean container). A tail alone is a warning, the same as
+    /// the seven Rule-A files' own line; interior damage on an object container is reported through
+    /// `object_interrupted_appends`/`object_item_outcomes` instead, unchanged. Empty when the objects
+    /// stage did not evaluate.
+    pub object_container_tails: Vec<ObjectContainerTailStatus>,
     /// Number of trailing bytes in the active WAL that look like an incomplete final record. `None`
     /// when the WAL-replay stage did not evaluate to completion.
     pub trailing_partial_wal_bytes: Option<usize>,
@@ -735,6 +741,19 @@ pub struct AppendedFileTailStatus {
     /// tail above -- a sound record follows the damage, so RFC 164 Rule A keeps it interior damage,
     /// not a tail. The message is the first such outcome's own, naming its offset.
     pub interior_damage: Option<String>,
+}
+
+/// RFC 164 Addendum 1 (N7): one persisted object type's own container's trailing partial byte count
+/// (its "short tail"). A tail alone never fails `verify` -- interior damage on an object container is
+/// reported through `object_interrupted_appends`/the object's own item outcome instead, unchanged;
+/// this struct exists only to give the tail count itself a reported line, where before N7 nothing did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ObjectContainerTailStatus {
+    /// Which persisted object type this container holds.
+    pub object_type: ObjectType,
+    /// Trailing bytes after the last sound record. `0` for a container with no tail.
+    pub trailing_partial_bytes: usize,
 }
 
 /// A `Merge` block (DC-75) whose recorded `merge_baseline_block_id` is not a common ancestor of its
@@ -1244,6 +1263,21 @@ pub fn verify_repository_with_options(
         .as_ref()
         .map(|summary| summary.interrupted_appends.clone())
         .unwrap_or_default();
+    let object_container_tails = object_summary
+        .as_ref()
+        .map(|summary| {
+            summary
+                .object_container_tails
+                .iter()
+                .map(
+                    |&(object_type, trailing_partial_bytes)| ObjectContainerTailStatus {
+                        object_type,
+                        trailing_partial_bytes,
+                    },
+                )
+                .collect()
+        })
+        .unwrap_or_default();
     let trailing_partial_object_index_bytes = object_summary
         .as_ref()
         .map(|summary| summary.trailing_partial_index_bytes);
@@ -1571,6 +1605,7 @@ pub fn verify_repository_with_options(
         publication_trust_issues: trust_verifier.issues,
         object_temp_paths,
         object_interrupted_appends,
+        object_container_tails,
         trailing_partial_wal_bytes: replay.as_ref().map(|replay| replay.trailing_partial_bytes),
         active_wal_metadata_status,
         commit_index_divergences,

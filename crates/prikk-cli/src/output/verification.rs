@@ -479,6 +479,22 @@ pub(crate) fn print_verify_report(
         "interrupted appends: {}",
         report.object_interrupted_appends.len()
     );
+    // RFC 164 Addendum 1 (N7): one line per persisted object type, always -- a tail alone is a
+    // warning, never failing `verify`; there is no automated repair for it (Rule B only, per the
+    // review's ruling), so no repair command is named the way the other tail lines name one.
+    for status in &report.object_container_tails {
+        println!(
+            "trailing partial {} container bytes: {}",
+            status.object_type, status.trailing_partial_bytes
+        );
+        if status.trailing_partial_bytes != 0 {
+            println!(
+                "warning: {} container has an incomplete tail ({} byte(s)); no automated repair -- \
+                 connectivity separately reports whether anything still needs the object it may hold",
+                status.object_type, status.trailing_partial_bytes
+            );
+        }
+    }
     for append in &report.object_interrupted_appends {
         let possibly_missing: Vec<_> = report
             .connectivity_issues

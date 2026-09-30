@@ -13,7 +13,7 @@ use super::{
     PublicationTrustVerifier, verify_block_payload,
 };
 use crate::block_state::{BlockStateOutcome, LineageStateMemo, verify_blocks_topological};
-use crate::foundation::container::{self, ContainerRecordStatus};
+use crate::foundation::container::{self, ContainerRecordOutcome, ContainerRecordStatus};
 use crate::foundation::fsutil::{EntryKind, inspect_entry, list_directory, read_file_if_exists};
 use crate::foundation::index::replay_index;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
@@ -100,6 +100,14 @@ pub(super) struct ObjectSummary {
     /// RFC 162 Addendum 1 fix 3: whether the object index has an interior record that failed to
     /// decode. Same non-merge rule as `trailing_partial_index_bytes`.
     pub(super) index_interior_damage: bool,
+    /// RFC 164 Addendum 1 (N7): one entry per persisted object type, in `persisted_object_types()`
+    /// order, naming its own container's trailing partial byte count -- the WAL/pointer-index-style
+    /// tail-by-position `decode_container_records` already computes (`sound_frame_after_partial`),
+    /// simply never surfaced past this module before now. A genuinely torn frame with nothing sound
+    /// after it stays out of `interrupted_appends` (that path is for a frame whose own shape is not
+    /// tail-shaped, i.e. `TrailingPartial` never reaches it) -- this is the aggregate count `verify`
+    /// reports as a short warning, mirroring the seven Rule-A files' own line exactly.
+    pub(super) object_container_tails: Vec<(ObjectType, usize)>,
 }
 
 impl ObjectSummary {
@@ -114,6 +122,7 @@ impl ObjectSummary {
             interrupted_appends: Vec::new(),
             trailing_partial_index_bytes: 0,
             index_interior_damage: false,
+            object_container_tails: Vec::new(),
         }
     }
 
@@ -126,6 +135,8 @@ impl ObjectSummary {
             .extend(other.merge_baseline_divergences);
         self.block_seals.extend(other.block_seals);
         self.interrupted_appends.extend(other.interrupted_appends);
+        self.object_container_tails
+            .extend(other.object_container_tails);
     }
 }
 
@@ -300,6 +311,33 @@ fn verify_object_type_container(
         return Ok(summary);
     };
     let replay = container::decode_container_records(object_type, &bytes)?;
+    // RFC 164 Addendum 1 (N7): a reporting-only aggregate, deliberately not a reclassification.
+    // `replay.trailing_partial_bytes` is only ever set by the narrow case where fewer bytes remain
+    // than one header (`TrailingPartial`) -- object containers' own `Invalid` branch, unlike the
+    // seven Rule-A files' decode loops, never checks whether a sound frame follows a longer garbage
+    // run before marking it `Failed`, so a longer positional tail still reaches `interrupted_appends`
+    // as a per-record warning instead. When the **last** outcome in this container is exactly that
+    // shape (`Failed { complete: false, .. }`, meaning nothing sound was found after it -- otherwise
+    // a later `Evaluated` outcome would exist), the bytes from its own offset to end of file are, in
+    // fact, positionally a tail: summed here for the same aggregate line the other files get, without
+    // touching the underlying resync/classification logic at all.
+    let tail_bytes = if replay.trailing_partial_bytes != 0 {
+        replay.trailing_partial_bytes
+    } else {
+        match replay.record_outcomes.last() {
+            Some(ContainerRecordOutcome {
+                offset,
+                status:
+                    ContainerRecordStatus::Failed {
+                        complete: false, ..
+                    },
+            }) => bytes.len().saturating_sub(*offset),
+            _ => 0,
+        }
+    };
+    summary
+        .object_container_tails
+        .push((object_type, tail_bytes));
 
     // RFC 102 Stage 2: `records` holds only sound frames, in the same order `record_outcomes`
     // visits its `Evaluated` entries -- both built in lockstep by `decode_container_records`.
