@@ -241,6 +241,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- [`164-every-appended-file-has-a-way-out.md`](rfcs/proposed/164-every-appended-file-has-a-way-out.md) — every appended file has a way out: tails by position, nothing silent, one repair (`doctor --repair-tails`), refuse before the first write, unreferenced remnants are not damage; proposed 2026-09-30 for the owner's reading (0.49.0 step 1); both §6 decisions ruled by the owner (one `--repair-tails` verb; remnants classified only, not removed); acceptance of the whole RFC pending
+
 
 
 

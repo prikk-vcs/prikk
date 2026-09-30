@@ -1,0 +1,145 @@
+# RFC 164 — Every appended file has a way out: tails by position, nothing silent, one repair
+
+**Status.** **PROPOSED 2026-09-30 by the architect, for the project owner's reading.** It is presented in this exchange
+and accepted, changed or refused in a later one (RFC 152 §7). **The two decisions in it are the owner's, and both are
+ruled (§6, 2026-09-30).** Acceptance of the whole RFC is still pending. This is 0.49.0
+step 1, in the owner-approved schedule ("a way out of every crash state").
+
+**Author-review independence.** The architect proposes, and the architect's own rulings left most of the gaps below:
+RFC 162 rule 3 covered two files, and RFC 163 guarded writers but gave four files no repair. Two things compensate:
+- every rule here extends a rule that already holds in the codebase for at least one file, and was tested there;
+- the recommendation (§8) is that the 0.49.0 candidate goes to the external architect, whose matrix covers every file
+  named here.
+
+## 1. What 0.48.0 left
+
+Measured, not argued, by the external reviews 015–017, the step-0 soak and the architect's probes:
+
+| file | a crash tail today | a damaged-shaped tail (zeros, garbage) today | `verify` says | repair |
+|---|---|---|---|---|
+| WAL | tail, by position (RFC 162) | tail | a line | `--repair-wal-tail` |
+| pointer index | tail, by position (RFC 162) | tail | a line | `--repair-pointer-index-tail` |
+| trust keys, trust policy, author keys, received index | writes refuse (RFC 163); readers tolerate a torn prefix | **damage**: the reading command refuses, "has a damaged entry; run doctor" (N2's remainder) | **nothing** about a torn prefix (N7) | **none**; the way out is manual |
+| the three generation logs | `compact` refuses (RFC 163 §9) | **damage**; on the pointer index's log **every command refuses** (N10) | nothing (N7) | none |
+| ref log | positive rule (its own, RFC 162) | silent; a later `seal` appends behind it (M4) | nothing | none |
+| the five object containers | connectivity (RFC 162 rule 2) | connectivity | a short tail: nothing (N7) | — |
+
+**And two command-level gaps:**
+- **RFC 163 §10.** A publication, or a new author's commit, refuses over its guarded file only after it has written its
+  content objects.
+- **Step 0's finding.** An interrupted `bundle import` left blocks naming missing objects. 0.49.0 now writes in dependency
+  order, so it no longer happens. But a repository already in that state has one way out, re-running the same import,
+  and a user without the bundle has none.
+
+## 2. Rule A — a tail is defined by position, for every appended file that is not an object container
+
+**For the trust keys, trust policy, author keys, the received index, and the three generation logs,** as RFC 162 rule 3
+already holds for the WAL and the pointer index: **the tail is everything after the last sound record, when no sound record
+follows, whatever its shape** (a torn prefix, zeros, garbage).
+- **Readers tolerate a tail.** None of them refuses over it, so N10's "every command refuses" and N2's "run doctor" for a
+  tail both end.
+- **Writers refuse before appending behind it** (RFC 163's guard, now covering every shape).
+- **Interior damage stays damage**: a sound record after the bad bytes is refused and named, as RFC 162 made it for the
+  WAL.
+- **Not changed:**
+  - the object containers keep connectivity (RFC 162 rule 2);
+  - the object index stays a cache (rule 1);
+  - **the ref log keeps its positive rule.** Its tail and its interrupted publications (N3) are settled together in the
+    F1 round (0.49.0 step 2). This RFC only makes the ref log speak (Rule B).
+
+## 3. Rule B — nothing is silent
+
+**`verify` and `doctor` report, for every framed file:**
+- a tail (a warning, with the file, the offset of the last sound record and the byte count);
+- interior damage (a failure, naming its offset).
+
+That covers N7's short tails in the object containers, the ref log, the trust files, the author keys and the received
+index, and M4's garbage in the ref log. **A repository whose only findings are tails still exits 0**, because a crash tail
+is not damage. Each warning names the repair.
+
+## 4. Rule C — one repair for every tail
+
+**`prikk doctor --repair-tails`** truncates every tail Rule A defines, in every file it covers, and says what it removed
+per file.
+- **It saves the removed bytes** to `.prikk/recovery/`, as the WAL repair does, before truncating.
+- **It is idempotent.** If any covered file has interior damage, it refuses before touching any file, naming the file
+  and the offset.
+- **It runs under the same locks as the files' writers.**
+- `--repair-wal-tail` and `--repair-pointer-index-tail` stay, as the single-file forms.
+- **Windows (D5):** the recovery file's save is claimed durable only where the platform makes it so, as today.
+
+## 5. Rule D — refuse before the first write; Rule E — a remnant is not damage
+
+**Rule D (RFC 163 §10).** A publication (`seal`, `branch create`, `tag create`, `merge`) and a commit by a new author check
+their guarded files' tails **at the start of the command, before any content object is written**, as `bundle import`
+already does. A refusal then writes nothing at all, for every guarded writer.
+
+**Rule E (step 0's bundle-less case), extending RFC 162 rule 2 from frames to whole objects.** A stored object whose
+references are missing is **damage only if something committed reaches it**: a ref, a received pointer, a queued patch, or
+a sealed block reached from them. Otherwise it is an **unreferenced remnant with missing references**:
+- a warning naming the object and what it lacks, and "re-run the import if you still have the bundle; otherwise it is
+  harmless";
+- `verify` exits 0 over it;
+- **no command removes it in 0.49.0.** Containers are append-only, and removing a record needs object-container
+  compaction, which is not built (`containers/generations.log` is reserved for it).
+
+## 6. The owner's decisions
+
+**Both are ruled.** RFC 164 as a whole is still PROPOSED, until the owner accepts it.
+
+1. **One tail repair, `--repair-tails`, not one verb per file. APPROVED by the owner 2026-09-30** (*"Approved."*). The
+   reasons, as the architect gave them to the owner:
+   - **One rule, one mechanism.** Rule A gives every file the same tail definition. Per-file verbs are separate code paths,
+     and every gap in the 0.48.0 cycle was a copy that drifted from the rule:
+     - RFC 162 rule 1 applied to the object index only;
+     - the RFC 163 guards differed per file;
+     - the received-index guard alone ignored damage (N9).
+
+     One implementation and one test set cannot leave a file behind.
+   - **A crash leaves tails in more than one file.** An import touches the received index and the author keys; a
+     publication touches the pointer index and the ref log. Per-file verbs make the user work out which files, and in what
+     order, which is the "run doctor" dead end 0.48.0 disclosed. One verb repairs each tail it finds, per file under that
+     file's lock, and reports per file.
+   - **Discoverability.** Every `verify` warning names the same verb, and `troubleshooting.md` needs one entry, not seven.
+   - **Future files join by construction.** A newly appended file joins the rule and the verb without a new flag. Each new
+     flag is CLI surface for consumers, plus help text, docs and tests.
+   - **Nothing breaks.** `--repair-wal-tail` and `--repair-pointer-index-tail` stay as the single-file forms.
+
+   **The trade-off, stated:** one command touches several files, with less granular control. It is bounded three ways:
+   - every removed byte is saved to `recovery/` first;
+   - the verb refuses on interior damage in any file, before it touches anything;
+   - it reports per file.
+
+   A `--file <kind>` option can be added later without changing this design.
+2. **Rule E: classification only in 0.49.0. ACCEPTED by the owner 2026-09-30** (*"Accepted."*). An unreferenced object
+   with missing references is a warning, and `verify` exits 0 over it. **No command removes it in 0.49.0**: removal needs
+   object-container compaction, a larger design for 0.50.0 or later.
+
+## 7. The matrix, and what it must show
+
+- `rfc162_recovery_matrix.rs` and `rfc163_*` gain, **for every file in §1**:
+  - a torn prefix, 100 zero bytes and 100 random bytes;
+  - both orders: the repair first, and the write first;
+  - I1 to I5 asserted, and a `verify` line asserted where Rule B requires one.
+- **Controls:** remove Rule A's reader tolerance, Rule B's line, `--repair-tails` and Rule D's early check, one at a time,
+  at each site. Each removal must redden its rows.
+- **The external architect's `matrix.py` v4 must show:**
+  - the 21 damaged-shaped-tail I5 cells gone;
+  - the N7 silent cells reduced to those this RFC leaves (the object containers' torn prefixes, if connectivity still
+    calls them harmless, now with a line);
+  - N10's cells gone.
+
+## 8. Scheduling
+
+1. **This RFC, read by the owner, then accepted or changed**, with §6 decided.
+2. **Implementation, in two rounds:**
+   - Rules A, B and C;
+   - then Rules D and E.
+
+   Each round is gated, probed and matrix-checked.
+3. **Output changes** for the 0.49.0 notes and the consumer letters:
+   - the new `verify` lines, and their JSON fields;
+   - the new `doctor` verb;
+   - fewer refusals.
+4. **External review of the 0.49.0 candidate: recommended**, because damage is reclassified again. The owner decides when
+   the candidate exists.
