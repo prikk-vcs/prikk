@@ -62,3 +62,33 @@ Genesis peak RSS was 10–14% higher at N = 8,000, 32,000 and 64,000 than the la
 **Nothing else runs while U3 does.**
 
 **Report:** `.git-exclude/review-request/stability-follow-up-report-v1.md`.
+
+## Addendum 1 — 2026-09-30: order within a kind, the merge disclosure, the text (review `stability-follow-up-review-v1`)
+
+**Not accepted yet. Fixes and text only.**
+
+1. **Order within a kind** (review §1).
+   - A block is written only after its parent blocks (`parent_block_ids`, `mainline_parent_id`,
+     `merge_baseline_block_id`, wherever the bundle carries them). A ref-state is written only after the ref-state it
+     names as previous. Likewise any other same-kind reference the payload structs show.
+   - A topological order within the rank. The module doc says so.
+   - **Tests:**
+     - a fixture whose bundle carries **at least three blocks with a child listed before its parent**, in the white-box
+       sweep and the black-box soak;
+     - **control:** today's kind-only sort. The rows go red with "references missing parent block".
+   - **The architect's check:** `import_kill_dangling_probe.py`, 300 kills, plus a targeted run over 85–110% of the
+     import's duration, 300 kills. **0 dangling in both.**
+2. **Disclose the killed merge** (review §1).
+   - Extend N3's known-limitations bullet and troubleshooting entry to `merge`. A merge killed mid-publication leaves
+     `PRIKK-VERIFY-REF-DIVERGENCE`, and neither re-running the merge nor a `seal` retry completes it. Measured: 10 of 300
+     kills on 0.48.0, 16 of 300 on this build (`merge_kill_probe.py`).
+   - Fixed with F1 and N3 in 0.49.0 step 2. **No code here.**
+3. **Text** (review §2):
+   - key the troubleshooting entry on the messages the binary prints (the review lists them);
+   - "in every case reproduced (25 of 25)", not "always";
+   - `sync accept` is not said to have left this shape.
+
+**Before proposing:** the 14 gates on the final commit, in R1's scope; both sweeps and both soaks green; the architect's
+probe runs.
+
+**Report:** `.git-exclude/review-request/stability-follow-up-report-v2.md`.
