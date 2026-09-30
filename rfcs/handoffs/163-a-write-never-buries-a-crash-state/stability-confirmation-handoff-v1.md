@@ -62,3 +62,8 @@ of cells we had explained without running.
 
 **Report:** `.git-exclude/review-request/stability-confirmation-report-v1.md`. It carries the binary's sha256, each unit's
 N and wall time, and every finding with its replay record. Report the gates only for any commit that lands test code.
+
+**ACCEPTED as a measurement 2026-09-30** (review `stability-confirmation-review-v1`; test code `003fe7b4`). Finding 3: a
+killed `bundle import` leaves `verify` failing for good. The architect reproduced it on the shipped 0.48.0 and on 0.47.0.
+The cause is objects written in bundle order, not dependency order, and re-running the import heals it. Finding 2 is N3,
+reproduced by a real kill. Finding 1, genesis RSS, is to be measured. **Next, live:** `stability-follow-up-handoff-v1.md`.
