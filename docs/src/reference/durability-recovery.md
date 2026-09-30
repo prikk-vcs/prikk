@@ -228,8 +228,13 @@ until signer-backed seal revalidates the transition, appends nothing, and remove
 ## A Write Never Buries a Crash State (RFC 163)
 
 **The rule, at six files: before an append, the writer confirms under its lock that the file ends at
-its last sound record. If it does not, it refuses before writing anything**, naming the file, the byte
-offset where the sound content ends, how many bytes follow, and the way out. Before this round, a torn
+its last sound record. If it does not, it refuses before appending to that file**, naming the file, the
+byte offset where the sound content ends, how many bytes follow, and the way out. For four of the six
+(the trust-key and trust-policy containers together, the received index, and every generation log) this
+is also a whole-operation guarantee: the command writes nothing at all when it refuses. For the other two
+(the pointer index and the author-key container) it is narrower: only the guarded file itself is left
+untouched — see each bullet below for what else the command may already have written, and why that is
+harmless. Before this round, a torn
 tail that `verify` already accepted as harmless (the pointer index, under RFC 162 rule 3 above) or said
 nothing about at all (the other five, still under the pre-0.48.0 shape rule, N2) was invisible to the
 *next ordinary write* at these files: the write appended behind it, blind, and turned an accepted crash
@@ -248,19 +253,41 @@ whether an append is actually about to happen, not the read.
 - **The pointer index.** Every publication (`seal`, `branch create`, `tag create`, `merge`) reads the
   pointer index for its own compare-and-swap check immediately before it would append; that same read
   now also refuses on an unclean tail, naming `prikk doctor --repair-pointer-index-tail` — the repair
-  already exists (RFC 162). After it, the same publication succeeds.
-- **Trust keys, trust policy, author keys, the received index.** `trust maintainer add`/`remove` (both
-  containers, only when adding or removing would append), a commit by an author key id not yet recorded,
-  and `bundle import` (never `sync accept`, which does not touch the received namespace) each refuse the
-  same way, **entirely before their first write** — for `bundle import`, before even the bundle's own
+  already exists (RFC 162). After it, the same publication succeeds. **This is a claim about the pointer
+  index file only, not about the whole command**: a publication may already have written its own new,
+  ordinary content-addressed objects (a ref-state, a block, an index entry) before reaching this check —
+  nothing references them until the pointer index is actually updated, `verify` still exits 0, and the
+  retry after the repair reuses them rather than writing them again.
+- **Trust keys and trust policy, together.** `trust maintainer add`/`remove` refuse the same way,
+  **entirely before either container's first write** — a fix in this same round, after review: the first
+  shape checked and appended to the trust-key container, then checked the trust-policy container, so a
+  torn *policy* tail alone (the key container clean) left the key recorded but the policy refused, a
+  half-applied write. Both containers' tails are now decided before either is appended to, so the whole
+  operation writes nothing at all when it refuses, whichever container's tail caused it (RFC 163 §2
+  Addendum 2). No repair verb exists for either container in 0.48.0 (planned for 0.49.0, alongside a
+  `verify` line for each — see `current-state.md`'s known limitations, N2's remainder). **The way out is
+  manual**: back the file up, truncate it to the byte offset the refusal names, then run `prikk verify` to
+  confirm the repository is sound before retrying `trust maintainer add`/`remove`.
+- **The received index.** `bundle import` (never `sync accept`, which does not touch the received
+  namespace) refuses the same way, **entirely before its first write** — before even the bundle's own
   objects are written, the same pre-write phase the author-key check already ran in (0.44.0,
-  GHSA-px5q-233r-6hq5: a refused import must write nothing at all). No repair verb exists for these four
-  in 0.48.0 (planned for 0.49.0, alongside a `verify` line for each — see `current-state.md`'s known
-  limitations, N2's remainder). **The way out is manual**: back the file up, truncate it to the byte
-  offset the refusal names, then run `prikk verify` to confirm the repository is sound before retrying
-  the write that refused. A tail of zeros or random bytes at these four files is damage under their own
-  shape rule, not something this refusal covers at all — see `current-state.md` and
-  `troubleshooting.md`'s own entry for that message.
+  GHSA-px5q-233r-6hq5: a refused import must write nothing at all). No repair verb exists for this file in
+  0.48.0 (planned for 0.49.0, alongside a `verify` line — see `current-state.md`'s known limitations, N2's
+  remainder). The way out is the same manual truncate-then-`verify`, then retry the import.
+- **The author-key container.** A commit by an author key id not yet recorded refuses the same way, but
+  **only before appending to the author-key container itself, not before the commit's other writes**: the
+  author-key check is the last thing a commit checks, immediately before the WAL append that would queue
+  it, so by the time it runs the commit has already written its own new blob content, an object-index
+  entry, and updated the commit-index and lifecycle caches. Those are ordinary, content-addressed or
+  self-verifying, referenced by nothing until the commit itself succeeds; `verify` still exits 0, and a
+  retry after the truncate below reuses them rather than writing them again. No repair verb exists for
+  this file in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see `current-state.md`'s known
+  limitations, N2's remainder). The way out is the same manual truncate-then-`verify`, then retry the
+  commit.
+- **A tail of zeros or random bytes, at any of these four files** (the trust-key, trust-policy,
+  author-key or received-index containers) is damage under their own pre-0.48.0 shape rule, not something
+  any of the refusals above covers at all — see `current-state.md` and `troubleshooting.md`'s own entry
+  for that message.
 - **The generation log, at each of the three compacting containers** (the pointer index, the received
   index, the trust policy container). `compact` refuses the same way, **before its first write** — before
   the retired slot is truncated, not only before the generation record itself — and only in `--execute`

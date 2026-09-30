@@ -385,6 +385,81 @@ fn trust_maintainer_add_of_the_already_adopted_key_is_unaffected_by_a_tail_on_ei
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
+/// RFC 163 §2 Addendum 2 (review `release-0.48.0-candidate-3-review-v1` §2.2): a torn tail on the
+/// trust **policy** container alone -- the trust-key container stays clean -- must refuse `trust
+/// maintainer add` of a genuinely new key **before either container is appended to**, not append the
+/// key to `trust/keys.container` and then refuse over the policy. Whole-repository byte identity
+/// (`support::store_bytes`), not just the policy file's own bytes, is the point: the old, half-applied
+/// order left the trust-key file changed while its own refusal said nothing was written.
+#[test]
+fn trust_maintainer_add_refuses_before_either_container_when_only_the_policy_tail_is_torn() {
+    let mut failures = Vec::new();
+    for (fault_name, fault) in SHAPE_RULE_FAULTS {
+        let repo = trust_repository(&format!(
+            "rfc163-trust-policy-only-torn-{}",
+            fault_name.replace(' ', "-")
+        ));
+        // The trust-key container is deliberately left clean: this test isolates the policy-only tail.
+        let policy_path = trust_policy_path(&repo);
+        let original_len = read_bytes(&policy_path).len();
+        fault(&policy_path);
+        let label = format!("trust policy only / {fault_name}");
+
+        let before = support::store_bytes(&repo);
+        let (code, text) = add_second_maintainer(&repo);
+        if code.is_some_and(|code| code == 0) {
+            failures.push(format!(
+                "{label}: adding a new key must refuse on the policy's unclean tail, but exited 0\n{text}"
+            ));
+        }
+        assert!(
+            text.contains("incomplete tail"),
+            "{label}: the refusal must name the unclean tail\n{text}"
+        );
+        let after = support::store_bytes(&repo);
+        if before != after {
+            let mut changed: Vec<String> = before
+                .keys()
+                .chain(after.keys())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .filter(|path| before.get(*path) != after.get(*path))
+                .map(|path| path.display().to_string())
+                .collect();
+            changed.sort();
+            changed.dedup();
+            failures.push(format!(
+                "{label}: every file under .prikk/ must be byte-identical after the refusal; changed: {changed:?}"
+            ));
+        }
+
+        // The way out: truncate the policy container back to its pre-fault length.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&policy_path)
+            .unwrap();
+        file.set_len(original_len as u64).unwrap();
+        drop(file);
+
+        let (retry_code, retry_text) = add_second_maintainer(&repo);
+        if retry_code != Some(0) {
+            failures.push(format!(
+                "{label}: the same add after the manual truncate must succeed\n{retry_text}"
+            ));
+        }
+
+        let (verify_code, verify_text, _) = run(&repo, &["verify"]);
+        if verify_code != Some(0) {
+            failures.push(format!(
+                "{label}: verify after the truncate and retry\n{verify_text}"
+            ));
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
 // ---------------------------------------------------------------------------------------------
 // 3. Author keys -- a commit by a new author.
 // ---------------------------------------------------------------------------------------------

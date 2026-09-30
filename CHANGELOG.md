@@ -85,23 +85,39 @@
   was silent about it).
 - A size-bound refusal or description under 1 MiB now renders in **KiB** instead of a useless "0.0 MiB"
   (`incoming.max-object-bytes` set to a few thousand bytes, for instance).
-- `seal`, `branch create`, `tag create` and `merge` now **refuse before writing anything** when the ref
-  pointer index ends in an unclean tail, naming the byte offset and `prikk doctor
+- `seal`, `branch create`, `tag create` and `merge` now **refuse before appending to the ref pointer
+  index itself** when it ends in an unclean tail, naming the byte offset and `prikk doctor
   --repair-pointer-index-tail`; before, the publication appended behind it, and `verify` then failed for
-  good after (RFC 163, N1).
-- `trust maintainer add`/`remove` (each only when it would actually append), a commit by an author key
-  id this repository has not recorded material for, and `bundle import` now **refuse before writing
-  anything at all** — for `bundle import`, before even the bundle's own objects are written — when the
-  trust-key, trust-policy, author-key or received-index container (respectively) ends in an unclean
-  tail, naming the byte offset and the manual way out (back the file up, truncate to the named offset,
-  run `verify`); before, the write appended behind it, and `verify` then failed for good, with
+  good after (RFC 163, N1). **Not a claim that the command writes nothing at all**: a publication may
+  already have written its own new, ordinary content-addressed objects (a ref-state, a block, an index
+  entry) before reaching this check; nothing references them until the pointer index is actually
+  updated, `verify` still exits 0, and a retry after the repair reuses them rather than writing them
+  again.
+- `trust maintainer add`/`remove` (each only when it would actually append) now **refuse before writing
+  anything at all**, and a `bundle import` refuses **before even the bundle's own objects are written**,
+  when the trust-key, trust-policy or received-index container (respectively) ends in an unclean tail,
+  naming the byte offset and the manual way out (back the file up, truncate to the named offset, run
+  `verify`); before, the write appended behind it, and `verify` then failed for good, with
   `seal`/`commit`/`compact` refused too depending on the file (RFC 163, N2's burying half; a repair verb
-  for these four is 0.49.0). An operation that appends nothing to one of these files (re-adding an
-  already-adopted key, a commit by an already-recorded author) is unaffected by a tail on it. The
+  for these three is 0.49.0). An operation that appends nothing to one of these files (re-adding an
+  already-adopted key) is unaffected by a tail on it. `trust maintainer add` addressing a torn
+  **trust-policy** tail while the trust-key container stays clean: fixed the same round, after review, to
+  decide both containers' tails before either is appended to — the first shape left the trust-key
+  container written and the policy container refused, a half-applied write (RFC 163 §2 Addendum 2). The
   received-index check is a new whole read (`bundle import` reads nothing there today), measured on a
   release build against a lean tail-only walk that decodes no entry: 1,000 entries (159 KB), 182 µs
   against 256 µs for a full decode; 10,000 entries (1.6 MB), 1.65 ms against 2.01 ms — both linear in the
   file's own size, a bounded saving rather than a different complexity class.
+- A commit by an author key id this repository has not recorded material for yet now **refuses before
+  appending to the author-key container itself** when it ends in an unclean tail, naming the byte offset
+  and the manual way out; before, the write appended behind it, and `verify` then failed for good, with
+  `commit` refused too (RFC 163, N2's burying half; a repair verb is 0.49.0). **Not a claim that the
+  commit writes nothing at all**: its own new blob content and object-index entry, and the commit-index
+  and lifecycle caches, are already written by the time this check runs (the author-key container is the
+  last thing a commit checks, immediately before the WAL append that would queue it) — ordinary,
+  content-addressed or self-verifying, referenced by nothing until the commit itself succeeds; `verify`
+  still exits 0, and a retry after the truncate reuses them. A commit by an author key id this repository
+  has already recorded material for is unaffected by a tail on this file.
 - `trust maintainer add`, a commit, and `bundle import` on the trust-key, trust-policy, author-key or
   received-index container with **100 or more zero or random trailing bytes** (damage under these four
   files' own pre-0.48.0 shape rule, not a tail the refusal above covers): still `<container> has a
@@ -322,7 +338,11 @@ architect (§9). Earlier releases were not independently checked this round.
   up, truncate to the offset, run `verify`) plus one more for the four files' own **garbage-shaped** tails (100+
   zero or random bytes), which are damage under their pre-0.48.0 shape rule, not something this refusal covers,
   and which no command repairs. Repairs and a position-defined tail for these four files are 0.49.0, alongside a
-  `verify` line for each (N7, with M4).
+  `verify` line for each (N7, with M4). **Not the same guarantee for every one of these four**, corrected after
+  review: `trust maintainer add`/`remove` and `bundle import` write nothing at all to any file when they
+  refuse; a commit by a new author key id does not — its own new blob and index-entry content is already
+  written by the time the author-key check runs, the last thing a commit checks before the WAL append that
+  would queue it (see Output changes).
 - **A refused `bundle import` writes nothing at all, not only leaving the received index untouched.** The
   received-index guard first landed inside the low-level append itself, after the bundle's own objects and any
   author-key material were already durably written — the exact shape 0.44.0 closed for every other decision a

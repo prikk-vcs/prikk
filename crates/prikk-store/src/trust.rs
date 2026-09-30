@@ -115,13 +115,20 @@ pub fn add_trusted_maintainer(
 
     // RFC 163 §2: the trust-key container's own write-side tail guard, at the one whole read this
     // function already performs before its own conditional `append_trust_key_entry` below -- no
-    // second read added. Addendum 1 item 2: the tail is checked only inside the `None` arm, the one
-    // branch that is about to append -- an already-recorded (matching) key, or a conflicting one this
-    // refuses regardless, appends nothing, so neither other arm needs it.
+    // second read added.
     let (existing_entry, key_trailing_partial_bytes, key_tail_offset) =
         lookup_trust_key_entry_with_tail(layout, key_id)?;
-    match existing_entry {
-        Some(existing) if existing.public_key == public_key => {}
+
+    // RFC 163 §2 Addendum 2: whether EACH of the two containers will actually be appended to is
+    // decided here, before either tail guard runs and before either append -- not one file checked
+    // and appended, then the other checked. Addendum 1 item 2 correctly scoped each guard to its own
+    // about-to-append branch, but left them interleaved with the writes: a torn tail on the policy
+    // container, found only after the trust-key container had already been appended to, left the key
+    // recorded but not adopted -- one file changed, the other refused, and the refusal's own text said
+    // nothing was written. Deciding both up front closes that: a conflicting key still refuses
+    // unconditionally, appending nothing.
+    let key_will_append = match existing_entry {
+        Some(existing) if existing.public_key == public_key => false,
         // RFC 147 §2d: a trust-on-first-use collision, detected before anything is verified -- no
         // signature was checked here, so `InvalidSignature` named the wrong axis. The arm above is
         // idempotent for the same key, which is why `prikk setup` on an existing repository always
@@ -136,36 +143,44 @@ pub fn add_trusted_maintainer(
                  maintainer add --key-id <that id> --public-key <its public key>`"
             )));
         }
-        None => {
-            crate::foundation::tail_guard::require_no_unclean_tail(
-                "the trust key container",
-                key_trailing_partial_bytes,
-                key_tail_offset,
-                "back it up, truncate it to the named offset, then run `prikk verify`",
-            )?;
-            append_trust_key_entry(
-                layout,
-                &TrustKeyEntry {
-                    key_id: key_id.to_string(),
-                    public_key,
-                },
-            )?;
-        }
+        None => true,
+    };
+    let policy_will_append = !key_ids.iter().any(|existing| existing == key_id);
+
+    if key_will_append {
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the trust key container",
+            key_trailing_partial_bytes,
+            key_tail_offset,
+            "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
+    }
+    if policy_will_append {
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the trust policy container",
+            policy_trailing_partial_bytes,
+            policy_tail_offset,
+            "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
+    }
+
+    if key_will_append {
+        append_trust_key_entry(
+            layout,
+            &TrustKeyEntry {
+                key_id: key_id.to_string(),
+                public_key,
+            },
+        )?;
     }
 
     let adopted = AdoptedMaintainerKey {
         key_id: key_id.to_string(),
         public_key,
     };
-    if key_ids.iter().any(|existing| existing == key_id) {
+    if !policy_will_append {
         return Ok((adopted, false));
     }
-    crate::foundation::tail_guard::require_no_unclean_tail(
-        "the trust policy container",
-        policy_trailing_partial_bytes,
-        policy_tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
-    )?;
     key_ids.push(key_id.to_string());
     append_trust_policy_snapshot(layout, &key_ids)?;
     Ok((adopted, true))

@@ -152,11 +152,16 @@ right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail
 
 ## `error: integrity error: the ref pointer index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
-`seal`, `branch create`, `tag create` and `merge` each refuse **before writing anything**: the
-compare-and-swap check every one of them already runs immediately before its own pointer-index append now
-also refuses there when the pointer index ends in a torn tail from an interrupted publication, instead of
-appending behind it and leaving `verify` to fail for good afterward. Unlike the four entries below, this
-one already has a `doctor` repair verb:
+`seal`, `branch create`, `tag create` and `merge` each refuse **before appending to the pointer index
+itself** — the file this refusal protects is always untouched by it — but not necessarily before every
+byte the command as a whole would otherwise have written: the compare-and-swap check every one of them
+already runs immediately before its own pointer-index append now also refuses there when the pointer
+index ends in a torn tail from an interrupted publication, instead of appending behind it and leaving
+`verify` to fail for good afterward. **A publication may already have written its own new, ordinary
+content-addressed objects (a ref-state, a block, an index entry) before reaching this check** — ordinary
+writes that nothing yet references, since the pointer index was never updated to point at them; `verify`
+still exits 0, and a retry after the repair below reuses them rather than writing them again. Unlike the
+four entries below, this one already has a `doctor` repair verb:
 
 ```sh
 prikk doctor --repair-pointer-index-tail
@@ -203,8 +208,13 @@ this repository has not recorded material for yet** — recording it would appen
 `.prikk/trust/author-keys.container`, and its own last write was interrupted (a crash mid-append); the
 same shape as the two trust-store refusals above, for the file that records AUTHOR (not MAINTAINER) key
 material. **A commit (or import) by an author key id this repository has already recorded material for
-is unaffected**: it appends nothing to this file, so it succeeds regardless of the tail. Back the file
-up, truncate it to the named offset, run `prikk verify`, then retry the write that refused.
+is unaffected**: it appends nothing to this file, so it succeeds regardless of the tail. **For a
+`commit` specifically, this file is the last thing checked, not the first**: the file's content itself
+(a blob, an index entry) is already written by the time this refusal fires, since the author-key check
+runs immediately before the WAL append that would queue the commit. Those objects are ordinary and
+content-addressed, referenced by nothing until the commit itself succeeds; `verify` still exits 0, and a
+retry after the truncate below reuses them. Back the file up, truncate it to the named offset, run
+`prikk verify`, then retry the write that refused.
 
 ## `error: integrity error: the received index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
