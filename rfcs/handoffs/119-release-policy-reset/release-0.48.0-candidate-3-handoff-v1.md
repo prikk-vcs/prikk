@@ -109,3 +109,7 @@ which steps changed nothing, and why.
 **ACCEPTED 2026-09-30: `5299fd1b` is the 0.48.0 candidate** (reviews `release-0.48.0-candidate-3-review-v1`, `-v2`).
 The architect ran 14/14 gates and six probes on its release build, and the reviewer's scripts; the results are
 attached to letter 016. Next: push, CI, then letter 016 for the owner to send. **No tag until the external answer.**
+
+**Letter 016 SENT and ANSWERED 2026-09-30: do not tag `af2fc77e`.** One blocker, N9: `bundle import` appends behind a
+damaged-shaped received-index tail. Reproduced by the architect, also on `ddf1e82a`. **Next, live:**
+`163-a-write-never-buries-a-crash-state/received-index-damage-handoff-v1.md`; then a new candidate and letter 017.

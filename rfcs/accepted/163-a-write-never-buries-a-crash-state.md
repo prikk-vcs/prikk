@@ -166,3 +166,12 @@ content objects and caches. Those objects are unreferenced and reused on retry, 
 §2's rule holds for the file it protects. But "refuses before it writes anything" holds only for `bundle import`,
 `compact` and `trust maintainer add`. **0.49.0 moves the pointer-index and author-key checks ahead of the first write**,
 as `bundle import`'s already is. The 0.48.0 notes say what each refusal leaves.
+
+## 11. External review 016 (2026-09-30): the received index never refused on damage
+
+The external architect's review of the candidate `af2fc77e` found that `bundle import` appends behind a damaged-shaped
+received-index tail (100 zero or random bytes), which `verify` already reports as damage (N9).
+- The architect reproduced it, **also on `ddf1e82a`**: the received-index guard checked a torn tail only, never a damaged
+  entry, while the four sibling files' writers read through lookups that fail on any damaged entry.
+- **Fixed in 0.48.0** (`received-index-damage-handoff-v1.md`), as §2's rule already requires. The disclosure that says the
+  import refuses becomes true.
