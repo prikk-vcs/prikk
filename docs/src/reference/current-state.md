@@ -62,8 +62,11 @@ planned for. None of these blocks 0.48.0.
   index) have, in one run, saving what it removes first, refusing before touching anything if any covered
   file has interior damage. **What remains:** interior damage still has no automatic repair -- by
   design, the same as every other covered file -- so the way out for it is still manual (back the file up
-  first, ask before truncating). The ref log's own tail (M4) is reported (Rule B) but not yet repaired;
-  its repair and N3's interrupted publications are settled together in the F1 round (0.49.0 step 2).
+  first, ask before truncating). The ref log's own tail (M4) and the object containers' own tails (N7)
+  are not yet reported by Rule B, and the ref log's tail is not yet repaired; a torn last record still
+  fails `verify` with `PRIKK-VERIFY-REF-DIVERGENCE` rather than being reported as a tail (see below).
+  Reporting and repair for the ref log, and N3's interrupted publications, are settled together in the
+  F1 round (0.49.0 step 2).
 - **A `bundle import` interrupted by a crash could leave a block durable while the patch, blob, or
   parent block it names is not, and no repair cleared it (fixed in 0.49.0).** In 0.48.0 and earlier,
   objects were written in the bundle's own carried order, not in dependency order -- across kinds,
