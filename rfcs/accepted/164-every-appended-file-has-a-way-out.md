@@ -12,9 +12,10 @@ decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E
 - **The ref log's repair and interrupted publications stay in the F1 round** (0.49.0 step 2).
 - **2026-10-01: §9 corrects Rule A** (a complete record is never a tail), after round 1's review found that the rule as
   written can roll back trust and ref state. ACCEPTED by the owner; the reasoning is §9.1.
-- **2026-10-01: §9.2 proposes a correction to §9** (the checksum decides whether a record is complete), after
-  Addendum 1's review found that a flipped header byte still makes a complete record read as a tail, in the readers as
-  well as the repairs, and that the trust-policy case has shipped silently. It awaits the owner's reading.
+- **2026-10-01: §9.2 corrects §9** (the checksum decides whether a record is complete), after Addendum 1's review found
+  that a flipped header byte still makes a complete record read as a tail, in the readers as well as the repairs, and
+  that the trust-policy case has shipped silently. ACCEPTED by the owner, with disclosure rather than an advisory for the
+  released versions.
 
 *History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 
@@ -260,9 +261,21 @@ state. The trust set, the ref tips and the live slots are identical before and a
 that restores "whatever its shape" and shows the rollback rows go red.
 
 
-### 9.2 Proposed correction, 2026-10-01: the checksum decides whether a record is complete (for the owner's reading)
+### 9.2 Correction: the checksum decides whether a record is complete
 
-**Status: PROPOSED by the architect, for the owner's reading.** It corrects §9's definition of a tail. §9's principle and
+**Status: ACCEPTED by the owner 2026-10-01** (*"Accepted."*), after reading; proposed by the architect the same day
+(`5c260fb0`). **The released versions get a disclosure, not an advisory** (the owner: *"Disclosure."*).
+
+**The architect's reading, stated so it can be corrected:**
+- the rule below is accepted as written, for the seven Rule-A files and the pointer index. The WAL is unchanged;
+- §9's principle stands. §9.2 changes only how "complete" is recognised: by the stored checksum, not by the header
+  fields;
+- **disclosure:** the known limitations and CHANGELOG `### Security` name the trust-policy rollback (silent, the first
+  affected release confirmed from history, through 0.48.0), and the pointer index's readers and repair (0.48.0). They
+  also name what remains: corruption spanning more than one field of the last record. No GHSA;
+- the fix round is round 1's Addendum 2, live on `round-1-handoff-v1.md`.
+
+It corrects §9's definition of a tail. §9's principle and
 §9.1's reasoning are unchanged; this is the second correction in one round, so it is a design re-read (RFC 152 §7), not a
 fix-round detail.
 
@@ -319,7 +332,7 @@ sound record:
 - the trust-policy rollback, silent, from 0.20.0 (to be confirmed) through 0.48.0;
 - the pointer index's readers and its repair, 0.48.0.
 
-Fixed in 0.49.0 by this rule. **An advisory is the owner's decision.**
+Fixed in 0.49.0 by this rule. **Advisory or disclosure: the owner ruled disclosure (above).** The reasoning put to the owner:
 - **The architect recommends a disclosure, not a GHSA:**
   - it needs a corrupted local file, and no untrusted input can write one: bundles, sync and imports never write the
     trust policy;

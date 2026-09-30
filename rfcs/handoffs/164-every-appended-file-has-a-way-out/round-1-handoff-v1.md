@@ -147,3 +147,54 @@ as written. The rule was wrong in one place: the owner **ACCEPTED RFC 164 §9** 
 - the generation-log tree probe.
 
 **Report:** `.git-exclude/review-request/rfc164-round-1-report-v2.md`.
+
+## Addendum 2 — 2026-10-01: the checksum decides whether a record is complete (review `rfc164-round-1-review-v2`)
+
+Report `rfc164-round-1-report-v2.md`, commits `b24a3283` … `284a5308`. **Not accepted yet.** Addendum 1 is implemented as
+written. The design was wrong in one more place: a flipped magic, version or length byte in the last record still reads
+as a tail, **and the readers roll back before any repair runs.**
+- The owner **ACCEPTED RFC 164 §9.2** on 2026-10-01, with disclosure, not an advisory, for the released versions.
+- **Read §9.2 and review v2 §2 first.**
+- **Fixes only.**
+
+1. **§9.2's rule, in the six decoders** (trust keys, trust policy, author keys, received index, generation logs, pointer
+   index):
+   - at a tail candidate, **if the stored checksum verifies** over the claimed length, or over the length to the end of the
+     file, the bytes are a complete record: `never_a_tail`, whatever the stored magic, version or length say;
+   - **one shared helper**, beside `sound_frame_after_partial`, called by each decoder;
+   - the write-side scans too (`scan_received_index_tail` and any like it);
+   - **the WAL is untouched.**
+2. **Every reader, before any repair:** for any single flipped byte in the last record, no reader returns the state from
+   before that record. List each file's readers (round 1 listed them), and assert it for each.
+3. **The matrix:**
+   - the "flipped byte" shape becomes **one row per field: magic, version, length, checksum, body**. For the seven files
+     **and the pointer index**, in both orders;
+   - **I6 for the §9 shapes:** no reader returns the older state, before or after the repair;
+   - **the whole-record sweep:** a store-level test per decoder that flips every offset of the last record and asserts no
+     offset decodes to a tail. It only decodes, so it is cheap.
+4. **Controls, one at a time; report the rows each reddens:**
+   - §9.2's helper bypassed, per decoder: its header-field rows go red;
+   - §9's `never_a_tail` restored to `false`, per decoder, **including the pointer index**. Today the whole suite stays
+     green without it (review v2 §6).
+5. **`--repair-tails` on a damaged generation log:** the refusal names the file and says nothing was touched, as the
+   other refusals do. Today it prints the reader's "run doctor before reading".
+6. **Text and disclosure** (no advisory; the owner's ruling):
+   - **rewrite the CHANGELOG `### Security` entry, and the known limitations in `current-state.md`, for the released
+     versions:**
+     - the trust policy: a flipped length byte in its last snapshot silently brings back the previous policy (a removed
+       maintainer trusted again), with `verify` 0. **Find the first affected release from history** (`2827fab7`; the
+       architect measured 0.46.0 and 0.48.0);
+     - the pointer index, 0.48.0: its readers show the previous tip, and its repair removes the record;
+     - fixed in 0.49.0 by §9 and §9.2;
+   - what remains, in the known limitations: corruption spanning more than one field of the last record (for example a
+     zeroed sector) still reads as a tail, until a per-file witness (format 8);
+   - `durability-recovery.md`: "complete" is decided by the checksum.
+
+**Before proposing:**
+- the 14 gates on the final commit, in R1's scope;
+- the architect's `arch-seal/rfc164_every_offset_probe.sh` and `rfc164_header_flip_reader_probe.sh` on a release build of
+  the final commit: **0 rollbacks at every offset, before and after the repair**;
+- `rfc164_rollback_probe.sh`, `pointer_index_flip_probe.sh` and the seven RFC 163 probes;
+- `matrix.py` v4 compared with `matrix-5e50a661.txt`, every changed cell explained with its own replay.
+
+**Report:** `.git-exclude/review-request/rfc164-round-1-report-v3.md`.
