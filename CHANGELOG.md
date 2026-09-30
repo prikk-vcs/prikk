@@ -51,17 +51,57 @@ types) — one row per file, reporting a tail (a warning, never failing `verify`
 independently of whether some other check happens to touch the file first. `has_item_failure` now also considers a
 row's own interior damage. `RepositoryVerification` was already `#[non_exhaustive]`; this is additive.
 
+### Security — `--repair-pointer-index-tail` could remove a corrupted, not torn, last record and silently revert a ref
+
+RFC 162's own "a tail is everything after the last sound record, whatever its shape" let a **complete** last pointer-
+index record (a valid header, its whole claimed body present) whose checksum fails be truncated as if it were a
+crash's torn remnant. A crash can only interrupt a write, so everything it leaves is *incomplete*; a complete record
+was fully written, and a failing checksum on it is corruption after the fact, not a crash. Truncating it removed a
+publication that had actually happened: measured on the shipped 0.48.0 binary, one flipped byte in the pointer
+index's newest record, then `doctor --repair-pointer-index-tail`, silently reverted a ref's tip to its previous
+block — `verify` reported a failure both before and after the repair, but the repair still changed what the ref
+pointed at. **Affected: 0.48.0 (RFC 162).** Fixed in this release by RFC 164 §9 (below): a complete record with a
+bad checksum is now damage, even when last, and the repair refuses on it instead.
+
+### Fixed — RFC 164 §9: a complete record is never a tail, even when it is last
+
+Rule A (above) first read "a tail is everything after the last sound record, whatever its shape," which had the
+same defect the Security entry above describes, for the seven Rule-A files it introduces this release (never
+shipped in this shape): a complete record whose checksum or envelope fails could be truncated by `--repair-tails`
+as if it were a torn tail, silently reverting the decision it carried — measured on a release build, a single
+flipped byte in a real trust-policy snapshot, then the pre-§9 `--repair-tails`, silently re-trusted a key that
+snapshot had just revoked, with `verify` exiting 0 throughout. Corrected before release: a tail is now an
+incomplete record, or bytes that are not a record header at all, when nothing sound follows; a complete record
+whose checksum or envelope fails is damage, even when last — `verify` fails and names it, both repair verbs refuse
+and change nothing, and readers fail closed on it exactly as they do on any other interior damage. Applies to the
+seven Rule-A files and the pointer index. The WAL keeps RFC 162 rule 3 unchanged: removing its own damaged last
+record loses a queued, saved, and disclosed commit (N6), not a rollback of trust or ref state.
+
+### Added — every persisted object type's own short tail is now reported (RFC 164 Addendum 1, N7)
+
+`verify`/`doctor` now print a `trailing partial <type> container bytes: N` line for every persisted object type's
+own container (0 for a clean one) — a reporting-only aggregate of the same tail-by-position count the container
+scan already computes; no reclassification, and no repair (per the review's ruling: these report, they do not get
+`--repair-tails` coverage this release). `RepositoryVerification` gains `object_container_tails:
+Vec<ObjectContainerTailStatus>` (both new, `#[non_exhaustive]`). A new `doctor` code,
+`PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL` (warning), names one when found.
+
 ### Output changes
 
 - `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file, plus a warning line
   naming the file, the offset, the byte count, and the repair when `N != 0`, plus a failure line on interior damage.
-  `verify --format json`'s own `verify-report-v1` schema is unaffected: the new `AppendedFileTails` stage
-  participates in the existing per-stage `evaluated`/`failed` reporting like any other stage, with no new field.
-- `doctor` gains two new diagnostic codes, `PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL` (warning) and
-  `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` (error), one per Rule A file with a finding.
+  It also gains one `trailing partial <type> container bytes: N` line per persisted object type (N7, above).
+  `verify --format json`'s own `verify-report-v1` schema is unaffected by either: the new `AppendedFileTails` stage
+  participates in the existing per-stage `evaluated`/`failed` reporting like any other stage, with no new field, and
+  the object-container line lives under the pre-existing `Objects` stage the same way.
+- `doctor` gains three new diagnostic codes: `PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL` (warning) and
+  `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` (error), one per Rule A file with a finding, and
+  `PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL` (warning), one per object type with a finding (N7).
 - Refusals that end: `"<container> has a damaged entry; run doctor before reading"` and `"generation log has a
   damaged record; run doctor before reading"` no longer fire for a plain trailing run of zero or random bytes at
-  the end of one of these seven files — only for genuine interior damage (a sound record following bad bytes) do.
+  the end of one of these seven files — only for genuine interior damage does, which after §9 also includes a
+  *complete* record at the very end whose checksum or envelope fails (previously silently repaired into a
+  rollback, not reported at all).
 
 ## 0.48.0 — 2026-09-30
 

@@ -49,24 +49,39 @@ planned for. None of these blocks 0.48.0.
 
 - **Trust keys, trust policy, author keys, the received index, and the three generation logs now have
   a tail defined by position, a `verify`/`doctor` line, and a repair (fixed in 0.49.0, RFC 164 Rules
-  A/B/C).** Before this round (N2's remainder, N7, N10, M4): a torn prefix at these seven files was a
-  repairable-looking tail, but 100 or more zero or random bytes at the same position was *damage* under
-  their own pre-0.49.0 shape rule -- `trust maintainer add`, a commit, or `bundle import` refused with
-  "\<container\> has a damaged entry", a generation log's own reader refused every command that resolves
-  a ref (on the pointer index's own log) or just `compact` (on the other two), and none of the seven had
-  a repair verb -- the way out was a manual backup-and-truncate. Now: the tail is everything after the
-  last sound record, whatever its shape, the same rule RFC 162 rule 3 already gave the WAL and the
-  pointer index; `verify` and `doctor` report a tail as a warning (never failing on it alone) and interior
-  damage (a sound record following bad bytes -- now the narrow case, not the common one) as a failure;
-  and `prikk doctor --repair-tails` truncates every tail these seven files (plus the WAL and the pointer
-  index) have, in one run, saving what it removes first, refusing before touching anything if any covered
-  file has interior damage. **What remains:** interior damage still has no automatic repair -- by
-  design, the same as every other covered file -- so the way out for it is still manual (back the file up
-  first, ask before truncating). The ref log's own tail (M4) and the object containers' own tails (N7)
-  are not yet reported by Rule B, and the ref log's tail is not yet repaired; a torn last record still
-  fails `verify` with `PRIKK-VERIFY-REF-DIVERGENCE` rather than being reported as a tail (see below).
-  Reporting and repair for the ref log, and N3's interrupted publications, are settled together in the
-  F1 round (0.49.0 step 2).
+  A/B/C, then corrected by §9).** Before this round (N2's remainder, N7, N10, M4): a torn prefix at
+  these seven files was a repairable-looking tail, but 100 or more zero or random bytes at the same
+  position was *damage* under their own pre-0.49.0 shape rule -- `trust maintainer add`, a commit, or
+  `bundle import` refused with "\<container\> has a damaged entry", a generation log's own reader
+  refused every command that resolves a ref (on the pointer index's own log) or just `compact` (on the
+  other two), and none of the seven had a repair verb -- the way out was a manual backup-and-truncate.
+  Rule A first defined a tail as "everything after the last sound record, whatever its shape"; **§9
+  corrected this the same round, before release, once measurement showed it let a complete last record
+  with a failed checksum be truncated as a tail** -- for a file whose last record carries a decision
+  (the trust policy's latest snapshot, a generation log's live slot, the pointer index's newest
+  pointer), that silently re-asserted the previous decision. A single flipped byte in a real trust
+  policy snapshot, followed by the pre-§9 `--repair-tails`, silently re-trusted a key that snapshot had
+  just revoked, `verify` exiting 0 throughout — measured on a release build before this was closed. Now:
+  a tail is an incomplete record or bytes that are not a record header, when nothing sound follows; a
+  *complete* record whose checksum or envelope fails is damage, even when last. `verify` and `doctor`
+  report a tail as a warning (never failing on it alone) and interior damage (including a complete,
+  corrupted last record) as a failure; `prikk doctor --repair-tails` truncates every genuine tail these
+  seven files (plus the WAL and the pointer index) have, in one run, saving what it removes first, and
+  refuses -- unconditionally, changing nothing -- if any covered file has interior damage, including a
+  complete corrupted record. **What remains:** interior damage still has no automatic repair -- by
+  design, the same as every other covered file -- so the way out for it is still manual (back the file
+  up first, ask before truncating; a complete corrupted record has no offset a repair can safely act on
+  at all). The object containers' own short tails (N7) are now reported too (`verify`/`doctor` print a
+  trailing-partial byte count per persisted object type), reporting only, no repair, per the review's
+  ruling. The ref log's own tail (M4) is not yet reported by Rule B, and its tail is not yet repaired; a
+  torn last record still fails `verify` with `PRIKK-VERIFY-REF-DIVERGENCE` rather than being reported as
+  a tail. Reporting and repair for the ref log, and N3's interrupted publications, are settled together
+  in the F1 round (0.49.0 step 2). **0.48.0 disclosure:** the shipped `--repair-pointer-index-tail`
+  (RFC 162) had the same defect §9 fixes -- a single flipped byte in the pointer index's newest,
+  otherwise-complete publication record was indistinguishable from a torn tail, and the repair removed
+  it, reverting the ref's tip to its previous block, with `verify` exiting 1 both before and after (the
+  repair did not clear the failure, but did silently change what the ref pointed at). Fixed in 0.49.0 by
+  §9: the same repair now refuses on this shape instead.
 - **A `bundle import` interrupted by a crash could leave a block durable while the patch, blob, or
   parent block it names is not, and no repair cleared it (fixed in 0.49.0).** In 0.48.0 and earlier,
   objects were written in the bundle's own carried order, not in dependency order -- across kinds,

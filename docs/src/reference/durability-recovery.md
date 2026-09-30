@@ -246,15 +246,39 @@ and repair paths, not only the write-side refusal above.** Before this: a torn *
 already read as a repairable-looking tail, but 100 or more zero or random bytes at the same position
 read as *damage* under their own pre-0.49.0 shape rule -- readers refused ("\<container\> has a damaged
 entry"), and no repair verb existed for any of the six (or the three generation logs, listed together
-with them below). Now: the tail is everything after the last sound record, whatever its shape -- a torn
-prefix, zeros, or garbage all count, the same rule RFC 162 rule 3 already gave the WAL and the pointer
-index -- and readers tolerate it. `verify`/`doctor` report a tail (a warning, naming the file, the
-offset, the byte count, and the repair) and interior damage (a sound record following bad bytes -- now
-the narrow case) separately, and `prikk doctor --repair-tails` truncates every tail across all nine
-covered files (these six, the three generation logs, the WAL, and the pointer index) in one run, saving
-what it removes first, refusing before touching anything if any covered file has interior damage --
-see "Doctor Repair Boundary" below for the full mechanism. The bullets immediately following describe
-the write-side refusal RFC 163 already gave each file, which RFC 164 does not change.
+with them below). Now: a tail is a record whose header or body is incomplete, or bytes that are not a
+record header at all (no magic, or an unknown version), when nothing sound follows -- a torn prefix,
+zeros, or garbage all count, the same rule RFC 162 rule 3 already gave the WAL and the pointer index --
+and readers tolerate it. `verify`/`doctor` report a tail (a warning, naming the file, the offset, the
+byte count, and the repair) and interior damage (a sound record following bad bytes) separately, and
+`prikk doctor --repair-tails` truncates every tail across all nine covered files (these six, the three
+generation logs, the WAL, and the pointer index) in one run, saving what it removes first, refusing
+before touching anything if any covered file has interior damage -- see "Doctor Repair Boundary" below
+for the full mechanism. The bullets immediately following describe the write-side refusal RFC 163
+already gave each file, which RFC 164 does not change.
+
+**RFC 164 §9 (Addendum 1, 0.49.0): a complete record is never a tail, even when it is last.** Rule A's
+first accepted text said "whatever its shape," which let a *complete* record (its own header valid,
+its whole claimed body present) whose checksum or envelope fails be truncated as if it were a crash's
+torn remnant. It is not one: a crash can only interrupt a write, so everything a crash leaves is
+*incomplete*; a complete record was fully written, and a failing checksum on it is corruption *after*
+the fact. For files whose last record carries a decision -- the trust policy's latest snapshot, a
+generation log's live slot, the pointer index's newest pointer -- silently removing it re-asserts the
+*previous* decision: measured on a real build, a single flipped byte in the trust policy's newest
+snapshot, followed by the pre-§9 repair, silently re-trusted a key that snapshot had just revoked, with
+`verify` exiting 0 throughout. §9 corrects this for the seven Rule-A files and the pointer index (the
+WAL keeps RFC 162 rule 3 exactly as it was -- see below): a complete record whose checksum or envelope
+fails is damage, even when last. `verify` fails and names it; `--repair-tails` and
+`--repair-pointer-index-tail` refuse and change nothing; readers fail closed on it exactly as they do
+on any other interior damage, never silently resolving to an older, undamaged state. The cost, accepted
+knowingly: a single corrupted byte in the last complete record of one of these files now stops the
+commands that read that file (for the pointer index's own generation log, that is nearly every
+command), where before it was quietly repaired into a rollback. The way out is restoring the file from
+a copy, until the F1 round (0.49.0 step 2) can rebuild the pointer index from the ref log. **The WAL is
+deliberately not part of this correction**: removing its own damaged last record loses a queued commit,
+which is saved to `.prikk/recovery/` and disclosed (N6) -- a loss of work in progress, not a rollback of
+already-committed trust or ref state, and N6's own witness (0.49.0 step 3) will let a genuine crash be
+told apart from later damage there without this trade-off at all.
 
 **Refuses only when that write would actually append.** An operation that turns out to be a no-op for
 one of these files — re-adding a maintainer key already adopted under the same public key, removing one
@@ -322,12 +346,16 @@ size — checksumming every byte is unavoidable for telling a sound record from 
 bounded saving, not a change of complexity class; at these sizes the absolute cost is small either way.
 
 **Not covered, on purpose.** The object index keeps RFC 162 rule 1 (a writer rebuilds it before
-appending, rather than refusing). The object containers keep rule 2's connectivity classification. The
-ref log keeps its own positive truncation rule (it truncates only a suffix that is a prefix of the
-record it expected to write next) — **the ref log is not in this round's scope**: a crash inside
-`branch create`/`tag create` leaving its own ref-log record torn, and a later `seal` of a *different*
-ref appending behind it, is disclosed, not fixed, in `current-state.md`'s known limitations (N3),
-alongside F1 in 0.49.0.
+appending, rather than refusing). The object containers keep rule 2's connectivity classification, but
+now also report an aggregate tail count per persisted object type (RFC 164 Addendum 1, N7:
+`verify`/`doctor` print "trailing partial \<type\> container bytes" for each of the seven persisted
+object types, 0 for a clean container) — reporting only, no repair; a frame that does not parse is
+still classified as before (a warning if its own checksum never verified, connectivity-checked damage
+otherwise), unchanged. The ref log keeps its own positive truncation rule (it truncates only a suffix
+that is a prefix of the record it expected to write next) — **the ref log is not in this round's
+scope**: a crash inside `branch create`/`tag create` leaving its own ref-log record torn, and a later
+`seal` of a *different* ref appending behind it, is disclosed, not fixed, in `current-state.md`'s known
+limitations (N3), alongside F1 in 0.49.0.
 
 ## Doctor Repair Boundary
 
@@ -348,8 +376,12 @@ the removed bytes to `.prikk/recovery/` first; a file with no tail is reported c
 with the other four repair flags in one invocation (it already covers the WAL and the pointer index).
 **None of the four repair verbs ever removes a sound record**: each truncates or rebuilds only what a
 true torn tail or a pure-cache rebuild covers (see above), and on genuine damage each refuses and changes
-nothing. Doctor diagnoses ref-publication states but does not sign, append, promote, or reconstruct ref
-authority.
+nothing. **This held exactly to the letter of "whatever its shape" until RFC 164 §9** (Addendum 1,
+0.49.0): a complete record whose checksum failed used to satisfy "whatever its shape" too, and both
+`--repair-tails` and `--repair-pointer-index-tail` would truncate it -- removing a record that was, in
+fact, sound in every way except its own checksum, and rolling back the decision it carried. §9 closes
+that: a complete record is never a tail, so neither repair verb reaches it any more. Doctor diagnoses
+ref-publication states but does not sign, append, promote, or reconstruct ref authority.
 
 The [integrity and recovery diagnostics](./integrity-recovery.md) reference owns the full diagnostic
 catalog: verification checks, `DoctorIssue` codes, severities, and diagnostic interpretation. This

@@ -237,31 +237,39 @@ writes nothing, so it never refuses over a tail it would never write behind. Run
 ## `error: integrity error: generation log has a damaged record; run doctor before reading`
 
 Seen from any command that reads a generation log's live slot — `status`, `log`, `branch list`, `seal`,
-`commit`, `verify`, `doctor`, and `compact` itself for that container — when a **sound** record follows
-damaged bytes further into the file (RFC 164 Rule A: interior damage, not a tail — the tail's own
-"whatever the shape" rule only covers bytes at the *end* of the file, with nothing sound after them; a
-plain zero/garbage run at the end is a tail now, not this). **On the ref pointer index's own generation
-log, this stops every command that resolves a ref**, since every one of them reads it; on the
-received-index and trust-policy generation logs, only `compact` is affected. `doctor` has nothing that
-repairs this — `--repair-tails` refuses on interior damage the same way every other covered file's own
-repair does, rather than guessing which bytes are safe to remove. **This entry gives no truncation
-advice**, for the same reason as the "has a damaged entry" entry below: no offset here is known to be
-followed by nothing sound, so a truncation would be a guess. Restore the repository from a backup or a
-clone instead.
+`commit`, `verify`, `doctor`, and `compact` itself for that container — for either of two reasons (RFC
+164 Rule A and §9): a **sound** record follows damaged bytes further into the file, or the **last**
+record is itself *complete* (its own header valid, its whole claimed body present) but its checksum or
+envelope fails. Neither is a tail: a tail is what a crash leaves, and a crash can only leave something
+*incomplete* — a torn prefix, or zeros/garbage with nothing sound after them at the very end. A complete
+record was fully written; a failing checksum on it is corruption after the fact, not a crash, so RFC 164
+§9 treats it exactly like interior damage, never as a tail to be repaired away (repairing it away would
+silently revert whichever slot it names to the previous one — measured, and closed, on a real build).
+**On the ref pointer index's own generation log, this stops every command that resolves a ref**, since
+every one of them reads it; on the received-index and trust-policy generation logs, only `compact` is
+affected. `doctor` has nothing that repairs this — `--repair-tails` refuses on it, the same way every
+other covered file's own repair does, rather than guessing which bytes are safe to remove, or silently
+undoing the decision the damaged record carried. **This entry gives no truncation advice**: whether the
+damage sits before a sound record or is the complete-but-corrupt last record itself, no offset here is
+one a repair can safely remove. Restore the repository from a backup or a clone instead.
 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
 Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,
-author-key or received-index container, when a **sound** record follows damaged bytes further into the
-file (RFC 164 Rule A: interior damage, not a tail — trailing zeros, garbage, or a torn prefix at the
-*end* of the file, with nothing sound after them, is a tail now; see the four "incomplete tail" entries
-above and `prikk doctor --repair-tails`). **`doctor` has nothing that repairs interior damage** —
+author-key or received-index container, for either of two reasons (RFC 164 Rule A and §9): a **sound**
+record follows damaged bytes further into the file, or the **last** record is itself *complete* (its own
+header valid, its whole claimed body present) but its checksum or envelope fails. Neither is a tail — see
+the generation-log entry above for why a complete record is never one, whatever its position; a genuine
+tail (trailing zeros, garbage, or a torn prefix at the *end* of the file, with nothing sound after it, and
+not itself a complete record) reads as one of the four "incomplete tail" entries above instead, repaired
+by `prikk doctor --repair-tails`. **`doctor` has nothing that repairs interior damage** —
 `--repair-tails` refuses on it, the same way every other covered file's own repair does, rather than
-guessing which bytes are safe to remove — and this entry gives no truncation advice: unlike a genuine
-tail, there is no offset promised to be followed by nothing sound, so a truncation here is a guess, not a
-safe recovery step. If you believe the bytes after some offset really are nothing but trailing garbage,
-run `prikk verify` first and read its own report carefully before deciding to truncate anything by hand;
-when in doubt, back the file up and ask before changing it.
+guessing which bytes are safe to remove, or silently reverting the decision (a trust adoption, a
+revocation) the damaged record carried. This entry gives no truncation advice: there is no offset here
+promised to be safe to remove. If you believe the bytes after some offset really are nothing but trailing
+garbage from an interrupted append (not a complete, corrupted record), run `prikk verify` first and read
+its own report carefully before deciding to truncate anything by hand; when in doubt, back the file up
+and ask before changing it.
 
 ## `error: integrity error: object <id> (block) references missing <role> <id>`
 
