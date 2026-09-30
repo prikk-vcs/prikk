@@ -12,6 +12,9 @@ decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E
 - **The ref log's repair and interrupted publications stay in the F1 round** (0.49.0 step 2).
 - **2026-10-01: §9 corrects Rule A** (a complete record is never a tail), after round 1's review found that the rule as
   written can roll back trust and ref state. ACCEPTED by the owner; the reasoning is §9.1.
+- **2026-10-01: §9.2 proposes a correction to §9** (the checksum decides whether a record is complete), after
+  Addendum 1's review found that a flipped header byte still makes a complete record read as a tail, in the readers as
+  well as the repairs, and that the trust-policy case has shipped silently. It awaits the owner's reading.
 
 *History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 
@@ -256,3 +259,70 @@ trusting a key it had revoked.
 state. The trust set, the ref tips and the live slots are identical before and after. Each file's §9 rule gets a control
 that restores "whatever its shape" and shows the rollback rows go red.
 
+
+### 9.2 Proposed correction, 2026-10-01: the checksum decides whether a record is complete (for the owner's reading)
+
+**Status: PROPOSED by the architect, for the owner's reading.** It corrects §9's definition of a tail. §9's principle and
+§9.1's reasoning are unchanged; this is the second correction in one round, so it is a design re-read (RFC 152 §7), not a
+fix-round detail.
+
+**What was found.** Round 1's Addendum 1 implements §9 as written. On its release build (`284a5308`, sha256 `331f04f5…`),
+the architect flipped **each byte of the last record in turn**, header included (`arch-seal/rfc164_every_offset_probe.sh`,
+`rfc164_header_flip_reader_probe.sh`). The header of these formats is magic (8 bytes), version (2), length (8), checksum
+(32).
+
+| file | bytes flipped | before any repair | after the repair |
+|---|---|---|---|
+| trust policy (80-byte last record) | checksum field or body: 62 of 80 | `verify` 1; readers refuse | refuses; nothing moves. **Correct** |
+| trust policy | **magic, version or length: 18 of 80** | **`verify` 0; the removed maintainer is already trusted again** | `--repair-tails` truncates the record |
+| pointer index (132 bytes) | **magic, version or length: 18** | `verify` 1; **`branch list` shows `heads/keep` at an older tip** | refuses; readers still show the older state |
+| pointer-index generation log (51 bytes) | **magic or version: 10** | `verify` 1; **`branch list` drops `heads/keep`** | refuses; readers still show the older state |
+
+**Why.** §9 decided "complete" from the header: bytes with no magic or an unknown version were "not a record", and a
+length claiming more than the file holds made the record "incomplete". **But those header fields can be what got
+corrupted.** A record whose magic byte, or length byte, was flipped was still fully written. §9's own probe flipped one
+body byte only, and so did the matrix. One sample is not a measurement: the region is every byte of the record.
+
+**The rollback happens in the readers, not only in the repairs.** Rule A makes every reader tolerate a tail. So a
+complete record misread as a tail rolls back **every reader, before anyone runs a repair**, and silently wherever
+`verify` reports a tail as a warning.
+
+**It shipped.** Measured by the architect on released binaries:
+- **The trust policy, 0.46.0 and 0.48.0:** a flipped length byte in the last snapshot. `verify` exits 0 (0.46.0 does not
+  read the trust files at all), and readers trust the removed maintainer again. **Silent.** The partial-record arm that
+  does this dates from the trust container's introduction (`2827fab7`, first released in 0.20.0); the dev team confirms
+  the affected range from history.
+- **The pointer index, 0.48.0:** *any* flipped byte in the last record, header or body. Readers show the ref at its
+  previous tip before any repair. `verify` exits 1. §9's disclosure named only the repair.
+
+**Proposed rule: the checksum decides.** Every one of these formats computes its checksum over the magic and version *as
+the format defines them* (constants, not the stored bytes), the length and the body. At the first position after the last
+sound record:
+- **if the stored checksum verifies** over the claimed length, or over the length that reaches the end of the file, **the
+  bytes are a complete record**, whatever the stored magic, version or length say. A complete record is never a tail
+  (§9): damage, fail closed;
+- **otherwise it is a tail.** A torn prefix, zeros or garbage cannot carry a SHA-256 that verifies over them.
+
+**What it covers, and what it does not:**
+- **Every single flipped byte in the last record is then caught:**
+  - body and checksum field: already by §9;
+  - magic or version: the checksum verifies over the claimed length;
+  - length: it verifies over the length to the end of the file.
+- **Cost:** one extra SHA-256 over at most the tail's bytes, and only when a tail is found. N2 and N10 are unchanged:
+  their tails carry no checksum that verifies.
+- **What remains:** corruption of more than one field of the last record still reads as a tail. For example, a zeroed
+  sector covering the header and the checksum. Only a per-file witness closes that (§9.1, alternative 3, format 8). The
+  known limitations say so.
+- **The same files as §9:** the seven Rule-A files and the pointer index. The WAL stays under RFC 162 rule 3.
+
+**For users of released versions.** The known limitations and CHANGELOG disclose:
+- the trust-policy rollback, silent, from 0.20.0 (to be confirmed) through 0.48.0;
+- the pointer index's readers and its repair, 0.48.0.
+
+Fixed in 0.49.0 by this rule. **An advisory is the owner's decision.**
+- **The architect recommends a disclosure, not a GHSA:**
+  - it needs a corrupted local file, and no untrusted input can write one: bundles, sync and imports never write the
+    trust policy;
+  - anyone who can write `.prikk/` can change the trust policy with the CLI anyway, so an attacker gains nothing.
+- **Unlike §9's case, this one is silent in shipped versions.** That is the argument for an advisory, and the owner may
+  prefer one.
