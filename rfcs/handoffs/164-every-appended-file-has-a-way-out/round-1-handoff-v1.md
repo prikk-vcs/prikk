@@ -100,3 +100,50 @@ containers (their short tails, N7).
 | U2 | `matrix.py` v4, the seven probes and the tree probe, on the release build | 45 min |
 
 **Report:** `.git-exclude/review-request/rfc164-round-1-report-v1.md`.
+
+## Addendum 1 — 2026-10-01: a complete record is never a tail, I6, the object containers, the matrix and its controls (review `rfc164-round-1-review-v1`)
+
+Report `rfc164-round-1-report-v1.md`, commits `bfa567db` … `09f416af`. **Not accepted yet.** The round implemented Rule A
+as written. The rule was wrong in one place: the owner **ACCEPTED RFC 164 §9** on 2026-10-01. **Read §9 and §9.1 first.**
+
+1. **§9, for the seven Rule-A files and the pointer index.**
+   - A tail is an incomplete record (header or body short), or bytes that are not a record header, when nothing sound
+     follows.
+   - **A complete record whose checksum or envelope fails is damage, even when last.** Your `never_a_tail` flag is the
+     natural place: it now also holds for a complete record whose checksum or envelope fails.
+   - Readers fail closed on it, as on interior damage. `--repair-tails` and `--repair-pointer-index-tail` refuse, and
+     change nothing.
+   - **The WAL keeps RFC 162 rule 3 unchanged.**
+2. **Invariant I6, in every repair row:** a repair never changes the meaning of committed state. Assert, before and after:
+   - `trust maintainer list`;
+   - every ref tip (`branch list`, tags, received pointers);
+   - each compacting container's live slot.
+3. **The rollback rows, which must now pass** (the architect's probes, `arch-seal/rfc164_rollback_probe.sh` and
+   `arch-seal/pointer_index_flip_probe.sh`):
+   - a flipped byte in the last complete record of the trust policy, a generation log and the pointer index. `verify`
+     fails, the repair refuses, and **nothing reverts**: the removed maintainer stays untrusted, the branch stays, `main`'s
+     tip stays;
+   - also trust keys, author keys and the received index.
+   - **Control:** restore "whatever its shape" at one file at a time. Its rollback rows go red.
+4. **Rule B for the five object containers** (N7's short tails): a warning line, as for the other files. **The ref log's
+   line moves to the F1 round** (my ruling): leave it out, and say so in the text.
+5. **§4, as the handoff asked:**
+   - the matrix rows for every file of §1: a torn prefix, 100 zero bytes, 100 random bytes, **and a flipped byte in the
+     last complete record**, in both orders, asserting I1 to I6;
+   - **the four controls, per site:** a reader's refusal restored; one file's line dropped; one file removed from
+     `--repair-tails`; `--repair-tails` touching files before its check;
+   - report each control with the rows it reddened. A site whose removal reddens nothing is a finding.
+6. **Text:**
+   - the §9 rule, in `durability-recovery.md`;
+   - `troubleshooting.md`: a damaged complete record means restore from a copy; no truncation advice;
+   - **the 0.48.0 disclosure** in the known limitations: `--repair-pointer-index-tail` can remove a damaged, not torn,
+     last record, and the ref then reverts. Fixed in 0.49.0 by §9;
+   - CHANGELOG to match.
+
+**Before proposing:**
+- the 14 gates on the final commit, in R1's scope;
+- `matrix.py` v4 compared with `matrix-5e50a661.txt`, **every changed cell explained, each with its own replay**;
+- the architect's probes, including the two above;
+- the generation-log tree probe.
+
+**Report:** `.git-exclude/review-request/rfc164-round-1-report-v2.md`.

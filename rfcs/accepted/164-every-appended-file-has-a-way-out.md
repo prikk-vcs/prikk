@@ -10,8 +10,8 @@ decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E
 - **Implementation is two rounds:** A, B and C first (`rfcs/handoffs/164-every-appended-file-has-a-way-out/
   round-1-handoff-v1.md`, live 2026-09-30), then D and E.
 - **The ref log's repair and interrupted publications stay in the F1 round** (0.49.0 step 2).
-- **2026-10-01: §9 proposes a correction to Rule A** (a complete record is never a tail), after round 1's review found
-  that the rule as written can roll back trust and ref state. It awaits the owner's reading.
+- **2026-10-01: §9 corrects Rule A** (a complete record is never a tail), after round 1's review found that the rule as
+  written can roll back trust and ref state. ACCEPTED by the owner; the reasoning is §9.1.
 
 *History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 
@@ -154,10 +154,11 @@ a sealed block reached from them. Otherwise it is an **unreferenced remnant with
 4. **External review of the 0.49.0 candidate: recommended**, because damage is reclassified again. The owner decides when
    the candidate exists.
 
-## 9. Proposed amendment, 2026-10-01: a complete record is never a tail (for the owner's reading)
+## 9. Amendment: a complete record is never a tail
 
-**Status: PROPOSED by the architect, for the owner's reading.** It changes Rule A as accepted, and RFC 162 rule 3 for the
-pointer index. It is presented in this exchange and accepted, changed or refused in a later one.
+**Status: ACCEPTED by the owner 2026-10-01** (*"Accepted. Record the reasoning and our consideration around it."*). It was
+proposed by the architect on 2026-10-01 and read before acceptance. It changes Rule A as first accepted, and RFC 162 rule
+3 for the pointer index. **The owner asked that the reasoning and the consideration around it be recorded: §9.1.**
 
 **What went wrong.** Rule A says a tail is everything after the last sound record, "whatever its shape". That includes a
 **complete** last record (a valid header, its full claimed body present) whose checksum fails. Such a record cannot be told
@@ -192,3 +193,66 @@ fixes hold.
 
 **For 0.48.0 users:** the known limitations disclose that `--repair-pointer-index-tail` can remove a damaged, not torn,
 last record, and that the ref then reverts. The fix is this rule, in 0.49.0.
+
+### 9.1 The reasoning, and what was considered (recorded at the owner's request)
+
+**The principle.** A crash can only interrupt a write, so what a crash leaves at the end of an appended file is always
+*incomplete*: a short header, a short body, or bytes that were never a record (zeros, garbage). **A record whose header is
+valid and whose whole claimed body is present was fully written.** If its checksum fails, something changed it *after*
+it was written. That is corruption, not a crash. Treating it as a crash tail lets a repair delete a record that was really
+committed, and for files whose records carry state, the file then means an older state.
+
+**Why "the bytes are saved" does not make it safe.** RFC 162 rule 3 accepted this trade-off for the WAL because a removed
+WAL record is a queued commit, saved in `recovery/` and disclosed (N6). The user loses work in progress, not a decision.
+In the files §9 covers, the last record *is* a decision:
+- the trust policy's latest snapshot says who is trusted;
+- a generation log's newest record says which slot is live;
+- the pointer index's newest entry says where a ref points.
+
+Removing it silently re-asserts the previous decision. The bytes in `recovery/` do not tell the repository to stop
+trusting a key it had revoked.
+
+**Considered, and not chosen:**
+1. **Keep "whatever its shape", and rely on the recovery file.** Rejected, for the reason above. The trust-policy case
+   was also silent: `verify` exited 0 before the repair.
+2. **Refuse only for the trust files.** Rejected. The generation logs and the pointer index showed the same rollback: a
+   lost branch, and a reverted ref. One rule for the whole class is the lesson of 0.48.0, where every gap was a
+   per-file copy.
+3. **A witness per file** (a count or end offset written with each record, as N6's witness will be for the WAL). It would
+   tell a crash from corruption exactly. Not chosen for 0.49.0: it is a format change, a larger design, and §9 already
+   closes the unsafe outcome. Recorded as format-8 input, beside RFC 162 §3.
+4. **Readers tolerate the damage, reading up to the last good record.** Rejected: that *is* the rollback, done by every
+   reader instead of by the repair. For the trust policy, a reader that skipped a damaged revocation would trust the
+   revoked key.
+5. **Chosen: fail closed.** A complete record with a bad checksum is damage wherever it sits. `verify` fails and names it,
+   the repairs refuse and change nothing, and readers refuse as they do for interior damage.
+
+**What it costs, accepted knowingly.**
+- A single corrupted byte in the last complete record of one of these files stops the commands that read that file. For
+  the pointer index's generation log, that is almost every command.
+- The way out is restoring the file from a copy, until the F1 round (0.49.0 step 2) can rebuild the pointer index from
+  the ref log.
+- This is the behaviour 0.48.0 already had for damage in these files. It is honest, and it cannot be turned into a
+  rollback.
+- **What stays repairable is exactly what the external reviews measured:** a torn prefix, zeros and garbage. N2's and
+  N10's fixes hold.
+
+**The WAL is the one exception, and why.**
+- Its damaged last record stays a tail (RFC 162 rule 3, N6), because what it loses is saved, disclosed, and not a
+  decision.
+- The repair's output already says when it removed a whole record (0.48.0).
+- N6's witness (0.49.0 step 3) replaces the trade-off with an exact answer.
+
+**The shipped 0.48.0 case, and no advisory.**
+- `--repair-pointer-index-tail` can remove a damaged, not torn, last record, and the ref then reverts.
+- It needs local corruption of the file, and no untrusted input reaches it. `verify` fails before and after, so it is not
+  silent, and the removed bytes are saved.
+- **The architect judged a disclosure in the known limitations enough, not a security advisory.** The owner was told, and
+  may ask for one.
+- The trust-policy rollback, which would have been silent, never shipped: it existed only in round 1, and is fixed before
+  any release.
+
+**How it is held.** Invariant I6, in every repair row of the matrix: a repair never changes the meaning of committed
+state. The trust set, the ref tips and the live slots are identical before and after. Each file's §9 rule gets a control
+that restores "whatever its shape" and shows the rollback rows go red.
+
