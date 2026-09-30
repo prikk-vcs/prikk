@@ -301,8 +301,9 @@ binary** (the external architect's own reproduction, letter 015's assessment): `
 `--repair-pointer-index-tail` is refused as interior damage (N1); `trust maintainer add` exits 1 having
 appended, after which `seal` is refused too (N2); a crash inside `branch create`/`tag create` followed by a
 `seal` of a different ref buries the torn ref-log record the same way (N3, ref log, not fixed this round — see
-below); `compact` on a torn generation log appended its own new slot behind it, blind, the same way (§9, also
-reproduced in the released 0.47.0 binary). Earlier releases were not independently checked this round.
+below). `compact` on a torn generation log appended its own new slot behind it, blind, the same way — found by
+the dev team's own round-B report, and separately confirmed in the released 0.47.0 binary by the project's
+architect (§9). Earlier releases were not independently checked this round.
 
 - **The ref pointer index (N1) is fixed the same way the WAL already was**: `ensure_current_matches`, the
   compare-and-swap check every publication (`seal`, `branch create`, `tag create`, `merge`) already runs
@@ -347,7 +348,7 @@ reproduced in the released 0.47.0 binary). Earlier releases were not independent
   and a `verify` line are 0.49.0, alongside N7's remainder.
   **Disclosed, not fixed: a garbage-shaped generation-log tail (100+ zero or random bytes) is damage under this
   file's own shape rule, not a tail this guard covers** — the same gap as the four N2 files, measured by the
-  external architect on `7354feb3` and confirmed on 0.47.0 as well. On the **ref pointer index's** generation
+  project's architect on `7354feb3` and confirmed on 0.47.0 as well. On the **ref pointer index's** generation
   log it is the most severe instance of this case in the product: every command that resolves a ref refuses
   (`status`, `log`, `branch list`, `seal`, `commit`, `verify`, `doctor`), and `doctor` repairs nothing. On the
   received-index and trust-policy generation logs, only `compact` is affected. A positional tail and repair

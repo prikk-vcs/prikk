@@ -150,6 +150,22 @@ repository as it is and copy `.prikk/active/` aside before doing anything else: 
 contrast, shows as `trailing partial WAL bytes: N` and a `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` warning, and `--repair-wal-tail` is the
 right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail and the repair deleted the intact records after it.)
 
+## `error: integrity error: the ref pointer index has an incomplete tail at byte offset N (M byte(s) follow); …`
+
+`seal`, `branch create`, `tag create` and `merge` each refuse **before writing anything**: the
+compare-and-swap check every one of them already runs immediately before its own pointer-index append now
+also refuses there when the pointer index ends in a torn tail from an interrupted publication, instead of
+appending behind it and leaving `verify` to fail for good afterward. Unlike the four entries below, this
+one already has a `doctor` repair verb:
+
+```sh
+prikk doctor --repair-pointer-index-tail
+```
+
+which truncates the incomplete trailing record under the pointer-index lock, saving the removed bytes to
+`.prikk/recovery/`, the same way `--repair-wal-tail` does for the WAL. After it, `prikk verify` should exit
+0, and the publication that refused can be retried.
+
 ## `error: integrity error: the trust key container has an incomplete tail at byte offset N (M byte(s) follow); …`
 
 `trust maintainer add` refuses before writing anything, but **only when adding this key would actually
