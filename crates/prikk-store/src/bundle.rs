@@ -895,8 +895,7 @@ pub fn import_bundle(
     // names. Reordered here, after every check above (which do not depend on write order) and before
     // the first durable write, so a kill partway through this loop never leaves a later-typed object
     // durable while an earlier one it depends on is still missing.
-    let mut admission_envelopes = admission.envelopes;
-    objects_in_dependency_order(&mut admission_envelopes);
+    let admission_envelopes = objects_in_dependency_order(admission.envelopes)?;
 
     // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
     // can stop the import -- never a decision about the bundle's content.
@@ -967,12 +966,110 @@ fn object_type_dependency_rank(object_type: ObjectType) -> u8 {
     }
 }
 
-/// Stable-sorts `envelopes` into the dependency order `object_type_dependency_rank` defines.
-/// **Stable on purpose**: within one type, the caller's own order is trusted (e.g. a chain of
-/// `Block`s is already collected ancestor-first) -- this only fixes ordering *across* types, never
-/// reorders two objects of the same type relative to each other.
-pub(crate) fn objects_in_dependency_order(envelopes: &mut [ObjectEnvelope]) {
+/// This envelope's own same-kind dependencies among `envelopes` -- the ids, of the *same*
+/// `ObjectType`, it must be written after. Only `Block` (parents, `mainline_parent_id` -- already a
+/// member of `parent_block_ids`, so adding it again would be redundant, not wrong --, and
+/// `merge_baseline_block_id`, which is not necessarily a parent) and `RefState`
+/// (`previous_ref_state_id`) carry one; every other type's own same-kind fields (Addendum 1 review
+/// §1: "any other same-kind reference the payload structs show") were checked and carry none.
+fn same_kind_dependencies(envelope: &ObjectEnvelope) -> Result<Vec<ObjectId>> {
+    match envelope.object_type {
+        ObjectType::Block => {
+            let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+            let mut deps = payload.parent_block_ids;
+            deps.extend(payload.merge_baseline_block_id);
+            Ok(deps)
+        }
+        ObjectType::RefState => {
+            let payload = RefStatePayload::decode_canonical(
+                &envelope.canonical_payload,
+                envelope.schema_version,
+            )?;
+            Ok(payload.previous_ref_state_id.into_iter().collect())
+        }
+        ObjectType::Blob
+        | ObjectType::Patch
+        | ObjectType::Attestation
+        | ObjectType::Tag
+        | ObjectType::RecognitionClaim
+        | ObjectType::RefUpdate
+        | ObjectType::RecoveryNote
+        | ObjectType::BlockSummaryCache => Ok(Vec::new()),
+    }
+}
+
+/// Orders one same-`ObjectType` run so a referenced id (per [`same_kind_dependencies`]) is always
+/// written before whatever names it -- Kahn's algorithm, scoped to ids present in `group` only: an
+/// id this batch does not carry is either already durable (nothing to order against here) or
+/// missing (already refused earlier, above this function's only caller), never a cycle risk this
+/// function introduces. Each pass keeps the earliest-ready envelope first, the same "trust the
+/// caller's own order where the graph allows it" spirit the old stable sort documented.
+fn same_kind_topological_order(group: Vec<ObjectEnvelope>) -> Result<Vec<ObjectEnvelope>> {
+    let mut pending: Vec<(ObjectId, Vec<ObjectId>, ObjectEnvelope)> =
+        Vec::with_capacity(group.len());
+    for envelope in group {
+        let id = envelope.object_id();
+        let dependencies = same_kind_dependencies(&envelope)?;
+        pending.push((id, dependencies, envelope));
+    }
+    let present: BTreeSet<ObjectId> = pending.iter().map(|(id, ..)| *id).collect();
+
+    let mut written: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let before = pending.len();
+        let mut still_pending = Vec::with_capacity(pending.len());
+        for (id, dependencies, envelope) in pending {
+            let ready = dependencies
+                .iter()
+                .all(|dependency| !present.contains(dependency) || written.contains(dependency));
+            if ready {
+                written.insert(id);
+                ordered.push(envelope);
+            } else {
+                still_pending.push((id, dependencies, envelope));
+            }
+        }
+        pending = still_pending;
+        if pending.len() == before {
+            // Cannot happen for real content -- parent/previous chains are acyclic by construction,
+            // and `verify`'s own ancestry walk would already refuse a genuine cycle -- but refuse
+            // rather than write an arbitrary order if a malformed bundle somehow produces one.
+            return Err(PrikkError::Integrity(
+                "bundle contents: a same-kind object reference forms a cycle among carried objects"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(ordered)
+}
+
+/// Orders `envelopes` into the dependency order `object_type_dependency_rank` defines across kinds,
+/// then, within each contiguous same-kind run that sort produces, topologically by
+/// [`same_kind_topological_order`] -- Addendum 1 (review `stability-follow-up-review-v1`): the
+/// original stable-only sort left same-kind order exactly as the caller supplied it, which is safe
+/// for a chain of `Block`s already collected ancestor-first but not for a bundle whose own carried
+/// order lists a child before its parent.
+pub(crate) fn objects_in_dependency_order(
+    envelopes: Vec<ObjectEnvelope>,
+) -> Result<Vec<ObjectEnvelope>> {
+    let mut envelopes = envelopes;
     envelopes.sort_by_key(|envelope| object_type_dependency_rank(envelope.object_type));
+
+    let mut result = Vec::with_capacity(envelopes.len());
+    let mut group: Vec<ObjectEnvelope> = Vec::new();
+    for envelope in envelopes {
+        if let Some(last) = group.last() {
+            if last.object_type != envelope.object_type {
+                result.extend(same_kind_topological_order(std::mem::take(&mut group))?);
+            }
+        }
+        group.push(envelope);
+    }
+    if !group.is_empty() {
+        result.extend(same_kind_topological_order(group)?);
+    }
+    Ok(result)
 }
 
 /// Every carried envelope as it will be handed to the store, after RFC 156 §4's admission.
@@ -1501,7 +1598,7 @@ fn resolve_ref_target_block(
     Ok(target_block_id)
 }
 
-fn encode_bundle(
+pub(crate) fn encode_bundle(
     ref_name: &str,
     objects: &[ObjectEnvelope],
     author_keys: &[AuthorKeyEntry],
@@ -1586,7 +1683,7 @@ fn encode_bundle_v2_for_test(
 /// [`BundleManifest`], built only after that check passes, drops both. `PartialEq`/`Debug` are for
 /// the round-trip property test's own benefit (`proptest_decode_bundle.rs`), not a production need.
 #[derive(Debug, PartialEq, Eq)]
-struct DecodedManifest {
+pub(crate) struct DecodedManifest {
     repository_format: u32,
     tool_version: String,
     scope: BundleScope,
@@ -1596,14 +1693,14 @@ struct DecodedManifest {
 
 /// `decode_bundle`'s own return shape, named so the signature reads as "ref name, objects,
 /// author keys, manifest" instead of a four-tuple clippy's own `type_complexity` lint flags.
-type DecodedBundle = (
+pub(crate) type DecodedBundle = (
     String,
     Vec<ObjectEnvelope>,
     Vec<AuthorKeyEntry>,
     Option<DecodedManifest>,
 );
 
-fn decode_bundle(
+pub(crate) fn decode_bundle(
     bytes: &[u8],
     max_object_count: usize,
     max_object_bytes: usize,

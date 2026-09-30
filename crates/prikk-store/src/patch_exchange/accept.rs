@@ -353,7 +353,7 @@ pub fn accept_exchange_artifact(
         .chain(decoded.tags.iter())
         .cloned()
         .collect();
-    let mut admission =
+    let admission =
         crate::bundle::admit_carried_signatures(layout, &object_store, &ordered, |key_id| {
             let mut entries = lookup_author_key_entries(layout, key_id)?;
             entries.extend(
@@ -374,12 +374,10 @@ pub fn accept_exchange_artifact(
     // fixed for its own, unrelated reason (design §8.1: no claim or tag may be recorded from an
     // exchange that failed, so claims/tags are deliberately last, under the lock, regardless of
     // object-reference order).
-    let (content_envelopes, publication_envelopes) =
-        admission.envelopes.split_at_mut(content_count);
-    crate::bundle::objects_in_dependency_order(content_envelopes);
-    crate::bundle::objects_in_dependency_order(publication_envelopes);
-    let content_envelopes: &[ObjectEnvelope] = content_envelopes;
-    let publication_envelopes: &[ObjectEnvelope] = publication_envelopes;
+    let mut admission_envelopes = admission.envelopes;
+    let publication_envelopes = admission_envelopes.split_off(content_count);
+    let content_envelopes = crate::bundle::objects_in_dependency_order(admission_envelopes)?;
+    let publication_envelopes = crate::bundle::objects_in_dependency_order(publication_envelopes)?;
 
     // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
     // can stop the exchange — never a decision about what it carries.
@@ -387,7 +385,7 @@ pub fn accept_exchange_artifact(
     // Item 10: patches and blobs. Content-addressed and idempotent -- a replayed accept (§4.3) writes
     // nothing new here.
     let mut written_object_count = 0_usize;
-    for envelope in content_envelopes {
+    for envelope in &content_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
@@ -410,7 +408,7 @@ pub fn accept_exchange_artifact(
     // Claims and tags last, still under the lock: "no key material, and no claim, may be recorded
     // from an exchange that failed" (design §8.1), and RFC 117 stage 3 §5 row 6 puts a Tag on the
     // same terms -- **a refused exchange records no tag.**
-    for envelope in publication_envelopes {
+    for envelope in &publication_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
