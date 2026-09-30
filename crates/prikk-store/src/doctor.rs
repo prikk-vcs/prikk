@@ -511,6 +511,9 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
         // repository-wide, the same conservative reading `PublicationReclassification`'s ambiguous
         // case already uses.
         VerificationStage::ObjectConnectivity => None,
+        // RFC 164 Rule B: reads seven standalone, repository-wide files, none of them scoped to any
+        // active session's own WAL.
+        VerificationStage::AppendedFileTails => None,
     }
 }
 
@@ -869,6 +872,31 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     "run `prikk doctor --repair-pointer-index-tail` to truncate only the \
                      incomplete final pointer-index bytes",
                 ));
+            }
+            // RFC 164 Rule B: one Rule-A file's own tail (a warning) or interior damage (an error) --
+            // the same split every other framed file above already gets, extended by Rule A to these
+            // seven files' own shape.
+            for status in &verification.appended_file_tails {
+                if status.trailing_partial_bytes != 0 {
+                    issues.push(DoctorIssue::warning(
+                        "PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL",
+                        format!(
+                            "{} has {} trailing byte(s) at offset {} that look like an incomplete \
+                             final record",
+                            status.label, status.trailing_partial_bytes, status.tail_offset
+                        ),
+                        "run `prikk doctor --repair-tails` to truncate only the incomplete final \
+                         bytes",
+                    ));
+                }
+                if let Some(message) = &status.interior_damage {
+                    issues.push(DoctorIssue::error(
+                        "PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE",
+                        format!("{}: {message}", status.label),
+                        "preserve the repository for manual recovery; `--repair-tails` refuses on \
+                         interior damage rather than guessing which bytes are safe to remove",
+                    ));
+                }
             }
             for path in &verification.object_temp_paths {
                 let name = path

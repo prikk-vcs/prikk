@@ -305,21 +305,27 @@ mod trust;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockPayload, ObjectId, ObjectType, RefKind, RefStatePayload};
 
+use crate::author::author_key_index::{AuthorKeyRecordStatus, replay_author_keys};
 use crate::block_state::{BlockStateOutcome, BlockStateStatus};
 use crate::commit_boundary::active::ActiveRefMetadata;
 use crate::commit_index::{CommitIndexDivergence, verify_divergence};
+use crate::foundation::generation::{GenerationRecordStatus, replay_generation_log};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
 use crate::lifecycle_cache::incremental::{
     LifecycleCacheDivergence, verify_divergence as verify_lifecycle_cache_divergence,
 };
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::received::list_received_pointers;
+use crate::received::received_index::{ReceivedIndexRecordStatus, replay_received_index};
 use crate::refs::{RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid, verify_refs};
 use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
 };
 use crate::trust::PublicationTrustIssue;
+use crate::trust_index::{
+    TrustKeyRecordStatus, TrustPolicyRecordStatus, replay_trust_keys, replay_trust_policy,
+};
 use crate::wal::{Wal, WalReplay};
 
 use objects::verify_objects;
@@ -480,6 +486,12 @@ verification_stages! {
     /// way `doctor.rs`'s own non-default-session scan does, rather than reading `WalReplay`'s
     /// `DEFAULT_ACTIVE_NAME`-only replay.
     ObjectConnectivity => "object-connectivity",
+    /// RFC 164 Rule B: reads every Rule-A file (trust keys, trust policy, author keys, the received
+    /// index, and the three generation logs) directly and reports its own tail or interior-damage
+    /// status, unconditionally -- not only when some other check happens to touch it. No upstream
+    /// stage dependency: each of the seven files is read on its own, the same way `ObjectConnectivity`
+    /// above enumerates active sessions directly rather than reading another stage's output.
+    AppendedFileTails => "appended-file-tails",
 }
 
 impl std::fmt::Display for VerificationStage {
@@ -698,6 +710,31 @@ pub struct RepositoryVerification {
     /// already reported through `stage_outcomes`, never silently. `None` when the `Refs` stage itself
     /// did not evaluate.
     pub trailing_partial_pointer_index_bytes: Option<usize>,
+    /// RFC 164 Rule B: one row per Rule-A file (trust keys, trust policy, author keys, the received
+    /// index, and the three generation logs) this repository currently holds. Empty when the
+    /// `AppendedFileTails` stage itself did not evaluate.
+    pub appended_file_tails: Vec<AppendedFileTailStatus>,
+}
+
+/// RFC 164 Rule B: one Rule-A-covered file's own tail/damage status, from a direct, standalone read
+/// (never gated behind whatever else happens to touch the file first). A tail alone never fails
+/// `verify` -- "a repository whose only findings are tails still exits 0" (Rule B) -- `interior_
+/// damage`, unlike a tail, does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AppendedFileTailStatus {
+    /// A stable, human-readable label naming the file -- also its `--format json` key.
+    pub label: &'static str,
+    /// Trailing bytes after the last sound record, when the file ends at one (RFC 162 rule 3,
+    /// extended to this file by RFC 164 Rule A). `0` for a file with no tail.
+    pub trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins. Only meaningful when
+    /// `trailing_partial_bytes != 0`.
+    pub tail_offset: usize,
+    /// Set when this file's own decode found a `Failed` record outcome that is not the trailing
+    /// tail above -- a sound record follows the damage, so RFC 164 Rule A keeps it interior damage,
+    /// not a tail. The message is the first such outcome's own, naming its offset.
+    pub interior_damage: Option<String>,
 }
 
 /// A `Merge` block (DC-75) whose recorded `merge_baseline_block_id` is not a common ancestor of its
@@ -816,6 +853,10 @@ impl RepositoryVerification {
                 .iter()
                 .any(|outcome| matches!(outcome.status, RefItemStatus::Failed { .. }))
             || !self.connectivity_issues.is_empty()
+            || self
+                .appended_file_tails
+                .iter()
+                .any(|status| status.interior_damage.is_some())
     }
 
     /// Return true if the active WAL contained an incomplete trailing record. `None` (the WAL-replay
@@ -1040,6 +1081,132 @@ pub struct VerifyOptions {
 /// `--stop-on-first-error`.
 pub fn verify_repository(layout: &RepositoryLayout) -> Result<RepositoryVerification> {
     verify_repository_with_options(layout, VerifyOptions::default())
+}
+
+/// RFC 164 Rule B: every Rule-A file's own tail/damage status, read directly rather than through
+/// whichever writer or reader happens to touch it first -- reads it, unconditionally, every time
+/// `verify` runs. Each of the seven reads is independent; one failing to open does not stop the
+/// others (an `Err` here becomes one row's own `interior_damage`, naming what happened, the same
+/// "isolate and continue" discipline every other framed reader in this codebase already has).
+fn check_appended_file_tails(layout: &RepositoryLayout) -> Result<Vec<AppendedFileTailStatus>> {
+    let mut rows = Vec::with_capacity(7);
+
+    match replay_trust_keys(layout) {
+        Ok(replay) => rows.push(AppendedFileTailStatus {
+            label: "trust keys",
+            trailing_partial_bytes: replay.trailing_partial_bytes,
+            tail_offset: replay.tail_offset,
+            interior_damage: replay.record_outcomes.iter().find_map(|outcome| {
+                match &outcome.status {
+                    TrustKeyRecordStatus::Failed { message } => Some(message.clone()),
+                    TrustKeyRecordStatus::Evaluated => None,
+                }
+            }),
+        }),
+        Err(error) => rows.push(AppendedFileTailStatus {
+            label: "trust keys",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: Some(error.to_string()),
+        }),
+    }
+
+    match replay_trust_policy(layout) {
+        Ok(replay) => rows.push(AppendedFileTailStatus {
+            label: "trust policy",
+            trailing_partial_bytes: replay.trailing_partial_bytes,
+            tail_offset: replay.tail_offset,
+            interior_damage: replay.record_outcomes.iter().find_map(|outcome| {
+                match &outcome.status {
+                    TrustPolicyRecordStatus::Failed { message } => Some(message.clone()),
+                    TrustPolicyRecordStatus::Evaluated => None,
+                }
+            }),
+        }),
+        Err(error) => rows.push(AppendedFileTailStatus {
+            label: "trust policy",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: Some(error.to_string()),
+        }),
+    }
+
+    match replay_author_keys(layout) {
+        Ok(replay) => rows.push(AppendedFileTailStatus {
+            label: "author keys",
+            trailing_partial_bytes: replay.trailing_partial_bytes,
+            tail_offset: replay.tail_offset,
+            interior_damage: replay.record_outcomes.iter().find_map(|outcome| {
+                match &outcome.status {
+                    AuthorKeyRecordStatus::Failed { message } => Some(message.clone()),
+                    AuthorKeyRecordStatus::Evaluated => None,
+                }
+            }),
+        }),
+        Err(error) => rows.push(AppendedFileTailStatus {
+            label: "author keys",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: Some(error.to_string()),
+        }),
+    }
+
+    match replay_received_index(layout) {
+        Ok(replay) => rows.push(AppendedFileTailStatus {
+            label: "received index",
+            trailing_partial_bytes: replay.trailing_partial_bytes,
+            tail_offset: replay.tail_offset,
+            interior_damage: replay.record_outcomes.iter().find_map(|outcome| {
+                match &outcome.status {
+                    ReceivedIndexRecordStatus::Failed { message } => Some(message.clone()),
+                    ReceivedIndexRecordStatus::Evaluated => None,
+                }
+            }),
+        }),
+        Err(error) => rows.push(AppendedFileTailStatus {
+            label: "received index",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: Some(error.to_string()),
+        }),
+    }
+
+    for (label, path) in [
+        (
+            "pointer index generation log",
+            layout.ref_pointer_index_generation_log_path(),
+        ),
+        (
+            "received index generation log",
+            layout.received_index_generation_log_path(),
+        ),
+        (
+            "trust policy generation log",
+            layout.trust_policy_generation_log_path(),
+        ),
+    ] {
+        match replay_generation_log(layout, &path) {
+            Ok(replay) => rows.push(AppendedFileTailStatus {
+                label,
+                trailing_partial_bytes: replay.trailing_partial_bytes,
+                tail_offset: replay.tail_offset,
+                interior_damage: replay.record_outcomes.iter().find_map(|outcome| {
+                    match &outcome.status {
+                        GenerationRecordStatus::Failed { message } => Some(message.clone()),
+                        GenerationRecordStatus::Evaluated => None,
+                    }
+                }),
+            }),
+            Err(error) => rows.push(AppendedFileTailStatus {
+                label,
+                trailing_partial_bytes: 0,
+                tail_offset: 0,
+                interior_damage: Some(error.to_string()),
+            }),
+        }
+    }
+
+    Ok(rows)
 }
 
 /// Verify a repository layout without modifying it.
@@ -1354,6 +1521,15 @@ pub fn verify_repository_with_options(
         )
         .unwrap_or_default();
 
+    // Stage: AppendedFileTails (RFC 164 Rule B). No upstream stage dependency -- reads all seven
+    // Rule-A files directly, unconditionally.
+    let appended_file_tails = pipeline
+        .run(
+            VerificationStage::AppendedFileTails,
+            check_appended_file_tails(layout),
+        )
+        .unwrap_or_default();
+
     let checked_publication_trust_records =
         (objects_evaluated && ref_update_schema_trust_evaluated && local_tag_trust_evaluated)
             .then_some(trust_verifier.checked_records);
@@ -1406,6 +1582,7 @@ pub fn verify_repository_with_options(
         trailing_partial_object_index_bytes,
         object_index_interior_damage,
         trailing_partial_pointer_index_bytes,
+        appended_file_tails,
     })
 }
 

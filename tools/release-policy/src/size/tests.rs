@@ -93,7 +93,10 @@ fn removing_a_declaration_names_its_file() {
         // reusing `default`'s own WAL replay in `verify_queued_patch_connectivity` instead of redoing it, 1,786 -> 1,837.
         // RFC 162 Addendum 1 fix 1 follow-up: `ConnectivityIssue.active_session`, so `doctor` scopes the finding to
         // one active session instead of refusing the whole repair run, 1,837 -> 1,844.
-        detail.contains("1844"),
+        // RFC 164 Rule B: the `AppendedFileTails` stage, `AppendedFileTailStatus`, and
+        // `check_appended_file_tails` reading all seven Rule-A files directly, plus folding interior
+        // damage into `has_item_failure`, 1,844 -> 2,021.
+        detail.contains("2021"),
         "the line count is in the message: {detail}"
     );
     assert!(

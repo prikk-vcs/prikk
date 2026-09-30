@@ -522,6 +522,25 @@ pub(crate) fn print_verify_report(
     {
         println!("warning: ref pointer index contains an incomplete trailing record");
     }
+    // RFC 164 Rule B: one line per Rule-A file, always -- a tail alone is a warning (never fails
+    // `verify`); interior damage is a failure, naming its own offset (the message this file's own
+    // decode already produced, e.g. "... checksum mismatch at byte offset N").
+    for status in &report.appended_file_tails {
+        println!(
+            "trailing partial {} bytes: {}",
+            status.label, status.trailing_partial_bytes
+        );
+        if status.trailing_partial_bytes != 0 {
+            println!(
+                "warning: {} has an incomplete tail at byte offset {} ({} byte(s)); run `prikk \
+                 doctor --repair-tails`",
+                status.label, status.tail_offset, status.trailing_partial_bytes
+            );
+        }
+        if let Some(message) = &status.interior_damage {
+            println!("{}: failed: {message}", status.label);
+        }
+    }
     match &report.active_wal_metadata_status {
         Some(status) => print_active_wal_metadata_status(status),
         None => println!("active WAL metadata: unknown (stage did not evaluate)"),

@@ -343,7 +343,10 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
     }
 }
 
-fn replay_generation_log(
+/// RFC 164 Rule B: `verify`'s own reporting reads this directly (never refusing on interior damage
+/// itself -- that is `resolve_live_slot_with_tail`'s own job for a real reader) so a tail or damaged
+/// record is *reported*, not merely made to fail whatever incidentally reads the log next.
+pub(crate) fn replay_generation_log(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
 ) -> Result<GenerationReplay> {

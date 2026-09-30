@@ -50,7 +50,7 @@ struct DeclaredLargeFile {
     what_would_split_it: &'static str,
 }
 
-/// The three files over the line today, each read before it was written about.
+/// The four files over the line today, each read before it was written about.
 const DECLARED_LARGE_FILES: &[DeclaredLargeFile] = &[
     DeclaredLargeFile {
         path: "crates/prikk-store/src/verify.rs",
@@ -76,6 +76,20 @@ const DECLARED_LARGE_FILES: &[DeclaredLargeFile] = &[
                               reading, symlink refusal — are self-contained and could become \
                               `node_authoring/classify.rs`. That would leave the identity decision \
                               itself intact and take out perhaps 350 lines.",
+    },
+    DeclaredLargeFile {
+        path: "crates/prikk-store/src/doctor.rs",
+        reason: "One command's diagnosis and repair are read together because a repair verb's own \
+                 correctness depends on exactly which findings `doctor_repository` produced for the \
+                 same repository state -- RFC 163 and RFC 164 both exist because per-file guards that \
+                 drifted from what `verify` actually checked left gaps (N2, N9, N10); keeping the \
+                 finding constructors and the repair verbs in the same file is what makes that drift \
+                 visible in a diff instead of across two files that can silently disagree.",
+        what_would_split_it: "The repair verbs themselves (`repair_object_index`, \
+                              `repair_pointer_index_tail`, `repair_repository`, roughly 150 lines) \
+                              touch no `DoctorIssue` construction and could move to `doctor/repair.rs` \
+                              without separating a repair from the diagnosis it answers, which stays \
+                              in this file either way.",
     },
     DeclaredLargeFile {
         path: "crates/prikk-store/src/bundle.rs",
