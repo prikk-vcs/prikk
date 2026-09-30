@@ -147,12 +147,20 @@ const POINTER_INDEX_FAULTS: [(&str, FaultFn); 2] = [
     ("100 zero bytes", append_zeros_100 as FaultFn),
 ];
 
-/// Faults for the four files still on the pre-0.48.0 shape rule (trust keys, trust policy, author
-/// keys, the received index) -- both genuinely short of one header, so both are `TrailingPartial`
-/// there (see [`append_zeros_30`]'s own doc for why 100 zero bytes would test something else).
-const SHAPE_RULE_FAULTS: [(&str, FaultFn); 2] = [
+/// Faults for the four files RFC 164 Rule A extended the same rule to (trust keys, trust policy,
+/// author keys, the received index): all four now behave exactly like the pointer index for every
+/// shape -- a torn prefix, 100 zero bytes and 100 random bytes are each a repairable tail, whatever
+/// their shape, RFC 162 rule 3's own rule extended, not a narrower one. `append_zeros_30` (fewer
+/// than one header) is a genuine `TrailingPartial` case distinct in code path from the other three,
+/// which each parse a full header and reach `Invalid` before Rule A's own "nothing sound follows"
+/// check -- kept alongside them, not because it now tests something different (it does not, since
+/// Rule A unified both paths' outcome), but because a header-short tail is still a real crash shape
+/// worth its own row.
+const SHAPE_RULE_FAULTS: [(&str, FaultFn); 4] = [
     ("torn prefix", append_torn_prefix as FaultFn),
     ("30 zero bytes", append_zeros_30 as FaultFn),
+    ("100 zero bytes", append_zeros_100 as FaultFn),
+    ("100 random bytes", append_random_100 as FaultFn),
 ];
 
 // ---------------------------------------------------------------------------------------------
