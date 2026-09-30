@@ -92,3 +92,9 @@ Genesis peak RSS was 10–14% higher at N = 8,000, 32,000 and 64,000 than the la
 probe runs.
 
 **Report:** `.git-exclude/review-request/stability-follow-up-report-v2.md`.
+
+**ACCEPTED and CLOSED 2026-09-30** (`05373cf9` … `acda25fd`; reviews `stability-follow-up-review-v1`, `-v2`). The
+architect's import probes on the release build (sha256 `b333f862…`) found 0 dangling in 300 random kills and 300 near-end
+kills; the prior build had found 1 and 4. The controls reverted each half of the order and went red. A killed `merge` is
+disclosed with N3, and fixed in step 2. **0.49.0 step 0 is closed; next is step 1, RFC 164**, the architect's design for
+the owner's reading.
