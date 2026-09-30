@@ -88,8 +88,22 @@ fn interior_damage_on_one_file_refuses_and_touches_nothing() {
     let layout = repo_with_trust_content("rfc164-repair-tails-interior-damage");
     let path = layout.trust_key_container_path();
     let before_trust_keys = std::fs::read(&path).unwrap();
-    let before_pointer_index =
-        std::fs::read(layout.ref_pointer_index_slot_path(crate::ContainerSlot::A)).ok();
+
+    // Addendum 1 control 4 ("--repair-tails touching files before its check must redden its
+    // rows"): the pointer index also carries a genuine, unrelated TAIL at the same time trust keys
+    // carries interior damage. All-or-nothing means this tail must survive the refusal
+    // byte-for-byte -- if the all-or-nothing check ever moved after the truncation loop, this tail
+    // would be gone even though the repair as a whole still reports an error.
+    let pointer_index_path = layout.ref_pointer_index_slot_path(crate::ContainerSlot::A);
+    let sound_pointer_entry = crate::refs::PointerIndexEntry {
+        ref_name_key: [0x22; 32],
+        ref_name: "heads/rfc164-repair-tails-control4".to_string(),
+        ref_state_id: prikk_object::ObjectId::from_bytes([0x33; 32]),
+    };
+    let mut pointer_index_with_tail =
+        crate::refs::encode_pointer_index_record(&sound_pointer_entry).expect("encode");
+    pointer_index_with_tail.extend(vec![0_u8; 40]);
+    std::fs::write(&pointer_index_path, &pointer_index_with_tail).unwrap();
 
     // Garbage with nothing sound after it would be a tail (RFC 164 Rule A); a genuinely sound
     // trust-key record after the garbage is what keeps this interior damage -- the same shape
@@ -117,14 +131,12 @@ fn interior_damage_on_one_file_refuses_and_touches_nothing() {
         after_trust_keys, damaged,
         "the damaged file itself is untouched"
     );
-    if let Some(before) = before_pointer_index {
-        let after = std::fs::read(layout.ref_pointer_index_slot_path(crate::ContainerSlot::A)).ok();
-        assert_eq!(
-            after,
-            Some(before),
-            "an unrelated file must not be touched either"
-        );
-    }
+    let after_pointer_index = std::fs::read(&pointer_index_path).unwrap();
+    assert_eq!(
+        after_pointer_index, pointer_index_with_tail,
+        "an unrelated file's own tail must survive the refusal byte-for-byte -- \
+         the all-or-nothing check must run before any truncation, not after"
+    );
     let _ = std::fs::remove_dir_all(layout.root());
 }
 

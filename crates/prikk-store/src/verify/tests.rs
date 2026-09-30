@@ -718,6 +718,81 @@ fn verify_repository_counts_objects_and_wal_records() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// RFC 164 Rule B: `verify` reads all seven Rule-A files, every run, unconditionally -- named
+/// individually so a future refactor that drops one silently (the review's own control 2) fails
+/// this test rather than only a `#[non_exhaustive]` struct compiling regardless.
+#[test]
+fn verify_repository_reports_all_seven_rule_a_files() -> Result<()> {
+    let root = unique_temp_dir("verify-rule-b-seven-files");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let report = verify_repository(&layout)?;
+    let labels: Vec<&str> = report
+        .appended_file_tails
+        .iter()
+        .map(|status| status.label)
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            "trust keys",
+            "trust policy",
+            "author keys",
+            "received index",
+            "pointer index generation log",
+            "received index generation log",
+            "trust policy generation log",
+        ],
+        "Rule B must report exactly these seven files, in this order, every run"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 164 Addendum 1 (N7): `verify` reports a trailing-partial count for every persisted object
+/// type's own container, unconditionally -- a clean repository's containers all read 0, and a
+/// genuine tail on one (planted directly, since `write_object` never leaves one on its own) is
+/// picked up without anything else needing to reference the object first.
+#[test]
+fn verify_repository_reports_object_container_tails_for_every_persisted_type() -> Result<()> {
+    let root = unique_temp_dir("verify-rule-b-object-container-tails");
+    let layout = RepositoryLayout::init(root.clone())?;
+
+    let clean = verify_repository(&layout)?;
+    assert_eq!(
+        clean.object_container_tails.len(),
+        crate::foundation::layout::persisted_object_types().len(),
+        "one entry per persisted object type"
+    );
+    assert!(
+        clean
+            .object_container_tails
+            .iter()
+            .all(|status| status.trailing_partial_bytes == 0),
+        "a fresh repository's containers have no tail"
+    );
+
+    let blob_path = layout.container_slot_path(ObjectType::Blob, crate::ContainerSlot::A);
+    let mut bytes = std::fs::read(&blob_path).unwrap_or_default();
+    bytes.extend(vec![0_u8; 77]);
+    std::fs::write(&blob_path, &bytes)?;
+
+    let after = verify_repository(&layout)?;
+    let Some(blob_status) = after
+        .object_container_tails
+        .iter()
+        .find(|status| status.object_type == ObjectType::Blob)
+    else {
+        panic!("blob row must be present");
+    };
+    assert_eq!(blob_status.trailing_partial_bytes, 77);
+    assert!(
+        !after.has_item_failure(),
+        "a tail alone must not fail verify"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 /// DC-66 criterion 6: `verify` reports queue ordering explicitly. Reachable only by direct file
 /// tampering — `Wal::append_patch` always assigns `previous.seq + 1` — but a queue of N gives
 /// "ordering" a meaning worth verifying rather than assuming from successful structural decode.
