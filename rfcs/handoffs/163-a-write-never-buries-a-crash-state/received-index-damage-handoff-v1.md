@@ -55,3 +55,7 @@ makes that sentence true.
 | P2 | the seven probes | 10 min |
 
 **Report:** `.git-exclude/review-request/rfc163-received-index-damage-report-v1.md`.
+
+**ACCEPTED 2026-09-30** (`f993bcee`; review `rfc163-received-index-damage-review-v1`). The architect ran seven probes on
+the release build, with a control on the earlier builds. The reviewer's `matrix.py` v4 shows the three N9 cells gone and
+none worse. **The 0.48.0 candidate is the pushed tip** that carries this code; letter 017 names it.
