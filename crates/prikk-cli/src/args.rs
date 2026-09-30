@@ -96,6 +96,12 @@ pub(crate) struct DoctorArgs {
     pub(crate) repair_index: bool,
     /// Whether to truncate incomplete trailing pointer-index bytes (RFC 162 rule 3).
     pub(crate) repair_pointer_index_tail: bool,
+    /// RFC 164 Rule C: truncate every tail Rule A defines, across every file it covers (the WAL,
+    /// the pointer index, and the seven Rule-A files). Mutually exclusive with the other repair
+    /// flags -- it already covers what `--repair-wal-tail`/`--repair-pointer-index-tail` do, and
+    /// combining it with `--repair-index`/`--repair-main-ref` would let one invocation silently mix
+    /// two different repairs' own reports.
+    pub(crate) repair_tails: bool,
 }
 
 /// `prikk verify`'s output format (RFC 118 stage 5). `Prose` is the default and must remain
@@ -438,6 +444,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut repair_main_ref = false;
     let mut repair_index = false;
     let mut repair_pointer_index_tail = false;
+    let mut repair_tails = false;
     let mut path = None;
     for arg in args {
         match arg.as_str() {
@@ -450,6 +457,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
                     "--repair-pointer-index-tail",
                 )?;
             }
+            "--repair-tails" => mark_seen(&mut repair_tails, "--repair-tails")?,
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
             _ => {
                 if path.is_some() {
@@ -461,12 +469,22 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             }
         }
     }
+    if repair_tails
+        && (repair_wal_tail || repair_main_ref || repair_index || repair_pointer_index_tail)
+    {
+        return Err(CliError::Usage(
+            "--repair-tails cannot be combined with another repair flag -- it already covers the \
+             WAL and pointer-index tails; run it alone"
+                .to_string(),
+        ));
+    }
     Ok(DoctorArgs {
         root: optional_path_or_current(path)?,
         repair_wal_tail,
         repair_main_ref,
         repair_index,
         repair_pointer_index_tail,
+        repair_tails,
     })
 }
 

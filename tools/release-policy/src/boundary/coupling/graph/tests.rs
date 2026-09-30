@@ -136,7 +136,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // anchor-trust function, and `block_state::anchored_parent`, the anchored seal derivation: 145 -> 147.
     // RFC 163 added `foundation::tail_guard`, the one shared write-side tail check every scope-B append site
     // calls: 147 -> 148.
-    assert_eq!(modules.len(), 148, "modules: {modules:?}");
+    // RFC 164 Rule C added `doctor::repair_tails`, the consolidated `--repair-tails` verb: 148 -> 149.
+    assert_eq!(modules.len(), 149, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

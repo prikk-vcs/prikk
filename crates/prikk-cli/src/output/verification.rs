@@ -3,8 +3,26 @@ use crate::stdout::println;
 use prikk_store::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, ActiveWalMetadataStatus,
     AuthorSignatureVerification, BlockStateStatus, DoctorSeverity, ObjectItemStatus, RefFileStatus,
-    RefItemStatus, RepositoryLayout, StageStatus,
+    RefItemStatus, RepairTailsReport, RepositoryLayout, StageStatus,
 };
+
+/// `prikk doctor --repair-tails` (RFC 164 Rule C): one line per covered file, always -- clean or
+/// repaired, so a run's own report names every file it read, never only the ones it changed.
+pub(crate) fn print_repair_tails_report(report: &RepairTailsReport) {
+    for file in &report.files {
+        if file.truncated_bytes == 0 {
+            println!("{}: nothing to repair", file.label);
+        } else {
+            println!(
+                "{}: truncated {} trailing byte(s)",
+                file.label, file.truncated_bytes
+            );
+            if let Some(recovery_file) = &file.recovery_file {
+                println!("  removed bytes saved to: {}", recovery_file.display());
+            }
+        }
+    }
+}
 
 /// Render a count sourced from one verification stage. `None` means that stage did not evaluate to
 /// completion -- printed as `unknown`, never as `0`, since zero is itself a claim ("checked, found

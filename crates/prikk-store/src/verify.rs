@@ -1088,7 +1088,9 @@ pub fn verify_repository(layout: &RepositoryLayout) -> Result<RepositoryVerifica
 /// `verify` runs. Each of the seven reads is independent; one failing to open does not stop the
 /// others (an `Err` here becomes one row's own `interior_damage`, naming what happened, the same
 /// "isolate and continue" discipline every other framed reader in this codebase already has).
-fn check_appended_file_tails(layout: &RepositoryLayout) -> Result<Vec<AppendedFileTailStatus>> {
+pub(crate) fn check_appended_file_tails(
+    layout: &RepositoryLayout,
+) -> Result<Vec<AppendedFileTailStatus>> {
     let mut rows = Vec::with_capacity(7);
 
     match replay_trust_keys(layout) {

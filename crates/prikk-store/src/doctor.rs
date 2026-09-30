@@ -17,6 +17,9 @@ use crate::verify::{
 };
 use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
+mod repair_tails;
+pub use repair_tails::{RepairTailsFileOutcome, RepairTailsReport, repair_tails};
+
 /// Severity assigned to a doctor diagnostic issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoctorSeverity {

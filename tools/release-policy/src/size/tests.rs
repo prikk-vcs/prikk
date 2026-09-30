@@ -95,8 +95,8 @@ fn removing_a_declaration_names_its_file() {
         // one active session instead of refusing the whole repair run, 1,837 -> 1,844.
         // RFC 164 Rule B: the `AppendedFileTails` stage, `AppendedFileTailStatus`, and
         // `check_appended_file_tails` reading all seven Rule-A files directly, plus folding interior
-        // damage into `has_item_failure`, 1,844 -> 2,021.
-        detail.contains("2021"),
+        // damage into `has_item_failure`, 1,844 -> 2,021, then a `cargo fmt` pass, 2,021 -> 2,023.
+        detail.contains("2023"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -224,7 +224,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 141 -> 143. Its worktree side added `worktree_read.rs`: 143 -> 144. RFC 136 increment 2c added
     // `anchor_fallback.rs` and `lifecycle_cache/anchored_text.rs`: 144 -> 146. RFC 159 added `anchor_trust.rs` and
     // `block_state/anchored_parent.rs`: 146 -> 148. RFC 163 added `foundation/tail_guard.rs`: 148 -> 149.
-    assert_eq!(store.production_files, 149);
+    // RFC 164 Rule C added `doctor/repair_tails.rs`: 149 -> 150.
+    assert_eq!(store.production_files, 150);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

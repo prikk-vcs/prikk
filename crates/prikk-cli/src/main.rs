@@ -59,11 +59,11 @@ use commands::CliError;
 use output::{
     QueueTarget, QueueThresholdStatus, print_active_session_repairs, print_command_help,
     print_doctor_report, print_help, print_history, print_history_json, print_merge_evidence,
-    print_merge_plan, print_patch_inverse_plan, print_rollback_draft_report,
-    print_rollback_draft_verification, print_rollback_preview_plan, print_show, print_show_json,
-    print_status_json, print_trust_check, print_trust_check_json, print_trust_list,
-    print_trust_list_json, print_verify_report, print_verify_report_json, print_worktree_status,
-    print_worktree_status_json,
+    print_merge_plan, print_patch_inverse_plan, print_repair_tails_report,
+    print_rollback_draft_report, print_rollback_draft_verification, print_rollback_preview_plan,
+    print_show, print_show_json, print_status_json, print_trust_check, print_trust_check_json,
+    print_trust_list, print_trust_list_json, print_verify_report, print_verify_report_json,
+    print_worktree_status, print_worktree_status_json,
 };
 use prikk_object::Signature;
 use prikk_store::{
@@ -973,6 +973,22 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     let doctor_args = parse_doctor_args(args)?;
     let layout = open_repository(doctor_args.root)?;
+    // RFC 164 Rule C: handled first and returns immediately -- args.rs already refuses to combine
+    // it with any other repair flag, so nothing below this block runs when it is set.
+    if doctor_args.repair_tails {
+        let report = prikk_store::repair_tails(&layout).map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        print_repair_tails_report(&report);
+        let after = doctor_repository(&layout);
+        print_doctor_report(&layout, &after);
+        return if after.is_healthy() {
+            Ok(())
+        } else {
+            Err("doctor reported unresolved repository issues"
+                .to_string()
+                .into())
+        };
+    }
     // RFC 102's repair round: the object index rebuild. Handled before the WAL/active-session
     // repairs and independently of them -- the two share no state, and combining the flags runs both
     // rather than making one win. Like `--repair-wal-tail`, it is explicit: `doctor` with no flag

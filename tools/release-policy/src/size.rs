@@ -50,7 +50,7 @@ struct DeclaredLargeFile {
     what_would_split_it: &'static str,
 }
 
-/// The four files over the line today, each read before it was written about.
+/// The five files over the line today, each read before it was written about.
 const DECLARED_LARGE_FILES: &[DeclaredLargeFile] = &[
     DeclaredLargeFile {
         path: "crates/prikk-store/src/verify.rs",
@@ -76,6 +76,18 @@ const DECLARED_LARGE_FILES: &[DeclaredLargeFile] = &[
                               reading, symlink refusal — are self-contained and could become \
                               `node_authoring/classify.rs`. That would leave the identity decision \
                               itself intact and take out perhaps 350 lines.",
+    },
+    DeclaredLargeFile {
+        path: "crates/prikk-cli/src/main.rs",
+        reason: "The CLI's own command dispatch: every `run_<command>` function, and the table that \
+                 routes an argv verb to one, are read together so a new command's whole surface -- \
+                 registration, argument parsing, execution, and exit code -- is visible in one file, \
+                 not scattered across as many files as there are commands. `commands.rs` already \
+                 carries the static declaration each command's `run` field points into here.",
+        what_would_split_it: "`run_status`/`run_status_json` together (roughly 200 lines, `status`'s \
+                              prose and JSON forms) touch nothing else in this file and could move to \
+                              `status.rs`, mirroring `output/status.rs`'s own existing split for that \
+                              command's printers.",
     },
     DeclaredLargeFile {
         path: "crates/prikk-store/src/doctor.rs",

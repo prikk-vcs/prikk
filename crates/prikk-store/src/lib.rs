@@ -155,8 +155,9 @@ pub use diff::{
 };
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
-    DoctorRepairReport, DoctorReport, DoctorSeverity, doctor_repository, repair_object_index,
-    repair_pointer_index_tail, repair_repository,
+    DoctorRepairReport, DoctorReport, DoctorSeverity, RepairTailsFileOutcome, RepairTailsReport,
+    doctor_repository, repair_object_index, repair_pointer_index_tail, repair_repository,
+    repair_tails,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;

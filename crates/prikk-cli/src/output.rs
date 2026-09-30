@@ -33,8 +33,8 @@ pub(crate) use trust::{
     print_trust_check, print_trust_check_json, print_trust_list, print_trust_list_json,
 };
 pub(crate) use verification::{
-    print_active_session_repairs, print_doctor_report, print_verify_report,
-    print_verify_report_json,
+    print_active_session_repairs, print_doctor_report, print_repair_tails_report,
+    print_verify_report, print_verify_report_json,
 };
 pub(crate) use worktree::{
     print_history, print_history_json, print_worktree_status, print_worktree_status_json,
