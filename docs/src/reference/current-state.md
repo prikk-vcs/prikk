@@ -47,37 +47,23 @@ Prikk is not yet the right tool if you need:
 Disclosed here rather than left implicit, each with the figure it was measured at and the release it is
 planned for. None of these blocks 0.48.0.
 
-- **Trust keys, trust policy, author keys, and the received index have no repair verb, and `verify` says
-  nothing about a tail on any of them on its own (N2's remainder).** The burying itself is fixed in
-  0.48.0: RFC 163 §2 fixed the pointer index (a write now refuses before it appends behind an unclean
-  tail, naming `prikk doctor --repair-pointer-index-tail`) and extended the same refusal to these four
-  files, each only when the write in question would actually append. What remains: none of the four has
-  a repair verb yet, so the way out a write's own refusal names is manual (back the file up, truncate it
-  to the named offset, then run `prikk verify`; see `durability-recovery.md`) -- and `verify` on its own,
-  without a write attempt to trigger the refusal, still says nothing about a torn tail on any of these
-  four files (N7, with M4). Repair verbs and a `verify` line for each are planned for 0.49.0.
-- **A tail of zeros or random bytes at these same four files is damage, not a repairable tail, and
-  nothing says so.** Their own shape rule (pre-0.48.0, unchanged this round) treats a torn *prefix* as a
-  tail but 100 or more zero/random bytes as an unparseable frame -- interior damage, not a position-based
-  tail RFC 162 rule 3 would cover. `verify` fails; `trust maintainer add`, a commit, and `bundle import`
-  each refuse with "\<container\> has a damaged entry; run doctor before reading"; and `doctor` has
-  nothing that repairs it. A tail defined by position for these four files, the same way rule 3 already
-  works for the WAL and the pointer index, is 0.49.0 work.
-- **The generation log at each compacting container has no repair verb, and `verify` says nothing about
-  a tail on it on its own.** RFC 163 §9 fixed the burying: `compact` now refuses before its first write
-  (before the retired slot is truncated, not only before the generation record) when its own generation
-  log ends in an unclean tail, the same way the pointer index and the other four files above already do.
-  What remains, same as N2's remainder: no repair verb yet, so the way out is manual (back the file up,
-  truncate it to the named offset, then run `prikk verify`); and `verify` on its own still says nothing
-  about a torn generation-log tail. A repair verb and a `verify` line are planned for 0.49.0.
-- **A tail of 100 or more zero or random bytes at a generation log is damage, not a repairable tail, and
-  nothing says so** -- the same shape-rule gap as the bullet above, at the generation log instead. On the
-  **pointer index's** generation log this stops every command that resolves a ref: `status`, `log`,
-  `branch list`, `seal`, `commit`, `verify` and `doctor` all refuse with "generation log has a damaged
-  record; run doctor before reading", and `doctor` has nothing that repairs it. On the received-index and
-  trust-policy generation logs, only `compact` is affected. Long-standing, confirmed on 0.47.0 as well as
-  this release. A tail defined by position, and a repair verb, for the four files above and the
-  generation logs alike, is planned for 0.49.0.
+- **Trust keys, trust policy, author keys, the received index, and the three generation logs now have
+  a tail defined by position, a `verify`/`doctor` line, and a repair (fixed in 0.49.0, RFC 164 Rules
+  A/B/C).** Before this round (N2's remainder, N7, N10, M4): a torn prefix at these seven files was a
+  repairable-looking tail, but 100 or more zero or random bytes at the same position was *damage* under
+  their own pre-0.49.0 shape rule -- `trust maintainer add`, a commit, or `bundle import` refused with
+  "\<container\> has a damaged entry", a generation log's own reader refused every command that resolves
+  a ref (on the pointer index's own log) or just `compact` (on the other two), and none of the seven had
+  a repair verb -- the way out was a manual backup-and-truncate. Now: the tail is everything after the
+  last sound record, whatever its shape, the same rule RFC 162 rule 3 already gave the WAL and the
+  pointer index; `verify` and `doctor` report a tail as a warning (never failing on it alone) and interior
+  damage (a sound record following bad bytes -- now the narrow case, not the common one) as a failure;
+  and `prikk doctor --repair-tails` truncates every tail these seven files (plus the WAL and the pointer
+  index) have, in one run, saving what it removes first, refusing before touching anything if any covered
+  file has interior damage. **What remains:** interior damage still has no automatic repair -- by
+  design, the same as every other covered file -- so the way out for it is still manual (back the file up
+  first, ask before truncating). The ref log's own tail (M4) is reported (Rule B) but not yet repaired;
+  its repair and N3's interrupted publications are settled together in the F1 round (0.49.0 step 2).
 - **A `bundle import` interrupted by a crash could leave a block durable while the patch, blob, or
   parent block it names is not, and no repair cleared it (fixed in 0.49.0).** In 0.48.0 and earlier,
   objects were written in the bundle's own carried order, not in dependency order -- across kinds,

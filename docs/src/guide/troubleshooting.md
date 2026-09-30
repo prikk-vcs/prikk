@@ -176,20 +176,19 @@ which truncates the incomplete trailing record under the pointer-index lock, sav
 `trust maintainer add` refuses before writing anything, but **only when adding this key would actually
 append to the file** — a new key id, or an existing one under a different (conflicting) public key. Both
 have to write to `.prikk/trust/keys.container`, and its own last write was interrupted (a crash
-mid-append); this command would otherwise append behind that torn tail, blind, turning a state `prikk
-verify` does not yet report into damage no repair verb can fix in 0.48.0. **Re-adding a key id already
-adopted with the same public key is unaffected**: it appends nothing, so it succeeds regardless of the
-tail. The bytes after the named offset are the torn tail; nothing before it is touched, and nothing has
-been written by this refusal. Back the file up first:
+mid-append); this command would otherwise append behind that torn tail, blind. **Re-adding a key id
+already adopted with the same public key is unaffected**: it appends nothing, so it succeeds regardless
+of the tail. Fixed in 0.49.0 (RFC 164 Rule A): the tail is defined by position here now, the same way it
+already was for the WAL and the pointer index — a torn prefix, zeros, or garbage all count, whatever the
+shape. Run:
 
 ```sh
-cp .prikk/trust/keys.container .prikk/trust/keys.container.bak
+prikk doctor --repair-tails
 ```
 
-then truncate it to the named offset (in a Python one-liner, or any tool that truncates a file to an
-exact byte length), and run `prikk verify` to confirm the repository is sound before retrying
-`trust maintainer add`. There is no `doctor` repair verb for this file yet (planned for 0.49.0); the
-backup means the manual truncate can be undone if it goes wrong.
+which truncates the incomplete trailing record under this file's own lock, saving the removed bytes to
+`.prikk/recovery/` first. After it, `prikk verify` should exit 0, and `trust maintainer add` can be
+retried.
 
 ## `error: integrity error: the trust policy container has an incomplete tail at byte offset N (M byte(s) follow); …`
 
@@ -199,7 +198,7 @@ live) — `trust maintainer add` and `trust maintainer remove` both read this co
 here **only when they are about to append their own new snapshot**: `add` of a key id not yet in the
 policy, or `remove` of one that is (and is not the last one). Re-adding an already-adopted key, or
 removing one that was never adopted, appends nothing and is unaffected by a tail here. The way out is
-the same: back the file up, truncate it to the named offset, run `prikk verify`, then retry.
+the same: `prikk doctor --repair-tails`, then retry.
 
 ## `error: integrity error: the author key container has an incomplete tail at byte offset N (M byte(s) follow); …`
 
@@ -213,8 +212,7 @@ is unaffected**: it appends nothing to this file, so it succeeds regardless of t
 (a blob, an index entry) is already written by the time this refusal fires, since the author-key check
 runs immediately before the WAL append that would queue the commit. Those objects are ordinary and
 content-addressed, referenced by nothing until the commit itself succeeds; `verify` still exits 0, and a
-retry after the truncate below reuses them. Back the file up, truncate it to the named offset, run
-`prikk verify`, then retry the write that refused.
+retry after `prikk doctor --repair-tails` reuses them.
 
 ## `error: integrity error: the received index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
@@ -222,48 +220,48 @@ retry after the truncate below reuses them. Back the file up, truncate it to the
 own live slot (`.prikk/refs/containers/received-index-a.container` or `-b.container`) untouched, but
 also the bundle's own objects and any author-key material it carries: the check runs before the first
 object write, the same as every other decision an import makes. (`sync accept` never writes to this
-file; a received/`remotes/*` ref is only ever created by `bundle import`.) Back the file up, truncate it
-to the named offset, run `prikk verify`, then retry the import.
+file; a received/`remotes/*` ref is only ever created by `bundle import`.) Run `prikk doctor
+--repair-tails`, then retry the import.
 
 ## `error: integrity error: the <container>'s generation log has an incomplete tail at byte offset N (M byte(s) follow); …`
 
 `prikk compact` refuses **before writing anything at all** — before the retired slot is truncated, not
 only before the new generation record — when the container's own generation log (`<container>` is "ref
 pointer index", "received index", or "trust policy container", whichever `compact` flag you ran) ends in
-a torn tail from an interrupted `compact`. This is the same rule as the five container refusals above,
+a torn tail from an interrupted `compact`. This is the same rule as the four container refusals above,
 one layer up: `compact` already reads the generation log to pick the live slot, and this check rides that
 same read rather than performing a new one. **`compact --plan-only` is unaffected**: a plan-only run
-writes nothing, so it never refuses over a tail it would never write behind. Back the file up, truncate
-it to the named offset, run `prikk verify` to confirm the repository is sound, then retry `compact`.
-There is no `doctor` repair verb for this file yet (planned for 0.49.0).
+writes nothing, so it never refuses over a tail it would never write behind. Run `prikk doctor
+--repair-tails`, then retry `compact`.
 
 ## `error: integrity error: generation log has a damaged record; run doctor before reading`
 
 Seen from any command that reads a generation log's live slot — `status`, `log`, `branch list`, `seal`,
-`commit`, `verify`, `doctor`, and `compact` itself for that container. Like the "has a damaged entry"
-refusal below, this is not a crash-torn append: it is a record whose header parses as claiming a
-plausible length, but whose bytes do not check out (most often 100 or more zero or random bytes appended
-after the last sound record) — damage under this file's shape rule, not a tail RFC 163 §9's guard covers.
-**On the ref pointer index's own generation log, this stops every command that resolves a ref**, since
-every one of them reads it; on the received-index and trust-policy generation logs, only `compact` is
-affected. `doctor` has nothing that repairs this in 0.48.0 (0.49.0 work, alongside a positional tail and
-repair verb for all of RFC 163's files). **This entry gives no truncation advice**, for the same reason as
-the "has a damaged entry" entry below: no offset here is known to be followed by nothing sound, so a
-truncation would be a guess. Restore the repository from a backup or a clone instead.
+`commit`, `verify`, `doctor`, and `compact` itself for that container — when a **sound** record follows
+damaged bytes further into the file (RFC 164 Rule A: interior damage, not a tail — the tail's own
+"whatever the shape" rule only covers bytes at the *end* of the file, with nothing sound after them; a
+plain zero/garbage run at the end is a tail now, not this). **On the ref pointer index's own generation
+log, this stops every command that resolves a ref**, since every one of them reads it; on the
+received-index and trust-policy generation logs, only `compact` is affected. `doctor` has nothing that
+repairs this — `--repair-tails` refuses on interior damage the same way every other covered file's own
+repair does, rather than guessing which bytes are safe to remove. **This entry gives no truncation
+advice**, for the same reason as the "has a damaged entry" entry below: no offset here is known to be
+followed by nothing sound, so a truncation would be a guess. Restore the repository from a backup or a
+clone instead.
 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
 Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,
-author-key or received-index container. Unlike the four "incomplete tail" refusals above, this is not a
-crash-torn append: it is a record whose own header parses as claiming a plausible length, but whose
-bytes do not check out (a checksum mismatch, or an unparseable body) — most often seen after 100 or more
-zero or random bytes land at the end of one of these files, which this project's own shape rule for them
-treats as damage, not a tail (unlike the WAL and the pointer index). **`doctor` has nothing that repairs
-this today** (0.49.0 work), and this entry gives no truncation advice: unlike a genuine torn tail, there
-is no offset promised to be followed by nothing sound, so a truncation here is a guess, not a safe
-recovery step. If you believe the bytes after some offset really are nothing but trailing garbage, run
-`prikk verify` first and read its own report carefully before deciding to truncate anything by hand; when
-in doubt, back the file up and ask before changing it.
+author-key or received-index container, when a **sound** record follows damaged bytes further into the
+file (RFC 164 Rule A: interior damage, not a tail — trailing zeros, garbage, or a torn prefix at the
+*end* of the file, with nothing sound after them, is a tail now; see the four "incomplete tail" entries
+above and `prikk doctor --repair-tails`). **`doctor` has nothing that repairs interior damage** —
+`--repair-tails` refuses on it, the same way every other covered file's own repair does, rather than
+guessing which bytes are safe to remove — and this entry gives no truncation advice: unlike a genuine
+tail, there is no offset promised to be followed by nothing sound, so a truncation here is a guess, not a
+safe recovery step. If you believe the bytes after some offset really are nothing but trailing garbage,
+run `prikk verify` first and read its own report carefully before deciding to truncate anything by hand;
+when in doubt, back the file up and ask before changing it.
 
 ## `error: integrity error: object <id> (block) references missing <role> <id>`
 

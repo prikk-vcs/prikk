@@ -23,6 +23,46 @@ leaves `verify` reporting `PRIKK-VERIFY-REF-DIVERGENCE`, and neither re-running 
 confluent") nor a `seal` retry of the same ref completes it. Measured: 10 of 300 kills on 0.48.0, 16 of 300 on this
 release. No code change — text only; a fix is planned for 0.49.0 step 2, alongside F1.
 
+### Added — `prikk doctor --repair-tails` (RFC 164 Rule C)
+
+One repair for every tail RFC 164 Rule A defines, across every file that has one: the WAL, the pointer index, trust
+keys, trust policy, author keys, the received index, and the three generation logs. Reads all nine once before
+touching any of them; if any one has interior damage, refuses immediately, naming every such file, and truncates
+nothing anywhere. Otherwise truncates each file's own tail under that file's own lock, saving the removed bytes to
+`.prikk/recovery/` first. `--repair-wal-tail` and `--repair-pointer-index-tail` stay, unchanged, as the single-file
+forms; `--repair-tails` cannot be combined with them or with `--repair-index`/`--repair-main-ref` in one invocation.
+
+### Fixed — trust keys, trust policy, author keys, the received index, and the three generation logs read a tail by
+position, the same rule the WAL and the pointer index already had (RFC 164 Rule A)
+
+Before this release, a torn *prefix* at these seven files read as a repairable-looking tail, but 100 or more zero or
+random bytes at the same position — the shape a crash more often actually leaves — read as *damage*: `trust
+maintainer add`, a commit, or `bundle import` refused reading it ("\<container\> has a damaged entry"), a generation
+log's own reader refused every command that resolves a ref (on the pointer index's own log) or just `compact` (on
+the other two), and no repair verb existed for any of the seven. Now: the tail is everything after the last sound
+record, whatever its shape (a torn prefix, zeros, or garbage), the same rule RFC 162 rule 3 already gave the WAL and
+the pointer index. Readers tolerate it; writers still refuse to append behind it (RFC 163, now catching every shape
+too, not only a torn prefix).
+
+### Changed — `verify` and `doctor` now read all seven RFC 164 Rule A files directly, every run (RFC 164 Rule B)
+
+`RepositoryVerification` gains `appended_file_tails: Vec<AppendedFileTailStatus>` (both new, `#[non_exhaustive]`
+types) — one row per file, reporting a tail (a warning, never failing `verify` alone) or interior damage (a failure)
+independently of whether some other check happens to touch the file first. `has_item_failure` now also considers a
+row's own interior damage. `RepositoryVerification` was already `#[non_exhaustive]`; this is additive.
+
+### Output changes
+
+- `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file, plus a warning line
+  naming the file, the offset, the byte count, and the repair when `N != 0`, plus a failure line on interior damage.
+  `verify --format json`'s own `verify-report-v1` schema is unaffected: the new `AppendedFileTails` stage
+  participates in the existing per-stage `evaluated`/`failed` reporting like any other stage, with no new field.
+- `doctor` gains two new diagnostic codes, `PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL` (warning) and
+  `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` (error), one per Rule A file with a finding.
+- Refusals that end: `"<container> has a damaged entry; run doctor before reading"` and `"generation log has a
+  damaged record; run doctor before reading"` no longer fire for a plain trailing run of zero or random bytes at
+  the end of one of these seven files — only for genuine interior damage (a sound record following bad bytes) do.
+
 ## 0.48.0 — 2026-09-30
 
 ### Security

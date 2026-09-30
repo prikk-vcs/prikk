@@ -73,6 +73,7 @@ prikk verify [path] [--stop-on-first-error] [--format json]
 prikk doctor [path]
 prikk doctor [path] --repair-wal-tail
 prikk doctor [path] --repair-index
+prikk doctor [path] --repair-tails
 prikk doctor [path] --repair-main-ref
 prikk format upgrade [path]
 prikk unlock

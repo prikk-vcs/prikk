@@ -241,6 +241,21 @@ nothing about at all (the other five, still under the pre-0.48.0 shape rule, N2)
 state into permanent damage — `verify` failing for good, and on some of these files a `seal` or `commit`
 refused too.
 
+**RFC 164 Rule A (0.49.0) extends the same tail-by-position rule to all six of these files' own read
+and repair paths, not only the write-side refusal above.** Before this: a torn *prefix* at these files
+already read as a repairable-looking tail, but 100 or more zero or random bytes at the same position
+read as *damage* under their own pre-0.49.0 shape rule -- readers refused ("\<container\> has a damaged
+entry"), and no repair verb existed for any of the six (or the three generation logs, listed together
+with them below). Now: the tail is everything after the last sound record, whatever its shape -- a torn
+prefix, zeros, or garbage all count, the same rule RFC 162 rule 3 already gave the WAL and the pointer
+index -- and readers tolerate it. `verify`/`doctor` report a tail (a warning, naming the file, the
+offset, the byte count, and the repair) and interior damage (a sound record following bad bytes -- now
+the narrow case) separately, and `prikk doctor --repair-tails` truncates every tail across all nine
+covered files (these six, the three generation logs, the WAL, and the pointer index) in one run, saving
+what it removes first, refusing before touching anything if any covered file has interior damage --
+see "Doctor Repair Boundary" below for the full mechanism. The bullets immediately following describe
+the write-side refusal RFC 163 already gave each file, which RFC 164 does not change.
+
 **Refuses only when that write would actually append.** An operation that turns out to be a no-op for
 one of these files — re-adding a maintainer key already adopted under the same public key, removing one
 that was never adopted, a commit by an author whose key material this repository already recorded —
@@ -264,10 +279,8 @@ whether an append is actually about to happen, not the read.
   torn *policy* tail alone (the key container clean) left the key recorded but the policy refused, a
   half-applied write. Both containers' tails are now decided before either is appended to, so the whole
   operation writes nothing at all when it refuses, whichever container's tail caused it (RFC 163 §2
-  Addendum 2). No repair verb exists for either container in 0.48.0 (planned for 0.49.0, alongside a
-  `verify` line for each — see `current-state.md`'s known limitations, N2's remainder). **The way out is
-  manual**: back the file up, truncate it to the byte offset the refusal names, then run `prikk verify` to
-  confirm the repository is sound before retrying `trust maintainer add`/`remove`.
+  Addendum 2). **The way out (0.49.0): `prikk doctor --repair-tails`**, then retry `trust maintainer
+  add`/`remove`.
 - **The received index.** `bundle import` (never `sync accept`, which does not touch the received
   namespace) refuses the same way, **entirely before its first write** — before even the bundle's own
   objects are written, the same pre-write phase the author-key check already ran in (0.44.0,
@@ -275,34 +288,22 @@ whether an append is actually about to happen, not the read.
   only a torn tail** (external review 016, N9, fixed the same round the guard's tail-only walk was added):
   before the fix, the same walk resynced silently past 100 or more zero or random bytes and appended
   behind them, burying damage `verify` had already reported — the one guarded writer where that held,
-  since the four sibling files below already refuse through a lookup that fails on any damaged entry. No
-  repair verb exists for this file in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see
-  `current-state.md`'s known limitations, N2's remainder). The way out for a torn tail is the same manual
-  truncate-then-`verify`, then retry the import; a damaged entry gives no truncation advice, the same as
-  the four sibling files' own damaged-entry case below.
+  since the four sibling files below already refuse through a lookup that fails on any damaged entry.
+  **The way out for a tail (0.49.0): `prikk doctor --repair-tails`**, then retry the import; genuine
+  interior damage (a sound record follows the bad bytes) still gives no truncation advice, the same as
+  the sibling files' own damaged-entry case below.
 - **The author-key container.** A commit by an author key id not yet recorded refuses the same way, but
   **only before appending to the author-key container itself, not before the commit's other writes**: the
   author-key check is the last thing a commit checks, immediately before the WAL append that would queue
   it, so by the time it runs the commit has already written its own new blob content, an object-index
   entry, and updated the commit-index and lifecycle caches. Those are ordinary, content-addressed or
   self-verifying, referenced by nothing until the commit itself succeeds; `verify` still exits 0, and a
-  retry after the truncate below reuses them rather than writing them again. No repair verb exists for
-  this file in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see `current-state.md`'s known
-  limitations, N2's remainder). The way out is the same manual truncate-then-`verify`, then retry the
-  commit.
-- **A tail of zeros or random bytes, at the trust-key, trust-policy or author-key container**, is damage
-  under their own pre-0.48.0 shape rule, not something the tail-guard refusals above cover at all — those
-  three refuse on it regardless, but through their own pre-existing `has_item_failure()` read-side check,
-  not through RFC 163's own new guard. **At the received index, the guard above covers it directly** (N9,
-  above) — see `current-state.md` and `troubleshooting.md`'s own entry for the shared "has a damaged
-  entry" message all four files give.
+  retry after `prikk doctor --repair-tails` reuses them rather than writing them again.
 - **The generation log, at each of the three compacting containers** (the pointer index, the received
   index, the trust policy container). `compact` refuses the same way, **before its first write** — before
   the retired slot is truncated, not only before the generation record itself — and only in `--execute`
   mode: a `--plan-only` preview writes nothing and is unaffected by a tail on a log it will never write
-  behind. No repair verb exists for this in 0.48.0 (planned for 0.49.0, alongside a `verify` line — see
-  `current-state.md`'s known limitations). The way out is the same manual truncate-then-`verify` as the
-  four files above.
+  behind. **The way out (0.49.0): `prikk doctor --repair-tails`**, then retry `compact`.
 
 **Where each check reads from.** No new whole read was added where an existing one could carry the
 answer: the pointer index's guard rides the same replay `ensure_current_matches`'s own compare-and-swap
@@ -335,8 +336,18 @@ after an under-lock publication guard and verification have accepted the precedi
 `doctor --repair-index` rebuilds the object index from the containers under the object-store lock — the
 index is a pure cache, never touched by any other repair. `doctor --repair-pointer-index-tail` truncates
 an incomplete trailing pointer-index record under the pointer-index lock, mirroring `--repair-wal-tail`
-exactly. **None of the three ever removes a sound record**: each truncates or rebuilds only what a true
-torn tail or a pure-cache rebuild covers (see above), and on genuine damage each refuses and changes
+exactly. **`doctor --repair-tails` (RFC 164 Rule C, 0.49.0)** truncates every tail across all nine
+covered files (the WAL, the pointer index, and the seven RFC 164 Rule A files) in one run: `ActiveLock`
+first (covering the WAL, trust keys, and author keys, none of which has its own dedicated container
+lock), then the pointer-index, received-index, and trust-policy container locks together (each also
+covering its own generation log) — reusing `--repair-wal-tail`'s and `--repair-pointer-index-tail`'s
+own repair functions for the WAL and the pointer index, unchanged. It reads all nine files once, before
+touching any of them: if any one has interior damage, it refuses immediately, naming every such file,
+and truncates nothing anywhere. Otherwise each file with a tail is truncated under its own lock, saving
+the removed bytes to `.prikk/recovery/` first; a file with no tail is reported clean. Mutually exclusive
+with the other four repair flags in one invocation (it already covers the WAL and the pointer index).
+**None of the four repair verbs ever removes a sound record**: each truncates or rebuilds only what a
+true torn tail or a pure-cache rebuild covers (see above), and on genuine damage each refuses and changes
 nothing. Doctor diagnoses ref-publication states but does not sign, append, promote, or reconstruct ref
 authority.
 
