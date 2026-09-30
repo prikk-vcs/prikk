@@ -105,3 +105,7 @@ which steps changed nothing, and why.
 - `reproduce.sh` v2 on a release build of the final commit.
 
 **Report:** `.git-exclude/review-request/release-0.48.0-candidate-3-report-v2.md`.
+
+**ACCEPTED 2026-09-30: `5299fd1b` is the 0.48.0 candidate** (reviews `release-0.48.0-candidate-3-review-v1`, `-v2`).
+The architect ran 14/14 gates and six probes on its release build, and the reviewer's scripts; the results are
+attached to letter 016. Next: push, CI, then letter 016 for the owner to send. **No tag until the external answer.**
