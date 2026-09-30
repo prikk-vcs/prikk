@@ -1,9 +1,17 @@
 # RFC 164 — Every appended file has a way out: tails by position, nothing silent, one repair
 
-**Status.** **PROPOSED 2026-09-30 by the architect, for the project owner's reading.** It is presented in this exchange
-and accepted, changed or refused in a later one (RFC 152 §7). **The two decisions in it are the owner's, and both are
-ruled (§6, 2026-09-30).** Acceptance of the whole RFC is still pending. This is 0.49.0
-step 1, in the owner-approved schedule ("a way out of every crash state").
+**Status.** **ACCEPTED by the project owner 2026-09-30** (*"Yes. RFC 164 is accepted."*), after reading. Both §6
+decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E classification only (*"Accepted."*).
+**The architect's reading, stated so it can be corrected:**
+- **Rules A to E are accepted as written.** Rule A covers the trust keys, trust policy, author keys, received index and
+  the three generation logs. The object containers, the object index and the ref log keep their own rules.
+- **`--repair-tails`** covers every file with a position-defined tail: those of Rule A, plus the WAL and the pointer index
+  (RFC 162 rule 3). It does not truncate the object containers or the ref log; Rule B makes them report.
+- **Implementation is two rounds:** A, B and C first (`rfcs/handoffs/164-every-appended-file-has-a-way-out/
+  round-1-handoff-v1.md`, live 2026-09-30), then D and E.
+- **The ref log's repair and interrupted publications stay in the F1 round** (0.49.0 step 2).
+
+*History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 
 **Author-review independence.** The architect proposes, and the architect's own rulings left most of the gaps below:
 RFC 162 rule 3 covered two files, and RFC 163 guarded writers but gave four files no repair. Two things compensate:
