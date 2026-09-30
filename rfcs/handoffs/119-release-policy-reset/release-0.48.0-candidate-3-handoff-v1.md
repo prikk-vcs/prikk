@@ -113,3 +113,12 @@ attached to letter 016. Next: push, CI, then letter 016 for the owner to send. *
 **Letter 016 SENT and ANSWERED 2026-09-30: do not tag `af2fc77e`.** One blocker, N9: `bundle import` appends behind a
 damaged-shaped received-index tail. Reproduced by the architect, also on `ddf1e82a`. **Next, live:**
 `163-a-write-never-buries-a-crash-state/received-index-damage-handoff-v1.md`; then a new candidate and letter 017.
+
+**0.48.0 RELEASED 2026-09-30.** The external review 017 found nothing blocking. The owner authorized the cut and crates.io
+(*"Both authorized."*).
+- Signed tag `0.48.0` on `5e50a661`, with the Release-page link in its message.
+- Release run `36681456886`, 6/6. **The gate chose `main`'s CI run `36676818049` while the tag's own run was still in
+  progress**: N4, proven in production.
+- The downloaded Linux asset: checksum and build-info OK, `prikk 0.48.0`, smoke 252/252.
+- The Release page's notes are byte-identical to the CHANGELOG section at the tag.
+- **crates.io:** 0.47.0 and 0.48.0 published for all eight crates.
