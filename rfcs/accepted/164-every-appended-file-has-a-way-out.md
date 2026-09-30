@@ -10,6 +10,8 @@ decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E
 - **Implementation is two rounds:** A, B and C first (`rfcs/handoffs/164-every-appended-file-has-a-way-out/
   round-1-handoff-v1.md`, live 2026-09-30), then D and E.
 - **The ref log's repair and interrupted publications stay in the F1 round** (0.49.0 step 2).
+- **2026-10-01: §9 proposes a correction to Rule A** (a complete record is never a tail), after round 1's review found
+  that the rule as written can roll back trust and ref state. It awaits the owner's reading.
 
 *History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 
@@ -151,3 +153,42 @@ a sealed block reached from them. Otherwise it is an **unreferenced remnant with
    - fewer refusals.
 4. **External review of the 0.49.0 candidate: recommended**, because damage is reclassified again. The owner decides when
    the candidate exists.
+
+## 9. Proposed amendment, 2026-10-01: a complete record is never a tail (for the owner's reading)
+
+**Status: PROPOSED by the architect, for the owner's reading.** It changes Rule A as accepted, and RFC 162 rule 3 for the
+pointer index. It is presented in this exchange and accepted, changed or refused in a later one.
+
+**What went wrong.** Rule A says a tail is everything after the last sound record, "whatever its shape". That includes a
+**complete** last record (a valid header, its full claimed body present) whose checksum fails. Such a record cannot be told
+apart from a crash only when it is torn, and **a complete record is not torn: its bytes were all written.** For files
+whose records carry state, removing the last one rolls that state back. Measured by the architect on round 1's release
+build (`09f416af`, sha256 `578999d0…`, `arch-seal/rfc164_rollback_probe.sh`) and on the shipped 0.48.0
+(`pointer_index_flip_probe.sh`):
+
+| file | one byte flipped in the last complete record | `verify` | after the repair |
+|---|---|---:|---|
+| trust policy (round 1) | the snapshot that removed a maintainer | **0, silent** | **`--repair-tails` deletes it, and the removed key is trusted again** |
+| pointer-index generation log (round 1) | the newest generation | 1 | `--repair-tails` deletes it; the live slot reverts, and **branch `heads/keep` is gone** |
+| pointer index (**shipped 0.48.0**, RFC 162) | the newest publication | 1 | `--repair-pointer-index-tail` deletes it; **`main` reverts to the previous block**, and `verify` stays 1 |
+
+The removed bytes are saved in each case, but saving them does not undo the meaning the repair changed. The first row is a
+security defect: a single corrupted byte, then the documented repair, silently undoes a revocation.
+
+**Proposed rule, replacing "whatever its shape" for the seven Rule-A files and for the pointer index:**
+- a **tail** is a record whose header or body is incomplete (the bytes end first), or bytes that are not a record header
+  at all (no magic, or an unknown version), **when nothing sound follows**;
+- **a complete record whose checksum or envelope fails is damage, even when it is last.** `verify` fails and names it.
+  `--repair-tails` and `--repair-pointer-index-tail` refuse, and change nothing. Readers treat it as they treat interior
+  damage: **fail closed.** No reader reads past it to an older state;
+- **the WAL keeps RFC 162 rule 3 as it is.** Removing its damaged last record loses a queued commit that is saved and
+  disclosed (N6), not a rollback of trust or ref state. N6's witness (0.49.0 step 3) will close that case properly.
+
+**What it costs.** A bit flip in the last complete record of one of these files now stops the commands that read that
+file, instead of being repaired into a rollback. That is the old behaviour for damage, and the honest one. The way out is
+restoring the file from a copy. Rebuilding the pointer index from the ref log belongs to the F1 round (0.49.0 step 2).
+The measured crash shapes the external reviews found (torn prefixes, zeros, garbage) all stay tails, so N2's and N10's
+fixes hold.
+
+**For 0.48.0 users:** the known limitations disclose that `--repair-pointer-index-tail` can remove a damaged, not torn,
+last record, and that the ref then reverts. The fix is this rule, in 0.49.0.
