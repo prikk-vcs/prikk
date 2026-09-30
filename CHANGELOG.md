@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — a killed `bundle import` or `sync accept` could leave a dangling forward reference no repair cleared
+
+`bundle import` and `sync accept` each write more than one object per call, in whatever order their input carries
+them, not in dependency order (an object only after everything it references is durable). An interruption partway
+through `bundle import` could leave a Block durable while the Patch or Blob it names is not: `verify` then failed
+for good ("references missing", or a state-root mismatch), and none of the three `doctor` repairs cleared it —
+only re-running the same import did (25 of 25 reproduced repositories went to `verify` 0). Reproduced at 89 of 300
+kills on 0.48.0 and 136 of 300 on 0.47.0, with an 80-file bundle; present since `bundle import` was first
+introduced. **Affected: 0.20.0 to 0.48.0.** `sync accept`'s own current write set (patches, blobs, claims, tags —
+never a Block or RefState) was not found to exhibit this empirically, but is fixed the same way on the same
+principle. Both writers now write objects in dependency order, so an interrupted write leaves only complete
+objects behind.
+
 ## 0.48.0 — 2026-09-30
 
 ### Security

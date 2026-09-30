@@ -265,6 +265,19 @@ recovery step. If you believe the bytes after some offset really are nothing but
 `prikk verify` first and read its own report carefully before deciding to truncate anything by hand; when
 in doubt, back the file up and ask before changing it.
 
+## `error: integrity error: object <id> (block) references missing <role> <id>` or `… state root does not match authoritative replay`
+
+Seen from `verify` (and anything that calls it, such as `doctor`) after a `bundle import` or `sync
+accept` was interrupted by a crash partway through. In 0.48.0 and earlier, these two writers could
+leave a Block durable while the Patch or Blob it names is not — the object-connectivity check then
+reports the first message, or, when a state root was derived from the missing content before the
+crash, the second. **None of `doctor`'s three repairs (`--repair-wal-tail`, `--repair-index`,
+`--repair-pointer-index-tail`) clears this** — they do not know this shape. **The way out is to run
+the same `bundle import` or `sync accept` again**, with the same input: every object it carries is
+content-addressed, so the retry only writes what is still missing, and a repository that reaches this
+state has always cleared it. Fixed in 0.49.0: both writers now write objects in dependency order, so
+an interrupted write can no longer produce this shape in the first place.
+
 ## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 
 The block you asked to check out has no snapshot, which is the normal state of most blocks: `seal`
