@@ -20,7 +20,12 @@
 
 #![allow(clippy::indexing_slicing, clippy::expect_used, clippy::unwrap_used)]
 
-use crate::bundle::{BundleImportOptions, export_bundle, import_bundle};
+use prikk_object::{ObjectEnvelope, ObjectType};
+
+use crate::bundle::{
+    BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle, export_bundle, import_bundle,
+};
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::patch_exchange::{AcceptOptions, accept_exchange_artifact, export_exchange_artifact};
 use crate::test_gates::test_support::{
@@ -239,11 +244,6 @@ fn rfc163_ref_publication_randomized_failpoint_sweep() {
 // confirms these same rows go red.
 // ---------------------------------------------------------------------------------------------
 
-/// Scans a completed [`RepositoryVerification`] for the shape the dangling-forward-reference defect
-/// produces: a `Failed` object item naming a missing reference, or a `Failed` block-state outcome
-/// whose message names a state-root mismatch. Mirrors the black-box soak's own `classify()`
-/// substring check (`order_fix_soak.py`, this round's scratchpad) -- kept in sync by hand, since the
-/// two live in different languages and there is no single source both could share.
 /// Clears every lock still held in `layout` -- the store-level equivalent of `prikk unlock --lock
 /// <path> --yes`, run unconditionally, the same way this crate's own black-box soak
 /// (`order_fix_soak.py`, this round's scratchpad) does as its documented first recovery step
@@ -262,6 +262,11 @@ fn clear_stale_locks_for_test(layout: &RepositoryLayout) {
     }
 }
 
+/// Scans a completed [`RepositoryVerification`] for the shape the dangling-forward-reference defect
+/// produces: a `Failed` object item naming a missing reference, or a `Failed` block-state outcome
+/// whose message names a state-root mismatch. Mirrors the black-box soak's own `classify()`
+/// substring check (`order_fix_soak.py`, this round's scratchpad) -- kept in sync by hand, since the
+/// two live in different languages and there is no single source both could share.
 fn dangling_reference_finding(verification: &RepositoryVerification) -> Option<String> {
     for outcome in &verification.object_outcomes {
         if let ObjectItemStatus::Failed { message } = &outcome.status {
@@ -316,6 +321,76 @@ fn seal_two_block_history_bundle(layout: &RepositoryLayout) -> prikk_error::Resu
 
     let (_report, bytes) = export_bundle(layout, "heads/main")?;
     Ok(bytes)
+}
+
+/// Addendum 1 (review `stability-follow-up-review-v1` §1): the architect's own probe found that
+/// `export_bundle`'s carried order lists Blocks via `ancestors.keys()`
+/// (`std::collections::BTreeMap<ObjectId, _>`, `merge/evidence.rs::ancestors_inclusive`) -- ordered
+/// by content hash, effectively random relative to ancestry, not by ancestry itself. The prior
+/// round's own two-block fixture happened to carry the parent first by luck, so its control never
+/// saw the gap. Three commit-then-seal generations here, then the three carried Block envelopes are
+/// pulled out and **deliberately reinserted tip-first, root-last** -- reversing a linear three-block
+/// chain guarantees at least one child precedes its own parent, regardless of what order the real
+/// export started in, so this fixture exercises the gap by construction, not by hash luck.
+fn three_block_history_bundle_with_reversed_blocks(
+    layout: &RepositoryLayout,
+) -> prikk_error::Result<Vec<u8>> {
+    let maintainer =
+        Ed25519MaintainerSigner::from_seed("rfc163-order-within-kind-maintainer", &[0x83; 32])?;
+    add_trusted_maintainer(
+        layout,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    let author = Ed25519AuthorSigner::from_seed("rfc163-order-within-kind-author", &[0x84; 32])?;
+
+    for index in 0..3 {
+        let path = format!("f{index}.txt");
+        std::fs::write(layout.root().join(&path), format!("{path}\n").into_bytes())?;
+        crate::commit_boundary::worktree_patch::commit_worktree_changes_signed(
+            layout,
+            "heads/main",
+            "rfc163-order-within-kind",
+            crate::commit_boundary::worktree_patch::WorktreePatchCommitOptions::default(),
+            &author,
+        )?;
+        crate::rfc111_seal_simulation::simulate_one_seal(layout, "heads/main", &maintainer)?;
+    }
+
+    let (_report, bytes) = export_bundle(layout, "heads/main")?;
+    let (ref_name, mut objects, _author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+
+    let block_positions: Vec<usize> = objects
+        .iter()
+        .enumerate()
+        .filter(|(_, envelope)| envelope.object_type == ObjectType::Block)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        block_positions.len(),
+        3,
+        "expected exactly three carried Block envelopes, found {}",
+        block_positions.len()
+    );
+    let mut blocks: Vec<ObjectEnvelope> = block_positions
+        .iter()
+        .map(|&index| objects[index].clone())
+        .collect();
+    blocks.reverse();
+    for (slot, block) in block_positions.into_iter().zip(blocks) {
+        objects[slot] = block;
+    }
+
+    let manifest = BundleManifest {
+        repository_format: 6,
+        tool_version: "test".to_string(),
+        scope: BundleScope::SingleRef,
+    };
+    encode_bundle(&ref_name, &objects, &[], &manifest)
 }
 
 /// Write one Blob and the Patch referencing it (`signed_patch_envelope`'s own `CreateFile`
@@ -461,6 +536,142 @@ fn rfc163_bundle_import_randomized_failpoint_sweep() {
                     )),
                 }
             }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} failure(s) out of {iterations} (seed {seed}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Addendum 1 (review `stability-follow-up-review-v1` §1): order *within* a kind, not just across
+/// kinds. `rfc163_bundle_import_randomized_failpoint_sweep` above uses a two-block fixture that
+/// happened, by hash luck, to carry its parent first -- so it could not see this gap; this sweep
+/// uses `three_block_history_bundle_with_reversed_blocks`'s own deliberately-inverted three-block
+/// bundle instead, which carries a child before its parent by construction.
+///
+/// **Control (required by the addendum):** temporarily revert `same_kind_topological_order`'s own
+/// call inside `objects_in_dependency_order` back to the kind-only stable sort (comment out the
+/// per-group topological reorder, restore via `/tmp/order-within-kind-fix-backup-bundle.rs`, confirm
+/// byte-identical after) and confirm these rows go red with "references missing parent block" -- see
+/// the round's own report for the run.
+#[test]
+#[ignore]
+fn rfc163_bundle_import_child_before_parent_randomized_failpoint_sweep() {
+    let seed: u64 = std::env::var("RFC163_SOAK_SEED")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20260930);
+    let iterations: usize = std::env::var("RFC163_BUNDLE_ORDER_SOAK_N")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(200);
+    // Three blocks, three patches, three blobs, one ref-state, one ref-update -- more objects than
+    // the two-block fixture, so widened further to give ordinals a real chance of landing inside the
+    // later (third) block's own write.
+    let max_ordinal = 24usize;
+
+    let source = match RepositoryLayout::init(unique_temp_dir(&format!(
+        "rfc163-bundle-order-soak-source-{seed}"
+    ))) {
+        Ok(layout) => layout,
+        Err(error) => panic!("building the source fixture repository failed: {error}"),
+    };
+    let bytes = match three_block_history_bundle_with_reversed_blocks(&source) {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("building the reversed-block bundle fixture failed: {error}"),
+    };
+    let _ = std::fs::remove_dir_all(source.root());
+
+    let points = all_points();
+    let mut rng = SplitMix64(seed ^ 0x8484_8484_8484_8484);
+    let mut failures = Vec::new();
+
+    for i in 0..iterations {
+        clear_failpoint_for_test();
+        let point = points[rng.below(points.len())];
+        let ordinal = rng.below(max_ordinal);
+        let label = format!("iter {i} seed {seed} point {point:?} ordinal {ordinal}");
+
+        let root = unique_temp_dir(&format!("rfc163-bundle-order-soak-{seed}-{i}"));
+        let layout = match RepositoryLayout::init(root.clone()) {
+            Ok(layout) => layout,
+            Err(error) => {
+                failures.push(format!("{label}: init failed: {error}"));
+                continue;
+            }
+        };
+
+        fail_after_for_test(point, ordinal);
+        let first = import_bundle(&layout, &bytes, &BundleImportOptions::default_limits());
+
+        if first.is_ok() {
+            match verify_repository(&layout) {
+                Ok(verification) => {
+                    if let Some(finding) = dangling_reference_finding(&verification) {
+                        failures.push(format!(
+                            "{label}: import succeeded but verify_repository found: {finding}"
+                        ));
+                    }
+                }
+                Err(error) => failures.push(format!(
+                    "{label}: import succeeded but verify_repository errored: {error}"
+                )),
+            }
+            let _ = std::fs::remove_dir_all(&root);
+            continue;
+        }
+
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| verify_repository(&layout)))
+            .is_err()
+        {
+            failures.push(format!("{label}: verify_repository panicked"));
+            let _ = std::fs::remove_dir_all(&root);
+            continue;
+        }
+
+        if let Ok(verification) = verify_repository(&layout) {
+            if let Some(finding) = dangling_reference_finding(&verification) {
+                failures.push(format!(
+                    "{label}: import failed and left verify_repository showing: {finding}"
+                ));
+            }
+        }
+
+        clear_stale_locks_for_test(&layout);
+        let _ = repair_pointer_index_tail(&layout);
+        let _ = repair_repository(&layout, DoctorRepairOptions::truncate_wal_tail());
+
+        let retry = import_bundle(&layout, &bytes, &BundleImportOptions::default_limits());
+        match retry {
+            Ok(_) => match verify_repository(&layout) {
+                Ok(verification) => {
+                    if let Some(finding) = dangling_reference_finding(&verification) {
+                        failures.push(format!(
+                            "{label}: retry succeeded but verify_repository still found: {finding}"
+                        ));
+                    }
+                }
+                Err(error) => failures.push(format!(
+                    "{label}: retry succeeded but verify_repository errored: {error}"
+                )),
+            },
+            Err(retry_error) => match verify_repository(&layout) {
+                Ok(verification) => {
+                    if let Some(finding) = dangling_reference_finding(&verification) {
+                        failures.push(format!(
+                            "{label}: retry refused ({retry_error}) and verify_repository still found: {finding}"
+                        ));
+                    }
+                }
+                Err(error) => failures.push(format!(
+                    "{label}: retry refused ({retry_error}) and verify_repository also errored: {error}"
+                )),
+            },
         }
         let _ = std::fs::remove_dir_all(&root);
     }
