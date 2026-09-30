@@ -20,7 +20,8 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, sound_frame_after_partial, tallied_sha256,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -158,6 +159,12 @@ enum FrameAttempt {
     },
     Invalid {
         message: String,
+        /// RFC 164 §9: a complete record (full header, full claimed body) whose checksum or
+        /// envelope fails is never the harmless remnant of an interrupted append -- excluded from
+        /// Rule A's "damage only if a sound record follows" check and stays a failed item
+        /// unconditionally. `false` for a header that is not this format's own (bad magic/version)
+        /// or a length claim the bytes cannot satisfy, which stay tail-eligible.
+        never_a_tail: bool,
     },
 }
 
@@ -175,17 +182,20 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         Err(err) => {
             return FrameAttempt::Invalid {
                 message: err.to_string(),
+                never_a_tail: false,
             };
         }
     };
     let Ok(body_len) = usize::try_from(header_values.body_len) else {
         return FrameAttempt::Invalid {
             message: "received index body length does not fit usize".to_string(),
+            never_a_tail: false,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
         return FrameAttempt::Invalid {
             message: "received index body end overflow".to_string(),
+            never_a_tail: false,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
@@ -193,8 +203,11 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
     };
     let expected = record_checksum(header_values.body_len, body);
     if expected != header_values.checksum {
+        // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
+        // fully written -- corruption, not a crash mid-write.
         return FrameAttempt::Invalid {
             message: format!("received index checksum mismatch at byte offset {offset}"),
+            never_a_tail: true,
         };
     }
     match decode_entry_body(body) {
@@ -204,6 +217,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         },
         Err(err) => FrameAttempt::Invalid {
             message: err.to_string(),
+            never_a_tail: true,
         },
     }
 }
@@ -248,30 +262,54 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
                 });
                 offset = require_progress("received index", offset, next)?;
             }
-            FrameAttempt::Invalid { message } => {
-                // RFC 164 Rule A: an invalid frame is damage only if a sound frame follows it
+            FrameAttempt::Invalid {
+                message,
+                never_a_tail,
+            } => {
+                // RFC 164 Rule A / §9: an invalid frame is damage only if a sound frame follows it
                 // somewhere in the rest of the buffer -- otherwise this frame and everything after
                 // it is a tail, whatever its shape (zeros, random bytes), the same rule RFC 162
-                // rule 3 already gives the WAL and the pointer index.
-                let sound_after = sound_frame_after_partial(
-                    bytes,
-                    offset,
-                    RECEIVED_INDEX_MAGIC.as_slice(),
-                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
-                );
-                let Some(next) = sound_after else {
+                // rule 3 already gives the WAL and the pointer index. Except a complete record whose
+                // checksum or envelope fails (`never_a_tail`), which stays damage unconditionally.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(
+                            bytes,
+                            offset,
+                            RECEIVED_INDEX_MAGIC.as_slice(),
+                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                        )
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
                     return Ok(ReceivedIndexReplay {
                         entries,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
                         tail_offset: offset,
                         record_outcomes,
                     });
-                };
+                }
                 record_outcomes.push(ReceivedIndexRecordOutcome {
                     offset,
                     status: ReceivedIndexRecordStatus::Failed { message },
                 });
-                offset = require_progress("received index", offset, next)?;
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => {
+                        resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice())
+                    }
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("received index", offset, next)?,
+                    None => {
+                        return Ok(ReceivedIndexReplay {
+                            entries,
+                            trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
+                            record_outcomes,
+                        });
+                    }
+                }
             }
         }
     }
@@ -312,19 +350,35 @@ fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize, bool)> {
                 damaged = true;
                 offset = require_progress("received index", offset, next)?;
             }
-            FrameAttempt::Invalid { .. } => {
-                // RFC 164 Rule A: see the matching comment in `decode_received_index_records` above.
-                let sound_after = sound_frame_after_partial(
-                    bytes,
-                    offset,
-                    RECEIVED_INDEX_MAGIC.as_slice(),
-                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
-                );
-                let Some(next) = sound_after else {
+            FrameAttempt::Invalid { never_a_tail, .. } => {
+                // RFC 164 Rule A / §9: see the matching comment in `decode_received_index_records`
+                // above. A `never_a_tail` record (a complete record whose checksum or envelope
+                // fails) is damage unconditionally, never resolved to a tail even when nothing
+                // sound follows.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(
+                            bytes,
+                            offset,
+                            RECEIVED_INDEX_MAGIC.as_slice(),
+                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                        )
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
                     return Ok((bytes.len().saturating_sub(offset), offset, damaged));
-                };
+                }
                 damaged = true;
-                offset = require_progress("received index", offset, next)?;
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => {
+                        resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice())
+                    }
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("received index", offset, next)?,
+                    None => return Ok((0, bytes.len(), damaged)),
+                }
             }
         }
     }

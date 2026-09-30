@@ -165,10 +165,11 @@ enum AuthorKeyFrameAttempt {
     },
     Invalid {
         message: String,
-        /// RFC 160 F3, unchanged by RFC 164 Rule A: a claim this format's own records can never
-        /// make (a body longer than any author-key record can hold) is never the harmless remnant
-        /// of an interrupted append, so it is excluded from Rule A's "damage only if a sound record
-        /// follows" check and stays a failed item unconditionally.
+        /// RFC 160 F3 and RFC 164 §9: a claim this format's own records can never make (a body
+        /// longer than any author-key record can hold), or a complete record (full header, full
+        /// claimed body) whose checksum or envelope fails, is never the harmless remnant of an
+        /// interrupted append -- excluded from Rule A's "damage only if a sound record follows"
+        /// check and stays a failed item unconditionally.
         never_a_tail: bool,
     },
 }
@@ -237,9 +238,11 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
     };
     let expected = author_key_checksum(body_len, body);
     if expected != checksum {
+        // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
+        // fully written -- corruption, not a crash mid-write.
         return AuthorKeyFrameAttempt::Invalid {
             message: format!("author key checksum mismatch at byte offset {offset}"),
-            never_a_tail: false,
+            never_a_tail: true,
         };
     }
     match decode_author_key_body(body) {
@@ -249,7 +252,7 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         },
         Err(err) => AuthorKeyFrameAttempt::Invalid {
             message: err.to_string(),
-            never_a_tail: false,
+            never_a_tail: true,
         },
     }
 }

@@ -156,11 +156,12 @@ enum GenerationFrameAttempt {
     },
     Invalid {
         message: String,
-        /// RFC 160 F3, unchanged by RFC 164 Rule A: a fixed-width record's header states its width;
-        /// any other length is malformed by construction, whatever bytes follow -- a claim this
-        /// format's own records can never make is never the harmless remnant of an interrupted
-        /// append, so it is excluded from Rule A's "damage only if a sound record follows" check
-        /// (`decode_generation_records`'s own `Invalid` arm) and stays a failed item unconditionally.
+        /// RFC 160 F3 and RFC 164 §9: a fixed-width record's header states its width; any other
+        /// length is malformed by construction, whatever bytes follow. A complete record (the
+        /// claimed one-byte body present) whose checksum or envelope fails was fully written --
+        /// corruption, not a crash. Neither is the harmless remnant of an interrupted append, so
+        /// both are excluded from Rule A's "damage only if a sound record follows" check
+        /// (`decode_generation_records`'s own `Invalid` arm) and stay a failed item unconditionally.
         never_a_tail: bool,
     },
 }
@@ -210,9 +211,11 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
     };
     let expected = generation_checksum(header_values.0, body);
     if expected != header_values.1 {
+        // RFC 164 §9: a complete record (full header, full one-byte body) whose checksum fails was
+        // fully written -- corruption, not a crash mid-write.
         return GenerationFrameAttempt::Invalid {
             message: format!("generation record checksum mismatch at byte offset {offset}"),
-            never_a_tail: false,
+            never_a_tail: true,
         };
     }
     match decode_generation_body(body) {
@@ -222,7 +225,7 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
         },
         Err(err) => GenerationFrameAttempt::Invalid {
             message: err.to_string(),
-            never_a_tail: false,
+            never_a_tail: true,
         },
     }
 }

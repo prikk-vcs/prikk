@@ -30,7 +30,8 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, sound_frame_after_partial, tallied_sha256,
+    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
+    sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
@@ -200,6 +201,12 @@ enum FrameAttempt {
     },
     Invalid {
         message: String,
+        /// RFC 164 §9: a complete record (full header, full claimed body) whose checksum or
+        /// envelope fails is never the harmless remnant of an interrupted append -- excluded from
+        /// RFC 162 rule 3's "damage only if a sound record follows" check and stays a failed item
+        /// unconditionally. `false` for a header that is not this format's own (bad magic/version)
+        /// or a length claim the bytes cannot satisfy, which stay tail-eligible.
+        never_a_tail: bool,
     },
 }
 
@@ -217,17 +224,20 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         Err(err) => {
             return FrameAttempt::Invalid {
                 message: err.to_string(),
+                never_a_tail: false,
             };
         }
     };
     let Ok(body_len) = usize::try_from(header_values.body_len) else {
         return FrameAttempt::Invalid {
             message: "pointer index body length does not fit usize".to_string(),
+            never_a_tail: false,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
         return FrameAttempt::Invalid {
             message: "pointer index body end overflow".to_string(),
+            never_a_tail: false,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
@@ -235,8 +245,11 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
     };
     let expected = record_checksum(header_values.body_len, body);
     if expected != header_values.checksum {
+        // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
+        // fully written -- corruption, not a crash mid-write.
         return FrameAttempt::Invalid {
             message: format!("pointer index checksum mismatch at byte offset {offset}"),
+            never_a_tail: true,
         };
     }
     match decode_entry_body(body) {
@@ -246,6 +259,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         },
         Err(err) => FrameAttempt::Invalid {
             message: err.to_string(),
+            never_a_tail: true,
         },
     }
 }
@@ -288,28 +302,54 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                 });
                 offset = require_progress("pointer index", offset, next)?;
             }
-            FrameAttempt::Invalid { message } => {
-                // RFC 162 rule 3: a log ends at its last sound record. An invalid frame is damage only if a sound
-                // frame follows it somewhere in the rest of the buffer -- otherwise this frame and everything after
-                // it is tail, whatever its shape (see `wal.rs::decode_records`'s identical fix for the full
-                // reasoning and the M3 mechanism this replaces).
-                let sound_after =
-                    sound_frame_after_partial(bytes, offset, POINTER_INDEX_MAGIC.as_slice(), |c| {
-                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
-                    });
-                let Some(next) = sound_after else {
+            FrameAttempt::Invalid {
+                message,
+                never_a_tail,
+            } => {
+                // RFC 162 rule 3 / RFC 164 §9: a log ends at its last sound record. An invalid frame
+                // is damage only if a sound frame follows it somewhere in the rest of the buffer --
+                // otherwise this frame and everything after it is tail, whatever its shape (see
+                // `wal.rs::decode_records`'s identical fix for the full reasoning and the M3
+                // mechanism this replaces). Except a complete record whose checksum or envelope
+                // fails (`never_a_tail`): that was fully written, so it stays damage unconditionally,
+                // even when it is last -- RFC 164 §9 amends this rule for the pointer index too.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(
+                            bytes,
+                            offset,
+                            POINTER_INDEX_MAGIC.as_slice(),
+                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                        )
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
                     return Ok(PointerIndexReplay {
                         entries,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
                         tail_offset: offset,
                         record_outcomes,
                     });
-                };
+                }
                 record_outcomes.push(PointerIndexRecordOutcome {
                     offset,
                     status: PointerIndexRecordStatus::Failed { message },
                 });
-                offset = require_progress("pointer index", offset, next)?;
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => resync_to_next_magic(bytes, offset + 1, POINTER_INDEX_MAGIC.as_slice()),
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("pointer index", offset, next)?,
+                    None => {
+                        return Ok(PointerIndexReplay {
+                            entries,
+                            trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
+                            record_outcomes,
+                        });
+                    }
+                }
             }
         }
     }

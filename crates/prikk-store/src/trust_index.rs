@@ -147,10 +147,11 @@ enum TrustKeyFrameAttempt {
     },
     Invalid {
         message: String,
-        /// RFC 160 F3, unchanged by RFC 164 Rule A: a claim this format's own records can never
-        /// make (a body longer than any trust-key record can hold) is never the harmless remnant of
-        /// an interrupted append, so it is excluded from Rule A's "damage only if a sound record
-        /// follows" check and stays a failed item unconditionally.
+        /// RFC 160 F3 and RFC 164 §9: a claim this format's own records can never make (a body
+        /// longer than any trust-key record can hold), or a complete record (full header, full
+        /// claimed body) whose checksum or envelope fails, is never the harmless remnant of an
+        /// interrupted append -- excluded from Rule A's "damage only if a sound record follows"
+        /// check and stays a failed item unconditionally.
         never_a_tail: bool,
     },
 }
@@ -219,9 +220,12 @@ fn parse_trust_key_frame_at(bytes: &[u8], offset: usize) -> TrustKeyFrameAttempt
     };
     let expected = trust_key_checksum(body_len, body);
     if expected != checksum {
+        // RFC 164 §9: the header was complete and the whole claimed body is present -- this record
+        // was fully written. A checksum failure on a complete record is corruption after the fact,
+        // not a crash mid-write, so it is never the harmless remnant of an interrupted append.
         return TrustKeyFrameAttempt::Invalid {
             message: format!("trust key checksum mismatch at byte offset {offset}"),
-            never_a_tail: false,
+            never_a_tail: true,
         };
     }
     match decode_trust_key_body(body) {
@@ -229,9 +233,11 @@ fn parse_trust_key_frame_at(bytes: &[u8], offset: usize) -> TrustKeyFrameAttempt
             entry,
             next_offset: body_end,
         },
+        // RFC 164 §9: same reasoning -- the checksum already vouched for these exact bytes, so a
+        // record that still fails to decode is a complete record with an unsound envelope, not a torn one.
         Err(err) => TrustKeyFrameAttempt::Invalid {
             message: err.to_string(),
-            never_a_tail: false,
+            never_a_tail: true,
         },
     }
 }
@@ -493,6 +499,12 @@ enum TrustPolicyFrameAttempt {
     },
     Invalid {
         message: String,
+        /// RFC 164 §9: a complete record (full header, full claimed body) whose checksum or
+        /// envelope fails is never the harmless remnant of an interrupted append -- excluded from
+        /// Rule A's "damage only if a sound record follows" check and stays a failed item
+        /// unconditionally. `false` for a header that is not this format's own (bad magic/version)
+        /// or a length claim the bytes cannot satisfy, which stay tail-eligible.
+        never_a_tail: bool,
     },
 }
 
@@ -517,27 +529,32 @@ fn parse_trust_policy_frame_at(bytes: &[u8], offset: usize) -> TrustPolicyFrameA
         Err(err) => {
             return TrustPolicyFrameAttempt::Invalid {
                 message: err.to_string(),
+                never_a_tail: false,
             };
         }
     };
     if &magic != TRUST_POLICY_MAGIC {
         return TrustPolicyFrameAttempt::Invalid {
             message: "invalid trust policy record magic".to_string(),
+            never_a_tail: false,
         };
     }
     if version != TRUST_POLICY_VERSION {
         return TrustPolicyFrameAttempt::Invalid {
             message: format!("unsupported trust policy record version {version}"),
+            never_a_tail: false,
         };
     }
     let Ok(body_len_usize) = usize::try_from(body_len) else {
         return TrustPolicyFrameAttempt::Invalid {
             message: "trust policy body length does not fit usize".to_string(),
+            never_a_tail: false,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len_usize) else {
         return TrustPolicyFrameAttempt::Invalid {
             message: "trust policy body end overflow".to_string(),
+            never_a_tail: false,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
@@ -545,8 +562,11 @@ fn parse_trust_policy_frame_at(bytes: &[u8], offset: usize) -> TrustPolicyFrameA
     };
     let expected = trust_policy_checksum(body_len, body);
     if expected != checksum {
+        // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
+        // fully written -- corruption, not a crash mid-write.
         return TrustPolicyFrameAttempt::Invalid {
             message: format!("trust policy checksum mismatch at byte offset {offset}"),
+            never_a_tail: true,
         };
     }
     match decode_trust_policy_body(body) {
@@ -556,6 +576,7 @@ fn parse_trust_policy_frame_at(bytes: &[u8], offset: usize) -> TrustPolicyFrameA
         },
         Err(err) => TrustPolicyFrameAttempt::Invalid {
             message: err.to_string(),
+            never_a_tail: true,
         },
     }
 }
@@ -598,28 +619,53 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
                 });
                 offset = require_progress("trust policy", offset, next)?;
             }
-            TrustPolicyFrameAttempt::Invalid { message } => {
-                // RFC 164 Rule A: see the matching comment in `decode_trust_key_records` above.
-                let sound_after =
-                    sound_frame_after_partial(bytes, offset, TRUST_POLICY_MAGIC.as_slice(), |c| {
-                        matches!(
-                            parse_trust_policy_frame_at(bytes, c),
-                            TrustPolicyFrameAttempt::Record { .. }
+            TrustPolicyFrameAttempt::Invalid {
+                message,
+                never_a_tail,
+            } => {
+                // RFC 164 Rule A / §9: see the matching comment in `decode_trust_key_records` above.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(
+                            bytes,
+                            offset,
+                            TRUST_POLICY_MAGIC.as_slice(),
+                            |c| {
+                                matches!(
+                                    parse_trust_policy_frame_at(bytes, c),
+                                    TrustPolicyFrameAttempt::Record { .. }
+                                )
+                            },
                         )
-                    });
-                let Some(next) = sound_after else {
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
                     return Ok(TrustPolicyReplay {
                         entries,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
                         tail_offset: offset,
                         record_outcomes,
                     });
-                };
+                }
                 record_outcomes.push(TrustPolicyRecordOutcome {
                     offset,
                     status: TrustPolicyRecordStatus::Failed { message },
                 });
-                offset = require_progress("trust policy", offset, next)?;
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => resync_to_next_magic(bytes, offset + 1, TRUST_POLICY_MAGIC.as_slice()),
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("trust policy", offset, next)?,
+                    None => {
+                        return Ok(TrustPolicyReplay {
+                            entries,
+                            trailing_partial_bytes: 0,
+                            tail_offset: bytes.len(),
+                            record_outcomes,
+                        });
+                    }
+                }
             }
         }
     }
