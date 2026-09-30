@@ -5,15 +5,23 @@
 ### Fixed — a killed `bundle import` or `sync accept` could leave a dangling forward reference no repair cleared
 
 `bundle import` and `sync accept` each write more than one object per call, in whatever order their input carries
-them, not in dependency order (an object only after everything it references is durable). An interruption partway
-through `bundle import` could leave a Block durable while the Patch or Blob it names is not: `verify` then failed
-for good ("references missing", or a state-root mismatch), and none of the three `doctor` repairs cleared it —
-only re-running the same import did (25 of 25 reproduced repositories went to `verify` 0). Reproduced at 89 of 300
-kills on 0.48.0 and 136 of 300 on 0.47.0, with an 80-file bundle; present since `bundle import` was first
-introduced. **Affected: 0.20.0 to 0.48.0.** `sync accept`'s own current write set (patches, blobs, claims, tags —
-never a Block or RefState) was not found to exhibit this empirically, but is fixed the same way on the same
-principle. Both writers now write objects in dependency order, so an interrupted write leaves only complete
-objects behind.
+them, not in dependency order (an object only after everything it references is durable) — across object types,
+and, within the same type, a child block could be listed before its own parent. An interruption partway through
+`bundle import` could leave a Block durable while the Patch, Blob, or parent Block it names is not: `verify` then
+failed for good, and none of the three `doctor` repairs cleared it — only re-running the same import cleared it,
+in every case reproduced (25 of 25). Reproduced at 89 of 300 kills on 0.48.0 and 136 of 300 on 0.47.0 (an 80-file
+bundle, cross-type order), and separately for within-type order on a multi-generation bundle. Present since
+`bundle import` was first introduced. **Affected: 0.20.0 to 0.48.0.** `sync accept`'s own current write set
+(patches, blobs, claims, tags — never a Block or RefState) was not found to exhibit this empirically, but is fixed
+the same way on the same principle. Both writers now write objects in full dependency order (across and within
+kinds), so an interrupted write leaves only complete objects behind.
+
+### Disclosed — a crash inside `merge` can leave a ref publication no command completes
+
+Reached through `merge`, N3's own gap (RFC 163, disclosed for `branch create`/`tag create`): a crash mid-publication
+leaves `verify` reporting `PRIKK-VERIFY-REF-DIVERGENCE`, and neither re-running the same merge (refused: "not
+confluent") nor a `seal` retry of the same ref completes it. Measured: 10 of 300 kills on 0.48.0, 16 of 300 on this
+release. No code change — text only; a fix is planned for 0.49.0 step 2, alongside F1.
 
 ## 0.48.0 — 2026-09-30
 

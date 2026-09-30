@@ -78,24 +78,31 @@ planned for. None of these blocks 0.48.0.
   trust-policy generation logs, only `compact` is affected. Long-standing, confirmed on 0.47.0 as well as
   this release. A tail defined by position, and a repair verb, for the four files above and the
   generation logs alike, is planned for 0.49.0.
-- **A `bundle import` interrupted by a crash could leave a block durable while the patch or blob it
-  names is not, and no repair cleared it (fixed in 0.49.0).** In 0.48.0 and earlier, objects were
-  written in the bundle's own carried order, not in dependency order, so an interruption partway
-  through could leave `verify` failing for good ("references missing", or a state-root mismatch),
-  while a commit was still accepted. None of the three `doctor` repairs cleared it -- **re-running
-  the same import always did** (confirmed: 25 of 25 repositories the architect reproduced this on
-  went to `verify` 0). Reproduced at 89 of 300 kills on 0.48.0 and 136 of 300 on 0.47.0, with an
+- **A `bundle import` interrupted by a crash could leave a block durable while the patch, blob, or
+  parent block it names is not, and no repair cleared it (fixed in 0.49.0).** In 0.48.0 and earlier,
+  objects were written in the bundle's own carried order, not in dependency order -- across kinds,
+  and, within one kind, a child block could be listed before its own parent. An interruption partway
+  through could leave `verify` failing for good with one of: "object \<id\> references missing
+  snapshot blob \<id\>" / "... missing block patch \<id\>" / "... missing parent block \<id\>";
+  "snapshot of Block \<id\> names Blob \<id\> for \<path\>, which is missing"; or "lifecycle replay:
+  blob \<id\> required for a state effect is missing" -- while a commit was still accepted. None of
+  the three `doctor` repairs cleared it -- **re-running the same import cleared it in every case
+  reproduced (25 of 25)**. Reproduced at 89 of 300 kills on 0.48.0 and 136 of 300 on 0.47.0, with an
   80-file bundle; present since `bundle import` was first introduced (0.20.0). Fixed in 0.49.0:
   every writer that lays down more than one object in a single command -- `bundle import`, `sync
-  accept` -- now writes them in dependency order, so an interrupted write leaves only complete
-  objects behind. A way out that needs no bundle at all is planned (RFC 164).
+  accept` -- now writes them in dependency order, both across and within kinds. A way out that needs
+  no bundle at all is planned (RFC 164).
 - **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
   different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
   `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same
   `branch create`/`tag create` answers "already exists" rather than finishing the interrupted
   publication -- DC-38's own retry exists for `seal` only. A `seal` of an *unrelated* ref then succeeds,
   appends behind the torn record, and from then on `verify` reports a damaged ref-log record and
-  `commit` is refused. A way to complete or withdraw the interrupted publication, and `seal` refusing
+  `commit` is refused. **Reached through `merge` too**: a crash mid-publication leaves the same
+  `PRIKK-VERIFY-REF-DIVERGENCE` state, and neither re-running the same merge (refused: "not
+  confluent") nor a `seal` retry of the same ref completes it -- there is no command way out. Measured
+  for `merge`: 10 of 300 kills on 0.48.0, 16 of 300 on the 0.49.0 build carrying the dependency-order
+  fix above. A way to complete or withdraw the interrupted publication, and `seal` refusing
   while another ref's publication is incomplete (the same refusal `commit` already gives), are planned
   for 0.49.0 alongside F1.
 - **A damaged last WAL record is now a tail, and the repair removes it (N6).** RFC 162 rule 3 defines

@@ -265,18 +265,46 @@ recovery step. If you believe the bytes after some offset really are nothing but
 `prikk verify` first and read its own report carefully before deciding to truncate anything by hand; when
 in doubt, back the file up and ask before changing it.
 
-## `error: integrity error: object <id> (block) references missing <role> <id>` or `… state root does not match authoritative replay`
+## `error: integrity error: object <id> (block) references missing <role> <id>`
 
-Seen from `verify` (and anything that calls it, such as `doctor`) after a `bundle import` or `sync
-accept` was interrupted by a crash partway through. In 0.48.0 and earlier, these two writers could
-leave a Block durable while the Patch or Blob it names is not — the object-connectivity check then
-reports the first message, or, when a state root was derived from the missing content before the
-crash, the second. **None of `doctor`'s three repairs (`--repair-wal-tail`, `--repair-index`,
+Seen from `verify` (and anything that calls it, such as `doctor`) after a `bundle import` was
+interrupted by a crash partway through. Exact wording varies with what the block names and what
+was missing when the crash landed:
+
+- `object <id> (block) references missing snapshot blob <id>`
+- `object <id> (block) references missing block patch <id>`
+- `object <id> (block) references missing parent block <id>`
+- `snapshot of Block <id> names Blob <id> for <path>, which is missing`
+- `lifecycle replay: blob <id> required for a state effect is missing`
+
+In 0.48.0 and earlier, `bundle import` wrote the objects it carried in the bundle's own order, not
+in dependency order — across object types, and, within the same type, a child block could be listed
+before its own parent — so a crash partway through could leave a Block durable while something it
+names is not. **None of `doctor`'s three repairs (`--repair-wal-tail`, `--repair-index`,
 `--repair-pointer-index-tail`) clears this** — they do not know this shape. **The way out is to run
-the same `bundle import` or `sync accept` again**, with the same input: every object it carries is
-content-addressed, so the retry only writes what is still missing, and a repository that reaches this
-state has always cleared it. Fixed in 0.49.0: both writers now write objects in dependency order, so
-an interrupted write can no longer produce this shape in the first place.
+the same `bundle import` again**, with the same input: every object it carries is content-addressed,
+so the retry only writes what is still missing, and this cleared the state in every case reproduced
+(25 of 25). Fixed in 0.49.0: `bundle import` now writes objects in full dependency order (across and
+within kinds), so an interrupted write can no longer produce this shape. `sync accept` is ordered the
+same way now, for the same reason.
+
+## `error: repository has interrupted or divergent ref publication state`
+
+Seen from `verify` after `branch create`, `tag create`, or `merge` was interrupted by a crash
+partway through publishing a ref (`--format json` and `doctor` name the underlying code,
+`PRIKK-VERIFY-REF-DIVERGENCE`; the detail line reads something like "format-2 ref log leads the
+authoritative pointer"). **`doctor` recommends manual recovery only — it does not repair this** (a
+signer-backed retry is not authorized without exact retained evidence). Retrying the same command
+does not complete the interrupted publication either: `branch create`/`tag create` answer "already
+exists" (the ref *was* durably created; the retry only confirms that), and `merge` answers "not
+confluent." A `seal` retry of the same ref does not complete it either — **DC-38's own natural-retry
+mechanism, which does complete an interrupted `seal`, exists for `seal` only.** A `seal` of a
+*different, unrelated* ref then succeeds and appends behind the torn record, after which `commit` is
+also refused. There is currently no command that completes or withdraws an interrupted
+`branch create`/`tag create`/`merge` publication; preserve the repository and ask before changing
+anything. Measured for `merge`: 10 of 300 kills on 0.48.0, 16 of 300 on the build carrying 0.49.0's
+own dependency-order fix (the two are unrelated defects reached through different commands). A fix
+is planned for 0.49.0 step 2, alongside F1.
 
 ## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 
