@@ -21,6 +21,8 @@ pub(crate) mod rfc111_index_decode_cost_gate;
 #[cfg(test)]
 pub(crate) mod rfc111_seal_decode_cost_gate;
 #[cfg(test)]
+pub(crate) mod rfc163_stability_soak;
+#[cfg(test)]
 pub(crate) mod runaway_guards;
 #[cfg(test)]
 pub(crate) mod signature_contract_tests;

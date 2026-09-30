@@ -75,6 +75,17 @@ pub(crate) fn fail_after(point: Point, matching_calls_to_skip: usize) {
 }
 
 #[cfg(test)]
+/// Disarm whatever `fail_once`/`fail_after` last armed on this thread, whether or not it has
+/// fired yet. `fail_after(point, n)` with `n` larger than how many times an operation actually
+/// reaches `point` leaves the armed state live afterward (`check` only clears it on firing) --
+/// a randomized sweep that arms a fresh `(point, ordinal)` per iteration needs this between
+/// iterations, or an ordinal that never fired can fire unexpectedly during a *later* iteration's
+/// own unrelated setup.
+pub(crate) fn clear() {
+    NEXT.with(|next| *next.borrow_mut() = None);
+}
+
+#[cfg(test)]
 pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
     DIRECTORY_CREATE_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }

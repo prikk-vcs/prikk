@@ -94,6 +94,11 @@ pub(crate) use anchored::{TestFailPoint, fail_once_for_test};
     test,
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
+pub(crate) use anchored::clear_failpoint_for_test;
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 pub(crate) use anchored::fail_after_for_test;
 
 #[cfg(all(

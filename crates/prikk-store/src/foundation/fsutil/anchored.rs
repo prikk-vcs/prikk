@@ -75,6 +75,11 @@ pub(crate) use failpoints::{Point as TestFailPoint, fail_once as fail_once_for_t
     test,
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
+pub(crate) use failpoints::clear as clear_failpoint_for_test;
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 pub(crate) use failpoints::fail_after as fail_after_for_test;
 
 /// The one gated symbol DC-82 exists to introduce: picks the active `DurabilityContract`
