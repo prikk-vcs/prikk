@@ -353,7 +353,7 @@ pub fn accept_exchange_artifact(
         .chain(decoded.tags.iter())
         .cloned()
         .collect();
-    let admission =
+    let mut admission =
         crate::bundle::admit_carried_signatures(layout, &object_store, &ordered, |key_id| {
             let mut entries = lookup_author_key_entries(layout, key_id)?;
             entries.extend(
@@ -369,7 +369,17 @@ pub fn accept_exchange_artifact(
         object_store.check_write(envelope)?;
     }
     let content_count = decoded.patches.len() + decoded.blobs.len();
-    let (content_envelopes, publication_envelopes) = admission.envelopes.split_at(content_count);
+    // 0.49.0 step 0, finding 3: dependency order within each of the two phases below, the same fix
+    // `import_bundle` applies -- never across the content/publication boundary itself, which stays
+    // fixed for its own, unrelated reason (design §8.1: no claim or tag may be recorded from an
+    // exchange that failed, so claims/tags are deliberately last, under the lock, regardless of
+    // object-reference order).
+    let (content_envelopes, publication_envelopes) =
+        admission.envelopes.split_at_mut(content_count);
+    crate::bundle::objects_in_dependency_order(content_envelopes);
+    crate::bundle::objects_in_dependency_order(publication_envelopes);
+    let content_envelopes: &[ObjectEnvelope] = content_envelopes;
+    let publication_envelopes: &[ObjectEnvelope] = publication_envelopes;
 
     // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
     // can stop the exchange — never a decision about what it carries.

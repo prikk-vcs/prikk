@@ -890,10 +890,18 @@ pub fn import_bundle(
         object_store.check_write(envelope)?;
     }
 
+    // 0.49.0 step 0, finding 3: the bundle's own carried order (whatever the exporter produced) is
+    // not necessarily dependency order across types -- a `Block` could precede the `Patch`/`Blob` it
+    // names. Reordered here, after every check above (which do not depend on write order) and before
+    // the first durable write, so a kill partway through this loop never leaves a later-typed object
+    // durable while an earlier one it depends on is still missing.
+    let mut admission_envelopes = admission.envelopes;
+    objects_in_dependency_order(&mut admission_envelopes);
+
     // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
     // can stop the import -- never a decision about the bundle's content.
     let mut written_object_count = 0_usize;
-    for envelope in &admission.envelopes {
+    for envelope in &admission_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
@@ -930,6 +938,41 @@ pub fn import_bundle(
         dropped_signatures: admission.dropped,
         recorded_author_key_count,
     })
+}
+
+/// The object model's own acyclic reference order (0.49.0 step 0, finding 3): a `Block` names
+/// `Patch`, `Blob` (its snapshot) and earlier `Block`s; `Attestation` and `Tag` name a `Block`;
+/// `RefState` names a `Block`, an earlier `RefState`, and `Attestation`s. `RecognitionClaim` names a
+/// `Block` and `Patch`es but is never existence-checked against them (its own module doc), so it
+/// carries no ordering requirement -- ranked last anyway, for consistency, not correctness.
+/// `Patch` and `Blob` name no other object type. Every writer that durably appends more than one
+/// object in a single command must write them in this order (an object only after everything it
+/// can reference is durable), so an interruption partway through never leaves a dangling forward
+/// reference for `verify`'s object-connectivity stage to miss -- see
+/// `objects_in_dependency_order`'s own callers (`import_bundle`, `patch_exchange::accept`) for what
+/// this closes.
+fn object_type_dependency_rank(object_type: ObjectType) -> u8 {
+    match object_type {
+        ObjectType::Blob | ObjectType::Patch => 0,
+        ObjectType::Block => 1,
+        ObjectType::Attestation => 2,
+        ObjectType::RefState => 3,
+        ObjectType::Tag => 4,
+        ObjectType::RecognitionClaim => 5,
+        // Never carried as a bulk-written envelope in a bundle or exchange artifact (`RefUpdate` is
+        // stored inline in the ref log; `RecoveryNote` inline in `refs/recovery/`;
+        // `BlockSummaryCache` is a rebuildable cache) -- ranked last defensively, not because any
+        // caller is known to reach this arm.
+        ObjectType::RefUpdate | ObjectType::RecoveryNote | ObjectType::BlockSummaryCache => 6,
+    }
+}
+
+/// Stable-sorts `envelopes` into the dependency order `object_type_dependency_rank` defines.
+/// **Stable on purpose**: within one type, the caller's own order is trusted (e.g. a chain of
+/// `Block`s is already collected ancestor-first) -- this only fixes ordering *across* types, never
+/// reorders two objects of the same type relative to each other.
+pub(crate) fn objects_in_dependency_order(envelopes: &mut [ObjectEnvelope]) {
+    envelopes.sort_by_key(|envelope| object_type_dependency_rank(envelope.object_type));
 }
 
 /// Every carried envelope as it will be handed to the store, after RFC 156 §4's admission.
