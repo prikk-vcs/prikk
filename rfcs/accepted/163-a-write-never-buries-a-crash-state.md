@@ -157,3 +157,12 @@ breaks every commit. It would have to be disclosed as such.
 
 **Recommendation: include it.** It is one site of the same rule, a read that already exists, and a refusal that leaves
 the repository fully usable (every reader already tolerates the tail).
+
+## 10. Scheduled for 0.49.0: refuse before the first write, not only before the guarded append
+
+**Measured by the architect on the 0.48.0 candidate's release build (2026-09-30).** A publication (`seal`, `branch
+create`, `tag create`, `merge`) and a new author's commit refuse over their guarded file's tail only after writing their
+content objects and caches. Those objects are unreferenced and reused on retry, and the guarded file is untouched, so
+§2's rule holds for the file it protects. But "refuses before it writes anything" holds only for `bundle import`,
+`compact` and `trust maintainer add`. **0.49.0 moves the pointer-index and author-key checks ahead of the first write**,
+as `bundle import`'s already is. The 0.48.0 notes say what each refusal leaves.

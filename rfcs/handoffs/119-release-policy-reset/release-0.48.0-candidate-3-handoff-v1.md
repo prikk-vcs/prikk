@@ -69,3 +69,39 @@ which steps changed nothing, and why.
 | P3 | the architect's four probes | 10 min |
 
 **Report:** `.git-exclude/review-request/release-0.48.0-candidate-3-report-v1.md`.
+
+## Addendum 1 — 2026-09-30: one half-applied refusal, and what each refusal leaves (review `release-0.48.0-candidate-3-review-v1`)
+
+**The sweep is accepted.** `14918dea` is not yet the candidate. **Fixes only here.**
+
+1. **`trust maintainer add` refuses before its first append** (review §2.2, code).
+   - Today, with a torn **trust-policy** tail, it appends the new key to `trust/keys.container` and then refuses over
+     the policy.
+   - Decide both tails before the first append: the trust-key file's, if the key will be appended, and the policy's, if
+     a snapshot will be.
+   - **Test:** a torn policy tail, then `trust maintainer add` of a new key. It exits non-zero, and every file under
+     `.prikk/` is byte-identical.
+   - **Control:** restore today's order. The test goes red.
+2. **Say exactly what each refusal leaves** (review §2.1, text). Use the review's table, measured on the candidate's
+   binary:
+   - `bundle import`, `compact` and `trust maintainer add` write nothing at all;
+   - `seal`, `branch create`, `tag create` and `merge`, and a new author's commit: **the guarded file is untouched**.
+     Content objects and caches the command had already written are left unreferenced; `verify` still exits 0; a retry
+     after the way out reuses them.
+   - Correct the CHANGELOG's `### Output changes` bullet (today "refuse before writing anything"), `troubleshooting.md`
+     (the pointer-index and author-key entries), and `durability-recovery.md`'s RFC 163 section wherever it says the
+     same.
+   - **Add a test** that holds each publication's claim as the text will state it: the pointer index byte-identical,
+     `verify` 0, and a retry after the repair succeeds.
+3. **The candidate** is the final commit of this addendum. The date stays **2026-09-30** if the work lands today (JST).
+   If it does not, change the heading's date in the last commit, and say so.
+
+**Before proposing:**
+- the 14 gates on the final commit, in R1's scope;
+- both matrices green;
+- the architect's six probes pass on its release build, all in `/home/nabbisen/.pgtmp/arch-seal/`: the four named in §2,
+  plus `rfc163_publication_writes_probe.sh` (whose output the new text must match) and `rfc163_other_writers_probe.sh`
+  (whose trust-policy row must now show `changed: none`);
+- `reproduce.sh` v2 on a release build of the final commit.
+
+**Report:** `.git-exclude/review-request/release-0.48.0-candidate-3-report-v2.md`.
