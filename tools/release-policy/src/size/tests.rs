@@ -98,7 +98,9 @@ fn removing_a_declaration_names_its_file() {
         // damage into `has_item_failure`, 1,844 -> 2,021, then a `cargo fmt` pass, 2,021 -> 2,023.
         // RFC 164 Addendum 1: `ObjectContainerTailStatus` and `object_container_tails`, wiring N7's
         // own reporting through the same pipeline `AppendedFileTails` already uses, 2,023 -> 2,058.
-        detail.contains("2058"),
+        // RFC 164 round 2 Rule E: `UnreferencedRemnant`, `ReachabilityClassifier`, and the
+        // reachability-aware `verify_block_payload`/`ensure_object_exists` rewrite, 2,058 -> 2,148.
+        detail.contains("2148"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -230,7 +232,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // `anchor_fallback.rs` and `lifecycle_cache/anchored_text.rs`: 144 -> 146. RFC 159 added `anchor_trust.rs` and
     // `block_state/anchored_parent.rs`: 146 -> 148. RFC 163 added `foundation/tail_guard.rs`: 148 -> 149.
     // RFC 164 Rule C added `doctor/repair_tails.rs`: 149 -> 150.
-    assert_eq!(store.production_files, 150);
+    // RFC 164 round 2 Rule E added `verify/reachability.rs`: 150 -> 151.
+    assert_eq!(store.production_files, 151);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

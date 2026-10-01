@@ -137,7 +137,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 163 added `foundation::tail_guard`, the one shared write-side tail check every scope-B append site
     // calls: 147 -> 148.
     // RFC 164 Rule C added `doctor::repair_tails`, the consolidated `--repair-tails` verb: 148 -> 149.
-    assert_eq!(modules.len(), 149, "modules: {modules:?}");
+    // RFC 164 round 2 Rule E added `verify::reachability`, the committed-state reachability walk: 149 -> 150.
+    assert_eq!(modules.len(), 150, "modules: {modules:?}");
     assert!(
         !modules
             .iter()
