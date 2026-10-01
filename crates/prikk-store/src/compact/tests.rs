@@ -395,6 +395,47 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
     Ok(())
 }
 
+/// RFC 164 round 2 Addendum 1, item 1's "quieter shape": a tail on the live slot itself, not only
+/// on the generation log. Before this fix, `compact_ref_pointer_index` silently dropped these
+/// trailing bytes from the newly-written target slot -- no recovery file, no line saying so, and
+/// `entries_after` reported as if the tail had never existed. Called directly, bypassing the CLI's
+/// own early cross-subsystem precheck (`crates/prikk-cli/src/compact.rs`), so this proves the
+/// in-function check itself is load-bearing for any caller, not only for `prikk compact --all`'s
+/// own front door -- the control that found it: with this check removed, this test still passes
+/// through the CLI alone, masked by that earlier check, and only fails when called this way.
+#[test]
+fn compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
+    let root = unique_temp_dir("compact-pointer-index-live-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+
+    let live_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let sound_bytes = std::fs::read(&live_path)?;
+    let mut tailed = sound_bytes.clone();
+    tailed.extend(std::iter::repeat_n(0_u8, 100));
+    std::fs::write(&live_path, &tailed)?;
+
+    assert!(compact_ref_pointer_index(&layout).is_err());
+    // Nothing touched: the live slot still carries the tail this test left it with, the retired
+    // slot is still empty, and no generation record exists -- the refusal happened before any of
+    // them could be written, not after a silent reduction that dropped the tail bytes.
+    assert_eq!(std::fs::read(&live_path)?, tailed);
+    assert!(std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::B))?.is_empty());
+    assert_eq!(
+        resolve_live_slot(&layout, &layout.ref_pointer_index_generation_log_path())?,
+        ContainerSlot::A
+    );
+
+    std::fs::write(&live_path, &sound_bytes)?;
+    let report = compact_ref_pointer_index(&layout)?;
+    assert_eq!(report.entries_after, 1);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 /// Acceptance criterion 4: the compactor participates in the same container lock the writers do --
 /// proven the same way round 2 proved the writers do, from the other direction: hold the lock
 /// externally, observe the compactor refuse.
@@ -446,6 +487,38 @@ fn compacting_the_received_index_reclaims_a_superseded_import() -> Result<()> {
     Ok(())
 }
 
+/// RFC 164 round 2 Addendum 1, item 1's "quieter shape", for the received index -- see
+/// `compaction_refuses_on_a_live_slot_tail_and_touches_nothing`'s own doc for why this is called
+/// directly rather than through the CLI.
+#[test]
+fn received_index_compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
+    let root = unique_temp_dir("compact-received-index-live-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let target = objects
+        .write_object(&signed_empty_block_envelope())?
+        .to_owned();
+    let ref_state = signed_ref_state_envelope("heads/main", None, target, 1);
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", ref_state.object_id())?;
+
+    let live_path = layout.received_index_slot_path(ContainerSlot::A);
+    let sound_bytes = std::fs::read(&live_path)?;
+    let mut tailed = sound_bytes.clone();
+    tailed.extend(std::iter::repeat_n(0_u8, 100));
+    std::fs::write(&live_path, &tailed)?;
+
+    assert!(compact_received_index(&layout).is_err());
+    assert_eq!(std::fs::read(&live_path)?, tailed);
+    assert!(std::fs::read(layout.received_index_slot_path(ContainerSlot::B))?.is_empty());
+
+    std::fs::write(&live_path, &sound_bytes)?;
+    let report = compact_received_index(&layout)?;
+    assert_eq!(report.entries_after, 1);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 /// The trust-policy compactor: unlike the other two, reduction keeps only the *last* snapshot, not
 /// one entry per key -- three snapshots (add, add, remove) collapse to the one live snapshot.
 #[test]
@@ -465,6 +538,34 @@ fn compacting_the_trust_policy_container_keeps_only_the_last_snapshot() -> Resul
     let policy = load_maintainer_trust_policy(&layout)?;
     assert_eq!(policy.keys.len(), 1);
     assert_eq!(policy.keys[0].key_id, "second");
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RFC 164 round 2 Addendum 1, item 1's "quieter shape", for the trust-policy container -- see
+/// `compaction_refuses_on_a_live_slot_tail_and_touches_nothing`'s own doc for why this is called
+/// directly rather than through the CLI.
+#[test]
+fn trust_policy_compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
+    let root = unique_temp_dir("compact-trust-policy-live-tail");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let key = public_key_hex(&[9_u8; 32]);
+    add_trusted_maintainer(&layout, "only", &key)?;
+
+    let live_path = layout.trust_policy_container_slot_path(ContainerSlot::A);
+    let sound_bytes = std::fs::read(&live_path)?;
+    let mut tailed = sound_bytes.clone();
+    tailed.extend(std::iter::repeat_n(0_u8, 100));
+    std::fs::write(&live_path, &tailed)?;
+
+    assert!(compact_trust_policy(&layout).is_err());
+    assert_eq!(std::fs::read(&live_path)?, tailed);
+    assert!(std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::B))?.is_empty());
+
+    std::fs::write(&live_path, &sound_bytes)?;
+    let report = compact_trust_policy(&layout)?;
+    assert_eq!(report.entries_after, 1);
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
