@@ -252,8 +252,8 @@ pub use ref_resolution::{
 pub use refs::{
     PointerIndexRepair, RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord,
     RefLogReplay, RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate,
-    RefStore, current_branch, resolve_ref_tip_block, validate_local_branch_ref,
-    validate_local_tag_ref,
+    RefStore, current_branch, ensure_no_incomplete_publication_except, resolve_ref_tip_block,
+    validate_local_branch_ref, validate_local_tag_ref,
 };
 #[cfg(feature = "test-support")]
 pub use refs::{

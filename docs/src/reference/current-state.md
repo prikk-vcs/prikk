@@ -128,19 +128,24 @@ planned for. None of these blocks 0.48.0.
   above; unreachable, it is an **unreferenced remnant** -- a warning, naming the object and what it
   lacks, and `verify` exits `0`. No command removes a remnant in 0.49.0; re-running the same `bundle
   import` is still the only way to make a still-needed one whole, exactly as before this round.
-- **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
-  different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
-  `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same
-  `branch create`/`tag create` answers "already exists" rather than finishing the interrupted
-  publication -- DC-38's own retry exists for `seal` only. A `seal` of an *unrelated* ref then succeeds,
-  appends behind the torn record, and from then on `verify` reports a damaged ref-log record and
-  `commit` is refused. **Reached through `merge` too**: a crash mid-publication leaves the same
-  `PRIKK-VERIFY-REF-DIVERGENCE` state, and neither re-running the same merge (refused: "not
-  confluent") nor a `seal` retry of the same ref completes it -- there is no command way out. Measured
-  for `merge`: 10 of 300 kills on 0.48.0, 16 of 300 on the 0.49.0 build carrying the dependency-order
-  fix above. A way to complete or withdraw the interrupted publication, and `seal` refusing
-  while another ref's publication is incomplete (the same refusal `commit` already gives), are planned
-  for 0.49.0 alongside F1.
+- **A crash inside `branch create` or `tag create` has no command that completes it (N3).** The ref
+  log's last record is torn; `verify` fails with `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends
+  manual recovery, but retrying the same `branch create`/`tag create` answers "already exists" rather
+  than finishing the interrupted publication -- DC-38's own retry exists for `seal` only. **Reached
+  through `merge` too**: a crash mid-publication leaves the same `PRIKK-VERIFY-REF-DIVERGENCE` state,
+  and re-running the same merge answers "not confluent" rather than finishing it. Measured for `merge`:
+  10 of 300 kills on 0.48.0, 16 of 300 on the 0.49.0 build carrying the dependency-order fix above.
+  **Fixed in 0.49.0 (R1-R3): every publication (`seal`, `branch create`, `branch close`, `tag create`,
+  `sync adopt-tag`, `merge`) now refuses before its first write while *another* ref's publication is
+  incomplete -- the same refusal `commit` already gave -- so a `seal` (or any other publication) can no
+  longer bury an unrelated ref's torn record behind its own, appended content.** A publication's own
+  retry of *its own* interrupted state is never blocked by this (`seal`'s DC-38 retry still completes).
+  **What remains, until 0.49.0 step 3 (R4-R6):** completing or withdrawing an interrupted `branch
+  create`/`branch close`/`tag create`/`sync adopt-tag`/`merge` publication still has no command --
+  retrying still only answers "already exists"/"not confluent," safely but uselessly. **`sync seal`
+  remains locked out of its own interrupted publication**: its own precondition cannot yet tell "my own
+  retry" apart from "another ref's incomplete work," so it refuses both -- a known, disclosed gap, not
+  worked around in this round.
 - **A damaged last WAL record is now a tail, and the repair removes it (N6).** RFC 162 rule 3 defines
   the WAL's tail by position, not shape: a last record whose own bytes are all present but whose
   checksum fails is indistinguishable, once nothing sound follows it, from a genuine crash-torn append.
@@ -149,8 +154,22 @@ planned for. None of these blocks 0.48.0.
   told had succeeded is never silent about it. What would close the gap itself -- telling a genuine
   crash apart from later damage to an already-durable record -- is a witness written with each commit
   (the count or end offset of committed records), planned for 0.49.0.
-- **A ref publication replays the whole ref log three times.** It grows about 4.3 KB per generation.
-  Planned for 0.49.0.
+- **Fixed in 0.49.0 (R1): a ref publication now reads the whole ref log once, not three times.**
+  `classify_state`'s own replay is threaded through the append's idempotency check and the post-write
+  agreement check (a ranged read-back of just the bytes appended, not a fourth whole read). Measured
+  at generations 4, 64 and 1,024: 3 whole reads before, 1 after, at every depth; about 1.8× faster at
+  depth 1,024 on a release test binary. **What remains**: the write-path precondition (M8, below) used
+  to share this same three-reads shape but is now fixed separately; reconciling this round's own
+  ~417 B/generation figure against an earlier ~4.3 KB/generation measurement (likely counting more than
+  the ref log alone) was not settled.
+- **Fixed in 0.49.0 (R2): a commit's own write-path precondition no longer checks every ref's whole
+  history.** `ensure_no_incomplete_publication` used to run a full `verify_refs`, replaying the ref log
+  once per ref -- a commit touches no ref, yet paid refs × log size. Now one pass over the pointer
+  index and one over the ref log, comparing each ref's newest pointer with its newest log record.
+  Measured (release build): 62 µs at 1 ref before and after is noise-level, but 6.3 ms → 108 µs at 100
+  refs, 74 ms → 417 µs at 400, and **6.8 s → 4.4 ms at 4,000**. `verify`/`doctor` keep the fuller check
+  (chain continuity, signature-envelope structure, missing-object detection) this precondition never
+  needed.
 - **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.
   Planned for 0.49.0.
 - **A one-file `commit` reads every stored blob to learn its kind**: 1 MiB of stored content read 1.1 MB,

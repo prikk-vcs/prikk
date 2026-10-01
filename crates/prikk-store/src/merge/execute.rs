@@ -69,6 +69,10 @@ pub fn execute_merge(
 ) -> Result<MergeExecutionReport> {
     layout.require_current_format()?;
     let into_ref = validate_local_branch_ref(into_ref)?;
+    // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
+    // `into_ref` excluded, since this merge is the thing that would resolve its own state, not
+    // something blocked by it. A merge never writes `from_ref`, so it is never excluded.
+    crate::refs::ensure_no_incomplete_publication_except(layout, Some(&into_ref))?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     // DC-85: `from_ref` may be a local branch or a received ref (`remotes/<name>`) — never widen

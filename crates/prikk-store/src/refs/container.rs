@@ -52,7 +52,9 @@ use crate::foundation::frame_resync::{
     partial_before_sound_frame_message, require_progress, resync_to_next_magic,
     sound_frame_after_partial, tallied_sha256,
 };
-use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
+use crate::foundation::fsutil::{
+    append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
+};
 use crate::foundation::layout::RepositoryLayout;
 use crate::refs::require_signed_type;
 
@@ -415,41 +417,108 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
 /// would mean one ref's crash blocks every other ref's publishes under a shared container -- exactly
 /// the availability regression the ruling rejects. Mirrors `write_object_to_container`'s own
 /// unconditional container-append exactly.
+///
+/// RFC 165 R1: `publish_locked` (this function's only production caller before this round) now calls
+/// [`append_ref_container_record_with_replay`] instead, to reuse `classify_state`'s own read rather
+/// than reading the container again here. This function has no production caller left -- `#[cfg(test)]`
+/// matches its own sole re-export in `refs.rs`, so a non-test build never compiles it (and so never
+/// flags it as dead code; its test-only fixture callers, `refs.rs::append_log_record_for_signature_test`
+/// and `container/tests.rs`'s own direct calls, are unaffected).
+#[cfg(test)]
 pub(in crate::refs) fn append_ref_container_record(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
     envelope: &ObjectEnvelope,
 ) -> Result<()> {
+    let relative = require_sound_update(envelope, layout)?;
+    let existing = replay_ref_subsequence(layout, ref_name_key)?;
+    append_ref_container_record_against(layout, &relative, ref_name_key, &existing, envelope)?;
+    Ok(())
+}
+
+/// RFC 165 R1: identical write behavior and identical `created_at == 0` enforcement to
+/// [`append_ref_container_record`], but takes an already-loaded [`RefLogReplay`] instead of reading
+/// the whole container again for the idempotency check -- the caller (`publish_locked`) reuses the
+/// one read `classify_state`'s own replay already paid for (F1). Reports [`AppendOutcome`] so the
+/// caller's own post-write check can be a ranged read of just the bytes this call wrote, not another
+/// whole-container read (review v2 §2 item 2: a trusted return was rejected, a ranged read-back kept
+/// `ensure_agreement`'s actual purpose -- did the bytes land as intended).
+pub(in crate::refs) fn append_ref_container_record_with_replay(
+    layout: &RepositoryLayout,
+    ref_name_key: [u8; 32],
+    envelope: &ObjectEnvelope,
+    preloaded: &RefLogReplay,
+) -> Result<AppendOutcome> {
+    let relative = require_sound_update(envelope, layout)?;
+    append_ref_container_record_against(layout, &relative, ref_name_key, preloaded, envelope)
+}
+
+/// Decode and validate the `created_at == 0` requirement, and resolve the container's own relative
+/// path -- the part [`append_ref_container_record`] and
+/// [`append_ref_container_record_with_replay`] both need before either reads or writes anything.
+fn require_sound_update(
+    envelope: &ObjectEnvelope,
+    layout: &RepositoryLayout,
+) -> Result<std::path::PathBuf> {
     // RFC 102 Stage 4 checkpoint review, design-v1.md §13.15: format-2 requires `created_at == 0`
     // for a RefUpdate -- DC-39's implementation of a DC-34 ruling, carried from the retired
-    // `refs/log.rs::append_log_record`'s own write-time check. Placed here, the append function
-    // itself, because it is the one choke point every publish path (`Ready`/`PointerLeading`/
-    // `Complete`) already goes through -- anything upstream (e.g. `publish_locked`) is a layer a
-    // future caller could bypass, which is how this check was lost in the first place.
+    // `refs/log.rs::append_log_record`'s own write-time check. Placed here, the one choke point
+    // every publish path (`Ready`/`PointerLeading`/`Complete`) already goes through -- anything
+    // upstream (e.g. `publish_locked`) is a layer a future caller could bypass, which is how this
+    // check was lost in the first place.
     let update = RefUpdatePayload::decode_canonical(&envelope.canonical_payload)?;
     if update.created_at != 0 {
         return Err(PrikkError::MalformedData(
             "format-2 RefUpdate requires created_at == 0".to_string(),
         ));
     }
-    let relative = layout.repository_relative(
+    layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
-    )?;
+    )
+}
+
+/// What one append call actually did, so a caller's own post-write check knows what to verify.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::refs) enum AppendOutcome {
+    /// The retry's own envelope already matched this ref's last record (idempotency, below) -- a
+    /// zero-byte sync landed, nothing new was written, and the pre-write replay already confirmed
+    /// this exact envelope is this ref's own current tip. Nothing new to range-read.
+    AlreadyPresent,
+    /// A new record was durably appended at `offset`, with exactly `bytes` on disk there -- the
+    /// caller's own ranged read-back compares against these bytes, not a recomputed copy.
+    Wrote { offset: u64, bytes: Vec<u8> },
+}
+
+fn append_ref_container_record_against(
+    layout: &RepositoryLayout,
+    relative: &std::path::Path,
+    ref_name_key: [u8; 32],
+    existing: &RefLogReplay,
+    envelope: &ObjectEnvelope,
+) -> Result<AppendOutcome> {
     // Idempotency, preserved from `refs/log.rs::append_log_record`'s exact behavior (retired, not
     // dropped): a retry whose own ref-scoped subsequence already ends in this exact envelope is a
     // no-op sync, not a second record -- `publish_locked`'s `PointerLeading`/`Complete` branches
     // call this unconditionally on every retry, and without this check a `Complete`-state retry
     // (pointer and log already agree) would append a genuine duplicate record.
-    let existing = replay_ref_subsequence(layout, ref_name_key)?;
     if existing
         .records
         .last()
         .is_some_and(|last| last.envelope == *envelope)
     {
-        return append_file_required(layout.repository_mutation_root(), &relative, &[]);
+        append_file_required(layout.repository_mutation_root(), relative, &[])?;
+        return Ok(AppendOutcome::AlreadyPresent);
     }
     let record = encode_ref_container_record(ref_name_key, envelope)?;
-    append_file_required(layout.repository_mutation_root(), &relative, &record)
+    let offset = append_file_reporting_offset_required(
+        layout.repository_mutation_root(),
+        relative,
+        &record,
+    )?;
+    Ok(AppendOutcome::Wrote {
+        offset,
+        bytes: record,
+    })
 }
 
 /// Replay one ref's own subsequence from the shared container: every sound record whose header
@@ -465,6 +534,26 @@ pub(in crate::refs) fn append_ref_container_record(
 /// the retry append lands correctly regardless, per the ruling's own point 1; an unattributed tail
 /// only loses the specific "N incomplete trailing byte(s)" diagnostic wording and the truncate-before-
 /// retry hygiene step, never the underlying detection or recovery).
+/// RFC 165 R1: read back exactly the bytes [`AppendOutcome::Wrote`] reported, for a caller's own
+/// post-write check -- a ranged read (`read_file_range_if_exists`), never a whole-container one.
+/// `None` only if the container itself is absent, which cannot happen for an offset an append into
+/// it just reported.
+pub(in crate::refs) fn read_back_ref_container_bytes(
+    layout: &RepositoryLayout,
+    offset: u64,
+    len: usize,
+) -> Result<Option<Vec<u8>>> {
+    let relative = layout.repository_relative(
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
+    )?;
+    crate::foundation::fsutil::read_file_range_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+        offset,
+        len,
+    )
+}
+
 pub(in crate::refs) fn replay_ref_subsequence(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],

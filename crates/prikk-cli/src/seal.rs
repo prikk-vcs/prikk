@@ -85,6 +85,11 @@ fn seal_active_no_audit(
     signer: &impl MaintainerSigner,
 ) -> std::result::Result<SealCommandResult, String> {
     let ref_name = validate_local_branch_ref(ref_name).map_err(|err| err.to_string())?;
+    // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
+    // `ref_name` excluded, so this seal's own DC-38 retry of its own interrupted publication (the
+    // tip-already-matches path below) is never blocked by the very state it is about to resolve.
+    prikk_store::ensure_no_incomplete_publication_except(&layout, Some(&ref_name))
+        .map_err(|err| err.to_string())?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     prikk_store::ensure_worktree_replay_verified(&layout).map_err(|err| err.to_string())?;
     let active_lock =

@@ -13,7 +13,7 @@ use crate::lock::{RefLock, acquire_container_locks};
 use crate::object_store::ObjectWriter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PublicationState {
+pub(in crate::refs) enum PublicationState {
     Ready,
     PointerLeading,
     Complete,
@@ -94,8 +94,15 @@ fn publish_locked(
         }
     }
 
-    let (state, trailing_partial_bytes) = classify_state(store, publication, &update)?;
-    if trailing_partial_bytes != 0 {
+    // RFC 165 R1 (F1): one whole-container read of the ref log per publication, not three.
+    // `classify_state`'s own replay is reused below for the append's idempotency check
+    // (`append_ref_container_record_with_replay`) and for the post-write agreement check
+    // (`ensure_agreement`, below) -- safe because the pointer-index and ref-log container locks
+    // acquired above are held for this function's entire remaining body, so nothing else can write
+    // to either container in between (proved by `a_second_writer_between_the_reads_is_excluded_by_the_lock`,
+    // which bypasses the lock on purpose to show the assumption is load-bearing, not free).
+    let (state, replay) = classify_state(store, publication, &update)?;
+    if replay.trailing_partial_bytes != 0 {
         if !allow_partial_tail_repair
             || state != PublicationState::PointerLeading
             || !container::incomplete_tail_matches(
@@ -111,7 +118,7 @@ fn publish_locked(
         }
         container::truncate_incomplete_tail(&store.layout)?;
     }
-    match state {
+    let outcome = match state {
         PublicationState::Ready => {
             // Design-v1.md §13.6: no candidate/promote dance, and the write order is otherwise
             // unchanged from today's pointer-first publication -- the CAS check happens immediately
@@ -142,28 +149,23 @@ fn publish_locked(
                     ref_state_id,
                 },
             )?;
-            container::append_ref_container_record(
+            container::append_ref_container_record_with_replay(
                 &store.layout,
                 ref_name_key,
                 &publication.ref_update,
-            )?;
+                &replay,
+            )?
         }
-        PublicationState::PointerLeading => {
-            container::append_ref_container_record(
+        PublicationState::PointerLeading | PublicationState::Complete => {
+            container::append_ref_container_record_with_replay(
                 &store.layout,
                 ref_name_key,
                 &publication.ref_update,
-            )?;
+                &replay,
+            )?
         }
-        PublicationState::Complete => {
-            container::append_ref_container_record(
-                &store.layout,
-                ref_name_key,
-                &publication.ref_update,
-            )?;
-        }
-    }
-    ensure_agreement(store, publication, &update)?;
+    };
+    ensure_agreement(store, publication, &update, &replay, &outcome)?;
     drop(container_locks);
     drop(ref_lock);
     Ok(ref_state_id)
@@ -232,11 +234,15 @@ fn validate_coherent_publication(publication: &RefPublication) -> Result<RefUpda
     Ok(update)
 }
 
-fn classify_state(
+/// Classify this publication's state against the ref's current pointer and ref-log tip, **returning
+/// the [`super::RefLogReplay`] it read** (RFC 165 R1/F1) -- the one whole-container read a
+/// publication now pays, reused by the append's own idempotency check and by [`ensure_agreement`]'s
+/// post-write check, instead of either reading the container again.
+pub(in crate::refs) fn classify_state(
     store: &RefStore,
     publication: &RefPublication,
     update: &RefUpdatePayload,
-) -> Result<(PublicationState, usize)> {
+) -> Result<(PublicationState, super::RefLogReplay)> {
     let current = store.read_current_ref_state_id(&publication.ref_name)?;
     let replay = store.replay_log(&publication.ref_name)?;
     // RFC 102 Stage 2: a damaged record silently missing from `replay.records` could make
@@ -270,7 +276,7 @@ fn classify_state(
             )));
         }
     };
-    Ok((state, replay.trailing_partial_bytes))
+    Ok((state, replay))
 }
 
 fn log_position(
@@ -305,27 +311,50 @@ fn log_position(
     Ok((previous, exact_last, before_last))
 }
 
-fn ensure_agreement(
+/// Confirm the publication landed, **without re-reading the whole ref log** (RFC 165 R1/F1).
+///
+/// Two facts stay true from before the write, because the pointer-index and ref-log container locks
+/// `publish_locked` holds were never released between `classify_state`'s own read and this check:
+/// `pre_write_replay.has_item_failure()` (no damage existed before this write, and nothing else could
+/// have written in between) and `pre_write_replay.trailing_partial_bytes == 0` or the tail this
+/// function's own truncate step already resolved. Review v2 §2 item 2 rejected trusting the append's
+/// own success outright: what's checked instead is a **ranged read-back** of exactly the bytes
+/// [`container::AppendOutcome::Wrote`] reported, compared byte for byte with what was written --
+/// `append_file_reporting_offset_required`'s own fsync-before-return contract makes the write durable
+/// before this read runs, but a corrupted read path, a torn write the durability contract missed, or
+/// a bug in `encode_ref_container_record` producing the wrong bytes would all still be caught here,
+/// which trusting the `Ok` return alone would not have caught.
+pub(in crate::refs) fn ensure_agreement(
     store: &RefStore,
     publication: &RefPublication,
     update: &RefUpdatePayload,
+    pre_write_replay: &super::RefLogReplay,
+    outcome: &container::AppendOutcome,
 ) -> Result<()> {
     let current = store.read_current_ref_state_id(&publication.ref_name)?;
-    let replay = store.replay_log(&publication.ref_name)?;
-    let last = replay.records.last().map(|record| &record.envelope);
-    // RFC 102 Stage 2: already naturally caught below in practice (a damaged just-appended record
-    // makes `last` disagree with `publication.ref_update`), named explicitly rather than left
-    // incidental -- this is the final agreement check after a write, and its refusal should not
-    // depend on the corrupted record happening to be the very last one.
-    if replay.has_item_failure()
-        || current != Some(update.new_ref_state_id)
-        || replay.trailing_partial_bytes != 0
-        || last != Some(&publication.ref_update)
-    {
+    if pre_write_replay.has_item_failure() || current != Some(update.new_ref_state_id) {
         return Err(PrikkError::Integrity(format!(
             "ref {} pointer/log agreement was not established",
             publication.ref_name
         )));
+    }
+    match outcome {
+        container::AppendOutcome::AlreadyPresent => {
+            // Nothing new was written: the pre-write replay's own idempotency check already
+            // confirmed `publication.ref_update` is this ref's current tip, verbatim. Nothing to
+            // range-read.
+        }
+        container::AppendOutcome::Wrote { offset, bytes } => {
+            let read_back =
+                container::read_back_ref_container_bytes(&store.layout, *offset, bytes.len())?;
+            if read_back.as_deref() != Some(bytes.as_slice()) {
+                return Err(PrikkError::Integrity(format!(
+                    "ref {} pointer/log agreement was not established: the bytes read back at \
+                     offset {offset} do not match what was written",
+                    publication.ref_name
+                )));
+            }
+        }
     }
     Ok(())
 }

@@ -141,8 +141,44 @@ reclassified as damage on the very next run, since reachability is never cached.
 only a Block's own three reference fields get this treatment; `RefState`'s and `Tag`'s own reference
 fields are not existence-checked at all today, independent of this change.
 
+### Changed — a ref publication reads the ref log once, not three times, and a commit's own
+write-path precondition no longer checks every ref's whole history (RFC 165 R1, R2)
+
+**R1 (F1):** `classify_state`'s own replay of the ref log is now threaded through the append's
+idempotency check and the post-write agreement check, instead of each reading the whole shared
+container again — the pointer-index and ref-log container locks stay held across the whole critical
+section, as before, so nothing else can write in between. The post-write check became a ranged
+read-back of exactly the bytes just appended, compared byte for byte with what was written, rather
+than a third whole-container read. Measured: 3 whole reads before, 1 after, at generations 4, 64 and
+1,024; about 1.8× faster at depth 1,024 (release test binary). **R2 (M8):** `ensure_no_incomplete_publication`
+(the precondition `commit`, `seal`, `branch create`, `branch close`, `tag create`, `sync adopt-tag`,
+`merge`, `sync seal`, `add_trusted_maintainer`, `rollback-draft`, and `doctor`'s own repair path all
+share) no longer calls `verify_refs` at all — it now does one pass over the pointer index and one over
+the ref log container, comparing each ref's newest pointer with its newest log record, and still
+refuses on a damaged record, candidate debris, or a settled publication whose active WAL has not
+drained (`has_incomplete_active_cleanup`, unchanged). `verify`/`doctor` keep the fuller per-ref
+checks (chain continuity, signature-envelope structure, missing-object detection) this precondition
+never needed. Measured (release build, three samples each): 1 ref 62 µs → 62 µs (noise), 100 refs
+6.3 ms → 108 µs, 400 refs 74 ms → 417 µs, **4,000 refs 6.8 s → 4.4 ms**.
+
+### Changed — every publication refuses while another ref's publication is incomplete, before its
+own first write (RFC 165 R3)
+
+`seal`, `branch create`, `branch close`, `tag create`, `sync adopt-tag`, and `merge` now call the same
+precondition `commit` already did, before any write — scoped to exclude the ref each command is itself
+about to publish, so a `seal` retrying its own interrupted publication (DC-38) is never blocked by the
+very state it is about to resolve. A `seal` of an *unrelated* ref, or any other publication, can no
+longer proceed while a different ref's publication is torn, and so can no longer append behind it or
+otherwise bury it further. A refusal here writes nothing. **`sync seal` is unchanged**: its own
+existing, unscoped precondition calls stay as they are — it remains locked out of its own interrupted
+publication, a known, disclosed gap carried to the next round, not worked around here.
+
 ### Output changes
 
+- `seal`, `branch create`, `branch close`, `tag create`, `sync adopt-tag`, and `merge` can now refuse
+  with `"repository mutation is blocked by incomplete ref publication; run verify/doctor and use
+  signer-backed seal retry"` before writing anything, when a *different* ref's own publication is
+  incomplete (RFC 165 R3) — the same text `commit` already gave, now reachable from six more commands.
 - `verify` gains an `unreferenced remnants: N` line, plus one warning line per remnant naming the
   owner, the missing object, and its role (RFC 164 round 2 Rule E): `"<owner type> <id> references
   missing <missing type> <id> (<role>) -- re-run the import if you still have the bundle; otherwise it

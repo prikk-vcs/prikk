@@ -10,7 +10,15 @@ use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::trust::{load_maintainer_trust_policy, verify_trusted_publication_envelope};
 use crate::wal::Wal;
 
-pub(super) fn has_incomplete_active_cleanup(layout: &RepositoryLayout) -> Result<bool> {
+/// `exclude_ref_name`: RFC 165 R3 -- a publication retrying its own interrupted work is exactly the
+/// shape this function's own fixture describes (a settled Block whose WAL has not drained yet), so a
+/// publication excludes its own ref the same way [`super::ensure_no_incomplete_publication_except`]
+/// excludes it from the pointer/log agreement check -- otherwise a `seal` retry would refuse behind
+/// the very state its own retry exists to resolve.
+pub(super) fn has_incomplete_active_cleanup(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+) -> Result<bool> {
     let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
     let ActiveRefMetadata::Valid(ref_name) = read_active_ref_metadata(layout)? else {
         return Ok(false);
@@ -19,13 +27,18 @@ pub(super) fn has_incomplete_active_cleanup(layout: &RepositoryLayout) -> Result
     // `patch_ids` comparison below pass or fail for the wrong reason -- fail closed instead of
     // reasoning from a reduced view of the WAL. Checked after the metadata check above (matching
     // this function's own established shape: only report on an issue once metadata already
-    // implicates this WAL), before the emptiness check below.
+    // implicates this WAL), before the emptiness check below. **Never excluded**: a damaged WAL
+    // refuses regardless of which ref's own retry is in progress -- only the ordinary "settled but
+    // not drained" shape below is this ref's own business to resolve.
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(format!(
             "active WAL has a damaged record ({}); run doctor for diagnosis before mutating this repository (a damaged record with \
              sound ones behind it is not a torn tail, and no automatic repair applies to it)",
             replay.damage_summary().unwrap_or_default()
         )));
+    }
+    if Some(ref_name.as_str()) == exclude_ref_name {
+        return Ok(false);
     }
     if replay.records.is_empty() {
         return Ok(false);

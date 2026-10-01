@@ -1,7 +1,10 @@
 //! Ref publication tests.
 
+mod every_publication_refuses_first;
 mod hostile_lengths;
+mod no_refs_times_log_precondition;
 mod object_mismatch;
+mod one_read_per_publication;
 mod publication_recovery;
 
 use prikk_object::ObjectType;

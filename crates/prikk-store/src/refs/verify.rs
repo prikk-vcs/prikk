@@ -102,9 +102,12 @@ impl RefVerification {
     /// Return true when any pointer file, log file, or ref-name classification failed (DC-95
     /// Stage 2 Level 2). Item containment means `verify_refs` itself now returns `Ok` for these
     /// cases -- callers that need "is this repository's ref state fully sound," not just "did the
-    /// scan run at all," must check this alongside any hard `Err`. Not called anywhere today
-    /// (`verify.rs` destructures the fields directly instead) -- narrowed rather than left
-    /// `pub(crate)` on the strength of an unused capability.
+    /// scan run at all," must check this alongside any hard `Err`. No production caller today:
+    /// `verify.rs` destructures the fields directly instead, and RFC 165 R2 removed this crate's
+    /// one other caller (`ensure_no_incomplete_publication`, which no longer calls `verify_refs` at
+    /// all). `#[cfg(test)]` since its only remaining caller is the R2 test oracle,
+    /// `ensure_no_incomplete_publication_via_verify_refs_for_test`.
+    #[cfg(test)]
     pub(in crate::refs) fn has_item_failure(&self) -> bool {
         self.pointer_outcomes
             .iter()
@@ -299,7 +302,9 @@ fn next_log_sequence(log: Option<&LogState>) -> Result<u64> {
 /// absence itself is reported by `doctor`'s own sweep over `RepositoryLayout::required_directories`,
 /// not here, so this stays a pure scan rather than growing a second way to say "something is
 /// missing."
-fn candidate_issues(layout: &RepositoryLayout) -> Result<Vec<RefPublicationIssue>> {
+pub(in crate::refs) fn candidate_issues(
+    layout: &RepositoryLayout,
+) -> Result<Vec<RefPublicationIssue>> {
     let mut issues = Vec::new();
     let dir = layout.refs_dir().join("tmp");
     let relative = layout.repository_relative(&dir)?;

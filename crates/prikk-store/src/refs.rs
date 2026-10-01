@@ -54,7 +54,7 @@ use prikk_object::{
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::lock::ActiveLock;
-use crate::object_store::{FileObjectStore, ObjectReader, ObjectWriter};
+use crate::object_store::{FileObjectStore, ObjectReadSnapshot, ObjectReader, ObjectWriter};
 
 /// Test-only convenience matching the retired `refs/log.rs::append_log_record`'s own 3-argument
 /// call shape exactly, for fixtures that need to plant a specific log record directly without going
@@ -175,25 +175,168 @@ pub(crate) fn read_current_ref_tip_block(
 /// The precondition every write path checks before touching refs: a publication interrupted between
 /// its pointer write and its ref-state write leaves a ref that reads as neither old nor new, and a
 /// second writer stepping onto it would make the damage permanent rather than resumable.
+///
+/// RFC 165 R2 (M8): answers exactly this question, in one pass over the pointer index and one over
+/// the ref log container, instead of `verify_refs`'s full per-ref `replay_ref_subsequence` loop
+/// (refs × log size) -- `verify_refs` is no longer called from here at all. `verify` and `doctor`
+/// keep the fuller check this precondition never needs (chain continuity, signature-envelope
+/// structure, missing-object detection): those answer "is this repository's ref state fully sound,"
+/// a broader question than "is a write safe to proceed." But two of `verify_refs`'s checks are kept,
+/// explicit and separate, because the existing test suite ties them to this precondition specifically
+/// -- removing them during this round's own implementation turned six tests red, each naming a
+/// mutation entry point (`append_patch`, `add_trusted_maintainer`, `repair_repository`) that depends
+/// on this exact gate catching it, not `verify`/`doctor` catching it later:
+/// - **candidate debris** (`candidate_issues`, below) -- a `refs/tmp/` leftover from an era before
+///   RFC 102 Stage 4's append-only pointer index, kept reachable for an older-format repository and
+///   for any writer outside `prikk` that still produces one; a cheap directory listing, not a
+///   refs-or-log-sized read.
+/// - **a legacy (`created_at != 0`) ref-log record** -- free to check here: this function's own log
+///   scan already decodes every record's `RefUpdatePayload` to read `new_ref_state_id`; checking
+///   `created_at` costs nothing further.
+///   `has_incomplete_active_cleanup` stays for the same reason, and because review v2 §2 item 1
+///   already named it explicitly: not incidental coverage, half of what this precondition protects
+///   (a settled publication whose queue has not drained).
+///
+/// **A fourth check, beyond R2's own literal "two passes," found the same way**: a ref whose pointer
+/// and log agree on a `RefState` id, but whose `RefState` object is itself missing or unreadable, is
+/// still an unsafe state for a second writer to build on -- `add_trusted_maintainer` and
+/// `repair_repository` do not always read the ref content their own write touches, so this is not
+/// always caught downstream the way a content-reading command like `commit` or `seal` mostly would
+/// be. One `ObjectReadSnapshot::open` (one object-index decode, the same cost shape `verify`'s own
+/// object stage already pays once) followed by an O(1) `contains_object` lookup per distinct
+/// `RefState` id the pointer index names keeps this a bounded, one-more-read cost, not a return to
+/// refs × anything -- measured alongside R2's own release timing, not assumed.
 pub(crate) fn ensure_no_incomplete_publication(layout: &RepositoryLayout) -> Result<()> {
-    let verification = verify_refs(layout)?;
-    // DC-95 Stage 2 Level 2: item containment means `verify_refs` now returns `Ok` for a single
-    // ref's own read/classification failure instead of aborting -- this gate must check for that
-    // directly (`has_item_failure`), the same reason `RepositoryVerification::has_stage_failure`
-    // alone stopped being sufficient once `verify_objects` gained the same containment.
-    if verification.publication_issues.is_empty()
-        && !verification.has_item_failure()
-        && !evidence::has_incomplete_active_cleanup(layout)?
-    {
-        return Ok(());
+    ensure_no_incomplete_publication_except(layout, None)
+}
+
+/// RFC 165 R3 (C3): the same precondition, but blind to one ref's own pointer/log disagreement and
+/// missing-object state -- `exclude_ref_name`. Every publication now calls this (with its own ref
+/// name excluded) before its first write, so a `seal` retrying its own interrupted publication is
+/// never blocked by the very state it is about to resolve, while an unrelated `seal` still refuses
+/// behind *another* ref's interrupted publication (C3's own point). `exclude_ref_name: None` is
+/// `ensure_no_incomplete_publication` itself: every other check here (damaged records anywhere,
+/// a legacy record anywhere, candidate debris, pending active cleanup) stays global regardless of
+/// which ref is excluded -- none of them are attributed to one ref in the first place (candidate
+/// debris carries no ref name at all; a crash cannot produce a legacy record under current write-time
+/// enforcement, so one found anywhere is already an anomaly, not this ref's own business).
+///
+/// **Known interim state (R3, not R4): excluding a ref from this check does not give it a way to
+/// *finish* an interrupted publication** -- only `seal`'s own pre-existing DC-38 retry mechanism
+/// actually completes one. `branch create`/`branch close`/`tag create`/`sync adopt-tag`/`merge`
+/// still answer "already exists"/"not confluent" once past this check, exactly as before R3; `sync
+/// seal` is deliberately **not** changed to call this excluding form at all (its own two existing,
+/// unscoped `ensure_no_incomplete_publication` calls stay as they are) -- review v2 and the round 1
+/// handoff both name `sync seal`'s self-lockout as a known gap this round does not work around.
+pub fn ensure_no_incomplete_publication_except(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+) -> Result<()> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let excluded_key = exclude_ref_name.map(crate::foundation::layout::ref_name_key_bytes);
+
+    let pointer_replay = replay_pointer_index(layout)?;
+    if pointer_replay.has_item_failure() {
+        return Err(incomplete_publication_refusal());
     }
+    let mut newest_pointer: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
+    for entry in &pointer_replay.entries {
+        newest_pointer.insert(entry.ref_name_key, entry.ref_state_id);
+    }
+
+    // RFC 165 R2: this is the one whole-container read this precondition now does, in total --
+    // the `ref-log-replay` open finding (`whole_read_guard.rs`'s own `SCOPES` table), reached here
+    // once per precondition check instead of once per ref.
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
+    let relative = layout.repository_relative(
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
+    )?;
+    let mut newest_log: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
+    if let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )? {
+        let discovery = container::decode_ref_container_records(&bytes)?;
+        // A damaged record anywhere in the shared container blocks mutation too -- not
+        // attributable to one ref until it decodes, so this refuses for the whole repository
+        // rather than naming which ref, unlike `verify`'s own per-ref attribution.
+        if discovery.record_outcomes.iter().any(|outcome| {
+            matches!(
+                outcome.status,
+                container::RefContainerRecordStatus::Failed { .. }
+            )
+        }) {
+            return Err(incomplete_publication_refusal());
+        }
+        for record in &discovery.records {
+            let update = RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload)?;
+            if update.created_at != 0 {
+                return Err(incomplete_publication_refusal());
+            }
+            newest_log.insert(record.ref_name_key, update.new_ref_state_id);
+        }
+    }
+
+    let mut keys: BTreeSet<[u8; 32]> = BTreeSet::new();
+    keys.extend(newest_pointer.keys().copied());
+    keys.extend(newest_log.keys().copied());
+    for key in keys {
+        if Some(key) == excluded_key {
+            continue;
+        }
+        if newest_pointer.get(&key) != newest_log.get(&key) {
+            return Err(incomplete_publication_refusal());
+        }
+    }
+
+    // One object-index decode, then an O(1) lookup per distinct pointer-named RefState -- the
+    // fourth check named above.
+    let objects = ObjectReadSnapshot::open(layout)?;
+    for (key, ref_state_id) in &newest_pointer {
+        if Some(*key) == excluded_key {
+            continue;
+        }
+        if !objects.contains_object(ObjectType::RefState, *ref_state_id) {
+            return Err(incomplete_publication_refusal());
+        }
+    }
+
+    if !verify::candidate_issues(layout)?.is_empty() {
+        return Err(incomplete_publication_refusal());
+    }
+    if evidence::has_incomplete_active_cleanup(layout, exclude_ref_name)? {
+        return Err(incomplete_publication_refusal());
+    }
+    Ok(())
+}
+
+fn incomplete_publication_refusal() -> PrikkError {
     // RFC 132 part 2: an incomplete publication is a caller precondition, not a lock -- nothing is
     // held and no other writer is racing this one; the fix is running verify/doctor and retrying
     // with the right signer, not waiting.
-    Err(PrikkError::Precondition(
+    PrikkError::Precondition(
         "repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry"
             .to_string(),
-    ))
+    )
+}
+
+/// RFC 165 R2: `ensure_no_incomplete_publication`'s own pre-R2 implementation, kept as a test oracle
+/// (handoff §2: "equivalence with the old function, kept as a test oracle"). Not called from any
+/// production path -- `ensure_no_incomplete_publication` itself no longer calls `verify_refs` at all.
+#[cfg(test)]
+pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
+    layout: &RepositoryLayout,
+) -> Result<()> {
+    let verification = verify_refs(layout)?;
+    if verification.publication_issues.is_empty()
+        && !verification.has_item_failure()
+        && !evidence::has_incomplete_active_cleanup(layout, None)?
+    {
+        return Ok(());
+    }
+    Err(incomplete_publication_refusal())
 }
 
 /// Diagnostic ref candidate derived from an append-only format-1 ref log.
