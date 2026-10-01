@@ -92,16 +92,19 @@ planned for. None of these blocks 0.48.0.
   (no advisory, per the owner's ruling); code history kept apart from measurement:** the code shipped in
   0.20.0 for all three files (trust policy `2827fab7`, the pointer index `0550e340`, the three generation
   logs `b33d1942`), confirmed from history, not measured directly. **Measured on 0.46.0, 0.47.0, and
-  0.48.0** (0.20.0-0.45.0 not independently confirmed): a **length-field** flip in the trust policy's last
-  snapshot read straight through to the previous one on all three measured versions, `verify` exiting 0
-  throughout (0.46.0's and 0.47.0's own `verify` does not read the trust files at all; 0.48.0's reads them
-  but still exits 0 for this shape). A length-field flip in the pointer index's or its generation log's
-  own last record rolled every reader back to the previous tip or slot on 0.46.0 and 0.47.0, `verify`
-  exiting 1; on 0.48.0 the generation log refuses instead (its own one-byte-body rule rejects any length
-  but exactly one), but **every byte, header or body**, flipped in the pointer index's own last record
-  rolls its readers back with no repair involved, and a **body**-byte flip (checksum mismatch) is
-  separately truncatable by `doctor --repair-pointer-index-tail` as a tail, reverting the ref's tip while
-  `verify` stays failed both before and after. A flipped **magic** or **version** byte is refused on every
+  0.48.0** (0.20.0-0.45.0 not independently confirmed), with one reader per file -- `trust maintainer
+  check` for the trust policy, `branch list` for the pointer index and its generation log, not every
+  reader (round 2's own exhaustive, all-reader sweep is against the *fixed* 0.49.0 build, not these
+  historical releases): a **length-field** flip in the trust policy's last snapshot read straight through
+  to the previous one on all three measured versions, `verify` exiting 0 throughout (0.46.0's and 0.47.0's
+  own `verify` does not read the trust files at all; 0.48.0's reads them but still exits 0 for this
+  shape). A length-field flip in the pointer index's or its generation log's own last record rolled
+  `branch list` back to the previous tip or slot on 0.46.0 and 0.47.0, `verify` exiting 1; on 0.48.0 the
+  generation log refuses instead (its own one-byte-body rule rejects any length but exactly one), but
+  **every byte, header or body**, flipped in the pointer index's own last record rolls `branch list` back
+  with no repair involved, and a **body**-byte flip (checksum mismatch) is separately truncatable by
+  `doctor --repair-pointer-index-tail` as a tail, reverting the ref's tip while `verify` stays failed both
+  before and after. A flipped **magic** or **version** byte is refused on every
   measured released version -- that rollback shape existed only in this release's own, unreleased Rule A,
   never shipped. All fixed in 0.49.0 by §9 and §9.2.
 - **A `bundle import` interrupted by a crash could leave a block durable while the patch, blob, or

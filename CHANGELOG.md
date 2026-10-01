@@ -57,11 +57,15 @@ row's own interior damage. `RepositoryVerification` was already `#[non_exhaustiv
 kept apart below** — the code dates to 0.20.0 for all three files, but only 0.46.0, 0.47.0, and 0.48.0 were
 measured; earlier releases are not confirmed either way.
 
+**Measured with one reader per file** (`trust maintainer check` for the trust policy, `branch list` for the
+pointer index and its generation log) — not every reader; round 2's own exhaustive, all-reader sweep against the
+*fixed* 0.49.0 build is what the "every reader" claim is good for, not these historical releases.
+
 | released | trust policy, last snapshot | pointer index, last record | pointer-index generation log, last record |
 |---|---|---|---|
-| 0.46.0 | **length field flipped:** the removed maintainer is trusted again; `verify` exits **0** (0.46.0's `verify` does not read the trust files at all) | **length field flipped:** every reader shows the previous publication's tip; `verify` exits 1 | **length field flipped:** every reader resolves the previous (stale) slot; `verify` exits 1 |
+| 0.46.0 | **length field flipped:** `trust maintainer check` reports the removed maintainer trusted again; `verify` exits **0** (0.46.0's `verify` does not read the trust files at all) | **length field flipped:** `branch list` shows the previous publication's tip; `verify` exits 1 | **length field flipped:** `branch list` resolves the previous (stale) slot; `verify` exits 1 |
 | 0.47.0 | the same | the same | the same |
-| 0.48.0 | **length field flipped:** the same, `verify` exits **0** | **every byte, header or body, flipped:** every reader shows the previous tip, with **no repair run at all**; separately, `doctor --repair-pointer-index-tail` on a **body**-flipped record removes it, reverting the tip itself | **refuses** (0.48.0's own one-byte-body rule rejects any length other than exactly one, so a length flip never resolves as a tail here) |
+| 0.48.0 | **length field flipped:** the same, `verify` exits **0** | **every byte, header or body, flipped:** `branch list` shows the previous tip, with **no repair run at all**; separately, `doctor --repair-pointer-index-tail` on a **body**-flipped record removes it, reverting the tip itself | **refuses** (0.48.0's own one-byte-body rule rejects any length other than exactly one, so a length flip never resolves as a tail here) |
 
 A flipped **magic** or **version** byte is refused on every released version measured — that rollback shape existed
 only in this release's own, unreleased Rule A (RFC 164), never in a shipped version. **Code first shipped in 0.20.0**
