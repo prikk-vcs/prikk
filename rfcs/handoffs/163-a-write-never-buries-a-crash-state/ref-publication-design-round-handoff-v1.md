@@ -69,3 +69,43 @@
 - **Before proposing:** the 14 gates on `main`'s tip are not needed (no product code). State that the primary tree is
   clean.
 - **Report:** `.git-exclude/review-request/rfc165-design-round-report-v1.md`.
+
+## Addendum 1 — 2026-10-01: finish the round (review `rfc165-design-round-review-v1`)
+
+Report `rfc165-design-round-report-v1.md`. **Not accepted: the round is incomplete.** Read review v1, §1 to §3.
+- **Still a design round:** measure, prototype, report, stop. No product code lands.
+- **Ruled already** (review v1 §3):
+  - a pointer-index rebuild is structural, never trust-filtered;
+  - Q4's sketch and Q5's per-ref comparison are the directions to prototype;
+  - Q7's text findings go into the RFC.
+
+1. **Q1, by failpoints:**
+   - every write ordinal of `seal`, `branch create`, `branch close`, `tag create`, `merge`, `sync seal` and
+     `sync adopt-tag`, upstream writes included;
+   - for each state: `verify`, `doctor`, a same-command retry, an unrelated ref's `seal`, and a `commit`.
+2. **Q2:** test review v1 §2's proposed completion rule against every pointer-lead state from item 1:
+   - (a) the RefState verifies under current trust as signed by an adopted maintainer key;
+   - (b) it chains (ref name, previous, sequence);
+   - (c) its target exists, with the right kind;
+   - (d) the WAL evidence, for `seal` and `sync seal`.
+
+   Report which states pass, **any that pass yet should not be completed**, and whether a failing lead can come from a
+   crash or only from corruption. `require_retained_evidence` (`verify/ref_publication.rs:12-41`) is today's rule;
+   start there.
+3. **Q4:** implement the prototype in the scratch worktree.
+   - Reads and bytes at generations 4, 64 and 1,024; release timing of one `seal` at 1,024, three samples.
+   - A second-writer test, by failpoint, of the lock-held invariant, with a control that makes it fail.
+   - Reconcile 417 B against RFC 160's 4.3 KB per generation.
+4. **Q5:**
+   - release `commit` timings at 1, 100, 400 and 4,000 refs, three samples each with the spread, before and with the
+     per-ref prototype;
+   - what a narrower precondition still protects.
+5. **Q6:**
+   - the structural rebuild prototype;
+   - a byte-for-byte comparison with the live pointer index on the RFC 133 corpus at two depths;
+   - a row with a revoked key, where the ref must not move.
+6. **Q7:** the tail-variant text, live.
+7. **Time spent against each unit's budget.** A cut is a question to the architect before delivery, answered within the
+   round.
+
+**Report:** `.git-exclude/review-request/rfc165-design-round-report-v2.md`.
