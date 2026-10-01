@@ -80,7 +80,20 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     // Read every covered file once, before touching any of them.
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let wal_replay = wal.replay()?;
-    let pointer_replay = replay_pointer_index(layout)?;
+    // RFC 164 Addendum 2 item 5: `replay_pointer_index` resolves the pointer index's own live slot
+    // through `resolve_live_slot`, which refuses raw ("generation log has a damaged record; run doctor
+    // before reading") the moment that log has interior damage -- caught here, instead of propagated
+    // with `?`, so a damaged generation log refuses the same uniform, named way every other covered
+    // file's own damage does, rather than leaking that resolver's own bare refusal text.
+    let pointer_replay = match replay_pointer_index(layout) {
+        Ok(replay) => replay,
+        Err(error) => {
+            return Err(PrikkError::Integrity(format!(
+                "--repair-tails refuses: 1 file(s) have interior damage, not a tail -- nothing was \
+                 touched: pointer index generation log: {error}"
+            )));
+        }
+    };
     let appended = check_appended_file_tails(layout)?;
 
     // All or nothing: refuse before touching anything if any file has interior damage.
