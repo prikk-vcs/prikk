@@ -51,30 +51,47 @@ types) — one row per file, reporting a tail (a warning, never failing `verify`
 independently of whether some other check happens to touch the file first. `has_item_failure` now also considers a
 row's own interior damage. `RepositoryVerification` was already `#[non_exhaustive]`; this is additive.
 
-### Security — `--repair-pointer-index-tail` could remove a corrupted, not torn, last record and silently revert a ref
+### Security — a corrupted (not torn) last record could silently revert trust or ref state
 
-RFC 162's own "a tail is everything after the last sound record, whatever its shape" let a **complete** last pointer-
-index record (a valid header, its whole claimed body present) whose checksum fails be truncated as if it were a
-crash's torn remnant. A crash can only interrupt a write, so everything it leaves is *incomplete*; a complete record
-was fully written, and a failing checksum on it is corruption after the fact, not a crash. Truncating it removed a
-publication that had actually happened: measured on the shipped 0.48.0 binary, one flipped byte in the pointer
-index's newest record, then `doctor --repair-pointer-index-tail`, silently reverted a ref's tip to its previous
-block — `verify` reported a failure both before and after the repair, but the repair still changed what the ref
-pointed at. **Affected: 0.48.0 (RFC 162).** Fixed in this release by RFC 164 §9 (below): a complete record with a
-bad checksum is now damage, even when last, and the repair refuses on it instead.
+**The trust policy, since 0.20.0.** A single flipped byte anywhere in the last trust-policy snapshot's header
+(magic, version, or claimed length) was indistinguishable from a torn tail, under the `TrailingPartial` shape rule
+`2827fab7` first shipped. The repository's own readers resolved it as a tail with nothing sound after it — reading
+straight through to the *previous* snapshot — with no repair even involved: `verify` exited 0 and `trust maintainer
+check` reported a just-revoked key trusted again, the moment the byte flipped. Measured on 0.46.0 and 0.48.0;
+present in every release from 0.20.0 on. **Affected: 0.20.0 to 0.48.0. No advisory (disclosure only, per the
+owner's ruling). Action: upgrade; verify is now able to detect and report this shape.**
 
-### Fixed — RFC 164 §9: a complete record is never a tail, even when it is last
+**The pointer index's readers and its repair, in 0.48.0 (RFC 162).** The same shape: a single flipped header byte
+in the pointer index's own last record made every reader resolve the *previous* publication's tip, with no repair
+needed to cause it. Separately, a flipped **body** byte (checksum mismatch on an otherwise complete record) was
+truncatable by `doctor --repair-pointer-index-tail` as if it were a torn tail — `verify` reported a failure both
+before and after the repair, but the repair still reverted the ref's tip. **Affected: 0.48.0. No advisory. Action:
+upgrade.**
 
-Rule A (above) first read "a tail is everything after the last sound record, whatever its shape," which had the
-same defect the Security entry above describes, for the seven Rule-A files it introduces this release (never
-shipped in this shape): a complete record whose checksum or envelope fails could be truncated by `--repair-tails`
-as if it were a torn tail, silently reverting the decision it carried — measured on a release build, a single
-flipped byte in a real trust-policy snapshot, then the pre-§9 `--repair-tails`, silently re-trusted a key that
-snapshot had just revoked, with `verify` exiting 0 throughout. Corrected before release: a tail is now an
-incomplete record, or bytes that are not a record header at all, when nothing sound follows; a complete record
-whose checksum or envelope fails is damage, even when last — `verify` fails and names it, both repair verbs refuse
-and change nothing, and readers fail closed on it exactly as they do on any other interior damage. Applies to the
-seven Rule-A files and the pointer index. The WAL keeps RFC 162 rule 3 unchanged: removing its own damaged last
+Fixed in this release by RFC 164 §9 and §9.2 (below): completeness is decided by the checksum, not by whether the
+header's own magic, version, or length happens to look valid.
+
+### Fixed — RFC 164 §9 and §9.2: a complete record is never a tail, even when it is last, however it is corrupted
+
+**§9** first corrected Rule A's own "whatever its shape": a *complete* record (full header, full claimed body)
+whose checksum or envelope fails is damage, even when last, not a tail — closing the body-byte shape of the Security
+entry above for the seven Rule-A files it introduces this release (never shipped with the defect) and for the
+pointer index. Measured on a release build before fixing: a single flipped **body** byte in a real trust-policy
+snapshot, then the pre-§9 `--repair-tails`, silently re-trusted a key that snapshot had just revoked, with `verify`
+exiting 0 throughout.
+
+**§9.2** found §9 itself incomplete: it decided "complete" from the header's own magic, version, and length fields
+— but any one of those three can itself be the single corrupted byte, with the checksum and body untouched, and a
+flipped **header** field rolled readers back *before any repair ran at all* (the Security entries above). Corrected:
+the checksum decides. At a tail candidate, if the stored checksum verifies — recomputed with the format's own real
+magic and version constants, over either the claimed length or the length to the end of the file — the record is
+complete, whatever its stored header fields say. One shared helper (`complete_by_checksum`, beside
+`sound_frame_after_partial`), called by all six decoders (trust keys, trust policy, author keys, the received
+index, the generation logs, the pointer index) and their write-side tail scans alike. Verified exhaustively: every
+single byte offset of a last record, across all six decoders, is now asserted never to decode as a tail (a
+store-level, decode-only test per decoder); on a release build, flipping every offset of a real last record (263
+offsets, across the trust policy, the pointer index, and its generation log) produced zero rollbacks, before or
+after the repair, in every case. The WAL keeps RFC 162 rule 3 unchanged throughout: removing its own damaged last
 record loses a queued, saved, and disclosed commit (N6), not a rollback of trust or ref state.
 
 ### Added — every persisted object type's own short tail is now reported (RFC 164 Addendum 1, N7)
@@ -99,9 +116,16 @@ Vec<ObjectContainerTailStatus>` (both new, `#[non_exhaustive]`). A new `doctor` 
   `PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL` (warning), one per object type with a finding (N7).
 - Refusals that end: `"<container> has a damaged entry; run doctor before reading"` and `"generation log has a
   damaged record; run doctor before reading"` no longer fire for a plain trailing run of zero or random bytes at
-  the end of one of these seven files — only for genuine interior damage does, which after §9 also includes a
-  *complete* record at the very end whose checksum or envelope fails (previously silently repaired into a
-  rollback, not reported at all).
+  the end of one of these seven files, nor for a single corrupted header field (magic, version, or length) in an
+  otherwise complete last record (§9.2) — only for genuine interior damage does, which now covers both shapes
+  (previously silently repaired into a rollback, or rolled back by a reader before any repair ran, not reported
+  at all).
+- `prikk doctor --repair-tails` on a repository whose pointer-index generation log has interior damage: **names the
+  file and says nothing was touched** (`"--repair-tails refuses: 1 file(s) have interior damage, not a tail --
+  nothing was touched: pointer index generation log: …"`), the same uniform shape every other covered file's own
+  damage already refused with; it used to print that generation log's own reader refusal verbatim (`"generation log
+  has a damaged record; run doctor before reading"`), telling the user to run the very command they were already
+  running.
 
 ## 0.48.0 — 2026-09-30
 

@@ -238,13 +238,17 @@ writes nothing, so it never refuses over a tail it would never write behind. Run
 
 Seen from any command that reads a generation log's live slot — `status`, `log`, `branch list`, `seal`,
 `commit`, `verify`, `doctor`, and `compact` itself for that container — for either of two reasons (RFC
-164 Rule A and §9): a **sound** record follows damaged bytes further into the file, or the **last**
-record is itself *complete* (its own header valid, its whole claimed body present) but its checksum or
-envelope fails. Neither is a tail: a tail is what a crash leaves, and a crash can only leave something
-*incomplete* — a torn prefix, or zeros/garbage with nothing sound after them at the very end. A complete
-record was fully written; a failing checksum on it is corruption after the fact, not a crash, so RFC 164
-§9 treats it exactly like interior damage, never as a tail to be repaired away (repairing it away would
-silently revert whichever slot it names to the previous one — measured, and closed, on a real build).
+164 Rule A, §9 and §9.2): a **sound** record follows damaged bytes further into the file, or the **last**
+record is itself *complete* — its checksum verifies, recomputed with this format's own real magic and
+version, over either the claimed length or the length to the end of the file — but its envelope still
+fails, or its checksum itself is wrong. Neither is a tail: a tail is what a crash leaves, and a crash can
+only leave something *incomplete* — a torn prefix, or zeros/garbage with nothing sound after them at the
+very end. A complete record was fully written, **whatever its own stored magic, version, or length field
+says** (one of those three can itself be the single corrupted byte, with the checksum and body untouched
+— §9.2); a failing checksum or envelope on it is corruption after the fact, not a crash, so RFC 164 §9/
+§9.2 treats it exactly like interior damage, never as a tail to be repaired away (repairing it away would
+silently revert whichever slot it names to the previous one — measured, and closed, on a real build; a
+corrupted header field did so even before any repair ran, until §9.2 closed that too).
 **On the ref pointer index's own generation log, this stops every command that resolves a ref**, since
 every one of them reads it; on the received-index and trust-policy generation logs, only `compact` is
 affected. `doctor` has nothing that repairs this — `--repair-tails` refuses on it, the same way every
@@ -256,9 +260,10 @@ one a repair can safely remove. Restore the repository from a backup or a clone 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
 Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,
-author-key or received-index container, for either of two reasons (RFC 164 Rule A and §9): a **sound**
-record follows damaged bytes further into the file, or the **last** record is itself *complete* (its own
-header valid, its whole claimed body present) but its checksum or envelope fails. Neither is a tail — see
+author-key or received-index container, for either of two reasons (RFC 164 Rule A, §9 and §9.2): a
+**sound** record follows damaged bytes further into the file, or the **last** record is itself *complete*
+(its checksum verifies against this format's own real magic and version, whatever its own stored header
+fields say) but its envelope or checksum still fails. Neither is a tail — see
 the generation-log entry above for why a complete record is never one, whatever its position; a genuine
 tail (trailing zeros, garbage, or a torn prefix at the *end* of the file, with nothing sound after it, and
 not itself a complete record) reads as one of the four "incomplete tail" entries above instead, repaired

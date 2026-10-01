@@ -280,6 +280,31 @@ which is saved to `.prikk/recovery/` and disclosed (N6) -- a loss of work in pro
 already-committed trust or ref state, and N6's own witness (0.49.0 step 3) will let a genuine crash be
 told apart from later damage there without this trade-off at all.
 
+**RFC 164 §9.2 (Addendum 2, 0.49.0): the checksum decides whether a record is complete, not its header.**
+§9 decided completeness from the header's own magic, version, and length fields -- but any one of those
+three can itself be the single corrupted byte a complete write left behind, no more a crash's own
+signature than a flipped body byte is. A flipped **header** field read as a tail under §9's own rule, and
+every reader rolled back to the state before the last record *before any repair even ran* -- measured on
+a release build: a single flipped magic, version, or length byte in the trust policy's last snapshot, or
+in the pointer index's or its generation log's, and `trust maintainer check`/`branch list` showed the
+previous state immediately, with no `--repair-tails` involved at all. Corrected: at a tail candidate, the
+checksum is recomputed with the format's own real magic and version constants -- never the stored,
+possibly-corrupted bytes at that offset -- over two candidates: the body the stored length claims, and
+the body that runs to the end of the file (catching a corrupted length field itself). A match either way
+means the record is complete, whatever its header says; only genuine corruption of the checksum or body
+itself still resolves as a tail when nothing sound follows. One shared helper
+(`frame_resync::complete_by_checksum`), called by all six decoders (trust keys, trust policy, author
+keys, the received index, the three generation logs, the pointer index) and their write-side tail scans
+alike, before any of those three header fields is trusted. **Verified exhaustively, not sampled**: a
+store-level test per decoder flips every single byte offset of one complete record (decode only, cheap)
+and asserts none of them decodes to a tail; on a release build, flipping every offset of a real last
+record across the trust policy, the pointer index, and its generation log (263 offsets total) produced
+zero rollbacks, before or after the repair, in every case. **Still open:** corruption spanning more than
+one field of the last record at once (a zeroed sector, say) can still read as a tail -- this rule
+resolves a single field's own corruption against an otherwise-intact record, not multiple fields
+corrupted together; a per-record witness (format 8) is what would tell that shape apart reliably, and is
+not yet built. The WAL is untouched by §9.2 too, for the same reason §9 leaves it alone.
+
 **Refuses only when that write would actually append.** An operation that turns out to be a no-op for
 one of these files — re-adding a maintainer key already adopted under the same public key, removing one
 that was never adopted, a commit by an author whose key material this repository already recorded —
@@ -379,8 +404,10 @@ true torn tail or a pure-cache rebuild covers (see above), and on genuine damage
 nothing. **This held exactly to the letter of "whatever its shape" until RFC 164 §9** (Addendum 1,
 0.49.0): a complete record whose checksum failed used to satisfy "whatever its shape" too, and both
 `--repair-tails` and `--repair-pointer-index-tail` would truncate it -- removing a record that was, in
-fact, sound in every way except its own checksum, and rolling back the decision it carried. §9 closes
-that: a complete record is never a tail, so neither repair verb reaches it any more. Doctor diagnoses
+fact, sound in every way except its own checksum, and rolling back the decision it carried. §9 closed
+that for a corrupted body byte; **§9.2 (Addendum 2) closed the matching gap for a corrupted header
+field** -- a flipped magic, version, or length byte rolled readers back *before either repair verb even
+ran*, so completeness is now decided by the checksum (above), not by the header. Doctor diagnoses
 ref-publication states but does not sign, append, promote, or reconstruct ref authority.
 
 The [integrity and recovery diagnostics](./integrity-recovery.md) reference owns the full diagnostic
