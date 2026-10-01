@@ -82,3 +82,34 @@
 | U3 | the release-build probes and `matrix.py` | 45 min |
 
 **Report:** `.git-exclude/review-request/rfc164-round-2-report-v1.md`.
+
+## Addendum 1 — 2026-10-01: two writers still write before refusing (review `rfc164-round-2-review-v1`)
+
+Report `rfc164-round-2-report-v1.md`, commits `c52588e0` … `f660b5b5`. **Not accepted yet.** Rule E holds, including
+on real 0.48.0 crash shapes. Rule D holds for the six writers you fixed. **Fixes only.** Read review v1, §1 and §3.
+
+**Ruled:** the queued-patch root is accepted as delivered, and so is Rule E's scope (a Block's three reference fields).
+Review v1 §3 gives the reasons.
+
+1. **`compact --all`** checks every subsystem it will compact before compacting any of them.
+   - For each subsystem (pointer index, received index, trust policy): the live slot and the generation log, with
+     §9.2's check.
+   - **Over a tail or a complete damaged record, it refuses, writes nothing, and points at `--repair-tails`.** This
+     also ends today's silent drop of a live-slot tail.
+   - The target slot it rewrites is exempt.
+2. **`rollback-draft --append-inverse`:** its guarded-file checks run before it writes `ref-name` or anything else.
+3. **The inventory, from source:** every command that writes anything under `.prikk/`. For each, say whether it touches
+   a guarded file and where its check runs. At least `branch switch`, `checkout --*-materialize*`, `rollback-draft`,
+   `sync adopt-tag`, `mv`, `unlock`, and the `doctor` repairs.
+4. **Tests:**
+   - `rfc164_rule_d_refuse_before_first_write.rs` gains `compact --all` (every subsystem's live slot and generation
+     log, × the four faults) and `rollback-draft --append-inverse` (every guarded file it reads, × the four faults);
+   - **controls, one per site:** move each new check after the first write. Its rows go red.
+
+**Before proposing:**
+- the 14 gates on the final commit;
+- the architect's `arch-seal/rfc164_rule_d_writers_probe.sh` and `rfc164_rule_d_sync_rollback_probe.sh` on a release
+  build: **TOTAL findings: 0** in both;
+- `rfc164_all_files_reader_probe.sh` and the seven RFC 163 probes.
+
+**Report:** `.git-exclude/review-request/rfc164-round-2-report-v2.md`.
