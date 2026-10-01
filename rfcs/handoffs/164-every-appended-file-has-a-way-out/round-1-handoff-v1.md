@@ -198,3 +198,41 @@ as a tail, **and the readers roll back before any repair runs.**
 - `matrix.py` v4 compared with `matrix-5e50a661.txt`, every changed cell explained with its own replay.
 
 **Report:** `.git-exclude/review-request/rfc164-round-1-report-v3.md`.
+
+## Addendum 3 — 2026-10-01: the disclosure corrected, the sweeps strengthened, the readers in the suite (review `rfc164-round-1-review-v3`)
+
+Report `rfc164-round-1-report-v3.md`, commits `0bc2e739` … `24ca5991`. **Not accepted yet. The code is right:** the
+architect's every-offset probe over all eight files and five readers found 0 rollbacks. **Text and tests only; no
+change under `crates/*/src`.** Read review v3, §2 to §4.
+
+1. **Correct the disclosure** in CHANGELOG `### Security` and `current-state.md`, to review v3 §2's table:
+   - **The trust policy, released versions: the length bytes only.** The removed maintainer is trusted again, and
+     `verify` exits 0. Measured on 0.46.0, 0.47.0 and 0.48.0.
+   - **The pointer index:** readers show an older tip on a flipped length byte, from at least 0.46.0. In 0.48.0 they do
+     so on any byte, and the repair also removes a body-flipped record. `verify` 1.
+   - **The pointer-index generation log:** readers resolve the older slot on a flipped length byte in 0.46.0 and 0.47.0.
+     `verify` 1.
+   - Magic and version flips are refused on every released version.
+   - **The code first shipped in 0.20.0** (`2827fab7`, `0550e340`, `b33d1942`). Keep that history apart from the
+     measured versions.
+2. **The six sweeps** also assert a `Failed` outcome at every flipped offset, not only no tail.
+   - **Control, per decoder:** stop recording the failure for a complete damaged record. That sweep goes red.
+3. **The readers, in the suite:** one CLI test in the shape of `arch-seal/rfc164_all_files_reader_probe.sh`.
+   - **Flips:** all eight files, each with at least two records. Five flips per file in the last record: magic, version,
+     length, checksum field, body.
+   - **Assert:** `verify` fails; `--repair-tails` refuses; each of `trust maintainer list`, `branch list`, `sync tags`,
+     `status` and `log` either refuses or prints exactly its baseline, before and after the repair. Normalise the
+     repository path.
+   - **Control:** `complete_by_checksum` bypassed. The header rows go red.
+4. **The helper bypassed at one decoder's call sites at a time.** Report the rows each run reddens.
+
+**Ruled:** the CLI matrix needs no restructuring into one row per field. Items 2 and 3 replace it.
+
+**Process:** a cut is a question to the architect before delivery, not a disclosure after it.
+
+**Before proposing:**
+- the 14 gates on the final commit;
+- the architect's `rfc164_all_files_reader_probe.sh` on a release build: 0 rollbacks, 0 silent, 0 repairs;
+- `rfc164_rollback_probe.sh`, `pointer_index_flip_probe.sh` and the seven RFC 163 probes.
+
+**Report:** `.git-exclude/review-request/rfc164-round-1-report-v4.md`.
