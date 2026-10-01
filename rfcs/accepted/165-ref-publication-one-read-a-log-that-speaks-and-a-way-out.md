@@ -30,7 +30,12 @@ maintainer key.
     specifically.
   - **K7, a second addendum on round 2 means a design re-read,** per RFC 152 §7. A finding that would change R4 or R5
     comes back to the owner.
-- **Live:** `rfcs/handoffs/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out/round-1-handoff-v1.md` (R1–R3).
+- **2026-10-02: round 1 (R1–R3) ACCEPTED and CLOSED** (`1785a849`, `522f8c0f`; reviews `rfc165-round-1-review-v1`,
+  `-v2`; pushed `522f8c0f`). `commit` at 4,000 refs went from 6.3 s to 42 ms (release, LUKS). A lead-free ref-log tail no
+  longer blocks `commit`, and publications refuse over it (Rule D).
+  - **Binding on round 2:** the ref log's tail follows §9.2, because round 1's classification treats a terminal
+    complete-damaged record as a tail. That is fail-closed today, and would be unsafe under R5's repair.
+- **Live:** `rfcs/handoffs/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out/round-2-handoff-v1.md` (R4–R6).
 
 **Author-review independence.** The architect wrote RFC 162 rule 3 and RFC 164 §9, and both needed late corrections.
 This RFC touches the same class of question for the ref log, so:

@@ -127,3 +127,6 @@ Report `rfc165-round-1-report-v1.md`, commit `1785a849`. **Not accepted. Fixes o
 - `matrix.py`.
 
 **Report:** `.git-exclude/review-request/rfc165-round-1-report-v2.md`.
+
+**ACCEPTED and CLOSED 2026-10-02** (`1785a849`, `522f8c0f`; reviews `rfc165-round-1-review-v1`, `-v2`; pushed
+`522f8c0f`). Next is round 2: `round-2-handoff-v1.md`.
