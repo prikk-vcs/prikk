@@ -49,6 +49,15 @@ fn no_offset_of_a_single_trust_key_record_decodes_to_a_tail() -> Result<()> {
             replay.trailing_partial_bytes, 0,
             "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
         );
+        // Addendum 3 item 2: a cut that stops recording the failure (silently dropping the record
+        // instead of reporting it as damage) would still pass the assertion above -- caught here.
+        assert!(
+            replay
+                .record_outcomes
+                .iter()
+                .any(|outcome| matches!(outcome.status, TrustKeyRecordStatus::Failed { .. })),
+            "offset {offset}: a flipped byte must be reported as damage, not silently dropped"
+        );
     }
     Ok(())
 }
@@ -120,6 +129,13 @@ fn no_offset_of_a_single_trust_policy_record_decodes_to_a_tail() -> Result<()> {
         assert_eq!(
             replay.trailing_partial_bytes, 0,
             "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+        assert!(
+            replay
+                .record_outcomes
+                .iter()
+                .any(|outcome| matches!(outcome.status, TrustPolicyRecordStatus::Failed { .. })),
+            "offset {offset}: a flipped byte must be reported as damage, not silently dropped"
         );
     }
     Ok(())

@@ -43,6 +43,13 @@ fn no_offset_of_a_single_generation_record_decodes_to_a_tail() -> Result<()> {
             replay.trailing_partial_bytes, 0,
             "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
         );
+        assert!(
+            replay
+                .record_outcomes
+                .iter()
+                .any(|outcome| matches!(outcome.status, GenerationRecordStatus::Failed { .. })),
+            "offset {offset}: a flipped byte must be reported as damage, not silently dropped"
+        );
     }
     Ok(())
 }
