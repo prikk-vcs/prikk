@@ -17,6 +17,27 @@
 - **Build from the final commit in a clean worktree, and state the sha256.** Name the filesystem with every timing.
 - **The architect's probes** are in `/home/nabbisen/.pgtmp/arch-seal/`.
 
+## 0. FIRST, before anything else: CI on `main` is not green (added 2026-10-02, before any delivery)
+
+CI run `36936365842` on `522f8c0f`:
+- **`msrv-1.85.0` was cancelled at its 20-minute limit,** in its Test step. It took 6 to 9 minutes on the three runs
+  before;
+- `stable` took 17 minutes, against 8 before.
+
+**Cause, measured by the architect:** `refs/tests/one_read_per_publication.rs` takes **239 s by itself**, single-threaded,
+on a 32-core machine. It builds 1,024 generations in a debug build. The store's library tests went from 106 s to 380 s
+locally (`690cb778` to `522f8c0f`).
+
+1. **The default suite runs the read-count tests at generations 4 and 64 only.**
+   - The property is flat (one read at every depth), and 64 shows it.
+   - **1,024 becomes an `#[ignore]` measurement,** run in U5 on the release build and reported there.
+2. **Do not raise any CI timeout.** A timeout is a cost budget, and this round must return to it.
+3. **Before anything else is proposed:**
+   - the store's library-test time locally, before and after this item;
+   - **a green CI run on a push of this fix alone.** The architect pushes it as soon as it is gated, ahead of the rest of
+     the round. So deliver it first, as its own commit and its own short report:
+     `.git-exclude/review-request/rfc165-round-2-ci-fix-report-v1.md`.
+
 ## 1. R5 first: what a ref-log tail is (K2)
 
 R4 and the rebuild both depend on this, so it comes first.
