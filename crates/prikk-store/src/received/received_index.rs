@@ -20,8 +20,8 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    complete_by_checksum, partial_before_sound_frame_message, require_progress,
+    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -180,6 +180,18 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
     let header_values = match parse_header(header) {
         Ok(values) => values,
         Err(err) => {
+            // RFC 164 §9.2: a corrupted magic or version byte alone does not rule out a complete,
+            // fully written record -- the checksum decides, computed with this format's own real
+            // magic and version. Covers the write-side tail scan too (`scan_received_index_tail`
+            // calls this same function).
+            if complete_by_checksum(bytes, offset, RECEIVED_INDEX_HEADER_LEN, record_checksum)
+                .is_some()
+            {
+                return FrameAttempt::Invalid {
+                    message: format!("{err}, but a complete record's own checksum verifies"),
+                    never_a_tail: true,
+                };
+            }
             return FrameAttempt::Invalid {
                 message: err.to_string(),
                 never_a_tail: false,
@@ -199,6 +211,19 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
+        // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
+        // conceding this is a torn tail, check whether the checksum verifies against the length to the
+        // end of the file instead.
+        if complete_by_checksum(bytes, offset, RECEIVED_INDEX_HEADER_LEN, record_checksum).is_some()
+        {
+            return FrameAttempt::Invalid {
+                message:
+                    "received index record length claims more bytes than remain, but a complete \
+                          record's own checksum verifies against the length to the end of the file"
+                        .to_string(),
+                never_a_tail: true,
+            };
+        }
         return FrameAttempt::TrailingPartial { remaining };
     };
     let expected = record_checksum(header_values.body_len, body);

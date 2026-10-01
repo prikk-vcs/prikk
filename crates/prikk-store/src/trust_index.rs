@@ -37,8 +37,8 @@ use prikk_error::{PrikkError, Result};
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_string_u16, push_u16, push_u32};
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    complete_by_checksum, partial_before_sound_frame_message, require_progress,
+    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -182,12 +182,31 @@ fn parse_trust_key_frame_at(bytes: &[u8], offset: usize) -> TrustKeyFrameAttempt
         }
     };
     if &magic != TRUST_KEY_MAGIC {
+        // RFC 164 §9.2: a corrupted magic byte alone does not rule out a complete, fully written
+        // record -- the checksum decides, computed with this format's own real magic and version.
+        if complete_by_checksum(bytes, offset, TRUST_KEY_HEADER_LEN, trust_key_checksum).is_some() {
+            return TrustKeyFrameAttempt::Invalid {
+                message:
+                    "invalid trust key record magic, but a complete record's own checksum verifies"
+                        .to_string(),
+                never_a_tail: true,
+            };
+        }
         return TrustKeyFrameAttempt::Invalid {
             message: "invalid trust key record magic".to_string(),
             never_a_tail: false,
         };
     }
     if version != TRUST_KEY_VERSION {
+        // RFC 164 §9.2: same reasoning as the magic check above.
+        if complete_by_checksum(bytes, offset, TRUST_KEY_HEADER_LEN, trust_key_checksum).is_some() {
+            return TrustKeyFrameAttempt::Invalid {
+                message: format!(
+                    "unsupported trust key record version {version}, but a complete record's own checksum verifies"
+                ),
+                never_a_tail: true,
+            };
+        }
         return TrustKeyFrameAttempt::Invalid {
             message: format!("unsupported trust key record version {version}"),
             never_a_tail: false,
@@ -216,6 +235,17 @@ fn parse_trust_key_frame_at(bytes: &[u8], offset: usize) -> TrustKeyFrameAttempt
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
+        // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
+        // conceding this is a torn tail, check whether the checksum verifies against the length to the
+        // end of the file instead.
+        if complete_by_checksum(bytes, offset, TRUST_KEY_HEADER_LEN, trust_key_checksum).is_some() {
+            return TrustKeyFrameAttempt::Invalid {
+                message: "trust key record length claims more bytes than remain, but a complete \
+                          record's own checksum verifies against the length to the end of the file"
+                    .to_string(),
+                never_a_tail: true,
+            };
+        }
         return TrustKeyFrameAttempt::TrailingPartial { remaining };
     };
     let expected = trust_key_checksum(body_len, body);
@@ -534,12 +564,45 @@ fn parse_trust_policy_frame_at(bytes: &[u8], offset: usize) -> TrustPolicyFrameA
         }
     };
     if &magic != TRUST_POLICY_MAGIC {
+        // RFC 164 §9.2: a corrupted magic byte alone does not rule out a complete, fully written
+        // record -- the checksum decides, computed with this format's own real magic and version.
+        if complete_by_checksum(
+            bytes,
+            offset,
+            TRUST_POLICY_HEADER_LEN,
+            trust_policy_checksum,
+        )
+        .is_some()
+        {
+            return TrustPolicyFrameAttempt::Invalid {
+                message:
+                    "invalid trust policy record magic, but a complete record's own checksum verifies"
+                        .to_string(),
+                never_a_tail: true,
+            };
+        }
         return TrustPolicyFrameAttempt::Invalid {
             message: "invalid trust policy record magic".to_string(),
             never_a_tail: false,
         };
     }
     if version != TRUST_POLICY_VERSION {
+        // RFC 164 §9.2: same reasoning as the magic check above.
+        if complete_by_checksum(
+            bytes,
+            offset,
+            TRUST_POLICY_HEADER_LEN,
+            trust_policy_checksum,
+        )
+        .is_some()
+        {
+            return TrustPolicyFrameAttempt::Invalid {
+                message: format!(
+                    "unsupported trust policy record version {version}, but a complete record's own checksum verifies"
+                ),
+                never_a_tail: true,
+            };
+        }
         return TrustPolicyFrameAttempt::Invalid {
             message: format!("unsupported trust policy record version {version}"),
             never_a_tail: false,
@@ -558,6 +621,25 @@ fn parse_trust_policy_frame_at(bytes: &[u8], offset: usize) -> TrustPolicyFrameA
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
+        // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
+        // conceding this is a torn tail, check whether the checksum verifies against the length to the
+        // end of the file instead.
+        if complete_by_checksum(
+            bytes,
+            offset,
+            TRUST_POLICY_HEADER_LEN,
+            trust_policy_checksum,
+        )
+        .is_some()
+        {
+            return TrustPolicyFrameAttempt::Invalid {
+                message:
+                    "trust policy record length claims more bytes than remain, but a complete \
+                          record's own checksum verifies against the length to the end of the file"
+                        .to_string(),
+                never_a_tail: true,
+            };
+        }
         return TrustPolicyFrameAttempt::TrailingPartial { remaining };
     };
     let expected = trust_policy_checksum(body_len, body);

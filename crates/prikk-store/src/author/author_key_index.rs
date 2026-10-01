@@ -61,8 +61,8 @@ use std::path::Path;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::push_string_u16;
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    complete_by_checksum, partial_before_sound_frame_message, require_progress,
+    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     append_file_required, create_new_file_required, len_to_u64, read_file_if_exists,
@@ -200,12 +200,33 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         }
     };
     if &magic != AUTHOR_KEY_MAGIC {
+        // RFC 164 §9.2: a corrupted magic byte alone does not rule out a complete, fully written
+        // record -- the checksum decides, computed with this format's own real magic and version.
+        if complete_by_checksum(bytes, offset, AUTHOR_KEY_HEADER_LEN, author_key_checksum).is_some()
+        {
+            return AuthorKeyFrameAttempt::Invalid {
+                message:
+                    "invalid author key record magic, but a complete record's own checksum verifies"
+                        .to_string(),
+                never_a_tail: true,
+            };
+        }
         return AuthorKeyFrameAttempt::Invalid {
             message: "invalid author key record magic".to_string(),
             never_a_tail: false,
         };
     }
     if version != AUTHOR_KEY_VERSION {
+        // RFC 164 §9.2: same reasoning as the magic check above.
+        if complete_by_checksum(bytes, offset, AUTHOR_KEY_HEADER_LEN, author_key_checksum).is_some()
+        {
+            return AuthorKeyFrameAttempt::Invalid {
+                message: format!(
+                    "unsupported author key record version {version}, but a complete record's own checksum verifies"
+                ),
+                never_a_tail: true,
+            };
+        }
         return AuthorKeyFrameAttempt::Invalid {
             message: format!("unsupported author key record version {version}"),
             never_a_tail: false,
@@ -234,6 +255,18 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
+        // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
+        // conceding this is a torn tail, check whether the checksum verifies against the length to the
+        // end of the file instead.
+        if complete_by_checksum(bytes, offset, AUTHOR_KEY_HEADER_LEN, author_key_checksum).is_some()
+        {
+            return AuthorKeyFrameAttempt::Invalid {
+                message: "author key record length claims more bytes than remain, but a complete \
+                          record's own checksum verifies against the length to the end of the file"
+                    .to_string(),
+                never_a_tail: true,
+            };
+        }
         return AuthorKeyFrameAttempt::TrailingPartial { remaining };
     };
     let expected = author_key_checksum(body_len, body);

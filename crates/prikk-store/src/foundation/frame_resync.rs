@@ -75,6 +75,72 @@ pub(crate) fn partial_before_sound_frame_message(
     )
 }
 
+/// RFC 164 §9.2: **the checksum decides.** §9 decided whether the bytes at a tail candidate are a
+/// *complete* record (never a tail, whatever its shape) from the header's own magic, version, and
+/// length fields -- but any one of those three can itself be the single corrupted byte a full write
+/// left behind, and a flipped header field is no more a crash's own signature than a flipped body byte
+/// is. Tried before any of those fields is trusted: recomputes the checksum with the format's own real
+/// magic and version constants (`checksum_of` already bakes them in, never the stored, possibly-
+/// corrupted bytes at this offset) over two candidate bodies -- the one the stored length claims, and
+/// the one that runs to the end of the file (catching a corrupted length field itself) -- and compares
+/// against the checksum bytes stored at their fixed offset, read directly regardless of whether the
+/// rest of the header parses at all. A match either way means the record was fully written; only the
+/// checksum's own bytes (or the body) still being wrong falls through to genuine damage, and nothing
+/// sound anywhere in the remainder falls through to a genuine tail, exactly as before this rule.
+///
+/// **Excluded by construction, not by a special case**: a torn prefix (fewer bytes than one full
+/// header) never reaches this -- every caller only calls it once a full header's worth of bytes is
+/// confirmed present, the same precondition `sound_frame_after_partial`'s own callers already check.
+/// The WAL keeps RFC 162 rule 3 unchanged (RFC 164 §9.2): its own decode loop does not call this.
+///
+/// `header_len` is the format's fixed header length; the checksum is assumed to be its trailing 32
+/// bytes and the body length its preceding 8 (magic(8) + version(2) + body_len(8) + checksum(32) is
+/// every format's own shared layout, confirmed against each module's `*_HEADER_LEN` constant).
+/// Returns the record's own total length (header + body) from `offset` when a checksum-verified
+/// interpretation exists, `None` otherwise.
+pub(crate) fn complete_by_checksum(
+    bytes: &[u8],
+    offset: usize,
+    header_len: usize,
+    checksum_of: impl Fn(u64, &[u8]) -> [u8; 32],
+) -> Option<usize> {
+    let header_end = offset.checked_add(header_len)?;
+    if header_end > bytes.len() {
+        return None;
+    }
+    let checksum_start = header_end.checked_sub(32)?;
+    let stored_checksum: [u8; 32] = bytes.get(checksum_start..header_end)?.try_into().ok()?;
+    let body_len_start = checksum_start.checked_sub(8)?;
+    let claimed_body_len = bytes
+        .get(body_len_start..checksum_start)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u64::from_be_bytes);
+
+    // Candidate 1: the stored length, whatever it claims -- catches a corrupted magic or version byte
+    // alone, with the length field itself untouched.
+    if let Some(claimed) = claimed_body_len {
+        if let Ok(claimed_usize) = usize::try_from(claimed) {
+            if let Some(body_end) = header_end.checked_add(claimed_usize) {
+                if let Some(body) = bytes.get(header_end..body_end) {
+                    if checksum_of(claimed, body) == stored_checksum {
+                        return Some(body_end);
+                    }
+                }
+            }
+        }
+    }
+
+    // Candidate 2: the length to the end of the file -- catches a corrupted length field itself, on
+    // the last record in the file (the only place a positional tail candidate ever arises).
+    let to_eof_len = bytes.len().saturating_sub(header_end);
+    if let Some(body_to_eof) = bytes.get(header_end..) {
+        if checksum_of(to_eof_len as u64, body_to_eof) == stored_checksum {
+            return Some(bytes.len());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests;
 
