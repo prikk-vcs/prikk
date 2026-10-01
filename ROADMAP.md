@@ -240,7 +240,6 @@ review records** — `.git-exclude/reviewed/` stays where reasoning lives; this 
 item is open.
 
 <!-- open-work-index:start -->
-- [`165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md`](rfcs/proposed/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) — ref publication: one ref-log read per publication (F1), a one-pass write precondition (M8), every publication refusing while another's is incomplete, `prikk ref complete` for an interrupted publication (N3), the ref log under §9.2 and Rules A–C (M4), and `doctor --rebuild-pointer-index`; proposed 2026-10-01, design round accepted, rewritten as a design for the owner's reading (two decisions, §6)
 
 
 

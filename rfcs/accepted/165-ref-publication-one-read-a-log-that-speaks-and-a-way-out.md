@@ -1,11 +1,36 @@
 # RFC 165 — Ref publication: one read per publication, a ref log that speaks, and a way out of an interrupted publication
 
-**Status.** **PROPOSED, rewritten 2026-10-01 as a design** after its design round (reviews `rfc165-design-round-review-v1`
-and `-v2`). **For the owner's reading.** It is accepted, changed or refused in a later exchange, and no implementation
-handoff exists until then.
-- *History:* proposed 2026-10-01 as questions (0.49.0 step 2, owner-approved schedule: *"ref publication: F1 with N3 and
-  M8 (design round)"*). The design round answered them with failpoint sweeps, prototypes and release-build timings.
-- **Two decisions for the owner:** §6.
+**Status.** **ACCEPTED by the owner 2026-10-01**, after reading. The owner said: *"Accepted. However, we had better be
+careful around such design."* **§6 decision 2, who may complete:** *"Your recommendation is accepted."*: any adopted
+maintainer key.
+- *History:* proposed 2026-10-01 as questions (0.49.0 step 2, owner-approved schedule). It was answered by a design round
+  (reviews `rfc165-design-round-review-v1` and `-v2`) and rewritten as this design the same day.
+
+**The architect's reading, stated so it can be corrected:**
+- R1 to R6 are accepted as written, and decision 2 is settled: any adopted maintainer key may complete. The completer's
+  key is named in the record it signs.
+- **"Be careful" is taken as binding on the implementation, not as a remark.** It means:
+  - **K1, see before writing.** `prikk ref complete` and `doctor --rebuild-pointer-index` each get `--plan-only`, which
+    prints exactly what would be written and changes nothing. A real run prints the same plan first: the ref, the
+    leading RefState, its signer, its target and the chain for a completion; each ref's resulting state and every
+    dropped lead for a rebuild.
+  - **K2, fail closed on any doubt.** Any condition that cannot be evaluated refuses and writes nothing. That covers
+    damaged trust state, an unreadable RefState, a missing target, and a log tail other than the one completion removes.
+  - **K3, every condition can fail in a test.**
+    - Each of R4's conditions (a)–(d) gets a negative test, and a control that removes the condition and turns the
+      test red.
+    - Adversarial constructions: a lead signed by a non-adopted key, one chained to the wrong previous state, one at the
+      wrong sequence, one with a missing target or one of the wrong kind, and a WAL mismatch.
+  - **K4, a recovery verb is a writer.** `ref complete` and the rebuild are each raced against ordinary publishers and
+    commits under failpoints. A crash inside either one leaves a state the same rules classify.
+  - **K5, nothing implicit.** Neither verb runs automatically, from another command or from `doctor`'s diagnosis.
+    `doctor` only names them.
+  - **K6, the ways out last, and reviewed from outside.** Implementation round 1 is R1–R3, which change cost and
+    ordering, not meaning. Round 2 is R4–R6. The external review of the 0.49.0 candidate is asked to examine R4 and R5
+    specifically.
+  - **K7, a second addendum on round 2 means a design re-read,** per RFC 152 §7. A finding that would change R4 or R5
+    comes back to the owner.
+- **Live:** `rfcs/handoffs/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out/round-1-handoff-v1.md` (R1–R3).
 
 **Author-review independence.** The architect wrote RFC 162 rule 3 and RFC 164 §9, and both needed late corrections.
 This RFC touches the same class of question for the ref log, so:
@@ -135,7 +160,7 @@ A `seal` no longer appends behind another ref's interrupted publication.
 - **Units:** smaller than the design round's, each with a budget.
 - **External review:** of the 0.49.0 candidate (§ Status).
 
-## 6. Decisions for the owner
+## 6. Decisions for the owner (both decided 2026-10-01: accepted; any adopted maintainer key)
 
 1. **This design, as written.**
 2. **Who may complete another's interrupted publication:**
