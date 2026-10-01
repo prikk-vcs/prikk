@@ -109,3 +109,6 @@ Report `rfc165-design-round-report-v1.md`. **Not accepted: the round is incomple
    round.
 
 **Report:** `.git-exclude/review-request/rfc165-design-round-report-v2.md`.
+
+**Design round ACCEPTED 2026-10-01** (reviews `rfc165-design-round-review-v1`, `-v2`). RFC 165 is rewritten as a
+design for the owner's reading. **No implementation handoff until the owner accepts it.**
