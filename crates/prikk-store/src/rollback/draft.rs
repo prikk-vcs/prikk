@@ -176,6 +176,20 @@ pub fn append_rollback_draft(
             remove_active_ref_metadata(layout)?;
         }
     }
+    // RFC 164 round 2 Addendum 1, item 2: this signer's own author-key check, moved here from its own
+    // previous position inside `record_author_key_material` below (where it still runs and re-checks,
+    // harmless and cheap under the same held `active_lock`) -- before this fix, a refusal over a
+    // damaged or torn author-key container still happened only after `prepare_empty_active_ref_for_
+    // append` had already written `active/default/ref-name`, so the refusal did not leave the tree as
+    // it found it. Read-only (`check_author_key_conflict` records nothing); the actual append, if any,
+    // still happens only at `record_author_key_material`'s own call site below, under the same
+    // `active_lock` held continuously since it was acquired above, so nothing else can append to the
+    // author-key container between this check and that one.
+    crate::author::author_key_index::check_author_key_conflict(
+        layout,
+        signer.key_id(),
+        signer.public_key_bytes(),
+    )?;
     prepare_empty_active_ref_for_append(layout, &canonical_ref)?;
     // DC-53 Stage 2 C1: record this signer's key material under the held `ActiveLock`, immediately
     // before the append it gates -- not while planning, before the lock existed. Stage 1's version of
