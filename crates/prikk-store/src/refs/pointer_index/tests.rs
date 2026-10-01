@@ -33,6 +33,29 @@ fn write_then_lookup_round_trips() -> Result<()> {
     Ok(())
 }
 
+/// RFC 164 §9.2, Addendum 2 item 3's whole-record sweep, closing the exact gap the review's own
+/// control found (nothing in the suite held §9 for the pointer index): flip every byte of a single
+/// complete pointer-index record in turn and assert none of them decodes to a tail.
+#[test]
+fn no_offset_of_a_single_pointer_index_record_decodes_to_a_tail() -> Result<()> {
+    let entry = PointerIndexEntry {
+        ref_name_key: ref_name_key_bytes("heads/main"),
+        ref_name: "heads/main".to_string(),
+        ref_state_id: sample_object_id("state"),
+    };
+    let sound = encode_pointer_index_record(&entry)?;
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_pointer_index_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+    }
+    Ok(())
+}
+
 /// "Last entry wins" (Step 0 §13.4's own words, mirroring `index.rs::lookup_object_location`): a
 /// second publish for the same ref supersedes the first at lookup time, without needing the first
 /// entry removed or rewritten -- append-only, never overwritten in place.

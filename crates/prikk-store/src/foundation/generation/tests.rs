@@ -27,6 +27,26 @@ fn a_single_record_round_trips_through_decode() -> Result<()> {
     Ok(())
 }
 
+/// RFC 164 §9.2, Addendum 2 item 3's whole-record sweep: flip every byte of a single complete
+/// generation record in turn and assert none of them decodes to a tail. Decode only, cheap.
+#[test]
+fn no_offset_of_a_single_generation_record_decodes_to_a_tail() -> Result<()> {
+    let record = GenerationRecord {
+        live_slot: ContainerSlot::B,
+    };
+    let sound = encode_generation_record(&record);
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_generation_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+    }
+    Ok(())
+}
+
 /// Mirrors `received_index/tests.rs`'s own version of this test: trailing bytes shorter than one
 /// complete frame are a tolerated in-progress append, not corruption.
 #[test]

@@ -31,6 +31,39 @@ fn a_single_record_round_trips_through_decode() -> Result<()> {
     Ok(())
 }
 
+/// RFC 164 §9.2, Addendum 2 item 3's whole-record sweep: flip every byte of a single complete
+/// received-index record in turn and assert none of them decodes to a tail, through both the full
+/// decode and the write-side tail-only scan (`scan_received_index_tail`'s own `(trailing, offset,
+/// damaged)`: a tail would show `damaged == false` with a nonzero trailing count).
+#[test]
+fn no_offset_of_a_single_received_index_record_decodes_to_a_tail() -> Result<()> {
+    let entry = ReceivedIndexEntry {
+        ref_name_key: ref_name_key_bytes("remotes/heads/main"),
+        ref_name: "remotes/heads/main".to_string(),
+        ref_state_id: sample_object_id("state"),
+    };
+    let sound = encode_received_index_record(&entry)?;
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_received_index_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+        let (trailing, _tail_offset, damaged) = scan_received_index_tail(&flipped)?;
+        assert_eq!(
+            trailing, 0,
+            "offset {offset}: the write-side scan must not read it as a tail either"
+        );
+        assert!(
+            damaged,
+            "offset {offset}: the write-side scan must flag it as damage, not pass it as clean"
+        );
+    }
+    Ok(())
+}
+
 /// Mirrors `pointer_index/tests.rs::trailing_partial_bytes_are_tolerated_not_treated_as_corruption`:
 /// same three-shape frame structure (`parse_frame_at`'s `TrailingPartial`/`Invalid`/`Record`),
 /// confirmed by construction here rather than assumed from the parallel design.

@@ -33,6 +33,27 @@ fn a_single_key_entry_round_trips_through_decode() -> Result<()> {
     Ok(())
 }
 
+/// RFC 164 §9.2, Addendum 2 item 3's whole-record sweep: flip every byte of a single complete
+/// author-key record in turn and assert none of them decodes to a tail. Decode only, cheap.
+#[test]
+fn no_offset_of_a_single_author_key_record_decodes_to_a_tail() -> Result<()> {
+    let entry = AuthorKeyEntry {
+        key_id: "alice".to_string(),
+        public_key: sample_public_key(1),
+    };
+    let sound = encode_author_key_record(&entry)?;
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_author_key_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn trailing_partial_key_bytes_are_tolerated_not_treated_as_corruption() -> Result<()> {
     let entry = AuthorKeyEntry {

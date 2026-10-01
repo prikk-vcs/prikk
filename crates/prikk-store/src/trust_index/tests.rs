@@ -31,6 +31,28 @@ fn a_single_key_entry_round_trips_through_decode() -> Result<()> {
     Ok(())
 }
 
+/// RFC 164 §9.2, Addendum 2 item 3's whole-record sweep: flip every byte of a single complete trust-key
+/// record in turn -- magic, version, length, checksum, and body alike -- and assert none of the 170
+/// offsets decodes to a tail. Decode only, no I/O: cheap enough to cover every offset, not a sample.
+#[test]
+fn no_offset_of_a_single_trust_key_record_decodes_to_a_tail() -> Result<()> {
+    let entry = TrustKeyEntry {
+        key_id: "maintainer".to_string(),
+        public_key: sample_public_key(1),
+    };
+    let sound = encode_trust_key_record(&entry)?;
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_trust_key_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn trailing_partial_key_bytes_are_tolerated_not_treated_as_corruption() -> Result<()> {
     let entry = TrustKeyEntry {
@@ -81,6 +103,25 @@ fn isolates_a_damaged_key_entry_and_reads_sound_entries_around_it() -> Result<()
         .collect();
     assert_eq!(failed_offsets, vec![damaged_start]);
     assert_eq!(replay.entries, vec![first, third]);
+    Ok(())
+}
+
+/// RFC 164 §9.2, Addendum 2 item 3's whole-record sweep, for trust policy.
+#[test]
+fn no_offset_of_a_single_trust_policy_record_decodes_to_a_tail() -> Result<()> {
+    let entry = TrustPolicySnapshotEntry {
+        key_ids: vec!["alice".to_string(), "bob".to_string()],
+    };
+    let sound = encode_trust_policy_record(&entry)?;
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_trust_policy_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+    }
     Ok(())
 }
 
