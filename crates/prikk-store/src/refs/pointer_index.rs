@@ -75,18 +75,21 @@ pub(in crate::refs) struct PointerIndexRecordOutcome {
 /// and Rust requires a function's return type to be at least as visible as the function -- a type
 /// cannot be narrower than the least-restrictive signature that names it, regardless of whether
 /// every caller ever writes the type name explicitly (found by trying the narrower form first and
-/// letting the compiler reject it, not assumed). `trailing_partial_bytes`/`record_outcomes` still
-/// narrow safely: `compact::compact_ref_pointer_index`, the sole external caller, reads only
-/// `entries` and calls `has_item_failure`, never these two.
+/// letting the compiler reject it, not assumed). `record_outcomes` still narrows safely: nothing
+/// outside `refs` reads it directly, only through `has_item_failure`. `trailing_partial_bytes`/
+/// `tail_offset` widened to `pub(crate)` for RFC 164 round 2 Addendum 1: `compact::compact_ref_
+/// pointer_index` now also refuses on the live slot's own tail, not only the generation log's (the
+/// Addendum's own "quieter shape" -- a tail silently compacted away, with no recovery file and no
+/// line saying so).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct PointerIndexReplay {
     pub(crate) entries: Vec<PointerIndexEntry>,
-    pub(in crate::refs) trailing_partial_bytes: usize,
+    pub(crate) trailing_partial_bytes: usize,
     /// The byte offset where the last sound record ends -- equivalently, where `trailing_partial_bytes`
     /// (if any) begins. RFC 163 §2's refusal names this directly, so it comes from the same decode loop
     /// that already stops here, rather than a second pass over `bytes.len() - trailing_partial_bytes`.
-    pub(in crate::refs) tail_offset: usize,
+    pub(crate) tail_offset: usize,
     pub(in crate::refs) record_outcomes: Vec<PointerIndexRecordOutcome>,
 }
 

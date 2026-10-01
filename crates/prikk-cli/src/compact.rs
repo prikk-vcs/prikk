@@ -74,11 +74,30 @@ pub(crate) fn run_compact(root: PathBuf, args: Vec<String>) -> std::result::Resu
     }
 
     let layout = crate::open_repository(root)?;
+    // RFC 164 round 2 Addendum 1, item 1: every target this run will touch is checked before any of
+    // them is compacted -- otherwise a multi-target run (`--all`, or several explicit flags together)
+    // could compact an earlier target durably before ever discovering a later one's own torn tail or
+    // damage, the review's own finding. A `--plan-only` preview writes nothing and is unaffected by a
+    // tail it will never write behind, so it skips this pass entirely, matching every other guarded
+    // writer's "refuse only when the operation will append" rule.
+    if !plan_only {
+        for target in &targets {
+            precheck_one(&layout, *target).map_err(|err| err.to_string())?;
+        }
+    }
     for target in targets {
         let report = run_one(&layout, target, plan_only).map_err(|err| err.to_string())?;
         print_report(&report, plan_only);
     }
     Ok(())
+}
+
+fn precheck_one(layout: &prikk_store::RepositoryLayout, target: Target) -> prikk_error::Result<()> {
+    match target {
+        Target::PointerIndex => prikk_store::precheck_ref_pointer_index_before_compaction(layout),
+        Target::ReceivedIndex => prikk_store::precheck_received_index_before_compaction(layout),
+        Target::TrustPolicy => prikk_store::precheck_trust_policy_before_compaction(layout),
+    }
 }
 
 fn run_one(

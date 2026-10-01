@@ -76,6 +76,97 @@ enum CompactionMode {
     PlanOnly,
 }
 
+/// RFC 164 round 2 Addendum 1, item 1: read-only, unlocked checks of one subsystem's own guarded
+/// files (its live slot and generation log), for `compact --all` (or any multi-target `compact`) to
+/// call for *every* target it will touch, before compacting *any* of them. Without this, a multi-
+/// target run could compact the pointer index durably, then only discover the received index's own
+/// torn tail -- the review's own finding: Rule D's "a refusal writes nothing at all" held per
+/// subsystem, not across the whole command. Each function here is strictly earlier than, and
+/// redundant with, its own `run_*_compaction`'s authoritative check under the container lock -- a
+/// genuine race between this check and the real one is caught there, not here, the same two-call-site
+/// shape Rule D's other guarded writers already use. The target slot (about to be truncated and
+/// overwritten were compaction to proceed) is exempt by construction: only the live slot is ever
+/// replayed by any of these three.
+pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -> Result<()> {
+    let generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let (_, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the ref pointer index's generation log",
+        generation_trailing_partial_bytes,
+        generation_tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
+    let replay = replay_pointer_index(layout)?;
+    if replay.has_item_failure() {
+        return Err(PrikkError::Integrity(
+            "ref pointer index has a damaged entry; compaction refuses to run on a corrupt \
+             container -- run doctor first"
+                .to_string(),
+        ));
+    }
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the ref pointer index",
+        replay.trailing_partial_bytes,
+        replay.tail_offset,
+        "run `prikk doctor --repair-tails`, then retry",
+    )
+}
+
+/// See [`precheck_ref_pointer_index_before_compaction`]'s own doc.
+pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> Result<()> {
+    let generation_log_path = layout.received_index_generation_log_path();
+    let (_, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the received index's generation log",
+        generation_trailing_partial_bytes,
+        generation_tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
+    let replay = replay_received_index(layout)?;
+    if replay.has_item_failure() {
+        return Err(PrikkError::Integrity(
+            "received-ref index has a damaged entry; compaction refuses to run on a corrupt \
+             container -- run doctor first"
+                .to_string(),
+        ));
+    }
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the received index",
+        replay.trailing_partial_bytes,
+        replay.tail_offset,
+        "run `prikk doctor --repair-tails`, then retry",
+    )
+}
+
+/// See [`precheck_ref_pointer_index_before_compaction`]'s own doc.
+pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Result<()> {
+    let generation_log_path = layout.trust_policy_generation_log_path();
+    let (_, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the trust policy container's generation log",
+        generation_trailing_partial_bytes,
+        generation_tail_offset,
+        "back it up, truncate it to the named offset, then run `prikk verify`",
+    )?;
+    let replay = replay_trust_policy(layout)?;
+    if replay.has_item_failure() {
+        return Err(PrikkError::Integrity(
+            "trust policy container has a damaged snapshot; compaction refuses to run on a \
+             corrupt container -- run doctor first"
+                .to_string(),
+        ));
+    }
+    crate::foundation::tail_guard::require_no_unclean_tail(
+        "the trust policy container",
+        replay.trailing_partial_bytes,
+        replay.tail_offset,
+        "run `prikk doctor --repair-tails`, then retry",
+    )
+}
+
 fn run_ref_pointer_index_compaction(
     layout: &RepositoryLayout,
     mode: CompactionMode,
@@ -95,6 +186,8 @@ fn run_ref_pointer_index_compaction(
         ));
     }
     let entries_before = replay.entries.len();
+    let (replay_trailing_partial_bytes, replay_tail_offset) =
+        (replay.trailing_partial_bytes, replay.tail_offset);
     let mut compacted: Vec<PointerIndexEntry> = Vec::new();
     for entry in replay.entries {
         compacted
@@ -113,6 +206,18 @@ fn run_ref_pointer_index_compaction(
             generation_trailing_partial_bytes,
             generation_tail_offset,
             "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
+        // RFC 164 round 2 Addendum 1, item 1's "quieter shape": the LIVE slot's own tail, not only
+        // the generation log's, else a torn or zeroed tail on the live slot is silently compacted
+        // away -- the tail bytes are never read into `entries` above, so they are simply absent from
+        // the newly-written target slot, with no recovery file and no line saying so. The target slot
+        // (about to be truncated and overwritten below) is exempt by construction: only the live slot
+        // is ever replayed here, never the retired one.
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the ref pointer index",
+            replay_trailing_partial_bytes,
+            replay_tail_offset,
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         let target_slot = live_slot.other();
         let target_relative =
@@ -170,6 +275,8 @@ fn run_received_index_compaction(
         ));
     }
     let entries_before = replay.entries.len();
+    let (replay_trailing_partial_bytes, replay_tail_offset) =
+        (replay.trailing_partial_bytes, replay.tail_offset);
     let mut compacted: Vec<ReceivedIndexEntry> = Vec::new();
     for entry in replay.entries {
         compacted
@@ -185,6 +292,14 @@ fn run_received_index_compaction(
             generation_trailing_partial_bytes,
             generation_tail_offset,
             "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
+        // RFC 164 round 2 Addendum 1, item 1: the live slot's own tail -- see the identical guard
+        // (and its own comment) in `run_ref_pointer_index_compaction` above.
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the received index",
+            replay_trailing_partial_bytes,
+            replay_tail_offset,
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         let target_slot = live_slot.other();
         let target_relative =
@@ -241,6 +356,8 @@ fn run_trust_policy_compaction(
         ));
     }
     let entries_before = replay.entries.len();
+    let (replay_trailing_partial_bytes, replay_tail_offset) =
+        (replay.trailing_partial_bytes, replay.tail_offset);
     let last_snapshot = replay.entries.into_iter().next_back();
     let entries_after = usize::from(last_snapshot.is_some());
 
@@ -251,6 +368,14 @@ fn run_trust_policy_compaction(
             generation_trailing_partial_bytes,
             generation_tail_offset,
             "back it up, truncate it to the named offset, then run `prikk verify`",
+        )?;
+        // RFC 164 round 2 Addendum 1, item 1: the live slot's own tail -- see the identical guard
+        // (and its own comment) in `run_ref_pointer_index_compaction` above.
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the trust policy container",
+            replay_trailing_partial_bytes,
+            replay_tail_offset,
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         let target_slot = live_slot.other();
         let target_relative =
