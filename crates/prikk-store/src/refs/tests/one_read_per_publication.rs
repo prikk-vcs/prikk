@@ -61,72 +61,95 @@ fn grow_to_generation(
     Ok((last, previous))
 }
 
-/// Read count: one whole read of the ref log per publication, at generations 4, 64 and 1,024, for
-/// both a generic (`branch create`-shaped) publication and a real `seal`.
+/// Read count: one whole read of the ref log per publication, at generations 4 and 64, for both a
+/// generic (`branch create`-shaped) publication and a real `seal`.
+///
+/// RFC 165 round 2 item 0: this used to also sweep 1,024, but a 1,024-generation debug build of this
+/// file alone took 239 s single-threaded, cancelling CI's `msrv-1.85.0` job at its 20-minute Test-step
+/// limit (`main` CI run `36936365842` on `522f8c0f`). The property is flat -- one read at every
+/// depth -- and 64 already shows it; 1,024 is still measured, but as a release-build, `#[ignore]`d
+/// measurement below, not a debug-build CI assertion.
 #[test]
 fn one_whole_read_per_publication_at_several_generations() -> prikk_error::Result<()> {
-    for generations in [4u32, 64, 1024] {
-        // `branch create`-shaped: a generic publish via `RefStore::publish_with_object_store`, the
-        // same call every publication (including `branch create`'s own) funnels through.
-        {
-            let root = unique_temp_dir(&format!("rfc165-r1-read-count-generic-{generations}"));
-            let layout = RepositoryLayout::init(root.clone())?;
-            let (last, previous) = grow_to_generation(&layout, "heads/main", generations)?;
-            let log_path =
-                layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
-            let container_size_before = std::fs::metadata(&log_path)?.len();
+    for generations in [4u32, 64] {
+        assert_one_whole_read_at_generation(generations)?;
+    }
+    Ok(())
+}
 
-            let mut objects = FileObjectStore::new(layout.clone());
-            let store = RefStore::new(layout.clone());
-            read_tally::reset();
-            publish_next(&store, &mut objects, "heads/main", Some(previous))?;
-            let bytes = read_tally::bytes_read(&layout.repository_relative(&log_path)?);
-            // One whole read (~container_size_before) plus one small ranged read-back
-            // (one record, tens of bytes): well under two whole reads' worth. The old, three-read
-            // path would read roughly 3x container_size_before; this bounds it under 1.5x.
-            assert!(
-                bytes < container_size_before * 3 / 2,
-                "generations={generations}: read {bytes} bytes, container was {container_size_before} \
+/// RFC 165 round 2 item 0: the 1,024-generation case the sweep above used to cover, kept as a
+/// deliberate, named, `#[ignore]`d measurement rather than dropped -- run explicitly (`cargo test
+/// --release -- --ignored one_whole_read_per_publication_at_generation_1024`) on a release build, in
+/// round 2's own U5, and reported there. `#[ignore]`d because a 1,024-generation debug build is
+/// exactly the cost this item exists to keep out of the default suite and CI.
+#[test]
+#[ignore = "RFC 165 round 2 item 0: release-build measurement only, run explicitly in U5 -- see this \
+            test's own doc comment"]
+fn one_whole_read_per_publication_at_generation_1024() -> prikk_error::Result<()> {
+    assert_one_whole_read_at_generation(1024)
+}
+
+fn assert_one_whole_read_at_generation(generations: u32) -> prikk_error::Result<()> {
+    // `branch create`-shaped: a generic publish via `RefStore::publish_with_object_store`, the same
+    // call every publication (including `branch create`'s own) funnels through.
+    {
+        let root = unique_temp_dir(&format!("rfc165-r1-read-count-generic-{generations}"));
+        let layout = RepositoryLayout::init(root.clone())?;
+        let (last, previous) = grow_to_generation(&layout, "heads/main", generations)?;
+        let log_path =
+            layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+        let container_size_before = std::fs::metadata(&log_path)?.len();
+
+        let mut objects = FileObjectStore::new(layout.clone());
+        let store = RefStore::new(layout.clone());
+        read_tally::reset();
+        publish_next(&store, &mut objects, "heads/main", Some(previous))?;
+        let bytes = read_tally::bytes_read(&layout.repository_relative(&log_path)?);
+        // One whole read (~container_size_before) plus one small ranged read-back
+        // (one record, tens of bytes): well under two whole reads' worth. The old, three-read
+        // path would read roughly 3x container_size_before; this bounds it under 1.5x.
+        assert!(
+            bytes < container_size_before * 3 / 2,
+            "generations={generations}: read {bytes} bytes, container was {container_size_before} \
                  bytes before this publish -- expected about one whole read, not several"
-            );
-            let _ = last;
-            let _ = std::fs::remove_dir_all(&root);
-        }
+        );
+        let _ = last;
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
-        // A real `seal`.
-        {
-            let root = unique_temp_dir(&format!("rfc165-r1-read-count-seal-{generations}"));
-            let layout = RepositoryLayout::init(root.clone())?;
-            let signer = crate::maintainer_signing::Ed25519MaintainerSigner::from_seed(
-                "rfc165-r1-read-count",
-                &[0x51; 32],
-            )
-            .map_err(|_| prikk_error::PrikkError::Integrity("seed".to_string()))?;
-            let pub_hex: String = signer
-                .public_key_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
-            crate::trust::add_trusted_maintainer(&layout, signer.key_id(), &pub_hex)?;
-            for generation in 1..generations {
-                queue_one_patch(&layout, "heads/main", &format!("g{generation}"))?;
-                crate::simulate_one_seal_for_test_support(&layout, "heads/main", &signer)?;
-            }
-            let log_path =
-                layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
-            let container_size_before = std::fs::metadata(&log_path)?.len();
-
-            queue_one_patch(&layout, "heads/main", "final")?;
-            read_tally::reset();
+    // A real `seal`.
+    {
+        let root = unique_temp_dir(&format!("rfc165-r1-read-count-seal-{generations}"));
+        let layout = RepositoryLayout::init(root.clone())?;
+        let signer = crate::maintainer_signing::Ed25519MaintainerSigner::from_seed(
+            "rfc165-r1-read-count",
+            &[0x51; 32],
+        )
+        .map_err(|_| prikk_error::PrikkError::Integrity("seed".to_string()))?;
+        let pub_hex: String = signer
+            .public_key_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        crate::trust::add_trusted_maintainer(&layout, signer.key_id(), &pub_hex)?;
+        for generation in 1..generations {
+            queue_one_patch(&layout, "heads/main", &format!("g{generation}"))?;
             crate::simulate_one_seal_for_test_support(&layout, "heads/main", &signer)?;
-            let bytes = read_tally::bytes_read(&layout.repository_relative(&log_path)?);
-            assert!(
-                bytes < container_size_before * 3 / 2,
-                "seal, generations={generations}: read {bytes} bytes, container was \
-                 {container_size_before} bytes before this seal"
-            );
-            let _ = std::fs::remove_dir_all(&root);
         }
+        let log_path =
+            layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+        let container_size_before = std::fs::metadata(&log_path)?.len();
+
+        queue_one_patch(&layout, "heads/main", "final")?;
+        read_tally::reset();
+        crate::simulate_one_seal_for_test_support(&layout, "heads/main", &signer)?;
+        let bytes = read_tally::bytes_read(&layout.repository_relative(&log_path)?);
+        assert!(
+            bytes < container_size_before * 3 / 2,
+            "seal, generations={generations}: read {bytes} bytes, container was \
+                 {container_size_before} bytes before this seal"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
     Ok(())
 }
