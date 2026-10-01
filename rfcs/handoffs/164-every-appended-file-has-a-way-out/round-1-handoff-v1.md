@@ -236,3 +236,9 @@ change under `crates/*/src`.** Read review v3, §2 to §4.
 - `rfc164_rollback_probe.sh`, `pointer_index_flip_probe.sh` and the seven RFC 163 probes.
 
 **Report:** `.git-exclude/review-request/rfc164-round-1-report-v4.md`.
+
+**ACCEPTED and CLOSED 2026-10-01** (`bfa567db` … `2a56be48`; reviews `rfc164-round-1-review-v1` … `-v4`; pushed `2a56be48`).
+- **Verified:** the 14 gates on a clean build, and the architect's every-offset probe over all eight files and five
+  readers on the release build (sha256 `10ab1b00…`): 0 rollbacks, 0 silent `verify`. The control on the pre-§9.2 build
+  found 84 and 68.
+- **Next is round 2** (Rules D and E): `round-2-handoff-v1.md`.

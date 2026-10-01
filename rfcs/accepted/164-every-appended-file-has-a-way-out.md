@@ -16,6 +16,9 @@ decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E
   that a flipped header byte still makes a complete record read as a tail, in the readers as well as the repairs, and
   that the trust-policy case has shipped silently. ACCEPTED by the owner, with disclosure rather than an advisory for the
   released versions.
+- **2026-10-01: round 1 (Rules A, B, C, with §9 and §9.2) ACCEPTED and CLOSED** (`bfa567db` … `2a56be48`, reviews
+  `rfc164-round-1-review-v1` … `-v4`), pushed `2a56be48`. Round 2 (Rules D and E) is live:
+  `rfcs/handoffs/164-every-appended-file-has-a-way-out/round-2-handoff-v1.md`.
 
 *History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 
