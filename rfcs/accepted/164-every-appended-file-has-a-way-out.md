@@ -19,6 +19,18 @@ decisions were ruled first: one `--repair-tails` verb (*"Approved."*) and Rule E
 - **2026-10-01: round 1 (Rules A, B, C, with §9 and §9.2) ACCEPTED and CLOSED** (`bfa567db` … `2a56be48`, reviews
   `rfc164-round-1-review-v1` … `-v4`), pushed `2a56be48`. Round 2 (Rules D and E) is live:
   `rfcs/handoffs/164-every-appended-file-has-a-way-out/round-2-handoff-v1.md`.
+- **2026-10-01: round 2 (Rules D and E) ACCEPTED and CLOSED** (`c52588e0` … `a222d2c2`, reviews `rfc164-round-2-review-v1`,
+  `-v2`). **RFC 164 is fully delivered; 0.49.0 step 1 is closed.**
+  - **Ruled in round 2:**
+    - the queued-patch reachability root stays, though it reaches only blobs today: an active session's base is its
+      branch tip, already a root;
+    - Rule E covers a Block's three reference fields only, because nothing else is existence-checked, and Rule E only
+      downgrades a failure.
+  - **Carried to the 0.49.0 release preparation:**
+    - `### Output changes` for `compact`'s new live-slot refusal and `rollback-draft`'s earlier refusal;
+    - a troubleshooting entry for the former;
+    - the generation-log refusal's advice becoming `prikk doctor --repair-tails`.
+  - **Next:** the ref log, N3 and M8 in RFC 165 (proposed), 0.49.0 step 2.
 
 *History:* **PROPOSED 2026-09-30 by the architect** (0.49.0 step 1).
 

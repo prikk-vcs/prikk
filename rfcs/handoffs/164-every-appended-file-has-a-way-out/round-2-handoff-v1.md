@@ -113,3 +113,10 @@ Review v1 §3 gives the reasons.
 - `rfc164_all_files_reader_probe.sh` and the seven RFC 163 probes.
 
 **Report:** `.git-exclude/review-request/rfc164-round-2-report-v2.md`.
+
+**ACCEPTED and CLOSED 2026-10-01** (`c52588e0` … `a222d2c2`; reviews `rfc164-round-2-review-v1`, `-v2`).
+- **Verified:** the 14 gates; the architect's Rule D probes (11 writers × 9 guarded files, plus `sync accept` and
+  `rollback-draft`): 0 findings. Rule E judged on real 0.48.0 crash shapes: 6 of 6 dangling states were remnants, with
+  `verify` 0.
+- **RFC 164 is fully delivered.** Next is RFC 165's design round:
+  `rfcs/handoffs/163-a-write-never-buries-a-crash-state/ref-publication-design-round-handoff-v1.md`.

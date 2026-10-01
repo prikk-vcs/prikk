@@ -240,6 +240,7 @@ review records** — `.git-exclude/reviewed/` stays where reasoning lives; this 
 item is open.
 
 <!-- open-work-index:start -->
+- [`165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md`](rfcs/proposed/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) — ref publication: one ref-log read per publication (F1), a commit's precondition that does not scale refs × log (M8), a way out of an interrupted publication (N3, including `merge`), the ref log under §9.2 and Rules A–C (M4), and rebuilding the pointer index from the ref log; proposed 2026-10-01 (0.49.0 step 2); design round live, no mechanism chosen yet
 
 
 
