@@ -53,20 +53,22 @@ row's own interior damage. `RepositoryVerification` was already `#[non_exhaustiv
 
 ### Security — a corrupted (not torn) last record could silently revert trust or ref state
 
-**The trust policy, since 0.20.0.** A single flipped byte anywhere in the last trust-policy snapshot's header
-(magic, version, or claimed length) was indistinguishable from a torn tail, under the `TrailingPartial` shape rule
-`2827fab7` first shipped. The repository's own readers resolved it as a tail with nothing sound after it — reading
-straight through to the *previous* snapshot — with no repair even involved: `verify` exited 0 and `trust maintainer
-check` reported a just-revoked key trusted again, the moment the byte flipped. Measured on 0.46.0 and 0.48.0;
-present in every release from 0.20.0 on. **Affected: 0.20.0 to 0.48.0. No advisory (disclosure only, per the
-owner's ruling). Action: upgrade; verify is now able to detect and report this shape.**
+**Code history (when the shape first shipped) and measurement (which released versions were actually tested) are
+kept apart below** — the code dates to 0.20.0 for all three files, but only 0.46.0, 0.47.0, and 0.48.0 were
+measured; earlier releases are not confirmed either way.
 
-**The pointer index's readers and its repair, in 0.48.0 (RFC 162).** The same shape: a single flipped header byte
-in the pointer index's own last record made every reader resolve the *previous* publication's tip, with no repair
-needed to cause it. Separately, a flipped **body** byte (checksum mismatch on an otherwise complete record) was
-truncatable by `doctor --repair-pointer-index-tail` as if it were a torn tail — `verify` reported a failure both
-before and after the repair, but the repair still reverted the ref's tip. **Affected: 0.48.0. No advisory. Action:
-upgrade.**
+| released | trust policy, last snapshot | pointer index, last record | pointer-index generation log, last record |
+|---|---|---|---|
+| 0.46.0 | **length field flipped:** the removed maintainer is trusted again; `verify` exits **0** (0.46.0's `verify` does not read the trust files at all) | **length field flipped:** every reader shows the previous publication's tip; `verify` exits 1 | **length field flipped:** every reader resolves the previous (stale) slot; `verify` exits 1 |
+| 0.47.0 | the same | the same | the same |
+| 0.48.0 | **length field flipped:** the same, `verify` exits **0** | **every byte, header or body, flipped:** every reader shows the previous tip, with **no repair run at all**; separately, `doctor --repair-pointer-index-tail` on a **body**-flipped record removes it, reverting the tip itself | **refuses** (0.48.0's own one-byte-body rule rejects any length other than exactly one, so a length flip never resolves as a tail here) |
+
+A flipped **magic** or **version** byte is refused on every released version measured — that rollback shape existed
+only in this release's own, unreleased Rule A (RFC 164), never in a shipped version. **Code first shipped in 0.20.0**
+(trust policy: `2827fab7`; pointer index: `0550e340`; the three generation logs: `b33d1942`) — confirmed from
+history, not measured directly; the measurements above are 0.46.0 through 0.48.0 only. **Affected: 0.46.0 through
+0.48.0 (measured); the same code shipped from 0.20.0, not independently confirmed on 0.20.0–0.45.0. No advisory
+(disclosure only, per the owner's ruling). Action: upgrade; `verify` now detects and reports every shape above.**
 
 Fixed in this release by RFC 164 §9 and §9.2 (below): completeness is decided by the checksum, not by whether the
 header's own magic, version, or length happens to look valid.
