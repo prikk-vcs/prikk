@@ -119,8 +119,15 @@ planned for. None of these blocks 0.48.0.
   reproduced (25 of 25)**. Reproduced at 89 of 300 kills on 0.48.0 and 136 of 300 on 0.47.0, with an
   80-file bundle; present since `bundle import` was first introduced (0.20.0). Fixed in 0.49.0:
   every writer that lays down more than one object in a single command -- `bundle import`, `sync
-  accept` -- now writes them in dependency order, both across and within kinds. A way out that needs
-  no bundle at all is planned (RFC 164).
+  accept` -- now writes them in dependency order, both across and within kinds, so a new interrupted
+  write can no longer produce this shape. **What remains, after RFC 164 Rule E (0.49.0): `verify`
+  still needs the original bundle to make such an object whole, but no longer fails forever over one
+  nothing in the repository actually needs.** `verify`/`doctor` now classify a stored object's own
+  dangling reference by reachability from committed state (a ref, a received pointer, a queued
+  patch, or a sealed block reached from them): reachable, it is still the same hard failure named
+  above; unreachable, it is an **unreferenced remnant** -- a warning, naming the object and what it
+  lacks, and `verify` exits `0`. No command removes a remnant in 0.49.0; re-running the same `bundle
+  import` is still the only way to make a still-needed one whole, exactly as before this round.
 - **A crash inside `branch create` or `tag create` has no command that completes it, and a `seal` of a
   different ref buries it (N3).** The ref log's last record is torn; `verify` fails with
   `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends manual recovery, but retrying the same

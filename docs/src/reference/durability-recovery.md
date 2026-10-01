@@ -128,6 +128,20 @@ and read. A frame an index entry names, that the containers cannot actually prod
 append refuses past a tail, so an interior partial frame is always damage), and the ref log keeps a failed item for it today, because nothing at
 the reader names a ref-log record.
 
+**RFC 164 round 2 Rule E (0.49.0) generalizes the same damage-vs-remnant question to a complete, decodable object that itself names a missing
+reference** — not an unparseable frame (the case above), but a fully sound Block whose own `parent_block_ids`, `patch_ids`, or `snapshot_blob_ref`
+names an object that does not exist. Before this round that was always a hard failure, regardless of whether anything still needed the Block making
+the claim. Now: `verify`/`doctor` compute, fresh on every run, every object id reachable from committed state (a ref, a received pointer, a queued
+patch, or a sealed block reached from them — the same connectivity roots the paragraph above already uses, walked further: a ref's RefState reaches
+its own target Block or Tag and its prior RefState lineage; a Tag reaches its target Block; a Block reaches its own parents, patches, snapshot blob,
+and merge lineage). A Block with a dangling reference is damage, exactly as before, only if the Block itself is reachable this way; otherwise it is an
+**unreferenced remnant** — a warning naming the object and what it lacks ("re-run the import if you still have the bundle; otherwise it is harmless"),
+and `verify` exits `0` over it, same as the frame-level case above. No command removes a remnant in 0.49.0. A remnant made reachable afterward (a new
+branch created over it, say) is reclassified as damage on the very next run, since reachability is never cached. **Scope, this round**: only a Block's
+own three reference fields get this treatment — `RefState`'s and `Tag`'s own reference fields are not existence-checked at all today, independent of
+Rule E, and extending that is separate, larger scope this round does not cover; `RecognitionClaim`'s own references stay untouched by design (never
+trust-conferring, never existence-checked).
+
 ## Active Ref Metadata
 
 The active WAL is paired with active ref metadata that records which local branch ref owns the

@@ -299,6 +299,25 @@ so the retry only writes what is still missing, and this cleared the state in ev
 within kinds), so an interrupted write can no longer produce this shape. `sync accept` is ordered the
 same way now, for the same reason.
 
+**0.49.0: this error now fires only when the Block making the dangling reference is itself reachable
+from committed state** — a ref, a received pointer, a queued patch, or a sealed block reached from
+them (RFC 164 Rule E). A Block nothing reaches this way is an **unreferenced remnant**, reported as a
+warning instead — see the next entry.
+
+## `warning: <owner type> <id> references missing <missing type> <id> (<role>) -- re-run the import if you still have the bundle; otherwise it is harmless`
+
+Seen from `verify` and `doctor` (as `PRIKK-DOCTOR-UNREFERENCED-REMNANT`) for a stored object's own
+dangling reference when nothing committed still needs it — not reached by any ref, received pointer,
+queued patch, or sealed block reached from them (RFC 164 Rule E, 0.49.0). The same underlying shape as
+the previous entry's error, told apart by reachability: a Block left behind by an interrupted `bundle
+import`/`sync accept` that nothing in this repository was ever going to use is harmless debris, not
+damage, and `verify` exits `0` over it. No command removes a remnant in 0.49.0; if the bundle that
+produced it is still available, re-running the same import is still the way to make it whole, exactly
+as the previous entry describes — this warning simply means doing so is optional, not required for
+`verify` to pass. **A remnant that later becomes reachable** (a new branch created over it, say) is
+reclassified as damage — the previous entry's error — on the very next run: reachability is always
+recomputed fresh, never cached.
+
 ## `error: repository has interrupted or divergent ref publication state`
 
 Seen from `verify` after `branch create`, `tag create`, or `merge` was interrupted by a crash

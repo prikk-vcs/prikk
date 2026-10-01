@@ -124,8 +124,33 @@ object-index, commit-index, and lifecycle-cache writes. A commit by an already-r
 a publication whose pointer-index entry is clean, reaches neither check's own refusal path and is
 unaffected.
 
+### Changed — a stored Block's own dangling reference is damage only when the Block is itself
+reachable from committed state; otherwise it is a harmless remnant (RFC 164 round 2 Rule E)
+
+Before this round, a sealed Block whose `parent_block_ids`, `patch_ids`, or `snapshot_blob_ref` named
+an object that does not exist always failed `verify`/`doctor`, whether or not anything in the
+repository still needed that Block — the common shape a killed `bundle import`/`sync accept` leaves
+behind even after this release's own dependency-order fix (above) closes the easy case. Now:
+`verify`/`doctor` compute, fresh on every run, every object id reachable from committed state (a ref,
+a received pointer, a queued patch, or a sealed block reached from them). A Block with a dangling
+reference is damage, exactly as before, only if it is itself reachable this way; otherwise it is an
+**unreferenced remnant** — `RepositoryVerification` gains `unreferenced_remnants: Vec<UnreferencedRemnant>`
+(new, `#[non_exhaustive]`) — reported as a warning, never failing `verify`. No command removes a
+remnant in 0.49.0. A remnant made reachable afterward (a new branch created over it, say) is
+reclassified as damage on the very next run, since reachability is never cached. Scope, this round:
+only a Block's own three reference fields get this treatment; `RefState`'s and `Tag`'s own reference
+fields are not existence-checked at all today, independent of this change.
+
 ### Output changes
 
+- `verify` gains an `unreferenced remnants: N` line, plus one warning line per remnant naming the
+  owner, the missing object, and its role (RFC 164 round 2 Rule E): `"<owner type> <id> references
+  missing <missing type> <id> (<role>) -- re-run the import if you still have the bundle; otherwise it
+  is harmless"`. `doctor` gains the matching `PRIKK-DOCTOR-UNREFERENCED-REMNANT` warning code.
+  `verify --format json`'s own `verify-report-v1` schema is unaffected: item-level findings are out of
+  its v1 scope, unchanged by this addition.
+- `object <id> (block) references missing <role> <id>` no longer fires for a Block that is not itself
+  reachable from committed state (RFC 164 round 2 Rule E) — it is the warning above instead.
 - `seal`, `tag create`, `merge`, and `sync seal` can now refuse with the pointer index's own tail/damage
   message (`"the ref pointer index has an incomplete tail…"` / `"ref pointer index has a damaged
   entry…"`) before writing any object at all, not only at the later compare-and-swap step (RFC 164 Rule
