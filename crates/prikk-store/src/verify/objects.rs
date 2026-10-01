@@ -108,6 +108,9 @@ pub(super) struct ObjectSummary {
     /// tail-shaped, i.e. `TrailingPartial` never reaches it) -- this is the aggregate count `verify`
     /// reports as a short warning, mirroring the seven Rule-A files' own line exactly.
     pub(super) object_container_tails: Vec<(ObjectType, usize)>,
+    /// RFC 164 Rule E: a stored object's own dangling reference, when the object making it is not
+    /// itself reachable from committed state.
+    pub(super) unreferenced_remnants: Vec<super::UnreferencedRemnant>,
 }
 
 impl ObjectSummary {
@@ -123,6 +126,7 @@ impl ObjectSummary {
             trailing_partial_index_bytes: 0,
             index_interior_damage: false,
             object_container_tails: Vec::new(),
+            unreferenced_remnants: Vec::new(),
         }
     }
 
@@ -137,6 +141,8 @@ impl ObjectSummary {
         self.interrupted_appends.extend(other.interrupted_appends);
         self.object_container_tails
             .extend(other.object_container_tails);
+        self.unreferenced_remnants
+            .extend(other.unreferenced_remnants);
     }
 }
 
@@ -242,6 +248,9 @@ pub(super) fn verify_objects(
         }
     }
 
+    // RFC 164 Rule E: computed once per run, from committed state only, and reused for every
+    // object type's own missing-reference classification below.
+    let reachable = super::reachability::compute_reachable_object_ids(layout, object_store)?;
     for object_type in persisted_object_types() {
         summary.add(verify_object_type_container(
             layout,
@@ -250,6 +259,7 @@ pub(super) fn verify_objects(
             trust_verifier,
             &mut pending_v3_blocks,
             &indexed_ids,
+            &reachable,
         )?);
     }
     for (entry, message) in unreadable {
@@ -298,6 +308,7 @@ fn verify_object_type_container(
     trust_verifier: &mut PublicationTrustVerifier<'_>,
     pending_v3_blocks: &mut Vec<(ObjectId, BlockPayload)>,
     indexed_ids: &HashSet<ObjectId>,
+    reachable: &std::collections::BTreeSet<ObjectId>,
 ) -> Result<ObjectSummary> {
     let mut summary = ObjectSummary::empty();
     #[cfg(test)]
@@ -382,6 +393,13 @@ fn verify_object_type_container(
         // DC-95 Stage 2 Level 2: this object's own failure is caught here, at the item boundary,
         // rather than propagated -- every *other* record in this and every other container is
         // still attempted.
+        let mut ctx = ObjectRecordContext {
+            pending_v3_blocks: &mut *pending_v3_blocks,
+            classifier: super::ReachabilityClassifier {
+                reachable,
+                remnants: &mut summary.unreferenced_remnants,
+            },
+        };
         match verify_object_record(
             layout,
             object_store,
@@ -389,7 +407,7 @@ fn verify_object_type_container(
             &locator,
             &record.envelope,
             trust_verifier,
-            pending_v3_blocks,
+            &mut ctx,
         ) {
             Ok((object, signature_issues, merge_baseline_divergence)) => {
                 summary.signature_issues.extend(signature_issues);
@@ -429,6 +447,13 @@ fn verify_object_type_container(
     Ok(summary)
 }
 
+/// `pending_v3_blocks` and the RFC 164 Rule E classifier, bundled purely to keep
+/// `verify_object_record`'s own argument count low (`clippy::too_many_arguments`).
+struct ObjectRecordContext<'a> {
+    pending_v3_blocks: &'a mut Vec<(ObjectId, BlockPayload)>,
+    classifier: super::ReachabilityClassifier<'a>,
+}
+
 fn verify_object_record(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
@@ -436,7 +461,7 @@ fn verify_object_record(
     locator: &Path,
     envelope: &ObjectEnvelope,
     trust_verifier: &mut PublicationTrustVerifier<'_>,
-    pending_v3_blocks: &mut Vec<(ObjectId, BlockPayload)>,
+    ctx: &mut ObjectRecordContext<'_>,
 ) -> Result<(
     ObjectVerification,
     Vec<SignatureEnvelopeIssue>,
@@ -483,7 +508,8 @@ fn verify_object_record(
             object_id,
             layout.format(),
             &envelope.canonical_payload,
-            pending_v3_blocks,
+            ctx.pending_v3_blocks,
+            &mut ctx.classifier,
         )?
     } else {
         (0, None)

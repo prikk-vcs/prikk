@@ -495,6 +495,23 @@ pub(crate) fn print_verify_report(
             );
         }
     }
+    // RFC 164 Rule E: a stored object's own dangling reference, when the object making it is not
+    // itself reachable from committed state -- a harmless remnant, never failing `verify`.
+    println!(
+        "unreferenced remnants: {}",
+        report.unreferenced_remnants.len()
+    );
+    for remnant in &report.unreferenced_remnants {
+        println!(
+            "warning: {} {} references missing {} {} ({}) -- re-run the import if you still have \
+             the bundle; otherwise it is harmless",
+            remnant.owner_object_type,
+            remnant.owner_object_id,
+            remnant.missing_object_type,
+            remnant.missing_object_id,
+            remnant.missing_role
+        );
+    }
     for append in &report.object_interrupted_appends {
         let possibly_missing: Vec<_> = report
             .connectivity_issues

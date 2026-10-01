@@ -916,6 +916,22 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     ));
                 }
             }
+            // RFC 164 Rule E: a stored object's own dangling reference, when the object making it
+            // is not itself reachable from committed state -- never repaired or removed in 0.49.0.
+            for remnant in &verification.unreferenced_remnants {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-UNREFERENCED-REMNANT",
+                    format!(
+                        "{} {} references missing {} {role} {}",
+                        remnant.owner_object_type,
+                        remnant.owner_object_id,
+                        remnant.missing_object_type,
+                        remnant.missing_object_id,
+                        role = remnant.missing_role
+                    ),
+                    "re-run the import if you still have the bundle; otherwise it is harmless",
+                ));
+            }
             for path in &verification.object_temp_paths {
                 let name = path
                     .file_name()

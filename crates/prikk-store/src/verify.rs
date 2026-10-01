@@ -299,6 +299,7 @@
 use std::path::PathBuf;
 
 mod objects;
+mod reachability;
 mod ref_publication;
 mod trust;
 
@@ -648,6 +649,10 @@ pub struct RepositoryVerification {
     /// `object_interrupted_appends`/`object_item_outcomes` instead, unchanged. Empty when the objects
     /// stage did not evaluate.
     pub object_container_tails: Vec<ObjectContainerTailStatus>,
+    /// RFC 164 Rule E: a stored object's own dangling reference, when the object making it is not
+    /// itself reachable from committed state -- a harmless remnant, not damage. Empty when the
+    /// objects stage did not evaluate.
+    pub unreferenced_remnants: Vec<UnreferencedRemnant>,
     /// Number of trailing bytes in the active WAL that look like an incomplete final record. `None`
     /// when the WAL-replay stage did not evaluate to completion.
     pub trailing_partial_wal_bytes: Option<usize>,
@@ -754,6 +759,36 @@ pub struct ObjectContainerTailStatus {
     pub object_type: ObjectType,
     /// Trailing bytes after the last sound record. `0` for a container with no tail.
     pub trailing_partial_bytes: usize,
+}
+
+/// RFC 164 Rule E: a stored object's own reference to something missing, when the object making the
+/// reference is not itself reachable from committed state (a ref, a received pointer, a queued
+/// patch, or a sealed block reached from them -- see `verify/reachability.rs`) -- a harmless
+/// remnant, not damage. `verify` does not fail over this, and no command removes it in 0.49.0
+/// (RFC 164 §5). Reachability is recomputed fresh on every run, so an object that becomes reachable
+/// later (a new branch created over it, say) is reclassified as damage on the very next run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnreferencedRemnant {
+    /// The object making the dangling reference.
+    pub owner_object_id: ObjectId,
+    /// The owning object's own type.
+    pub owner_object_type: ObjectType,
+    /// What role the missing object plays for the owner (e.g. "parent block", "block patch",
+    /// "snapshot blob").
+    pub missing_role: String,
+    /// The missing object's expected type.
+    pub missing_object_type: ObjectType,
+    /// The missing object's id.
+    pub missing_object_id: ObjectId,
+}
+
+/// RFC 164 Rule E: `reachable` and `remnants` threaded together purely to keep the surrounding
+/// functions' own argument counts low (`clippy::too_many_arguments`). `reachable` is shared,
+/// read-only state computed once per `verify` run; `remnants` accumulates this run's own findings.
+pub(crate) struct ReachabilityClassifier<'a> {
+    pub(crate) reachable: &'a std::collections::BTreeSet<ObjectId>,
+    pub(crate) remnants: &'a mut Vec<UnreferencedRemnant>,
 }
 
 /// A `Merge` block (DC-75) whose recorded `merge_baseline_block_id` is not a common ancestor of its
@@ -1278,6 +1313,10 @@ pub fn verify_repository_with_options(
                 .collect()
         })
         .unwrap_or_default();
+    let unreferenced_remnants = object_summary
+        .as_ref()
+        .map(|summary| summary.unreferenced_remnants.clone())
+        .unwrap_or_default();
     let trailing_partial_object_index_bytes = object_summary
         .as_ref()
         .map(|summary| summary.trailing_partial_index_bytes);
@@ -1606,6 +1645,7 @@ pub fn verify_repository_with_options(
         object_temp_paths,
         object_interrupted_appends,
         object_container_tails,
+        unreferenced_remnants,
         trailing_partial_wal_bytes: replay.as_ref().map(|replay| replay.trailing_partial_bytes),
         active_wal_metadata_status,
         commit_index_divergences,
@@ -1847,8 +1887,20 @@ fn verify_block_payload(
     format: RepositoryFormat,
     canonical_payload: &[u8],
     pending_v3_blocks: &mut Vec<(ObjectId, BlockPayload)>,
+    classifier: &mut ReachabilityClassifier<'_>,
 ) -> Result<(usize, Option<MergeBaselineDivergence>)> {
     let payload = BlockPayload::decode_canonical(canonical_payload)?;
+    // RFC 164 Rule E: Phase B (`verify_blocks_topological`, below) replays this block's own claimed
+    // state from its parents and patches -- unconditionally, regardless of reachability, if this
+    // block is handed to it. A remnant's own missing reference makes that replay impossible to even
+    // attempt soundly, and attempting it anyway would surface the *same* missing object as a Phase B
+    // failure (a different message, e.g. "lifecycle replay: patch ... is malformed"), defeating the
+    // whole point of classifying it as a harmless remnant at Phase A. So: if this block's own checks
+    // below record it as a remnant for ANY reference, it is excluded from Phase B's own replay too --
+    // `remnants_before` lets this function tell "a remnant from this block" apart from "a remnant
+    // from some earlier block already in `classifier.remnants`", without needing a bespoke "did I
+    // push anything" flag threaded through every arm below.
+    let remnants_before = classifier.remnants.len();
     for parent in &payload.parent_block_ids {
         ensure_object_exists(
             object_store,
@@ -1856,41 +1908,65 @@ fn verify_block_payload(
             *parent,
             "parent block",
             block_id,
+            ObjectType::Block,
+            classifier,
         )?;
     }
     let mut rollback_patch_count = 0_usize;
     for patch in &payload.patch_ids {
-        let Some(envelope) = object_store.read_typed(*patch, ObjectType::Patch)? else {
-            return Err(PrikkError::Integrity(format!(
-                "object {block_id} references missing block patch {patch}"
-            )));
-        };
-        let context = format!("sealed Block {block_id} Patch {patch}");
-        if verify_rollback_patch_envelope(&envelope, &context)? {
-            rollback_patch_count = rollback_patch_count.checked_add(1).ok_or_else(|| {
-                PrikkError::Integrity("sealed rollback patch count overflow".to_string())
-            })?;
+        match object_store.read_typed(*patch, ObjectType::Patch)? {
+            Some(envelope) => {
+                let context = format!("sealed Block {block_id} Patch {patch}");
+                if verify_rollback_patch_envelope(&envelope, &context)? {
+                    rollback_patch_count =
+                        rollback_patch_count.checked_add(1).ok_or_else(|| {
+                            PrikkError::Integrity(
+                                "sealed rollback patch count overflow".to_string(),
+                            )
+                        })?;
+                }
+            }
+            None if classifier.reachable.contains(&block_id) => {
+                return Err(PrikkError::Integrity(format!(
+                    "object {block_id} references missing block patch {patch}"
+                )));
+            }
+            None => classifier.remnants.push(UnreferencedRemnant {
+                owner_object_id: block_id,
+                owner_object_type: ObjectType::Block,
+                missing_role: "block patch".to_string(),
+                missing_object_type: ObjectType::Patch,
+                missing_object_id: *patch,
+            }),
         }
     }
-    if let Some(snapshot) = payload.snapshot_blob_ref {
+    let snapshot_exists = if let Some(snapshot) = payload.snapshot_blob_ref {
         ensure_object_exists(
             object_store,
             ObjectType::Blob,
             snapshot,
             "snapshot blob",
             block_id,
+            ObjectType::Block,
+            classifier,
         )?;
+        object_store.has_object(snapshot, ObjectType::Blob)?
+    } else {
+        false
+    };
+    if snapshot_exists {
         // RFC 136 increment 1b: the snapshot describes this block (decodes, recomputes to its root,
         // names only present content Blobs). `verify` never reads a snapshot in place of replay.
         crate::snapshot::validate_snapshot_manifest(object_store, block_id, &payload)?;
     }
+    let is_remnant = classifier.remnants.len() > remnants_before;
     let merge_baseline_divergence =
-        if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) {
+        if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) && !is_remnant {
             verify_merge_baseline(object_store, block_id, &payload)?
         } else {
             None
         };
-    if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) {
+    if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) && !is_remnant {
         pending_v3_blocks.push((block_id, payload));
     }
     Ok((rollback_patch_count, merge_baseline_divergence))
@@ -2008,20 +2084,34 @@ fn verify_queued_patch_connectivity(
     Ok(issues)
 }
 
+/// RFC 164 Rule E: on a missing reference, `owner` is damage if it is itself reachable from
+/// committed state, or an unreferenced remnant (pushed to `remnants`, not an error) otherwise.
 fn ensure_object_exists(
     object_store: &impl ObjectReader,
     object_type: ObjectType,
     object_id: ObjectId,
     role: &str,
     owner: ObjectId,
+    owner_type: ObjectType,
+    classifier: &mut ReachabilityClassifier<'_>,
 ) -> Result<()> {
     let exists = object_store.read_typed(object_id, object_type)?.is_some();
     if exists {
         return Ok(());
     }
-    Err(PrikkError::Integrity(format!(
-        "object {owner} references missing {role} {object_id}"
-    )))
+    if classifier.reachable.contains(&owner) {
+        return Err(PrikkError::Integrity(format!(
+            "object {owner} references missing {role} {object_id}"
+        )));
+    }
+    classifier.remnants.push(UnreferencedRemnant {
+        owner_object_id: owner,
+        owner_object_type: owner_type,
+        missing_role: role.to_string(),
+        missing_object_type: object_type,
+        missing_object_id: object_id,
+    });
+    Ok(())
 }
 
 fn verify_wal_persistence(
