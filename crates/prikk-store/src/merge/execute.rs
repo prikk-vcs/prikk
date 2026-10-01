@@ -150,6 +150,13 @@ pub fn execute_merge(
     }
 
     let ref_store = RefStore::new(layout.clone());
+    // RFC 164 Rule D: the pointer index's own tail check for `into_ref`, before the merge Block
+    // write just below (`seal_block_at`) -- previously this ref's own pointer-index tail was not
+    // checked until `publish_locked`'s own, later `Ready`-branch-only call, by which point the new
+    // merge Block was already durably written, for nothing (a refused publication left it
+    // unreferenced, not undone). `read_current_ref_state_id` below already reads the pointer index
+    // too (and so already refuses on damage via `has_item_failure()`); this call adds the tail half.
+    ref_store.ensure_pointer_index_has_no_tail(&into_ref)?;
     crate::ref_resolution::require_existing_ref(
         layout,
         &into_ref,

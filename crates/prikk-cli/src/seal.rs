@@ -130,8 +130,17 @@ fn seal_active_no_audit(
         }
     }
 
-    let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     let ref_store = RefStore::new(layout.clone());
+    // RFC 164 Rule D: the pointer index's own tail check, before any content-object write below
+    // (`persist_wal_patches`, `seal_block`) -- previously this ref's own pointer-index tail was not
+    // checked until `publish_locked`'s own, later `Ready`-branch-only call, by which point a block
+    // and its patches were already durably written, for nothing (a refused publication left them
+    // unreferenced, not undone). `current_ref_state` below already reads the pointer index too (and
+    // so already refuses on damage via `has_item_failure()`); this call adds the tail half.
+    ref_store
+        .ensure_pointer_index_has_no_tail(&ref_name)
+        .map_err(|err| err.to_string())?;
+    let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     let current = current_ref_state(&layout, &object_store, &ref_store, &ref_name)?;
     let wal_patch_ids = collect_wal_patch_ids(&replay.records)?;
     if let Some(current) = current.as_ref() {

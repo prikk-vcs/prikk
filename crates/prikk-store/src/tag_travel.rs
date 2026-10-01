@@ -277,6 +277,14 @@ pub fn create_local_tag(
             "tag {canonical} already exists"
         )));
     }
+    // RFC 164 Rule D: the pointer index's own tail check, before the Tag object write just below --
+    // previously this ref's own pointer-index tail was not checked until `publish_with_object_store`
+    // (`publish_locked`'s own `Ready`-branch-only call), by which point the Tag object (and, for
+    // `sync adopt-tag`, everything its own caller already wrote) was already durably written, for
+    // nothing (a refused publication left it unreferenced, not undone). The `read_current_ref_state_id`
+    // call just above already reads the pointer index too (and so already refuses on damage via
+    // `has_item_failure()`); this call adds the tail half.
+    ref_store.ensure_pointer_index_has_no_tail(&canonical)?;
 
     let tag_payload = TagPayload {
         name: canonical.clone(),

@@ -68,6 +68,21 @@ fn publish_locked(
             LockableContainer::RefLog,
         ],
     )?;
+    // RFC 164 Rule D: the pointer index's own tail/damage check, run again here -- before the
+    // RefState object write just below -- from its own prior position inside `classify_state`'s
+    // read (damage, via `lookup_ref_pointer`'s own refusal on `has_item_failure()`) and
+    // `ensure_current_matches` (the tail check, `Ready` branch only). Checked unconditionally here,
+    // for every publication state (`Ready`, `PointerLeading`, `Complete`), under the same container
+    // locks held for the rest of this function. `seal`, `tag create` (and `sync adopt-tag`), `merge`,
+    // and `sync seal` each write a content object of their own (a Patch, a Block) before ever
+    // reaching this function, so each of them also calls `RefStore::ensure_pointer_index_has_no_tail`
+    // at the very top of their own command, before that earlier write -- this call is their second,
+    // cheap, redundant-but-harmless re-check under the lock, not the only one. `branch create` writes
+    // no content object of its own at all (its RefState, written just below, is the first object this
+    // publication produces), so this one call is already its only and sufficient check -- it carries
+    // no separate early call of its own.
+    store.ensure_pointer_index_has_no_tail(&publication.ref_name)?;
+
     // Step 0 §13.3, ruled in design-v1.md §13.3: the candidate-write-then-promote mechanism
     // (`refs/pointer.rs`'s old `write_ref_pointer_candidate`/`promote_ref_pointer_candidate`,
     // `remove_candidate_write_temps` here) has no equivalent under an append-only pointer index --

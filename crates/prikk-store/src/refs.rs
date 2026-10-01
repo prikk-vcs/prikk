@@ -507,6 +507,25 @@ impl RefStore {
         }))
     }
 
+    /// RFC 164 Rule D: the pointer index's own tail/damage check, standalone from the CAS comparison
+    /// `ensure_current_matches` also makes. **Call this at the very start of a publishing command**
+    /// (`seal`, `branch create`, `tag create`, `merge`), before any content-object write of its own
+    /// (a queued patch's objects, a sealed Block) -- not only inside `publish_locked`'s own later,
+    /// redundant-but-harmless re-check, which exists only to catch a lock-discipline regression, not
+    /// as the primary guard. `lookup_ref_pointer` itself already refuses on interior damage
+    /// (`has_item_failure()`); `require_no_unclean_tail` adds the tail check on top, the same pair
+    /// every other guarded-file writer performs under its own replay.
+    pub fn ensure_pointer_index_has_no_tail(&self, ref_name: &str) -> Result<()> {
+        let key = crate::foundation::layout::ref_name_key_bytes(ref_name);
+        let (_entry, tail) = pointer_index::lookup_ref_pointer(&self.layout, key)?;
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the ref pointer index",
+            tail.trailing_partial_bytes,
+            tail.tail_offset,
+            "run `prikk doctor --repair-pointer-index-tail`, then retry",
+        )
+    }
+
     /// RFC 132 follow-up: this refusal is defence against a lock-discipline regression, not a live
     /// CAS gate on the only path that reaches it today. Its sole production call site is
     /// `publish_locked`'s `PublicationState::Ready` branch (`refs/publication.rs`), which is chosen

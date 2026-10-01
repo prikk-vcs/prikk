@@ -203,6 +203,13 @@ pub fn seal_from_accepted_claim(
     }
 
     let ref_store = RefStore::new(layout.clone());
+    // RFC 164 Rule D: the pointer index's own tail check, before the new Block write just below
+    // (`seal_block_classified`) -- previously this ref's own pointer-index tail was not checked
+    // until `publish_with_object_store`'s own, later `Ready`-branch-only call, by which point the
+    // new Block was already durably written, for nothing. `read_current_tip` below already reads
+    // the pointer index too (and so already refuses on damage via `has_item_failure()`); this call
+    // adds the tail half.
+    ref_store.ensure_pointer_index_has_no_tail(&canonical_ref)?;
     let current = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?;
     let parent = current.as_ref().map(|tip| tip.target_block_id);
 
