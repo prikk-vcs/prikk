@@ -92,3 +92,38 @@ way-out.md`, **including K1–K7 in its Status.** They are how "be careful" bind
 | U4 | release timings, probes, `matrix.py`, text | 45 min |
 
 **Report:** `.git-exclude/review-request/rfc165-round-1-report-v1.md`, with time spent against each unit.
+
+## Addendum 1 — 2026-10-01: a wedge, the cross-target gates, three unheld call sites (review `rfc165-round-1-review-v1`)
+
+Report `rfc165-round-1-report-v1.md`, commit `1785a849`. **Not accepted. Fixes only.** Read review v1, §1 to §5.
+
+1. **The wedge (review §1):**
+   - **The defect:** a ref-log tail with no pointer lead (zeros, garbage, a lead-free torn prefix) now blocks every
+     `commit`, while `verify` exits 0, and the refusal names a `seal` retry that cannot apply.
+   - **R2 separates the two states:** a pointer lead is an incomplete publication; a lead-free tail is not one.
+     `commit`, and every writer that does not append to the ref log, proceeds over it.
+   - **Publications refuse over it, writing nothing** (Rule D). Their message names the tail, its offset and its byte
+     count, and says the repair arrives with R5. Not "incomplete ref publication", and not "seal retry".
+   - **Tests:**
+     - 30, 100 and 4,096 zero bytes, 100 random bytes, and a lead-free torn prefix: `commit` succeeds, and each
+       publication refuses with an identical tree;
+     - **control:** today's behaviour turns these rows red.
+   - **`matrix.py`:** the four `log-a.container` cells return to `way-out: yes`.
+2. **The cross-target gates (review §2):**
+   - fix the dead code on Windows and macOS: `ensure_no_incomplete_publication_via_verify_refs_for_test` and
+     `RefVerification::has_item_failure`;
+   - **run all 14 gates every round.** The cross-target rule counts against the last release tag, not the round's diff.
+3. **The unheld call sites (review §3):** `seal`, `branch create` and `branch close` each get an entry-point test with
+   another ref's interrupted publication present. **Control, per site:** remove its call; its row goes red.
+4. **Timings (review §4):** the raw samples and the binary's sha256, measured on an idle machine.
+5. **Process (review §5):**
+   - each unit's start and end time goes in the report;
+   - a unit reaching ×2 files a question in `.git-exclude/review-request/` at that moment.
+
+**Before proposing:**
+- the 14 gates;
+- the architect's probes, in `/home/nabbisen/.pgtmp/arch-seal/`: `rfc164_all_files_reader_probe.sh`,
+  `rfc164_rule_d_writers_probe.sh`, `rfc164_rule_d_sync_rollback_probe.sh`, and the seven `rfc163_*.sh`;
+- `matrix.py`.
+
+**Report:** `.git-exclude/review-request/rfc165-round-1-report-v2.md`.
