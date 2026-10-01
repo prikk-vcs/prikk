@@ -145,7 +145,12 @@ planned for. None of these blocks 0.48.0.
   retrying still only answers "already exists"/"not confluent," safely but uselessly. **`sync seal`
   remains locked out of its own interrupted publication**: its own precondition cannot yet tell "my own
   retry" apart from "another ref's incomplete work," so it refuses both -- a known, disclosed gap, not
-  worked around in this round.
+  worked around in this round. **Addendum 1: a ref-log tail with no pointer lead (zeros, random bytes,
+  or any torn prefix left for a reason unrelated to a pending write) is not an incomplete publication --
+  `commit` and every other writer that does not append to the ref log proceed over it; every publication
+  still refuses over it (RFC 164 Rule D: a writer refuses over a tail in a file it appends to), naming
+  the tail's own offset and byte count and that its repair arrives with R5, not "incomplete publication"
+  and not a seal retry that cannot apply.**
 - **A damaged last WAL record is now a tail, and the repair removes it (N6).** RFC 162 rule 3 defines
   the WAL's tail by position, not shape: a last record whose own bytes are all present but whose
   checksum fails is indistinguishable, once nothing sound follows it, from a genuine crash-torn append.

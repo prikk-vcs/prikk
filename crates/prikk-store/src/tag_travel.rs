@@ -274,7 +274,7 @@ pub fn create_local_tag(
     // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
     // `canonical` excluded, since this call is the thing that would resolve its own state (covers
     // both `tag create` and `sync adopt-tag`, which reaches this function too).
-    crate::refs::ensure_no_incomplete_publication_except(layout, Some(&canonical))?;
+    crate::refs::ensure_may_publish(layout, &canonical)?;
     let ref_store = RefStore::new(layout.clone());
     if ref_store.read_current_ref_state_id(&canonical)?.is_some() {
         return Err(PrikkError::Integrity(format!(

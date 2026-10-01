@@ -192,6 +192,80 @@ impl RefContainerReplay {
             .count();
         (self.records.len(), failed, self.trailing_partial_bytes)
     }
+
+    /// RFC 165 Addendum 1 §1: true when a `Failed` outcome exists that is **not** the container's own
+    /// last attempted frame -- something sound or failed follows it, so this is interior damage
+    /// (unrecoverable corruption), not the container's own tail. Every `Failed` outcome is pushed in
+    /// scan order (`decode_ref_container_records`'s own loop), so the last element of
+    /// `record_outcomes`, if any, is always the physically-last attempted frame; any other `Failed`
+    /// entry means the scan continued past it. Distinct from a lead-free tail (`ref_log_container_tail`,
+    /// below), which must not be confused with an incomplete publication -- see
+    /// `refs::ensure_no_incomplete_publication_except`'s own doc for why that distinction matters.
+    #[must_use]
+    pub(in crate::refs) fn has_interior_damage(&self) -> bool {
+        let last_index = self.record_outcomes.len().checked_sub(1);
+        self.record_outcomes
+            .iter()
+            .enumerate()
+            .any(|(index, outcome)| {
+                matches!(outcome.status, RefContainerRecordStatus::Failed { .. })
+                    && Some(index) != last_index
+            })
+    }
+}
+
+/// The ref-log container's own trailing tail, by position (RFC 162 rule 3 / RFC 164 Rule A: everything
+/// after the last sound record, when nothing sound follows, regardless of shape). Covers both frame
+/// shapes `decode_ref_container_records` can leave at the physical end: a torn partial too short to
+/// parse a header from (`trailing_partial_bytes > 0`, no `Failed` outcome pushed for it), and a
+/// frame-sized-or-larger span whose header or checksum fails with no sound resync point after it (a
+/// `Failed` outcome that is the replay's own last attempted frame). `None` when the container ends
+/// cleanly, or when `has_interior_damage` is true (a terminal `Failed` entry reached by continuing past
+/// earlier interior damage is still interior damage's business, not this function's -- callers check
+/// `has_interior_damage` first).
+///
+/// RFC 165 Addendum 1 §1: a lead-free tail is not an incomplete publication -- `publish_locked` writes
+/// the pointer before the log, so a genuine crash mid-publication always leaves a pointer lead, which
+/// `ensure_no_incomplete_publication_except`'s own agreement check still catches regardless of whether
+/// a tail also exists. This exists so a publishing command can refuse over the tail specifically
+/// (RFC 164 Rule D: a writer refuses over a tail in a file it appends to), without conflating that with
+/// "an interrupted publication," and without a second whole-container read: callers reuse the one read
+/// `decode_ref_container_records` already did for them.
+///
+/// No ref-name attribution here -- an earlier version carried the tail's own best-effort
+/// header-claimed `ref_name_key` so a caller could exclude "its own" tail by name, but a torn tail
+/// short enough to carry no readable name at all (as little as a few bytes) made that refuse a ref's
+/// own first-ever, very-short interrupted write, which DC-38's retry must still complete regardless of
+/// whether the physical tail can be attributed to it by header inspection. Callers instead ask whether
+/// *their own excluded ref* currently has a pointer lead (`refs::ensure_may_publish`'s own doc explains
+/// why that is the right question, and why it is always safe).
+pub(in crate::refs) struct RefLogContainerTail {
+    pub(in crate::refs) offset: usize,
+    pub(in crate::refs) len: usize,
+}
+
+pub(in crate::refs) fn ref_log_container_tail(
+    bytes: &[u8],
+    discovery: &RefContainerReplay,
+) -> Option<RefLogContainerTail> {
+    if discovery.has_interior_damage() {
+        return None;
+    }
+    if discovery.trailing_partial_bytes > 0 {
+        let offset = bytes.len().checked_sub(discovery.trailing_partial_bytes)?;
+        return Some(RefLogContainerTail {
+            offset,
+            len: discovery.trailing_partial_bytes,
+        });
+    }
+    let last = discovery.record_outcomes.last()?;
+    if !matches!(last.status, RefContainerRecordStatus::Failed { .. }) {
+        return None;
+    }
+    Some(RefLogContainerTail {
+        offset: last.offset,
+        len: bytes.len().checked_sub(last.offset)?,
+    })
 }
 
 /// Encode one signed RefUpdate envelope as a durable ref-log container record. `ref_name_key` is

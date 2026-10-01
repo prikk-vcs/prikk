@@ -105,9 +105,12 @@ impl RefVerification {
     /// scan run at all," must check this alongside any hard `Err`. No production caller today:
     /// `verify.rs` destructures the fields directly instead, and RFC 165 R2 removed this crate's
     /// one other caller (`ensure_no_incomplete_publication`, which no longer calls `verify_refs` at
-    /// all). `#[cfg(test)]` since its only remaining caller is the R2 test oracle,
-    /// `ensure_no_incomplete_publication_via_verify_refs_for_test`.
-    #[cfg(test)]
+    /// all). Its only remaining caller is the R2 test oracle,
+    /// `ensure_no_incomplete_publication_via_verify_refs_for_test`, itself gated
+    /// `#[cfg(all(test, target_os = "linux"))]` (RFC 165 Addendum 1 §2: that oracle's sole consumer
+    /// is `refs::tests`, DC-71-gated the same way) -- matched here rather than the broader
+    /// `#[cfg(test)]` this had before, which left this dead code on Windows and macOS.
+    #[cfg(all(test, target_os = "linux"))]
     pub(in crate::refs) fn has_item_failure(&self) -> bool {
         self.pointer_outcomes
             .iter()

@@ -6,6 +6,7 @@ mod no_refs_times_log_precondition;
 mod object_mismatch;
 mod one_read_per_publication;
 mod publication_recovery;
+mod ref_log_tail_is_not_a_publication;
 
 use prikk_object::ObjectType;
 

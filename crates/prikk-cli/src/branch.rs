@@ -210,10 +210,10 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         .require_current_format()
         .map_err(|err| err.to_string())?;
     let canonical = validate_local_branch_ref(&parsed.name).map_err(|err| err.to_string())?;
-    // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
-    // `canonical` excluded, since this create is the thing that would resolve its own state.
-    prikk_store::ensure_no_incomplete_publication_except(&layout, Some(&canonical))
-        .map_err(|err| err.to_string())?;
+    // RFC 165 R3 (C3) + Addendum 1 §1: refuse while another ref's publication is incomplete, or
+    // while the ref log has a lead-free tail (Rule D), before any write -- `canonical` excluded,
+    // since this create is the thing that would resolve its own state.
+    prikk_store::ensure_may_publish(&layout, &canonical).map_err(|err| err.to_string())?;
     let ref_store = RefStore::new(layout.clone());
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
 
@@ -379,10 +379,10 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
         .require_current_format()
         .map_err(|err| err.to_string())?;
     let canonical = validate_local_branch_ref(&name).map_err(|err| err.to_string())?;
-    // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
-    // `canonical` excluded, since this close is the thing that would resolve its own state.
-    prikk_store::ensure_no_incomplete_publication_except(&layout, Some(&canonical))
-        .map_err(|err| err.to_string())?;
+    // RFC 165 R3 (C3) + Addendum 1 §1: refuse while another ref's publication is incomplete, or
+    // while the ref log has a lead-free tail (Rule D), before any write -- `canonical` excluded,
+    // since this close is the thing that would resolve its own state.
+    prikk_store::ensure_may_publish(&layout, &canonical).map_err(|err| err.to_string())?;
     let ref_store = RefStore::new(layout.clone());
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     // RFC 132 refusal sweep, rule 1.

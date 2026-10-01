@@ -211,10 +211,11 @@ pub(crate) fn ensure_no_incomplete_publication(layout: &RepositoryLayout) -> Res
 }
 
 /// RFC 165 R3 (C3): the same precondition, but blind to one ref's own pointer/log disagreement and
-/// missing-object state -- `exclude_ref_name`. Every publication now calls this (with its own ref
-/// name excluded) before its first write, so a `seal` retrying its own interrupted publication is
-/// never blocked by the very state it is about to resolve, while an unrelated `seal` still refuses
-/// behind *another* ref's interrupted publication (C3's own point). `exclude_ref_name: None` is
+/// missing-object state -- `exclude_ref_name`. `commit` and every other non-publishing writer call
+/// this (unexcluded, via `ensure_no_incomplete_publication`); the six publications call
+/// [`ensure_may_publish`] instead, which adds the ref-log tail check below -- this function alone never
+/// refuses merely because the ref log container has a lead-free tail (RFC 165 Addendum 1 §1): `commit`
+/// never appends to the ref log, so Rule D does not apply to it. `exclude_ref_name: None` is
 /// `ensure_no_incomplete_publication` itself: every other check here (damaged records anywhere,
 /// a legacy record anywhere, candidate debris, pending active cleanup) stays global regardless of
 /// which ref is excluded -- none of them are attributed to one ref in the first place (candidate
@@ -231,6 +232,37 @@ pub(crate) fn ensure_no_incomplete_publication(layout: &RepositoryLayout) -> Res
 pub fn ensure_no_incomplete_publication_except(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
+) -> Result<()> {
+    ensure_publication_precondition(layout, exclude_ref_name, false)
+}
+
+/// RFC 165 Addendum 1 §1: [`ensure_no_incomplete_publication_except`], plus RFC 164 Rule D's "a writer
+/// refuses over a tail in a file it appends to," applied to the ref log container specifically -- every
+/// publication appends to it; `commit` and every other caller of the function above never does. One
+/// read of the ref log container total: the tail check reuses the same `discovery`/bytes the
+/// precondition above already read, not a second whole read.
+///
+/// **Why this is not the same question as an incomplete publication**: `publish_locked` writes the
+/// pointer before the log, so a genuine crash mid-publication always leaves a pointer lead, which the
+/// precondition's own agreement check (above) catches regardless of whether the ref log also has a
+/// tail. A tail with **no** pointer lead -- zeros, random bytes, or a torn prefix the crash left behind
+/// for reasons unrelated to any pending write -- is not an interrupted publication at all (RFC 165 R5
+/// names exactly this shape), and must not block `commit` or any other writer that does not append to
+/// the ref log; `ensure_no_incomplete_publication_except` alone (no tail check) is what those callers
+/// use. But a *publishing* command is about to append past that tail, which Rule D forbids regardless
+/// of why the tail is there -- hence this separate, additive check, named and worded differently (the
+/// tail's own offset and byte count, and that its repair arrives with R5 -- never "incomplete
+/// publication," never "seal retry," since neither applies to a lead-free tail). `ref_name`'s own
+/// attributable tail is let through, the same as the precondition's own exclusion: a retry of `ref_name`
+/// itself is DC-38's business, not Rule D's.
+pub fn ensure_may_publish(layout: &RepositoryLayout, ref_name: &str) -> Result<()> {
+    ensure_publication_precondition(layout, Some(ref_name), true)
+}
+
+fn ensure_publication_precondition(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+    check_ref_log_tail: bool,
 ) -> Result<()> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -259,15 +291,13 @@ pub fn ensure_no_incomplete_publication_except(
         &relative,
     )? {
         let discovery = container::decode_ref_container_records(&bytes)?;
-        // A damaged record anywhere in the shared container blocks mutation too -- not
-        // attributable to one ref until it decodes, so this refuses for the whole repository
-        // rather than naming which ref, unlike `verify`'s own per-ref attribution.
-        if discovery.record_outcomes.iter().any(|outcome| {
-            matches!(
-                outcome.status,
-                container::RefContainerRecordStatus::Failed { .. }
-            )
-        }) {
+        // RFC 165 Addendum 1 §1: only *interior* damage (a `Failed` frame with something sound or
+        // failed after it) blocks mutation here -- not attributable to one ref until it decodes, so
+        // this refuses for the whole repository rather than naming which ref, unlike `verify`'s own
+        // per-ref attribution. A `Failed` frame that is the container's own last attempted one is its
+        // tail, not interior damage; see `ensure_may_publish`'s own doc for why a lead-free tail is a
+        // different question from this one.
+        if discovery.has_interior_damage() {
             return Err(incomplete_publication_refusal());
         }
         for record in &discovery.records {
@@ -276,6 +306,38 @@ pub fn ensure_no_incomplete_publication_except(
                 return Err(incomplete_publication_refusal());
             }
             newest_log.insert(record.ref_name_key, update.new_ref_state_id);
+        }
+        if check_ref_log_tail {
+            if let Some(tail) = container::ref_log_container_tail(&bytes, &discovery) {
+                // RFC 165 Addendum 1 §1 fix: a torn tail too short to carry a readable
+                // `ref_name_key` (as little as a handful of bytes -- shorter even than the header's
+                // own `ref_name_key` field) is "unattributable" by header inspection alone, but the
+                // excluded ref's *own* retry still must not be blocked by it. The earlier version of
+                // this check used `tail.attributed_ref_name_key == excluded_key`, which refused a
+                // seal retrying its own first-ever, very-short torn write (nothing to read a name
+                // from) -- `seal_truncates_only_partial_tail_before_completion` caught this. The
+                // right test is not "whose name does the tail's header claim" but "does the excluded
+                // ref itself currently have a pointer lead" (`newest_pointer` vs. `newest_log`
+                // disagree for it): the agreement loop below already refuses for every *other* ref
+                // that leads, before this point is ever reached (publish_locked writes the pointer
+                // before the log, so a genuine crash always produces a lead for its own ref, not just
+                // a tail) -- so if control reaches here, either the excluded ref itself leads (its
+                // own business, DC-38 completes it regardless of whether the physical tail can be
+                // attributed to it by header inspection), or no ref leads at all, in which case
+                // whatever tail is present is lead-free by elimination and Rule D applies.
+                let excluded_ref_leads = match excluded_key {
+                    Some(key) => newest_pointer.get(&key) != newest_log.get(&key),
+                    None => false,
+                };
+                if !excluded_ref_leads {
+                    crate::foundation::tail_guard::require_no_unclean_tail(
+                        "the ref log",
+                        tail.len,
+                        tail.offset,
+                        "a repair arrives with RFC 165 R5",
+                    )?;
+                }
+            }
         }
     }
 
@@ -325,7 +387,14 @@ fn incomplete_publication_refusal() -> PrikkError {
 /// RFC 165 R2: `ensure_no_incomplete_publication`'s own pre-R2 implementation, kept as a test oracle
 /// (handoff §2: "equivalence with the old function, kept as a test oracle"). Not called from any
 /// production path -- `ensure_no_incomplete_publication` itself no longer calls `verify_refs` at all.
-#[cfg(test)]
+/// RFC 165 Addendum 1 §2: its sole consumer is the equivalence sweep in
+/// `refs::tests::no_refs_times_log_precondition`, which lives under `refs::tests`
+/// (DC-71-gated to `target_os = "linux"`, real repository mutation) -- gated to match it exactly,
+/// the same reasoning `container::append_ref_container_record`'s own re-export already carries,
+/// rather than the broader `#[cfg(test)]` this had before: that left it (and `RefVerification::
+/// has_item_failure`, its own sole remaining caller) dead code on Windows and macOS, where
+/// `refs::tests` does not compile at all.
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
     layout: &RepositoryLayout,
 ) -> Result<()> {

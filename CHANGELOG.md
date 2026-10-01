@@ -179,6 +179,13 @@ publication, a known, disclosed gap carried to the next round, not worked around
   with `"repository mutation is blocked by incomplete ref publication; run verify/doctor and use
   signer-backed seal retry"` before writing anything, when a *different* ref's own publication is
   incomplete (RFC 165 R3) — the same text `commit` already gave, now reachable from six more commands.
+- The same six commands can also now refuse with `"the ref log has an incomplete tail at byte offset
+  N (M byte(s) follow); a repair arrives with RFC 165 R5"` before writing anything, when the ref log
+  container has a tail with no pointer lead — zeros, random bytes, or a torn prefix left for a reason
+  unrelated to a pending write (RFC 165 Addendum 1 §1, RFC 164 Rule D). Distinct from the refusal
+  above on purpose: `commit` and every other non-publishing writer proceed over this shape instead of
+  refusing, since a lead-free tail is not an incomplete publication and naming a seal retry for it
+  would be misleading — only a writer that itself appends to the ref log must refuse over it.
 - `verify` gains an `unreferenced remnants: N` line, plus one warning line per remnant naming the
   owner, the missing object, and its role (RFC 164 round 2 Rule E): `"<owner type> <id> references
   missing <missing type> <id> (<role>) -- re-run the import if you still have the bundle; otherwise it
