@@ -1,8 +1,17 @@
 //! RFC 164 Rule D: a publishing command refuses over its guarded file's own tail or damage at the
 //! start, before any content object is written -- not only after, as `seal`, `branch create`, `tag
 //! create`, and `merge` all did before this round (the pointer index), and a new author's first
-//! commit did (the author-key container). `bundle import`, `trust maintainer add/remove`, and
-//! `compact` were already compliant (RFC 163 §10/§9) and are not re-tested here.
+//! commit did (the author-key container). `bundle import` and `trust maintainer add/remove` were
+//! already compliant (RFC 163 §10/§9) and are not re-tested here.
+//!
+//! **Addendum 1 (round 2 review v1): `compact --all` and `rollback-draft --append-inverse` were not
+//! compliant either**, found by the architect's own `rfc164_rule_d_writers_probe.sh` and `rfc164_
+//! rule_d_sync_rollback_probe.sh`. `compact --all` compacted the pointer index durably before ever
+//! reaching the received index's or trust policy's own tail/damage -- Rule D held per subsystem, not
+//! across the whole command -- and separately, ANY single subsystem's own compaction silently dropped
+//! a tail on its own LIVE slot (not only the generation log), with no recovery file and no line saying
+//! so. `rollback-draft --append-inverse` wrote `active/default/ref-name` before reaching the
+//! author-key check that could refuse it. Both fixed; both tested below.
 //!
 //! Each writer gets its own fixture (the setup each needs differs too much to share one driver --
 //! the same reasoning `rfc163_write_never_buries_a_crash_state.rs` gives), but every row checks the
@@ -74,12 +83,36 @@ const FAULTS: [(&str, FaultFn); 4] = [
     ),
 ];
 
+/// The live slot's own suffix ('a' or 'b'), read from the generation log's own last record --
+/// never guessed by file size, which breaks down the moment compaction has run once: both slots
+/// then hold content of comparable size, and a size-based guess can silently pick the retired one
+/// (confirmed: it did, for every one of the three `compact --all` fixtures below, before this fix --
+/// the fault landed on the slot the live-slot check never even reads, and the test passed for the
+/// wrong reason: nothing changed because nothing was ever faulted). Mirrors the architect's own
+/// shell `live()` helper exactly: the generation log's own record is 51 bytes, and the live slot is
+/// named by the last record's own body byte (0 = a, 1 = b); no record at all means the slot has
+/// never been switched, i.e. still 'a' -- the state every pre-compaction fixture in this file is in.
+fn live_slot_suffix(generation_log_path: &Path) -> char {
+    let Ok(bytes) = std::fs::read(generation_log_path) else {
+        return 'a';
+    };
+    if bytes.len() < 51 {
+        return 'a';
+    }
+    let last_record_start = (bytes.len() / 51 - 1) * 51;
+    if bytes[last_record_start + 50] == 1 {
+        'b'
+    } else {
+        'a'
+    }
+}
+
 fn pointer_index_path(repo: &Path) -> PathBuf {
-    let a = repo.join(".prikk/refs/containers/pointer-index-a.container");
-    let b = repo.join(".prikk/refs/containers/pointer-index-b.container");
-    let a_len = std::fs::metadata(&a).map(|m| m.len()).unwrap_or(0);
-    let b_len = std::fs::metadata(&b).map(|m| m.len()).unwrap_or(0);
-    if a_len >= b_len { a } else { b }
+    let suffix =
+        live_slot_suffix(&repo.join(".prikk/refs/containers/pointer-index-generation.log"));
+    repo.join(format!(
+        ".prikk/refs/containers/pointer-index-{suffix}.container"
+    ))
 }
 
 fn author_key_path(repo: &Path) -> PathBuf {
@@ -452,5 +485,207 @@ fn a_new_authors_first_commit_refuses_on_every_author_key_fault_before_any_write
         author_key_path,
         author_key_repository,
         commit_by_new_author_writer,
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// compact --all -- Addendum 1 item 1. Pointer index, received index, and trust policy all
+// populated and compacted once already, so each has both a live-slot record and a generation-log
+// record for the fault functions to act on.
+// ---------------------------------------------------------------------------------------------
+
+fn compact_repository(tag: &str) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    // Pointer index: a real sealed commit.
+    std::fs::write(repo.join("a.txt"), "a\n".repeat(20)).unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "first"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    // Received index: import a bundle from an independent sender.
+    let sender = support::unique_repo(&format!("{tag}-sender"));
+    support::init(&sender);
+    std::fs::write(sender.join("s.txt"), "s\n".repeat(20)).unwrap();
+    support::ok(&support::commit(&sender, "heads/main", "s"), "commit");
+    support::ok(&support::seal(&sender, "heads/main"), "seal");
+    let bundle = side_path(&repo, "bundle");
+    support::ok(
+        &support::prikk(&sender)
+            .args([
+                "bundle",
+                "export",
+                "--ref",
+                "heads/main",
+                "--output",
+                bundle.to_str().unwrap(),
+                "--force",
+            ])
+            .output()
+            .unwrap(),
+        "bundle export",
+    );
+    support::ok(
+        &support::prikk(&repo)
+            .args(["bundle", "import", "--input", bundle.to_str().unwrap()])
+            .output()
+            .unwrap(),
+        "bundle import",
+    );
+    let _ = std::fs::remove_dir_all(&sender);
+    let _ = std::fs::remove_file(&bundle);
+
+    // Trust policy: adopt the fixed maintainer key.
+    support::trust_maintainer(&repo);
+
+    // Compact once: builds the first generation-log record for all three subsystems, and switches
+    // each one's own live slot from the empty "a" starting state to a populated "b" -- every fault
+    // below lands on a slot (and a log) with real content, not an empty file.
+    support::ok(
+        &support::prikk(&repo)
+            .args(["compact", "--all"])
+            .output()
+            .unwrap(),
+        "compact --all (building the fixture)",
+    );
+    repo
+}
+
+fn compact_all_writer(repo: &Path) -> std::process::Output {
+    support::prikk(repo)
+        .args(["compact", "--all"])
+        .output()
+        .unwrap()
+}
+
+fn pointer_index_generation_log_path(repo: &Path) -> PathBuf {
+    repo.join(".prikk/refs/containers/pointer-index-generation.log")
+}
+
+fn received_index_path(repo: &Path) -> PathBuf {
+    let suffix =
+        live_slot_suffix(&repo.join(".prikk/refs/containers/received-index-generation.log"));
+    repo.join(format!(
+        ".prikk/refs/containers/received-index-{suffix}.container"
+    ))
+}
+
+fn received_index_generation_log_path(repo: &Path) -> PathBuf {
+    repo.join(".prikk/refs/containers/received-index-generation.log")
+}
+
+fn trust_policy_path(repo: &Path) -> PathBuf {
+    let suffix = live_slot_suffix(&repo.join(".prikk/trust/policy-generation.log"));
+    repo.join(format!(".prikk/trust/policy-{suffix}.container"))
+}
+
+fn trust_policy_generation_log_path(repo: &Path) -> PathBuf {
+    repo.join(".prikk/trust/policy-generation.log")
+}
+
+#[test]
+fn compact_all_refuses_on_every_pointer_index_live_slot_fault_before_any_write() {
+    run_matrix(
+        "compact --all / pointer index live slot",
+        pointer_index_path,
+        compact_repository,
+        compact_all_writer,
+    );
+}
+
+#[test]
+fn compact_all_refuses_on_every_pointer_index_generation_log_fault_before_any_write() {
+    run_matrix(
+        "compact --all / pointer index generation log",
+        pointer_index_generation_log_path,
+        compact_repository,
+        compact_all_writer,
+    );
+}
+
+#[test]
+fn compact_all_refuses_on_every_received_index_live_slot_fault_before_any_write() {
+    run_matrix(
+        "compact --all / received index live slot",
+        received_index_path,
+        compact_repository,
+        compact_all_writer,
+    );
+}
+
+#[test]
+fn compact_all_refuses_on_every_received_index_generation_log_fault_before_any_write() {
+    run_matrix(
+        "compact --all / received index generation log",
+        received_index_generation_log_path,
+        compact_repository,
+        compact_all_writer,
+    );
+}
+
+#[test]
+fn compact_all_refuses_on_every_trust_policy_live_slot_fault_before_any_write() {
+    run_matrix(
+        "compact --all / trust policy live slot",
+        trust_policy_path,
+        compact_repository,
+        compact_all_writer,
+    );
+}
+
+#[test]
+fn compact_all_refuses_on_every_trust_policy_generation_log_fault_before_any_write() {
+    run_matrix(
+        "compact --all / trust policy generation log",
+        trust_policy_generation_log_path,
+        compact_repository,
+        compact_all_writer,
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// rollback-draft --append-inverse -- Addendum 1 item 2. A sealed commit to invert, rolled back by
+// a NEW author (so the author-key container's own tail check is actually exercised, not bypassed
+// by the already-recorded fast path -- same reasoning as `commit_by_new_author_writer` above).
+//
+// Scope note: this file tests the author-key container specifically, since that is this
+// Addendum's own fix. The WAL's own tail/damage check was already correctly ordered before this
+// round (unchanged here) and is exhaustively covered, across all nine guarded files, by the
+// architect's own `rfc164_rule_d_sync_rollback_probe.sh` (TOTAL findings: 0) -- not duplicated
+// here as a Rust test, to avoid constructing a WAL fixture that risks exercising the pre-existing
+// "requires an empty active WAL" precondition instead of the tail/damage check specifically.
+// ---------------------------------------------------------------------------------------------
+
+const ROLLBACK_AUTHOR_KEY_ID: &str = "rfc164-ruleD-rollback-author";
+const ROLLBACK_AUTHOR_SEED_HEX: &str =
+    "d4b20698d4b20698d4b20698d4b20698d4b20698d4b20698d4b20698d4b20698";
+
+fn rollback_repository(tag: &str) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), "a\n".repeat(20)).unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "first"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+    repo
+}
+
+fn rollback_draft_writer(repo: &Path) -> std::process::Output {
+    support::prikk(repo)
+        .env("PRIKK_AUTHOR_KEY_ID", ROLLBACK_AUTHOR_KEY_ID)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(ROLLBACK_AUTHOR_SEED_HEX),
+        )
+        .args(["rollback-draft", "--append-inverse", "-m", "undo"])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn rollback_draft_refuses_on_every_author_key_fault_before_any_write() {
+    run_matrix(
+        "rollback-draft / author key container",
+        author_key_path,
+        rollback_repository,
+        rollback_draft_writer,
     );
 }
