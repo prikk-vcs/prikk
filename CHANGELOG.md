@@ -109,8 +109,30 @@ scan already computes; no reclassification, and no repair (per the review's ruli
 Vec<ObjectContainerTailStatus>` (both new, `#[non_exhaustive]`). A new `doctor` code,
 `PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL` (warning), names one when found.
 
+### Changed — `seal`, `tag create`, `merge`, and `sync seal` check the pointer index before writing a
+Patch or Block; a new author's first commit checks the author-key container before writing anything
+(RFC 164 Rule D)
+
+Each of these commands' own content-object write (a Patch, a Block) now happens only after the pointer
+index's own tail/damage check — the same check `RefStore::ensure_pointer_index_has_no_tail` already ran,
+redundantly, at the later compare-and-swap step every publication performs — moving it earlier means a
+refusal over the tail or interior damage no longer leaves an unreferenced object behind for a retry to
+skip past. `branch create` needed no change: it writes no content object of its own before reaching the
+pointer index at all. A new author's first commit gets the same treatment for the author-key container:
+the check that used to run immediately before the WAL append now also runs before the commit's blob,
+object-index, commit-index, and lifecycle-cache writes. A commit by an already-recorded author key id, or
+a publication whose pointer-index entry is clean, reaches neither check's own refusal path and is
+unaffected.
+
 ### Output changes
 
+- `seal`, `tag create`, `merge`, and `sync seal` can now refuse with the pointer index's own tail/damage
+  message (`"the ref pointer index has an incomplete tail…"` / `"ref pointer index has a damaged
+  entry…"`) before writing any object at all, not only at the later compare-and-swap step (RFC 164 Rule
+  D); the message text is unchanged, only when it can fire moved earlier.
+- A new author's first `commit` can now refuse with the author-key container's own tail/damage message
+  before writing its blob, object-index entry, or updating the commit-index/lifecycle caches (RFC 164
+  Rule D); the message text is unchanged, only when it can fire moved earlier.
 - `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file, plus a warning line
   naming the file, the offset, the byte count, and the repair when `N != 0`, plus a failure line on interior damage.
   It also gains one `trailing partial <type> container bytes: N` line per persisted object type (N7, above).

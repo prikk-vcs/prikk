@@ -305,6 +305,23 @@ resolves a single field's own corruption against an otherwise-intact record, not
 corrupted together; a per-record witness (format 8) is what would tell that shape apart reliably, and is
 not yet built. The WAL is untouched by §9.2 too, for the same reason §9 leaves it alone.
 
+**RFC 164 Rule D (0.49.0): a publishing command's own content object is now written only after the
+pointer index's own tail/damage check, not before.** Before this round, the pointer-index bullet below
+described a real gap: `seal`, `tag create`, `merge`, and `sync seal` each wrote their own new Patch and
+Block objects first, and only reached the pointer index's own compare-and-swap check -- the same read
+that now also checks the tail -- immediately before the RefState object that publication itself writes.
+A refusal there left the Patch and Block already durably written, unreferenced by anything until the
+pointer index moved; harmless (nothing references them, `verify` exits 0), but unnecessary work repeated
+on every retry until the tail is repaired. Each of these four commands now calls the same tail/damage
+check once more, at the very top of the command, before that earlier content write -- `branch create`
+needed no change, since it writes no content object of its own before reaching the pointer index at all
+(see below). The author-key container gets the same treatment for a new author's first commit: the
+check that used to run immediately before the WAL append now also runs at the top of
+`author_worktree_patch`, before the commit's blob, object-index, commit-index, and lifecycle-cache
+writes. In every case, the retry after `prikk doctor --repair-pointer-index-tail`/`--repair-tails` still
+reuses whatever was already durably written rather than writing it again -- that half of each bullet
+below is unchanged; what moved is only how much gets written before the file's own tail is ever checked.
+
 **Refuses only when that write would actually append.** An operation that turns out to be a no-op for
 one of these files — re-adding a maintainer key already adopted under the same public key, removing one
 that was never adopted, a commit by an author whose key material this repository already recorded —
@@ -314,14 +331,17 @@ whether an append is actually about to happen, not the read.
 
 **The six files, and the way out:**
 
-- **The pointer index.** Every publication (`seal`, `branch create`, `tag create`, `merge`) reads the
-  pointer index for its own compare-and-swap check immediately before it would append; that same read
-  now also refuses on an unclean tail, naming `prikk doctor --repair-pointer-index-tail` — the repair
-  already exists (RFC 162). After it, the same publication succeeds. **This is a claim about the pointer
-  index file only, not about the whole command**: a publication may already have written its own new,
-  ordinary content-addressed objects (a ref-state, a block, an index entry) before reaching this check —
-  nothing references them until the pointer index is actually updated, `verify` still exits 0, and the
-  retry after the repair reuses them rather than writing them again.
+- **The pointer index.** `seal`, `tag create` (and `sync adopt-tag`), `merge`, and `sync seal` each call
+  the pointer index's own tail/damage check at the very start of the command (RFC 164 Rule D, 0.49.0) —
+  before writing their own Patch or Block objects — naming `prikk doctor --repair-pointer-index-tail` on
+  an unclean tail; the repair already exists (RFC 162). The same check still runs again, redundantly and
+  harmlessly, at the compare-and-swap step every publication performs immediately before its own RefState
+  write. `branch create` writes no content object of its own before that compare-and-swap step, so for it
+  this one check was already both the first and the only content write in the command — it carries no
+  separate early call. **This is a claim about the pointer index file only, not about the whole
+  command**: a refusal over the tail itself now precedes every content-object write these commands make,
+  so a retry after `prikk doctor --repair-pointer-index-tail` starts clean rather than reusing objects a
+  refused attempt left behind.
 - **Trust keys and trust policy, together.** `trust maintainer add`/`remove` refuse the same way,
   **entirely before either container's first write** — a fix in this same round, after review: the first
   shape checked and appended to the trust-key container, then checked the trust-policy container, so a
@@ -341,13 +361,13 @@ whether an append is actually about to happen, not the read.
   **The way out for a tail (0.49.0): `prikk doctor --repair-tails`**, then retry the import; genuine
   interior damage (a sound record follows the bad bytes) still gives no truncation advice, the same as
   the sibling files' own damaged-entry case below.
-- **The author-key container.** A commit by an author key id not yet recorded refuses the same way, but
-  **only before appending to the author-key container itself, not before the commit's other writes**: the
-  author-key check is the last thing a commit checks, immediately before the WAL append that would queue
-  it, so by the time it runs the commit has already written its own new blob content, an object-index
-  entry, and updated the commit-index and lifecycle caches. Those are ordinary, content-addressed or
-  self-verifying, referenced by nothing until the commit itself succeeds; `verify` still exits 0, and a
-  retry after `prikk doctor --repair-tails` reuses them rather than writing them again.
+- **The author-key container.** A commit by an author key id not yet recorded now refuses on this check
+  at the very start of `author_worktree_patch` (RFC 164 Rule D, 0.49.0), before the commit writes its own
+  new blob content, an object-index entry, or updates the commit-index and lifecycle caches. The same
+  check still runs again, redundantly and harmlessly, immediately before the WAL append that would queue
+  the commit — exactly where it ran before this round, and where a commit by an already-recorded author
+  key id still only ever reaches (see "Refuses only when that write would actually append" above). **The
+  way out (0.49.0): `prikk doctor --repair-tails`**, then retry the commit.
 - **The generation log, at each of the three compacting containers** (the pointer index, the received
   index, the trust policy container). `compact` refuses the same way, **before its first write** — before
   the retired slot is truncated, not only before the generation record itself — and only in `--execute`
