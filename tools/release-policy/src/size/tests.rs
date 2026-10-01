@@ -175,7 +175,10 @@ fn an_inline_test_module_is_not_production() {
         .lines()
         .count();
     assert_eq!(
-        physical, 1397,
+        // RFC 164 Rule D: the author-key check moved earlier (an early, read-only call plus a
+        // doc-comment explaining why), 1397 -> 1413.
+        physical,
+        1413,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -185,7 +188,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1348);
+    assert_eq!(counted.production_lines, 1364);
     assert_eq!(
         physical - counted.production_lines,
         49,

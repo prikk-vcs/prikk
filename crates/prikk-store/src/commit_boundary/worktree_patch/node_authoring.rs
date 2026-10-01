@@ -412,6 +412,22 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         require_active_ref_for_non_empty_wal(layout, &canonical_ref).map_err(AuthorError::Store)?;
     }
 
+    // RFC 164 Rule D: this signer's own author-key check, moved here from its own previous position
+    // immediately before the WAL append (near the end of this function, where `record_author_key_
+    // material` still runs and re-checks, harmless and cheap under the same held `active_lock`) --
+    // before this fix, a new author's very first commit already had a durable blob, an object-index
+    // entry, and updated caches by the time this check ran, so a refusal here did not leave the tree
+    // as it found it. Read-only (`check_author_key_conflict` records nothing); the actual append, if
+    // any, still happens only at `record_author_key_material`'s own call site below, under the same
+    // `active_lock` held continuously since the top of this function, so nothing else can append to
+    // the author-key container between this check and that one.
+    crate::author::author_key_index::check_author_key_conflict(
+        layout,
+        signer.key_id(),
+        signer.public_key_bytes(),
+    )
+    .map_err(AuthorError::Store)?;
+
     // RFC 111 §6.1 Stage 2: `author_worktree_patch` never publishes a ref itself (that happens at
     // seal time, a different operation) -- confirmed by grep, no `.publish(`/
     // `finish_interrupted_publication`/`RefPublication` anywhere in this file -- so it needs no
