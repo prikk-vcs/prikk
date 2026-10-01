@@ -345,17 +345,19 @@ fn doctor_reports_a_required_directory_occupied_by_a_file() {
 /// is `Some`, not `None`), and the stage-outcome loop is what makes doctor refuse to call the
 /// repository healthy, not the absence of a report.
 ///
-/// **Two errors, not one, and that is the point of containment.** This fixture's Block is signed by
-/// `maintainer_signature()` (aliased `legacy_maintainer_signature` here), never adopted via
-/// `add_trusted_maintainer` -- the DC-95 Stage 1 "fake signer" hazard, deliberately reused here.
-/// `verify_objects`'s Phase A reaches this Block's own trust check (pushing a real
-/// `PRIKK-TRUST-POLICY-INVALID`/`PRIKK-TRUST-PUBLICATION-UNTRUSTED` finding into the shared
-/// `PublicationTrustVerifier`) before Phase B's topological pass reaches the missing-patch error
-/// that fails the whole `Objects` stage. Both survive: the trust finding because `trust_verifier` is
-/// mutated by reference and outlives `verify_objects`'s own `Err` return, and the stage failure via
-/// its own `StageOutcome`. Pre-Level-1, the second was invisible -- the first hard error any object
-/// hit aborted everything after it, so only one of the two ever got reported. This is a strict
-/// improvement in diagnosis, not a construction bug to route around.
+/// **One error, one warning -- not two errors.** This fixture's Block is signed by `maintainer_
+/// signature()` (aliased `legacy_maintainer_signature` here), never adopted via `add_trusted_
+/// maintainer` -- the DC-95 Stage 1 "fake signer" hazard, deliberately reused here -- which is the
+/// one error (`PRIKK-TRUST-POLICY-INVALID`/`PRIKK-TRUST-PUBLICATION-UNTRUSTED`, pushed into the
+/// shared `PublicationTrustVerifier`, which is what makes `doctor` refuse to call the repository
+/// healthy). **RFC 164 Rule E (0.49.0): the missing-patch defect is no longer a second error.** This
+/// Block is never published by any ref, received pointer, or queued patch -- an unreferenced
+/// remnant, not damage -- so it surfaces as a warning (`PRIKK-DOCTOR-UNREFERENCED-REMNANT`) instead
+/// of the `Failed` stage outcome the missing patch used to produce (both in Phase A's own check and,
+/// before that fix, redundantly in Phase B's topological replay too). Before DC-95 Stage 2 Level 1,
+/// only one of the (then two) errors was ever visible at all -- the first hard error any object hit
+/// aborted everything after it; that containment property is what this test still exists to prove,
+/// unchanged by Rule E's own reclassification of which finding is an error versus a warning.
 #[test]
 fn doctor_reports_verification_error() {
     let root = unique_temp_dir("doctor-bad-block");
@@ -381,7 +383,16 @@ fn doctor_reports_verification_error() {
             assert!(store.write_object(&block).is_ok());
             let report = doctor_repository(&layout);
             assert!(!report.is_healthy());
-            assert_eq!(report.count_by_severity(DoctorSeverity::Error), 2);
+            assert_eq!(report.count_by_severity(DoctorSeverity::Error), 1);
+            assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 1);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.code == "PRIKK-DOCTOR-UNREFERENCED-REMNANT"),
+                "expected the missing-patch defect to surface as a remnant warning: {:?}",
+                report.issues
+            );
             assert!(report.verification.is_some());
         }
     }

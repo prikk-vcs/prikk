@@ -3,6 +3,7 @@
 mod connectivity;
 mod every_signature;
 mod local_tag_trust;
+mod reachability;
 mod received_refs;
 mod ref_cluster;
 mod root_authority;
@@ -80,6 +81,25 @@ pub(super) fn assert_object_item_failed(report: &RepositoryVerification, expecte
         found,
         "expected an object item Failed with a message containing {expected_substring:?}, got: {:?}",
         report.object_outcomes
+    );
+}
+
+/// RFC 164 Rule E: assert at least one `unreferenced_remnants` entry names `owner` with the given
+/// missing role, and that `verify` does not fail over it (`has_item_failure()` is false unless some
+/// other, unrelated defect is also present in the fixture).
+pub(super) fn assert_unreferenced_remnant(
+    report: &RepositoryVerification,
+    owner: ObjectId,
+    expected_role: &str,
+) {
+    let found = report
+        .unreferenced_remnants
+        .iter()
+        .any(|remnant| remnant.owner_object_id == owner && remnant.missing_role == expected_role);
+    assert!(
+        found,
+        "expected an unreferenced remnant for owner {owner} with role {expected_role:?}, got: {:?}",
+        report.unreferenced_remnants
     );
 }
 
@@ -190,8 +210,15 @@ pub(super) fn assert_wal_item_failed(report: &RepositoryVerification, expected_s
 /// regression guards on `verify_block_payload`'s own message (useful for diagnostics -- "which check
 /// said so" matters to an operator) rather than the "silent absence" demonstration `missing-snapshot-
 /// blob` gives directly.
+///
+/// **RFC 164 Rule E (0.49.0): none of these three blocks is published by any ref, received pointer, or
+/// queued patch -- each is, by construction, an unreferenced remnant, not damage.** `verify_block_
+/// payload`'s own message (asserted by name before this round, the text this doc comment above still
+/// describes) no longer appears in `object_outcomes` for an unreachable owner; the same finding is now
+/// `report.unreferenced_remnants`, asserted below. See `verify/tests/reachability.rs` for the mirror
+/// case -- a ref published over the same shapes, asserting the ORIGINAL message still fires as damage.
 #[test]
-fn verify_repository_detects_every_missing_referenced_object() -> Result<()> {
+fn verify_repository_detects_every_missing_referenced_object_as_a_remnant() -> Result<()> {
     type CaseFn = fn(&FileObjectStore, ObjectId) -> Result<(BlockPayload, &'static str)>;
     let cases: Vec<(&str, CaseFn)> = vec![
         ("missing-parent", |_store, missing| {
@@ -205,7 +232,7 @@ fn verify_repository_detects_every_missing_referenced_object() -> Result<()> {
                     mainline_parent_id: None,
                     merge_baseline_block_id: None,
                 },
-                "references missing parent block",
+                "parent block",
             ))
         }),
         ("missing-patch", |_store, missing| {
@@ -219,7 +246,7 @@ fn verify_repository_detects_every_missing_referenced_object() -> Result<()> {
                     mainline_parent_id: None,
                     merge_baseline_block_id: None,
                 },
-                "references missing block patch",
+                "block patch",
             ))
         }),
         ("missing-snapshot-blob", |store, missing| {
@@ -234,7 +261,7 @@ fn verify_repository_detects_every_missing_referenced_object() -> Result<()> {
                     mainline_parent_id: None,
                     merge_baseline_block_id: None,
                 },
-                "references missing snapshot blob",
+                "snapshot blob",
             ))
         }),
     ];
@@ -244,11 +271,18 @@ fn verify_repository_detects_every_missing_referenced_object() -> Result<()> {
         let layout = RepositoryLayout::init(root.clone())?;
         let mut store = FileObjectStore::new(layout.clone());
         let missing = sample_object_id(&format!("{name}-target"));
-        let (payload, expected_substring) = case_fn(&store, missing)?;
-        write_signed_block(&mut store, &payload)?;
+        let (payload, expected_role) = case_fn(&store, missing)?;
+        let block_id = write_signed_block(&mut store, &payload)?;
 
         let report = verify_repository(&layout)?;
-        assert_object_item_failed(&report, expected_substring);
+        assert_unreferenced_remnant(&report, block_id, expected_role);
+        // RFC 164 §5: `verify` exits 0 over a remnant -- not merely reclassified in one report
+        // section while still failing via another (Phase B's own, unconditional replay attempt,
+        // skipped for a remnant specifically so this holds end to end).
+        assert!(
+            !report.has_item_failure(),
+            "{name}: a remnant alone must not fail verify: {report:?}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
     Ok(())
