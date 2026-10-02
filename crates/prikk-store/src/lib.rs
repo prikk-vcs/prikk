@@ -69,6 +69,7 @@ mod point;
 mod point_reading;
 mod received;
 mod recognition_claim;
+mod ref_completion;
 mod ref_resolution;
 mod refs;
 mod rename_declaration;
@@ -245,6 +246,9 @@ pub use received::{
 };
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
+};
+pub use ref_completion::{
+    CompletionPlan, CompletionRefusal, complete_ref_publication, plan_ref_completion,
 };
 pub use ref_resolution::{
     ReceivedRefs, is_unpublished_local_branch, require_existing_ref, resolve_point,

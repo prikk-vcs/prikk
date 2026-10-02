@@ -944,23 +944,36 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 ));
             }
             for issue in &verification.ref_publication_issues {
+                // RFC 165 R4: a completable lead (`POINTER-LEADS-LOG`) now names `ref complete`
+                // directly, since `verify`'s own `require_retained_evidence` only keeps that code
+                // when `ref_completion::plan_ref_completion` agrees the lead is completable -- "the
+                // same table" the handoff requires. `LEGACY-LOG-LEADS` is confirmed dead (format-1
+                // only, never pushed by `classify_ref_state`) and stays grouped with the unrelated
+                // `ACTIVE-CLEANUP-PENDING` rather than being reworked for a case that cannot occur.
+                // `DIVERGENCE`'s own text still does not name the rebuild (R5, `prikk doctor
+                // --rebuild-pointer-index`): that command does not exist yet (round 2 U4); naming it
+                // here would promise a flag doctor cannot run.
                 let recommendation = match issue.code {
-                    "PRIKK-VERIFY-REF-POINTER-LEADS-LOG"
-                    | "PRIKK-VERIFY-REF-LEGACY-LOG-LEADS"
-                    | "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" => {
-                        "run signer-backed `prikk seal --allow-no-audit` for the affected ref; doctor does not sign or append"
+                    "PRIKK-VERIFY-REF-POINTER-LEADS-LOG" => match issue.ref_name.as_deref() {
+                        Some(ref_name) => format!(
+                            "run `prikk ref complete {ref_name}`; doctor does not sign or append"
+                        ),
+                        None => "run `prikk ref complete <ref>` for the affected ref; doctor does not sign or append".to_string(),
+                    },
+                    "PRIKK-VERIFY-REF-LEGACY-LOG-LEADS" | "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" => {
+                        "run signer-backed `prikk seal --allow-no-audit` for the affected ref; doctor does not sign or append".to_string()
                     }
                     "PRIKK-VERIFY-REF-POINTER-MISSING" => {
-                        "preserve the repository; use signer-backed seal retry only with matching retained active state, otherwise restore from backup"
+                        "preserve the repository; use signer-backed seal retry only with matching retained active state, otherwise restore from backup".to_string()
                     }
                     "PRIKK-VERIFY-REF-LEGACY-TIMESTAMP" => {
-                        "treat the value as non-authoritative legacy data; do not normalize signed bytes in place"
+                        "treat the value as non-authoritative legacy data; do not normalize signed bytes in place".to_string()
                     }
                     "PRIKK-VERIFY-REF-DIVERGENCE" => {
-                        "preserve the repository for manual recovery; signer-backed retry is not authorized without exact retained evidence"
+                        "preserve the repository for manual recovery; signer-backed retry is not authorized without exact retained evidence".to_string()
                     }
                     _ => {
-                        "preserve the candidate for inspection; doctor does not infer ownership or remove it"
+                        "preserve the candidate for inspection; doctor does not infer ownership or remove it".to_string()
                     }
                 };
                 let doctor_issue = if issue.blocking {

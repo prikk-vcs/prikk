@@ -670,6 +670,30 @@ impl RefStore {
         )
     }
 
+    /// RFC 165 R4: `prikk ref complete`'s own write, after its own `ref_completion::plan_ref_
+    /// completion` already applied the full completion rule (conditions a-e) -- deliberately not
+    /// routed through [`Self::finish_interrupted_publication_with_object_store`], whose own
+    /// `evidence::validate_signer_backed_recovery` unconditionally requires a matching, complete,
+    /// non-empty active WAL. That is correct for `seal`'s own retry (its only caller today), which
+    /// always has one, but it would refuse *every* non-WAL-consuming publication (`branch create`,
+    /// `tag create`, `merge`, `sync adopt-tag`) outright -- the exact "seal only" limitation R4 exists
+    /// to end. `plan_ref_completion`'s own condition (d) already re-implements the WAL-evidence check,
+    /// applied only when the active WAL's retained metadata actually claims this ref, so this
+    /// function's job is purely the write: never a new code path for the append itself,
+    /// `publication::finish_interrupted` -> `publish_locked` is the same one `seal`'s retry uses.
+    pub(crate) fn finish_interrupted_publication_for_ref_complete(
+        &self,
+        object_store: &mut impl ObjectWriter,
+        active_lock: &ActiveLock,
+        publication: &RefPublication,
+    ) -> Result<ObjectId> {
+        self.layout.validate_format()?;
+        active_lock.require_layout(&self.layout)?;
+        crate::format::validate_read_schema(self.layout.format(), &publication.ref_state)?;
+        crate::format::validate_read_schema(self.layout.format(), &publication.ref_update)?;
+        publication::finish_interrupted(self, object_store, publication)
+    }
+
     /// Read the current RefState object ID for a ref name. A reader: never refuses on the pointer
     /// index's own trailing-partial tail (rule 1), the same as every other reader of a file RFC 163
     /// guards on the write side.

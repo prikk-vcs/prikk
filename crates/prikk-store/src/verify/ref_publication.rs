@@ -1,7 +1,7 @@
 //! Retained active-state evidence for interrupted ref publication diagnostics.
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlockPayload, ObjectType, RefStatePayload, RefUpdatePayload};
+use prikk_object::{BlockPayload, ObjectType, RefStatePayload};
 
 use super::ActiveWalMetadataStatus;
 use crate::foundation::layout::RepositoryLayout;
@@ -29,13 +29,27 @@ pub(super) fn require_retained_evidence(
             mark_unproved(issue);
             continue;
         };
-        if !trust_is_valid || !active_ref_matches(metadata, ref_name) {
+        // RFC 165 R4: `trust_is_valid` stays as its own, broader gate -- it answers "did the Objects
+        // and trust-verification stages themselves run cleanly at all" (DC-95 Stage 2 Step 0's own
+        // ruling: an accumulator's emptiness proves nothing unless its producer ran to completion),
+        // a different question from "does *this* lead's own signature verify", which
+        // `crate::ref_completion::plan_ref_completion`'s own condition (a) checks per ref. Both must
+        // hold. The completion rule itself (conditions a, b [folded into its own lead
+        // classification], c, d [only when the active WAL's retained metadata claims this exact
+        // ref], e) now decides completable vs. divergent -- replacing this function's own narrower,
+        // WAL-only check (`active_ref_matches`/`block_matches_wal`, below), which refused every
+        // non-WAL-consuming publication (`branch create`, `tag create`, `merge`, `sync adopt-tag`)
+        // unconditionally -- the DC-38 "seal only" limitation RFC 165 R4 exists to end. `verify`'s own
+        // report and `prikk ref complete`'s own precondition now share the one table, exactly as the
+        // handoff requires: a lead is never reported completable here and refused there, or the
+        // reverse.
+        if !trust_is_valid {
             mark_unproved(issue);
             continue;
         }
-        let target = interrupted_target(layout, ref_name, issue.code)?;
-        if !block_matches_wal(layout, target, records)? {
-            mark_unproved(issue);
+        match crate::ref_completion::plan_ref_completion(layout, ref_name)? {
+            Ok(_plan) => {}
+            Err(_refusal) => mark_unproved(issue),
         }
     }
     add_incomplete_cleanup_issue(layout, records, metadata, issues)?;
@@ -77,48 +91,6 @@ fn add_incomplete_cleanup_issue(
         });
     }
     Ok(())
-}
-
-fn active_ref_matches(metadata: &ActiveWalMetadataStatus, ref_name: &str) -> bool {
-    matches!(
-        metadata,
-        ActiveWalMetadataStatus::ValidForNonEmptyWal { ref_name: active } if active == ref_name
-    )
-}
-
-fn interrupted_target(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    issue_code: &str,
-) -> Result<prikk_object::ObjectId> {
-    let store = RefStore::new(layout.clone());
-    let state_id = if issue_code == "PRIKK-VERIFY-REF-POINTER-LEADS-LOG" {
-        store.read_current_ref_state_id(ref_name)?.ok_or_else(|| {
-            PrikkError::Integrity(format!("interrupted ref {ref_name} has no pointer"))
-        })?
-    } else {
-        let replay = store.replay_log(ref_name)?;
-        // RFC 102 Stage 2: a damaged record silently missing from `replay.records` could make
-        // `.last()` below resolve to a stale earlier record instead of the true (but corrupted)
-        // tip, misidentifying the interrupted-publication target this evidence check is proving.
-        if replay.has_item_failure() {
-            return Err(PrikkError::Integrity(format!(
-                "interrupted ref {ref_name} log has a damaged record"
-            )));
-        }
-        let record = replay.records.last().ok_or_else(|| {
-            PrikkError::Integrity(format!("interrupted ref {ref_name} has no log record"))
-        })?;
-        RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload)?.new_ref_state_id
-    };
-    let objects = FileObjectStore::new(layout.clone());
-    let state = objects
-        .read_typed(state_id, ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {state_id}")))?;
-    Ok(
-        RefStatePayload::decode_canonical(&state.canonical_payload, state.schema_version)?
-            .target_object_id,
-    )
 }
 
 fn block_matches_wal(
