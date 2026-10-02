@@ -41,7 +41,11 @@ fn setup(root: &std::path::Path) -> RepositoryLayout {
     layout
 }
 
-fn new_block(layout: &RepositoryLayout, parent: Option<ObjectId>, seed: u8) -> ObjectId {
+/// `_seed` is unused beyond distinguishing call sites in the test source -- two blocks with the same
+/// `parent` and otherwise-empty content are legitimately the same content-addressed object (a root
+/// block, say, shared by two refs' own first publish), not a problem this helper needs to avoid; a
+/// non-root block's own `parent_block_ids` already makes distinct chains naturally distinct.
+fn new_block(layout: &RepositoryLayout, parent: Option<ObjectId>, _seed: u8) -> ObjectId {
     let payload = BlockPayload {
         parent_block_ids: parent.into_iter().collect(),
         kind: if parent.is_some() {
@@ -56,9 +60,7 @@ fn new_block(layout: &RepositoryLayout, parent: Option<ObjectId>, seed: u8) -> O
         merge_baseline_block_id: None,
     };
     let bytes = payload.to_canonical_bytes().unwrap();
-    let mut bytes_with_seed = bytes;
-    bytes_with_seed.push(seed);
-    let mut env = ObjectEnvelope::unsigned(ObjectType::Block, 2, bytes_with_seed);
+    let mut env = ObjectEnvelope::unsigned(ObjectType::Block, 2, bytes);
     let id = env.object_id();
     env.add_signature(sign_maintainer(&original_signer(), ObjectType::Block, id).unwrap())
         .unwrap();
@@ -458,3 +460,5 @@ fn k5_rebuild_is_never_run_implicitly() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+mod k4_failpoints_and_race;
