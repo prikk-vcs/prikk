@@ -63,7 +63,7 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 25] = [
+const UPPER_LAYER: [&str; 26] = [
     "branch_switch",
     "bundle",
     "compact",
@@ -85,6 +85,12 @@ const UPPER_LAYER: [&str; 25] = [
     "point_reading",
     "received",
     "recognition_claim",
+    // RFC 165 R4: `prikk ref complete`'s own rule (`plan_ref_completion`/`complete_ref_publication`)
+    // -- built on `refs`, `trust`, `wal`, `object_store`, `maintainer_signing` and
+    // `commit_boundary::active`, the same "operation over the lower layer" shape as
+    // `seal_from_accepted`. Reached by `verify` (completable-vs-divergent reclassification, "the
+    // same table" R4's own handoff requires) and by the CLI; nothing lower reaches it.
+    "ref_completion",
     // RFC 132 refusal sweep: the one resolver for a consumed ref reads both `refs` and `received`.
     "ref_resolution",
     "rollback",

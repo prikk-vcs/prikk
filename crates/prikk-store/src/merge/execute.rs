@@ -73,6 +73,17 @@ pub fn execute_merge(
     // `into_ref` excluded, since this merge is the thing that would resolve its own state, not
     // something blocked by it. A merge never writes `from_ref`, so it is never excluded.
     crate::refs::ensure_may_publish(layout, &into_ref)?;
+    // RFC 165 R4 item 5: a completable lead on `into_ref` must not be silently built on top of --
+    // its own log tip sits one transition behind its pointer, so evidence gathered against the
+    // pointer and a publish computed from it would carry the wrong `expected_previous_ref_state_id`
+    // and fail deep inside the write, not here where the real cause is nameable. Checked before any
+    // evidence gathering or write.
+    if crate::ref_completion::plan_ref_completion(layout, &into_ref)?.is_ok() {
+        return Err(PrikkError::Precondition(format!(
+            "ref {into_ref} has an interrupted publication; run `prikk ref complete {into_ref}` \
+             before merging into it"
+        )));
+    }
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     // DC-85: `from_ref` may be a local branch or a received ref (`remotes/<name>`) — never widen

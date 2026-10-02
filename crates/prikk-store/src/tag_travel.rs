@@ -277,6 +277,16 @@ pub fn create_local_tag(
     crate::refs::ensure_may_publish(layout, &canonical)?;
     let ref_store = RefStore::new(layout.clone());
     if ref_store.read_current_ref_state_id(&canonical)?.is_some() {
+        // RFC 165 R4 item 5: `ensure_may_publish` above excludes `canonical`, so a crashed
+        // publication for this exact ref (via `tag create` or `sync adopt-tag`, both of which reach
+        // this function) reads as a pointer already present here, not as the precondition refusing
+        // -- name the way out instead of the permanent "already exists".
+        if crate::ref_completion::plan_ref_completion(layout, &canonical)?.is_ok() {
+            return Err(PrikkError::Precondition(format!(
+                "tag {canonical} has an interrupted publication; run `prikk ref complete \
+                 {canonical}` to finish it"
+            )));
+        }
         return Err(PrikkError::Integrity(format!(
             "tag {canonical} already exists"
         )));

@@ -138,7 +138,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // calls: 147 -> 148.
     // RFC 164 Rule C added `doctor::repair_tails`, the consolidated `--repair-tails` verb: 148 -> 149.
     // RFC 164 round 2 Rule E added `verify::reachability`, the committed-state reachability walk: 149 -> 150.
-    assert_eq!(modules.len(), 150, "modules: {modules:?}");
+    // RFC 165 R4 added `ref_completion`, `prikk ref complete`'s own rule: 150 -> 151.
+    assert_eq!(modules.len(), 151, "modules: {modules:?}");
     assert!(
         !modules
             .iter()
