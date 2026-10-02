@@ -229,6 +229,48 @@ fn an_untrusted_completer_refuses_and_writes_nothing() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// K1: `--plan-only` and a real run share the same `plan_ref_completion` call -- calling it alone,
+/// any number of times, is read-only (what `--plan-only` does), and every call returns the identical
+/// plan a real run would go on to print before its own write.
+#[test]
+fn planning_alone_is_read_only_and_repeatable() {
+    let root = unique_temp_dir("rfc165-r4-plan-only-read-only");
+    let layout = setup(&root);
+    let target = root_block(&layout);
+    crash_branch_create(&layout, "heads/topic", target);
+
+    let snapshot = |layout: &RepositoryLayout| {
+        [
+            layout.ref_log_container_slot_path(ContainerSlot::A),
+            layout.ref_log_container_slot_path(ContainerSlot::B),
+            layout.ref_pointer_index_slot_path(ContainerSlot::A),
+            layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        ]
+        .map(|path| std::fs::read(path).unwrap_or_default())
+    };
+
+    let before = snapshot(&layout);
+    let first_plan = plan_ref_completion(&layout, "heads/topic").unwrap();
+    let after_first = snapshot(&layout);
+    let second_plan = plan_ref_completion(&layout, "heads/topic").unwrap();
+    let after_second = snapshot(&layout);
+
+    assert_eq!(
+        before, after_first,
+        "planning alone must not change the ref log or pointer index"
+    );
+    assert_eq!(
+        after_first, after_second,
+        "a second planning call must not change anything either"
+    );
+    assert_eq!(
+        first_plan, second_plan,
+        "planning the same state twice must return the identical plan a real run would print"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_ref_with_no_pointer_is_not_completable() {
     let root = unique_temp_dir("rfc165-r4-no-pointer");
