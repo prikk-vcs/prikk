@@ -63,7 +63,7 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 26] = [
+const UPPER_LAYER: [&str; 27] = [
     "branch_switch",
     "bundle",
     "compact",
@@ -83,6 +83,11 @@ const UPPER_LAYER: [&str; 26] = [
     // RFC 157: `tree` and `cat`, reading a resolved point through the anchored replay. Built on
     // `patch_replay` and `point`; reached only by the CLI.
     "point_reading",
+    // RFC 165 R5: `prikk doctor --rebuild-pointer-index` -- built on `refs`, `trust`, `lock` and
+    // `foundation` (all lower), plus `ref_completion`'s own `evaluate_known_lead` (upper), the same
+    // R4 rule a completable lead must be evaluated against. Reached only by the CLI; nothing lower
+    // reaches it, and it reaches nothing that reaches back into it.
+    "pointer_rebuild",
     "received",
     "recognition_claim",
     // RFC 165 R4: `prikk ref complete`'s own rule (`plan_ref_completion`/`complete_ref_publication`)

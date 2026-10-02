@@ -145,19 +145,36 @@ pub fn plan_ref_completion(
 ) -> Result<std::result::Result<CompletionPlan, CompletionRefusal>> {
     // Condition (e), first and global: no complete damage anywhere, checked before this ref's own
     // state is even read (K2 -- a damaged container's own bytes are not trustworthy enough to use
-    // for classifying anything, including whether this ref is a lead at all).
+    // for classifying anything, including whether this ref is a lead at all). This pointer-index
+    // half is `ref complete`'s own, not shared with RFC 165 R5's rebuild: a rebuild's whole purpose
+    // is to fix a damaged pointer-index record, so that same damage must never block it from
+    // evaluating an unrelated ref's own lead (`pointer_rebuild.rs` calls [`evaluate_known_lead`]
+    // directly, with its own damage-tolerant pointer read, bypassing this gate on purpose).
     if replay_pointer_index(layout)?.has_item_failure() {
         return Ok(Err(CompletionRefusal::PointerIndexDamaged));
     }
+    let store = RefStore::new(layout.clone());
+    let Some(leading_id) = store.read_current_ref_state_id(ref_name)? else {
+        return Ok(Err(CompletionRefusal::NoPointer));
+    };
+    evaluate_known_lead(layout, ref_name, leading_id)
+}
+
+/// RFC 165 R4's own rule, conditions (b)-(e)'s ref-log half plus (a)/(c)/(d), given a `leading_id`
+/// the caller has already resolved (by whatever means -- [`plan_ref_completion`]'s own damage-gated
+/// pointer lookup, or RFC 165 R5's rebuild, which tolerates pointer-index damage elsewhere). Shared
+/// so the two verbs' own classification can never drift on what counts as a completable lead.
+pub(crate) fn evaluate_known_lead(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    leading_id: ObjectId,
+) -> Result<std::result::Result<CompletionPlan, CompletionRefusal>> {
     let (_, _, ref_log_interior_damage) = ref_log_tail_status(layout)?;
     if let Some(message) = ref_log_interior_damage {
         return Ok(Err(CompletionRefusal::RefLogDamaged(message)));
     }
 
     let store = RefStore::new(layout.clone());
-    let Some(leading_id) = store.read_current_ref_state_id(ref_name)? else {
-        return Ok(Err(CompletionRefusal::NoPointer));
-    };
     let replay = store.replay_log(ref_name)?;
     if replay.has_item_failure() {
         return Ok(Err(CompletionRefusal::OwnLogDamaged));

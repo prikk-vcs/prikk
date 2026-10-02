@@ -67,6 +67,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reason: "`replay_ref_subsequence`, `incomplete_tail_matches` and `truncate_incomplete_tail` read the whole ref log container                  (every ref's history) to answer one ref's question: a ref publication does it up to three times                  (`append_ref_container_record`, `classify_state`, `ensure_agreement`), so the cost of updating one ref follows                  the number of ref updates the repository has ever recorded",
         reference: "RFC 160 report v1 §F1 (ruling requested); RFC 102 Stage 6 (ref log containers, never compacted, DC-38/DC-69)",
     },
+    DeclaredScope {
+        id: "pointer-index-rebuild",
+        status: ScopeStatus::Intentional,
+        reason: "`prikk doctor --rebuild-pointer-index` re-derives the whole ref-pointer index from every record in the ref log                  container, once per run (`decode_ref_log_for_rebuild`); re-deriving the pointer index from the ref log is                  what rebuilding means, the same reasoning `index-rebuild` already has for the object index",
+        reference: "RFC 165 R5",
+    },
 ];
 
 /// Which family of store-growing file `relative` (relative to the repository's `.prikk/` directory) is in, if it is in one.

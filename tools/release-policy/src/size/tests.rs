@@ -236,7 +236,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 164 Rule C added `doctor/repair_tails.rs`: 149 -> 150.
     // RFC 164 round 2 Rule E added `verify/reachability.rs`: 150 -> 151.
     // RFC 165 R4 added `ref_completion.rs` and `ref_completion/tests.rs` is `cfg(test)`-invisible: 151 -> 152.
-    assert_eq!(store.production_files, 152);
+    // RFC 165 R5 added `pointer_rebuild.rs`; `pointer_rebuild/tests.rs` is `cfg(test)`-invisible: 152 -> 153.
+    assert_eq!(store.production_files, 153);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

@@ -67,6 +67,7 @@ mod path;
 // RFC 131 §2.2a ruling (b): the `received` name family (received, received_index).
 mod point;
 mod point_reading;
+mod pointer_rebuild;
 mod received;
 mod recognition_claim;
 mod ref_completion;
@@ -240,6 +241,9 @@ pub use point_reading::{
     PathContent, PointEntry, PointEntryEncoding, PointEntryKind, TreeListing,
     list_tree_at_point_reporting_anchor, parse_tree_prefix, read_path_at_point_reporting_anchor,
     unpublished_branch_tree_listing,
+};
+pub use pointer_rebuild::{
+    DroppedLead, RebuildPlan, RefRebuildEntry, plan_pointer_index_rebuild, rebuild_pointer_index,
 };
 pub use received::{
     ReceivedPointer, list_received_pointers, read_received_pointer, validate_received_ref,
