@@ -752,12 +752,13 @@ fn verify_repository_counts_objects_and_wal_records() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// RFC 164 Rule B: `verify` reads all seven Rule-A files, every run, unconditionally -- named
-/// individually so a future refactor that drops one silently (the review's own control 2) fails
-/// this test rather than only a `#[non_exhaustive]` struct compiling regardless.
+/// RFC 164 Rule B (RFC 165 R5 adds the ref log as an eighth): `verify` reads all eight covered files,
+/// every run, unconditionally -- named individually so a future refactor that drops one silently (the
+/// review's own control 2) fails this test rather than only a `#[non_exhaustive]` struct compiling
+/// regardless.
 #[test]
-fn verify_repository_reports_all_seven_rule_a_files() -> Result<()> {
-    let root = unique_temp_dir("verify-rule-b-seven-files");
+fn verify_repository_reports_all_eight_appended_files() -> Result<()> {
+    let root = unique_temp_dir("verify-rule-b-eight-files");
     let layout = RepositoryLayout::init(root.clone())?;
     let report = verify_repository(&layout)?;
     let labels: Vec<&str> = report
@@ -775,8 +776,9 @@ fn verify_repository_reports_all_seven_rule_a_files() -> Result<()> {
             "pointer index generation log",
             "received index generation log",
             "trust policy generation log",
+            "ref log",
         ],
-        "Rule B must report exactly these seven files, in this order, every run"
+        "Rule B must report exactly these eight files, in this order, every run"
     );
     let _ = std::fs::remove_dir_all(root);
     Ok(())

@@ -291,14 +291,16 @@ fn ensure_publication_precondition(
         &relative,
     )? {
         let discovery = container::decode_ref_container_records(&bytes)?;
-        // RFC 165 Addendum 1 §1: only *interior* damage (a `Failed` frame with something sound or
-        // failed after it) blocks mutation here -- not attributable to one ref until it decodes, so
-        // this refuses for the whole repository rather than naming which ref, unlike `verify`'s own
-        // per-ref attribution. A `Failed` frame that is the container's own last attempted one is its
-        // tail, not interior damage; see `ensure_may_publish`'s own doc for why a lead-free tail is a
-        // different question from this one.
-        if discovery.has_interior_damage() {
-            return Err(incomplete_publication_refusal());
+        // RFC 165 R5 (§9.2): `has_damage()` is true for a complete, fully-written record whose later
+        // validation failed (damage, wherever it sits) or a `Failed` frame with something sound or
+        // failed after it (interior damage) -- never for the container's own genuine, lead-free tail
+        // (represented purely by `trailing_partial_bytes`, checked separately by `ensure_may_publish`
+        // for the publications that append to this container; see its own doc for why a lead-free
+        // tail is a different question from this one). Not attributable to one ref until it decodes,
+        // so this refuses for the whole repository rather than naming which ref, unlike `verify`'s own
+        // per-ref attribution.
+        if discovery.has_damage() {
+            return Err(ref_log_damage_refusal(&discovery));
         }
         for record in &discovery.records {
             let update = RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload)?;
@@ -374,6 +376,44 @@ fn ensure_publication_precondition(
     Ok(())
 }
 
+/// RFC 165 R5 (§9.2, Rule B extended to the ref log): the container's own tail/damage status, for
+/// `verify`'s `AppendedFileTailStatus` reporting (RFC 164 Rule B) and `doctor --repair-tails`, matching
+/// how both already read each Rule-A file directly and independently rather than through whatever else
+/// touches it first. Returns `(trailing_partial_bytes, tail_offset, interior_damage_message)` -- plain
+/// primitives, since `AppendedFileTailStatus` itself lives in `crate::verify`, a sibling module that
+/// cannot see `container`'s own `pub(in crate::refs)` internals.
+pub(crate) fn ref_log_tail_status(
+    layout: &RepositoryLayout,
+) -> Result<(usize, usize, Option<String>)> {
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
+    let relative = layout.repository_relative(
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
+    )?;
+    let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    else {
+        return Ok((0, 0, None));
+    };
+    let discovery = container::decode_ref_container_records(&bytes)?;
+    if let Some(tail) = container::ref_log_container_tail(&bytes, &discovery) {
+        return Ok((tail.len, tail.offset, None));
+    }
+    let interior_damage =
+        discovery
+            .record_outcomes
+            .iter()
+            .find_map(|outcome| match &outcome.status {
+                container::RefContainerRecordStatus::Failed { message, .. } => {
+                    Some(message.clone())
+                }
+                container::RefContainerRecordStatus::Evaluated => None,
+            });
+    Ok((0, 0, interior_damage))
+}
+
 fn incomplete_publication_refusal() -> PrikkError {
     // RFC 132 part 2: an incomplete publication is a caller precondition, not a lock -- nothing is
     // held and no other writer is racing this one; the fix is running verify/doctor and retrying
@@ -382,6 +422,37 @@ fn incomplete_publication_refusal() -> PrikkError {
         "repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry"
             .to_string(),
     )
+}
+
+/// RFC 165 R5 (§9.2): found live against the architect's own `rfc165_ref_log_tail_shapes_probe.sh`
+/// (the `flip-last-body` shape) -- `discovery.has_damage()` was routed through
+/// `incomplete_publication_refusal()`, the same text a genuine pointer lead gets ("... use
+/// signer-backed seal retry"), which is wrong here: a complete, fully-written record whose checksum
+/// or envelope fails is damage, not an interrupted publication, and no seal retry resolves it. The
+/// handoff's own classification table names the real way out: "a complete damaged record, anywhere:
+/// damage ... The way out is a copy." This names the first damaged offset `has_damage()` found, not
+/// just a generic refusal.
+fn ref_log_damage_refusal(discovery: &container::RefContainerReplay) -> PrikkError {
+    let last_index = discovery.record_outcomes.len().checked_sub(1);
+    let detail = discovery
+        .record_outcomes
+        .iter()
+        .enumerate()
+        .find_map(|(index, outcome)| match &outcome.status {
+            container::RefContainerRecordStatus::Failed {
+                message,
+                never_a_tail,
+                ..
+            } if *never_a_tail || Some(index) != last_index => {
+                Some(format!(" at byte offset {}: {message}", outcome.offset))
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    PrikkError::Integrity(format!(
+        "the ref log has a damaged record{detail}; this is not an incomplete publication and no seal \
+         retry resolves it -- the way out is a copy of a sound repository, not a repair"
+    ))
 }
 
 /// RFC 165 R2: `ensure_no_incomplete_publication`'s own pre-R2 implementation, kept as a test oracle

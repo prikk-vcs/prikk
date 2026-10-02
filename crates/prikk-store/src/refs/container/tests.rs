@@ -31,6 +31,55 @@ fn round_trips_a_single_record() -> Result<()> {
     Ok(())
 }
 
+/// RFC 165 R5 (§9.2 for the ref log): flip every byte of a single complete ref-log record in turn --
+/// magic, version, `ref_name_key`, length, checksum, and body alike -- and assert none of the offsets
+/// decodes to a tail. Mirrors `trust_index::tests::no_offset_of_a_single_trust_key_record_decodes_to_a_tail`
+/// exactly; decode only, no I/O, cheap enough to cover every offset, not a sample.
+///
+/// **Manual control (handoff §1 item 3, "§9.2 bypassed at the ref log"), not an automated toggle:**
+/// every `never_a_tail` assignment in `parse_frame_at`/`decode_ref_container_records` was forced to
+/// `false` (via `sed`, `container.rs` restored from a backup afterward), reproducing "§9.2 does not
+/// apply here" directly. Rerunning this exact test then failed at offset 0 (a magic-byte flip):
+/// `left: 374, right: 0` -- the flipped record was misread as a 374-byte tail instead of damage.
+/// Restored and reverified green before this file was committed.
+#[test]
+fn no_offset_of_a_single_ref_log_record_decodes_to_a_tail() -> Result<()> {
+    let key = ref_name_key_bytes("heads/main");
+    let envelope = signed_ref_update_envelope(
+        "heads/main",
+        None,
+        sample_object_id("state"),
+        sample_object_id("target"),
+        1,
+    );
+    let sound = encode_ref_container_record(key, &envelope)?;
+    for offset in 0..sound.len() {
+        let mut flipped = sound.clone();
+        flipped[offset] ^= 0xFF;
+        let replay = decode_ref_container_records(&flipped)?;
+        assert_eq!(
+            replay.trailing_partial_bytes, 0,
+            "offset {offset}: a flipped byte in the only (complete) record must never read as a tail"
+        );
+        assert!(
+            replay.record_outcomes.iter().any(|outcome| matches!(
+                outcome.status,
+                RefContainerRecordStatus::Failed {
+                    never_a_tail: true,
+                    ..
+                }
+            )),
+            "offset {offset}: a flipped byte must be reported as damage (never_a_tail), not silently \
+             dropped or read as a tail"
+        );
+        assert!(
+            replay.records.is_empty(),
+            "offset {offset}: a complete damaged record must not be returned as a sound one"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn trailing_partial_bytes_are_tolerated_not_treated_as_corruption() -> Result<()> {
     let key = ref_name_key_bytes("heads/main");

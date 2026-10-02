@@ -318,7 +318,10 @@ use crate::lifecycle_cache::incremental::{
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::received::list_received_pointers;
 use crate::received::received_index::{ReceivedIndexRecordStatus, replay_received_index};
-use crate::refs::{RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid, verify_refs};
+use crate::refs::{
+    RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid, ref_log_tail_status,
+    verify_refs,
+};
 use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
@@ -1137,15 +1140,18 @@ pub fn verify_repository(layout: &RepositoryLayout) -> Result<RepositoryVerifica
     verify_repository_with_options(layout, VerifyOptions::default())
 }
 
-/// RFC 164 Rule B: every Rule-A file's own tail/damage status, read directly rather than through
-/// whichever writer or reader happens to touch it first -- reads it, unconditionally, every time
-/// `verify` runs. Each of the seven reads is independent; one failing to open does not stop the
-/// others (an `Err` here becomes one row's own `interior_damage`, naming what happened, the same
-/// "isolate and continue" discipline every other framed reader in this codebase already has).
+/// RFC 164 Rule B (RFC 165 R5 extends it to the ref log, an eighth row): every covered file's own
+/// tail/damage status, read directly rather than through whichever writer or reader happens to touch
+/// it first -- reads it, unconditionally, every time `verify` runs. Each read is independent; one
+/// failing to open does not stop the others (an `Err` here becomes one row's own `interior_damage`,
+/// naming what happened, the same "isolate and continue" discipline every other framed reader in this
+/// codebase already has). The ref log's own tail and damage are mutually exclusive by construction
+/// (`refs::ref_log_tail_status`'s own doc) -- unlike the seven Rule-A files, which report both
+/// independently.
 pub(crate) fn check_appended_file_tails(
     layout: &RepositoryLayout,
 ) -> Result<Vec<AppendedFileTailStatus>> {
-    let mut rows = Vec::with_capacity(7);
+    let mut rows = Vec::with_capacity(8);
 
     match replay_trust_keys(layout) {
         Ok(replay) => rows.push(AppendedFileTailStatus {
@@ -1260,6 +1266,23 @@ pub(crate) fn check_appended_file_tails(
                 interior_damage: Some(error.to_string()),
             }),
         }
+    }
+
+    match ref_log_tail_status(layout) {
+        Ok((trailing_partial_bytes, tail_offset, interior_damage)) => {
+            rows.push(AppendedFileTailStatus {
+                label: "ref log",
+                trailing_partial_bytes,
+                tail_offset,
+                interior_damage,
+            });
+        }
+        Err(error) => rows.push(AppendedFileTailStatus {
+            label: "ref log",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: Some(error.to_string()),
+        }),
     }
 
     Ok(rows)

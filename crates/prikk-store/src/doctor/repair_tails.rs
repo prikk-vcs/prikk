@@ -1,15 +1,23 @@
-//! RFC 164 Rule C: `prikk doctor --repair-tails` -- one repair for every tail Rule A defines, across
-//! every file it covers (the WAL, the pointer index, and the seven Rule-A files), truncating each
-//! one it finds under that file's own lock, saving what it removes first.
+//! RFC 164 Rule C (RFC 165 R5 extends it to the ref log): `prikk doctor --repair-tails` -- one repair
+//! for every tail Rule A (and now the ref log's own §9.2) defines, across every file it covers (the
+//! WAL, the pointer index, the seven Rule-A files, and the ref log), truncating each one it finds
+//! under that file's own lock, saving what it removes first.
 //!
-//! **Not the object containers, and not the ref log** -- Rule B makes those two report; only Rule A's
-//! files (plus the WAL and pointer index, which RFC 162 rule 3 already gave a repair) are covered
-//! here. `--repair-wal-tail` and `--repair-pointer-index-tail` stay, unchanged, as the single-file
-//! forms; this reuses their own repair functions rather than a second implementation of either.
+//! **Not the object containers** -- Rule B makes those report only. `--repair-wal-tail` and
+//! `--repair-pointer-index-tail` stay, unchanged, as the single-file forms; this reuses their own
+//! repair functions rather than a second implementation of either.
 //!
-//! **All or nothing on interior damage.** Every one of the nine files is read once, up front, before
+//! **The ref log's own tail is never truncated while any ref's pointer leads its log** (RFC 165 R5):
+//! a tail *by position* does not know whether the same bytes are actually a completable publication's
+//! own interrupted append (RFC 165 R4 completes those, never truncates them) -- truncating first would
+//! destroy exactly what a later `ref complete` needs. `ensure_no_incomplete_publication` is checked
+//! before this repair touches the ref log at all; a lead anywhere routes through the same all-or-nothing
+//! refusal below as any other file's interior damage, not a silent skip.
+//!
+//! **All or nothing on interior damage.** Every one of the ten files is read once, up front, before
 //! anything is touched. If any one of them has interior damage (a sound record follows a damaged
-//! one -- RFC 164 Rule A's own "not a tail" case), this refuses immediately, naming every such file
+//! one -- RFC 164 Rule A's own "not a tail" case, extended to the ref log by RFC 165 §9.2), or the ref
+//! log's own tail cannot yet be confirmed lead-free, this refuses immediately, naming every such file
 //! and its offset, and truncates nothing anywhere.
 //!
 //! **Locks, in the order this project's own convention already uses** (`bundle.rs::import_bundle`:
@@ -35,7 +43,9 @@ use crate::foundation::fsutil::{
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
 use crate::lock::{ActiveLock, acquire_container_locks};
-use crate::refs::{replay_pointer_index, truncate_pointer_index_trailing_partial};
+use crate::refs::{
+    ensure_no_incomplete_publication, replay_pointer_index, truncate_pointer_index_trailing_partial,
+};
 use crate::verify::check_appended_file_tails;
 use crate::wal::Wal;
 
@@ -54,8 +64,8 @@ pub struct RepairTailsFileOutcome {
 }
 
 /// `prikk doctor --repair-tails`'s own report: one row per covered file, in a fixed order (the WAL,
-/// the pointer index, then the seven Rule-A files in the same order `check_appended_file_tails`
-/// reports them) -- always all nine, whether or not each one had anything to repair, so a clean
+/// the pointer index, then the eight files `check_appended_file_tails` reports, the ref log now last
+/// among them) -- always all ten, whether or not each one had anything to repair, so a clean
 /// repository's own report says so per file rather than by omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -72,6 +82,7 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
         layout,
         &[
             LockableContainer::RefPointerIndex,
+            LockableContainer::RefLog,
             LockableContainer::ReceivedIndex,
             LockableContainer::TrustPolicy,
         ],
@@ -112,6 +123,24 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     for status in &appended {
         if let Some(message) = &status.interior_damage {
             damaged.push(format!("{}: {message}", status.label));
+        }
+    }
+    // RFC 165 R5 (§9.2): a tail *by position* in the ref log is not necessarily lead-free --
+    // `ref_log_container_tail` has no view of the pointer index, so the same physical bytes a
+    // completable publication's own interrupted log append left behind read identically to orphaned
+    // garbage. Truncating a lead's own tail would destroy exactly what a future completion verb needs
+    // to finish it (RFC 165 R4), so this refuses rather than guesses: a lead anywhere blocks the ref
+    // log's own row specifically, the same all-or-nothing refusal every other covered file's damage
+    // already gets, not a silent skip.
+    let ref_log_has_tail = appended
+        .iter()
+        .any(|status| status.label == "ref log" && status.trailing_partial_bytes != 0);
+    if ref_log_has_tail {
+        if let Err(error) = ensure_no_incomplete_publication(layout) {
+            damaged.push(format!(
+                "ref log: the ref publication precondition does not hold ({error}), so its trailing \
+                 bytes cannot be confirmed lead-free -- not a repairable tail until that is resolved"
+            ));
         }
     }
     if !damaged.is_empty() {
@@ -180,6 +209,9 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
         "pointer index generation log" => layout.ref_pointer_index_generation_log_path(),
         "received index generation log" => layout.received_index_generation_log_path(),
         "trust policy generation log" => layout.trust_policy_generation_log_path(),
+        "ref log" => {
+            layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A)
+        }
         other => {
             return Err(PrikkError::Integrity(format!(
                 "--repair-tails: unrecognized appended-file label {other:?} -- this is a bug \
@@ -200,6 +232,12 @@ fn truncate_one_tail(
     label: &'static str,
     tail_offset: usize,
 ) -> Result<RepairTailsFileOutcome> {
+    // RFC 165 R5: the ref log is now one of this function's own generic callers (`repair_tails`'s
+    // own loop below) and is a "store-growing file" the whole-read guard watches; this repair's own
+    // whole read of it (to truncate under lock, the same as every other covered file here) is the
+    // declared exception, matching `truncate_incomplete_tail`'s own declaration for the same file.
+    #[cfg(test)]
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
     let Some(bytes) = read_file_if_exists(root, relative)? else {
         return Ok(RepairTailsFileOutcome {
             label,

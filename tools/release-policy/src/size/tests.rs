@@ -100,7 +100,9 @@ fn removing_a_declaration_names_its_file() {
         // own reporting through the same pipeline `AppendedFileTails` already uses, 2,023 -> 2,058.
         // RFC 164 round 2 Rule E: `UnreferencedRemnant`, `ReachabilityClassifier`, and the
         // reachability-aware `verify_block_payload`/`ensure_object_exists` rewrite, 2,058 -> 2,148.
-        detail.contains("2148"),
+        // RFC 165 R5: the ref log as an eighth `AppendedFileTails` row (`ref_log_tail_status`,
+        // wired into `check_appended_file_tails` and its own destructuring), 2,148 -> 2,171.
+        detail.contains("2171"),
         "the line count is in the message: {detail}"
     );
     assert!(

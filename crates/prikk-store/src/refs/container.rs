@@ -49,8 +49,8 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    complete_by_checksum, partial_before_sound_frame_message, require_progress,
+    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
@@ -155,6 +155,14 @@ pub(in crate::refs) enum RefContainerRecordStatus {
         /// never reaches here at all; only a structurally-short header on a corrupted-but-not-torn
         /// tail could leave this `None`).
         claimed_ref_name_key: Option<[u8; 32]>,
+        /// RFC 165 R5 (§9.2): true when a checksum-verified interpretation of this frame exists (its
+        /// stored checksum matches either the claimed length's body or the length-to-end-of-file
+        /// body, computed with the format's own real magic/version constants, never the possibly-
+        /// corrupted on-disk ones) -- the record was fully written, so whatever caused *this*
+        /// validation to fail (a corrupted magic/version byte, a checksum mismatch at the claimed
+        /// length, a malformed envelope, an unsigned RefUpdate) is damage, never a tail, even when
+        /// this is the container's own last attempted frame.
+        never_a_tail: bool,
     },
 }
 
@@ -193,23 +201,32 @@ impl RefContainerReplay {
         (self.records.len(), failed, self.trailing_partial_bytes)
     }
 
-    /// RFC 165 Addendum 1 §1: true when a `Failed` outcome exists that is **not** the container's own
-    /// last attempted frame -- something sound or failed follows it, so this is interior damage
-    /// (unrecoverable corruption), not the container's own tail. Every `Failed` outcome is pushed in
-    /// scan order (`decode_ref_container_records`'s own loop), so the last element of
-    /// `record_outcomes`, if any, is always the physically-last attempted frame; any other `Failed`
-    /// entry means the scan continued past it. Distinct from a lead-free tail (`ref_log_container_tail`,
-    /// below), which must not be confused with an incomplete publication -- see
-    /// `refs::ensure_no_incomplete_publication_except`'s own doc for why that distinction matters.
+    /// RFC 165 R5 (§9.2 for the ref log): true when the container has **damage**, in the handoff's own
+    /// classification table's sense -- never excusable as the container's own tail, whatever the
+    /// pointer index says about any ref's lead. Two ways a `Failed` outcome earns this:
+    /// - `never_a_tail: true` -- a complete, fully-written record (its checksum verifies) whose later
+    ///   validation nonetheless failed. Damage, unconditionally, **even when it is the container's own
+    ///   last attempted frame** (RFC 164 §9's own rule, extended here to the ref log).
+    /// - any `Failed` outcome that is **not** the container's own last attempted frame -- something
+    ///   sound or failed follows it, so whatever reached this point in the scan was not the physical
+    ///   end of the container, regardless of its own `never_a_tail` value.
+    ///
+    /// Every `Failed` outcome is pushed in scan order (`decode_ref_container_records`'s own loop), so
+    /// the last element of `record_outcomes`, if any, is always the physically-last attempted frame.
+    /// Distinct from a lead-free tail (`ref_log_container_tail`, below), which must not be confused
+    /// with an incomplete publication -- see `refs::ensure_no_incomplete_publication_except`'s own doc
+    /// for why that distinction matters.
     #[must_use]
-    pub(in crate::refs) fn has_interior_damage(&self) -> bool {
+    pub(in crate::refs) fn has_damage(&self) -> bool {
         let last_index = self.record_outcomes.len().checked_sub(1);
         self.record_outcomes
             .iter()
             .enumerate()
-            .any(|(index, outcome)| {
-                matches!(outcome.status, RefContainerRecordStatus::Failed { .. })
-                    && Some(index) != last_index
+            .any(|(index, outcome)| match &outcome.status {
+                RefContainerRecordStatus::Failed { never_a_tail, .. } => {
+                    *never_a_tail || Some(index) != last_index
+                }
+                RefContainerRecordStatus::Evaluated => false,
             })
     }
 }
@@ -248,23 +265,19 @@ pub(in crate::refs) fn ref_log_container_tail(
     bytes: &[u8],
     discovery: &RefContainerReplay,
 ) -> Option<RefLogContainerTail> {
-    if discovery.has_interior_damage() {
+    if discovery.trailing_partial_bytes == 0 {
         return None;
     }
-    if discovery.trailing_partial_bytes > 0 {
-        let offset = bytes.len().checked_sub(discovery.trailing_partial_bytes)?;
-        return Some(RefLogContainerTail {
-            offset,
-            len: discovery.trailing_partial_bytes,
-        });
-    }
-    let last = discovery.record_outcomes.last()?;
-    if !matches!(last.status, RefContainerRecordStatus::Failed { .. }) {
-        return None;
-    }
+    // A genuine tail is represented *only* by `trailing_partial_bytes > 0`: `decode_ref_container_
+    // records`'s own loop never pushes a `Failed` outcome for a terminal frame that is not
+    // `never_a_tail` and has nothing sound after it (RFC 165 R5, §9.2) -- it returns
+    // `trailing_partial_bytes` directly instead, the same as the too-short-for-a-header case. So
+    // `discovery.has_damage()` and `trailing_partial_bytes > 0` are mutually exclusive by
+    // construction; no separate check against `has_damage()` is needed here.
+    let offset = bytes.len().checked_sub(discovery.trailing_partial_bytes)?;
     Some(RefLogContainerTail {
-        offset: last.offset,
-        len: bytes.len().checked_sub(last.offset)?,
+        offset,
+        len: discovery.trailing_partial_bytes,
     })
 }
 
@@ -319,7 +332,17 @@ enum FrameAttempt {
     Invalid {
         message: String,
         claimed_ref_name_key: Option<[u8; 32]>,
+        /// RFC 165 R5 (§9.2): see `RefContainerRecordStatus::Failed`'s own doc.
+        never_a_tail: bool,
     },
+}
+
+/// Best-effort, not checksum-verified, read of the header's own `ref_name_key` field at its fixed
+/// offset (10..42: magic(8) + version(2), then 32 bytes) -- usable even when `parse_header` itself
+/// failed (a bad magic or version byte does not disturb this field's own bytes), the same reasoning
+/// `trailing_tail_ref_name_key` already relies on for the torn-tail case.
+fn raw_ref_name_key_at(header: &[u8]) -> Option<[u8; 32]> {
+    header.get(10..42)?.try_into().ok()
 }
 
 /// Attempt to parse one ref-log container frame at `offset`. Never trusts a not-yet-checksum-validated
@@ -336,9 +359,20 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
     let header_values = match parse_header(header) {
         Ok(values) => values,
         Err(err) => {
+            // RFC 165 R5 (§9.2): a corrupted magic or version byte alone does not rule out a
+            // complete, fully written record -- the checksum decides, computed with this format's
+            // own real magic and version constants (`record_checksum` always uses the constants, never
+            // whatever bytes are actually on disk at this offset).
+            let never_a_tail = raw_ref_name_key_at(header).is_some_and(|key| {
+                complete_by_checksum(bytes, offset, REF_CONTAINER_HEADER_LEN, |body_len, body| {
+                    record_checksum(key, body_len, body)
+                })
+                .is_some()
+            });
             return FrameAttempt::Invalid {
                 message: err.to_string(),
                 claimed_ref_name_key: None,
+                never_a_tail,
             };
         }
     };
@@ -347,30 +381,56 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         return FrameAttempt::Invalid {
             message: "ref container body length does not fit usize".to_string(),
             claimed_ref_name_key: claimed,
+            never_a_tail: false,
         };
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
         return FrameAttempt::Invalid {
             message: "ref container body end overflow".to_string(),
             claimed_ref_name_key: claimed,
+            never_a_tail: false,
         };
     };
     let Some(body) = bytes.get(header_end..body_end) else {
+        // RFC 165 R5 (§9.2): a corrupted length field can claim a body past the end of the file --
+        // before conceding this is a torn tail, check whether the checksum verifies against the
+        // length to the end of the file instead.
+        let never_a_tail =
+            complete_by_checksum(bytes, offset, REF_CONTAINER_HEADER_LEN, |len, body| {
+                record_checksum(header_values.ref_name_key, len, body)
+            })
+            .is_some();
+        if never_a_tail {
+            return FrameAttempt::Invalid {
+                message: "ref container record length claims more bytes than remain, but a \
+                          complete record's own checksum verifies against the length to the end \
+                          of the file"
+                    .to_string(),
+                claimed_ref_name_key: claimed,
+                never_a_tail: true,
+            };
+        }
         return FrameAttempt::TrailingPartial { remaining };
     };
     let expected = record_checksum(header_values.ref_name_key, header_values.body_len, body);
     if expected != header_values.checksum {
+        // RFC 165 R5 (§9.2): a complete record (full header, full claimed body) whose checksum
+        // fails was fully written -- corruption, not a crash mid-write.
         return FrameAttempt::Invalid {
             message: format!("ref container checksum mismatch at byte offset {offset}"),
             claimed_ref_name_key: claimed,
+            never_a_tail: true,
         };
     }
     let envelope = match decode_envelope_file(body) {
         Ok(envelope) => envelope,
         Err(err) => {
+            // The checksum already verified above: a complete record whose envelope fails to decode
+            // is damage, never a tail.
             return FrameAttempt::Invalid {
                 message: err.to_string(),
                 claimed_ref_name_key: claimed,
+                never_a_tail: true,
             };
         }
     };
@@ -378,6 +438,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         return FrameAttempt::Invalid {
             message: err.to_string(),
             claimed_ref_name_key: claimed,
+            never_a_tail: true,
         };
     }
     FrameAttempt::Record {
@@ -420,11 +481,15 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                         records.push(record);
                     }
                     Err(err) => {
+                        // The checksum, the envelope decode, and the signed-type check already
+                        // passed (that is how a `FrameAttempt::Record` was reached at all): a
+                        // complete record, damage, never a tail -- RFC 165 R5 (§9.2).
                         record_outcomes.push(RefContainerRecordOutcome {
                             offset,
                             status: RefContainerRecordStatus::Failed {
                                 message: err.to_string(),
                                 claimed_ref_name_key: Some(record.ref_name_key),
+                                never_a_tail: true,
                             },
                         });
                     }
@@ -445,14 +510,13 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                     });
                 };
                 let message = partial_before_sound_frame_message(offset, next);
-                let claimed = bytes
-                    .get(offset + 10..offset + 42)
-                    .and_then(|key| <[u8; 32]>::try_from(key).ok());
+                let claimed = bytes.get(offset..).and_then(raw_ref_name_key_at);
                 record_outcomes.push(RefContainerRecordOutcome {
                     offset,
                     status: RefContainerRecordStatus::Failed {
                         message,
                         claimed_ref_name_key: claimed,
+                        never_a_tail: false,
                     },
                 });
                 offset = require_progress("ref container", offset, next)?;
@@ -460,16 +524,47 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
             FrameAttempt::Invalid {
                 message,
                 claimed_ref_name_key,
+                never_a_tail,
             } => {
+                // RFC 165 R5 (§9.2): a `never_a_tail` frame is damage unconditionally, so the scan
+                // never checks whether a *sound* frame follows it (that question only matters for
+                // deciding tail vs. damage, and this is already damage) -- it still tries a plain
+                // magic-byte resync to keep reading whatever comes after, the same as before this
+                // round. A frame that is not `never_a_tail` and has nothing sound after it is a
+                // genuine tail: RFC 162 rule 3's own rule, unchanged -- no `Failed` outcome is
+                // recorded for it at all, exactly like `TrailingPartial`'s own tail case above;
+                // `trailing_partial_bytes` alone represents it.
+                let sound_after = (!never_a_tail)
+                    .then(|| {
+                        sound_frame_after_partial(
+                            bytes,
+                            offset,
+                            REF_CONTAINER_MAGIC.as_slice(),
+                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                        )
+                    })
+                    .flatten();
+                if sound_after.is_none() && !never_a_tail {
+                    return Ok(RefContainerReplay {
+                        records,
+                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        record_outcomes,
+                    });
+                }
                 record_outcomes.push(RefContainerRecordOutcome {
                     offset,
                     status: RefContainerRecordStatus::Failed {
                         message,
                         claimed_ref_name_key,
+                        never_a_tail,
                     },
                 });
-                match resync_to_next_magic(bytes, offset + 1, REF_CONTAINER_MAGIC.as_slice()) {
-                    Some(next) => offset = next,
+                let resumed = match sound_after {
+                    Some(next) => Some(next),
+                    None => resync_to_next_magic(bytes, offset + 1, REF_CONTAINER_MAGIC.as_slice()),
+                };
+                match resumed {
+                    Some(next) => offset = require_progress("ref container", offset, next)?,
                     None => {
                         return Ok(RefContainerReplay {
                             records,
@@ -670,6 +765,7 @@ pub(in crate::refs) fn replay_ref_subsequence(
             RefContainerRecordStatus::Failed {
                 message,
                 claimed_ref_name_key,
+                ..
             } => {
                 if *claimed_ref_name_key != Some(ref_name_key) {
                     continue;

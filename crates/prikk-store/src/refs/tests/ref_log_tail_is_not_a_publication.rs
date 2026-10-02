@@ -363,13 +363,18 @@ fn a_lead_free_tail_still_refuses_every_publication_that_appends_to_the_ref_log(
 }
 
 #[test]
-fn control_without_the_fix_a_lead_free_tail_wrongly_blocked_commit() {
-    // RFC 165 Addendum 1 §1's own required control: before this fix,
-    // `ensure_no_incomplete_publication` refused on *any* `Failed` record outcome regardless of
-    // whether it was interior damage or the container's own terminal tail. This reproduces that
-    // exact pre-fix predicate directly (not by reverting the whole module) to prove the distinction
-    // drawn above is load-bearing, not vestigial.
-    let root = unique_temp_dir("rfc165-a1-tail-control");
+fn control_a_lead_free_tail_produces_no_failed_outcome_at_all() {
+    // RFC 165 R5 (§9.2): superseded this test's own original form (Addendum 1's "the old predicate
+    // blocks on any `Failed` outcome, the new one does not"). R5 changed the *representation* itself
+    // -- a genuine, lead-free tail no longer produces a `Failed` outcome at all (`trailing_partial_
+    // bytes` alone represents it, exactly like the too-short-for-a-header case already did), so the
+    // old predicate's own reproduction is no longer even reachable from this fixture: there is
+    // nothing for "any Failed outcome" to see. What remains worth asserting directly: this fixture
+    // produces zero `Failed` outcomes and a nonzero `trailing_partial_bytes`, and the real
+    // precondition still does not block `commit` over it -- `container.rs`'s own `§9.2 bypassed`
+    // control (`no_refs_times_log_precondition.rs` / `container::tests`) is what now exercises the
+    // "old, wrong" predicate meaningfully (a *complete* damaged record wrongly read as a tail).
+    let root = unique_temp_dir("rfc165-r5-tail-no-failed-outcome");
     let layout = repo_with_main(&root);
     append_tail(&layout, &TailShape::RandomBytes(100));
 
@@ -382,19 +387,23 @@ fn control_without_the_fix_a_lead_free_tail_wrongly_blocked_commit() {
     .unwrap()
     .unwrap();
     let discovery = crate::refs::decode_ref_container_records(&bytes).unwrap();
-    let pre_fix_any_failed_blocks = discovery.record_outcomes.iter().any(|outcome| {
+    let any_failed = discovery.record_outcomes.iter().any(|outcome| {
         matches!(
             outcome.status,
             crate::refs::container::RefContainerRecordStatus::Failed { .. }
         )
     });
     assert!(
-        pre_fix_any_failed_blocks,
-        "fixture bug: a 100-random-byte tail must still produce a Failed record outcome"
+        !any_failed,
+        "a genuine, lead-free tail must produce zero Failed outcomes under RFC 165 R5"
+    );
+    assert_ne!(
+        discovery.trailing_partial_bytes, 0,
+        "fixture bug: a 100-random-byte tail must still be represented as a tail"
     );
     assert!(
         crate::refs::ensure_no_incomplete_publication(&layout).is_ok(),
-        "the real precondition must not reproduce the pre-fix behaviour"
+        "the real precondition must not block commit over a lead-free tail"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

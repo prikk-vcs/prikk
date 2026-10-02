@@ -3,8 +3,14 @@
 #![allow(clippy::indexing_slicing, clippy::expect_used, clippy::unwrap_used)]
 
 use super::repair_tails;
-use crate::test_gates::test_support::unique_temp_dir;
-use crate::{Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout, add_trusted_maintainer};
+use crate::test_gates::test_support::{
+    signed_empty_block_envelope, signed_ref_state_envelope, signed_ref_update_envelope,
+    unique_temp_dir,
+};
+use crate::{
+    Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectWriter, RefPublication,
+    RefStore, RepositoryLayout, add_trusted_maintainer,
+};
 
 /// A fresh repository with one adopted maintainer -- real trust-key and trust-policy content, so
 /// there is something to repair (or, in the clean case, to confirm untouched).
@@ -28,8 +34,8 @@ fn a_clean_repository_reports_every_file_untouched() {
     let report = repair_tails(&layout).expect("repair_tails");
     assert_eq!(
         report.files.len(),
-        9,
-        "the WAL, the pointer index, and the seven Rule-A files"
+        10,
+        "the WAL, the pointer index, the seven Rule-A files, and the ref log (RFC 165 R5)"
     );
     for file in &report.files {
         assert_eq!(
@@ -167,5 +173,121 @@ fn a_second_run_after_repair_is_idempotent() {
             file.label
         );
     }
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// A repository with `heads/main` soundly published -- one real record in the ref log, so the
+/// precondition (`ensure_no_incomplete_publication`) agrees nothing leads, and there is something
+/// real to append a lead-free tail behind.
+fn repo_with_published_main(tag: &str) -> RepositoryLayout {
+    let layout = RepositoryLayout::init(unique_temp_dir(tag)).expect("init");
+    let mut objects = FileObjectStore::new(layout.clone());
+    let target = objects
+        .write_object(&signed_empty_block_envelope())
+        .expect("write target block");
+    let ref_state = signed_ref_state_envelope("heads/main", None, target, 1);
+    let ref_state_id = ref_state.object_id();
+    let publication = RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_update: signed_ref_update_envelope("heads/main", None, ref_state_id, target, 1),
+        ref_state,
+    };
+    RefStore::new(layout.clone())
+        .publish(&publication)
+        .expect("publish heads/main");
+    layout
+}
+
+/// RFC 165 R5 (§9.2 for the ref log): `--repair-tails` now covers the ref log too, saving what it
+/// removes, the same shape every other covered file already has. Mirrors `a_tail_on_trust_keys_is_
+/// repaired_and_recovered` exactly.
+///
+/// **Manual control (handoff §1 item 3, "the ref log removed from `--repair-tails`"), not an
+/// automated toggle:** `check_appended_file_tails`'s own `ref_log_tail_status` call was wrapped in
+/// `if false { ... }` (reproducing "the ref log is not one of the covered files," pre-R5), and this
+/// exact test rerun. It failed at `.expect("ref log row")` (no such row exists at all) -- confirming
+/// the wiring is load-bearing. Restored and reverified green (all six tests in this file) before this
+/// file was committed.
+#[test]
+fn a_tail_on_the_ref_log_is_repaired_and_recovered() {
+    let layout = repo_with_published_main("rfc165-r5-repair-tails-ref-log-tail");
+    let path = layout.ref_log_container_slot_path(crate::ContainerSlot::A);
+    let before = std::fs::read(&path).unwrap();
+    let mut with_tail = before.clone();
+    with_tail.extend(vec![0_u8; 100]);
+    std::fs::write(&path, &with_tail).unwrap();
+
+    let report = repair_tails(&layout).expect("repair_tails");
+    let row = report
+        .files
+        .iter()
+        .find(|file| file.label == "ref log")
+        .expect("ref log row");
+    assert_eq!(row.truncated_bytes, 100);
+    let recovery_file = row.recovery_file.as_ref().expect("recovery file recorded");
+    let recovery_bytes =
+        std::fs::read(layout.prikk_dir().join(recovery_file)).expect("read recovery file");
+    assert_eq!(
+        recovery_bytes,
+        vec![0_u8; 100],
+        "exactly the removed bytes, nothing else"
+    );
+
+    let after = std::fs::read(&path).unwrap();
+    assert_eq!(after, before, "truncated back to exactly the sound prefix");
+
+    for file in &report.files {
+        if file.label != "ref log" {
+            assert_eq!(
+                file.truncated_bytes, 0,
+                "{}: unaffected by the ref log's own tail",
+                file.label
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// RFC 165 R5: `--repair-tails` must refuse to touch the ref log's own tail while a *different* ref's
+/// pointer leads its log -- truncating would destroy exactly what a future `ref complete` (R4) needs
+/// to finish it. Built the same way the round-1 report's own manual crash-state construction was: a
+/// real `branch create` through the real `RefStore`, then the log truncated back to its own
+/// pre-create length, leaving the pointer naming a state the log does not yet confirm.
+#[test]
+fn a_tail_while_a_ref_leads_is_not_repaired() {
+    use std::io::Write;
+
+    let layout = repo_with_published_main("rfc165-r5-repair-tails-ref-log-lead");
+    let path = layout.ref_log_container_slot_path(crate::ContainerSlot::A);
+
+    // Crash mid-log-append for `heads/topic`: its pointer is written (as a real publish would,
+    // pointer before log), but only a short, torn fragment reaches the log -- both a genuine lead
+    // (the pointer names a state the log's last sound record does not confirm) *and* a physical tail
+    // in the same file, the shape `--repair-tails` must not truncate away (RFC 165 R4 completes it).
+    let target_target = prikk_object::ObjectId::from_bytes([0x77; 32]);
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/topic", target_target)
+        .expect("write pointer candidate");
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+    }
+
+    assert!(
+        crate::refs::ensure_no_incomplete_publication_except(&layout, None).is_err(),
+        "fixture bug: heads/topic must actually be leading"
+    );
+
+    let before = std::fs::read(&path).unwrap();
+    let result = repair_tails(&layout);
+    assert!(
+        result.is_err(),
+        "a lead must refuse the whole repair, not just skip the ref log's own row"
+    );
+    let after = std::fs::read(&path).unwrap();
+    assert_eq!(after, before, "a refusal must write nothing");
     let _ = std::fs::remove_dir_all(layout.root());
 }
