@@ -26,7 +26,7 @@
 //!
 //! Never a new code path for the append itself: completing a plan still goes through
 //! `publication::finish_interrupted` -> `publish_locked`, the same primitive DC-38's own `seal` retry
-//! uses -- reached here via [`RefStore::finish_interrupted_publication_for_ref_complete`], a sibling
+//! uses -- reached here via `RefStore::finish_interrupted_publication_for_ref_complete`, a sibling
 //! entry point that skips `finish_interrupted_publication_with_object_store`'s own
 //! `validate_signer_backed_recovery` (which unconditionally requires matching retained WAL evidence,
 //! correct for `seal`'s own retry but wrong for the four publication kinds this rule's condition (d)
@@ -268,7 +268,7 @@ pub fn plan_ref_completion(
 /// `plan.leading_ref_state_id`) and reuses the already-durable, already-signed `RefState` object
 /// verbatim -- completion never re-signs or re-derives it.
 ///
-/// Routes through [`RefStore::finish_interrupted_publication_for_ref_complete`] -- see the module
+/// Routes through `RefStore::finish_interrupted_publication_for_ref_complete` -- see the module
 /// doc comment for why this, and not DC-38's own `finish_interrupted_publication_with_object_store`,
 /// is the right entry point; both still terminate in the same `publish_locked` write.
 pub fn complete_ref_publication(
