@@ -1012,6 +1012,12 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                 }
             }
         }
+        for restored in &plan.restored {
+            println!(
+                "restored from the log: {} (RefState {} was stale, behind the log)",
+                restored.ref_name, restored.stale_ref_state_id
+            );
+        }
         for dropped in &plan.dropped_leads {
             println!(
                 "dropped lead: {} (RefState {}) -- {}",

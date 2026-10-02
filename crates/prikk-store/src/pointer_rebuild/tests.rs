@@ -280,6 +280,79 @@ fn a_damaged_pointer_index_record_is_served_from_the_log() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// U4 review v1's own finding: when the pointer index's *newest* record for a ref is damaged, the
+/// damage-tolerant reader falls back to an *older*, still-sound entry -- stale, behind the log, never
+/// a lead. The write is still correct (the log's own tip), but the plan must say "restored," never
+/// "dropped lead": nothing authorized is being discarded.
+#[test]
+fn a_damaged_newest_pointer_record_falls_back_to_a_stale_one_and_is_restored_not_dropped() {
+    let root = unique_temp_dir("rfc165-r5-stale-fallback-restored");
+    let layout = setup(&root);
+    let target1 = new_block(&layout, None, 1);
+    let seq1 = fully_publish(&layout, "heads/main", target1, &original_signer(), None, 1);
+    let target2 = new_block(&layout, Some(target1), 2);
+    let seq2 = fully_publish(
+        &layout,
+        "heads/main",
+        target2,
+        &original_signer(),
+        Some(seq1),
+        2,
+    );
+
+    // Damage only the newest (second) pointer-index record, leaving the first one sound.
+    let pointer_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let mut bytes = std::fs::read(&pointer_path).unwrap();
+    let first_record_len = bytes.len() / 2;
+    assert!(
+        first_record_len > 10,
+        "expected two roughly-equal-size records, got {} total bytes",
+        bytes.len()
+    );
+    let flip_at = first_record_len + 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&pointer_path, bytes).unwrap();
+
+    let plan = rebuild_pointer_index(&layout).unwrap();
+    let entry = plan
+        .per_ref
+        .iter()
+        .find(|entry| entry.ref_name == "heads/main")
+        .expect("heads/main must appear in the plan");
+    assert_eq!(
+        entry.before,
+        Some(seq1),
+        "the damage-tolerant reader must fall back to the older, sound record"
+    );
+    assert_eq!(
+        entry.after,
+        Some(seq2),
+        "the write is still the log's own tip"
+    );
+    assert!(
+        plan.dropped_leads.is_empty(),
+        "a stale pointer is not a dropped lead: {:?}",
+        plan.dropped_leads
+    );
+    assert_eq!(
+        plan.restored,
+        vec![super::RestoredRef {
+            ref_name: "heads/main".to_string(),
+            stale_ref_state_id: seq1,
+        }],
+        "the stale fallback must be reported as restored, naming the exact stale id"
+    );
+
+    let store = RefStore::new(layout.clone());
+    assert_eq!(
+        store.read_current_ref_state_id("heads/main").unwrap(),
+        Some(seq2),
+        "heads/main must read the log's own tip after the rebuild"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_completable_lead_refuses_the_whole_rebuild() {
     let root = unique_temp_dir("rfc165-r5-completable-lead-refuses");

@@ -243,7 +243,8 @@ pub use point_reading::{
     unpublished_branch_tree_listing,
 };
 pub use pointer_rebuild::{
-    DroppedLead, RebuildPlan, RefRebuildEntry, plan_pointer_index_rebuild, rebuild_pointer_index,
+    DroppedLead, RebuildPlan, RefRebuildEntry, RestoredRef, plan_pointer_index_rebuild,
+    rebuild_pointer_index,
 };
 pub use received::{
     ReceivedPointer, list_received_pointers, read_received_pointer, validate_received_ref,

@@ -10,17 +10,26 @@
 //! every record durably in the log already passed `publish_locked`'s own trust check at write time,
 //! so re-checking it here would be redundant work, not a new gate.
 //!
-//! **The one place trust re-enters: a completable lead.** A ref whose *current pointer* is ahead of
-//! what the log confirms (a lead) is evaluated against RFC 165 R4's own rule
-//! ([`crate::ref_completion::evaluate_known_lead`], the same table `ref complete` uses) --
-//! deliberately *not* `plan_ref_completion` itself, whose own pointer-index-damage gate would refuse
-//! every ref in the repository the moment *any* ref's pointer record is damaged, which is exactly the
-//! shape this rebuild exists to recover from. A completable lead blocks the whole rebuild outright
-//! (completing it is the correct fix, and overwriting it would drop an authorized transition); a lead
-//! that fails the rule is **dropped** -- named in the plan, and simply absent from the rebuilt index,
-//! since the log never confirmed it in the first place.
+//! **A current pointer that disagrees with the log is not automatically a lead.** It is a lead only
+//! when its own `update_seq` is *ahead* of the log's own newest confirmed sequence for that ref --
+//! trust re-enters only then, evaluated against RFC 165 R4's own rule
+//! ([`crate::ref_completion::evaluate_known_lead`], the same table `ref complete` uses, deliberately
+//! *not* `plan_ref_completion` itself, whose own pointer-index-damage gate would refuse every ref the
+//! moment *any* ref's pointer record is damaged -- exactly the shape this rebuild exists to recover
+//! from). A completable lead blocks the whole rebuild outright (completing it is the correct fix, and
+//! overwriting it would drop an authorized transition); a lead that fails the rule is **dropped** --
+//! named in the plan ([`DroppedLead`]), and simply absent from the rebuilt index, since the log never
+//! confirmed it in the first place.
 //!
-//! **Never a new way to decide "is this ref's current pointer a lead."** [`current_pointer_tolerating_damage_elsewhere`]
+//! **A disagreeing pointer whose own sequence is *behind* the log is stale, never a lead** (U4 review
+//! v1's own finding): the common cause is the pointer index's own newest record for that ref being
+//! damaged, so `current_pointer_tolerating_damage_elsewhere` resolves to an older, already-log-
+//! confirmed entry instead. Nothing is dropped; the ref is simply **restored** ([`RestoredRef`]) to
+//! what the log already soundly confirms. Conflating the two in the plan's own report would claim an
+//! authorized transition is being discarded when none is -- K1's "the plan says exactly what will
+//! happen" is precisely what this distinction protects.
+//!
+//! **Never a new way to decide "is this ref's current pointer a lead."** `current_pointer_tolerating_damage_elsewhere`
 //! reads the pointer index directly (not `RefStore::read_current_ref_state_id`, which refuses the
 //! moment *any* record in the container is damaged) -- the one place this module's own read departs
 //! from `ref_completion`'s, and the reason the whole module exists.
@@ -28,13 +37,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::ObjectId;
+use prikk_object::{ObjectId, ObjectType, RefStatePayload};
 
 use crate::foundation::fsutil::{append_file_required, truncate_file_empty_required};
 use crate::foundation::generation::{self, GenerationRecord};
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 use crate::foundation::tail_guard::require_no_unclean_tail;
 use crate::lock::acquire_container_locks;
+use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::ref_completion::{CompletionRefusal, evaluate_known_lead};
 use crate::refs::{
     PointerIndexEntry, decode_ref_log_for_rebuild, encode_pointer_index_record,
@@ -58,7 +68,11 @@ pub struct RefRebuildEntry {
 }
 
 /// A lead the rebuild found and refused to carry forward, because it failed RFC 165 R4's own rule --
-/// named, per R5 item 4, not silently absent.
+/// named, per R5 item 4, not silently absent. **Only a pointer genuinely ahead of the log** (its own
+/// `update_seq` at or past the log's own newest confirmed one for this ref) is ever reported here --
+/// see [`RestoredRef`] for the other shape a stale pointer can take, which this type must never be
+/// used for (U4 review v1's own finding: a damaged newest pointer record falls back to an *older*,
+/// already-log-confirmed entry, which is behind the log, not ahead of it, and dropping nothing).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DroppedLead {
@@ -68,6 +82,21 @@ pub struct DroppedLead {
     pub lead_ref_state_id: ObjectId,
     /// Which of RFC 165 R4's own conditions it failed.
     pub reason: CompletionRefusal,
+}
+
+/// A ref whose *current pointer* read as something other than the log's own newest state, but turned
+/// out to be stale -- **behind** the log, not a lead at all. The usual cause: the pointer index's own
+/// newest record for this ref is damaged, so `current_pointer_tolerating_damage_elsewhere` resolves
+/// to an older, already-log-confirmed entry instead. Nothing authorized is dropped here; the rebuilt
+/// index simply restores the ref to what the log already soundly confirms, which is exactly what a
+/// correct read of the pointer would have shown had it not been damaged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RestoredRef {
+    /// The ref whose pointer was stale.
+    pub ref_name: String,
+    /// The stale `RefState` id the pointer read as, behind the log's own newest confirmed state.
+    pub stale_ref_state_id: ObjectId,
 }
 
 /// K1: everything `prikk doctor --rebuild-pointer-index [--plan-only]` prints, and what a real run
@@ -81,6 +110,8 @@ pub struct RebuildPlan {
     pub per_ref: Vec<RefRebuildEntry>,
     /// Every lead the rebuild found and refused to carry forward.
     pub dropped_leads: Vec<DroppedLead>,
+    /// Every ref whose pointer read as stale (behind the log), restored rather than dropped.
+    pub restored: Vec<RestoredRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,10 +163,16 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
 
     // The ref log's own newest record per ref, in file order -- "last entry wins," the same
     // reduction `verify`'s `read_pointers` and `compact_ref_pointer_index` already persist for the
-    // pointer index itself.
+    // pointer index itself. `log_tip_seq` is what tells a stale pointer (behind the log) apart from a
+    // genuine lead (ahead of it): the ref log's own chain invariant (enforced at write time, and
+    // itself just confirmed damage-free above) means at most one `RefState` can ever exist at a given
+    // `update_seq` for one ref, so comparing sequences is equivalent to -- and cheaper than -- asking
+    // "does this exact id appear anywhere in this ref's own log history."
     let mut log_derived: BTreeMap<String, ObjectId> = BTreeMap::new();
+    let mut log_tip_seq: BTreeMap<String, u64> = BTreeMap::new();
     for record in &discovery.records {
         log_derived.insert(record.ref_name.clone(), record.new_ref_state_id);
+        log_tip_seq.insert(record.ref_name.clone(), record.update_seq);
     }
 
     let pointer_replay = replay_pointer_index(layout)?;
@@ -152,7 +189,9 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     // them, not only the first found.
     let mut completable_leads: Vec<String> = Vec::new();
     let mut dropped_leads: Vec<DroppedLead> = Vec::new();
+    let mut restored: Vec<RestoredRef> = Vec::new();
     let mut per_ref: Vec<RefRebuildEntry> = Vec::new();
+    let objects = FileObjectStore::new(layout.clone());
 
     for ref_name in &ref_names {
         let before = current_pointer_tolerating_damage_elsewhere(&pointer_replay.entries, ref_name);
@@ -160,16 +199,40 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
 
         if let Some(leading_id) = before {
             if Some(leading_id) != after {
-                // A lead: the current pointer is not what the log confirms (or the log confirms
-                // nothing for this ref at all). Evaluate it against R4's own rule, tolerating
-                // pointer-index damage elsewhere -- `evaluate_known_lead`, not `plan_ref_completion`.
-                match evaluate_known_lead(layout, ref_name, leading_id)? {
-                    Ok(_plan) => completable_leads.push(ref_name.clone()),
-                    Err(refusal) => dropped_leads.push(DroppedLead {
+                let leading_state_envelope = objects
+                    .read_typed(leading_id, ObjectType::RefState)?
+                    .ok_or_else(|| {
+                        PrikkError::Integrity(format!("missing RefState object: {leading_id}"))
+                    })?;
+                let leading_update_seq = RefStatePayload::decode_canonical(
+                    &leading_state_envelope.canonical_payload,
+                    leading_state_envelope.schema_version,
+                )?
+                .update_seq;
+                let behind_the_log = log_tip_seq
+                    .get(ref_name)
+                    .is_some_and(|&tip_seq| leading_update_seq <= tip_seq);
+
+                if behind_the_log {
+                    // U4 review v1's own finding: a damaged newest pointer record resolves to an
+                    // older, already-log-confirmed entry -- behind the log, not a lead, and nothing
+                    // authorized is dropped. The rebuild simply restores the correct, sound value.
+                    restored.push(RestoredRef {
                         ref_name: ref_name.clone(),
-                        lead_ref_state_id: leading_id,
-                        reason: refusal,
-                    }),
+                        stale_ref_state_id: leading_id,
+                    });
+                } else {
+                    // A genuine lead: ahead of (or with no history in) the log. Evaluate it against
+                    // R4's own rule, tolerating pointer-index damage elsewhere -- `evaluate_known_
+                    // lead`, not `plan_ref_completion`.
+                    match evaluate_known_lead(layout, ref_name, leading_id)? {
+                        Ok(_plan) => completable_leads.push(ref_name.clone()),
+                        Err(refusal) => dropped_leads.push(DroppedLead {
+                            ref_name: ref_name.clone(),
+                            lead_ref_state_id: leading_id,
+                            reason: refusal,
+                        }),
+                    }
                 }
             }
         }
@@ -226,6 +289,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     Ok(RebuildPlan {
         per_ref,
         dropped_leads,
+        restored,
     })
 }
 
