@@ -16,12 +16,35 @@ bundle, cross-type order), and separately for within-type order on a multi-gener
 the same way on the same principle. Both writers now write objects in full dependency order (across and within
 kinds), so an interrupted write leaves only complete objects behind.
 
-### Disclosed — a crash inside `merge` can leave a ref publication no command completes
+### Added — `prikk ref complete <ref>` completes an interrupted publication (RFC 165 R4)
 
-Reached through `merge`, N3's own gap (RFC 163, disclosed for `branch create`/`tag create`): a crash mid-publication
-leaves `verify` reporting `PRIKK-VERIFY-REF-DIVERGENCE`, and neither re-running the same merge (refused: "not
-confluent") nor a `seal` retry of the same ref completes it. Measured: 10 of 300 kills on 0.48.0, 16 of 300 on this
-release. No code change — text only; a fix is planned for 0.49.0 step 2, alongside F1.
+Closes N3's own gap (disclosed for `branch create`/`tag create`, and reached through `merge`: 10 of 300 kills on
+0.48.0, 16 of 300 on the build carrying 0.49.0's own dependency-order fix). Every condition evaluated before any
+write: the leading `RefState` verifies under the current trust policy, signed by an adopted maintainer key — **any**
+adopted key, not only the one that started the publication; it chains to the log's own tip at the next sequence; its
+target exists, with the kind the ref requires; for a publication that consumed the active WAL (`seal`, `sync seal`),
+the retained WAL evidence still matches; and no complete damage sits anywhere in the ref log or the pointer index.
+Any one failing refuses, writing nothing. `--plan-only` prints the same plan a real run writes from — the ref, the
+leading `RefState` id, its signer key id, its target and kind, the log tip, the sequence, the completing key, and
+any partial tail it would remove. The write is one signed ref-log record, by the completing key, through the exact
+same completion path `seal`'s own DC-38 retry already used — never a new code path for the append itself.
+`branch create`, `branch close`, `tag create`, `sync adopt-tag`, and `merge` now name `prikk ref complete <ref>` in
+their own refusal when blocked by their own ref's completable lead, instead of a permanent-reading "already exists"/
+"not confluent".
+
+### Added — `prikk doctor --rebuild-pointer-index` re-derives the ref-pointer index from the ref log (RFC 165 R5)
+
+The other way out: structural, never trust-filtered, no signing. Every ref's rebuilt state is its own newest record
+in the ref log; a *current* pointer disagreeing with the log only re-enters trust when it is genuinely a lead (ahead
+of the log, evaluated against R4's own rule above) — a lead that fails is **dropped** and named; a merely *stale*
+pointer (behind the log, the common cause: a damaged newest pointer-index record falling back to an older, sound
+one) is **restored**, never conflated with a dropped lead. Refuses, writing nothing, over ref-log damage or a tail
+(repair that first), or any completable lead anywhere in the repository (complete it first — a rebuild would
+otherwise drop an authorized transition). A complete damaged pointer-index record is not a refusal reason — serving
+past it is this verb's own purpose. `--plan-only` prints the same plan a real run writes from: every ref's state
+before and after, and every dropped or restored ref. The write truncates the pointer index's other slot, writes the
+rebuilt records, and switches the generation log atomically, the same mechanism `compact` already uses for the same
+container.
 
 ### Added — `prikk doctor --repair-tails` (RFC 164 Rule C)
 
@@ -175,6 +198,36 @@ publication, a known, disclosed gap carried to the next round, not worked around
 
 ### Output changes
 
+- A completable pointer lead reports `PRIKK-VERIFY-REF-POINTER-LEADS-LOG` and `doctor` now names
+  `prikk ref complete <ref>` (RFC 165 R4) — the old, seal-specific "run signer-backed `prikk seal
+  --allow-no-audit`" recommendation was wrong for a `branch create`/`tag create`/`merge`-shaped lead,
+  which it could never actually apply to. A lead that fails R4's own rule stays
+  `PRIKK-VERIFY-REF-DIVERGENCE`.
+- `branch create`, `branch close`, `tag create`, and `sync adopt-tag` can now say `"branch <ref> has
+  an interrupted publication; run `prikk ref complete <ref>` to finish it"` (`"tag <ref> has an
+  interrupted publication…"` for the latter two) in place of the old, permanent-reading "already
+  exists"/"already closed", when their own ref's own pointer is a completable lead; `merge` says `"ref
+  <into-ref> has an interrupted publication; run `prikk ref complete <into-ref>` before merging into
+  it"`, refusing before gathering evidence rather than building on a pointer its own log has not
+  caught up to.
+- `prikk doctor --rebuild-pointer-index [--plan-only]` is new (RFC 165 R5): prints, per ref, its state
+  before and after, and every dropped lead or restored ref; refuses with `"<N> ref(s) have a
+  completable lead; run `prikk ref complete <ref>` first -- a rebuild would drop an authorized
+  transition: <ref list>"` over any completable lead anywhere, or with the ref log's own damage/tail
+  message (below) over ref-log damage.
+- `prikk compact --pointer-index`/`--received-index`/`--trust-policy` can now refuse with the live
+  slot's own tail/damage message (the same text `seal`/`branch create`/`tag create`/`merge` already
+  give for the pointer index specifically) before truncating or writing anything, when the slot
+  `compact` is about to read and reduce itself ends in a torn tail — carried from RFC 164 round 2,
+  landed here. `--plan-only` is unaffected.
+- `prikk rollback-draft --append-inverse` has refused while another ref's own publication is
+  incomplete (`ensure_no_incomplete_publication`, the same RFC 163 R3 refusal `commit` and six other
+  writers already have a line for above) since RFC 163 — carried from RFC 164 round 2's own release-prep
+  list; this is the first `CHANGELOG` mention it has had.
+- The three generation-log tail refusals (`"back it up, truncate it to the named offset, then run
+  `prikk verify`"`, from `compact`'s own precheck and from the rebuild above) now say `"run `prikk
+  doctor --repair-tails`, then retry"` instead — `--repair-tails` already covers all three generation
+  logs, and the old advice predated that coverage.
 - `seal`, `branch create`, `branch close`, `tag create`, `sync adopt-tag`, and `merge` can now refuse
   with `"repository mutation is blocked by incomplete ref publication; run verify/doctor and use
   signer-backed seal retry"` before writing anything, when a *different* ref's own publication is
@@ -187,12 +240,16 @@ publication, a known, disclosed gap carried to the next round, not worked around
   refusing, since a lead-free tail is not an incomplete publication and naming a seal retry for it
   would be misleading — only a writer that itself appends to the ref log must refuse over it.
 - `verify` gains an `unreferenced remnants: N` line, plus one warning line per remnant naming the
-  owner, the missing object, and its role (RFC 164 round 2 Rule E): `"<owner type> <id> references
-  missing <missing type> <id> (<role>) -- re-run the import if you still have the bundle; otherwise it
-  is harmless"`. `doctor` gains the matching `PRIKK-DOCTOR-UNREFERENCED-REMNANT` warning code.
-  `verify --format json`'s own `verify-report-v1` schema is unaffected: item-level findings are out of
-  its v1 scope, unchanged by this addition.
-- `object <id> (block) references missing <role> <id>` no longer fires for a Block that is not itself
+  owner, the missing object, and its role (RFC 164 round 2 Rule E): `"object <owner> references
+  missing <role> <id> -- re-run the import if you still have the bundle; otherwise it is harmless"` —
+  the same canonical form (RFC 165 R6) the blocking version of this message below already used; the
+  warning's own first draft carried an owner/missing-object type prefix the blocking form never had
+  (`<role>` already names what kind of thing is missing — "parent block", "block patch", "snapshot
+  blob" — so the type names repeated it), corrected before release rather than shipped and fixed later.
+  `doctor` gains the matching `PRIKK-DOCTOR-UNREFERENCED-REMNANT` warning code. `verify --format
+  json`'s own `verify-report-v1` schema is unaffected: item-level findings are out of its v1 scope,
+  unchanged by this addition.
+- `object <owner> references missing <role> <id>` no longer fires for a Block that is not itself
   reachable from committed state (RFC 164 round 2 Rule E) — it is the warning above instead.
 - `seal`, `tag create`, `merge`, and `sync seal` can now refuse with the pointer index's own tail/damage
   message (`"the ref pointer index has an incomplete tail…"` / `"ref pointer index has a damaged

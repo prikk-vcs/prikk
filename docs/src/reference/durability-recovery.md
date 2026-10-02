@@ -99,12 +99,13 @@ deleted once it is not needed. It also means a repair can be wrong about what it
   of one well-formed frame, and nothing else; a complete record that fails its own checksum there is damage,
   refused, not truncated.
 
-**Only three repairs write a recovery file today:** the WAL repair, the pointer index's own
-`--repair-pointer-index-tail` (mirroring the WAL exactly), and the object index's own rebuild (its lost ids, when it
-cannot re-derive an entry). The
-ref log's own tail truncation, run automatically as part of a signer-backed seal's interrupted-publication recovery
-rather than as its own `doctor` verb, truncates directly and saves nothing first: a ref-log record removed by mistake
-this way cannot be read back.
+**The WAL repair, the pointer index's own `--repair-pointer-index-tail`** (mirroring the WAL exactly),
+**the object index's own rebuild** (its lost ids, when it cannot re-derive an entry), **and
+`--repair-tails`'s own coverage of every file it truncates** all write a recovery file. **The one
+exception: a ref-log tail attributable to one ref's own pending completion**, truncated directly with
+no recovery file, as part of `prikk ref complete <ref>`'s own write (RFC 165 R4 — `seal`'s own DC-38
+retry is one instance of the same mechanism, not a separate path). A lead-*free* tail (RFC 165 R5's
+own M4) goes through `--repair-tails` instead, saving what it removes like every other file it covers.
 
 **On Windows, the recovery file's own save is not claimed durable.** It writes through the same platform
 durability contract as every other atomic replace on this repository (`foundation/fsutil/anchored/windows.rs`), and that
@@ -228,16 +229,58 @@ there is no separate write-then-promote step and no candidate-cleanup diagnostic
 either lands durably or it does not.
 
 Verification jointly classifies pointer and log state. A pointer leading the log by exactly one
-expected transition is an interrupted publication and makes `verify` fail. Signer-backed `seal` retry
-may append the exact deterministic RefUpdate after revalidating retained WAL and trust. If the final
-log frame is structurally incomplete, that same path may truncate and sync only the container's own
-trailing incomplete suffix before the append; a torn tail belonging to one ref never enters any other
-ref's own filtered record sequence, so it cannot block a different ref's own publish or repair. Fully
-framed checksum-invalid or malformed records are never truncation-safe.
+expected transition is an interrupted publication and makes `verify` fail. If the final log frame is
+structurally incomplete (a genuine tail, never a complete damaged record), the completion path below
+may truncate and sync only the container's own trailing incomplete suffix before the append; a torn
+tail belonging to one ref never enters any other ref's own filtered record sequence, so it cannot
+block a different ref's own publish or repair. Fully framed checksum-invalid or malformed records are
+never truncation-safe — `--repair-tails` refuses outright on them (RFC 164 §9.2).
 
 Pointer/log agreement with the matching active WAL and metadata still retained is incomplete cleanup,
 not a healthy repository state. Verification returns non-zero and unrelated mutation remains blocked
-until signer-backed seal revalidates the transition, appends nothing, and removes active state.
+until the completion path below revalidates the transition, appends nothing new, and removes active
+state.
+
+### `prikk ref complete <ref>` (RFC 165 R4)
+
+The general completion verb — `seal`'s own DC-38 retry is now one instance of the same mechanism,
+not a separate path. Every condition evaluated before any write, in order: (a) the leading `RefState`
+verifies under the current trust policy, signed by an adopted maintainer key — **any** adopted key,
+not only the one that started the publication; (b) it chains — its ref name, its previous state equal
+to the log's own tip, the next sequence; (c) its target exists, with the kind the ref requires; (d)
+for a publication that consumed the active WAL (`seal`, `sync seal`), the retained WAL evidence still
+matches; (e) no complete damage anywhere in the ref log or the pointer index. Any one failing refuses,
+writing nothing.
+
+**K1:** `--plan-only` prints the ref, the leading `RefState` id, its signer key id, its target and
+kind, the log tip it chains to, the sequence, the completing key, and any partial tail it would
+remove — the identical plan a real run prints before writing, both from the same one computation.
+
+**The write:** one signed ref-log record, by the completing key, through the exact same write path
+`publish_locked`'s own completion branch already uses — never a new code path for the append itself.
+
+### `prikk doctor --rebuild-pointer-index` (RFC 165 R5)
+
+The way out when the *pointer index* — not the ref log — is what is damaged or untrustworthy: a
+complete damaged pointer-index record, or a stale pointer reading behind the log (the common cause of
+the latter: the damaged record is the ref's own *newest* one, so the damage-tolerant reader falls back
+to an older, already-sound entry). Re-derives every ref's own state from the ref log directly,
+structural and **never trust-filtered** — no signature is re-checked for a record already durable in
+the log, only a *current* lead re-enters trust (the same R4 rule above, reused, not re-derived).
+
+**It refuses, writing nothing**, if the ref log itself has damage or a tail (repair that first — the
+rebuild's own source of truth must be trustworthy before anything is derived from it), or if **any**
+lead anywhere in the repository is completable: completing it is the correct fix, and a rebuild would
+otherwise drop an authorized transition, the one outcome this verb must never produce. A lead that
+fails R4's rule is **dropped** and named; a merely stale pointer (behind the log) is **restored**, a
+distinct outcome from a dropped lead — nothing authorized is discarded restoring one.
+
+**K1:** `--plan-only` prints, per ref, its state before and after, and every dropped lead or restored
+ref — the identical plan a real run writes from.
+
+**The write:** truncates the ref-pointer index's other slot, writes the rebuilt records, then switches
+the generation log to it — atomic, as `compact` already does for the same container; the old slot
+survives until the next compaction.
 
 ## A Write Never Buries a Crash State (RFC 163)
 
@@ -481,7 +524,9 @@ production-readiness claims. Single-ref backup/restore tooling is no longer defe
 | Seal verifies the configured MAINTAINER signer against repository-local trust before publication. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs), [DC-11](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-11-MAINTAINER-TRUST-STORE.md) |
 | Ref publication uses ref-specific locking, compare-and-swap checks, signed RefState/RefUpdate envelopes, pointer-first commit, and an idempotent exact log append. | [`refs/publication.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/publication.rs), [`refs/pointer_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/pointer_index.rs), [`refs/container.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/container.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
 | Immutable object publication never replaces an existing final name; existing or concurrent winners require valid identity/type and exact persisted-byte equality, while recognized crash-left temps remain warning-only debris. | [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs), [`immutable.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/fsutil/anchored/immutable.rs), [DC-36](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-36-EXISTING-OBJECT-PUBLICATION-INTEGRITY.md) |
-| Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; exact interrupted ref publication completion requires retained active evidence and a trusted signer. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
+| Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; `prikk doctor` itself signs and appends nothing. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
+| Interrupted ref publication completion (`prikk ref complete <ref>`) requires an adopted maintainer signer — any adopted key, not only the one that started the publication — and, only for a WAL-consuming publication (`seal`, `sync seal`), matching retained WAL evidence. | [`ref_completion.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/ref_completion.rs), [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [RFC 165](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) |
+| The ref-pointer index rebuild (`prikk doctor --rebuild-pointer-index`) re-derives it from the ref log alone, structural and never trust-filtered; it signs nothing. | [`pointer_rebuild.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/pointer_rebuild.rs), [RFC 165](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) |
 | Doctor began as read-only diagnostics, and current mutating repairs remain opt-in and narrow. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [PR-011](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-011-DOCTOR-HANDOFF.md), [PR-012](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-012-DOCTOR-REPAIR-HANDOFF.md), [PR-013](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-013-REF-RECOVERY-HANDOFF.md) |
 | Ref pointers are mutable, not roots of trust. | [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs), [`refs/pointer_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/pointer_index.rs), [data model](./data-model.md) |
 | Durability/platform claims remain limited by current test evidence and gates exercised on Linux, macOS, and Windows. | [DC-24 baseline recap](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-24-data-model-trust-threat-docs/baseline-recap.md), [DC-24](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-24-DATA-MODEL-TRUST-THREAT-DOCS.md), [DC-28](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-28-DURABILITY-CRASH-RECOVERY-REFERENCE.md) |

@@ -85,10 +85,11 @@ planned for. None of these blocks 0.48.0.
   against an otherwise-intact record. Telling that shape apart reliably needs a per-record witness
   (format 8), not yet built. The object containers' own short tails (N7) are now reported too
   (`verify`/`doctor` print a trailing-partial byte count per persisted object type), reporting only, no
-  repair, per the review's ruling. The ref log's own tail (M4) is not yet reported by Rule B, and its
-  tail is not yet repaired; a torn last record still fails `verify` with `PRIKK-VERIFY-REF-DIVERGENCE`
-  rather than being reported as a tail. Reporting and repair for the ref log, and N3's interrupted
-  publications, are settled together in the F1 round (0.49.0 step 2). **Disclosure, released versions
+  repair, per the review's ruling. **The ref log's own tail (M4) and N3's interrupted publications are
+  now settled (RFC 165, 0.49.0):** the ref log is Rule B's eighth reported file and `--repair-tails`'s
+  tenth covered one (§9.2 applied to it the same as the other seven); a torn last record with a
+  completable pointer lead is an interrupted publication, completed by `prikk ref complete <ref>`
+  (any adopted key, not only the one that started it), never truncated as a tail. **Disclosure, released versions
   (no advisory, per the owner's ruling); code history kept apart from measurement:** the code shipped in
   0.20.0 for all three files (trust policy `2827fab7`, the pointer index `0550e340`, the three generation
   logs `b33d1942`), confirmed from history, not measured directly. **Measured on 0.46.0, 0.47.0, and
@@ -128,7 +129,8 @@ planned for. None of these blocks 0.48.0.
   above; unreachable, it is an **unreferenced remnant** -- a warning, naming the object and what it
   lacks, and `verify` exits `0`. No command removes a remnant in 0.49.0; re-running the same `bundle
   import` is still the only way to make a still-needed one whole, exactly as before this round.
-- **A crash inside `branch create` or `tag create` has no command that completes it (N3).** The ref
+- **A crash inside `branch create` or `tag create` now has a command that completes it (N3, fixed in
+  0.49.0).** Before this round: the ref
   log's last record is torn; `verify` fails with `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends
   manual recovery, but retrying the same `branch create`/`tag create` answers "already exists" rather
   than finishing the interrupted publication -- DC-38's own retry exists for `seal` only. **Reached
@@ -140,17 +142,26 @@ planned for. None of these blocks 0.48.0.
   incomplete -- the same refusal `commit` already gave -- so a `seal` (or any other publication) can no
   longer bury an unrelated ref's torn record behind its own, appended content.** A publication's own
   retry of *its own* interrupted state is never blocked by this (`seal`'s DC-38 retry still completes).
-  **What remains, until 0.49.0 step 3 (R4-R6):** completing or withdrawing an interrupted `branch
-  create`/`branch close`/`tag create`/`sync adopt-tag`/`merge` publication still has no command --
-  retrying still only answers "already exists"/"not confluent," safely but uselessly. **`sync seal`
-  remains locked out of its own interrupted publication**: its own precondition cannot yet tell "my own
-  retry" apart from "another ref's incomplete work," so it refuses both -- a known, disclosed gap, not
-  worked around in this round. **Addendum 1: a ref-log tail with no pointer lead (zeros, random bytes,
-  or any torn prefix left for a reason unrelated to a pending write) is not an incomplete publication --
-  `commit` and every other writer that does not append to the ref log proceed over it; every publication
-  still refuses over it (RFC 164 Rule D: a writer refuses over a tail in a file it appends to), naming
-  the tail's own offset and byte count and that its repair arrives with R5, not "incomplete publication"
-  and not a seal retry that cannot apply.**
+  **Fixed in 0.49.0 step 3 (R4-R6):** `prikk ref complete <ref>` completes an interrupted `branch
+  create`/`branch close`/`tag create`/`sync adopt-tag`/`merge` publication the same way `seal`'s own
+  DC-38 retry always completed its own -- by any adopted maintainer key, not only the one that started
+  it. Every condition evaluated before any write (the leading `RefState` verifies under current trust,
+  chains cleanly, names a target that exists, and, for a WAL-consuming publication, retained WAL
+  evidence still matches); a lead that fails is left alone (not completed), and the entry point's own
+  "already exists"/"not confluent" refusal now names `prikk ref complete <ref>` when that is why.
+  **`sync seal` remains locked out of its own interrupted publication**: its own precondition cannot
+  yet tell "my own retry" apart from "another ref's incomplete work," so it refuses both -- a known,
+  disclosed gap, not worked around in this round. **A lead that fails R4's rule entirely** (an
+  untrusted or revoked signer, a broken chain, a missing or wrong-kind target, or mismatched WAL
+  evidence) has no automatic completion; `prikk doctor --rebuild-pointer-index` re-derives the
+  pointer index from the ref log instead, dropping that one lead (named) while leaving every other ref
+  untouched -- it refuses outright if *any* lead anywhere is completable, since completing it is the
+  correct fix and a rebuild would otherwise discard an authorized transition. **Addendum 1: a ref-log
+  tail with no pointer lead (zeros, random bytes, or any torn prefix left for a reason unrelated to a
+  pending write) is not an incomplete publication** -- `commit` and every other writer that does not
+  append to the ref log proceed over it; every publication still refuses over it (RFC 164 Rule D: a
+  writer refuses over a tail in a file it appends to), naming the tail's own offset and byte count; its
+  repair is `prikk doctor --repair-tails`, the same as the other nine files it covers.
 - **A damaged last WAL record is now a tail, and the repair removes it (N6).** RFC 162 rule 3 defines
   the WAL's tail by position, not shape: a last record whose own bytes are all present but whose
   checksum fails is indistinguishable, once nothing sound follows it, from a genuine crash-torn append.

@@ -95,7 +95,7 @@ pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -
         "the ref pointer index's generation log",
         generation_trailing_partial_bytes,
         generation_tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
+        "run `prikk doctor --repair-tails`, then retry",
     )?;
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
@@ -122,7 +122,7 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
         "the received index's generation log",
         generation_trailing_partial_bytes,
         generation_tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
+        "run `prikk doctor --repair-tails`, then retry",
     )?;
     let replay = replay_received_index(layout)?;
     if replay.has_item_failure() {
@@ -149,7 +149,7 @@ pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Res
         "the trust policy container's generation log",
         generation_trailing_partial_bytes,
         generation_tail_offset,
-        "back it up, truncate it to the named offset, then run `prikk verify`",
+        "run `prikk doctor --repair-tails`, then retry",
     )?;
     let replay = replay_trust_policy(layout)?;
     if replay.has_item_failure() {
@@ -205,7 +205,7 @@ fn run_ref_pointer_index_compaction(
             "the ref pointer index's generation log",
             generation_trailing_partial_bytes,
             generation_tail_offset,
-            "back it up, truncate it to the named offset, then run `prikk verify`",
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         // RFC 164 round 2 Addendum 1, item 1's "quieter shape": the LIVE slot's own tail, not only
         // the generation log's, else a torn or zeroed tail on the live slot is silently compacted
@@ -291,7 +291,7 @@ fn run_received_index_compaction(
             "the received index's generation log",
             generation_trailing_partial_bytes,
             generation_tail_offset,
-            "back it up, truncate it to the named offset, then run `prikk verify`",
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         // RFC 164 round 2 Addendum 1, item 1: the live slot's own tail -- see the identical guard
         // (and its own comment) in `run_ref_pointer_index_compaction` above.
@@ -367,7 +367,7 @@ fn run_trust_policy_compaction(
             "the trust policy container's generation log",
             generation_trailing_partial_bytes,
             generation_tail_offset,
-            "back it up, truncate it to the named offset, then run `prikk verify`",
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         // RFC 164 round 2 Addendum 1, item 1: the live slot's own tail -- see the identical guard
         // (and its own comment) in `run_ref_pointer_index_compaction` above.

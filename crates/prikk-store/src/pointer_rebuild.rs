@@ -149,9 +149,13 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     // source of truth; its bytes must be trustworthy before anything is derived from them.
     let discovery = decode_ref_log_for_rebuild(layout)?;
     if let Some(message) = discovery.interior_damage {
+        // RFC 165 R6: the same wording `ensure_may_publish`'s own `ref_log_damage_refusal` already
+        // uses for the identical fact (complete damage in the ref log) -- one text for one condition,
+        // regardless of which verb reads it. `--repair-tails` cannot fix this: it refuses outright on
+        // interior damage (RFC 164 §9.2), the same as every other complete-damage case in this RFC.
         return Err(PrikkError::Integrity(format!(
-            "the ref log has a damaged record: {message}; run `prikk doctor --repair-tails` only \
-             after the damage is resolved -- a complete damaged record is not a tail"
+            "the ref log has a damaged record: {message}; this is not a tail and no repair resolves \
+             it -- the way out is a copy of a sound repository, not a repair"
         )));
     }
     require_no_unclean_tail(
@@ -261,7 +265,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
             "the ref pointer index's generation log",
             generation_trailing_partial_bytes,
             generation_tail_offset,
-            "back it up, truncate it to the named offset, then run `prikk verify`",
+            "run `prikk doctor --repair-tails`, then retry",
         )?;
         let target_slot = live_slot.other();
         let target_relative =

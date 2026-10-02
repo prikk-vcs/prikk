@@ -921,11 +921,14 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             for remnant in &verification.unreferenced_remnants {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-UNREFERENCED-REMNANT",
+                    // RFC 165 R6: the same canonical form `verify.rs::ensure_object_exists` already
+                    // uses for a missing reference -- `missing_role` already names what kind of thing
+                    // is missing ("parent block", "block patch", …), so the owner/missing object
+                    // types this used to print separately added nothing a reader couldn't already
+                    // get from the role.
                     format!(
-                        "{} {} references missing {} {role} {}",
-                        remnant.owner_object_type,
+                        "object {} references missing {role} {}",
                         remnant.owner_object_id,
-                        remnant.missing_object_type,
                         remnant.missing_object_id,
                         role = remnant.missing_role
                     ),

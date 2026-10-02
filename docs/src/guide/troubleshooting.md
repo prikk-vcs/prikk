@@ -160,8 +160,14 @@ index ends in a torn tail from an interrupted publication, instead of appending 
 `verify` to fail for good afterward. **A publication may already have written its own new, ordinary
 content-addressed objects (a ref-state, a block, an index entry) before reaching this check** — ordinary
 writes that nothing yet references, since the pointer index was never updated to point at them; `verify`
-still exits 0, and a retry after the repair below reuses them rather than writing them again. Unlike the
-four entries below, this one already has a `doctor` repair verb:
+still exits 0, and a retry after the repair below reuses them rather than writing them again.
+
+**`prikk compact --pointer-index` refuses the identical way**, before touching anything (RFC 164 round
+2, carried to 0.49.0 release prep): the live slot it is about to read and reduce ending in a torn tail
+is the same unclean-tail refusal, the same advice, just reached from a different writer — `--plan-only`
+is unaffected, since a plan-only run never writes behind the tail it would otherwise refuse over.
+
+Unlike the four entries below, this one already has a `doctor` repair verb:
 
 ```sh
 prikk doctor --repair-pointer-index-tail
@@ -276,17 +282,27 @@ garbage from an interrupted append (not a complete, corrupted record), run `prik
 its own report carefully before deciding to truncate anything by hand; when in doubt, back the file up
 and ask before changing it.
 
-## `error: integrity error: object <id> (block) references missing <role> <id>`
+## `error: integrity error: object <id> references missing <role> <id>`
 
 Seen from `verify` (and anything that calls it, such as `doctor`) after a `bundle import` was
-interrupted by a crash partway through. Exact wording varies with what the block names and what
-was missing when the crash landed:
+interrupted by a crash partway through, when the object making the dangling reference is itself
+reachable from committed state (an unreachable one is a harmless remnant instead — see
+`PRIKK-DOCTOR-UNREFERENCED-REMNANT` below, which now uses the same canonical form). Exact wording
+varies with what was missing when the crash landed, but the shape is always `object <owner>
+references missing <role> <id>`:
 
-- `object <id> (block) references missing snapshot blob <id>`
-- `object <id> (block) references missing block patch <id>`
-- `object <id> (block) references missing parent block <id>`
+- `object <id> references missing snapshot blob <id>`
+- `object <id> references missing block patch <id>`
+- `object <id> references missing parent block <id>`
 - `snapshot of Block <id> names Blob <id> for <path>, which is missing`
 - `lifecycle replay: blob <id> required for a state effect is missing`
+
+An unreachable owner producing the identical dangling reference is not an error at all, just a
+warning naming the same two objects in the same form:
+
+```text
+warning [PRIKK-DOCTOR-UNREFERENCED-REMNANT]: object <owner> references missing <role> <id>
+```
 
 In 0.48.0 and earlier, `bundle import` wrote the objects it carried in the bundle's own order, not
 in dependency order — across object types, and, within the same type, a child block could be listed
@@ -323,20 +339,40 @@ recomputed fresh, never cached.
 Seen from `verify` after `branch create`, `tag create`, `sync adopt-tag`, `merge`, or `seal` was
 interrupted by a crash partway through publishing a ref: the ref's pointer names a `RefState` the
 ref log has not yet confirmed (a "pointer lead"). `--format json` and `doctor` name one of two codes,
-and they mean different things:
+and they mean different things.
 
-- `PRIKK-VERIFY-REF-POINTER-LEADS-LOG` — the lead is **completable** (RFC 165 R4): the leading
-  `RefState` verifies under the current trust policy, chains cleanly to the log's own tip, names a
-  target that exists, and, if the interrupted publication consumed the active WAL (`seal`/`sync
-  seal`), the retained WAL evidence still matches it. `doctor` recommends `prikk ref complete <ref>`.
-  Retrying the same command does not finish it: `branch create`/`tag create` still answer "already
-  exists" (the ref *was* durably created — unless the pointer itself also reports a completable lead,
-  in which case the refusal itself now names `ref complete`), and `merge` refuses before gathering
-  evidence rather than building on a pointer its own log has not caught up to.
-- `PRIKK-VERIFY-REF-DIVERGENCE` — the lead fails one of those conditions (an untrusted or revoked
-  signer, a broken chain, a missing or wrong-kind target, mismatched WAL evidence, or damage
-  elsewhere in the ref log or pointer index). `doctor` recommends manual recovery only; preserve the
-  repository and ask before changing anything.
+**`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`** — the lead is **completable** (RFC 165 R4): the leading
+`RefState` verifies under the current trust policy, chains cleanly to the log's own tip, names a
+target that exists, and, if the interrupted publication consumed the active WAL (`seal`/`sync seal`),
+the retained WAL evidence still matches it. `verify`'s own detail line, with and without a tail on the
+ref log container itself:
+
+```text
+ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads committed ref log by one transition
+ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads ref log by one transition with <N> incomplete trailing byte(s)
+```
+
+`doctor` recommends `prikk ref complete <ref>`. Retrying the same command does not finish it:
+`branch create`/`tag create` still answer "already exists" (the ref *was* durably created — unless
+the pointer itself also reports a completable lead, in which case the refusal itself now names
+`ref complete`), and `merge` refuses before gathering evidence rather than building on a pointer its
+own log has not caught up to.
+
+**`PRIKK-VERIFY-REF-DIVERGENCE`** — the lead fails one of those conditions (an untrusted or revoked
+signer, a broken chain, a missing or wrong-kind target, mismatched WAL evidence, or damage elsewhere
+in the ref log or pointer index). Three distinct shapes land on this one code, each with its own
+detail line:
+
+```text
+ref-publication [PRIKK-VERIFY-REF-DIVERGENCE]: format-2 ref log leads the authoritative pointer
+ref-publication [PRIKK-VERIFY-REF-DIVERGENCE]: format-2 ref pointer is missing while committed log history exists
+ref-publication [PRIKK-VERIFY-REF-DIVERGENCE]: ref-log chain or sequence diverges for <ref>
+```
+
+The first two are legacy format-2 shapes (format 6/7 repositories cannot produce them through any
+normal command — pointer-then-log write order makes them unreachable); the third is a genuinely
+broken chain. `doctor` recommends manual recovery only; preserve the repository and ask before
+changing anything.
 
 **`prikk ref complete <ref>`** finishes a completable lead: it appends one more signed `RefUpdate`
 record to the ref log, matching the state the pointer already carries, through the exact same write
@@ -351,6 +387,50 @@ that is not actually a pending completion (already caught up, or not published a
 Measured for `merge`: 10 of 300 kills on 0.48.0, 16 of 300 on the build carrying 0.49.0's own
 dependency-order fix (the two are unrelated defects reached through different commands); every one of
 those crash states is now either completable (`ref complete`) or named as a genuine divergence.
+
+A complete damaged ref-log record (never a tail, RFC 164 §9.2) refuses any of `seal`/`branch create`/
+`tag create`/`sync adopt-tag`/`merge`/`ref complete`/the rebuild below, identically:
+
+```text
+error: integrity error: the ref log has a damaged record at byte offset <N>: <checksum/decode detail>; this is not an incomplete publication and no seal retry resolves it -- the way out is a copy of a sound repository, not a repair
+```
+
+### `prikk doctor --rebuild-pointer-index` (RFC 165 R5)
+
+The other way out: re-derives the ref-pointer index from the ref log directly, structural and never
+trust-filtered (no signature is re-checked for a record already durable in the log — only a *current*
+lead re-enters trust, exactly as above). Where `ref complete` finishes one ref's own pending
+transition, the rebuild recovers the whole pointer index when *it* — not the ref log — is what is
+damaged or untrustworthy: a flipped byte in a pointer record, a stale fallback behind the log, or a
+lead that turns out not to verify at all.
+
+`--plan-only` prints the same plan a real run writes from (K1), per ref: its state before and after,
+and every lead it would drop or restore:
+
+```text
+heads/main: <before> -> <after>
+restored from the log: heads/main (RefState <id> was stale, behind the log)
+dropped lead: heads/topic (RefState <id>) -- the leading RefState's signature does not verify under the current trust policy: <detail>
+```
+
+**"Restored" and "dropped lead" are never the same claim.** A pointer *behind* the log — commonly a
+damaged newest pointer-index record, read as an older, already-log-confirmed entry instead — is
+*restored*: nothing authorized is discarded, the ref simply ends where the log already soundly
+confirms. A pointer genuinely *ahead* of the log that fails RFC 165 R4's own rule is a *dropped
+lead*: a real, signed transition the rebuild refuses to carry forward, because it cannot verify.
+
+It refuses, writing nothing, over the same ref-log damage/tail shown above, or over **any** completable
+lead anywhere in the repository (complete it first — overwriting it would drop an authorized
+transition, the one thing this verb must never do):
+
+```text
+error: precondition not met: <N> ref(s) have a completable lead; run `prikk ref complete <ref>` first -- a rebuild would drop an authorized transition: <ref list>
+```
+
+A damaged pointer-index record is **not** a refusal reason — serving past it is the rebuild's own
+purpose. Structural, no signing: a history entirely signed by a key later revoked is unaffected (the
+rebuild moves no ref on trust grounds alone), but a *lead* signed by a revoked key is dropped, named,
+same as any other failed condition.
 
 ## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 
