@@ -345,4 +345,5 @@ fn a_fully_published_ref_is_not_completable() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+mod k4_failpoints_and_race;
 mod negative_conditions;
