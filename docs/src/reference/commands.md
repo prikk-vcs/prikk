@@ -75,6 +75,7 @@ prikk doctor [path] --repair-wal-tail
 prikk doctor [path] --repair-index
 prikk doctor [path] --repair-tails
 prikk doctor [path] --repair-main-ref
+prikk doctor [path] --rebuild-pointer-index [--plan-only]
 prikk ref complete <ref> [--plan-only]
 prikk format upgrade [path]
 prikk unlock

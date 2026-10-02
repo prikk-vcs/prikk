@@ -980,6 +980,51 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     let doctor_args = parse_doctor_args(args)?;
     let layout = open_repository(doctor_args.root)?;
+    // RFC 165 R5 K1: handled first and returns immediately -- args.rs already refuses to combine it
+    // with any other repair flag. `--plan-only` and a real run share the one computation
+    // (`plan_pointer_index_rebuild`/`rebuild_pointer_index` each call the same internal function
+    // under one lock), so the plan printed here is always the plan a real run would also print
+    // before writing.
+    if doctor_args.rebuild_pointer_index {
+        let result = if doctor_args.rebuild_pointer_index_plan_only {
+            prikk_store::plan_pointer_index_rebuild(&layout)
+        } else {
+            prikk_store::rebuild_pointer_index(&layout)
+        };
+        let plan = result.map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        for entry in &plan.per_ref {
+            match (entry.before, entry.after) {
+                (before, after) if before == after => {
+                    println!(
+                        "{}: unchanged ({})",
+                        entry.ref_name,
+                        after.map_or_else(|| "none".to_string(), |id| id.to_string())
+                    );
+                }
+                (before, after) => {
+                    println!(
+                        "{}: {} -> {}",
+                        entry.ref_name,
+                        before.map_or_else(|| "none".to_string(), |id| id.to_string()),
+                        after.map_or_else(|| "none".to_string(), |id| id.to_string())
+                    );
+                }
+            }
+        }
+        for dropped in &plan.dropped_leads {
+            println!(
+                "dropped lead: {} (RefState {}) -- {}",
+                dropped.ref_name, dropped.lead_ref_state_id, dropped.reason
+            );
+        }
+        if doctor_args.rebuild_pointer_index_plan_only {
+            println!("plan only -- nothing written");
+        } else {
+            println!("pointer index rebuilt");
+        }
+        return Ok(());
+    }
     // RFC 164 Rule C: handled first and returns immediately -- args.rs already refuses to combine
     // it with any other repair flag, so nothing below this block runs when it is set.
     if doctor_args.repair_tails {
