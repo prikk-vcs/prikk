@@ -35,7 +35,19 @@ maintainer key.
   longer blocks `commit`, and publications refuse over it (Rule D).
   - **Binding on round 2:** the ref log's tail follows §9.2, because round 1's classification treats a terminal
     complete-damaged record as a tail. That is fail-closed today, and would be unsafe under R5's repair.
-- **Live:** `rfcs/handoffs/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out/round-2-handoff-v1.md` (R4–R6).
+- **2026-10-03: round 2 (R4–R6) ACCEPTED and CLOSED. RFC 165 is fully delivered, and 0.49.0 step 2 is closed.**
+  - **Commits:** `9b9ac7e7` (the CI fix), `c9684990`, `1b309136`, `cb53e972`, `2b7e2804`, `83a42498`. Reviews
+    `rfc165-round-2-u1` … `-u4-review-v1` and `rfc165-round-2-review-v1`.
+  - **Measured by the architect on the release build:**
+    - `ref complete` finishes stuck branch create, tag create, merge and seal, and refuses an unadopted completer, a
+      revoked original signer, and a WAL mismatch;
+    - the rebuild serves a damaged pointer record, refuses over a completable lead or ref-log damage, leaves history
+      signed by a since-revoked key unmoved, and drops a lead that fails the rule, naming it;
+    - **300 merges killed mid-write:** 3 interrupted, each reported as completable and finished by `ref complete`.
+  - **Still open:**
+    - K6, the external review of R4 and R5 at the 0.49.0 candidate;
+    - a complete damaged last ref-log record still needs a copy;
+    - multi-field corruption awaits format 8.
 
 **Author-review independence.** The architect wrote RFC 162 rule 3 and RFC 164 §9, and both needed late corrections.
 This RFC touches the same class of question for the ref log, so:

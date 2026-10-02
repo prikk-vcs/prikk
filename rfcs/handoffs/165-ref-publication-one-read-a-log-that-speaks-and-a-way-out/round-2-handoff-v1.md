@@ -163,3 +163,7 @@ R4 and the rebuild both depend on this, so it comes first.
 
 **K7:** a second addendum on this round, or any finding that would change R4's rule or R5's rebuild, goes back to the
 owner before the work continues.
+
+**ACCEPTED and CLOSED 2026-10-03.** Item 0 `9b9ac7e7`; U1 `c9684990`; U2 `1b309136`; U3 `cb53e972`; U4 `2b7e2804`;
+U5 `83a42498`. Reviews `rfc165-round-2-ci-fix-review-v1`, `-u1` … `-u4-review-v1`, `rfc165-round-2-review-v1`.
+**RFC 165 is fully delivered.**
