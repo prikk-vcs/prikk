@@ -54,6 +54,7 @@ which is a design for the import *contract*, and nothing implements it yet.
 | N/A — no counterpart | [`prikk format upgrade`](release-compatibility.md) | Moves a format-6 repository to format 7 in place, after the same verification `prikk verify` runs. Git's own `extensions.*` config changes are the nearest idea, but prikk's upgrade is one explicit verb, verified first, with no downgrade. |
 | N/A — no counterpart | [`prikk unlock`](../guide/backup-restore.md) | Lists or clears a held file lock. Nothing in Git needs this because Git has no equivalent lock. |
 | N/A — no counterpart | [`prikk trust maintainer add/remove`](../guide/security-setup.md) | Manages the local MAINTAINER trust set. Git has no signer-trust concept at this layer; the closest analogue is a GPG keyring, and it is not the same model. |
+| N/A — no counterpart | [`prikk ref complete <ref>`](../guide/troubleshooting.md) | Finishes an interrupted `branch create`/`tag create`/`sync adopt-tag`/`merge`/`seal` publication that is a completable lead (RFC 165 R4), by any adopted maintainer key, not only the one that started it. `--plan-only` previews without writing. Git has no equivalent: a crashed Git write is repaired by its own reflog/fsck machinery, not a per-ref completion verb. |
 
 ## Commit versus seal, a two-phase model
 

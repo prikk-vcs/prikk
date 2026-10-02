@@ -330,6 +330,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "ref",
+        run: crate::run_ref,
+        help_lines: &[
+            "  prikk ref complete <ref> [--plan-only]    Finish another adopted key's interrupted publication (RFC 165 R4); --plan-only prints the plan and writes nothing",
+        ],
+    },
+    Command {
         name: "format",
         run: crate::run_format,
         help_lines: &[

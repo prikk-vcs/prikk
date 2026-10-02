@@ -24,6 +24,10 @@ fn completing_signer() -> Ed25519MaintainerSigner {
     Ed25519MaintainerSigner::from_seed("rfc165-r4-completer", &[0x62; 32]).expect("seed")
 }
 
+fn untrusted_signer() -> Ed25519MaintainerSigner {
+    Ed25519MaintainerSigner::from_seed("rfc165-r4-untrusted", &[0x63; 32]).expect("seed")
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -173,6 +177,53 @@ fn a_crashed_branch_create_is_planned_and_completed_by_a_different_adopted_key()
         plan_ref_completion(&layout, "heads/topic").unwrap(),
         Err(CompletionRefusal::NotALead),
         "a ref already caught up is not a pending completion"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `complete_ref_publication` gates the *completing* signer itself, separate from
+/// `plan_ref_completion`'s own condition (a) (the *original* signer, already verified before this
+/// plan was ever offered) -- an otherwise-valid plan, completed by a key this repository never
+/// adopted, refuses and writes nothing.
+#[test]
+fn an_untrusted_completer_refuses_and_writes_nothing() {
+    let root = unique_temp_dir("rfc165-r4-untrusted-completer");
+    let layout = setup(&root);
+    let target = root_block(&layout);
+    crash_branch_create(&layout, "heads/topic", target);
+
+    let plan = plan_ref_completion(&layout, "heads/topic")
+        .unwrap()
+        .expect("heads/topic must be a completable lead");
+
+    let log_path = layout.ref_log_container_slot_path(ContainerSlot::A);
+    let before = std::fs::read(&log_path).unwrap();
+
+    let active_lock = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    let mut object_store = ObjectWriteSession::open(&layout).unwrap();
+    let outsider = untrusted_signer();
+    let result =
+        complete_ref_publication(&layout, &mut object_store, &active_lock, &plan, &outsider);
+    drop(object_store);
+    drop(active_lock);
+    assert!(
+        result.is_err(),
+        "an unadopted completer must be refused, got {result:?}"
+    );
+
+    assert_eq!(
+        std::fs::read(&log_path).unwrap(),
+        before,
+        "a refused completion must write nothing to the ref log"
+    );
+    let store = RefStore::new(layout.clone());
+    assert!(
+        store
+            .read_current_ref_state_id("heads/topic")
+            .unwrap()
+            .is_some(),
+        "the pointer itself is untouched by a refused completion"
     );
 
     let _ = std::fs::remove_dir_all(&root);

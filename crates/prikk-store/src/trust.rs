@@ -364,6 +364,12 @@ pub enum GatedOperation {
     BranchCreate,
     /// `prikk branch close` (`crates/prikk-cli/src/branch.rs::run_close`).
     BranchClose,
+    /// `prikk ref complete` (RFC 165 R4, `crates/prikk-store/src/ref_completion.rs::
+    /// complete_ref_publication`) -- owner decision 2 (RFC 165 §6): any adopted maintainer key may
+    /// complete another's interrupted publication, so this gates the *completing* signer, separate
+    /// from [`verify_trusted_publication_envelope`]'s check of the *original* signer inside
+    /// `plan_ref_completion`'s own condition (a).
+    RefComplete,
 }
 
 /// Verify that the signer matches one of the repository-local trust policy's adopted keys.

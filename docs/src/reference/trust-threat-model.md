@@ -77,11 +77,13 @@ MAINTAINER signatures identify publication objects. `seal` uses real role-bound 
 signatures for Block, RefState, and RefUpdate envelopes and verifies the signer against the local
 maintainer trust policy before publishing. The same gate — the local operator's own signer checked
 against the local trust policy before any object or ref write — applies to every operation below
-(`prikk tag create`/`prikk branch create`/`prikk branch close` since commit `053e442`):
+(`prikk tag create`/`prikk branch create`/`prikk branch close` since commit `053e442`; `prikk ref
+complete` since RFC 165 R4 — there it gates the *completing* signer, separate from the check of the
+original signer the interrupted publication's own leading `RefState` already carries):
 
 <!-- rfc118-stage3-gated-operations:start -->
 `seal`, `merge`, `sync build`, `sync seal`, `sync adopt-tag`, `prikk tag create`,
-`prikk branch create`, `prikk branch close`.
+`prikk branch create`, `prikk branch close`, `prikk ref complete`.
 <!-- rfc118-stage3-gated-operations:end -->
 
 This list is derived, not transcribed: it names every `GatedOperation` variant `verify_signer_trusted`

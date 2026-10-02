@@ -39,6 +39,7 @@ mod key_status;
 mod merge;
 mod mv;
 mod output;
+mod ref_complete;
 mod seal;
 mod setup;
 mod stdout;
@@ -292,6 +293,12 @@ fn run_bundle(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_sync(args: Vec<String>) -> std::result::Result<(), CliError> {
     let root = current_dir()?;
     sync::run_sync(root, args)?;
+    Ok(())
+}
+
+fn run_ref(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let root = current_dir()?;
+    ref_complete::run_ref(root, args)?;
     Ok(())
 }
 

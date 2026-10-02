@@ -24,10 +24,15 @@
 //!   not attributed to one ref until it decodes (matching `refs::ensure_no_incomplete_publication`'s
 //!   own reasoning for the same ordering).
 //!
-//! Never a new code path for the append itself: completing a plan goes through the exact same
-//! `RefStore::finish_interrupted_publication_with_object_store` -> `publication::finish_interrupted`
-//! -> `publish_locked` DC-38 already uses for `seal`'s own retry -- this module only decides *whether*
-//! to call it and *what* `RefPublication` to build, signed by the completing key.
+//! Never a new code path for the append itself: completing a plan still goes through
+//! `publication::finish_interrupted` -> `publish_locked`, the same primitive DC-38's own `seal` retry
+//! uses -- reached here via [`RefStore::finish_interrupted_publication_for_ref_complete`], a sibling
+//! entry point that skips `finish_interrupted_publication_with_object_store`'s own
+//! `validate_signer_backed_recovery` (which unconditionally requires matching retained WAL evidence,
+//! correct for `seal`'s own retry but wrong for the four publication kinds this rule's condition (d)
+//! has no WAL evidence for at all) because the rule above has already decided, more generally, whether
+//! this exact write is safe. This module only decides *whether* to call it and *what*
+//! `RefPublication` to build, signed by the completing key -- the append itself is untouched.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -255,13 +260,17 @@ pub fn plan_ref_completion(
 
 /// RFC 165 R4: carry out a plan [`plan_ref_completion`] already found completable, signed by
 /// `signer` (any adopted maintainer key -- owner decision 2, RFC 165 §6: the state being endorsed is
-/// already signed, the completer adds only the log record, which names its own key). Builds the one
-/// new object this verb produces (a signed `RefUpdate` envelope chaining to `plan.log_tip` at
-/// `plan.next_sequence`, naming `plan.leading_ref_state_id`) and reuses the already-durable,
-/// already-signed `RefState` object verbatim -- completion never re-signs or re-derives it.
+/// already signed, the completer adds only the log record, which names its own key). Gates `signer`
+/// itself against the trust policy first (`GatedOperation::RefComplete`) -- a separate question from
+/// condition (a)'s check of the *original* signer inside `plan_ref_completion`, and the one this
+/// module would otherwise be the only publishing verb to skip. Builds the one new object this verb
+/// produces (a signed `RefUpdate` envelope chaining to `plan.log_tip` at `plan.next_sequence`, naming
+/// `plan.leading_ref_state_id`) and reuses the already-durable, already-signed `RefState` object
+/// verbatim -- completion never re-signs or re-derives it.
 ///
-/// Routes through [`RefStore::finish_interrupted_publication_with_object_store`] exactly as DC-38's
-/// own `seal` retry does -- never a new code path for the append itself.
+/// Routes through [`RefStore::finish_interrupted_publication_for_ref_complete`] -- see the module
+/// doc comment for why this, and not DC-38's own `finish_interrupted_publication_with_object_store`,
+/// is the right entry point; both still terminate in the same `publish_locked` write.
 pub fn complete_ref_publication(
     layout: &RepositoryLayout,
     object_store: &mut impl ObjectWriter,
@@ -269,6 +278,7 @@ pub fn complete_ref_publication(
     plan: &CompletionPlan,
     signer: &impl MaintainerSigner,
 ) -> Result<ObjectId> {
+    crate::trust::verify_signer_trusted(layout, signer, crate::trust::GatedOperation::RefComplete)?;
     let objects = FileObjectStore::new(layout.clone());
     let ref_state = objects
         .read_typed(plan.leading_ref_state_id, ObjectType::RefState)?

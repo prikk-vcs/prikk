@@ -320,21 +320,37 @@ recomputed fresh, never cached.
 
 ## `error: repository has interrupted or divergent ref publication state`
 
-Seen from `verify` after `branch create`, `tag create`, or `merge` was interrupted by a crash
-partway through publishing a ref (`--format json` and `doctor` name the underlying code,
-`PRIKK-VERIFY-REF-DIVERGENCE`; the detail line reads something like "format-2 ref log leads the
-authoritative pointer"). **`doctor` recommends manual recovery only — it does not repair this** (a
-signer-backed retry is not authorized without exact retained evidence). Retrying the same command
-does not complete the interrupted publication either: `branch create`/`tag create` answer "already
-exists" (the ref *was* durably created; the retry only confirms that), and `merge` answers "not
-confluent." A `seal` retry of the same ref does not complete it either — **DC-38's own natural-retry
-mechanism, which does complete an interrupted `seal`, exists for `seal` only.** A `seal` of a
-*different, unrelated* ref then succeeds and appends behind the torn record, after which `commit` is
-also refused. There is currently no command that completes or withdraws an interrupted
-`branch create`/`tag create`/`merge` publication; preserve the repository and ask before changing
-anything. Measured for `merge`: 10 of 300 kills on 0.48.0, 16 of 300 on the build carrying 0.49.0's
-own dependency-order fix (the two are unrelated defects reached through different commands). A fix
-is planned for 0.49.0 step 2, alongside F1.
+Seen from `verify` after `branch create`, `tag create`, `sync adopt-tag`, `merge`, or `seal` was
+interrupted by a crash partway through publishing a ref: the ref's pointer names a `RefState` the
+ref log has not yet confirmed (a "pointer lead"). `--format json` and `doctor` name one of two codes,
+and they mean different things:
+
+- `PRIKK-VERIFY-REF-POINTER-LEADS-LOG` — the lead is **completable** (RFC 165 R4): the leading
+  `RefState` verifies under the current trust policy, chains cleanly to the log's own tip, names a
+  target that exists, and, if the interrupted publication consumed the active WAL (`seal`/`sync
+  seal`), the retained WAL evidence still matches it. `doctor` recommends `prikk ref complete <ref>`.
+  Retrying the same command does not finish it: `branch create`/`tag create` still answer "already
+  exists" (the ref *was* durably created — unless the pointer itself also reports a completable lead,
+  in which case the refusal itself now names `ref complete`), and `merge` refuses before gathering
+  evidence rather than building on a pointer its own log has not caught up to.
+- `PRIKK-VERIFY-REF-DIVERGENCE` — the lead fails one of those conditions (an untrusted or revoked
+  signer, a broken chain, a missing or wrong-kind target, mismatched WAL evidence, or damage
+  elsewhere in the ref log or pointer index). `doctor` recommends manual recovery only; preserve the
+  repository and ask before changing anything.
+
+**`prikk ref complete <ref>`** finishes a completable lead: it appends one more signed `RefUpdate`
+record to the ref log, matching the state the pointer already carries, through the exact same write
+`seal`'s own DC-38 retry uses (never a new code path for the append). **Any adopted maintainer key
+may complete it, not only the one that started it** — the leading `RefState` is already signed by an
+adopted maintainer; the completer's own key only signs the log record, so a different operator can
+finish a crash another operator's command left behind. `--plan-only` prints what it would do (the
+leading state, its target, the log sequence it would append at, and which key would sign it) without
+writing anything. `seal`'s own retry of the same ref is unaffected — DC-38's natural-retry mechanism
+still completes a `seal`-shaped crash through its own existing path, and `ref complete` refuses a ref
+that is not actually a pending completion (already caught up, or not published at all) the same way.
+Measured for `merge`: 10 of 300 kills on 0.48.0, 16 of 300 on the build carrying 0.49.0's own
+dependency-order fix (the two are unrelated defects reached through different commands); every one of
+those crash states is now either completable (`ref complete`) or named as a genuine divergence.
 
 ## `error: precondition not met: checkout target for <ref> is not a checkpoint, so it carries no snapshot …`
 
