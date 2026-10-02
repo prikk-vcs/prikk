@@ -71,8 +71,16 @@ fn root_block(layout: &RepositoryLayout) -> ObjectId {
 /// Crash a `branch create`-shaped publication for `ref_name` between its pointer write and its ref-log
 /// write, through the real `RefStore::publish` path, then truncate the log back to its own exact
 /// pre-publish byte length -- a genuine `PointerLeading` state, matching the construction already
-/// proven in `refs::tests::every_publication_refuses_first`.
-fn crash_branch_create(layout: &RepositoryLayout, ref_name: &str, target: ObjectId) -> ObjectId {
+/// proven in `refs::tests::every_publication_refuses_first`. `signer` signs both the `RefState` and
+/// `RefUpdate` -- `RefStore::publish` itself does not gate on trust policy membership (the caller
+/// does, before ever reaching it), so an untrusted or since-revoked signer crashes exactly the same
+/// way a trusted one does, which is what condition (a)'s own negative cases need.
+fn crash_branch_create(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    target: ObjectId,
+    signer: &impl MaintainerSigner,
+) -> ObjectId {
     use prikk_object::{RefKind, RefStatePayload, RefUpdatePayload};
 
     let log_path = layout.ref_log_container_slot_path(ContainerSlot::A);
@@ -91,7 +99,7 @@ fn crash_branch_create(layout: &RepositoryLayout, ref_name: &str, target: Object
         ObjectEnvelope::unsigned(ObjectType::RefState, 1, state.to_canonical_bytes().unwrap());
     let state_id = state_env.object_id();
     state_env
-        .add_signature(sign_maintainer(&original_signer(), ObjectType::RefState, state_id).unwrap())
+        .add_signature(sign_maintainer(signer, ObjectType::RefState, state_id).unwrap())
         .unwrap();
     let update = RefUpdatePayload {
         ref_name: ref_name.to_string(),
@@ -100,7 +108,7 @@ fn crash_branch_create(layout: &RepositoryLayout, ref_name: &str, target: Object
         new_target_object_id: target,
         update_seq: 1,
         created_at: 0,
-        author_key_id: original_signer().key_id().to_string(),
+        author_key_id: signer.key_id().to_string(),
     };
     let mut update_env = ObjectEnvelope::unsigned(
         ObjectType::RefUpdate,
@@ -109,9 +117,7 @@ fn crash_branch_create(layout: &RepositoryLayout, ref_name: &str, target: Object
     );
     let update_id = update_env.object_id();
     update_env
-        .add_signature(
-            sign_maintainer(&original_signer(), ObjectType::RefUpdate, update_id).unwrap(),
-        )
+        .add_signature(sign_maintainer(signer, ObjectType::RefUpdate, update_id).unwrap())
         .unwrap();
     RefStore::new(layout.clone())
         .publish(&RefPublication {
@@ -135,7 +141,7 @@ fn a_crashed_branch_create_is_planned_and_completed_by_a_different_adopted_key()
     let root = unique_temp_dir("rfc165-r4-plan-and-complete");
     let layout = setup(&root);
     let target = root_block(&layout);
-    let leading_state_id = crash_branch_create(&layout, "heads/topic", target);
+    let leading_state_id = crash_branch_create(&layout, "heads/topic", target, &original_signer());
 
     let plan = plan_ref_completion(&layout, "heads/topic")
         .unwrap()
@@ -191,7 +197,7 @@ fn an_untrusted_completer_refuses_and_writes_nothing() {
     let root = unique_temp_dir("rfc165-r4-untrusted-completer");
     let layout = setup(&root);
     let target = root_block(&layout);
-    crash_branch_create(&layout, "heads/topic", target);
+    crash_branch_create(&layout, "heads/topic", target, &original_signer());
 
     let plan = plan_ref_completion(&layout, "heads/topic")
         .unwrap()
@@ -237,7 +243,7 @@ fn planning_alone_is_read_only_and_repeatable() {
     let root = unique_temp_dir("rfc165-r4-plan-only-read-only");
     let layout = setup(&root);
     let target = root_block(&layout);
-    crash_branch_create(&layout, "heads/topic", target);
+    crash_branch_create(&layout, "heads/topic", target, &original_signer());
 
     let snapshot = |layout: &RepositoryLayout| {
         [
@@ -338,3 +344,5 @@ fn a_fully_published_ref_is_not_completable() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+mod negative_conditions;
