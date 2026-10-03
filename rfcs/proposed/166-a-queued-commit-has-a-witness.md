@@ -11,6 +11,9 @@ witness"*). **Rewritten 2026-10-03 as a design, for the owner's reading.**
   1. accept the design;
   2. the witness in its own file (P1, recommended) or folded into `ref-name` (P3);
   3. §1.6 shipped in 0.48.0: a disclosure or an advisory (asked 2026-10-03; disclosure recommended).
+- **Owner, 2026-10-03:** decision 2 is P1 and decision 3 is a disclosure (both as recommended). Decision 1 is "almost
+  accepted", pending the architect's own review of security, performance and UI/UX. That review is §13, and it
+  changes the design where marked; the owner re-reads §13 before accepting.
 - **No implementation handoff until the owner accepts it.**
 
 **Author-review independence.** The architect wrote RFC 162 rule 3, the rule that produces N6. The external architect
@@ -307,3 +310,81 @@ release builds:
   it unchanged.
 - Network transport, and any change to what a signature or a ref means.
 
+
+## 13. Self-review before acceptance (2026-10-03, at the owner's request)
+
+Each item is a defect or risk the architect found in §4 as written, and the change that binds the implementation.
+
+**Correctness and robustness:**
+1. **A third appender.** `rollback/draft.rs:208` (`prikk rollback-draft`) also appends to the WAL and reports the patch
+   queued; the prototype and D2 named only two paths.
+   - **Change:** one session-level function appends *and* writes the witness, and every appender goes through it
+     (`ActiveSession::append_patch` is the natural one).
+   - `Wal::append_patch` is reachable from nowhere else, and a test lists its callers from source.
+2. **W3 restarted from zero wrongly.**
+   - The prototype folds only the new frame onto the previous witness's hash, while `verify` recomputes from seq 1.
+   - **Any queue begun or extended by 0.48.0 would read as "a substituted earlier record"** (row 10): a false
+     alarm that refuses commits.
+   - **Change:** a witness written over a queue it does not fully cover (absent, stale or behind) folds every sound
+     record after its last covered one, O(those records). A first witness over a legacy queue covers the whole
+     queue: those commits were acknowledged by the older binary.
+3. **The connectivity walk was unbounded** (the whole ref history), and it would run on every `status` while a loss is
+   reported.
+   - **Change:** the witness also records the ref's tip when it was written. The walk stops there, so it costs the
+     seals since then (normally one). Reaching that tip without finding the Patch means a loss.
+4. **Both WAL repairs must classify.** `--repair-tails` (RFC 164) also repairs the WAL. D3 said only "the repair".
+   - **Change:** `--repair-wal-tail` and `--repair-tails` both refuse acknowledged damage and name the way out.
+5. **A damaged or stale witness over a wholly sound WAL** (row 8) had no repair verb.
+   - **Change:** `--repair-tails` rebuilds it from the WAL, covering every sound record. That only adds protection,
+     so C2 holds.
+6. **`ref-name`'s first-commit write still truncates, then appends.** A tear there is harmless, because the WAL is
+   still empty. But the tear was introduced in 0.20.0 (`c1df7ec2`, the "marker pattern" migration); before it, the
+   file was replaced atomically.
+   - **Change:** the implementation round says from source why the marker pattern was adopted, and restores the
+     atomic replace unless that reason stands.
+
+**Security:**
+7. **C2 holds call site by call site,** with one rule made explicit: the witness decides *whether* records were
+   acknowledged, never *which bytes* a write removes or *which ref* a write targets. Those come from the WAL and from
+   the user.
+8. **A forged witness can only force refusals** (rows 4–7, 9, 10). That is denial of service by someone who can
+   already write anything under `.prikk`. Deleting the witness restores 0.48.0's behaviour, no worse.
+9. **Path safety:** the witness is read and written only through the anchored `MutationRoot` primitives, with a test
+   for a symlinked `witness`, as for every other session file.
+10. **Restoring the owner** (D5): when the queue validates against more than one ref's tip, the plan lists every one,
+    and says so before writing. A user should never attach a queue to the wrong branch without being told.
+
+**Performance:**
+11. **Mean commit cost is unchanged** (§7): D1 removes two durable operations and D2 adds one atomic replace.
+    - The atomic replace varied between 2.7 and 12.8 ms on LUKS, so **tail latency is not yet measured.**
+    - **Change:** the implementation reports p50 and p95 over 100 commits against `main`.
+    - A session's first commit pays about 2.5 ms more; seal's witness clear is negligible.
+
+**UI/UX (users must not be confused):**
+12. **"Witness" is never a user-facing word.** The text says what happened, for example "a queued commit you were told
+    had succeeded is damaged". The codes carry the internal names.
+13. **The interrupted commit** (row 2). Today a commit killed after its durable append looks failed, and retrying it
+    answers "no node-addressed changes to commit", which is confusing.
+    - **Change:** `status`, and that refusal, say that a queued commit was written but not confirmed, either because
+      the command was interrupted or because an older prikk wrote it. That wording is honest: the two cannot be told
+      apart.
+14. **A removal of acknowledged commits is not a "tail repair."**
+    - **Change:** a verb of its own, `prikk doctor --discard-damaged-commits [--plan-only]`, instead of a flag on
+      `--repair-wal-tail`. The tail verbs keep their single meaning: never-acknowledged bytes.
+15. **"Active ref" is internal vocabulary.** `status` already says "queued patches … targeting <ref>".
+    - **Change:** `prikk doctor --restore-queue-target --ref <ref> [--plan-only]`.
+16. **A stale witness after an older binary's seal is silent in `status`.** It is a note in `doctor` only, and the next
+    commit or `--repair-tails` replaces it. It is not a problem the user must act on.
+17. **Consumers:** the new `verify` codes and the `status` lines go under `### Output changes`, and stikk's letter at
+    the cut names them (stikk consumes CLI output).
+
+**What stays as designed:** P1; D1; connectivity first; the verdict table; K1–K7; two implementation rounds.
+
+**Toward "finally clean":** `ref-name` and the witness now carry the owner twice, which D6 keeps consistent. **At format
+8, P3 folds them into one checksummed record,** removing the duplication and the legacy fallback. Recorded as format-8
+input, beside RFC 164 §9.1.
+
+**The disclosure (decision 3):** a stranded queue on 0.20.0 to 0.48.0 (measured on 0.46.0, 0.48.0 and `main`).
+- **Round 1, item 0:** a `troubleshooting.md` entry with the manual way out (write the ref name back), pushed ahead of
+  the fix, so 0.48.0 users have it now.
+- **Then** the known-limitations line until 0.49.0, and a CHANGELOG `### Fixed` entry at the cut.
