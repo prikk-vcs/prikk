@@ -1,20 +1,21 @@
 # RFC 166 — A queued commit has a witness: a damaged acknowledged commit is never read as a crash tail
 
-**Status.** **PROPOSED 2026-10-03 by the architect** (0.49.0 step 3, in the owner-approved schedule: *"N6's commit
-witness"*). **Rewritten 2026-10-03 as a design, for the owner's reading.**
-- **The design round is closed.** It ran as the handoff
-  `rfcs/handoffs/163-a-write-never-buries-a-crash-state/commit-witness-design-round-handoff-v1.md` and Addendum 1.
-  - Report v1 was not accepted (review `rfc166-design-round-review-v1`), and that review found §1.6.
-  - Report v2 was accepted (review `rfc166-design-round-review-v2`), with four corrections the architect measured
-    (§7).
-- **What the owner decides (§10):**
-  1. accept the design;
-  2. the witness in its own file (P1, recommended) or folded into `ref-name` (P3);
-  3. §1.6 shipped in 0.48.0: a disclosure or an advisory (asked 2026-10-03; disclosure recommended).
-- **Owner, 2026-10-03:** decision 2 is P1 and decision 3 is a disclosure (both as recommended). Decision 1 is "almost
-  accepted", pending the architect's own review of security, performance and UI/UX. That review is §13, and it
-  changes the design where marked; the owner re-reads §13 before accepting.
-- **No implementation handoff until the owner accepts it.**
+**Status.** **ACCEPTED 2026-10-03 by the owner** (*"Accepted."*). Proposed and rewritten as a design the same day by
+the architect (0.49.0 step 3, in the owner-approved schedule: *"N6's commit witness"*).
+- **The architect's reading of "Accepted.", recorded here:**
+  - the whole design is accepted: D1–D6 as amended by §13, and all seventeen of §13's items bind the implementation;
+  - **decision 2 is P1**: the witness in its own file, and P3 is format-8 input;
+  - **decision 3 is a disclosure** for 0.20.0 to 0.48.0, beginning with the troubleshooting entry, which lands first;
+  - **K1–K7 bind it** as they bound RFC 165;
+  - two implementation rounds (§11), the ways out last. The external review of the 0.49.0 candidate examines D5 (K6).
+- **The decisions were taken in two steps:** decisions 2 and 3, and "almost accepted" for decision 1 pending the
+  architect's review of security, performance and UI/UX (§13); then *"Accepted."* after §13 was written and folded into
+  the body.
+- **The design round** ran as `rfcs/handoffs/163-a-write-never-buries-a-crash-state/commit-witness-design-round-handoff-v1.md`
+  and its Addendum 1:
+  - report v1 was not accepted (review `rfc166-design-round-review-v1`), and that review found §1.6;
+  - report v2 was accepted (review `rfc166-design-round-review-v2`), with the architect's measured corrections (§7).
+- **Round 1 is live:** `rfcs/handoffs/166-a-queued-commit-has-a-witness/round-1-handoff-v1.md`.
 
 **Author-review independence.** The architect wrote RFC 162 rule 3, the rule that produces N6. The external architect
 found N6 (letter 015), and the architect's own §9 needed two late corrections (RFC 164 §9, §9.2). So:
@@ -288,7 +289,7 @@ release builds:
 
 ## 11. Implementation, after acceptance
 
-- **Round 1 — D1 to D4, D6, with §13 items 1–13, 16 and 17:**
+- **Round 1 — D1 to D4, D6, with §13 items 1–9, 11–13, 16 and 17:**
   - **item 0:** the §1.6 troubleshooting entry, delivered and pushed ahead of everything else;
   - D1 next, as its own commit;
   - the witness written and cleared;
