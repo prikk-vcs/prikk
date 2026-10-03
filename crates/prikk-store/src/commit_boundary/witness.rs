@@ -60,7 +60,10 @@ pub enum WitnessState {
     Damaged(String),
 }
 
-fn witness_path(layout: &RepositoryLayout, name: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+fn witness_path(
+    layout: &RepositoryLayout,
+    name: impl AsRef<std::path::Path>,
+) -> std::path::PathBuf {
     layout.active_session_dir(name).join("witness")
 }
 
@@ -87,7 +90,9 @@ fn decode_witness(bytes: &[u8]) -> Result<WitnessRecord> {
     let mut cursor = ByteCursor::new(bytes);
     let magic = cursor.read_array::<8>()?;
     if &magic != WITNESS_MAGIC {
-        return Err(PrikkError::MalformedData("witness has an unrecognized magic".to_string()));
+        return Err(PrikkError::MalformedData(
+            "witness has an unrecognized magic".to_string(),
+        ));
     }
     let version = cursor.read_u16()?;
     if version != WITNESS_VERSION {
@@ -102,13 +107,23 @@ fn decode_witness(bytes: &[u8]) -> Result<WitnessRecord> {
     let tip_bytes = cursor.read_array::<32>()?;
     let stored_checksum = cursor.read_array::<32>()?;
     if !cursor.is_finished() {
-        return Err(PrikkError::MalformedData("trailing bytes in witness record".to_string()));
+        return Err(PrikkError::MalformedData(
+            "trailing bytes in witness record".to_string(),
+        ));
     }
     let expected = witness_checksum(
-        &ref_name, last_seq, &patch_id_bytes, &frame_hash, &running_hash, has_tip, &tip_bytes,
+        &ref_name,
+        last_seq,
+        &patch_id_bytes,
+        &frame_hash,
+        &running_hash,
+        has_tip,
+        &tip_bytes,
     );
     if expected != stored_checksum {
-        return Err(PrikkError::MalformedData("witness checksum mismatch".to_string()));
+        return Err(PrikkError::MalformedData(
+            "witness checksum mismatch".to_string(),
+        ));
     }
     crate::refs::validate_local_branch_ref(&ref_name)
         .map_err(|err| PrikkError::MalformedData(format!("witness ref name invalid: {err}")))?;
@@ -126,12 +141,20 @@ fn decode_witness(bytes: &[u8]) -> Result<WitnessRecord> {
 fn encode_witness(record: &WitnessRecord) -> Vec<u8> {
     let patch_id_bytes = *record.patch_id.as_bytes();
     let has_tip = u8::from(record.ref_tip_at_write.is_some());
-    let tip_bytes = record.ref_tip_at_write.map_or([0u8; 32], |id| *id.as_bytes());
+    let tip_bytes = record
+        .ref_tip_at_write
+        .map_or([0u8; 32], |id| *id.as_bytes());
     let checksum = witness_checksum(
-        &record.ref_name, record.last_seq, &patch_id_bytes, &record.frame_hash,
-        &record.running_hash, has_tip, &tip_bytes,
+        &record.ref_name,
+        record.last_seq,
+        &patch_id_bytes,
+        &record.frame_hash,
+        &record.running_hash,
+        has_tip,
+        &tip_bytes,
     );
-    let mut out = Vec::with_capacity(8 + 2 + 2 + record.ref_name.len() + 8 + 32 + 32 + 32 + 1 + 32 + 32);
+    let mut out =
+        Vec::with_capacity(8 + 2 + 2 + record.ref_name.len() + 8 + 32 + 32 + 32 + 1 + 32 + 32);
     out.extend_from_slice(WITNESS_MAGIC);
     push_u16(&mut out, WITNESS_VERSION);
     // `validate_local_branch_ref` bounds ref names well under `u16::MAX` bytes before one ever
@@ -151,8 +174,13 @@ fn encode_witness(record: &WitnessRecord) -> Vec<u8> {
 
 #[allow(clippy::too_many_arguments)]
 fn witness_checksum(
-    ref_name: &str, last_seq: u64, patch_id: &[u8; 32], frame_hash: &[u8; 32],
-    running_hash: &[u8; 32], has_tip: u8, tip_bytes: &[u8; 32],
+    ref_name: &str,
+    last_seq: u64,
+    patch_id: &[u8; 32],
+    frame_hash: &[u8; 32],
+    running_hash: &[u8; 32],
+    has_tip: u8,
+    tip_bytes: &[u8; 32],
 ) -> [u8; 32] {
     let mut preimage = Vec::with_capacity(8 + 2 + 2 + ref_name.len() + 8 + 32 + 32 + 32 + 1 + 32);
     preimage.extend_from_slice(WITNESS_MAGIC);
@@ -220,7 +248,8 @@ pub fn append_patch_and_witness(
     let wal = Wal::for_layout(layout, name);
     let seq = wal.append_patch(envelope)?;
     let replay = wal.replay()?;
-    let running_hash = fold_running_hash(previous_running_hash, &replay.records, covered_through, seq)?;
+    let running_hash =
+        fold_running_hash(previous_running_hash, &replay.records, covered_through, seq)?;
     let ref_store = RefStore::new(layout.clone());
     let ref_tip_at_write = ref_store.read_current_ref_state_id(ref_name)?;
     let record = WitnessRecord {

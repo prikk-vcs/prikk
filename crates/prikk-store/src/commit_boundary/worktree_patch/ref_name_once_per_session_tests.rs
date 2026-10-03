@@ -17,17 +17,27 @@ fn signer() -> Ed25519AuthorSigner {
 }
 
 fn generator() -> NodeIdGenerator<SequenceEntropySource> {
-    let candidates: Vec<[u8; 32]> =
-        (0..16u8).map(|i| { let mut b = [0x62_u8; 32]; b[31] = i; b }).collect();
+    let candidates: Vec<[u8; 32]> = (0..16u8)
+        .map(|i| {
+            let mut b = [0x62_u8; 32];
+            b[31] = i;
+            b
+        })
+        .collect();
     NodeIdGenerator::with_source(SequenceEntropySource::new(&candidates))
 }
 
 fn commit(layout: &RepositoryLayout, path: &str, body: &[u8]) {
     std::fs::write(layout.root().join(path), body).unwrap();
     commit_worktree_changes_with_generator(
-        layout, "heads/main", "d1", WorktreePatchCommitOptions::file_level(),
-        &mut generator(), &signer(),
-    ).unwrap();
+        layout,
+        "heads/main",
+        "d1",
+        WorktreePatchCommitOptions::file_level(),
+        &mut generator(),
+        &signer(),
+    )
+    .unwrap();
 }
 
 /// Crash a *second* commit at the named failpoint's `skip`-th occurrence, and return whether
@@ -36,15 +46,21 @@ fn second_commit_leaves_ref_name_untouched_at(point: TestFailPoint, skip: usize)
     let root = unique_temp_dir(&format!("rfc166-d1-{point:?}-{skip}"));
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     commit(&layout, "a.txt", b"one");
-    let ref_name_path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("ref-name");
+    let ref_name_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("ref-name");
     let before = std::fs::read(&ref_name_path).unwrap();
     std::fs::write(layout.root().join("b.txt"), b"two").unwrap();
     fail_after_for_test(point, skip);
     // May succeed or fail at this ordinal; both are checked the same way (the file's own bytes),
     // which is why this does not go through the panicking `commit()` helper above.
     let _ = commit_worktree_changes_with_generator(
-        &layout, "heads/main", "d1", WorktreePatchCommitOptions::file_level(),
-        &mut generator(), &signer(),
+        &layout,
+        "heads/main",
+        "d1",
+        WorktreePatchCommitOptions::file_level(),
+        &mut generator(),
+        &signer(),
     );
     clear_failpoint_for_test();
     let after = std::fs::read(&ref_name_path).unwrap();
@@ -83,15 +99,16 @@ fn the_control_the_old_unconditional_write_can_still_be_made_to_tear() {
     let root = unique_temp_dir("rfc166-d1-control");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     commit(&layout, "a.txt", b"one");
-    let ref_name_path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("ref-name");
+    let ref_name_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("ref-name");
     assert_eq!(std::fs::read(&ref_name_path).unwrap(), b"heads/main");
     // The exact primitive D1's own guard now skips on a non-empty WAL, called directly and crashed
     // between its own truncate (which succeeds, emptying the file) and its own append (which does
     // not) -- the pre-D1 crash shape, exactly.
     fail_after_for_test(TestFailPoint::AppendWrite, 0);
-    let result = crate::commit_boundary::active::prepare_empty_active_ref_for_append(
-        &layout, "heads/main",
-    );
+    let result =
+        crate::commit_boundary::active::prepare_empty_active_ref_for_append(&layout, "heads/main");
     clear_failpoint_for_test();
     assert!(result.is_err(), "the injected failure must actually fire");
     let after = std::fs::read(&ref_name_path).unwrap();

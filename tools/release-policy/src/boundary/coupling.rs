@@ -360,6 +360,43 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 current call site, so this is a real, scoped option, not attempted \
                                 here for the same §7 reason as the others",
     },
+    DeclaredCycle {
+        edges: &[
+            ("commit_boundary::active", "commit_boundary::witness"),
+            (
+                "commit_boundary::worktree_patch",
+                "commit_boundary::witness",
+            ),
+        ],
+        reason: "RFC 166 D2: one session-level function appends a WAL record and writes the commit \
+                  witness together, and every appender goes through it -- `active`'s own \
+                  `ActiveSession::append_patch` and its drain, and `worktree_patch`'s \
+                  `author_inner`, both call `commit_boundary::witness::append_patch_and_witness`/ \
+                  `clear_witness` rather than `Wal::append_patch` directly (enforced by a test that \
+                  scans production source for any other caller). These two edges close a longer \
+                  cycle only because `witness` itself reaches back into `refs` (the next entry), \
+                  which already reaches back into this same component",
+        what_would_remove_it: "giving each appender its own copy of the witness-write logic \
+                                instead of sharing one function, reintroducing exactly the \
+                                four-site duplication RFC 166 §13 item 1 found and closed -- worse, \
+                                not better, and not a change this gate should ever encourage",
+    },
+    DeclaredCycle {
+        edges: &[("commit_boundary::witness", "refs")],
+        reason: "RFC 166 D2: the witness record carries the owning ref's own tip `RefState` id as \
+                  of the moment it was written, bounding D3's own connectivity walk to the seals \
+                  since then instead of an unbounded walk to genesis -- `append_patch_and_witness` \
+                  reads it via `RefStore::read_current_ref_state_id`. Closes a cycle only because \
+                  `refs` already reaches back into `commit_boundary::active` (this file's first \
+                  entry), and `active` now reaches `witness` (the entry above)",
+        what_would_remove_it: "having each of `witness`'s own three callers read the ref's current \
+                                tip themselves (all three already depend on `refs` through the \
+                                existing `active <-> refs` and `worktree_patch -> refs` edges) and \
+                                pass it into `append_patch_and_witness` as an argument -- a real, \
+                                scoped option, not attempted here for the same §7 reason as the \
+                                others: no defect motivates moving it, and RFC 166's own round 1 \
+                                scope does not include module restructuring",
+    },
 ];
 
 /// One declared hub: a module with high fan-in *and* high fan-out, and why that is consolidation

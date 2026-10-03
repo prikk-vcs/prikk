@@ -140,7 +140,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 164 round 2 Rule E added `verify::reachability`, the committed-state reachability walk: 149 -> 150.
     // RFC 165 R4 added `ref_completion`, `prikk ref complete`'s own rule: 150 -> 151.
     // RFC 165 R5 added `pointer_rebuild`, `prikk doctor --rebuild-pointer-index`'s own rule: 151 -> 152.
-    assert_eq!(modules.len(), 152, "modules: {modules:?}");
+    // RFC 166 D2 added `commit_boundary::witness`, the one shared append-and-witness function: 152 -> 153.
+    assert_eq!(modules.len(), 153, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

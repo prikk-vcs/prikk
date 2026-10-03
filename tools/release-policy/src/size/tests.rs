@@ -182,8 +182,11 @@ fn an_inline_test_module_is_not_production() {
         // RFC 164 Rule D: the author-key check moved earlier (an early, read-only call plus a
         // doc-comment explaining why), 1397 -> 1413. RFC 166 D1: `ref-name`'s pre-append write is now
         // conditional on the WAL still being empty (a doc comment plus an `if`), 1413 -> 1421.
+        // RFC 166 D2: the raw `wal.append_patch` call is now the shared
+        // `commit_boundary::witness::append_patch_and_witness`, a multi-line call plus its own
+        // `.map_err`, 1421 -> 1427.
         physical,
-        1421,
+        1427,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -193,7 +196,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1372);
+    assert_eq!(counted.production_lines, 1378);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -238,7 +241,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 164 round 2 Rule E added `verify/reachability.rs`: 150 -> 151.
     // RFC 165 R4 added `ref_completion.rs` and `ref_completion/tests.rs` is `cfg(test)`-invisible: 151 -> 152.
     // RFC 165 R5 added `pointer_rebuild.rs`; `pointer_rebuild/tests.rs` is `cfg(test)`-invisible: 152 -> 153.
-    assert_eq!(store.production_files, 153);
+    // RFC 166 D2 added `commit_boundary/witness.rs`; its own `tests.rs` and `worktree_patch`'s new
+    // `ref_name_once_per_session_tests.rs` are both `cfg(test)`-invisible: 153 -> 154.
+    assert_eq!(store.production_files, 154);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

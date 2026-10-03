@@ -14,9 +14,14 @@ fn signer() -> Ed25519AuthorSigner {
 fn commit(layout: &RepositoryLayout, path: &str, body: &[u8]) {
     std::fs::write(layout.root().join(path), body).unwrap();
     commit_worktree_changes_with_generator(
-        layout, "heads/main", "d2", WorktreePatchCommitOptions::file_level(),
-        &mut NodeIdGenerator::production(), &signer(),
-    ).unwrap();
+        layout,
+        "heads/main",
+        "d2",
+        WorktreePatchCommitOptions::file_level(),
+        &mut NodeIdGenerator::production(),
+        &signer(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -30,14 +35,20 @@ fn a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does()
     let root = unique_temp_dir("rfc166-d2-symlink");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     commit(&layout, "a.txt", b"one");
-    let witness_path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness");
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
     std::fs::remove_file(&witness_path).unwrap();
     let elsewhere = unique_temp_dir("rfc166-d2-symlink-target");
     std::os::unix::fs::symlink(&elsewhere, &witness_path).unwrap();
     std::fs::write(layout.root().join("b.txt"), b"two").unwrap();
     let result = commit_worktree_changes_with_generator(
-        &layout, "heads/main", "d2", WorktreePatchCommitOptions::file_level(),
-        &mut NodeIdGenerator::production(), &signer(),
+        &layout,
+        "heads/main",
+        "d2",
+        WorktreePatchCommitOptions::file_level(),
+        &mut NodeIdGenerator::production(),
+        &signer(),
     );
     assert!(
         result.is_err(),
@@ -56,7 +67,10 @@ fn a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does()
 fn absent_before_any_commit() {
     let root = unique_temp_dir("rfc166-d2-absent");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
-    assert_eq!(read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(), WitnessState::Absent);
+    assert_eq!(
+        read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+        WitnessState::Absent
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -69,7 +83,10 @@ fn first_commit_witnesses_seq_1_with_no_prior_tip() {
         WitnessState::Valid(record) => {
             assert_eq!(record.ref_name, "heads/main");
             assert_eq!(record.last_seq, 1);
-            assert_eq!(record.ref_tip_at_write, None, "heads/main has never been sealed yet");
+            assert_eq!(
+                record.ref_tip_at_write, None,
+                "heads/main has never been sealed yet"
+            );
         }
         other => panic!("expected Valid, got {other:?}"),
     }
@@ -91,8 +108,14 @@ fn second_commit_advances_the_witness_and_folds_the_running_hash() {
         other => panic!("expected Valid, got {other:?}"),
     };
     assert_eq!(second.last_seq, 2);
-    assert_ne!(second.running_hash, first.running_hash, "the running hash must advance");
-    assert_ne!(second.frame_hash, first.frame_hash, "a different record's own frame hash");
+    assert_ne!(
+        second.running_hash, first.running_hash,
+        "the running hash must advance"
+    );
+    assert_ne!(
+        second.frame_hash, first.frame_hash,
+        "a different record's own frame hash"
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -102,7 +125,10 @@ fn clear_returns_to_absent() {
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     commit(&layout, "a.txt", b"one");
     clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
-    assert_eq!(read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(), WitnessState::Absent);
+    assert_eq!(
+        read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+        WitnessState::Absent
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -111,7 +137,9 @@ fn a_flipped_byte_is_damaged_not_absent() {
     let root = unique_temp_dir("rfc166-d2-damaged");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     commit(&layout, "a.txt", b"one");
-    let path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness");
+    let path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
     let mut bytes = std::fs::read(&path).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 0xFF;
@@ -134,9 +162,14 @@ fn a_commit_after_a_legacy_queue_with_no_witness_folds_the_whole_queue_never_a_f
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     commit(&layout, "a.txt", b"one"); // simulates 0.48.0's own first commit
     commit(&layout, "b.txt", b"two"); // simulates 0.48.0's own second commit
-    let witness_path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness");
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
     std::fs::remove_file(&witness_path).unwrap(); // 0.48.0 never wrote one at all
-    assert_eq!(read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(), WitnessState::Absent);
+    assert_eq!(
+        read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+        WitnessState::Absent
+    );
     commit(&layout, "c.txt", b"three"); // this binary's own first commit over the legacy queue
     let witnessed = match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
         WitnessState::Valid(record) => record,
@@ -145,7 +178,11 @@ fn a_commit_after_a_legacy_queue_with_no_witness_folds_the_whole_queue_never_a_f
     assert_eq!(witnessed.last_seq, 3);
     let wal = crate::wal::Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay().unwrap();
-    assert_eq!(replay.records.len(), 3, "all three records, old and new, are sound");
+    assert_eq!(
+        replay.records.len(),
+        3,
+        "all three records, old and new, are sound"
+    );
     let mut expected = [0u8; 32];
     for record in &replay.records {
         let frame_hash = crate::wal::record_frame_checksum(record).unwrap();
@@ -176,7 +213,9 @@ fn an_appended_commit_after_a_damaged_witness_folds_the_whole_queue_from_scratch
         WitnessState::Valid(record) => record.running_hash,
         other => panic!("expected Valid, got {other:?}"),
     };
-    let path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness");
+    let path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
     let mut bytes = std::fs::read(&path).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 0xFF;
@@ -230,17 +269,30 @@ fn append_patch_and_witness_is_the_only_caller_of_wal_append_patch() {
     // or directory is test-only but does not literally match `/tests/` or end in `tests.rs`: found
     // empirically by running this exact scan first and checking every match it returned traces to
     // one of these (`test_gates/`, `caller_tests*`, `*_test_support*`), not assumed in advance.
-    const TEST_ONLY_MARKERS: &[&str] =
-        &["/tests/", "tests.rs", "test_gates", "caller_tests", "test_support"];
+    const TEST_ONLY_MARKERS: &[&str] = &[
+        "/tests/",
+        "tests.rs",
+        "test_gates",
+        "caller_tests",
+        "test_support",
+    ];
     let mut non_test_callers = Vec::new();
     visit_rs_files(&src, &mut |path, contents| {
         let path_text = path.to_string_lossy();
-        if TEST_ONLY_MARKERS.iter().any(|marker| path_text.contains(marker)) {
+        if TEST_ONLY_MARKERS
+            .iter()
+            .any(|marker| path_text.contains(marker))
+        {
             return;
         }
         for (line_number, line) in contents.lines().enumerate() {
             if line.contains(".append_patch(") {
-                non_test_callers.push(format!("{}:{}: {}", path.display(), line_number + 1, line.trim()));
+                non_test_callers.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    line_number + 1,
+                    line.trim()
+                ));
             }
         }
     });
@@ -254,7 +306,9 @@ fn append_patch_and_witness_is_the_only_caller_of_wal_append_patch() {
 }
 
 fn visit_rs_files(dir: &std::path::Path, visit: &mut impl FnMut(&std::path::Path, &str)) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
