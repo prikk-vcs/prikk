@@ -925,7 +925,15 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     )
     .map_err(AuthorError::Store)?;
 
-    prepare_empty_active_ref_for_append(layout, &canonical_ref).map_err(AuthorError::Store)?;
+    // RFC 166 D1: `ref-name` is written only by a session's first commit. Ownership cannot have
+    // changed on a later one -- a non-empty WAL already proves it (the ownership check above, which
+    // ran against the unmodified file, already confirmed it names this same ref). Rewriting it on
+    // every commit was §1.6: a crash between this write's own truncate and its own append left a
+    // non-empty WAL with no durable owner, on any commit after the first. `ActiveSession::append_patch`
+    // already had this shape; this is the one call site that did not.
+    if active_replay.records.is_empty() {
+        prepare_empty_active_ref_for_append(layout, &canonical_ref).map_err(AuthorError::Store)?;
+    }
     let wal_sequence = wal.append_patch(&patch).map_err(AuthorError::Store)?;
 
     // RFC 144 §4o.2: "cleared when the commit that consumes it is queued -- not when sealed." The
