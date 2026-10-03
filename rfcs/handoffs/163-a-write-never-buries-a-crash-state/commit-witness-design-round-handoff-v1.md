@@ -144,3 +144,6 @@ review v1, all of it.
 **Nothing else runs while U4's timings do.** Each unit's real start and end time.
 
 **Report:** `.git-exclude/review-request/rfc166-design-round-report-v2.md`.
+
+**Design round ACCEPTED 2026-10-03** (reviews `rfc166-design-round-review-v1`, `-v2`). RFC 166 is rewritten as a
+design for the owner's reading. **No implementation handoff until the owner accepts it.**

@@ -241,7 +241,7 @@ item is open.
 
 <!-- open-work-index:start -->
 
-- [`166-a-queued-commit-has-a-witness.md`](rfcs/proposed/166-a-queued-commit-has-a-witness.md) — the commit witness (N6): a damaged acknowledged commit in the WAL is never read as a crash tail, a drained queue never reads as a lost one, and the witness only adds refusals; proposed 2026-10-03 (0.49.0 step 3); design round live, no mechanism chosen yet
+- [`166-a-queued-commit-has-a-witness.md`](rfcs/proposed/166-a-queued-commit-has-a-witness.md) — the commit witness (N6): a damaged acknowledged commit in the WAL is never read as a crash tail, a drained queue never reads as a lost one, and the witness only adds refusals; proposed 2026-10-03 (0.49.0 step 3); design round accepted; rewritten as a design for the owner's reading (D1: `ref-name` written once per session, closing the torn `ref-name` of 0.48.0; D2–D6: the witness file, connectivity first, the verdict table, two explicit ways out). Owner decisions in §10
 
 
 

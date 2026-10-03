@@ -1,24 +1,27 @@
 # RFC 166 — A queued commit has a witness: a damaged acknowledged commit is never read as a crash tail
 
 **Status.** **PROPOSED 2026-10-03 by the architect** (0.49.0 step 3, in the owner-approved schedule: *"N6's commit
-witness"*).
-- **This RFC sets the questions; it does not yet choose the mechanism.** A design round answers §5 from source and
-  measurement, with prototypes and no product code: `rfcs/handoffs/163-a-write-never-buries-a-crash-state/
-  commit-witness-design-round-handoff-v1.md`.
-- **Then the architect rules on each option, this RFC is rewritten into a design, and the owner reads it** before any
-  implementation handoff.
-- **2026-10-03:** design-round report v1 not accepted (review `rfc166-design-round-review-v1`), and Addendum 1 is live.
-  The review found §1.6, the torn `ref-name`, which shipped in 0.48.0.
+witness"*). **Rewritten 2026-10-03 as a design, for the owner's reading.**
+- **The design round is closed.** It ran as the handoff
+  `rfcs/handoffs/163-a-write-never-buries-a-crash-state/commit-witness-design-round-handoff-v1.md` and Addendum 1.
+  - Report v1 was not accepted (review `rfc166-design-round-review-v1`), and that review found §1.6.
+  - Report v2 was accepted (review `rfc166-design-round-review-v2`), with four corrections the architect measured
+    (§7).
+- **What the owner decides (§10):**
+  1. accept the design;
+  2. the witness in its own file (P1, recommended) or folded into `ref-name` (P3);
+  3. §1.6 shipped in 0.48.0: a disclosure or an advisory (asked 2026-10-03; disclosure recommended).
+- **No implementation handoff until the owner accepts it.**
 
 **Author-review independence.** The architect wrote RFC 162 rule 3, the rule that produces N6. The external architect
 found N6 (letter 015), and the architect's own §9 needed two late corrections (RFC 164 §9, §9.2). So:
-- every cell of §5 Q2 is reproduced by the dev team and checked by the architect's own crash probes;
+- every verdict in §5 was built by the dev team in a prototype and checked by the architect's own probes (§7);
 - the external architect has said letter 018 will look for "N6's witness" in the 0.49.0 candidate, and `matrix.py`
   gains rows for it. That review is the independent check.
 
 **Carefulness.** RFC 165's K1–K7 were bound by the owner's *"we had better be careful around such design"*. This RFC
-changes what `verify` says about queued commits and adds a refusal to a repair verb. **The architect proposes that
-K1–K7 bind it in the same way:**
+changes what `verify` says about queued commits and adds a refusal to a repair verb. **K1–K7 bind it in the same
+way:**
 - K1 plan-only and a printed plan;
 - K2 fail closed;
 - K3 every condition testable, with controls;
@@ -62,7 +65,8 @@ K1–K7 bind it in the same way:**
      (`/home/nabbisen/.pgtmp/arch-166/commit_kill_probe.py`).
    - The external matrix grades "`ref-name` emptied" `ok`, because it is reported as damage. **It is reachable by a
      crash, though, and it has no way out.**
-   - **It belongs here:** it is in the commit's own write sequence, and §4's P3 places the witness in this same file.
+   - **It belongs here:** it is in the commit's own write sequence, and the design round's P3 placed the witness in
+     this same file.
 
 ## 2. Facts from source
 
@@ -75,11 +79,13 @@ K1–K7 bind it in the same way:**
 - **A commit, in order** (`node_authoring.rs`, under the active lock):
   - content blobs through the object store;
   - author key material;
-  - `ref-name` (truncate, then a durable append);
+  - `ref-name` (truncate, then a durable append, **on every commit**: §1.6);
   - the WAL append, durable (file and directory synced);
   - `declarations` cleared;
   - the report, "committed". **A commit is acknowledged only after its record is durable.**
   - A retry whose envelope equals the last record's appends nothing and returns the last seq.
+  - **A retry from the CLI never reaches that branch:** with the content already queued, `commit` refuses "worktree has
+    no node-addressed changes to commit" (design round, report v2).
 - **A seal drains the queue last:** after the pointer and the log agree, `finish_active_publication_cleanup` truncates
   the WAL to empty, then clears `ref-name`.
 - **Nothing durable today identifies an acknowledged commit outside the WAL itself:**
@@ -87,108 +93,217 @@ K1–K7 bind it in the same way:**
   - the object index is a pure cache (RFC 162);
   - blobs are shared and content-addressed;
   - the Patch envelope reaches the store only at seal.
+- **A Patch names no ref:** `PatchPayload` holds operations, intent, preconditions, purpose and message. Ownership of a
+  queue lives in `ref-name` alone.
+- **The queue limit is 1,000.** The 1,001st commit is refused.
 - **The format is 7,** shared with every release since format 7. `require_current_format` accepts any format-7
   repository, so **an older binary and a newer one can both write the same repository.**
 
-## 3. Constraints every option must meet
+## 3. Constraints (as proposed, and met by §4)
 
 - **C1 — meaning (I6).** A record the user was told had committed is never removed silently, and never read as a crash
-  tail.
-  - A record that was never acknowledged may still be removed as a tail.
-  - The witness decides which is which; it never decides what a record *means*.
-- **C2 — the witness grants nothing.** It is unsigned local metadata, so it can only *add* refusals:
-  - it never makes a record, a patch, a ref or a signature accepted that would be refused without it;
-  - a forged or stale witness can at worst make a crash tail look like damage, which refuses and names the way out;
-  - **this is shown from source, call site by call site, not argued.**
-- **C3 — fail closed, and nothing silent.**
-  - A witness that is damaged, absent, or disagrees with the WAL is reported.
-  - No repair removes a record the witness covers without an explicit, named acknowledgement of the loss (K5).
-  - §9.2's rule holds for the witness itself, if it is an appended file.
-- **C4 — the format.** The starting position is **no format version change in 0.49.0**: an additive file or field in
-  format 7.
-  - If the round shows that format 7 cannot carry the witness safely, in particular **against an older binary writing
-    the same repository** (§2), say so.
-  - The owner then decides between a format change and a narrower design, before any implementation handoff.
-- **C5 — cost:**
-  - a commit gains at most one durable write;
-  - `verify` and `status` stay linear in the WAL's size;
-  - each bound is shown by measurement on `/home` (LUKS), release build, three samples and their spread.
-- **C6 — Rule D.** Every writer of the session (commit, the idempotent retry, seal's drain, the repair) checks the
-  witness against the WAL before its first write. A refusal writes nothing.
+  tail. A record that was never acknowledged may still be removed as a tail. The witness decides which is which; it
+  never decides what a record *means*.
+- **C2 — the witness grants nothing.** It is unsigned local metadata, so it only ever *adds* a refusal or a report:
+  - it never makes a record, a patch, a ref or a signature accepted;
+  - **it never supplies data to a write** (§4 D5 takes the ref name from the user, not from the witness).
+- **C3 — fail closed, nothing silent.** No repair removes a record the witness covers without an explicit, named
+  acknowledgement of the loss (K5).
+- **C4 — no format change.** An additive file in format 7, safe against an older binary writing the same repository
+  (§6).
+- **C5 — cost.** A commit costs what it costs today, measured (§7).
+- **C6 — Rule D.** Every writer checks the witness against the WAL before its first write. A refusal writes nothing.
 
-## 4. Starting positions (to be tested, not decided)
+## 4. The design
 
-- **Acknowledge after durable.** The witness is written after the WAL append and before the report.
+**D1 — `ref-name` is written once per session.**
+- A commit writes `ref-name` only when the WAL is empty (the session's first commit). Later commits never rewrite it:
+  ownership cannot have changed, since a non-empty WAL already proves it.
+- **That closes §1.6.** No commit tears `ref-name`. Measured with 300 kills each: 10–13 stuck states for the rewrite on
+  every commit, and **0** with D1 (§7).
+- `ActiveSession::append_patch` already has this shape.
+
+**D2 — the witness: one record in its own file, replaced atomically after every acknowledged commit.**
+- **The path is `.prikk/active/<name>/witness`.** It is written with `write_file_atomically` (file sync, rename,
+  directory sync), so a crash leaves the old record or the new one, never a mix. Swept at every ordinal.
+- **The record:**
+  - magic and version;
+  - the owning ref name;
+  - the last acknowledged seq;
+  - its Patch id;
+  - its frame hash (W2);
+  - a running hash over every acknowledged frame, `next = SHA-256(previous ‖ frame hash)` (W3);
+  - a SHA-256 over all of it.
+- **The write comes after the durable WAL append and before the report.**
   - A crash between the two leaves a sound record the witness does not cover. The user was not told, so it is not
-    acknowledged, and it stays exactly as today.
-- **Three shapes of witness, from least to most:**
-  - **W1:** the count or end offset of acknowledged records, as RFC 163 §5 named;
-  - **W2:** W1, plus the identity of the last acknowledged record: its seq, its Patch id, and its frame's hash;
-  - **W3:** W1, plus a running hash over every acknowledged frame, updated in O(1) per commit and checked by `verify`
-    in O(WAL).
-- **Three places for it:**
-  - **P1:** a small file in the session directory, replaced atomically each commit;
-  - **P2:** a fixed-size appended witness log, where a torn last entry is exactly a crash before acknowledgement;
-  - **P3:** folded into `ref-name`, which every commit already rewrites (today *before* the append).
-- **A drained queue must not read as a lost one.** If the WAL is shorter than the witness, the witnessed Patch is either
-  sealed and reachable from the published ref (a drain, so the witness is stale) or not (a loss).
-  - That is RFC 162's "commitment proven by connectivity". It may also make an older binary's drain safe.
-  - It needs W2 or W3: W1 alone cannot tell a drain from a loss.
-- **An acknowledged damaged record has a way out, never an implicit one:**
-  - an explicit flag that names the loss, with `--plan-only` (K1);
-  - the bytes are kept as today;
-  - the commit's content is often still in the working tree, so committing again recovers it. The text should say so
-    only where that is true.
+    acknowledged, and it is kept as today.
+  - Every commit path writes it: `author_inner` and `ActiveSession::append_patch`.
+- **Seal's drain clears it,** in today's order: the WAL is truncated, then the witness is cleared, then `ref-name` is
+  cleared. That order is the safe one: clearing ownership before the WAL leaves an owned queue without an owner, shown
+  for every placement.
+- **Why the ref name is in it:** connectivity (D3) needs a ref after a drain, and every drain clears `ref-name`.
 
-## 5. Questions for the design round
+**D3 — one classification, used by `verify`, `status`, `doctor`, the repair, and the checks `commit` and `seal` make
+before their first write.**
+1. **No witness file** (a legacy session, or one removed): rule 3 for this session, exactly as 0.48.0, with a line
+   saying so. Removing the witness can therefore never make anything worse than 0.48.0.
+2. **A damaged witness:** reported. It matters only if the WAL has a tail (row 7 of §5).
+3. **The witness disagrees with the WAL** (it is ahead, or the same seq has a different identity), **so connectivity is
+   tried first:**
+   - if the witnessed Patch is sealed and reachable from the witness's own ref, the witness is **stale**. A drain it
+     missed (an older binary's seal) left it behind;
+   - **a stale witness counts as no witness** (item 1), with a note. The next commit replaces it.
+4. **Otherwise, the verdict table in §5.**
 
-1. **Write order:** every write ordinal of `commit`, the idempotent retry, seal's drain, and `--repair-wal-tail`, with
-   the witness prototyped (each of P1–P3 where they differ). For each prefix of those writes:
-   - the state a crash leaves;
-   - what `verify`, `status`, `doctor`, the repair, a retried `commit` and a `seal` do.
+**D4 — `verify` checks W3:** the running hash, recomputed over the WAL's acknowledged records. It catches a substituted
+earlier record, which W2 cannot. Cost: 0.73 ms at 1,000 records (design round, library call).
 
-   **The states come from failpoints, not reading.** One table.
-   - **A commit after the first in its session, not only the first,** with every write it makes: blobs, author key,
-     `ref-name`, WAL, witness, `declarations`.
-   - **The torn `ref-name` (§1.6):** how each option closes it, measured by the kill probe.
-2. **The decision table:** (the WAL's end: sound, a crash-shaped tail, a complete damaged record, shorter than the
-   witness, empty, missing) × (the witness: agrees, behind, ahead, absent, damaged).
-   - For each cell: the verdict (tail, acknowledged damage, a drain, a loss), what `verify` reports, and the safe way
-     out.
-   - **Every cell is reproduced, not reasoned.**
-   - **List first any cell where no option meets C1–C3.** The architect rules on those before anything else.
-3. **W1, W2 or W3:** which of the five I1q cells each closes, and which needs connectivity (§4). Include multi-field
-   corruption of the last record: what W2 and W3 catch that W1 and RFC 164 §9.2 cannot.
-4. **The witness's own integrity:**
-   - checksum or frame;
-   - a damaged witness;
-   - **an absent witness:** a repository made by 0.48.0 (legacy) against one whose witness was removed. Can they be
-     told apart? If not, what does each reader do?
-   - C2, call site by call site: every reader of the witness, and the proof that it only adds refusals.
-5. **Format 7 and older binaries (C4):** run the 0.48.0 binary (`.pgtmp/prikk-1c0d5b18`) on a repository carrying the
-   prototype's witness, and the prototype on a repository made by 0.48.0:
-   - a 0.48.0 commit after a witnessed one;
-   - a 0.48.0 seal, which drains the WAL without touching the witness;
-   - a 0.48.0 `--repair-wal-tail`.
+**D5 — the ways out (K6: delivered last, in their own round, and examined by the external review).**
+- **`prikk doctor --repair-wal-tail --acknowledge-loss [--plan-only]`** removes acknowledged damage.
+  - **The plan names each acknowledged record it would remove:** its seq, and the Patch id the witness holds for the
+    last one. It also names the recovery file the bytes go to.
+  - After the removal, the witness is rewritten to cover the sound prefix.
+  - **The text says the content may still be in the working tree** only where `status` shows it as uncommitted.
+- **`prikk doctor --restore-active-ref --ref <ref> [--plan-only]`** gives an owned queue its owner back, for a
+  `ref-name` that is missing or disagrees with the witness. The 0.48.0 strandings of §1.6 are the main case.
+  - **The ref comes from the user, never from the witness** (C2). `doctor` may show the witness's ref name as a hint.
+  - **It refuses:**
+    - when a witness exists and names a different ref;
+    - when the queue does not validate against `<ref>`'s current tip by the same check `seal` makes, run without
+      writing.
+  - **The implementation round shows from source that such a check exists.** If it does not, the round stops and asks.
+- **No other command calls either of them** (K5).
 
-   For each: what the newer binary then reports, and whether it is ever a false loss or a missed one. **If no shape is
-   safe in format 7, say so plainly. That is the owner's decision.**
-6. **Cost:** release builds, `/home` (LUKS), three samples and the spread:
-   - `commit` time before and with each prototype, at 1, 64 and 1,000 queued commits;
-   - `seal` at 64 and 1,000;
-   - `verify` with W3 at 1,000.
-   - **1,000 is the default queue limit:** the 1,001st commit is refused. The first version of this RFC said 1,024,
-     which cannot be reached.
-7. **Text and the matrix:**
-   - the five I1q cells: what each would read as under each option;
-   - the stale claims-table row;
-   - the repair's line, which today counts complete-looking records, against what an exact witness would print.
+**D6 — `ref-name` is checked against the witness.** When both exist and their ref names differ, that is damage:
+`verify` exits 1, the writers refuse, and D5's restore is the way out. **This closes the pre-existing
+`ref-name` "final byte removed" gap** (`heads/main` read as `heads/mai`, `I1` in `matrix.py` today) for every session
+that has a witness.
 
-## 6. Out of scope
+## 5. The verdict table (D3, item 4)
 
-- **The per-file witness for the other appended files** (RFC 164 §9.1, alternative 3), and multi-field corruption
-  elsewhere: format-8 input.
+| # | the WAL | the witness | verdict | `verify` | `commit`, `seal` | the repair |
+|---:|---|---|---|---|---|---|
+| 1 | sound | agrees | healthy | 0 | proceed | nothing to do |
+| 2 | sound | behind (a crash before acknowledgement, or an older binary's commit) | pending | 0, with a note | proceed; the next commit advances it | nothing to do |
+| 3 | sound, plus a tail past the witnessed record | agrees | crash tail (never acknowledged) | 0, with the tail line | refuse, as today | removes it, as today |
+| 4 | the record after the witnessed prefix is damaged or missing, and the witness names it | ahead by its seq | **acknowledged damage (N6)** | **1** | refuse | **refuses; `--acknowledge-loss` (D5)** |
+| 5 | shorter than the witness, or empty, and connectivity fails | ahead | **acknowledged loss** | **1** | refuse | **refuses; `--acknowledge-loss`** |
+| 6 | same seq, different Patch or frame hash, and connectivity fails | mismatch | **substituted record** | **1** | refuse | refuses; a copy is the way out |
+| 7 | a tail | damaged | unknown | 1 | refuse | refuses; `--acknowledge-loss` |
+| 8 | sound, no tail | damaged | witness damaged | 0, with a warning | proceed; the next commit replaces it | nothing to do |
+| 9 | non-empty | any | ownership missing | 1 | refuse, as today | D5's restore |
+| 10 | any | W3 disagrees | substituted earlier record | 1 | refuse | a copy is the way out |
+
+- **Rows 4, 5 and 6 close the five I1q cells:**
+  - a flipped body byte, length 2^62 and length one less are row 4;
+  - an emptied or removed WAL is row 5.
+- **Row 8 does not refuse,** because nothing is at risk: the WAL is wholly sound, and the witness only decides tails.
+  Refusing there would add a dead end without protecting anything.
+- **Rows 6 and 10 have no repair verb.** A sound record that is not the acknowledged one is not a crash shape. Removing
+  it would be a guess, so the way out is a copy, and the text says so.
+
+## 6. Format 7 and older binaries (C4)
+
+Measured against the shipped 0.48.0 binary:
+- **0.48.0 ignores the witness file:** it commits, seals and repairs a witnessed repository with no error, and leaves
+  the file untouched.
+- **A 0.48.0 commit after a witnessed one** leaves the witness behind: row 2, harmless.
+- **A 0.48.0 seal** drains the WAL and leaves the witness behind. D3 item 3 finds the witnessed Patch sealed and
+  reachable from the witness's ref, so the witness is stale, never a loss. **That is why the ref name is in the record.**
+- **A 0.48.0 seal, then a 0.48.0 commit** (the same seq, a different Patch): connectivity is tried before row 6, so it
+  is stale, never a substitution.
+- **This binary on a 0.48.0 repository:** the first commit creates the witness. No migration is needed.
+
+**The design round's prototype did not yet try connectivity in those two cases:** `readers.rs:152` and `:181-184`
+report a loss after an ordinary 0.48.0 seal (review v2 §5). D3 item 3 is the correction, and the implementation tests
+both sequences against the real 0.48.0 binary.
+
+## 7. Evidence
+
+From the architect's runs on the prototype (`e821775f…`) and `main` (`12b117d0…`), on `/home` (btrfs on LUKS),
+release builds:
+
+- **The kill probe, 300 kills of a second commit each:**
+
+  | | stuck (`ref-name` empty) |
+  |---|---:|
+  | rewrite on every commit (today) | 13, 10, 12 |
+  | D1 (P1Fixed) | **0** |
+  | P3 | **0** |
+
+  On shipped 0.48.0: 12 of 150.
+- **Commit cost, interleaved,** the mean of 5 commits, 3 samples:
+
+  | depth | `main` | witness alone (no D1) | **D1 + D2** | P3 |
+  |---:|---:|---:|---:|---:|
+  | 1 | 20.6–21.9 ms | 23.2–24.6 ms | **21.3–21.6 ms** | 20.9–21.3 ms |
+  | 64 | 21.3–21.5 ms (one sample 25.2) | 24.0–24.3 ms | **21.6–22.1 ms** | 21.4–22.0 ms |
+
+  **The witness write alone costs about 2.5 ms (12%). D1's saved rewrite pays for it.**
+- **From the design round (report v2), checked where marked:**
+  - **the crash windows:** the atomic replace leaves old or new, never a mix (failpoints at every ordinal);
+  - **the drain order:** today's is the safe one;
+  - **W1 is fooled by a substitution of the same length; W2 catches it.** W3 catches a substituted earlier record;
+  - **`matrix.py`:** under P1, the prototype changes no existing cell. The witness's own rows are `SILENT` only because the
+    prototype's readers are not wired into the CLI.
+- **Corrections the architect made to report v2** (review v2):
+  - its cost "baseline" was the witness itself;
+  - its Q5 ran only P1, and P3 breaks both directions (§8);
+  - the readers' connectivity order (§6);
+  - its measured binary predates the kept source.
+
+## 8. Alternatives considered
+
+- **P3, the witness folded into `ref-name`** (one checksummed record, replaced atomically):
+  - it has the same kill result (0 of 300) and the same cost as D1 + D2;
+  - it closes the `ref-name` checksum gap for every session, not only witnessed ones;
+  - **but it changes the format of an existing file.** Measured against 0.48.0:
+    - **a 0.48.0 queue opened by the P3 prototype is stranded** ("malformed metadata"; `commit` and `seal` refuse).
+      Reading the legacy plain name would fix that;
+    - **0.48.0 cannot use a queue the P3 binary wrote** ("not UTF-8"). Nothing fixes that inside format 7.
+  - **Rejected under C4,** because P1 carries the witness safely. If the owner prefers P3, it is a format change and
+    belongs to format 8.
+- **W1, a count or end offset:** fooled by a substitution of the same length.
+- **W2 alone:** cannot see a substituted earlier record. W3 costs one 64-byte hash per commit.
+- **P2, an appended witness log:** answers nothing P1 does not, and adds a file needing its own tail rules.
+- **Refusing on a damaged witness over a sound WAL (row 8):** a dead end that protects nothing.
+
+## 9. What remains
+
+- **An absent witness is 0.48.0's behaviour:** a legacy session, or a witness removed by hand. They cannot be told
+  apart, and both fall back to rule 3, reported.
+- **The `ref-name` checksum gap remains for a session with no witness.**
+- **Corruption that rewrites the WAL and the witness consistently** is beyond any unsigned local witness. A signed or
+  chained frame is format-8 input, with RFC 164 §9.1's per-file witness.
+
+## 10. For the owner
+
+1. **Accept the design** (D1–D6), or not.
+2. **P1 (recommended) or P3** (§8).
+3. **§1.6 shipped in 0.48.0:** a disclosure in the known limitations, or an advisory. It is availability only: no
+   authority moves, and the queue's content is intact. **Disclosure is recommended.**
+
+## 11. Implementation, after acceptance
+
+- **Round 1 — D1 to D4, D6:**
+  - D1 first, as its own commit;
+  - the witness written and cleared;
+  - the classification wired into every reader and writer;
+  - W3 in `verify`;
+  - text, including the stale claims-table row and the repair's line.
+  - **Tests:** a failpoint at every write ordinal of a second commit, the drain and the repair; every row of §5 built,
+    each with a control that turns it red; the 0.48.0 sequences of §6 against the real binary; the kill probe; and
+    `matrix.py`.
+- **Round 2 — D5, the ways out:** both verbs under K1–K5, raced against `commit` and `seal`, with every refusal
+  condition paired with its control.
+- **At the 0.49.0 candidate:** the external review examines D5 with RFC 165's R4 and R5 (K6).
+
+## 12. Out of scope
+
+- **The per-file witness for the other appended files** (RFC 164 §9.1), and multi-field corruption elsewhere: format-8
+  input.
 - **M5's structural fix** (0.49.0 step 4).
-- **Non-default active sessions,** beyond whatever the witness's placement implies for them; name it if it implies
-  anything.
+- **Non-default active sessions:** the witness sits in each session's own directory, so a later generalisation carries
+  it unchanged.
 - Network transport, and any change to what a signature or a ref means.
+
