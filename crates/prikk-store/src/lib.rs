@@ -139,6 +139,9 @@ pub use commit_boundary::active::{
     finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
     require_active_ref_for_non_empty_wal, write_active_ref_metadata,
 };
+pub use commit_boundary::witness::{
+    WitnessRecord, WitnessState, append_patch_and_witness, clear_witness, read_witness,
+};
 pub use commit_boundary::worktree_patch::{
     DEFAULT_ACTIVE_PATCH_LIMIT, DeclarationDisclosure, DeclarationDisclosureReason,
     MOVE_HINT_SUMMARY_THRESHOLD, MoveHintCandidate, MoveHints, WorktreePatchCommitOptions,

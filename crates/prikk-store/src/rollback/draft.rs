@@ -205,7 +205,12 @@ pub fn append_rollback_draft(
         signer.public_key_bytes(),
         &active_lock,
     )?;
-    let wal_sequence = wal.append_patch(&envelope)?;
+    let wal_sequence = crate::commit_boundary::witness::append_patch_and_witness(
+        layout,
+        DEFAULT_ACTIVE_NAME,
+        &canonical_ref,
+        &envelope,
+    )?;
 
     Ok(RollbackDraftReport {
         ref_name: canonical_ref,

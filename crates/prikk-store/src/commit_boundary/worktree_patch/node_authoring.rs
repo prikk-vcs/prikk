@@ -934,7 +934,13 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     if active_replay.records.is_empty() {
         prepare_empty_active_ref_for_append(layout, &canonical_ref).map_err(AuthorError::Store)?;
     }
-    let wal_sequence = wal.append_patch(&patch).map_err(AuthorError::Store)?;
+    let wal_sequence = crate::commit_boundary::witness::append_patch_and_witness(
+        layout,
+        DEFAULT_ACTIVE_NAME,
+        &canonical_ref,
+        &patch,
+    )
+    .map_err(AuthorError::Store)?;
 
     // RFC 144 §4o.2: "cleared when the commit that consumes it is queued -- not when sealed." The
     // loop above resolves every live declaration into exactly one of confirmed-rename,

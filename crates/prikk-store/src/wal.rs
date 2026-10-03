@@ -424,6 +424,14 @@ fn encode_record(record: &WalRecord) -> Result<Vec<u8>> {
     frame_record(record.seq, &body)
 }
 
+/// RFC 166 D2: the exact frame checksum this record's own header carries -- the commit witness's
+/// own W2 field, naming *which* durable frame was acknowledged, not only its sequence number.
+pub(crate) fn record_frame_checksum(record: &WalRecord) -> Result<[u8; 32]> {
+    let body = encode_envelope_file(&record.envelope)?;
+    let body_len = len_to_u64(body.len())?;
+    Ok(record_checksum(record.seq, body_len, &body))
+}
+
 #[cfg(test)]
 /// Encode one WAL record exactly as the writer would, for a test that needs the bytes without the
 /// write.

@@ -6,4 +6,5 @@
 //! dependency between them, not because they were easiest to move.
 
 pub(crate) mod active;
+pub(crate) mod witness;
 pub(crate) mod worktree_patch;

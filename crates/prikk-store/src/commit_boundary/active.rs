@@ -100,7 +100,12 @@ impl ActiveSession {
             // still be unambiguous — see `node_authoring.rs::author_inner`'s identical guard change.
             require_active_ref_for_non_empty_wal(&self.layout, "heads/main")?;
         }
-        let wal_sequence = wal.append_patch(envelope)?;
+        let wal_sequence = crate::commit_boundary::witness::append_patch_and_witness(
+            &self.layout,
+            DEFAULT_ACTIVE_NAME,
+            "heads/main",
+            envelope,
+        )?;
         Ok(ActiveCommitResult { wal_sequence })
     }
 }
@@ -200,7 +205,11 @@ pub fn finish_active_publication_cleanup(
 ) -> Result<()> {
     layout.require_current_format()?;
     active_lock.require_layout(layout)?;
+    // RFC 166 D2: today's order -- the WAL first, then the witness, then `ref-name` -- is the safe
+    // one (the design round's own failpoint sweep found the alternative leaves a non-empty WAL with
+    // no durable owner, §1.6's own shape reached a second way).
     Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).truncate_empty()?;
+    crate::commit_boundary::witness::clear_witness(layout, DEFAULT_ACTIVE_NAME)?;
     remove_active_ref_metadata_authorized(layout)?;
     Ok(())
 }
