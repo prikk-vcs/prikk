@@ -170,6 +170,13 @@ planned for. None of these blocks 0.48.0.
   told had succeeded is never silent about it. What would close the gap itself -- telling a genuine
   crash apart from later damage to an already-durable record -- is a witness written with each commit
   (the count or end offset of committed records), planned for 0.49.0.
+- **A crash during a commit after the first one in a session can leave `ref-name` empty while the queue
+  still holds records (0.20.0-0.48.0).** Every commit, not only the first, rewrote this small file by a
+  durable truncate then a durable append; a crash between the two leaves nothing durable naming which
+  ref owns the queue. `verify` and `doctor` exit 1, and `commit`/`seal` refuse -- see
+  [the troubleshooting entry](../guide/troubleshooting.md) for the exact text and the way out (writing
+  the ref name back by hand). Fixed in 0.49.0 (D1): the file is written once per session, by the first
+  commit only.
 - **Fixed in 0.49.0 (R1): a ref publication now reads the whole ref log once, not three times.**
   `classify_state`'s own replay is threaded through the append's idempotency check and the post-write
   agreement check (a ranged read-back of just the bytes appended, not a fourth whole read). Measured

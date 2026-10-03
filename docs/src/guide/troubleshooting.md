@@ -150,6 +150,46 @@ repository as it is and copy `.prikk/active/` aside before doing anything else: 
 contrast, shows as `trailing partial WAL bytes: N` and a `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` warning, and `--repair-wal-tail` is the
 right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail and the repair deleted the intact records after it.)
 
+## `error: integrity error: active WAL has records but active ref metadata is missing`
+
+**Affects 0.20.0 through 0.48.0.** A crash during a commit *after the first one in a session* can leave
+`.prikk/active/default/ref-name` empty while the queue of unsealed commits (the active WAL) still holds
+one or more records — because every commit, not only the first, rewrote this file by a durable truncate
+then a durable append, and a crash landing between the two leaves it empty. The commit itself is not
+lost (its bytes are durably queued), but nothing today can tell which ref it belongs to, so the way
+through is blocked:
+
+- `prikk status` shows `queued patches: N targeting <missing metadata>`;
+- `prikk verify` and `prikk doctor` both exit `1`;
+- `prikk commit` and `prikk seal` both refuse with this same message (`commit`'s own text is prefixed
+  `integrity error:`; `seal`'s is not, otherwise identical);
+- `prikk doctor --repair-wal-tail` and `prikk doctor --repair-tails` do not help: there is no torn tail
+  here for either of them to repair.
+
+**How to find the branch to write back**: `prikk status`'s own output, quoted above, already names it —
+look at its `current branch: <ref>` line. That line reads a different, unaffected file
+(`.prikk/current-branch`, the worktree's own checked-out branch), so it still shows the right ref even
+while `active/default/ref-name` itself is empty. If you changed branches since the commit that crashed,
+use whichever ref you were actually committing to at the time instead.
+
+**The way out**, run end to end against a real killed repository:
+
+```sh
+# If a previous run was interrupted mid-write, its lock may still be on disk:
+prikk unlock --lock .prikk/active/default/active.lock --yes
+
+# Write the branch name back by hand (no trailing newline needed):
+printf 'heads/main' > .prikk/active/default/ref-name
+
+prikk verify   # now exits 0
+prikk seal     # the queued commit(s) seal normally
+```
+
+Nothing about the queued commit's own content is at risk at any point in this sequence — only the
+small metadata file naming which ref owns it. 0.49.0 writes this file once per session instead of once
+per commit, closing the window; see [current limitations](../reference/current-state.md) for the status
+of that fix.
+
 ## `error: integrity error: the ref pointer index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
 `seal`, `branch create`, `tag create` and `merge` each refuse **before appending to the pointer index
