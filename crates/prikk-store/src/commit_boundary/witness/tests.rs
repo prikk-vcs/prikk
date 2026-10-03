@@ -20,6 +20,39 @@ fn commit(layout: &RepositoryLayout, path: &str, body: &[u8]) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does() {
+    // RFC 166 D2 item 3: the witness is written only through the anchored `MutationRoot`
+    // primitives, which refuse to follow a symlink at the final path component for *any* file --
+    // the same protection every other session file (`ref-name`, `declarations`, `active.lock`)
+    // already has. Confirmed here for `witness` specifically, not assumed from the shared primitive
+    // alone.
+    let root = unique_temp_dir("rfc166-d2-symlink");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let witness_path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness");
+    std::fs::remove_file(&witness_path).unwrap();
+    let elsewhere = unique_temp_dir("rfc166-d2-symlink-target");
+    std::os::unix::fs::symlink(&elsewhere, &witness_path).unwrap();
+    std::fs::write(layout.root().join("b.txt"), b"two").unwrap();
+    let result = commit_worktree_changes_with_generator(
+        &layout, "heads/main", "d2", WorktreePatchCommitOptions::file_level(),
+        &mut NodeIdGenerator::production(), &signer(),
+    );
+    assert!(
+        result.is_err(),
+        "a symlinked witness path must refuse the write, not follow it elsewhere"
+    );
+    assert!(
+        !elsewhere.join("witness").exists(),
+        "nothing must have been written through the symlink"
+    );
+    std::fs::remove_file(&witness_path).ok();
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&elsewhere).ok();
+}
+
+#[test]
 fn absent_before_any_commit() {
     let root = unique_temp_dir("rfc166-d2-absent");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
@@ -87,6 +120,46 @@ fn a_flipped_byte_is_damaged_not_absent() {
         WitnessState::Damaged(_) => {}
         other => panic!("expected Damaged, got {other:?}"),
     }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn a_commit_after_a_legacy_queue_with_no_witness_folds_the_whole_queue_never_a_false_alarm() {
+    // RFC 166 §13 item 2's own named defect in the design round's own prototype: "any queue begun or
+    // extended by 0.48.0 would read as 'a substituted earlier record', a false alarm that refuses
+    // commits." Simulated here by removing the witness after real commits (indistinguishable from
+    // 0.48.0 having written them at all -- D3 item 1's own point exactly) rather than shelling out to
+    // the real 0.48.0 binary, since the code path cannot tell the two apart either.
+    let root = unique_temp_dir("rfc166-d2-legacy-queue");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one"); // simulates 0.48.0's own first commit
+    commit(&layout, "b.txt", b"two"); // simulates 0.48.0's own second commit
+    let witness_path = layout.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness");
+    std::fs::remove_file(&witness_path).unwrap(); // 0.48.0 never wrote one at all
+    assert_eq!(read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(), WitnessState::Absent);
+    commit(&layout, "c.txt", b"three"); // this binary's own first commit over the legacy queue
+    let witnessed = match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
+        WitnessState::Valid(record) => record,
+        other => panic!("expected Valid, got {other:?}"),
+    };
+    assert_eq!(witnessed.last_seq, 3);
+    let wal = crate::wal::Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let replay = wal.replay().unwrap();
+    assert_eq!(replay.records.len(), 3, "all three records, old and new, are sound");
+    let mut expected = [0u8; 32];
+    for record in &replay.records {
+        let frame_hash = crate::wal::record_frame_checksum(record).unwrap();
+        let mut preimage = Vec::with_capacity(64);
+        preimage.extend_from_slice(&expected);
+        preimage.extend_from_slice(&frame_hash);
+        expected = prikk_hash::sha256(&preimage);
+    }
+    assert_eq!(
+        witnessed.running_hash, expected,
+        "the running hash must cover the whole queue (seq 1-3), including the two records this \
+         binary never witnessed itself -- not just the one new record folded onto an empty prior \
+         hash, which is exactly the false-alarm shape the design round's own prototype had"
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
