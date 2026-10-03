@@ -84,3 +84,63 @@
   - the 14 gates on `main`'s tip are not needed (no product code);
   - state that the primary tree is clean.
 - **Report:** `.git-exclude/review-request/rfc166-design-round-report-v1.md`.
+
+## Addendum 1 — 2026-10-03: finish the round (review `rfc166-design-round-review-v1`)
+
+Report `rfc166-design-round-report-v1.md`. **Not accepted: the round is incomplete, and its timings ran on tmpfs.** Read
+review v1, all of it.
+- **Still a design round:** measure, prototype, report, stop. No product code lands.
+- **Ruled already** (review v1 §4):
+  - the prototype is kept;
+  - an absent witness means "no witness", reported, falling back to rule 3;
+  - P3 is prototyped beside W2 in P1.
+- **RFC 166 changed:** §1.6 (the torn `ref-name`), Q1's scope, and the depth 1,000 (the queue limit), not 1,024.
+
+0. **Keep the prototype.** `/home/nabbisen/Desktop/prikk/scratch-166/proto` and its target directory stay until RFC
+   166 is accepted. Review paths point into it.
+1. **Readers, in the prototype,** under RFC 166 §4 and review v1 §4:
+   - `verify`, `status`, `doctor`, `--repair-wal-tail`, and `commit`'s and `seal`'s checks before their first write;
+   - connectivity for "WAL shorter or empty × witness ahead": the witnessed Patch reachable from the published ref
+     means a drain, and otherwise a loss;
+   - **two prototypes:** W2 in P1, and P3 (one atomically replaced session file with the ref name and the witness);
+   - **W3:** prototype it, or file a question first. Not a silent skip.
+2. **Q1, by failpoints, with the readers' verdicts:**
+   - every write ordinal of a **second** commit (blobs, author key, `ref-name`, WAL, witness, `declarations`), of the
+     idempotent retry, of seal's drain (**both orders** of WAL truncate and witness clear), and of the repair;
+   - **the kill probe,** `/home/nabbisen/.pgtmp/arch-166/commit_kill_probe.py <binary> <workdir> 300`, on each
+     prototype's release build: no state without a way out, or each such state classified and named;
+   - **§1.6, the torn `ref-name`:** each option that closes it (no rewrite when the WAL is non-empty and the name is
+     unchanged; an atomic replace; P3), measured by the same probe.
+3. **Q2:** every reachable cell built, with the verdict and the way out from the prototype's readers. Each impossible
+   cell, with the reason.
+4. **Q3:** W1 as an end offset, too, against the same substitution and against one of a different length.
+5. **`matrix.py`:**
+   - run it on each prototype:
+     `.git-exclude/upstream/external-architect/receive/017-review-of-the-candidate-5e50a661/reproduce/matrix.py`,
+     against `matrix-5e50a661.txt` with `compare_matrix.py`;
+   - every changed cell explained;
+   - what the five I1q cells now read.
+6. **Q5, with the readers:**
+   - the four sequences;
+   - **0.48.0 seal, then 0.48.0 commit** (same seq, different Patch);
+   - the prototype draining and repairing a 0.48.0-made repository.
+7. **Q6, on `/home`:**
+   - **the filesystem printed** (`stat -f -c %T`), and the calibration (exit status, duration) first;
+   - `commit` at depths 1, 64 and 1,000, baseline against each prototype, 3 samples, the mean of 5 commits each;
+   - `seal` at 64 and 1,000, exit status shown;
+   - `verify` with W3 at 1,000, if W3 is built;
+   - **your baseline must agree with the architect's** (20.4–22.2 ms, review v1 §1), or say why not;
+   - **the "seal @ 1,024" number in report v1:** how it was produced, or withdrawn.
+8. **Q7:** the text, quoted from each prototype's binary.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| U1 | readers, P3, connectivity (and W3 or a question) | 120 min |
+| U2 | Q1 sweep, the kill probe, §1.6's options | 90 min |
+| U3 | Q2 table, Q3, `matrix.py` | 90 min |
+| U4 | Q5 and Q6 | 60 min |
+| U5 | Q7 | 15 min |
+
+**Nothing else runs while U4's timings do.** Each unit's real start and end time.
+
+**Report:** `.git-exclude/review-request/rfc166-design-round-report-v2.md`.

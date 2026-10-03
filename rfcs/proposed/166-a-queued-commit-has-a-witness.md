@@ -7,6 +7,8 @@ witness"*).
   commit-witness-design-round-handoff-v1.md`.
 - **Then the architect rules on each option, this RFC is rewritten into a design, and the owner reads it** before any
   implementation handoff.
+- **2026-10-03:** design-round report v1 not accepted (review `rfc166-design-round-review-v1`), and Addendum 1 is live.
+  The review found §1.6, the torn `ref-name`, which shipped in 0.48.0.
 
 **Author-review independence.** The architect wrote RFC 162 rule 3, the rule that produces N6. The external architect
 found N6 (letter 015), and the architect's own §9 needed two late corrections (RFC 164 §9, §9.2). So:
@@ -48,6 +50,19 @@ K1–K7 bind it in the same way:**
    - that count is a guess from the shape. A claimed length past the end of the file, such as 2^62, is not counted.
 5. **Stale text:** `durability-recovery.md`'s claims table still says the WAL-tail repair "refuses complete-record
    integrity failures". It has not done so since RFC 162.
+6. **A torn `ref-name` strands the queue** (found by the architect in the design-round review, 2026-10-03; shipped in
+   0.48.0):
+   - **Every** commit rewrites `ref-name` by a durable truncate, then a durable append, not only the first commit of a
+     session.
+   - A crash between the two, on any commit after the first, leaves acknowledged commits in the WAL and `ref-name`
+     empty.
+   - **Then nothing moves it:** `verify` exits 1; `commit`, `seal`, `--repair-wal-tail` and `--repair-tails` all
+     refuse. The only way out is writing the ref name back by hand.
+   - **Measured by SIGKILL of a second commit:** 12 of 150 kills on shipped 0.48.0, and 12 of 300 on `main`
+     (`/home/nabbisen/.pgtmp/arch-166/commit_kill_probe.py`).
+   - The external matrix grades "`ref-name` emptied" `ok`, because it is reported as damage. **It is reachable by a
+     crash, though, and it has no way out.**
+   - **It belongs here:** it is in the commit's own write sequence, and §4's P3 places the witness in this same file.
 
 ## 2. Facts from source
 
@@ -133,6 +148,9 @@ K1–K7 bind it in the same way:**
    - what `verify`, `status`, `doctor`, the repair, a retried `commit` and a `seal` do.
 
    **The states come from failpoints, not reading.** One table.
+   - **A commit after the first in its session, not only the first,** with every write it makes: blobs, author key,
+     `ref-name`, WAL, witness, `declarations`.
+   - **The torn `ref-name` (§1.6):** how each option closes it, measured by the kill probe.
 2. **The decision table:** (the WAL's end: sound, a crash-shaped tail, a complete damaged record, shorter than the
    witness, empty, missing) × (the witness: agrees, behind, ahead, absent, damaged).
    - For each cell: the verdict (tail, acknowledged damage, a drain, a loss), what `verify` reports, and the safe way
@@ -156,9 +174,11 @@ K1–K7 bind it in the same way:**
    For each: what the newer binary then reports, and whether it is ever a false loss or a missed one. **If no shape is
    safe in format 7, say so plainly. That is the owner's decision.**
 6. **Cost:** release builds, `/home` (LUKS), three samples and the spread:
-   - `commit` time before and with each prototype, at 1, 64 and 1,024 queued commits;
-   - `seal` at 64 and 1,024;
-   - `verify` with W3 at 1,024.
+   - `commit` time before and with each prototype, at 1, 64 and 1,000 queued commits;
+   - `seal` at 64 and 1,000;
+   - `verify` with W3 at 1,000.
+   - **1,000 is the default queue limit:** the 1,001st commit is refused. The first version of this RFC said 1,024,
+     which cannot be reached.
 7. **Text and the matrix:**
    - the five I1q cells: what each would read as under each option;
    - the stale claims-table row;
