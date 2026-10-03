@@ -140,7 +140,8 @@ way:**
 - **The write comes after the durable WAL append and before the report.**
   - A crash between the two leaves a sound record the witness does not cover. The user was not told, so it is not
     acknowledged, and it is kept as today.
-  - Every commit path writes it: `author_inner` and `ActiveSession::append_patch`.
+  - **Every appender writes it, through one function** (§13 item 1): `commit` (`author_inner`), `ActiveSession::append_patch`
+    and `rollback-draft` (`rollback/draft.rs`).
 - **Seal's drain clears it,** in today's order: the WAL is truncated, then the witness is cleared, then `ref-name` is
   cleared. That order is the safe one: clearing ownership before the WAL leaves an owned queue without an owner, shown
   for every placement.
@@ -162,12 +163,12 @@ before their first write.**
 earlier record, which W2 cannot. Cost: 0.73 ms at 1,000 records (design round, library call).
 
 **D5 — the ways out (K6: delivered last, in their own round, and examined by the external review).**
-- **`prikk doctor --repair-wal-tail --acknowledge-loss [--plan-only]`** removes acknowledged damage.
+- **`prikk doctor --discard-damaged-commits [--plan-only]`** removes acknowledged damage (§13 item 14).
   - **The plan names each acknowledged record it would remove:** its seq, and the Patch id the witness holds for the
     last one. It also names the recovery file the bytes go to.
   - After the removal, the witness is rewritten to cover the sound prefix.
   - **The text says the content may still be in the working tree** only where `status` shows it as uncommitted.
-- **`prikk doctor --restore-active-ref --ref <ref> [--plan-only]`** gives an owned queue its owner back, for a
+- **`prikk doctor --restore-queue-target --ref <ref> [--plan-only]`** (§13 item 15) gives an owned queue its owner back, for a
   `ref-name` that is missing or disagrees with the witness. The 0.48.0 strandings of §1.6 are the main case.
   - **The ref comes from the user, never from the witness** (C2). `doctor` may show the witness's ref name as a hint.
   - **It refuses:**
@@ -189,11 +190,11 @@ that has a witness.
 | 1 | sound | agrees | healthy | 0 | proceed | nothing to do |
 | 2 | sound | behind (a crash before acknowledgement, or an older binary's commit) | pending | 0, with a note | proceed; the next commit advances it | nothing to do |
 | 3 | sound, plus a tail past the witnessed record | agrees | crash tail (never acknowledged) | 0, with the tail line | refuse, as today | removes it, as today |
-| 4 | the record after the witnessed prefix is damaged or missing, and the witness names it | ahead by its seq | **acknowledged damage (N6)** | **1** | refuse | **refuses; `--acknowledge-loss` (D5)** |
-| 5 | shorter than the witness, or empty, and connectivity fails | ahead | **acknowledged loss** | **1** | refuse | **refuses; `--acknowledge-loss`** |
+| 4 | the record after the witnessed prefix is damaged or missing, and the witness names it | ahead by its seq | **acknowledged damage (N6)** | **1** | refuse | **refuses; `--discard-damaged-commits` (D5)** |
+| 5 | shorter than the witness, or empty, and connectivity fails | ahead | **acknowledged loss** | **1** | refuse | **refuses; `--discard-damaged-commits`** |
 | 6 | same seq, different Patch or frame hash, and connectivity fails | mismatch | **substituted record** | **1** | refuse | refuses; a copy is the way out |
-| 7 | a tail | damaged | unknown | 1 | refuse | refuses; `--acknowledge-loss` |
-| 8 | sound, no tail | damaged | witness damaged | 0, with a warning | proceed; the next commit replaces it | nothing to do |
+| 7 | a tail | damaged | unknown | 1 | refuse | refuses; `--discard-damaged-commits` |
+| 8 | sound, no tail | damaged | witness damaged | 0, with a warning | proceed; the next commit replaces it | `--repair-tails` rebuilds it (§13 item 5) |
 | 9 | non-empty | any | ownership missing | 1 | refuse, as today | D5's restore |
 | 10 | any | W3 disagrees | substituted earlier record | 1 | refuse | a copy is the way out |
 
@@ -281,15 +282,15 @@ release builds:
 
 ## 10. For the owner
 
-1. **Accept the design** (D1–D6), or not.
-2. **P1 (recommended) or P3** (§8).
-3. **§1.6 shipped in 0.48.0:** a disclosure in the known limitations, or an advisory. It is availability only: no
-   authority moves, and the queue's content is intact. **Disclosure is recommended.**
+1. **Accept the design** (D1–D6, as amended by §13), or not. *Owner 2026-10-03: "almost accepted", pending §13.*
+2. **P1 or P3** (§8). *Owner 2026-10-03: P1.*
+3. **§1.6:** a disclosure or an advisory. *Owner 2026-10-03: a disclosure*, covering 0.20.0 to 0.48.0 (§13).
 
 ## 11. Implementation, after acceptance
 
-- **Round 1 — D1 to D4, D6:**
-  - D1 first, as its own commit;
+- **Round 1 — D1 to D4, D6, with §13 items 1–13, 16 and 17:**
+  - **item 0:** the §1.6 troubleshooting entry, delivered and pushed ahead of everything else;
+  - D1 next, as its own commit;
   - the witness written and cleared;
   - the classification wired into every reader and writer;
   - W3 in `verify`;
@@ -297,7 +298,7 @@ release builds:
   - **Tests:** a failpoint at every write ordinal of a second commit, the drain and the repair; every row of §5 built,
     each with a control that turns it red; the 0.48.0 sequences of §6 against the real binary; the kill probe; and
     `matrix.py`.
-- **Round 2 — D5, the ways out:** both verbs under K1–K5, raced against `commit` and `seal`, with every refusal
+- **Round 2 — D5, the ways out (with §13 items 10, 14 and 15):** both verbs under K1–K5, raced against `commit` and `seal`, with every refusal
   condition paired with its control.
 - **At the 0.49.0 candidate:** the external review examines D5 with RFC 165's R4 and R5 (K6).
 
