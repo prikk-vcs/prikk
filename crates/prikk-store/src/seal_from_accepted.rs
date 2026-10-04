@@ -177,6 +177,25 @@ pub fn seal_from_accepted_claim(
     // the same reasoning `rollback_draft` already applies for exactly this class of reason.
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay()?;
+    // RFC 166 round 2 §0: the commit-witness classification speaks first, before the older
+    // tail/damage checks below. `owning_ref` is read fresh, not assumed `Missing` -- this function's
+    // own "WAL must be empty" requirement is checked separately, below, and a non-empty WAL here can
+    // genuinely have valid ownership (e.g. unrelated local queued work); assuming `Missing` would
+    // misfire row 9 (`OwnershipMissing`) on exactly that case.
+    let owning_ref_now = crate::commit_boundary::active::read_active_ref_metadata(layout)?;
+    {
+        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+        let verdict = crate::commit_boundary::classification::classify(
+            layout,
+            &replay,
+            &owning_ref_now,
+            &witness,
+        )?;
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
+        {
+            return Err(PrikkError::Integrity(reason));
+        }
+    }
     if replay.trailing_partial_bytes != 0 {
         return Err(PrikkError::Integrity(format!(
             "active WAL has {} trailing partial bytes; run verify/doctor before sealing from \
@@ -200,21 +219,6 @@ pub fn seal_from_accepted_claim(
              local work first"
                 .to_string(),
         ));
-    }
-    // RFC 166 D3/D6: the commit-witness pre-write check. `owning_ref` is `Missing` unconditionally --
-    // the check above already guarantees `replay.records.is_empty()` by the time this line runs.
-    {
-        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
-        let verdict = crate::commit_boundary::classification::classify(
-            layout,
-            &replay,
-            &crate::commit_boundary::active::ActiveRefMetadata::Missing,
-            &witness,
-        )?;
-        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
-        {
-            return Err(PrikkError::Precondition(reason));
-        }
     }
 
     let ref_store = RefStore::new(layout.clone());

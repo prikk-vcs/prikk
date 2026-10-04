@@ -195,9 +195,12 @@ fn an_inline_test_module_is_not_production() {
         // ownership branch and before the WAL append, with its own doc comment, 1427 -> 1453, then a
         // `cargo fmt` pass, 1453 -> 1452. RFC 166 §13 item 13: the "no node-addressed changes"
         // refusal tells an interrupted-but-durable retry apart from a genuinely empty worktree, and
-        // `commit_witness_verdict` is kept past its own block for that check, 1452 -> 1473.
+        // `commit_witness_verdict` is kept past its own block for that check, 1452 -> 1473. RFC 166
+        // round 2 §0 (review v1's own required fix): the classification now speaks before the older
+        // tail check, with a single fresh ownership read shared by the empty-queue branch below it,
+        // 1473 -> 1471.
         physical,
-        1473,
+        1471,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -207,7 +210,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1424);
+    assert_eq!(counted.production_lines, 1422);
     assert_eq!(
         physical - counted.production_lines,
         49,

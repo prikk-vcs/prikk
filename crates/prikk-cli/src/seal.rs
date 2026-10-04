@@ -97,6 +97,24 @@ fn seal_active_no_audit(
         ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).map_err(|err| err.to_string())?;
     let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay().map_err(|err| err.to_string())?;
+    // RFC 166 round 2 §0: the commit-witness classification speaks first, before the older
+    // tail/damage checks below -- see `node_authoring.rs::author_inner`'s identical fix.
+    // `owning_ref_now` is read fresh (whatever is actually on disk), not assumed `Valid(ref_name)`:
+    // the dedicated ownership-match check below (does the queue belong to *this* ref) is a different
+    // question classify does not answer, and still needs the real value regardless of what classify
+    // finds.
+    let owning_ref_now = read_active_ref_metadata(&layout).map_err(|err| err.to_string())?;
+    {
+        let witness = prikk_store::read_witness(&layout, DEFAULT_ACTIVE_NAME)
+            .map_err(|err| err.to_string())?;
+        let verdict = prikk_store::classify(&layout, &replay, &owning_ref_now, &witness)
+            .map_err(|err| err.to_string())?;
+        if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
+            return Err(reason);
+        }
+    }
+    // Row 3 only past this point: a genuine crash tail the classification above already confirmed
+    // is not acknowledged damage.
     if replay.trailing_partial_bytes != 0 {
         return Err(format!(
             "active WAL has {} trailing partial bytes; run verify/doctor before seal",
@@ -111,7 +129,7 @@ fn seal_active_no_audit(
         return Err("active WAL has a damaged record; run verify/doctor before seal".to_string());
     }
     if replay.records.is_empty() {
-        match read_active_ref_metadata(&layout).map_err(|err| err.to_string())? {
+        match &owning_ref_now {
             ActiveRefMetadata::Missing => {}
             ActiveRefMetadata::Valid(_) | ActiveRefMetadata::Invalid(_) => {
                 remove_active_ref_metadata(&layout).map_err(|err| err.to_string())?;
@@ -119,7 +137,7 @@ fn seal_active_no_audit(
         }
         return Err("active WAL has no patch records to seal".to_string());
     }
-    match read_active_ref_metadata(&layout).map_err(|err| err.to_string())? {
+    match owning_ref_now {
         ActiveRefMetadata::Valid(actual) if actual == ref_name => {}
         ActiveRefMetadata::Valid(actual) => {
             return Err(format!(
@@ -133,23 +151,6 @@ fn seal_active_no_audit(
             return Err(format!(
                 "active WAL has records but active ref metadata is malformed: {reason}"
             ));
-        }
-    }
-    // RFC 166 D3/D6: the commit-witness pre-write check. `owning_ref` is reconstructed as
-    // `Valid(ref_name)` -- exactly what the ownership match just above confirmed (this branch is
-    // reached only when it did) -- never a second, independent read of the ownership file.
-    {
-        let witness = prikk_store::read_witness(&layout, DEFAULT_ACTIVE_NAME)
-            .map_err(|err| err.to_string())?;
-        let verdict = prikk_store::classify(
-            &layout,
-            &replay,
-            &ActiveRefMetadata::Valid(ref_name.clone()),
-            &witness,
-        )
-        .map_err(|err| err.to_string())?;
-        if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
-            return Err(reason);
         }
     }
 

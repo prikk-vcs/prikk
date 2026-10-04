@@ -138,6 +138,25 @@ pub fn append_rollback_draft(
     let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
     crate::refs::ensure_no_incomplete_publication(layout)?;
     let replay = wal.replay()?;
+    // RFC 166 round 2 §0: the commit-witness classification speaks first, before the older
+    // tail/damage checks below -- see `node_authoring.rs::author_inner`'s identical fix. `owning_ref`
+    // is read fresh, not assumed `Missing`: a non-empty WAL here can genuinely have valid ownership
+    // (unrelated local queued work, refused below for a different reason), and assuming `Missing`
+    // would misfire row 9 (`OwnershipMissing`) on exactly that case.
+    let owning_ref_now = read_active_ref_metadata(layout)?;
+    {
+        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+        let verdict = crate::commit_boundary::classification::classify(
+            layout,
+            &replay,
+            &owning_ref_now,
+            &witness,
+        )?;
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
+        {
+            return Err(PrikkError::Integrity(reason));
+        }
+    }
     if replay.trailing_partial_bytes != 0 {
         return Err(PrikkError::Integrity(format!(
             "active WAL has {} trailing partial bytes; run doctor before rollback-draft",
@@ -170,27 +189,10 @@ pub fn append_rollback_draft(
             "rollback-draft target ref changed during planning; retry rollback-draft".to_string(),
         ));
     }
-    match read_active_ref_metadata(layout)? {
+    match owning_ref_now {
         ActiveRefMetadata::Missing => {}
         ActiveRefMetadata::Valid(_) | ActiveRefMetadata::Invalid(_) => {
             remove_active_ref_metadata(layout)?;
-        }
-    }
-    // RFC 166 D3/D6: the commit-witness pre-write check. `owning_ref` is `Missing` unconditionally --
-    // the precondition above already guarantees `replay.records.is_empty()` by the time this line
-    // runs, the same fact the ownership match just above (re)established, so this is never a second,
-    // independent read of the ownership file.
-    {
-        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
-        let verdict = crate::commit_boundary::classification::classify(
-            layout,
-            &replay,
-            &ActiveRefMetadata::Missing,
-            &witness,
-        )?;
-        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
-        {
-            return Err(PrikkError::Precondition(reason));
         }
     }
     // RFC 164 round 2 Addendum 1, item 2: this signer's own author-key check, moved here from its own

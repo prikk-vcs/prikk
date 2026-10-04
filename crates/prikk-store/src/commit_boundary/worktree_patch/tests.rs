@@ -2086,8 +2086,11 @@ fn non_empty_wal_missing_active_ref_metadata_fails_closed() {
         &test_signer(),
     )
     .unwrap_err();
+    // RFC 166 round 2 §0: the commit-witness classification now speaks first for row 9 (any owner
+    // state, witness or none), before the older ownership-match check's own more specific text.
     assert!(
-        err.to_string().contains("metadata is missing"),
+        err.to_string()
+            .contains("no durable, matching owner names them"),
         "unexpected error: {err}"
     );
     let _ = std::fs::remove_dir_all(root);
@@ -2122,8 +2125,11 @@ fn non_empty_wal_malformed_active_ref_metadata_fails_closed() {
         &test_signer(),
     )
     .unwrap_err();
+    // RFC 166 round 2 §0: same reasoning as the missing-metadata control above -- the commit-witness
+    // classification's own row 9 text speaks first.
     assert!(
-        err.to_string().contains("metadata is malformed"),
+        err.to_string()
+            .contains("no durable, matching owner names them"),
         "unexpected error: {err}"
     );
     let _ = std::fs::remove_dir_all(root);

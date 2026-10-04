@@ -687,6 +687,14 @@ fn row10_a_non_empty_active_wal_refuses() -> Result<()> {
     let mut objects = FileObjectStore::new(fixture.layout.clone());
     let blob_id = write_blob(&mut objects, b"queued\n")?;
     let queued = create_file_patch(&author, "queued.txt", 0x9B, blob_id)?;
+    // RFC 166 round 2 §0: valid ownership, set up before the raw append, so this fixture isolates
+    // the "non-empty active WAL" precondition on its own -- without it, the commit-witness
+    // classification's own row 9 (no durable owner) fires first, which is a different, already
+    // separately tested condition.
+    crate::commit_boundary::active::prepare_empty_active_ref_for_append(
+        &fixture.layout,
+        TARGET_REF,
+    )?;
     Wal::for_layout(&fixture.layout, DEFAULT_ACTIVE_NAME).append_patch(&queued)?;
 
     let result = seal_from_accepted_claim(

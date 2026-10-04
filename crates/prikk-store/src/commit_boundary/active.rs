@@ -67,6 +67,26 @@ impl ActiveSession {
         ensure_no_incomplete_publication(&self.layout)?;
         let wal = Wal::for_layout(&self.layout, DEFAULT_ACTIVE_NAME);
         let replay = wal.replay()?;
+        // RFC 166 round 2 §0: the commit-witness classification speaks first, before the older
+        // tail/damage checks below -- see `node_authoring.rs::author_inner`'s identical fix, which
+        // this mirrors exactly, including the single fresh ownership read reused by the empty-queue
+        // branch further down.
+        let owning_ref_now = read_active_ref_metadata_for(&self.layout, DEFAULT_ACTIVE_NAME)?;
+        {
+            let witness =
+                crate::commit_boundary::witness::read_witness(&self.layout, DEFAULT_ACTIVE_NAME)?;
+            let verdict = crate::commit_boundary::classification::classify(
+                &self.layout,
+                &replay,
+                &owning_ref_now,
+                &witness,
+            )?;
+            if let Some(reason) =
+                crate::commit_boundary::classification::write_refusal_reason(&verdict)
+            {
+                return Err(PrikkError::Integrity(reason));
+            }
+        }
         if replay.trailing_partial_bytes != 0 {
             return Err(PrikkError::Integrity(format!(
                 "active WAL has {} trailing partial bytes; run doctor before appending",
@@ -99,29 +119,6 @@ impl ActiveSession {
             // DC-66: a non-empty active WAL now queues rather than refusing outright; ownership must
             // still be unambiguous — see `node_authoring.rs::author_inner`'s identical guard change.
             require_active_ref_for_non_empty_wal(&self.layout, "heads/main")?;
-        }
-        // RFC 166 D3/D6: the commit-witness pre-write check, mirroring `node_authoring.rs::
-        // author_inner`'s identical guard -- `owning_ref` reconstructed from exactly what the branch
-        // above just established, never a second, independent read of the ownership file.
-        {
-            let owning_ref = if replay.records.is_empty() {
-                ActiveRefMetadata::Missing
-            } else {
-                ActiveRefMetadata::Valid("heads/main".to_string())
-            };
-            let witness =
-                crate::commit_boundary::witness::read_witness(&self.layout, DEFAULT_ACTIVE_NAME)?;
-            let verdict = crate::commit_boundary::classification::classify(
-                &self.layout,
-                &replay,
-                &owning_ref,
-                &witness,
-            )?;
-            if let Some(reason) =
-                crate::commit_boundary::classification::write_refusal_reason(&verdict)
-            {
-                return Err(PrikkError::Precondition(reason));
-            }
         }
         let wal_sequence = crate::commit_boundary::witness::append_patch_and_witness(
             &self.layout,

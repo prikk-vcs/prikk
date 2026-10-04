@@ -362,8 +362,34 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
 
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let active_replay = wal.replay().map_err(AuthorError::Store)?;
+    // RFC 166 round 2 §0 (review v1's own required fix): the commit-witness classification speaks
+    // *first*, before the older tail/damage checks below -- round 1 wired it in after ownership was
+    // already confirmed, which let the tail check's own generic text answer first for rows 4-7, 9 and
+    // 10, naming `--repair-wal-tail` as if it could help when it cannot. `owning_ref_now` is a single
+    // fresh read, reused by the empty-queue branch below instead of a second one. `commit_witness_
+    // verdict` is kept past this block -- §13 item 13 reads it again below, at the "no node-addressed
+    // changes" refusal, to tell an interrupted-but-durable retry apart from a genuinely empty worktree.
+    let owning_ref_now = read_active_ref_metadata(layout).map_err(AuthorError::Store)?;
+    let commit_witness_verdict = {
+        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)
+            .map_err(AuthorError::Store)?;
+        let verdict = crate::commit_boundary::classification::classify(
+            layout,
+            &active_replay,
+            &owning_ref_now,
+            &witness,
+        )
+        .map_err(AuthorError::Store)?;
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
+        {
+            return Err(AuthorError::Store(PrikkError::Integrity(reason)));
+        }
+        verdict
+    };
+    // Row 3 only past this point (round 2 §0 item 2): a genuine crash tail the classification above
+    // already confirmed is not acknowledged damage. `--repair-wal-tail` is the correct way out here.
     if active_replay.trailing_partial_bytes != 0 {
-        return Err(AuthorError::Store(PrikkError::InvalidName(format!(
+        return Err(AuthorError::Store(PrikkError::Integrity(format!(
             "active WAL has {} trailing partial bytes; run `prikk doctor --repair-wal-tail` \
              before committing",
             active_replay.trailing_partial_bytes
@@ -396,7 +422,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         ))));
     }
     if active_replay.records.is_empty() {
-        match read_active_ref_metadata(layout).map_err(AuthorError::Store)? {
+        match owning_ref_now {
             ActiveRefMetadata::Missing => {}
             ActiveRefMetadata::Valid(_) | ActiveRefMetadata::Invalid(_) => {
                 remove_active_ref_metadata(layout).map_err(AuthorError::Store)?;
@@ -411,34 +437,6 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // rejecting.
         require_active_ref_for_non_empty_wal(layout, &canonical_ref).map_err(AuthorError::Store)?;
     }
-    // RFC 166 D3/D6: the commit-witness pre-write check, run after ownership is confirmed (or
-    // removed) above and before the append below. `owning_ref` is reconstructed from exactly what
-    // the branch above just established -- `Missing` for the empty-queue branch (which just enforced
-    // that), `Valid(canonical_ref)` for the non-empty branch (which just confirmed that) -- never a
-    // second, independent read of the ownership file. `commit_witness_verdict` is kept past this
-    // block -- RFC 166 §13 item 13 reads it again below, at the "no node-addressed changes" refusal,
-    // to tell an interrupted-but-durable retry apart from a genuinely empty worktree.
-    let commit_witness_verdict = {
-        let owning_ref = if active_replay.records.is_empty() {
-            ActiveRefMetadata::Missing
-        } else {
-            ActiveRefMetadata::Valid(canonical_ref.clone())
-        };
-        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)
-            .map_err(AuthorError::Store)?;
-        let verdict = crate::commit_boundary::classification::classify(
-            layout,
-            &active_replay,
-            &owning_ref,
-            &witness,
-        )
-        .map_err(AuthorError::Store)?;
-        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
-        {
-            return Err(AuthorError::Store(PrikkError::Precondition(reason)));
-        }
-        verdict
-    };
 
     // RFC 164 Rule D: this signer's own author-key check, moved here from its own previous position
     // immediately before the WAL append (near the end of this function, where `record_author_key_
@@ -880,9 +878,9 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             crate::commit_boundary::classification::Verdict::Pending { .. }
         ) {
             return Err(AuthorError::Store(PrikkError::Precondition(
-                "a queued commit was already written but not confirmed, either because this \
-                 command was interrupted after its own durable write or because an older prikk \
-                 wrote it; there is nothing left to commit"
+                "a queued commit was already written but not confirmed, either because a \
+                 previous command was interrupted after its own durable write or because an \
+                 older prikk wrote it; there is nothing left to commit"
                     .to_string(),
             )));
         }
