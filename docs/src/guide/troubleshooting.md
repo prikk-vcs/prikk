@@ -150,27 +150,39 @@ repository as it is and copy `.prikk/active/` aside before doing anything else: 
 contrast, shows as `trailing partial WAL bytes: N` and a `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` warning, and `--repair-wal-tail` is the
 right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail and the repair deleted the intact records after it.)
 
-## `error: integrity error: active WAL has records but active ref metadata is missing`
+## `error: queued commits exist but no durable, matching owner names them`
 
-**Affects 0.20.0 through 0.48.0.** A crash during a commit *after the first one in a session* can leave
-`.prikk/active/default/ref-name` empty while the queue of unsealed commits (the active WAL) still holds
-one or more records — because every commit, not only the first, rewrote this file by a durable truncate
-then a durable append, and a crash landing between the two leaves it empty. The commit itself is not
-lost (its bytes are durably queued), but nothing today can tell which ref it belongs to, so the way
-through is blocked:
+**Affects 0.20.0 through 0.48.0** (the stranding itself); **0.49.0 adds the way out.** A crash during a
+commit *after the first one in a session* could leave `.prikk/active/default/ref-name` empty while the
+queue of unsealed commits (the active WAL) still held one or more records — because every commit, not
+only the first, used to rewrite this file by a durable truncate then a durable append, and a crash
+landing between the two left it empty. 0.49.0 also closes the same condition reached a second way: the
+file present but naming a *different* ref than the session's own commit witness does (RFC 166 D6) — both
+read identically, since a session cannot have two owners. Either way, the commit itself is not lost (its
+bytes are durably queued), but nothing can tell which ref it belongs to, so the way through is blocked:
 
-- `prikk status` shows `queued patches: N targeting <missing metadata>`;
+- `prikk status` shows `queued patches: N targeting <missing metadata>`, with a warning naming the exact
+  text below;
 - `prikk verify` and `prikk doctor` both exit `1`;
-- `prikk commit` and `prikk seal` both refuse with this same message (`commit`'s own text is prefixed
-  `integrity error:`; `seal`'s is not, otherwise identical);
+- `prikk commit`, `prikk seal` and `prikk rollback-draft` all refuse with the same text:
+
+  ```
+  error: queued commits exist but no durable, matching owner names them -- run `prikk doctor
+  --restore-queue-target --ref <ref>` to give the queue its owner back
+  ```
+
+  (`commit`'s own text is prefixed `integrity error:`; the others are not, otherwise identical.)
 - `prikk doctor --repair-wal-tail` and `prikk doctor --repair-tails` do not help: there is no torn tail
   here for either of them to repair.
 
-**How to find the branch to write back**: `prikk status`'s own output, quoted above, already names it —
-look at its `current branch: <ref>` line. That line reads a different, unaffected file
+**How to find the branch to restore**: `prikk status`'s own output, quoted above, already names it — look
+at its `current branch: <ref>` line. That line reads a different, unaffected file
 (`.prikk/current-branch`, the worktree's own checked-out branch), so it still shows the right ref even
-while `active/default/ref-name` itself is empty. If you changed branches since the commit that crashed,
-use whichever ref you were actually committing to at the time instead.
+while `active/default/ref-name` itself is empty or disagrees. If you changed branches since the commit
+that crashed, use whichever ref you were actually committing to at the time instead. **The ref always
+comes from you** — `--restore-queue-target` never reads it from the witness, even when `doctor` shows
+one as a hint; a witness naming a *different* ref than the one you give refuses, rather than silently
+preferring one source over the other.
 
 **The way out**, run end to end against a real killed repository:
 
@@ -178,17 +190,20 @@ use whichever ref you were actually committing to at the time instead.
 # If a previous run was interrupted mid-write, its lock may still be on disk:
 prikk unlock --lock .prikk/active/default/active.lock --yes
 
-# Write the branch name back by hand (no trailing newline needed):
-printf 'heads/main' > .prikk/active/default/ref-name
+# See what this would do first, without writing anything:
+prikk doctor --restore-queue-target --ref heads/main --plan-only
+
+# Then do it:
+prikk doctor --restore-queue-target --ref heads/main
 
 prikk verify   # now exits 0
 prikk seal --allow-no-audit   # the queued commit(s) seal normally
 ```
 
-Nothing about the queued commit's own content is at risk at any point in this sequence — only the
-small metadata file naming which ref owns it. 0.49.0 writes this file once per session instead of once
-per commit, closing the window; see [current limitations](../reference/current-state.md) for the status
-of that fix.
+Nothing about the queued commit's own content is at risk at any point in this sequence — only the small
+metadata file naming which ref owns it, replaced by one atomic write. 0.49.0 also writes this file once
+per session instead of once per commit, closing the window for every commit going forward; see [current
+limitations](../reference/current-state.md) for the status of that fix.
 
 ## `error: a queued commit you were told had succeeded disagrees with the WAL in a way the WAL's own sound prefix cannot explain (RFC 166)`
 
@@ -222,8 +237,8 @@ $ prikk doctor
 ...
 error [PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE]: a queued commit you were told had succeeded
 (sequence 1) is damaged
-  recommendation: preserve the repository; it was already acknowledged, and it cannot be removed as a
-  crash leftover
+  recommendation: run `prikk doctor --discard-damaged-commits` to remove it; it was already
+  acknowledged, so it cannot be removed as a crash leftover
 ...
 error: doctor found repository health errors
 ```
@@ -231,15 +246,43 @@ error: doctor found repository health errors
 ```
 $ prikk doctor --repair-wal-tail
 ...
+active session "default": skipped -- this active session has its own blocking issue: a queued commit
+you were told had succeeded (sequence 1) is damaged
+...
 error: doctor repair skipped one or more active sessions; see the per-active outcomes above for which
 and why
 ```
 
-**There is no way out yet in 0.49.0.** The repository is preserved exactly as it is — nothing is
-deleted, and nothing is guessed at — but round 1 carries no verb that removes an acknowledged, damaged
-record. `prikk doctor --discard-damaged-commits` is planned for round 2; until then, preserve the
-repository (the damaged bytes are not touched by any of the commands above) and wait for that release,
-or restore the affected file from a backup taken before the damage occurred.
+**The way out**, run end to end against a real killed repository:
+
+```sh
+# See what this would remove first, without writing anything:
+prikk doctor --discard-damaged-commits --plan-only
+
+# Then do it -- the removed bytes are saved to .prikk/recovery/ first, all-or-nothing:
+prikk doctor --discard-damaged-commits
+```
+
+```
+$ prikk doctor --discard-damaged-commits --plan-only
+doctor repository: /path/to/.prikk
+acknowledged commit at sequence 1 (patch 01157f0c...)
+340 bytes saved to recovery/wal-default-at-0-bbbeb7e7a8a62c38.bytes before truncation
+plan only -- nothing written
+
+$ prikk doctor --discard-damaged-commits
+doctor repository: /path/to/.prikk
+acknowledged commit at sequence 1 (patch 01157f0c...)
+340 bytes saved to recovery/wal-default-at-0-bbbeb7e7a8a62c38.bytes before truncation
+damaged commit discarded
+```
+
+After it, `prikk verify` exits 0 again. The removed bytes are never gone — they are the exact bytes the
+named recovery file under `.prikk/recovery/` holds, in case the content needs to be recovered by hand
+from them (the queued commit's own content, not just its presence, since the WAL body is the signed
+Patch envelope itself). Rows 5 (the record no longer present at all) and 7 (the acknowledgment history
+itself unreadable) are the same verb's job too, with no sequence or Patch id to name in row 7's case —
+the plan still says so, honestly, rather than guessing one.
 
 **If the acknowledgment record itself is what's damaged, not the queue:** `doctor` reports a warning
 (`PRIKK-DOCTOR-COMMIT-WITNESS-DAMAGED`) instead of an error, and does not refuse — nothing acknowledged

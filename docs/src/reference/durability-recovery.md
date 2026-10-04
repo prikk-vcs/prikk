@@ -66,16 +66,18 @@ but "is this the last thing in the file, with no sound record after it." Widenin
 repair keeps every byte it removes, below — including, now, a record that was in fact a real write, torn
 in a way this file cannot tell apart from a crash.)
 
-**Disclosed, not fixed in 0.48.0: a damaged last record is a tail, and the repair can remove one the user was
-told had succeeded.** A record whose own bytes are all present but whose checksum fails (bit rot, a partial
-write the storage layer itself reordered, and similar) is, by rule 3, indistinguishable from a genuine
-crash-torn prefix once nothing sound follows it — `verify` exits 0, and `doctor --repair-wal-tail` truncates
-it, keeping the removed bytes. Because the trade is only good if nothing is silently lost, the repair's own
-output now says when what it removed includes one or more **complete** records (their own claimed length
-fully present, not merely a torn fragment), naming how many, so a removed record the user believed committed
-is never silent about it. A witness written with each commit — the count or end offset of records actually
-committed, checked independently of the WAL's own content — would let a tail beyond it be told apart from
-damage inside it; that is 0.49.0 work (RFC 163 §5).
+**Fixed in 0.49.0 (N6): a damaged last record used to read as a tail, and the repair could remove one the
+user was told had succeeded.** A record whose own bytes are all present but whose checksum fails (bit rot, a
+partial write the storage layer itself reordered, and similar) is, by rule 3, indistinguishable from a
+genuine crash-torn prefix once nothing sound follows it, so before 0.49.0 `verify` exited 0 and
+`doctor --repair-wal-tail` truncated it either way, even when it had already been acknowledged. 0.49.0
+writes a small local witness with each commit — the count, Patch id and frame hash of the last record it
+acknowledges, checked against the WAL independently of the WAL's own content — so the two cases are told
+apart: a genuine, never-acknowledged crash tail is still removed exactly as before; an *acknowledged* record
+that is now damaged or missing refuses instead (`verify` exits 1; `commit`/`seal`/`rollback-draft` refuse,
+naming it), and `prikk doctor --discard-damaged-commits [--plan-only]` (RFC 166 D5) is its own way out — the
+removed bytes are still saved to `.prikk/recovery/`, exactly as `--repair-wal-tail` saves them, before the
+witness is rewritten to cover the resulting sound prefix.
 
 **A repair keeps every byte it removes.** A record whose only fault is a damaged length, with nothing sound behind it, is
 indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it writes exactly the bytes it will remove to
@@ -148,7 +150,14 @@ trust-conferring, never existence-checked).
 The active WAL is paired with active ref metadata that records which local branch ref owns the
 non-empty WAL. A non-empty active WAL with missing or malformed active ref metadata is an
 active-session integrity issue. Seal refuses that state rather than guessing which ref should receive
-the WAL records.
+the WAL records. Since RFC 166 (0.49.0), the same issue is also raised when the metadata is present and
+well-formed but disagrees with the session's own commit witness (D6) — a session cannot have two
+owners, so the two are checked against each other, not only the metadata's own shape. Either shape
+refuses with the same text, naming `prikk doctor --restore-queue-target --ref <ref> [--plan-only]`
+(RFC 166 D5) as the way out: the ref always comes from the caller, never from the witness, and the
+write is one atomic replace of the metadata file, never the truncate-then-append a commit itself uses
+only once, for a session's first write (RFC 166 D1) — a tear in *this* verb's own write would recreate
+the exact stranding it exists to repair, since the WAL here is, by construction, already non-empty.
 
 An empty active WAL with leftover active ref metadata is local debris. Verification and doctor report
 that distinction so empty-WAL cleanup does not get confused with sealed-history corruption.
@@ -518,6 +527,7 @@ production-readiness claims. Single-ref backup/restore tooling is no longer defe
 | Commit persistence appends exact signed Patch envelopes to the active WAL, required-syncs the WAL file, and required-syncs the parent directory after every append. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [DC-37](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) |
 | WAL replay reports incomplete trailing bytes separately from complete-record checksum failures. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [PR-004](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-004-WAL-HANDOFF.md), [PR-006](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-006-VERIFY-HANDOFF.md) |
 | WAL-tail repair truncates only a trailing prefix of the last frame, preserving every complete, sound record behind it; a damaged record with sound records behind it refuses rather than truncating past it (unchanged since RFC 162), and since RFC 166 it also refuses rather than remove a record the active session's own commit witness already names as acknowledged. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [`commit_boundary/classification.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/classification.rs), [PR-012](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-012-DOCTOR-REPAIR-HANDOFF.md), [RFC 166](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/166-a-queued-commit-has-a-witness.md) |
+| `--discard-damaged-commits` removes an acknowledged commit the active WAL no longer holds soundly, or declares it lost, saving the removed bytes first, all-or-nothing, the same way `--repair-wal-tail` does; `--restore-queue-target --ref <ref>` gives an owned queue its owner back by one atomic replace of the active ref metadata, with the ref always supplied by the caller, never read from the witness. Both are `--plan-only`-previewable and refuse, writing nothing, over every row they do not act on. | [`doctor/discard_damaged_commits.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/discard_damaged_commits.rs), [`doctor/restore_queue_target.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/restore_queue_target.rs), [RFC 166 D5](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/166-a-queued-commit-has-a-witness.md) |
 | Non-empty active WALs require valid active-ref ownership metadata; empty-WAL metadata debris is separate local debris. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-15](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-15-ACTIVE-SESSION-INTEGRITY-HARDENING.md) |
 | Seal rejects trailing partial WAL bytes, missing/malformed active ref metadata, and mismatched active ref ownership before publication. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [DC-15](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-15-ACTIVE-SESSION-INTEGRITY-HARDENING.md) |
 | Seal persists WAL Patches, creates signed Block and RefState objects, durably appends the pointer commit point, appends exactly one signed RefUpdate, confirms agreement, then drains active state. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`refs/publication.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/publication.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |

@@ -12,9 +12,9 @@ damaged record as a torn tail, silently, even though the commit had already succ
 before 0.49.0.** 0.49.0 keeps a small acknowledgment record per active session (`.prikk/active/<name>/witness`,
 written by the one function every appender — `commit`, `rollback-draft`, and a session's own queuing — goes
 through) and checks it before answering: `verify` and `doctor` now report the damage and exit `1`, and `commit`,
-`rollback-draft`, `seal`, and both WAL repairs refuse rather than discard or build on it. Round 1 carries no verb
-that removes an acknowledged, damaged record yet (`prikk doctor --discard-damaged-commits` is planned for round
-2) — the repository is preserved exactly as it is until then.
+`rollback-draft`, `seal`, and both WAL repairs refuse rather than discard or build on it. `prikk doctor
+--discard-damaged-commits [--plan-only]` removes the acknowledged, damaged (or no longer present) record, saving
+the bytes it removes first, the same way the WAL-tail repairs already do.
 
 ### Fixed — a crash during a commit after a session's first one could strand its own queue with no durable owner (RFC 166 §1.6)
 
@@ -23,7 +23,28 @@ by a durable truncate then a durable append; a crash landing between the two lef
 still held records, with no way to recover which ref owned it short of writing the name back by hand (see the
 [troubleshooting entry](docs/src/guide/troubleshooting.md)). Measured at 12 of 300 kills of a second commit.
 0.49.0 writes this file only on a session's own first commit, when it is still guaranteed empty — a tear there
-leaves nothing to strand, since the queue itself is still empty too — closing the window entirely.
+leaves nothing to strand, since the queue itself is still empty too — closing the window entirely. `prikk doctor
+--restore-queue-target --ref <ref> [--plan-only]` is the way out for a session already stranded this way (or by
+a ref-name/witness disagreement reached the other way, RFC 166 D6) — the ref always comes from the caller, never
+from the witness, and the file is now replaced atomically rather than by a second truncate-then-append.
+
+### Added — two new `doctor` repair verbs, the ways out RFC 166's own acknowledgment record creates (D5)
+
+- `prikk doctor --discard-damaged-commits [--plan-only]`: removes an acknowledged commit the active WAL no longer
+  holds soundly, or declares it lost when nothing of it remains at all. `--plan-only` prints the same plan a real
+  run would (the acknowledged sequence and its Patch id, the recovery file the removed bytes go to, and whether
+  the content may still be in the working tree) and writes nothing; the real run saves the removed bytes first,
+  all-or-nothing, then truncates the WAL, then rewrites the acknowledgment record to cover the resulting sound
+  prefix. Refuses, writing nothing, over anything it does not act on (a substituted record, a healthy session, or
+  ownership itself missing — each of those has its own different way out, or none).
+- `prikk doctor --restore-queue-target --ref <ref> [--plan-only]`: gives a queued, un-owned commit its ref back.
+  The ref always comes from the caller, never from the witness; `doctor` may show the witness's own ref as a
+  hint. Refuses, writing nothing, when a witness exists and names a different ref, or when the requested ref's
+  own current tip does not itself read soundly (the same check `seal` makes, run here without writing). The plan
+  additionally lists every other published ref whose own current tip happens to hold exactly this queue's
+  patches, when there is more than one, so a restore never attaches a queue to the wrong branch unannounced. The
+  write is one atomic replace of the active ref metadata file, never the truncate-then-append an ordinary commit
+  uses (safe only when the WAL is still empty, which it never is here).
 
 ### Changed — `commit`, `rollback-draft`, `seal`, and the WAL repairs classify the active session's queue against its own acknowledgment record before writing (RFC 166)
 
@@ -65,6 +86,18 @@ full acknowledged queue, catching a substituted *earlier* record a per-record ch
 - `commit`'s own "no node-addressed changes to commit" refusal now has a second shape: when the active WAL already
   durably holds the exact commit being retried, the message instead says a queued commit was already written but
   not confirmed (the same two indistinguishable causes `status`'s own new note names).
+- The refusal text for rows 4, 5, 7 and 9 (`commit`/`rollback-draft`/`seal`/`status`/`doctor`, and each of their
+  `PRIKK-DOCTOR-*` recommendation lines) now names the specific verb that is the way out
+  (`--discard-damaged-commits` for rows 4, 5 and 7; `--restore-queue-target --ref <ref>` for row 9), replacing
+  earlier text that only said a crash-tail repair would not help.
+- `prikk doctor --discard-damaged-commits`/`--plan-only`: new output lines — `acknowledged commit at sequence N
+  (patch <id>)` or `unexplained tail -- the witness itself could not be read`; `N bytes saved to <path> before
+  truncation` or `nothing to truncate -- the acknowledged commit is already gone from the WAL`; `this content may
+  still be in your working tree` (only when true); `plan only -- nothing written` or `damaged commit discarded`.
+- `prikk doctor --restore-queue-target --ref <ref>`/`--plan-only`: new output lines — `restoring N queued
+  patch(es) to <ref>`; `<ref>'s current tip is block <id>` or `<ref> has never been published -- this would be
+  its first`; `more than one ref's own tip has exactly this queue's patches: <list>` (only when true); `plan only
+  -- nothing written` or `queue ownership restored`.
 
 ### Fixed — a killed `bundle import` or `sync accept` could leave a dangling forward reference no repair cleared
 

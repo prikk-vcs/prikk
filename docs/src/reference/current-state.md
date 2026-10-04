@@ -162,21 +162,27 @@ planned for. None of these blocks 0.48.0.
   append to the ref log proceed over it; every publication still refuses over it (RFC 164 Rule D: a
   writer refuses over a tail in a file it appends to), naming the tail's own offset and byte count; its
   repair is `prikk doctor --repair-tails`, the same as the other nine files it covers.
-- **A damaged last WAL record is now a tail, and the repair removes it (N6).** RFC 162 rule 3 defines
-  the WAL's tail by position, not shape: a last record whose own bytes are all present but whose
-  checksum fails is indistinguishable, once nothing sound follows it, from a genuine crash-torn append.
-  `verify` exits 0; `doctor --repair-wal-tail` truncates it, keeping the removed bytes, and (0.48.0) now
-  says when what it removed includes one or more complete records, so a removed commit the user was
-  told had succeeded is never silent about it. What would close the gap itself -- telling a genuine
-  crash apart from later damage to an already-durable record -- is a witness written with each commit
-  (the count or end offset of committed records), planned for 0.49.0.
-- **A crash during a commit after the first one in a session can leave `ref-name` empty while the queue
-  still holds records (0.20.0-0.48.0).** Every commit, not only the first, rewrote this small file by a
-  durable truncate then a durable append; a crash between the two leaves nothing durable naming which
-  ref owns the queue. `verify` and `doctor` exit 1, and `commit`/`seal` refuse -- see
-  [the troubleshooting entry](../guide/troubleshooting.md) for the exact text and the way out (writing
-  the ref name back by hand). Fixed in 0.49.0: the file is written once per session, by the first
-  commit only.
+- **Fixed in 0.49.0 (N6): a damaged last WAL record is no longer removed uncritically as a tail.**
+  RFC 162 rule 3 used to define the WAL's tail by position, not shape: a last record whose own bytes
+  are all present but whose checksum fails was indistinguishable, once nothing sound followed it, from
+  a genuine crash-torn append -- so `--repair-wal-tail` removed it either way, even when it was a commit
+  the user had already been told succeeded. A commit now writes a small local witness alongside the WAL
+  (the count, Patch id and frame hash of the last record it acknowledged); `verify`, `status` and every
+  writer read it before a tail speaks. A genuine, never-acknowledged crash tail is still removed exactly
+  as before (`--repair-wal-tail`, `--repair-tails`). An *acknowledged* commit that is now damaged or
+  altogether missing refuses instead (`verify` exits 1; `commit`/`seal`/`rollback-draft` refuse, naming
+  it) -- `prikk doctor --discard-damaged-commits [--plan-only]` is its own way out, never folded into
+  the tail repair's single meaning.
+- **Fixed in 0.49.0: a crash during a commit after the first one in a session could leave `ref-name`
+  empty while the queue still held records (0.20.0-0.48.0).** Every commit, not only the first, used to
+  rewrite this small file by a durable truncate then a durable append; a crash between the two left
+  nothing durable naming which ref owned the queue. The file is now written once per session, by the
+  first commit only -- a later commit never touches it again, so no commit past the first can tear it.
+  `verify` and `doctor` exit 1, and `commit`/`seal`/`rollback-draft` refuse, over any session still
+  stranded from before this fix (or over the same ref-name-vs-witness disagreement by a different
+  route). `prikk doctor --restore-queue-target --ref <ref> [--plan-only]` is the way out -- the ref
+  always comes from the caller, never from the witness; see [the troubleshooting
+  entry](../guide/troubleshooting.md) for the exact text.
 - **Fixed in 0.49.0 (R1): a ref publication now reads the whole ref log once, not three times.**
   `classify_state`'s own replay is threaded through the append's idempotency check and the post-write
   agreement check (a ranged read-back of just the bytes appended, not a fourth whole read). Measured

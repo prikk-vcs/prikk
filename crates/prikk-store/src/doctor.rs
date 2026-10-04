@@ -1364,7 +1364,8 @@ fn add_active_wal_metadata_issues(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING",
                 "active WAL has records but active ref metadata is missing",
-                "preserve the repository and inspect the active WAL before sealing or appending",
+                "run `prikk doctor --restore-queue-target --ref <ref>` to give the queue its \
+                 owner back",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1373,7 +1374,8 @@ fn add_active_wal_metadata_issues(
                 DoctorIssue::error(
                     "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED",
                     format!("active WAL has records but active ref metadata is malformed: {reason}"),
-                    "preserve the repository and inspect the active WAL before sealing or appending",
+                    "run `prikk doctor --restore-queue-target --ref <ref>` to give the queue its \
+                     owner back",
                 )
                 .for_active_session(DEFAULT_ACTIVE_NAME),
             );
