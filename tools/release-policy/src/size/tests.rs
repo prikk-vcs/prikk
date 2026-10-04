@@ -243,7 +243,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 165 R5 added `pointer_rebuild.rs`; `pointer_rebuild/tests.rs` is `cfg(test)`-invisible: 152 -> 153.
     // RFC 166 D2 added `commit_boundary/witness.rs`; its own `tests.rs` and `worktree_patch`'s new
     // `ref_name_once_per_session_tests.rs` are both `cfg(test)`-invisible: 153 -> 154.
-    assert_eq!(store.production_files, 154);
+    // RFC 166 D3 added `commit_boundary/classification.rs`; its own `tests.rs` is `cfg(test)`-invisible: 154 -> 155.
+    assert_eq!(store.production_files, 155);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.
