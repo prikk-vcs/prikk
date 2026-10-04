@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+### Fixed — an acknowledged commit damaged after the fact could read, and be removed, as a crash leftover (RFC 166, N6)
+
+One flipped byte in the body of a queued commit's own last frame read exactly like an interrupted write: the
+checksum no longer matched, and nothing past it decoded, so the reader could not tell "a process was killed
+mid-write" from "this byte changed after the commit already finished." Before 0.49.0 that ambiguity always resolved
+in favor of the crash reading — `verify` exited `0`, and `doctor --repair-wal-tail`/`--repair-tails` removed the
+damaged record as a torn tail, silently, even though the commit had already succeeded. **Affected: every release
+before 0.49.0.** 0.49.0 keeps a small acknowledgment record per active session (`.prikk/active/<name>/witness`,
+written by the one function every appender — `commit`, `rollback-draft`, and a session's own queuing — goes
+through) and checks it before answering: `verify` and `doctor` now report the damage and exit `1`, and `commit`,
+`rollback-draft`, `seal`, and both WAL repairs refuse rather than discard or build on it. Round 1 carries no verb
+that removes an acknowledged, damaged record yet (`prikk doctor --discard-damaged-commits` is planned for round
+2) — the repository is preserved exactly as it is until then.
+
+### Fixed — a crash during a commit after a session's first one could strand its own queue with no durable owner (RFC 166 §1.6)
+
+**Affects 0.20.0 through 0.48.0.** Every commit, not only a session's first, rewrote `.prikk/active/<name>/ref-name`
+by a durable truncate then a durable append; a crash landing between the two left the file empty while the queue
+still held records, with no way to recover which ref owned it short of writing the name back by hand (see the
+[troubleshooting entry](docs/src/guide/troubleshooting.md)). Measured at 12 of 300 kills of a second commit.
+0.49.0 writes this file only on a session's own first commit, when it is still guaranteed empty — a tear there
+leaves nothing to strand, since the queue itself is still empty too — closing the window entirely.
+
+### Changed — `commit`, `rollback-draft`, `seal`, and the WAL repairs classify the active session's queue against its own acknowledgment record before writing (RFC 166)
+
+`commit`, `rollback-draft`, `seal`, `prikk sync seal --claim`, `doctor --repair-wal-tail`, and `doctor
+--repair-tails` each read the active session's own commit witness and refuse, before any write, when it disagrees
+with the queue in a way the queue's own sound prefix cannot explain — an acknowledged record no longer sound, no
+longer present, substituted for a different one, or owned by a different ref than the witness itself names. A
+witness that is absent, or that connectivity confirms is a drain an older binary's own seal left behind, changes
+nothing (rule 3, exactly as before 0.49.0): removing a witness can never make a session read worse than it did
+before this change existed. `doctor --repair-tails` additionally rebuilds a damaged or stale witness from the
+queue's own sound records, when nothing else about the queue is at risk. Commit cost is unchanged on average (one
+durable operation removed, one added); `verify` additionally recomputes the witness's own running hash over the
+full acknowledged queue, catching a substituted *earlier* record a per-record check alone cannot see.
+
+### Output changes — RFC 166's own new codes and lines (stikk: these are new, not renamed; nothing below replaces an existing line)
+
+- `prikk verify`/`prikk doctor`: a new stage, `commit-witness` (`--format json`'s own `stages[].stage` value
+  `"commit-witness"`), and a new report line, `acknowledged commits: <state>` (`none recorded`, `confirmed through
+  sequence N`, `pending (confirmed through <N or "nothing yet">, WAL sound through N)`, `agree with the sound
+  prefix; the trailing bytes are an unacknowledged crash tail`, `sequence N is damaged`, `sequence N is no longer
+  present in the WAL`, `sequence N does not match the queued commit you were told had succeeded`, `unreadable, and
+  the WAL has an unexplained tail that cannot be classified`, `unreadable`, `no durable owner can be confirmed for
+  this session`, or `unknown (stage did not evaluate)`).
+- `prikk verify`: when the acknowledgment record reads healthy, one further line, `acknowledged commits history:
+  agrees` or `disagrees` (D4, row 10) — printed only in that one case.
+- `prikk verify --format json`: two new verdict condition ids, `commit-witness-integrity` and
+  `commit-witness-substituted-earlier-record`, each with its own `message`, following the existing
+  `verify-report-v1` shape (an additive key set, not a schema version bump).
+- `prikk doctor`: new codes `PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE`, `-ACKNOWLEDGED-LOSS`,
+  `-SUBSTITUTED-RECORD`, `-UNKNOWN`, `-DAMAGED` (warning), `-OWNERSHIP-MISSING`, and `-STALE` (info) for the
+  default active session, each with an `ACTIVE-SESSION-` counterpart (plus its own `-UNREADABLE`) for a
+  non-default one.
+- `prikk status`: a new line when the next `commit`/`seal` would refuse on the acknowledgment record
+  (`warning: the next commit or seal will refuse: <reason>`), and a new line when a queued commit was durably
+  written but not yet confirmed (`note: a queued commit was already written but not confirmed, either because a
+  previous command was interrupted after its own durable write or because an older prikk wrote it`) — silent in
+  every other case, including a stale (connectivity-confirmed drained) acknowledgment record, which only `doctor`
+  notes.
+- `commit`'s own "no node-addressed changes to commit" refusal now has a second shape: when the active WAL already
+  durably holds the exact commit being retried, the message instead says a queued commit was already written but
+  not confirmed (the same two indistinguishable causes `status`'s own new note names).
+
 ### Fixed — a killed `bundle import` or `sync accept` could leave a dangling forward reference no repair cleared
 
 `bundle import` and `sync accept` each write more than one object per call, in whatever order their input carries

@@ -182,13 +182,68 @@ prikk unlock --lock .prikk/active/default/active.lock --yes
 printf 'heads/main' > .prikk/active/default/ref-name
 
 prikk verify   # now exits 0
-prikk seal     # the queued commit(s) seal normally
+prikk seal --allow-no-audit   # the queued commit(s) seal normally
 ```
 
 Nothing about the queued commit's own content is at risk at any point in this sequence — only the
 small metadata file naming which ref owns it. 0.49.0 writes this file once per session instead of once
 per commit, closing the window; see [current limitations](../reference/current-state.md) for the status
 of that fix.
+
+## `error: a queued commit you were told had succeeded disagrees with the WAL in a way the WAL's own sound prefix cannot explain (RFC 166)`
+
+**Affects every prikk before 0.49.0, which could not report this at all.** A single flipped byte in the
+body of a queued commit's own last frame reads, by itself, exactly like an interrupted write: the
+checksum it carries no longer matches, and nothing past it decodes either, so the reader cannot tell "a
+process was killed mid-write" from "this byte changed after the commit already finished." Before 0.49.0
+that ambiguity resolved in favor of the crash reading — `doctor --repair-wal-tail` treated it as a torn
+tail and deleted it, silently, even though the commit had already succeeded.
+
+0.49.0 keeps a small acknowledgment record (one per active session, `.prikk/active/<name>/witness`) and
+checks it against the queue before answering. When the queue it names no longer matches, it says so
+instead of guessing:
+
+```
+$ prikk verify
+...
+trailing partial WAL bytes: 713
+...
+acknowledged commits: sequence 1 is damaged
+...
+error: a queued commit you were told had succeeded disagrees with the WAL in a way the WAL's own sound
+prefix cannot explain (RFC 166)
+```
+
+(exit `1`; before 0.49.0 this exited `0`, with `trailing partial WAL bytes: 713` the only hint, read
+as a harmless tail.)
+
+```
+$ prikk doctor
+...
+error [PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE]: a queued commit you were told had succeeded
+(sequence 1) is damaged
+  recommendation: preserve the repository; it was already acknowledged, and it cannot be removed as a
+  crash leftover
+...
+error: doctor found repository health errors
+```
+
+```
+$ prikk doctor --repair-wal-tail
+...
+error: doctor repair skipped one or more active sessions; see the per-active outcomes above for which
+and why
+```
+
+**There is no way out yet in 0.49.0.** The repository is preserved exactly as it is — nothing is
+deleted, and nothing is guessed at — but round 1 carries no verb that removes an acknowledged, damaged
+record. `prikk doctor --discard-damaged-commits` is planned for round 2; until then, preserve the
+repository (the damaged bytes are not touched by any of the commands above) and wait for that release,
+or restore the affected file from a backup taken before the damage occurred.
+
+**If the acknowledgment record itself is what's damaged, not the queue:** `doctor` reports a warning
+(`PRIKK-DOCTOR-COMMIT-WITNESS-DAMAGED`) instead of an error, and does not refuse — nothing acknowledged
+is at risk when the queue itself is sound. `doctor --repair-tails` rebuilds it from the sound queue.
 
 ## `error: integrity error: the ref pointer index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
