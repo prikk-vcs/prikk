@@ -108,9 +108,10 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     let appended = check_appended_file_tails(layout)?;
     // RFC 166 §13 item 4: `--repair-tails` also repairs the WAL, so it must also classify before
     // touching anything, the same as `--repair-wal-tail`. Row 8 (a damaged or stale witness over a
-    // wholly sound WAL) is deliberately not refused here -- nothing is at risk, and the next commit
-    // already replaces it (`append_patch_and_witness`'s own fold-from-scratch-when-uncovered path,
-    // §13 item 2); rebuilding it proactively here is RFC 166 §13 item 5, carried to a later round.
+    // wholly sound WAL) is deliberately not refused here -- nothing is at risk, and this repair
+    // proactively rebuilds it below (§13 item 5), rather than leaving it to the next commit's own
+    // fold-from-scratch-when-uncovered path (§13 item 2), which would otherwise be the only thing
+    // that ever replaces it.
     let owning_ref =
         crate::commit_boundary::active::read_active_ref_metadata_for(layout, DEFAULT_ACTIVE_NAME)?;
     let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
@@ -204,6 +205,31 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
             status.tail_offset,
         )?;
         files.push(outcome);
+    }
+
+    // RFC 166 §13 item 5: a damaged or stale witness over a WAL `classify` already confirmed is
+    // wholly sound (row 8 -- the only `commit_witness_verdict` shape that reaches this line without
+    // having refused above) is rebuilt from the WAL's own sound records, never from the damaged
+    // witness's own bytes. `owning_ref` must be `Valid` whenever `wal_replay.records` is non-empty --
+    // otherwise row 9 (`OwnershipMissing`) would have refused above instead of reaching here; an empty
+    // WAL with no valid owner is left alone (nothing to attribute a rebuilt record to, and
+    // `rebuild_witness_over_sound_wal`'s own empty-WAL case clears it regardless of ownership, which
+    // this skip only withholds when there is no ref to name in the rebuilt record it would otherwise
+    // need).
+    if matches!(
+        commit_witness_verdict,
+        crate::commit_boundary::classification::Verdict::WitnessDamaged
+    ) {
+        if let crate::commit_boundary::active::ActiveRefMetadata::Valid(ref_name) = &owning_ref {
+            crate::commit_boundary::witness::rebuild_witness_over_sound_wal(
+                layout,
+                DEFAULT_ACTIVE_NAME,
+                ref_name,
+                &wal_replay,
+            )?;
+        } else if wal_replay.records.is_empty() {
+            crate::commit_boundary::witness::clear_witness(layout, DEFAULT_ACTIVE_NAME)?;
+        }
     }
 
     Ok(RepairTailsReport { files })

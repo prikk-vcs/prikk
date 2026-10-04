@@ -269,6 +269,38 @@ pub fn append_patch_and_witness(
     Ok(seq)
 }
 
+/// RFC 166 §13 item 5: `doctor --repair-tails` rebuilds a damaged or stale witness over a WAL that is
+/// otherwise wholly sound (row 8 -- `classify` already confirmed this is safe to call: no acknowledged
+/// commit is at risk, since nothing here is refused). Builds a fresh record from scratch, covering
+/// every sound record in `replay` (the same "covers nothing yet" fold `append_patch_and_witness` uses
+/// for an absent or damaged witness) -- never from the damaged witness's own bytes, which this
+/// function never reads. An empty `replay` (debris: a witness survived an otherwise-already-empty
+/// queue) clears the witness instead of building a record with no record to describe.
+pub(crate) fn rebuild_witness_over_sound_wal(
+    layout: &RepositoryLayout,
+    name: impl AsRef<std::path::Path> + Copy,
+    ref_name: &str,
+    replay: &crate::wal::WalReplay,
+) -> Result<()> {
+    let Some(last) = replay.records.last() else {
+        return clear_witness(layout, name);
+    };
+    let running_hash = fold_running_hash([0u8; 32], &replay.records, 0, last.seq)?;
+    let ref_store = RefStore::new(layout.clone());
+    let ref_tip_at_write = ref_store.read_current_ref_state_id(ref_name)?;
+    let record = WitnessRecord {
+        ref_name: ref_name.to_string(),
+        last_seq: last.seq,
+        patch_id: last.envelope.object_id(),
+        frame_hash: record_frame_checksum(last)?,
+        running_hash,
+        ref_tip_at_write,
+    };
+    let bytes = encode_witness(&record);
+    let relative = layout.repository_relative(&witness_path(layout, name))?;
+    write_file_atomically(layout.repository_mutation_root(), &relative, &bytes)
+}
+
 /// Decode a witness record from raw bytes, for a test that needs to forge one (the classification
 /// tests' own bounded-connectivity-walk test): a real record, read back, then a single field
 /// changed, keeping every other field (including the checksum, recomputed) genuine.

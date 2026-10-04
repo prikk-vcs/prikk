@@ -8,8 +8,9 @@ use crate::test_gates::test_support::{
     unique_temp_dir,
 };
 use crate::{
-    Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectWriter, RefPublication,
-    RefStore, RepositoryLayout, add_trusted_maintainer,
+    Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectWriter,
+    RefPublication, RefStore, RepositoryLayout, WorktreePatchCommitOptions, add_trusted_maintainer,
+    commit_worktree_changes_signed,
 };
 
 /// A fresh repository with one adopted maintainer -- real trust-key and trust-policy content, so
@@ -289,5 +290,129 @@ fn a_tail_while_a_ref_leads_is_not_repaired() {
     );
     let after = std::fs::read(&path).unwrap();
     assert_eq!(after, before, "a refusal must write nothing");
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+fn author_signer() -> Ed25519AuthorSigner {
+    Ed25519AuthorSigner::from_seed("rfc166-repair-tails-author", &[0x62; 32]).unwrap()
+}
+
+/// RFC 166 §13 item 5, end to end: a damaged commit witness over a wholly sound WAL (row 8) is
+/// rebuilt from the WAL's own sound records, not refused and not left alone.
+/// **Perturb:** skip the rebuild call this test exercises: the witness stays the corrupted bytes and
+/// `classify` keeps reading `WitnessDamaged` after a `repair_tails` run that reports success, which
+/// this test's own final `assert_eq!` on the verdict catches.
+#[test]
+fn a_damaged_witness_over_a_sound_wal_is_rebuilt_from_the_wal_not_refused() {
+    let layout = RepositoryLayout::init(unique_temp_dir("rfc166-repair-tails-witness-rebuild"))
+        .expect("init");
+    std::fs::write(layout.root().join("a.txt"), b"hello\n").unwrap();
+    commit_worktree_changes_signed(
+        &layout,
+        "heads/main",
+        "queued",
+        WorktreePatchCommitOptions::file_level(),
+        &author_signer(),
+    )
+    .expect("commit");
+
+    let witness_path = layout
+        .active_session_dir(crate::DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let wal_before = std::fs::read(
+        layout
+            .active_session_dir(crate::DEFAULT_ACTIVE_NAME)
+            .join("queue.wal"),
+    )
+    .unwrap();
+    let mut corrupted = std::fs::read(&witness_path).unwrap();
+    // Flip one byte inside the body (past the 8-byte magic and 2-byte version), the same shape
+    // `hostile_lengths.rs`'s own matrix uses elsewhere -- this must decode as `Damaged`, not `Valid`.
+    let flip_at = corrupted.len() / 2;
+    corrupted[flip_at] ^= 0xFF;
+    std::fs::write(&witness_path, &corrupted).unwrap();
+    assert!(
+        matches!(
+            crate::commit_boundary::witness::read_witness(&layout, crate::DEFAULT_ACTIVE_NAME)
+                .unwrap(),
+            crate::commit_boundary::witness::WitnessState::Damaged(_)
+        ),
+        "fixture: the flipped byte must actually damage the witness"
+    );
+
+    let report = repair_tails(&layout).expect("row 8 does not refuse");
+    for file in &report.files {
+        assert_eq!(
+            file.truncated_bytes, 0,
+            "{}: the WAL and every other covered file are already sound; nothing to truncate",
+            file.label
+        );
+    }
+    assert_eq!(
+        std::fs::read(
+            layout
+                .active_session_dir(crate::DEFAULT_ACTIVE_NAME)
+                .join("queue.wal")
+        )
+        .unwrap(),
+        wal_before,
+        "the repair touches the witness, never the WAL's own bytes"
+    );
+
+    let rebuilt = std::fs::read(&witness_path).unwrap();
+    assert_ne!(
+        rebuilt, corrupted,
+        "the witness file must actually change, not be left as the damaged bytes"
+    );
+    let wal = crate::wal::Wal::for_layout(&layout, crate::DEFAULT_ACTIVE_NAME);
+    let replay = wal.replay().unwrap();
+    let owning_ref = crate::read_active_ref_metadata(&layout).unwrap();
+    let witness =
+        crate::commit_boundary::witness::read_witness(&layout, crate::DEFAULT_ACTIVE_NAME).unwrap();
+    let verdict =
+        crate::commit_boundary::classification::classify(&layout, &replay, &owning_ref, &witness)
+            .unwrap();
+    assert_eq!(
+        verdict,
+        crate::commit_boundary::classification::Verdict::Healthy { last_seq: 1 },
+        "the rebuilt witness must agree with the sound WAL it was just derived from, not merely \
+         decode -- a rebuild that echoed the damaged bytes' own (corrupted) claims would still fail \
+         this"
+    );
+
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// RFC 166 K4: `--repair-tails` is a writer (it can rebuild the witness). It takes `ActiveLock` first,
+/// the same lock every commit-boundary appender takes -- an ordinary commit attempted while a repair
+/// is in progress must refuse as a lock conflict, never interleave with it.
+/// **Perturb:** have `repair_tails` take the active lock after its own witness-rebuild step instead of
+/// before every read: the commit below would then succeed while the repair is still "in progress",
+/// and this test's own `assert!(matches!(.., LockConflict))` goes red.
+#[test]
+fn repair_tails_races_an_ordinary_commit_under_the_shared_active_lock() {
+    let layout =
+        RepositoryLayout::init(unique_temp_dir("rfc166-repair-tails-k4-race")).expect("init");
+    std::fs::write(layout.root().join("a.txt"), b"hello\n").unwrap();
+    commit_worktree_changes_signed(
+        &layout,
+        "heads/main",
+        "queued",
+        WorktreePatchCommitOptions::file_level(),
+        &author_signer(),
+    )
+    .expect("commit");
+
+    let held = crate::lock::ActiveLock::acquire(&layout, crate::DEFAULT_ACTIVE_NAME).unwrap();
+    let raced = repair_tails(&layout);
+    assert!(
+        matches!(raced, Err(prikk_error::PrikkError::LockConflict(_))),
+        "repair_tails racing a held ActiveLock must refuse as a lock conflict, got {raced:?}"
+    );
+    drop(held);
+
+    // One writer at a time, and nothing is lost: the repair succeeds once the lock is free.
+    repair_tails(&layout).expect("repair_tails succeeds once the active lock is free");
+
     let _ = std::fs::remove_dir_all(layout.root());
 }
