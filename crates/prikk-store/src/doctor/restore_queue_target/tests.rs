@@ -7,7 +7,9 @@ use crate::commit_boundary::active::{ActiveRefMetadata, ActiveSession, read_acti
 use crate::commit_boundary::classification::{Verdict, classify};
 use crate::commit_boundary::witness::read_witness;
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
+use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::lock::ActiveLock;
 use crate::rfc111_seal_simulation::simulate_one_seal;
 use crate::test_gates::test_support::{
     signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
@@ -243,5 +245,325 @@ fn more_than_one_ref_validating_is_listed_in_the_plan() {
         plan.tip_matches,
         vec!["heads/main".to_string(), "heads/other".to_string()]
     );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- K3: the remaining refusal conditions, each with its own constructed case ----------------
+
+/// K3, cross-verb boundary: row 4 (acknowledged damage) is `--discard-damaged-commits`'s job, not
+/// this verb's. Built exactly like that verb's own row-4 fixture: a single damaged record reads
+/// as `records.is_empty()` once excluded, so row 9's own gate never fires regardless of
+/// `ref-name`'s state -- ownership here stays `Valid`, unaffected by the damage.
+#[test]
+fn row4_acknowledged_damage_is_not_this_verbs_job() {
+    let root = unique_temp_dir("rfc166-d5-restore-row4-boundary");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::AcknowledgedDamage { witnessed_seq: 1 }
+    );
+
+    let before = snapshot_tree(&layout);
+    let err = restore_queue_target(&layout, "heads/main")
+        .expect_err("row 4 is discard_damaged_commits's job");
+    assert!(
+        err.to_string()
+            .contains("already has a durable, matching owner"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !err.to_string().contains("discard-damaged-commits"),
+        "this verb must not leak the other verb's own advice: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K3: row 9 by itself does not excuse an unexplained tail *on top of* it -- this verb's own
+/// `trailing_partial_bytes` check, run after the `OwnershipMissing` gate, catches a torn tail
+/// that `classify`'s own row-9 priority does not look at.
+#[test]
+fn trailing_partial_bytes_refuses_even_though_classify_already_reached_ownership_missing() {
+    let root = unique_temp_dir("rfc166-d5-restore-trailing-partial");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    commit(&layout, "b.txt", b"two");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    bytes.extend_from_slice(&[0u8; 10]);
+    std::fs::write(&wal_path, &bytes).unwrap();
+    clear_ref_name(&layout);
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::OwnershipMissing,
+        "row 9's own gate fires on the missing owner alone, before any tail is examined"
+    );
+
+    let before = snapshot_tree(&layout);
+    let err = restore_queue_target(&layout, "heads/main")
+        .expect_err("a torn tail on top of row 9 is still a torn tail");
+    assert!(
+        err.to_string().contains("trailing partial bytes"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+
+    // Control: removing the tail (the one condition this case is built from) lets the same
+    // request succeed -- the refusal really did depend on the tail, not on something else.
+    std::fs::write(&wal_path, &bytes[..bytes.len() - 10]).unwrap();
+    restore_queue_target(&layout, "heads/main")
+        .expect("with the tail gone, row 9 alone is this verb's own job");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K3: a damaged *earlier* record (one sound record still follows it, so `records` stays
+/// non-empty and row 9's own gate still fires) is caught by this verb's own `has_item_failure`
+/// check, separately from the `OwnershipMissing` gate that let it through.
+#[test]
+fn a_damaged_earlier_record_refuses_even_though_classify_already_reached_ownership_missing() {
+    let root = unique_temp_dir("rfc166-d5-restore-item-failure");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let record1_len = std::fs::read(&wal_path).unwrap().len();
+    commit(&layout, "b.txt", b"two");
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = record1_len - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    clear_ref_name(&layout);
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::OwnershipMissing,
+        "the second record is still sound, so row 9's own gate still fires on the missing owner"
+    );
+
+    let before = snapshot_tree(&layout);
+    let err = restore_queue_target(&layout, "heads/main")
+        .expect_err("a damaged earlier record is still a damaged record");
+    assert!(
+        err.to_string().contains("damaged record"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+
+    // Control: restoring record 1's own original bytes (the one condition this case is built
+    // from) lets the same request succeed.
+    std::fs::write(&wal_path, {
+        let mut fixed = bytes.clone();
+        fixed[flip_at] ^= 0xFF;
+        fixed
+    })
+    .unwrap();
+    restore_queue_target(&layout, "heads/main")
+        .expect("with both records sound, row 9 alone is this verb's own job");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- K4: failpoints at the write ordinal, raced against commit and seal under the lock harness
+
+/// K4: this verb is a writer -- it takes `ActiveLock` first, the same lock every commit-boundary
+/// appender takes. A racing commit attempted while it holds the lock must refuse as a lock
+/// conflict, never interleave with it.
+#[test]
+fn restore_races_an_ordinary_commit_under_the_shared_active_lock() {
+    let root = unique_temp_dir("rfc166-d5-restore-k4-race");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_ref_name(&layout);
+
+    let held = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    let raced = restore_queue_target(&layout, "heads/main");
+    assert!(
+        matches!(raced, Err(prikk_error::PrikkError::LockConflict(_))),
+        "restore_queue_target racing a held ActiveLock must refuse as a lock conflict, got \
+         {raced:?}"
+    );
+    drop(held);
+
+    restore_queue_target(&layout, "heads/main").expect("succeeds once the active lock is free");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K4: `ref-name`'s own write is a single atomic replace -- the whole point is that a crash during
+/// it can never leave the file torn, only fully the old value or fully the new one. Crashed at
+/// each of the three points `atomic_replace` itself can fail at, the file is always one or the
+/// other, never a third, garbled state, and a second run (with no injected failure) completes it.
+#[test]
+fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
+    for point in [
+        TestFailPoint::MutableFileSync,
+        TestFailPoint::MutableRename,
+        TestFailPoint::MutableParentSync,
+    ] {
+        let root = unique_temp_dir(&format!("rfc166-d5-restore-k4-atomic-{point:?}"));
+        let layout = RepositoryLayout::init(root.clone()).unwrap();
+        commit(&layout, "a.txt", b"one");
+        clear_ref_name(&layout);
+        let ref_name_path = layout.default_active_ref_name_path();
+        let before = std::fs::read(&ref_name_path).unwrap();
+        assert!(before.is_empty(), "the stranded state this verb repairs");
+
+        fail_after_for_test(point, 0);
+        let crashed = restore_queue_target(&layout, "heads/main");
+        clear_failpoint_for_test();
+        assert!(
+            crashed.is_err(),
+            "{point:?}: the injected failure must actually fire"
+        );
+        let after = std::fs::read(&ref_name_path).unwrap();
+        assert!(
+            after == before || after == b"heads/main",
+            "{point:?}: ref-name must be fully the old value or fully the new one, got {after:?}"
+        );
+
+        if after == before {
+            // The crash genuinely landed before the rename -- a second, clean run must finish
+            // the job. (`MutableParentSync` fires *after* `renameat` already succeeded, so the
+            // new value can already be on disk even though this call reported failure; that
+            // case is handled below, not here.)
+            restore_queue_target(&layout, "heads/main")
+                .unwrap_or_else(|err| panic!("{point:?}: a clean second run completes it: {err}"));
+        }
+        assert_eq!(
+            std::fs::read(&ref_name_path).unwrap(),
+            b"heads/main",
+            "{point:?}: the file must end up at the new value either way"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// K3/K4's own "a control must be able to fail": the SAME failpoint, armed against the
+/// truncate-then-append [`crate::write_active_ref_metadata`] this verb deliberately does NOT use
+/// (its own doc explains why: that sequence is safe only when the WAL is empty, which it never is
+/// here), does tear the file -- a crash between the truncate and the append leaves it empty,
+/// neither the old value nor the new one. Confirms the atomic-replace sweep above is actually
+/// sensitive to a real defect shape, not vacuously passing because nothing can tear this file.
+#[test]
+fn the_control_the_truncate_then_append_write_this_verb_avoids_can_still_tear() {
+    let root = unique_temp_dir("rfc166-d5-restore-k4-control");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let ref_name_path = layout.default_active_ref_name_path();
+    assert_eq!(std::fs::read(&ref_name_path).unwrap(), b"heads/main");
+
+    fail_after_for_test(TestFailPoint::AppendWrite, 0);
+    let result = crate::write_active_ref_metadata(&layout, "heads/main");
+    clear_failpoint_for_test();
+    assert!(result.is_err(), "the injected failure must actually fire");
+    let after = std::fs::read(&ref_name_path).unwrap();
+    assert!(
+        after.is_empty(),
+        "the control must fail: a crashed truncate-then-append must leave ref-name empty -- \
+         neither the old value nor the new one, got {after:?}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- K5: no other command writes the WAL, the witness, or ref-name ----------------------------
+
+/// K5: `verify`, `status` (`doctor_repository`), and the other doctor repair modes all leave the
+/// WAL, the witness, and `ref-name` byte-identical against a row-9 fixture -- none of them calls
+/// this verb, and none of them can touch what only this verb's own classification has cleared to
+/// act on.
+#[test]
+fn no_other_command_touches_the_wal_witness_or_ref_name_over_row9() {
+    let root = unique_temp_dir("rfc166-d5-restore-k5");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_ref_name(&layout);
+    assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
+
+    // K5's own scope is the WAL, the witness, and `ref-name` specifically -- not the whole tree.
+    // `--rebuild-pointer-index` legitimately advances the ref-pointer index's own generation log
+    // even when it changes nothing else, so a whole-tree snapshot would be the wrong instrument.
+    fn session_snapshot(layout: &RepositoryLayout) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        (
+            std::fs::read(layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME)).unwrap(),
+            std::fs::read(
+                layout
+                    .active_session_dir(DEFAULT_ACTIVE_NAME)
+                    .join("witness"),
+            )
+            .unwrap(),
+            std::fs::read(layout.default_active_ref_name_path()).unwrap(),
+        )
+    }
+
+    let before = session_snapshot(&layout);
+
+    let _ = crate::verify_repository(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "verify must write nothing"
+    );
+
+    let _ = crate::doctor_repository(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "status/doctor_repository must write nothing"
+    );
+
+    let _ = crate::repair_repository(&layout, crate::DoctorRepairOptions::none());
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "repair_repository with nothing requested must write nothing"
+    );
+    let _ = crate::repair_repository(
+        &layout,
+        crate::DoctorRepairOptions {
+            truncate_wal_tail: true,
+            reconstruct_main_ref: false,
+        },
+    );
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--repair-wal-tail must write nothing over row 9 (no tail to repair)"
+    );
+
+    let _ = crate::repair_tails(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--repair-tails must write nothing over row 9 either"
+    );
+
+    let _ = crate::rebuild_pointer_index(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--rebuild-pointer-index touches the ref-pointer index only"
+    );
+
+    let _ = crate::discard_damaged_commits(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--discard-damaged-commits only acts on rows 4/5/7, never row 9"
+    );
+
     std::fs::remove_dir_all(&root).ok();
 }

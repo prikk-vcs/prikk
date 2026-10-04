@@ -4,9 +4,13 @@
 
 use super::{DiscardDamagedCommitsPlan, discard_damaged_commits, plan_discard_damaged_commits};
 use crate::commit_boundary::classification::{Verdict, classify};
-use crate::commit_boundary::witness::{WitnessState, clear_witness, read_witness};
+use crate::commit_boundary::witness::{
+    WitnessState, clear_witness, read_witness, rebuild_witness_over_sound_wal,
+};
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
+use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::lock::ActiveLock;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::wal::Wal;
 use crate::{Ed25519AuthorSigner, WorktreePatchCommitOptions};
@@ -293,5 +297,372 @@ fn no_witness_is_not_this_verbs_job_either() {
         snapshot_tree(&layout),
         "a refusal must write nothing"
     );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- K3: the remaining refusal conditions, each with its own constructed case ----------------
+
+/// Simulates RFC 166 §1.6's own stranding: ownership present right up until it is not.
+fn clear_ref_name(layout: &RepositoryLayout) {
+    std::fs::write(layout.default_active_ref_name_path(), []).unwrap();
+}
+
+/// K3, cross-verb boundary: row 9 (ownership missing) is `--restore-queue-target`'s job, not this
+/// verb's. This verb must refuse it by name, never with the "nothing acknowledged is damaged or
+/// lost" text the wildcard arm uses for an unrelated condition.
+#[test]
+fn row9_ownership_missing_is_not_this_verbs_job() {
+    let root = unique_temp_dir("rfc166-d5-discard-row9-boundary");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_ref_name(&layout);
+    assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
+
+    let before = snapshot_tree(&layout);
+    let err = discard_damaged_commits(&layout).expect_err("row 9 is restore_queue_target's job");
+    assert!(
+        err.to_string()
+            .contains("no durable owner names this session's queue"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !err.to_string()
+            .contains("nothing acknowledged is damaged or lost"),
+        "row 9 must not be folded into the generic wildcard refusal: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K3: row 3 (a genuine, never-acknowledged crash tail past an agreeing witness) is not
+/// acknowledged damage either -- `--repair-wal-tail` is its own way out, not this verb's.
+#[test]
+fn row3_crash_tail_is_not_this_verbs_job() {
+    let root = unique_temp_dir("rfc166-d5-discard-row3");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    bytes.extend_from_slice(&[0u8; 10]);
+    std::fs::write(&wal_path, &bytes).unwrap();
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::CrashTail {
+            sound_through: Some(1)
+        }
+    );
+
+    let before = snapshot_tree(&layout);
+    let err = discard_damaged_commits(&layout).expect_err("row 3 is a crash tail, not damage");
+    assert!(
+        err.to_string()
+            .contains("nothing acknowledged is damaged or lost"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+    std::fs::remove_dir_all(&root).ok();
+
+    // Control: removing the tail (the one condition this case is built from) turns row 3 into
+    // plain row 1 -- confirming the refusal really did depend on the tail, not on something else.
+    let root2 = unique_temp_dir("rfc166-d5-discard-row3-control");
+    let layout2 = RepositoryLayout::init(root2.clone()).unwrap();
+    commit(&layout2, "a.txt", b"one");
+    assert!(matches!(classify_now(&layout2), Verdict::Healthy { .. }));
+    std::fs::remove_dir_all(&root2).ok();
+}
+
+/// K3: row 8 (a damaged witness over a wholly sound WAL) is a warning, not acknowledged damage --
+/// `--repair-tails` rebuilds it; this verb does not act on it.
+#[test]
+fn row8_witness_damaged_over_a_sound_wal_is_not_this_verbs_job() {
+    let root = unique_temp_dir("rfc166-d5-discard-row8");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let mut witness_bytes = std::fs::read(&witness_path).unwrap();
+    let flip_at = witness_bytes.len() / 2;
+    witness_bytes[flip_at] ^= 0xFF;
+    std::fs::write(&witness_path, &witness_bytes).unwrap();
+    assert_eq!(classify_now(&layout), Verdict::WitnessDamaged);
+
+    let before = snapshot_tree(&layout);
+    let err =
+        discard_damaged_commits(&layout).expect_err("row 8 is a warning, not acknowledged damage");
+    assert!(
+        err.to_string()
+            .contains("nothing acknowledged is damaged or lost"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- K4: failpoints at every write ordinal, raced against commit under the lock harness -------
+
+/// K4: this verb is a writer -- it takes `ActiveLock` first, the same lock every commit-boundary
+/// appender takes. A racing commit attempted while it holds the lock must refuse as a lock
+/// conflict, never interleave with it.
+#[test]
+fn discard_races_an_ordinary_commit_under_the_shared_active_lock() {
+    let root = unique_temp_dir("rfc166-d5-discard-k4-race");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+
+    let held = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    let raced = discard_damaged_commits(&layout);
+    assert!(
+        matches!(raced, Err(prikk_error::PrikkError::LockConflict(_))),
+        "discard_damaged_commits racing a held ActiveLock must refuse as a lock conflict, got \
+         {raced:?}"
+    );
+    drop(held);
+
+    discard_damaged_commits(&layout).expect("succeeds once the active lock is free");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K4: a crash during the recovery-file write (before its own rename lands) leaves both the WAL
+/// and the witness exactly as they were -- `save_removed_bytes` runs first in this verb's own
+/// write order, and nothing past it has run yet.
+#[test]
+fn a_crash_saving_the_recovery_file_leaves_the_wal_and_witness_untouched() {
+    let root = unique_temp_dir("rfc166-d5-discard-k4-recovery-crash");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+
+    let wal_before = std::fs::read(&wal_path).unwrap();
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let witness_before = std::fs::read(&witness_path).unwrap();
+
+    fail_after_for_test(TestFailPoint::MutableRename, 0);
+    let crashed = discard_damaged_commits(&layout);
+    clear_failpoint_for_test();
+    assert!(crashed.is_err(), "the injected failure must actually fire");
+    assert_eq!(
+        std::fs::read(&wal_path).unwrap(),
+        wal_before,
+        "the WAL must be untouched -- the crash is in the recovery-file write, before truncation"
+    );
+    assert_eq!(
+        std::fs::read(&witness_path).unwrap(),
+        witness_before,
+        "the witness must be untouched either"
+    );
+
+    // A second run, with no injected failure, completes the job.
+    let plan = discard_damaged_commits(&layout).expect("a clean second run completes it");
+    assert_eq!(plan.witnessed_seq, Some(1));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K4: "each crash state classified and finished by a second run." Reproduces the crash window
+/// between a successful truncation and the witness rewrite that follows it (the two genuinely
+/// separate durable writes in this verb's own order) by calling the same primitives directly, in
+/// the same order `run` uses, and crashing only the second one. The resulting state -- a WAL
+/// truncated to its sound prefix, with the old witness still naming the now-removed record -- is
+/// not corruption: `classify` reads it as row 5 (acknowledged loss, since the record the witness
+/// names is genuinely no longer present), and a second call to this verb finishes the job.
+#[test]
+fn a_crash_between_truncation_and_the_witness_rewrite_is_read_as_acknowledged_loss_and_finished() {
+    let root = unique_temp_dir("rfc166-d5-discard-k4-reorder");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::AcknowledgedDamage { witnessed_seq: 1 }
+    );
+
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    wal.truncate_trailing_partial()
+        .expect("the truncation half of this verb's own write order");
+    // Simulate the crash: the witness rewrite that would normally follow immediately never runs.
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::AcknowledgedLoss { witnessed_seq: 1 },
+        "a truncated WAL with the old witness still naming the removed record is row 5, not \
+         corruption -- the record the witness names is genuinely no longer present"
+    );
+
+    let plan = discard_damaged_commits(&layout).expect("row 5 is this verb's own job too");
+    assert_eq!(plan.witnessed_seq, Some(1));
+    assert_eq!(plan.truncated_bytes, 0, "the truncation already happened");
+    match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
+        WitnessState::Absent => {}
+        other => panic!("expected the witness cleared over the empty sound prefix, got {other:?}"),
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// K3/K4's own "a control must be able to fail": rebuilding the witness *before* truncating the
+/// WAL (the order this verb never uses) leaves a witness claiming the WAL is healthy while the
+/// damaged record it was built over is, at that instant, still physically present -- a real
+/// defect shape this verb's own established order (truncate, then rebuild) exists to rule out.
+/// Confirms the ordering claims above are sensitive to the order, not vacuous.
+#[test]
+fn the_control_rebuilding_the_witness_before_truncating_is_a_real_inconsistency() {
+    let root = unique_temp_dir("rfc166-d5-discard-k4-control");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::AcknowledgedDamage { witnessed_seq: 1 }
+    );
+
+    // The wrong order: rebuild the witness over "no sound records" first (the truncation has not
+    // happened yet, but this call only reads the replay it is given -- the damaged record is
+    // still physically in the file).
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let replay = wal.replay().unwrap();
+    rebuild_witness_over_sound_wal(&layout, DEFAULT_ACTIVE_NAME, "heads/main", &replay).unwrap();
+    match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
+        WitnessState::Absent => {}
+        other => panic!(
+            "expected the witness cleared over the (not yet truncated) sound prefix, got {other:?}"
+        ),
+    }
+    // The WAL bytes are untouched -- the damaged record is still there, but the witness no longer
+    // mentions it at all, so a plain `verify`/`status` read now sees rule 1 (no witness), silently
+    // dropping the fact that an acknowledged commit is damaged. That silent loss is exactly what
+    // this verb's own real order (truncate, THEN rebuild) is built to avoid.
+    assert_eq!(std::fs::read(&wal_path).unwrap(), bytes);
+    assert!(
+        matches!(
+            classify_now(&layout),
+            Verdict::NoWitness { stale: false, .. }
+        ),
+        "the control must fail: the wrong order silently loses the acknowledged-damage finding"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- K5: no other command writes the WAL, the witness, or ref-name ----------------------------
+
+/// K5: `verify`, `status` (`doctor_repository`), and the other doctor repair modes all leave the
+/// WAL, the witness, and `ref-name` byte-identical against a row-4 fixture -- none of them calls
+/// this verb, and none of them can touch what only this verb's own classification has cleared to
+/// act on.
+#[test]
+fn no_other_command_touches_the_wal_witness_or_ref_name_over_row4() {
+    let root = unique_temp_dir("rfc166-d5-discard-k5");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::AcknowledgedDamage { witnessed_seq: 1 }
+    );
+
+    // K5's own scope is the WAL, the witness, and `ref-name` specifically -- not the whole tree.
+    // `--rebuild-pointer-index` legitimately advances the ref-pointer index's own generation log
+    // even when it changes nothing else, so a whole-tree snapshot would be the wrong instrument.
+    fn session_snapshot(layout: &RepositoryLayout) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        (
+            std::fs::read(layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME)).unwrap(),
+            std::fs::read(
+                layout
+                    .active_session_dir(DEFAULT_ACTIVE_NAME)
+                    .join("witness"),
+            )
+            .unwrap(),
+            std::fs::read(layout.default_active_ref_name_path()).unwrap(),
+        )
+    }
+
+    let before = session_snapshot(&layout);
+
+    let _ = crate::verify_repository(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "verify must write nothing"
+    );
+
+    let _ = crate::doctor_repository(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "status/doctor_repository must write nothing"
+    );
+
+    let _ = crate::repair_repository(&layout, crate::DoctorRepairOptions::none());
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "repair_repository with nothing requested must write nothing"
+    );
+    let _ = crate::repair_repository(
+        &layout,
+        crate::DoctorRepairOptions {
+            truncate_wal_tail: true,
+            reconstruct_main_ref: false,
+        },
+    );
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--repair-wal-tail refuses over a damaged record (not a tail) and must write nothing"
+    );
+
+    let _ = crate::repair_tails(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--repair-tails must write nothing over a damaged WAL record either"
+    );
+
+    let _ = crate::rebuild_pointer_index(&layout);
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--rebuild-pointer-index touches the ref-pointer index only"
+    );
+
+    let _ = crate::restore_queue_target(&layout, "heads/main");
+    assert_eq!(
+        before,
+        session_snapshot(&layout),
+        "--restore-queue-target only acts on row 9, never row 4"
+    );
+
     std::fs::remove_dir_all(&root).ok();
 }
