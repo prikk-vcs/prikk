@@ -18,8 +18,7 @@ use std::path::{Path, PathBuf};
 
 /// The exact substring every one of the four surfaces must share for an acknowledged-damage
 /// finding (RFC 166 §5 row 4) -- present in `write_refusal_reason`'s own text, nowhere else.
-const SHARED_TEXT: &str =
-    "cannot be removed as a crash leftover, since it was already acknowledged";
+const SHARED_TEXT: &str = "run `prikk doctor --discard-damaged-commits`";
 
 /// The older, generic text this round's own fix must no longer let speak first for this
 /// condition.

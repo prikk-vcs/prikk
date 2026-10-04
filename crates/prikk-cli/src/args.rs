@@ -106,9 +106,14 @@ pub(crate) struct DoctorArgs {
     /// other repair flag -- it is its own, structural, never-trust-filtered operation, not another
     /// member of the tail-repair family.
     pub(crate) rebuild_pointer_index: bool,
-    /// RFC 165 R5 K1: print the rebuild's own plan and write nothing. Accepted only alongside
-    /// `--rebuild-pointer-index`.
-    pub(crate) rebuild_pointer_index_plan_only: bool,
+    /// RFC 166 D5, §13 item 14: remove acknowledged damage or declare an acknowledged loss (RFC
+    /// 166 §5 rows 4, 5 and 7). Mutually exclusive with every other repair flag -- its own write
+    /// touches the active WAL and the commit witness, not the ref-pointer index or the Rule-A files.
+    pub(crate) discard_damaged_commits: bool,
+    /// RFC 165 R5 K1 / RFC 166 D5 K1: print the repair's own plan and write nothing. Shared between
+    /// every repair verb that has a plan (`--rebuild-pointer-index`, `--discard-damaged-commits`) --
+    /// accepted only alongside exactly one of them.
+    pub(crate) plan_only: bool,
 }
 
 /// `prikk verify`'s output format (RFC 118 stage 5). `Prose` is the default and must remain
@@ -453,7 +458,8 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut repair_pointer_index_tail = false;
     let mut repair_tails = false;
     let mut rebuild_pointer_index = false;
-    let mut rebuild_pointer_index_plan_only = false;
+    let mut discard_damaged_commits = false;
+    let mut plan_only = false;
     let mut path = None;
     for arg in args {
         match arg.as_str() {
@@ -470,7 +476,10 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             "--rebuild-pointer-index" => {
                 mark_seen(&mut rebuild_pointer_index, "--rebuild-pointer-index")?;
             }
-            "--plan-only" => mark_seen(&mut rebuild_pointer_index_plan_only, "--plan-only")?,
+            "--discard-damaged-commits" => {
+                mark_seen(&mut discard_damaged_commits, "--discard-damaged-commits")?;
+            }
+            "--plan-only" => mark_seen(&mut plan_only, "--plan-only")?,
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
             _ => {
                 if path.is_some() {
@@ -487,7 +496,8 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             || repair_main_ref
             || repair_index
             || repair_pointer_index_tail
-            || rebuild_pointer_index)
+            || rebuild_pointer_index
+            || discard_damaged_commits)
     {
         return Err(CliError::Usage(
             "--repair-tails cannot be combined with another repair flag -- it already covers the \
@@ -496,16 +506,30 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         ));
     }
     if rebuild_pointer_index
-        && (repair_wal_tail || repair_main_ref || repair_index || repair_pointer_index_tail)
+        && (repair_wal_tail
+            || repair_main_ref
+            || repair_index
+            || repair_pointer_index_tail
+            || discard_damaged_commits)
     {
         return Err(CliError::Usage(
             "--rebuild-pointer-index cannot be combined with another repair flag -- run it alone"
                 .to_string(),
         ));
     }
-    if rebuild_pointer_index_plan_only && !rebuild_pointer_index {
+    if discard_damaged_commits
+        && (repair_wal_tail || repair_main_ref || repair_index || repair_pointer_index_tail)
+    {
         return Err(CliError::Usage(
-            "--plan-only is only accepted alongside --rebuild-pointer-index".to_string(),
+            "--discard-damaged-commits cannot be combined with another repair flag -- run it alone"
+                .to_string(),
+        ));
+    }
+    if plan_only && !rebuild_pointer_index && !discard_damaged_commits {
+        return Err(CliError::Usage(
+            "--plan-only is only accepted alongside --rebuild-pointer-index or \
+             --discard-damaged-commits"
+                .to_string(),
         ));
     }
     Ok(DoctorArgs {
@@ -516,7 +540,8 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         repair_pointer_index_tail,
         repair_tails,
         rebuild_pointer_index,
-        rebuild_pointer_index_plan_only,
+        discard_damaged_commits,
+        plan_only,
     })
 }
 

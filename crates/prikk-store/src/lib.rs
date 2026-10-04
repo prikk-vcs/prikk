@@ -162,10 +162,10 @@ pub use diff::{
     WorktreeDiffFrom, diff_points_reporting_anchor, diff_worktree_reporting_anchor,
 };
 pub use doctor::{
-    ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DoctorIssue, DoctorRepairOptions,
-    DoctorRepairReport, DoctorReport, DoctorSeverity, RepairTailsFileOutcome, RepairTailsReport,
-    doctor_repository, repair_object_index, repair_pointer_index_tail, repair_repository,
-    repair_tails,
+    ActiveSessionRepairOutcome, ActiveSessionRepairStatus, DiscardDamagedCommitsPlan, DoctorIssue,
+    DoctorRepairOptions, DoctorRepairReport, DoctorReport, DoctorSeverity, RepairTailsFileOutcome,
+    RepairTailsReport, discard_damaged_commits, doctor_repository, plan_discard_damaged_commits,
+    repair_object_index, repair_pointer_index_tail, repair_repository, repair_tails,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;

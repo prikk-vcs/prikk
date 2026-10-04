@@ -289,12 +289,14 @@ fn patch_is_sealed_and_reachable_since(
     }
 }
 
-/// RFC 166 round 1: the exact refusal text `commit`, `rollback-draft` and `seal`'s own pre-write
-/// checks use when [`classify`] returns a blocking verdict (RFC 166 §5 rows 4, 5, 6, 7, 9) --
-/// `None` for every verdict that does not block a write (rows `NoWitness`, 1, 2, 3, 8). Centralized
-/// so the three call sites cannot drift to three different sentences for the same row. **Names no
-/// recovery verb**: round 1 carries no way to act on any of rows 4, 5, 7, 9 yet (`--discard-damaged-
-/// commits`/`--restore-queue-target` are round 2, D5).
+/// RFC 166: the exact refusal text `commit`, `rollback-draft` and `seal`'s own pre-write checks use
+/// when [`classify`] returns a blocking verdict (RFC 166 §5 rows 4, 5, 6, 7, 9) -- `None` for every
+/// verdict that does not block a write (rows `NoWitness`, 1, 2, 3, 8). Centralized so the call sites
+/// cannot drift to different sentences for the same row. **Rows 4, 5 and 7 name
+/// `prikk doctor --discard-damaged-commits`** (round 2, D5, §13 item 14) -- the one way out for
+/// acknowledged damage or loss. **Rows 6 and 9 name no verb**: row 6 (and D4's own row 10) has no
+/// verb at all -- a substituted record is not a crash shape, and a copy is the way out; row 9's own
+/// way out, `--restore-queue-target`, is round 2's own later unit and not yet landed.
 #[must_use]
 pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
     match verdict {
@@ -305,12 +307,14 @@ pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
         | Verdict::WitnessDamaged => None,
         Verdict::AcknowledgedDamage { witnessed_seq } => Some(format!(
             "a queued commit you were told had succeeded (sequence {witnessed_seq}) is damaged; \
-             it cannot be removed as a crash leftover, since it was already acknowledged"
+             it was already acknowledged, so it cannot be removed as a crash leftover -- run \
+             `prikk doctor --discard-damaged-commits` to remove it instead"
         )),
         Verdict::AcknowledgedLoss { witnessed_seq } => Some(format!(
             "a queued commit you were told had succeeded (sequence {witnessed_seq}) is no \
-             longer present at all; it cannot be removed as a crash leftover, since it was \
-             already acknowledged"
+             longer present at all; it was already acknowledged, so it cannot be removed as a \
+             crash leftover -- run `prikk doctor --discard-damaged-commits` to declare it lost \
+             instead"
         )),
         Verdict::SubstitutedRecord { witnessed_seq } => Some(format!(
             "sequence {witnessed_seq} does not match the queued commit you were told had \
@@ -318,7 +322,8 @@ pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
         )),
         Verdict::UnknownWithDamagedWitness => Some(
             "the queue has an unexplained tail, and this session's own acknowledgment history is \
-             unreadable, so the tail cannot be shown to be a crash leftover"
+             unreadable, so the tail cannot be shown to be a crash leftover -- run `prikk doctor \
+             --discard-damaged-commits` to discard it"
                 .to_string(),
         ),
         Verdict::OwnershipMissing => {

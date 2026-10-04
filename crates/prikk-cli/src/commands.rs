@@ -328,6 +328,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk doctor [path] --repair-tails        Truncate every tail: the WAL, the pointer index, trust keys, trust policy, author keys, the received index, and the three generation logs",
             "  prikk doctor [path] --repair-main-ref     Recognized, always refused: no repair is implemented",
             "  prikk doctor [path] --rebuild-pointer-index [--plan-only]  Rebuild the ref-pointer index from the ref log (RFC 165 R5); refuses over a completable lead or ref-log damage/tail; --plan-only previews without writing",
+            "  prikk doctor [path] --discard-damaged-commits [--plan-only]  Remove an acknowledged commit the active WAL no longer holds soundly, or declare it lost (RFC 166 D5); refuses over anything else; --plan-only previews without writing",
         ],
     },
     Command {

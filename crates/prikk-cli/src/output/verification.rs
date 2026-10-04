@@ -3,7 +3,7 @@ use crate::stdout::println;
 use prikk_store::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, ActiveWalMetadataStatus,
     AuthorSignatureVerification, BlockStateStatus, DoctorSeverity, ObjectItemStatus, RefFileStatus,
-    RefItemStatus, RepairTailsReport, RepositoryLayout, StageStatus, Verdict,
+    RefItemStatus, RepairTailsReport, RepositoryLayout, StageStatus, Verdict, write_refusal_reason,
 };
 
 /// `prikk doctor --repair-tails` (RFC 164 Rule C): one line per covered file, always -- clean or
@@ -686,10 +686,10 @@ fn print_active_wal_metadata_status(status: &ActiveWalMetadataStatus) {
     }
 }
 
-/// RFC 166 §5's own ten rows, 1-9 here (row 10 is D4's, layered on separately). **Rows 4, 5, 7 and 9
-/// name no recovery verb**: round 1 carries no way to act on any of them yet (`--discard-damaged-
-/// commits` and `--restore-queue-target` are round 2, D5) -- the text says only that the record was
-/// acknowledged and cannot be removed as a crash leftover, never a verb that does not exist.
+/// RFC 166 §5's own ten rows, 1-9 here (row 10 is D4's, layered on separately). **Rows 4, 5, 6, 7
+/// and 9's own `error:` line is [`prikk_store::write_refusal_reason`]'s own text, verbatim** -- the
+/// one source `commit`/`rollback-draft`/`seal` also refuse with (round 2 §0), never a second,
+/// independently worded copy that could drift from it.
 fn print_commit_witness_verdict(verdict: &Verdict) {
     match verdict {
         Verdict::NoWitness { .. } => {
@@ -717,20 +717,10 @@ fn print_commit_witness_verdict(verdict: &Verdict) {
         }
         Verdict::AcknowledgedDamage { witnessed_seq } => {
             println!("acknowledged commits: sequence {witnessed_seq} is damaged");
-            println!(
-                "error: a queued commit you were told had succeeded (sequence {witnessed_seq}) \
-                 is damaged; it cannot be removed as a crash leftover, since it was already \
-                 acknowledged"
-            );
         }
         Verdict::AcknowledgedLoss { witnessed_seq } => {
             println!(
                 "acknowledged commits: sequence {witnessed_seq} is no longer present in the WAL"
-            );
-            println!(
-                "error: a queued commit you were told had succeeded (sequence {witnessed_seq}) \
-                 is no longer present at all; it cannot be removed as a crash leftover, since it \
-                 was already acknowledged"
             );
         }
         Verdict::SubstitutedRecord { witnessed_seq } => {
@@ -738,19 +728,11 @@ fn print_commit_witness_verdict(verdict: &Verdict) {
                 "acknowledged commits: sequence {witnessed_seq} does not match the queued \
                  commit you were told had succeeded"
             );
-            println!(
-                "error: sequence {witnessed_seq} does not match the queued commit you were told \
-                 had succeeded; a copy is the way out"
-            );
         }
         Verdict::UnknownWithDamagedWitness => {
             println!(
                 "acknowledged commits: unreadable, and the WAL has an unexplained tail that \
                  cannot be classified"
-            );
-            println!(
-                "error: the WAL's trailing bytes cannot be shown to be a crash leftover; it \
-                 cannot be removed as one"
             );
         }
         Verdict::WitnessDamaged => {
@@ -762,8 +744,10 @@ fn print_commit_witness_verdict(verdict: &Verdict) {
         }
         Verdict::OwnershipMissing => {
             println!("acknowledged commits: no durable owner can be confirmed for this session");
-            println!("error: queued commits exist but no durable, matching owner names them");
         }
+    }
+    if let Some(reason) = write_refusal_reason(verdict) {
+        println!("error: {reason}");
     }
 }
 

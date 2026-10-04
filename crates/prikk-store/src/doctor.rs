@@ -20,7 +20,11 @@ use crate::verify::{
 };
 use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
+mod discard_damaged_commits;
 mod repair_tails;
+pub use discard_damaged_commits::{
+    DiscardDamagedCommitsPlan, discard_damaged_commits, plan_discard_damaged_commits,
+};
 pub use repair_tails::{RepairTailsFileOutcome, RepairTailsReport, repair_tails};
 
 /// Severity assigned to a doctor diagnostic issue.
@@ -1426,7 +1430,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE",
                 format!("a queued commit you were told had succeeded (sequence {witnessed_seq}) is damaged"),
-                "preserve the repository; it was already acknowledged, and it cannot be removed as a crash leftover",
+                "run `prikk doctor --discard-damaged-commits` to remove it; it was already acknowledged, so it cannot be removed as a crash leftover",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1434,7 +1438,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-LOSS",
                 format!("a queued commit you were told had succeeded (sequence {witnessed_seq}) is no longer present at all"),
-                "preserve the repository; it was already acknowledged, and it cannot be removed as a crash leftover",
+                "run `prikk doctor --discard-damaged-commits` to declare it lost; it was already acknowledged, so it cannot be removed as a crash leftover",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1450,7 +1454,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-UNKNOWN",
                 "the queue has an unexplained tail, and this session's own acknowledgment history is unreadable, so the tail cannot be shown to be a crash leftover",
-                "preserve the repository; it cannot be removed as a crash leftover without being able to confirm whether it was acknowledged",
+                "run `prikk doctor --discard-damaged-commits` to discard it; it cannot be removed as a crash leftover without being able to confirm whether it was acknowledged",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),

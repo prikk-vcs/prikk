@@ -357,6 +357,65 @@ impl Wal {
         })
     }
 
+    /// Report what [`Self::truncate_trailing_partial`] would do, without writing anything (RFC 166
+    /// D5, K1): the same read, the same slice of bytes that would be removed, and the same
+    /// [`recovery_file_path_for`] computation its own write uses -- never a second, independently
+    /// computed path that could drift from the one a real repair actually writes to.
+    pub(crate) fn preview_truncate_trailing_partial(&self) -> Result<WalRepair> {
+        self.require_current_format()?;
+        let Some(bytes) = self.read_bytes()? else {
+            return Ok(WalRepair {
+                preserved_records: 0,
+                truncated_bytes: 0,
+                preserved_patch_ids: Vec::new(),
+                recovery_file: None,
+                complete_records_removed: 0,
+            });
+        };
+        let replay = decode_records(&bytes)?;
+        if replay.has_item_failure() {
+            return Err(PrikkError::Integrity(format!(
+                "WAL has a damaged record ({}); repair does not modify it",
+                replay.damage_summary().unwrap_or_default()
+            )));
+        }
+        let preserved_patch_ids: Vec<ObjectId> = replay
+            .records
+            .iter()
+            .map(|record| record.envelope.object_id())
+            .collect();
+        if replay.trailing_partial_bytes == 0 {
+            return Ok(WalRepair {
+                preserved_records: replay.records.len(),
+                truncated_bytes: 0,
+                preserved_patch_ids,
+                recovery_file: None,
+                complete_records_removed: 0,
+            });
+        }
+        let current_len = u64::try_from(bytes.len())
+            .map_err(|_| PrikkError::MalformedData("WAL length does not fit u64".to_string()))?;
+        let trailing = u64::try_from(replay.trailing_partial_bytes).map_err(|_| {
+            PrikkError::MalformedData("trailing WAL byte count does not fit u64".to_string())
+        })?;
+        let repaired_len = current_len.checked_sub(trailing).ok_or_else(|| {
+            PrikkError::MalformedData("trailing WAL byte count exceeds file length".to_string())
+        })?;
+        let (_root, relative) = self.mutation()?;
+        let removed = bytes
+            .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
+            .unwrap_or_default();
+        let complete_records_removed = count_complete_record_shapes(removed);
+        let recovery_file = recovery_file_path_for(relative, repaired_len, removed);
+        Ok(WalRepair {
+            preserved_records: replay.records.len(),
+            truncated_bytes: replay.trailing_partial_bytes,
+            preserved_patch_ids,
+            recovery_file: Some(recovery_file),
+            complete_records_removed,
+        })
+    }
+
     /// Truncate the WAL after a successful publication that made all entries durable elsewhere.
     pub fn truncate_empty(&self) -> Result<()> {
         self.require_current_format()?;
@@ -585,17 +644,23 @@ fn save_removed_bytes(
     offset: u64,
     removed: &[u8],
 ) -> Result<PathBuf> {
+    let file = recovery_file_path_for(wal_relative, offset, removed);
+    ensure_directory_required(root, &PathBuf::from("recovery"))?;
+    write_file_atomically(root, &file, removed)?;
+    Ok(file)
+}
+
+/// The exact path [`save_removed_bytes`] would write `removed` to, computed without writing
+/// anything -- pure, so a plan-only preview (RFC 166 D5) can name the same path a real repair
+/// would use, by construction, never a second computation that could drift from it.
+pub(crate) fn recovery_file_path_for(wal_relative: &Path, offset: u64, removed: &[u8]) -> PathBuf {
     let session = wal_relative.parent().and_then(Path::file_name).map_or_else(
         || "wal".to_string(),
         |name| name.to_string_lossy().into_owned(),
     );
     let digest = prikk_hash::to_hex(&sha256(removed));
     let short = digest.get(..16).unwrap_or(&digest);
-    let directory = PathBuf::from("recovery");
-    let file = directory.join(format!("wal-{session}-at-{offset}-{short}.bytes"));
-    ensure_directory_required(root, &directory)?;
-    write_file_atomically(root, &file, removed)?;
-    Ok(file)
+    PathBuf::from("recovery").join(format!("wal-{session}-at-{offset}-{short}.bytes"))
 }
 
 pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {

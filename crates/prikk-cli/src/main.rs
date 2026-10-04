@@ -1010,7 +1010,7 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // under one lock), so the plan printed here is always the plan a real run would also print
     // before writing.
     if doctor_args.rebuild_pointer_index {
-        let result = if doctor_args.rebuild_pointer_index_plan_only {
+        let result = if doctor_args.plan_only {
             prikk_store::plan_pointer_index_rebuild(&layout)
         } else {
             prikk_store::rebuild_pointer_index(&layout)
@@ -1048,10 +1048,50 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                 dropped.ref_name, dropped.lead_ref_state_id, dropped.reason
             );
         }
-        if doctor_args.rebuild_pointer_index_plan_only {
+        if doctor_args.plan_only {
             println!("plan only -- nothing written");
         } else {
             println!("pointer index rebuilt");
+        }
+        return Ok(());
+    }
+    // RFC 166 D5, §13 item 14: handled first and returns immediately -- args.rs already refuses to
+    // combine it with any other repair flag. `--plan-only` and a real run share the one computation
+    // (`plan_discard_damaged_commits`/`discard_damaged_commits` both call the same private `run`
+    // under one lock), so the plan printed here is always the plan a real run would also print
+    // before writing.
+    if doctor_args.discard_damaged_commits {
+        let result = if doctor_args.plan_only {
+            prikk_store::plan_discard_damaged_commits(&layout)
+        } else {
+            prikk_store::discard_damaged_commits(&layout)
+        };
+        let plan = result.map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        match (plan.witnessed_seq, plan.patch_id) {
+            (Some(seq), Some(patch_id)) => {
+                println!("acknowledged commit at sequence {seq} (patch {patch_id})");
+            }
+            _ => println!("unexplained tail -- the witness itself could not be read"),
+        }
+        if plan.truncated_bytes > 0 {
+            if let Some(recovery_file) = &plan.recovery_file {
+                println!(
+                    "{} bytes saved to {} before truncation",
+                    plan.truncated_bytes,
+                    recovery_file.display()
+                );
+            }
+        } else {
+            println!("nothing to truncate -- the acknowledged commit is already gone from the WAL");
+        }
+        if plan.working_tree_may_still_hold_content {
+            println!("this content may still be in your working tree");
+        }
+        if doctor_args.plan_only {
+            println!("plan only -- nothing written");
+        } else {
+            println!("damaged commit discarded");
         }
         return Ok(());
     }
