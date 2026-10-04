@@ -140,3 +140,5 @@
 
 **K7:** a second addendum on this round, or any finding that would change D1–D6, goes back to the owner before the
 work continues.
+
+**ACCEPTED and CLOSED 2026-10-04** (review `rfc166-round-1-review-v1`; earlier directions `-item0-review-v1`, `-u3-`, `-u4-`, `-u5-direction-v1`). Commits `6854bbdb` … `ee34ac63`. One required fix (the refusal text of `commit` and `seal` over acknowledged damage) opens round 2 as its item 0.

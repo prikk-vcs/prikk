@@ -15,7 +15,9 @@ the architect (0.49.0 step 3, in the owner-approved schedule: *"N6's commit witn
   and its Addendum 1:
   - report v1 was not accepted (review `rfc166-design-round-review-v1`), and that review found §1.6;
   - report v2 was accepted (review `rfc166-design-round-review-v2`), with the architect's measured corrections (§7).
-- **Round 1 is live:** `rfcs/handoffs/166-a-queued-commit-has-a-witness/round-1-handoff-v1.md`.
+- **Round 1 (D1–D4, D6) closed 2026-10-04** (`ee34ac63`, review `rfc166-round-1-review-v1`): 0 of 300 kills stuck,
+  N6 refused end to end, 0.48.0 interop never a false loss. **Round 2 (D5) is live:**
+  `rfcs/handoffs/166-a-queued-commit-has-a-witness/round-2-handoff-v1.md`.
 
 **Author-review independence.** The architect wrote RFC 162 rule 3, the rule that produces N6. The external architect
 found N6 (letter 015), and the architect's own §9 needed two late corrections (RFC 164 §9, §9.2). So:
