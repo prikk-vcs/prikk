@@ -409,11 +409,16 @@ fn restore_races_an_ordinary_commit_under_the_shared_active_lock() {
 /// other, never a third, garbled state, and a second run (with no injected failure) completes it.
 #[test]
 fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
-    for point in [
-        TestFailPoint::MutableFileSync,
-        TestFailPoint::MutableRename,
-        TestFailPoint::MutableParentSync,
-    ] {
+    // `MutableParentSync` has no Windows counterpart at all (`foundation::fsutil::anchored::
+    // failpoints::Point`'s own doc: no directory sync happens there) -- included only where the
+    // platform actually has that boundary, matching `rfc163_stability_soak.rs::all_points`'s own
+    // established pattern, rather than left unconditional and invisible to a Linux-only `cargo
+    // test` run until cross-target clippy for Windows catches the missing variant.
+    #[allow(unused_mut)]
+    let mut points = vec![TestFailPoint::MutableFileSync, TestFailPoint::MutableRename];
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    points.push(TestFailPoint::MutableParentSync);
+    for point in points {
         let root = unique_temp_dir(&format!("rfc166-d5-restore-k4-atomic-{point:?}"));
         let layout = RepositoryLayout::init(root.clone()).unwrap();
         commit(&layout, "a.txt", b"one");
