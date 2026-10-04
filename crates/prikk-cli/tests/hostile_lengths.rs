@@ -165,6 +165,17 @@ const CLAIMED: u64 = 1 << 62;
 /// containers themselves are what `verify` still checks (this fixture's damage never touches them),
 /// and `m1_a_queued_patch_referencing_a_damaged_blob_...` (`rfc162_recovery_matrix.rs`) proves the
 /// index's own rebuildability does not let a *referenced* object's own damage go unreported.
+/// **A fifth row, added by RFC 166: the unsealed commit witness** (`active/default/witness`; a
+/// sealed repository has no active witness file -- seal clears it -- so this row never appears for
+/// `"sealed"`). RFC 166 §5 row 8, by design: a damaged witness over a WAL that is otherwise wholly
+/// sound (this fixture's two queued WAL records are untouched) is a warning, never a refusal --
+/// "nothing is at risk (the witness only ever decides tails)" (§5), and the alternative this matrix's
+/// own blanket rule would otherwise demand was considered and rejected in the accepted RFC itself:
+/// "Refusing on a damaged witness over a sound WAL (row 8): a dead end that protects nothing" (§8).
+/// `doctor --repair-tails` rebuilds the witness from the sound WAL rather than refusing over it. The
+/// warning line (`print_commit_witness_verdict`) still fires, so this is not a blind spot for the rest
+/// of this test's own "say something" half -- only the "non-zero" half is the named exception, the
+/// same shape RFC 162 rule 1's object-index rows use below.
 const OPEN: &[(&str, &str, &str)] = &[
     (
         "sealed",
@@ -175,6 +186,12 @@ const OPEN: &[(&str, &str, &str)] = &[
         "unsealed",
         "containers/index.container",
         "RFC 162 rule 1: the object index is a pure cache and no command refuses over damage to it",
+    ),
+    (
+        "unsealed",
+        "active/default/witness",
+        "RFC 166 §5 row 8: a damaged witness over an otherwise wholly sound WAL is a warning, never \
+         a refusal -- nothing is at risk, and `doctor --repair-tails` rebuilds it",
     ),
 ];
 
@@ -241,6 +258,7 @@ fn verify_and_doctor_end_by_an_exit_status_and_say_something_on_every_damaged_fi
                 "containers/blob/a.container",
                 "containers/index.container",
                 "active/default/queue.wal",
+                "active/default/witness",
             ][..],
         ),
     ] {

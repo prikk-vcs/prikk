@@ -106,9 +106,28 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
         }
     };
     let appended = check_appended_file_tails(layout)?;
+    // RFC 166 §13 item 4: `--repair-tails` also repairs the WAL, so it must also classify before
+    // touching anything, the same as `--repair-wal-tail`. Row 8 (a damaged or stale witness over a
+    // wholly sound WAL) is deliberately not refused here -- nothing is at risk, and the next commit
+    // already replaces it (`append_patch_and_witness`'s own fold-from-scratch-when-uncovered path,
+    // §13 item 2); rebuilding it proactively here is RFC 166 §13 item 5, carried to a later round.
+    let owning_ref =
+        crate::commit_boundary::active::read_active_ref_metadata_for(layout, DEFAULT_ACTIVE_NAME)?;
+    let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+    let commit_witness_verdict = crate::commit_boundary::classification::classify(
+        layout,
+        &wal_replay,
+        &owning_ref,
+        &witness,
+    )?;
 
     // All or nothing: refuse before touching anything if any file has interior damage.
     let mut damaged: Vec<String> = Vec::new();
+    if let Some(reason) =
+        crate::commit_boundary::classification::write_refusal_reason(&commit_witness_verdict)
+    {
+        damaged.push(format!("commit witness: {reason}"));
+    }
     if wal_replay.has_item_failure() {
         damaged.push(format!(
             "WAL: {}",

@@ -102,7 +102,12 @@ fn removing_a_declaration_names_its_file() {
         // reachability-aware `verify_block_payload`/`ensure_object_exists` rewrite, 2,058 -> 2,148.
         // RFC 165 R5: the ref log as an eighth `AppendedFileTails` row (`ref_log_tail_status`,
         // wired into `check_appended_file_tails` and its own destructuring), 2,148 -> 2,171.
-        detail.contains("2171"),
+        // RFC 166 D3/D6: the `CommitWitness` stage (enum variant, its stage-running code, the
+        // `commit_witness_verdict` field, `has_commit_witness_integrity_issue`/`has_commit_witness_
+        // warning`, and `active_ref_metadata_from_wal_metadata_status`, the `ActiveWalMetadataStatus`
+        // inverse the stage shares with `doctor.rs` rather than reading ownership twice), 2,171 ->
+        // 2,273, then a `cargo fmt` pass, 2,273 -> 2,270.
+        detail.contains("2270"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -184,9 +189,11 @@ fn an_inline_test_module_is_not_production() {
         // conditional on the WAL still being empty (a doc comment plus an `if`), 1413 -> 1421.
         // RFC 166 D2: the raw `wal.append_patch` call is now the shared
         // `commit_boundary::witness::append_patch_and_witness`, a multi-line call plus its own
-        // `.map_err`, 1421 -> 1427.
+        // `.map_err`, 1421 -> 1427. RFC 166 D3/D6: the commit-witness pre-write check, run after the
+        // ownership branch and before the WAL append, with its own doc comment, 1427 -> 1453, then a
+        // `cargo fmt` pass, 1453 -> 1452.
         physical,
-        1427,
+        1452,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -196,7 +203,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1378);
+    assert_eq!(counted.production_lines, 1403);
     assert_eq!(
         physical - counted.production_lines,
         49,

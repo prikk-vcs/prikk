@@ -201,6 +201,21 @@ pub fn seal_from_accepted_claim(
                 .to_string(),
         ));
     }
+    // RFC 166 D3/D6: the commit-witness pre-write check. `owning_ref` is `Missing` unconditionally --
+    // the check above already guarantees `replay.records.is_empty()` by the time this line runs.
+    {
+        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+        let verdict = crate::commit_boundary::classification::classify(
+            layout,
+            &replay,
+            &crate::commit_boundary::active::ActiveRefMetadata::Missing,
+            &witness,
+        )?;
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
+        {
+            return Err(PrikkError::Precondition(reason));
+        }
+    }
 
     let ref_store = RefStore::new(layout.clone());
     // RFC 164 Rule D: the pointer index's own tail check, before the new Block write just below

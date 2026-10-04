@@ -15,12 +15,12 @@
 //! no second list to forget.
 //!
 //! **Not exhaustive over every predicate `RepositoryVerification` exposes, deliberately.**
-//! `has_trailing_partial_wal` and `has_active_wal_metadata_warning` are excluded on purpose: both
-//! are warning-severity findings, already surfaced as `println!("warning: ...")` lines in
-//! `print_verify_report` rather than contributing to its `Err` chain, matching the warning/error
-//! severity split `doctor`'s own report already draws (`DoctorSeverity::Warning` vs `Error`). A
-//! repository with only these findings verifies cleanly today, and this declaration does not change
-//! that.
+//! `has_trailing_partial_wal`, `has_active_wal_metadata_warning`, and `has_commit_witness_warning`
+//! are excluded on purpose: all three are warning-severity findings, already surfaced as
+//! `println!("warning: ...")` lines in `print_verify_report` rather than contributing to its `Err`
+//! chain, matching the warning/error severity split `doctor`'s own report already draws
+//! (`DoctorSeverity::Warning` vs `Error`). A repository with only these findings verifies cleanly
+//! today, and this declaration does not change that.
 
 use prikk_store::RepositoryVerification;
 
@@ -67,6 +67,15 @@ pub(crate) const VERDICT_CONDITIONS: &[VerdictCondition] = &[
         message: "repository has active-WAL metadata integrity issues",
         check: RepositoryVerification::has_active_wal_metadata_integrity_issue,
         // The WAL.
+        blocks_provisional_clear: true,
+    },
+    VerdictCondition {
+        id: "commit-witness-integrity",
+        message: "the active session's commit witness disagrees with the WAL in a way the WAL's \
+                   own sound prefix cannot explain (RFC 166)",
+        check: RepositoryVerification::has_commit_witness_integrity_issue,
+        // The WAL: an acknowledged commit that the witness names is no longer sound, substituted, or
+        // unexplainable without a durable owner.
         blocks_provisional_clear: true,
     },
     VerdictCondition {

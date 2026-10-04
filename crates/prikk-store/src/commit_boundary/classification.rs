@@ -278,5 +278,44 @@ fn patch_is_sealed_and_reachable_since(
     }
 }
 
+/// RFC 166 round 1: the exact refusal text `commit`, `rollback-draft` and `seal`'s own pre-write
+/// checks use when [`classify`] returns a blocking verdict (RFC 166 §5 rows 4, 5, 6, 7, 9) --
+/// `None` for every verdict that does not block a write (rows `NoWitness`, 1, 2, 3, 8). Centralized
+/// so the three call sites cannot drift to three different sentences for the same row. **Names no
+/// recovery verb**: round 1 carries no way to act on any of rows 4, 5, 7, 9 yet (`--discard-damaged-
+/// commits`/`--restore-queue-target` are round 2, D5).
+#[must_use]
+pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
+    match verdict {
+        Verdict::NoWitness { .. }
+        | Verdict::Healthy { .. }
+        | Verdict::Pending { .. }
+        | Verdict::CrashTail { .. }
+        | Verdict::WitnessDamaged => None,
+        Verdict::AcknowledgedDamage { witnessed_seq } => Some(format!(
+            "commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no \
+             longer holds it soundly; it was acknowledged, and it cannot be removed as a crash \
+             leftover"
+        )),
+        Verdict::AcknowledgedLoss { witnessed_seq } => Some(format!(
+            "commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no \
+             longer contains it; it was acknowledged, and it cannot be removed as a crash \
+             leftover"
+        )),
+        Verdict::SubstitutedRecord { witnessed_seq } => Some(format!(
+            "sequence {witnessed_seq} in the WAL does not match the record the commit witness \
+             acknowledged; this is not a crash shape, and a copy is the way out"
+        )),
+        Verdict::UnknownWithDamagedWitness => Some(
+            "the WAL has an unexplained tail and the commit witness is damaged, so the tail \
+             cannot be shown to be a crash leftover"
+                .to_string(),
+        ),
+        Verdict::OwnershipMissing => {
+            Some("queued commits exist but no durable, matching owner names them".to_string())
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests;

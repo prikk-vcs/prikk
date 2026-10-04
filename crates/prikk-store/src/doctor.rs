@@ -7,13 +7,16 @@
 use prikk_error::{PrikkError, Result};
 
 use crate::block_state::BlockStateStatus;
+use crate::commit_boundary::classification::{Verdict, classify};
+use crate::commit_boundary::witness::read_witness;
 use crate::foundation::fsutil::{EntryKind, inspect_entry};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::refs::{RefFileStatus, RefItemStatus};
 use crate::verify::{
     ActiveWalMetadataStatus, ObjectItemStatus, RepositoryVerification, StageOutcome, StageStatus,
-    VerificationStage, classify_active_wal_metadata, verify_repository,
+    VerificationStage, active_ref_metadata_from_wal_metadata_status, classify_active_wal_metadata,
+    verify_repository,
 };
 use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
@@ -368,6 +371,30 @@ fn push_non_default_active_session_wal_issues(
                 match classify_active_wal_metadata(layout, &name, replay.records.is_empty()) {
                     Ok(status) => {
                         push_active_session_ref_metadata_issue(&name, &status, issues);
+                        let owning_ref = active_ref_metadata_from_wal_metadata_status(&status);
+                        match read_witness(layout, &name)
+                            .and_then(|witness| classify(layout, &replay, &owning_ref, &witness))
+                        {
+                            Ok(verdict) => {
+                                push_active_session_commit_witness_issue(
+                                    &name, &verdict, &status, issues,
+                                );
+                            }
+                            Err(error) => {
+                                issues.push(
+                                    DoctorIssue::error(
+                                        "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-UNREADABLE",
+                                        format!(
+                                            "active session {name:?}'s commit witness failed to \
+                                             read: {error}"
+                                        ),
+                                        "preserve the repository and inspect the active session's \
+                                         commit witness before attempting repair",
+                                    )
+                                    .for_active_session(name.clone()),
+                                );
+                            }
+                        }
                     }
                     Err(error) => {
                         issues.push(
@@ -460,6 +487,106 @@ fn push_active_session_ref_metadata_issue(
     }
 }
 
+/// The non-default counterpart of `add_commit_witness_issues` below -- same nine-arm intent, same
+/// `DoctorIssue` severities, reusing the exact `Verdict` `classify` already produced for this active
+/// session rather than re-deriving it. Distinct codes from `default`'s
+/// (`ACTIVE-SESSION-COMMIT-WITNESS-*` vs. `COMMIT-WITNESS-*`), matching `push_active_session_ref_
+/// metadata_issue`'s own convention -- and the message must name the active session.
+fn push_active_session_commit_witness_issue(
+    name: &std::ffi::OsStr,
+    verdict: &Verdict,
+    ref_metadata_status: &ActiveWalMetadataStatus,
+    issues: &mut Vec<DoctorIssue>,
+) {
+    match verdict {
+        Verdict::NoWitness { .. }
+        | Verdict::Healthy { .. }
+        | Verdict::Pending { .. }
+        | Verdict::CrashTail { .. } => {}
+        Verdict::AcknowledgedDamage { witnessed_seq } => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE",
+                format!(
+                    "active session {name:?}'s commit witness names sequence {witnessed_seq} as \
+                     acknowledged, but the WAL no longer holds it soundly"
+                ),
+                "preserve the repository; the commit was acknowledged, and it cannot be removed \
+                 as a crash leftover",
+            )
+            .for_active_session(name.to_os_string()),
+        ),
+        Verdict::AcknowledgedLoss { witnessed_seq } => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-ACKNOWLEDGED-LOSS",
+                format!(
+                    "active session {name:?}'s commit witness names sequence {witnessed_seq} as \
+                     acknowledged, but the WAL no longer contains it at all"
+                ),
+                "preserve the repository; the commit was acknowledged, and it cannot be removed \
+                 as a crash leftover",
+            )
+            .for_active_session(name.to_os_string()),
+        ),
+        Verdict::SubstitutedRecord { witnessed_seq } => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-SUBSTITUTED-RECORD",
+                format!(
+                    "sequence {witnessed_seq} in active session {name:?}'s WAL does not match the \
+                     record its commit witness acknowledged"
+                ),
+                "preserve the repository; this is not a crash shape, and a copy is the way out",
+            )
+            .for_active_session(name.to_os_string()),
+        ),
+        Verdict::UnknownWithDamagedWitness => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-UNKNOWN",
+                format!(
+                    "active session {name:?}'s WAL has an unexplained tail and its commit witness \
+                     is damaged, so the tail cannot be shown to be a crash leftover"
+                ),
+                "preserve the repository; it cannot be removed as a crash leftover without the \
+                 witness",
+            )
+            .for_active_session(name.to_os_string()),
+        ),
+        Verdict::WitnessDamaged => issues.push(
+            DoctorIssue::warning(
+                "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-DAMAGED",
+                format!(
+                    "active session {name:?}'s commit witness is damaged, but its active WAL is \
+                     wholly sound"
+                ),
+                "run `prikk doctor --repair-tails` to rebuild it",
+            )
+            .for_active_session(name.to_os_string()),
+        ),
+        // Same reasoning as `add_commit_witness_issues`'s own `OwnershipMissing` arm: a plain missing
+        // or malformed owner is already reported, precisely, by `push_active_session_ref_metadata_
+        // issue` above (via `ref_metadata_status`); this fires only for D6's genuine new case, where
+        // ownership is validly present and still disagrees with the witness.
+        Verdict::OwnershipMissing => {
+            if matches!(
+                ref_metadata_status,
+                ActiveWalMetadataStatus::ValidForNonEmptyWal { .. }
+            ) {
+                issues.push(
+                    DoctorIssue::error(
+                        "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-OWNERSHIP-MISSING",
+                        format!(
+                            "active session {name:?}'s ref metadata names an owner its commit \
+                             witness does not recognize as its own"
+                        ),
+                        "preserve the repository and inspect the active session's WAL before \
+                         attempting repair",
+                    )
+                    .for_active_session(name.to_os_string()),
+                );
+            }
+        }
+    }
+}
+
 /// Return `Some(DEFAULT_ACTIVE_NAME)` when `outcome` is about a stage that reads `default`'s own
 /// active WAL and nothing else, `None` when it does not (RFC 108 increment 3d, §2.2).
 ///
@@ -468,9 +595,13 @@ fn push_active_session_ref_metadata_issue(
 /// hardcodes exactly one `Wal::for_layout(layout, DEFAULT_ACTIVE_NAME)` call; `WalReplay` reads it
 /// directly, and `WalPersistence`/`RollbackDrafts`/`WalRecordSchema`/`ActiveWalMetadata`/`WalOrdering`
 /// each have `default`'s own `replay` as their **only** real dependency (`verify.rs`'s own
-/// `not_evaluated(_, VerificationStage::WalReplay)` calls for all five). A failure or non-evaluation
-/// in any of these six can only ever mean `default`'s own WAL or ref-name metadata is the problem --
-/// `second`'s state cannot cause it, since nothing here ever reads `second`.
+/// `not_evaluated(_, VerificationStage::WalReplay)` calls for all five). `CommitWitness` (RFC 166 D3)
+/// also reads only `default`'s own replay and ref-name metadata -- its `NotEvaluated` names whichever
+/// of `WalReplay`/`ActiveWalMetadata` blocked it first, never a stage outside this group, so it stays
+/// `default`-scoped the same as the other six regardless of which of the two it names. A failure or
+/// non-evaluation in any of these seven can only ever mean `default`'s own WAL, ref-name metadata, or
+/// commit witness is the problem -- `second`'s state cannot cause it, since nothing here ever reads
+/// `second`.
 ///
 /// `PublicationReclassification` is the one genuinely mixed stage: `verify.rs`'s own comment above
 /// its call site says its `NotEvaluated` names whichever of `WalReplay`/`Refs`/`ActiveWalMetadata`
@@ -485,7 +616,7 @@ fn push_active_session_ref_metadata_issue(
 /// Every other stage (`Objects`, `Refs`, `RefUpdateSchemaTrust`, `CommitIndex`, `LifecycleCache`,
 /// `ReceivedRefs`, `LocalTagTrust`) is independent of the active WAL entirely -- `verify.rs`'s own
 /// comments for `CommitIndex`/`LifecycleCache` say so explicitly ("No upstream stage dependency").
-/// **No wildcard arm**: a fifteenth `VerificationStage` variant must not silently fall through
+/// **No wildcard arm**: an eighteenth `VerificationStage` variant must not silently fall through
 /// either side of this match -- it fails to compile until a real decision is recorded here, the same
 /// defense `verification_stages!`'s own macro already gives `ALL`/`label()`.
 fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'static str> {
@@ -495,6 +626,7 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
         | VerificationStage::RollbackDrafts
         | VerificationStage::WalRecordSchema
         | VerificationStage::ActiveWalMetadata
+        | VerificationStage::CommitWitness
         | VerificationStage::WalOrdering => Some(DEFAULT_ACTIVE_NAME),
         VerificationStage::PublicationReclassification => match &outcome.status {
             StageStatus::NotEvaluated {
@@ -987,6 +1119,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 issues.push(doctor_issue);
             }
             add_active_wal_metadata_issues(&verification, &mut issues);
+            add_commit_witness_issues(&verification, &mut issues);
             DoctorReport {
                 verification: Some(verification),
                 issues,
@@ -1240,6 +1373,91 @@ fn add_active_wal_metadata_issues(
         ),
         ActiveWalMetadataStatus::MissingForEmptyWal
         | ActiveWalMetadataStatus::ValidForNonEmptyWal { .. } => {}
+    }
+}
+
+/// RFC 166 D3/D6, round 1: rows 4, 5, 6, 7 and 9 of §5 name no recovery verb yet
+/// (`--discard-damaged-commits`/`--restore-queue-target` are round 2, D5) -- each recommendation says
+/// only that the commit was acknowledged and cannot be removed as a crash leftover, never a verb that
+/// does not exist. Row 8 is the one warning, rebuilt by `--repair-tails` (§13 item 5). Rows `NoWitness`,
+/// `Healthy`, `Pending` and `CrashTail` push nothing -- `NoWitness` is 0.48.0's own unchanged rule 3
+/// (never worse, C2), and the other three are the ordinary, unremarkable cases the verdict table's own
+/// "0" column names.
+fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut Vec<DoctorIssue>) {
+    // `None` (the stage did not evaluate) is already surfaced, more precisely, by the stage-outcome
+    // loop above this function's own call site -- same reasoning as `add_active_wal_metadata_issues`.
+    let Some(verdict) = &verification.commit_witness_verdict else {
+        return;
+    };
+    match verdict {
+        Verdict::NoWitness { .. }
+        | Verdict::Healthy { .. }
+        | Verdict::Pending { .. }
+        | Verdict::CrashTail { .. } => {}
+        Verdict::AcknowledgedDamage { witnessed_seq } => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE",
+                format!("commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no longer holds it soundly"),
+                "preserve the repository; the commit was acknowledged, and it cannot be removed as a crash leftover",
+            )
+            .for_active_session(DEFAULT_ACTIVE_NAME),
+        ),
+        Verdict::AcknowledgedLoss { witnessed_seq } => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-LOSS",
+                format!("commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no longer contains it at all"),
+                "preserve the repository; the commit was acknowledged, and it cannot be removed as a crash leftover",
+            )
+            .for_active_session(DEFAULT_ACTIVE_NAME),
+        ),
+        Verdict::SubstitutedRecord { witnessed_seq } => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-RECORD",
+                format!("sequence {witnessed_seq} in the WAL does not match the record the commit witness acknowledged"),
+                "preserve the repository; this is not a crash shape, and a copy is the way out",
+            )
+            .for_active_session(DEFAULT_ACTIVE_NAME),
+        ),
+        Verdict::UnknownWithDamagedWitness => issues.push(
+            DoctorIssue::error(
+                "PRIKK-DOCTOR-COMMIT-WITNESS-UNKNOWN",
+                "the WAL has an unexplained tail and the commit witness is damaged, so the tail cannot be shown to be a crash leftover",
+                "preserve the repository; it cannot be removed as a crash leftover without the witness",
+            )
+            .for_active_session(DEFAULT_ACTIVE_NAME),
+        ),
+        Verdict::WitnessDamaged => issues.push(
+            DoctorIssue::warning(
+                "PRIKK-DOCTOR-COMMIT-WITNESS-DAMAGED",
+                "commit witness is damaged, but the active WAL it covers is wholly sound",
+                "run `prikk doctor --repair-tails` to rebuild it",
+            )
+            .for_active_session(DEFAULT_ACTIVE_NAME),
+        ),
+        // D6's mismatch case only: when ownership is missing or malformed outright (not merely
+        // disagreeing with the witness), `add_active_wal_metadata_issues` above already reports it,
+        // precisely, as `ACTIVE-REF-METADATA-MISSING`/`MALFORMED` -- a second, less specific code for
+        // the exact same root cause would be two independently derived answers to one question, the
+        // defect class `classify`/`VERDICT_CONDITIONS` exist to remove, not add. This fires only when
+        // ownership is validly present (`ValidForNonEmptyWal`) and still disagrees with the witness --
+        // the one case `add_active_wal_metadata_issues` has no way to see at all.
+        Verdict::OwnershipMissing => {
+            if matches!(
+                verification.active_wal_metadata_status,
+                Some(ActiveWalMetadataStatus::ValidForNonEmptyWal { .. })
+            ) {
+                issues.push(
+                    DoctorIssue::error(
+                        "PRIKK-DOCTOR-COMMIT-WITNESS-OWNERSHIP-MISSING",
+                        "the active ref metadata names an owner the commit witness does not \
+                         recognize as its own",
+                        "preserve the repository and inspect the active WAL before sealing or \
+                         appending",
+                    )
+                    .for_active_session(DEFAULT_ACTIVE_NAME),
+                );
+            }
+        }
     }
 }
 

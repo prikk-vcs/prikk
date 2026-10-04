@@ -100,6 +100,29 @@ impl ActiveSession {
             // still be unambiguous — see `node_authoring.rs::author_inner`'s identical guard change.
             require_active_ref_for_non_empty_wal(&self.layout, "heads/main")?;
         }
+        // RFC 166 D3/D6: the commit-witness pre-write check, mirroring `node_authoring.rs::
+        // author_inner`'s identical guard -- `owning_ref` reconstructed from exactly what the branch
+        // above just established, never a second, independent read of the ownership file.
+        {
+            let owning_ref = if replay.records.is_empty() {
+                ActiveRefMetadata::Missing
+            } else {
+                ActiveRefMetadata::Valid("heads/main".to_string())
+            };
+            let witness =
+                crate::commit_boundary::witness::read_witness(&self.layout, DEFAULT_ACTIVE_NAME)?;
+            let verdict = crate::commit_boundary::classification::classify(
+                &self.layout,
+                &replay,
+                &owning_ref,
+                &witness,
+            )?;
+            if let Some(reason) =
+                crate::commit_boundary::classification::write_refusal_reason(&verdict)
+            {
+                return Err(PrikkError::Precondition(reason));
+            }
+        }
         let wal_sequence = crate::commit_boundary::witness::append_patch_and_witness(
             &self.layout,
             DEFAULT_ACTIVE_NAME,

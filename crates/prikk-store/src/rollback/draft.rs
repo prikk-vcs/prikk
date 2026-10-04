@@ -176,6 +176,23 @@ pub fn append_rollback_draft(
             remove_active_ref_metadata(layout)?;
         }
     }
+    // RFC 166 D3/D6: the commit-witness pre-write check. `owning_ref` is `Missing` unconditionally --
+    // the precondition above already guarantees `replay.records.is_empty()` by the time this line
+    // runs, the same fact the ownership match just above (re)established, so this is never a second,
+    // independent read of the ownership file.
+    {
+        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+        let verdict = crate::commit_boundary::classification::classify(
+            layout,
+            &replay,
+            &ActiveRefMetadata::Missing,
+            &witness,
+        )?;
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
+        {
+            return Err(PrikkError::Precondition(reason));
+        }
+    }
     // RFC 164 round 2 Addendum 1, item 2: this signer's own author-key check, moved here from its own
     // previous position inside `record_author_key_material` below (where it still runs and re-checks,
     // harmless and cheap under the same held `active_lock`) -- before this fix, a refusal over a

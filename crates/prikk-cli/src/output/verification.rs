@@ -3,7 +3,7 @@ use crate::stdout::println;
 use prikk_store::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, ActiveWalMetadataStatus,
     AuthorSignatureVerification, BlockStateStatus, DoctorSeverity, ObjectItemStatus, RefFileStatus,
-    RefItemStatus, RepairTailsReport, RepositoryLayout, StageStatus,
+    RefItemStatus, RepairTailsReport, RepositoryLayout, StageStatus, Verdict,
 };
 
 /// `prikk doctor --repair-tails` (RFC 164 Rule C): one line per covered file, always -- clean or
@@ -596,6 +596,10 @@ pub(crate) fn print_verify_report(
         Some(status) => print_active_wal_metadata_status(status),
         None => println!("active WAL metadata: unknown (stage did not evaluate)"),
     }
+    match &report.commit_witness_verdict {
+        Some(verdict) => print_commit_witness_verdict(verdict),
+        None => println!("commit witness: unknown (stage did not evaluate)"),
+    }
     println!(
         "commit-index divergences: {}",
         report.commit_index_divergences.len()
@@ -666,6 +670,81 @@ fn print_active_wal_metadata_status(status: &ActiveWalMetadataStatus) {
         ActiveWalMetadataStatus::InvalidForNonEmptyWal { reason } => {
             println!("active WAL metadata: malformed for non-empty WAL ({reason})");
             println!("error: active WAL contains records but has malformed ref metadata");
+        }
+    }
+}
+
+/// RFC 166 §5's own ten rows, 1-9 here (row 10 is D4's, layered on separately). **Rows 4, 5, 7 and 9
+/// name no recovery verb**: round 1 carries no way to act on any of them yet (`--discard-damaged-
+/// commits` and `--restore-queue-target` are round 2, D5) -- the text says only that the record was
+/// acknowledged and cannot be removed as a crash leftover, never a verb that does not exist.
+fn print_commit_witness_verdict(verdict: &Verdict) {
+    match verdict {
+        Verdict::NoWitness { .. } => {
+            println!("commit witness: absent");
+        }
+        Verdict::Healthy { last_seq } => {
+            println!("commit witness: healthy through sequence {last_seq}");
+        }
+        Verdict::Pending {
+            witnessed_seq,
+            last_seq,
+        } => {
+            println!(
+                "commit witness: pending (witnessed through {}, WAL sound through {last_seq})",
+                witnessed_seq.map_or_else(|| "nothing yet".to_string(), |seq| seq.to_string())
+            );
+            println!("note: the next commit advances the witness");
+        }
+        Verdict::CrashTail { .. } => {
+            println!(
+                "commit witness: agrees with the sound prefix; the trailing bytes are an unacknowledged crash tail"
+            );
+        }
+        Verdict::AcknowledgedDamage { witnessed_seq } => {
+            println!("commit witness: sequence {witnessed_seq} is damaged");
+            println!(
+                "error: commit {witnessed_seq} was acknowledged, and it cannot be removed as a \
+                 crash leftover"
+            );
+        }
+        Verdict::AcknowledgedLoss { witnessed_seq } => {
+            println!("commit witness: sequence {witnessed_seq} is no longer present in the WAL");
+            println!(
+                "error: commit {witnessed_seq} was acknowledged, and it cannot be removed as a \
+                 crash leftover"
+            );
+        }
+        Verdict::SubstitutedRecord { witnessed_seq } => {
+            println!(
+                "commit witness: sequence {witnessed_seq} does not match the record the witness \
+                 acknowledged"
+            );
+            println!(
+                "error: sequence {witnessed_seq} is not the commit the witness acknowledged; a \
+                 copy is the way out"
+            );
+        }
+        Verdict::UnknownWithDamagedWitness => {
+            println!(
+                "commit witness: damaged, and the WAL has an unexplained tail that cannot be \
+                 classified"
+            );
+            println!(
+                "error: the WAL's trailing bytes cannot be shown to be a crash leftover; it \
+                 cannot be removed as one"
+            );
+        }
+        Verdict::WitnessDamaged => {
+            println!("commit witness: damaged");
+            println!(
+                "warning: commit witness is damaged; run `prikk doctor --repair-tails` to \
+                 rebuild it"
+            );
+        }
+        Verdict::OwnershipMissing => {
+            println!("commit witness: no durable owner can be confirmed for this session");
+            println!("error: queued commits exist but no durable, matching owner names them");
         }
     }
 }

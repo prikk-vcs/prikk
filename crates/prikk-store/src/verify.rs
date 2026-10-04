@@ -463,6 +463,11 @@ verification_stages! {
     WalRecordSchema => "wal-record-schema",
     /// Active-WAL ref-ownership metadata classification.
     ActiveWalMetadata => "active-wal-metadata",
+    /// RFC 166 D3/D6: the active session's commit-witness classification (rows 1-9 of RFC 166 §5;
+    /// row 10, the running-hash check, is `verify`'s own separate, additional O(WAL) pass). Depends
+    /// on `WalReplay` and `ActiveWalMetadata` -- reuses the `ActiveRefMetadata` the latter already
+    /// read rather than reading the ownership file a second time.
+    CommitWitness => "commit-witness",
     /// Retained-evidence reclassification of interrupted-publication ref issues.
     PublicationReclassification => "publication-reclassification",
     /// DC-56 commit-index cache divergence check.
@@ -662,6 +667,9 @@ pub struct RepositoryVerification {
     /// Active-WAL ref metadata status relative to the replayed WAL. `None` when the active-WAL-metadata
     /// stage did not evaluate to completion.
     pub active_wal_metadata_status: Option<ActiveWalMetadataStatus>,
+    /// RFC 166 D3/D6: the active session's commit-witness classification (rows 1-9 of RFC 166 §5).
+    /// `None` when the `CommitWitness` stage did not evaluate to completion.
+    pub commit_witness_verdict: Option<crate::commit_boundary::classification::Verdict>,
     /// DC-56 commit-index entries whose recorded content hash disagrees with the worktree's actual
     /// current content despite a matching stat — a stale-but-trusted cache entry, reported per the
     /// cache-validity specification §6 rather than silently trusted by a future commit.
@@ -954,6 +962,39 @@ impl RepositoryVerification {
         self.active_wal_metadata_status
             .as_ref()
             .is_some_and(ActiveWalMetadataStatus::has_local_debris_warning)
+    }
+
+    /// Return true when the commit-witness classification found acknowledged damage, acknowledged
+    /// loss, a substituted record, an unreadable witness over an unexplained tail, or ownership
+    /// missing (RFC 166 §5 rows 4, 5, 6, 7, 9). `None` (the stage did not evaluate, or found no
+    /// witness at all -- row NoWitness is 0.48.0's own unchanged rule 3, never worse) reads as false
+    /// — see `has_trailing_partial_wal`. A sound WAL with no witness, a healthy witness, a pending
+    /// witness, and a genuine crash tail (rows NoWitness, 1, 2, 3) are none of these.
+    #[must_use]
+    pub fn has_commit_witness_integrity_issue(&self) -> bool {
+        use crate::commit_boundary::classification::Verdict;
+        matches!(
+            self.commit_witness_verdict,
+            Some(
+                Verdict::AcknowledgedDamage { .. }
+                    | Verdict::AcknowledgedLoss { .. }
+                    | Verdict::SubstitutedRecord { .. }
+                    | Verdict::UnknownWithDamagedWitness
+                    | Verdict::OwnershipMissing
+            )
+        )
+    }
+
+    /// Return true when the commit witness is damaged but the WAL it covers is wholly sound (RFC 166
+    /// §5 row 8) -- nothing is at risk (the witness only ever decides tails), so this is a warning,
+    /// not a refusal; `doctor --repair-tails` rebuilds it. `None` reads as false — see
+    /// `has_trailing_partial_wal`.
+    #[must_use]
+    pub fn has_commit_witness_warning(&self) -> bool {
+        matches!(
+            self.commit_witness_verdict,
+            Some(crate::commit_boundary::classification::Verdict::WitnessDamaged)
+        )
     }
 
     /// Return true when the commit-index cache disagrees with the worktree for at least one path.
@@ -1544,6 +1585,39 @@ pub fn verify_repository_with_options(
         None
     };
 
+    // Stage: CommitWitness (RFC 166 D3/D6). Depends on WalReplay and ActiveWalMetadata -- reuses the
+    // exact `ActiveRefMetadata` the latter already read (`active_ref_metadata_from_wal_metadata_status`
+    // converts its own `ActiveWalMetadataStatus` back losslessly) rather than reading the ownership
+    // file a second time, the same "one read, shared" reasoning `trust_is_valid` uses just below.
+    let commit_witness_verdict = if let (Some(replay), Some(wal_metadata_status)) =
+        (&replay, &active_wal_metadata_status)
+    {
+        pipeline.run(
+            VerificationStage::CommitWitness,
+            (|| -> Result<crate::commit_boundary::classification::Verdict> {
+                let owning_ref = active_ref_metadata_from_wal_metadata_status(wal_metadata_status);
+                let witness =
+                    crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+                crate::commit_boundary::classification::classify(
+                    layout,
+                    replay,
+                    &owning_ref,
+                    &witness,
+                )
+            })(),
+        )
+    } else {
+        pipeline.not_evaluated(
+            VerificationStage::CommitWitness,
+            if replay.is_none() {
+                VerificationStage::WalReplay
+            } else {
+                VerificationStage::ActiveWalMetadata
+            },
+        );
+        None
+    };
+
     // Stage: PublicationReclassification. Cannot run at all without Refs (needs `issues` to mutate),
     // WalReplay (needs `records`), or ActiveWalMetadata (needs `metadata`) -- `NotEvaluated`, naming
     // whichever of those three failed first, if any. Objects failing does *not* block this stage from
@@ -1671,6 +1745,7 @@ pub fn verify_repository_with_options(
         unreferenced_remnants,
         trailing_partial_wal_bytes: replay.as_ref().map(|replay| replay.trailing_partial_bytes),
         active_wal_metadata_status,
+        commit_witness_verdict,
         commit_index_divergences,
         lifecycle_cache_divergences,
         active_wal_ordering_issues,
@@ -1870,6 +1945,30 @@ fn verify_local_tag_publication_trust(
 /// a second time. `pub(crate)` (was private) for that one new caller; the sole existing call site
 /// below still passes `DEFAULT_ACTIVE_NAME`, so `default`'s own classification is byte-for-byte
 /// unchanged.
+/// RFC 166 D3/D6: recover the exact `ActiveRefMetadata` an already-computed `ActiveWalMetadataStatus`
+/// was itself classified from, losslessly -- the `CommitWitness` stage's own `owning_ref` input, so it
+/// does not read the ownership file a second time. Each `ActiveWalMetadataStatus` arm already carries
+/// the original `ActiveRefMetadata` value unchanged (`classify_active_wal_metadata`, just below, is
+/// the only place that ever constructs one); this is its exact inverse. `pub(crate)`, the same
+/// footing `classify_active_wal_metadata` itself is on, for `doctor.rs`'s own per-active-session
+/// commit-witness classification to reuse rather than re-derive.
+pub(crate) fn active_ref_metadata_from_wal_metadata_status(
+    status: &ActiveWalMetadataStatus,
+) -> ActiveRefMetadata {
+    match status {
+        ActiveWalMetadataStatus::MissingForEmptyWal
+        | ActiveWalMetadataStatus::MissingForNonEmptyWal => ActiveRefMetadata::Missing,
+        ActiveWalMetadataStatus::ValidForEmptyWal { ref_name }
+        | ActiveWalMetadataStatus::ValidForNonEmptyWal { ref_name } => {
+            ActiveRefMetadata::Valid(ref_name.clone())
+        }
+        ActiveWalMetadataStatus::InvalidForEmptyWal { reason }
+        | ActiveWalMetadataStatus::InvalidForNonEmptyWal { reason } => {
+            ActiveRefMetadata::Invalid(reason.clone())
+        }
+    }
+}
+
 pub(crate) fn classify_active_wal_metadata(
     layout: &RepositoryLayout,
     name: impl AsRef<std::path::Path>,

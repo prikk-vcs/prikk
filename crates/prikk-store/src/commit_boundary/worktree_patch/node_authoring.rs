@@ -411,6 +411,31 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // rejecting.
         require_active_ref_for_non_empty_wal(layout, &canonical_ref).map_err(AuthorError::Store)?;
     }
+    // RFC 166 D3/D6: the commit-witness pre-write check, run after ownership is confirmed (or
+    // removed) above and before the append below. `owning_ref` is reconstructed from exactly what
+    // the branch above just established -- `Missing` for the empty-queue branch (which just enforced
+    // that), `Valid(canonical_ref)` for the non-empty branch (which just confirmed that) -- never a
+    // second, independent read of the ownership file.
+    {
+        let owning_ref = if active_replay.records.is_empty() {
+            ActiveRefMetadata::Missing
+        } else {
+            ActiveRefMetadata::Valid(canonical_ref.clone())
+        };
+        let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)
+            .map_err(AuthorError::Store)?;
+        let verdict = crate::commit_boundary::classification::classify(
+            layout,
+            &active_replay,
+            &owning_ref,
+            &witness,
+        )
+        .map_err(AuthorError::Store)?;
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
+        {
+            return Err(AuthorError::Store(PrikkError::Precondition(reason)));
+        }
+    }
 
     // RFC 164 Rule D: this signer's own author-key check, moved here from its own previous position
     // immediately before the WAL append (near the end of this function, where `record_author_key_

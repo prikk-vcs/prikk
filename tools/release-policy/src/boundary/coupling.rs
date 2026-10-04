@@ -397,6 +397,41 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 others: no defect motivates moving it, and RFC 166's own round 1 \
                                 scope does not include module restructuring",
     },
+    DeclaredCycle {
+        edges: &[
+            ("commit_boundary::active", "commit_boundary::classification"),
+            (
+                "commit_boundary::worktree_patch",
+                "commit_boundary::classification",
+            ),
+        ],
+        reason: "RFC 166 D3/D6, round 1's own pre-write guard: every writer that can leave an \
+                  acknowledged commit damaged, lost, substituted, or unowned must refuse before its \
+                  own append, not only `verify`/`doctor` after the fact (C2, C3) -- `active`'s own \
+                  `ActiveSession::append_patch` and `worktree_patch`'s `author_inner` both call \
+                  `commit_boundary::classification::classify`/`write_refusal_reason` immediately \
+                  before the same `append_patch_and_witness` call the entry above already names. \
+                  These two edges close a longer cycle only because `classification` itself reaches \
+                  back into `refs` (the next entry), which already reaches back into this component",
+        what_would_remove_it: "giving each writer its own copy of the pre-write refusal check \
+                                instead of sharing `classify`/`write_refusal_reason`, reintroducing \
+                                the exact duplication §13 item 1 already closed for the append-and- \
+                                witness half of the same writers -- worse, not better",
+    },
+    DeclaredCycle {
+        edges: &[("commit_boundary::classification", "refs")],
+        reason: "RFC 166 D3's own bounded connectivity walk (`patch_is_sealed_and_reachable_since`) \
+                  reads the witnessed ref's current tip and walks its `RefState` chain via \
+                  `RefStore`, the same primitive `commit_boundary::witness` already reaches `refs` \
+                  through (the entry above). Closes a cycle only because `refs` already reaches back \
+                  into `commit_boundary::active` (this file's first entry), and `active` now reaches \
+                  `classification` (the entry above)",
+        what_would_remove_it: "passing a pre-resolved reachability answer into `classify` instead of \
+                                letting it walk `RefStore` itself -- no real caller has that answer \
+                                precomputed (connectivity is exactly what `classify` exists to \
+                                decide), so this is not a real, scoped option the way the other \
+                                entries' alternatives are",
+    },
 ];
 
 /// One declared hub: a module with high fan-in *and* high fan-out, and why that is consolidation
@@ -513,6 +548,19 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   `add_trusted_maintainer` and `remove_trusted_maintainer`'s shared read before their \
                   own trust-policy append) and `add_trusted_maintainer`'s own trust-key lookup each \
                   refuse there on an unclean tail. One check reused at both call sites, not two",
+    },
+    DeclaredHub {
+        module: "commit_boundary::witness",
+        reason: "RFC 166 D2/D3's own consolidation, in both directions at once: every writer \
+                  (`commit_boundary::active`, `commit_boundary::worktree_patch`, `rollback::draft`) \
+                  goes through the one shared `append_patch_and_witness` rather than its own copy, \
+                  and every reader of the commit-witness classification (`verify`, `doctor`, \
+                  `doctor::repair_tails`, `seal_from_accepted`, plus the CLI's own `seal`) goes \
+                  through the one shared `classify`/`write_refusal_reason` rather than re-deriving \
+                  it -- seven real callers sharing two functions, not one caller reached seven ways. \
+                  Its own fan-out is the same durable-file toolkit `author::author_key_index` (above) \
+                  already depends on, plus `refs` (the ref's own tip, for D3's bounded connectivity \
+                  walk) and `wal` (the frame checksum it reuses rather than recomputing)",
     },
 ];
 

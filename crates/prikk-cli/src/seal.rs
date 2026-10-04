@@ -135,6 +135,23 @@ fn seal_active_no_audit(
             ));
         }
     }
+    // RFC 166 D3/D6: the commit-witness pre-write check. `owning_ref` is reconstructed as
+    // `Valid(ref_name)` -- exactly what the ownership match just above confirmed (this branch is
+    // reached only when it did) -- never a second, independent read of the ownership file.
+    {
+        let witness = prikk_store::read_witness(&layout, DEFAULT_ACTIVE_NAME)
+            .map_err(|err| err.to_string())?;
+        let verdict = prikk_store::classify(
+            &layout,
+            &replay,
+            &ActiveRefMetadata::Valid(ref_name.clone()),
+            &witness,
+        )
+        .map_err(|err| err.to_string())?;
+        if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
+            return Err(reason);
+        }
+    }
 
     let ref_store = RefStore::new(layout.clone());
     // RFC 164 Rule D: the pointer index's own tail check, before any content-object write below

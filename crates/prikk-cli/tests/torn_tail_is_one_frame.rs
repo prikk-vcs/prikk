@@ -31,6 +31,35 @@ fn wal_path(repo: &Path) -> PathBuf {
     repo.join(".prikk/active/default/queue.wal")
 }
 
+/// RFC 166: the commit witness for `default`'s own active session.
+fn witness_path(repo: &Path) -> PathBuf {
+    repo.join(".prikk/active/default/witness")
+}
+
+/// Like [`two_queued_commits`], but also returns the commit witness exactly as the first commit left
+/// it -- before the second commit's own witness write ever happened. RFC 166: a byte-truncated second
+/// record whose witness still names it as acknowledged is not an unacknowledged crash tail, it is
+/// acknowledged damage (row 4) -- a genuinely *never-acknowledged* torn second record additionally
+/// needs the witness rolled back to what it was after only the first commit, the state a real crash
+/// mid-way through the second commit's own WAL append (before that commit's own witness write, which
+/// is strictly ordered after it) would actually have left behind.
+fn two_queued_commits_with_witness_after_first(tag: &str) -> (PathBuf, Vec<u8>) {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    let mut witness_after_first = None;
+    for (index, name) in ["one.txt", "two.txt"].iter().enumerate() {
+        std::fs::write(repo.join(name), format!("queued commit {index}\n")).unwrap();
+        support::ok(
+            &support::commit(&repo, "heads/main", &format!("queued {index}")),
+            "commit",
+        );
+        if index == 0 {
+            witness_after_first = Some(std::fs::read(witness_path(&repo)).unwrap());
+        }
+    }
+    (repo, witness_after_first.unwrap())
+}
+
 /// The byte range of each record of a WAL (header, then a body whose length is the big-endian `u64` at bytes 18..26 of the header).
 fn records_of(wal: &[u8]) -> Vec<std::ops::Range<usize>> {
     let mut at = 0;
@@ -71,13 +100,15 @@ fn named_recovery_file(repo: &Path, output: &str) -> PathBuf {
     repo.join(name)
 }
 
-/// **Addendum 1, control 1 -- a lone damaged record: the repair truncates it, and keeps it.** One queued commit, its length set to
-/// 2^62: nothing sound is behind it, so it reads as a torn tail (the ambiguity no rule can resolve) and `--repair-wal-tail` removes it.
-/// **The recovery file the output names holds exactly the removed bytes, byte for byte**: a repair that was wrong about what it
-/// removed lost nothing, and the record can be read back.
+/// **Addendum 1, control 1 -- a lone damaged record with no witness: the repair truncates it, and keeps it.** One queued commit, its
+/// length set to 2^62, **and its commit witness removed** (RFC 166 row 1: no witness file is rule 3 for this session, exactly as
+/// 0.48.0 -- a legacy session, or one whose witness was itself removed): nothing sound is behind it, so it reads as a torn tail (the
+/// ambiguity no rule can resolve without a witness) and `--repair-wal-tail` removes it. **The recovery file the output names holds
+/// exactly the removed bytes, byte for byte**: a repair that was wrong about what it removed lost nothing, and the record can be read
+/// back.
 /// **Perturb:** truncate without saving: the output names no file and this goes red.
 #[test]
-fn a_repair_of_a_lone_damaged_record_saves_the_record_byte_for_byte() {
+fn a_repair_of_a_lone_damaged_record_with_no_witness_saves_the_record_byte_for_byte() {
     let repo = support::unique_repo("f3-wal-lone");
     support::init(&repo);
     std::fs::write(repo.join("one.txt"), "the only queued commit\n").unwrap();
@@ -86,6 +117,7 @@ fn a_repair_of_a_lone_damaged_record_saves_the_record_byte_for_byte() {
     let mut bytes = std::fs::read(&wal).unwrap();
     bytes[18..26].copy_from_slice(&(1_u64 << 62).to_be_bytes());
     std::fs::write(&wal, &bytes).unwrap();
+    std::fs::remove_file(witness_path(&repo)).unwrap();
 
     let (repair, text) = run(&repo, &["doctor", "--repair-wal-tail"]);
     assert_eq!(repair, Some(0), "{text}");
@@ -98,6 +130,42 @@ fn a_repair_of_a_lone_damaged_record_saves_the_record_byte_for_byte() {
         std::fs::read(&saved).unwrap(),
         bytes,
         "the recovery file is the removed record, whole"
+    );
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// **RFC 166, N6, end to end: a lone damaged record that WAS witnessed is acknowledged damage, not an ambiguous tail.** Same byte
+/// damage as the no-witness control above, but the commit witness is left in place, naming this record as acknowledged -- the
+/// ambiguity the no-witness control relies on does not exist here, so `--repair-wal-tail` must refuse rather than silently discard an
+/// acknowledged commit (0.48.0's own defect this RFC exists to close: `doctor --repair-wal-tail` used to remove this record, exit 0,
+/// and leave the user down one queued commit with no record anything was ever wrong).
+/// **Perturb:** delete the witness first (the control above): the repair succeeds and this distinction disappears.
+#[test]
+fn a_witnessed_lone_damaged_record_is_acknowledged_damage_and_the_repair_refuses() {
+    let repo = support::unique_repo("f3-wal-lone-witnessed");
+    support::init(&repo);
+    std::fs::write(repo.join("one.txt"), "the only queued commit\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "queued"), "commit");
+    let wal = wal_path(&repo);
+    let bytes = std::fs::read(&wal).unwrap();
+    let mut damaged = bytes.clone();
+    damaged[18..26].copy_from_slice(&(1_u64 << 62).to_be_bytes());
+    std::fs::write(&wal, &damaged).unwrap();
+
+    let (verify, verify_text) = run(&repo, &["verify"]);
+    assert!(
+        verify.is_some_and(|code| code != 0),
+        "verify refuses over acknowledged damage: {verify:?}\n{verify_text}"
+    );
+    let (repair, repair_text) = run(&repo, &["doctor", "--repair-wal-tail"]);
+    assert!(
+        repair.is_some_and(|code| code != 0),
+        "the repair refuses rather than discard an acknowledged commit: {repair:?}\n{repair_text}"
+    );
+    assert_eq!(
+        std::fs::read(&wal).unwrap(),
+        damaged,
+        "nothing is removed; the WAL is byte for byte as it was"
     );
     let _ = std::fs::remove_dir_all(repo);
 }
@@ -177,13 +245,17 @@ fn a_damaged_first_wal_record_is_reported_and_the_repair_refuses_and_deletes_not
 /// **Perturb:** treat every partial frame as damage: the repair refuses and this goes red.
 #[test]
 fn a_true_torn_wal_tail_is_still_tolerated_and_still_truncated_by_the_repair() {
-    let repo = two_queued_commits("f3-wal-torn");
+    let (repo, witness_after_first) = two_queued_commits_with_witness_after_first("f3-wal-torn");
     let wal = wal_path(&repo);
     let bytes = std::fs::read(&wal).unwrap();
     let records = records_of(&bytes);
     let first_end = records[0].end;
     let cut = first_end + (records[1].len() / 2);
     std::fs::write(&wal, &bytes[..cut]).unwrap();
+    // RFC 166: a genuine crash mid-way through the second commit's own WAL append happens strictly
+    // before that commit's own witness write, so the witness must still read exactly as the first
+    // commit left it -- not what a real, completed second commit actually wrote.
+    std::fs::write(witness_path(&repo), &witness_after_first).unwrap();
 
     let (verify, verify_text) = run(&repo, &["verify"]);
     assert_eq!(

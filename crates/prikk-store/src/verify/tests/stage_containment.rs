@@ -446,6 +446,7 @@ fn verify_repository_marks_every_wal_replay_dependent_as_not_evaluated() -> Resu
         VerificationStage::RollbackDrafts,
         VerificationStage::WalRecordSchema,
         VerificationStage::ActiveWalMetadata,
+        VerificationStage::CommitWitness,
         VerificationStage::PublicationReclassification,
         VerificationStage::WalOrdering,
     ] {
@@ -592,6 +593,10 @@ fn verify_repository_with_options_halts_every_later_stage_when_stop_on_first_err
         ),
         (
             VerificationStage::ActiveWalMetadata,
+            VerificationStage::WalReplay,
+        ),
+        (
+            VerificationStage::CommitWitness,
             VerificationStage::WalReplay,
         ),
         (
