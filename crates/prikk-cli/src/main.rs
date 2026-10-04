@@ -610,6 +610,21 @@ fn run_status(format_json: bool) -> std::result::Result<(), CliError> {
             );
         }
     }
+    // RFC 166 D3: the one classification `verify`/`doctor` already use, so a blocking condition the
+    // next `commit`/`seal` would refuse over is visible here first, before the user attempts it. A
+    // stale witness a connectivity-confirmed drain already explains reads as `NoWitness` here (item
+    // 1's own "exactly as 0.48.0" case) and stays silent -- RFC 166 §13 item 16: that note is
+    // `doctor`'s alone.
+    {
+        let owning_ref = read_active_ref_metadata(&layout).map_err(|err| err.to_string())?;
+        let witness = prikk_store::read_witness(&layout, DEFAULT_ACTIVE_NAME)
+            .map_err(|err| err.to_string())?;
+        let verdict = prikk_store::classify(&layout, &replay, &owning_ref, &witness)
+            .map_err(|err| err.to_string())?;
+        if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
+            println!("warning: the next commit or seal will refuse: {reason}");
+        }
+    }
     println!("status: multi-operation text diff minimization and plugins not yet implemented");
     Ok(())
 }
