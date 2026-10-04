@@ -143,7 +143,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 166 D2 added `commit_boundary::witness`, the one shared append-and-witness function: 152 -> 153.
     // RFC 166 D3 added `commit_boundary::classification`, the one shared verdict function: 153 -> 154.
     // RFC 166 round 2 §1 added `doctor::discard_damaged_commits` (D5, `--discard-damaged-commits`): 154 -> 155.
-    assert_eq!(modules.len(), 155, "modules: {modules:?}");
+    // RFC 166 round 2 §2 added `doctor::restore_queue_target` (D5, `--restore-queue-target`): 155 -> 156.
+    assert_eq!(modules.len(), 156, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

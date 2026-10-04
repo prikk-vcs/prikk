@@ -294,9 +294,11 @@ fn patch_is_sealed_and_reachable_since(
 /// verdict that does not block a write (rows `NoWitness`, 1, 2, 3, 8). Centralized so the call sites
 /// cannot drift to different sentences for the same row. **Rows 4, 5 and 7 name
 /// `prikk doctor --discard-damaged-commits`** (round 2, D5, §13 item 14) -- the one way out for
-/// acknowledged damage or loss. **Rows 6 and 9 name no verb**: row 6 (and D4's own row 10) has no
-/// verb at all -- a substituted record is not a crash shape, and a copy is the way out; row 9's own
-/// way out, `--restore-queue-target`, is round 2's own later unit and not yet landed.
+/// acknowledged damage or loss. **Row 9 names `prikk doctor --restore-queue-target --ref <ref>`**
+/// (round 2, D5, §13 item 15), covering both an outright missing owner and D6's own
+/// ref-name-vs-witness mismatch, which this function folds into the same verdict. **Row 6 names no
+/// verb**: a substituted record (and D4's own row 10) is not a crash shape, so a copy is the way
+/// out.
 #[must_use]
 pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
     match verdict {
@@ -326,9 +328,11 @@ pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
              --discard-damaged-commits` to discard it"
                 .to_string(),
         ),
-        Verdict::OwnershipMissing => {
-            Some("queued commits exist but no durable, matching owner names them".to_string())
-        }
+        Verdict::OwnershipMissing => Some(
+            "queued commits exist but no durable, matching owner names them -- run \
+             `prikk doctor --restore-queue-target --ref <ref>` to give the queue its owner back"
+                .to_string(),
+        ),
     }
 }
 

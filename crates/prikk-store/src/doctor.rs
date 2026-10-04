@@ -22,10 +22,14 @@ use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
 mod discard_damaged_commits;
 mod repair_tails;
+mod restore_queue_target;
 pub use discard_damaged_commits::{
     DiscardDamagedCommitsPlan, discard_damaged_commits, plan_discard_damaged_commits,
 };
 pub use repair_tails::{RepairTailsFileOutcome, RepairTailsReport, repair_tails};
+pub use restore_queue_target::{
+    RestoreQueueTargetPlan, plan_restore_queue_target, restore_queue_target,
+};
 
 /// Severity assigned to a doctor diagnostic issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1483,8 +1487,8 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
                         "PRIKK-DOCTOR-COMMIT-WITNESS-OWNERSHIP-MISSING",
                         "the active ref metadata names an owner this session's own acknowledgment \
                          history does not recognize as its own",
-                        "preserve the repository and inspect the active WAL before sealing or \
-                         appending",
+                        "run `prikk doctor --restore-queue-target --ref <ref>` to give the queue \
+                         its owner back",
                     )
                     .for_active_session(DEFAULT_ACTIVE_NAME),
                 );

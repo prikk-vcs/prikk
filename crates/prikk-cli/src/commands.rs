@@ -329,6 +329,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk doctor [path] --repair-main-ref     Recognized, always refused: no repair is implemented",
             "  prikk doctor [path] --rebuild-pointer-index [--plan-only]  Rebuild the ref-pointer index from the ref log (RFC 165 R5); refuses over a completable lead or ref-log damage/tail; --plan-only previews without writing",
             "  prikk doctor [path] --discard-damaged-commits [--plan-only]  Remove an acknowledged commit the active WAL no longer holds soundly, or declare it lost (RFC 166 D5); refuses over anything else; --plan-only previews without writing",
+            "  prikk doctor [path] --restore-queue-target --ref <ref> [--plan-only]  Give a queued, un-owned commit its ref back (RFC 166 D5); the ref always comes from you, never from the witness; --plan-only previews without writing",
         ],
     },
     Command {

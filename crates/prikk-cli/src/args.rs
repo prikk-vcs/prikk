@@ -110,9 +110,14 @@ pub(crate) struct DoctorArgs {
     /// 166 §5 rows 4, 5 and 7). Mutually exclusive with every other repair flag -- its own write
     /// touches the active WAL and the commit witness, not the ref-pointer index or the Rule-A files.
     pub(crate) discard_damaged_commits: bool,
+    /// RFC 166 D5, §13 item 15: give an owned queue its owner back (row 9, or D6's own
+    /// ref-name-vs-witness mismatch). `Some(ref)` means `--restore-queue-target --ref <ref>` was
+    /// given; the ref always comes from the caller (C2), never from the witness. Mutually exclusive
+    /// with every other repair flag.
+    pub(crate) restore_queue_target_ref: Option<String>,
     /// RFC 165 R5 K1 / RFC 166 D5 K1: print the repair's own plan and write nothing. Shared between
-    /// every repair verb that has a plan (`--rebuild-pointer-index`, `--discard-damaged-commits`) --
-    /// accepted only alongside exactly one of them.
+    /// every repair verb that has a plan (`--rebuild-pointer-index`, `--discard-damaged-commits`,
+    /// `--restore-queue-target`) -- accepted only alongside exactly one of them.
     pub(crate) plan_only: bool,
 }
 
@@ -459,9 +464,12 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut repair_tails = false;
     let mut rebuild_pointer_index = false;
     let mut discard_damaged_commits = false;
+    let mut restore_queue_target = false;
+    let mut restore_queue_target_ref: Option<String> = None;
     let mut plan_only = false;
     let mut path = None;
-    for arg in args {
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--repair-wal-tail" => mark_seen(&mut repair_wal_tail, "--repair-wal-tail")?,
             "--repair-main-ref" => mark_seen(&mut repair_main_ref, "--repair-main-ref")?,
@@ -478,6 +486,18 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             }
             "--discard-damaged-commits" => {
                 mark_seen(&mut discard_damaged_commits, "--discard-damaged-commits")?;
+            }
+            "--restore-queue-target" => {
+                mark_seen(&mut restore_queue_target, "--restore-queue-target")?;
+            }
+            "--ref" => {
+                let value = flag_value(&mut iter, "doctor --ref")?;
+                if value.trim().is_empty() {
+                    return Err(CliError::Usage(
+                        "doctor --ref must not be empty".to_string(),
+                    ));
+                }
+                restore_queue_target_ref.set_once("--ref", value)?;
             }
             "--plan-only" => mark_seen(&mut plan_only, "--plan-only")?,
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
@@ -497,7 +517,8 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             || repair_index
             || repair_pointer_index_tail
             || rebuild_pointer_index
-            || discard_damaged_commits)
+            || discard_damaged_commits
+            || restore_queue_target)
     {
         return Err(CliError::Usage(
             "--repair-tails cannot be combined with another repair flag -- it already covers the \
@@ -510,7 +531,8 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             || repair_main_ref
             || repair_index
             || repair_pointer_index_tail
-            || discard_damaged_commits)
+            || discard_damaged_commits
+            || restore_queue_target)
     {
         return Err(CliError::Usage(
             "--rebuild-pointer-index cannot be combined with another repair flag -- run it alone"
@@ -518,17 +540,39 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         ));
     }
     if discard_damaged_commits
-        && (repair_wal_tail || repair_main_ref || repair_index || repair_pointer_index_tail)
+        && (repair_wal_tail
+            || repair_main_ref
+            || repair_index
+            || repair_pointer_index_tail
+            || restore_queue_target)
     {
         return Err(CliError::Usage(
             "--discard-damaged-commits cannot be combined with another repair flag -- run it alone"
                 .to_string(),
         ));
     }
-    if plan_only && !rebuild_pointer_index && !discard_damaged_commits {
+    if restore_queue_target
+        && (repair_wal_tail || repair_main_ref || repair_index || repair_pointer_index_tail)
+    {
         return Err(CliError::Usage(
-            "--plan-only is only accepted alongside --rebuild-pointer-index or \
-             --discard-damaged-commits"
+            "--restore-queue-target cannot be combined with another repair flag -- run it alone"
+                .to_string(),
+        ));
+    }
+    if restore_queue_target_ref.is_some() && !restore_queue_target {
+        return Err(CliError::Usage(
+            "--ref is only accepted alongside --restore-queue-target".to_string(),
+        ));
+    }
+    if restore_queue_target && restore_queue_target_ref.is_none() {
+        return Err(CliError::Usage(
+            "--restore-queue-target requires --ref <ref>".to_string(),
+        ));
+    }
+    if plan_only && !rebuild_pointer_index && !discard_damaged_commits && !restore_queue_target {
+        return Err(CliError::Usage(
+            "--plan-only is only accepted alongside --rebuild-pointer-index, \
+             --discard-damaged-commits or --restore-queue-target"
                 .to_string(),
         ));
     }
@@ -541,6 +585,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         repair_tails,
         rebuild_pointer_index,
         discard_damaged_commits,
+        restore_queue_target_ref,
         plan_only,
     })
 }
