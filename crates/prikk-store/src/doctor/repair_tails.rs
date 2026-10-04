@@ -127,7 +127,7 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     if let Some(reason) =
         crate::commit_boundary::classification::write_refusal_reason(&commit_witness_verdict)
     {
-        damaged.push(format!("commit witness: {reason}"));
+        damaged.push(format!("acknowledged commits: {reason}"));
     }
     if wal_replay.has_item_failure() {
         damaged.push(format!(

@@ -269,6 +269,22 @@ pub fn append_patch_and_witness(
     Ok(seq)
 }
 
+/// RFC 166 D4 (row 10): recompute the running hash (W3) over every record `witness_record` claims to
+/// cover, from scratch, and compare it to the witness's own stored value. **Only meaningful when D3's
+/// own classification already reads `Healthy`** -- W2 (the last record's own frame hash, which D3
+/// already checks) cannot see a *substituted earlier* record, since a record's own frame hash never
+/// depends on any record before it; the running hash is the one check that chains them all together.
+/// `Ok(true)`: the running hash agrees (the common case). `Ok(false)`: row 10 -- some record strictly
+/// before `last_seq` was substituted for a different one after the fact. Cost: O(WAL), the one check
+/// in this module expensive enough that only `verify` (never a pre-write guard) pays for it.
+pub fn verify_running_hash(
+    witness_record: &WitnessRecord,
+    replay: &crate::wal::WalReplay,
+) -> Result<bool> {
+    let recomputed = fold_running_hash([0u8; 32], &replay.records, 0, witness_record.last_seq)?;
+    Ok(recomputed == witness_record.running_hash)
+}
+
 /// RFC 166 §13 item 5: `doctor --repair-tails` rebuilds a damaged or stale witness over a WAL that is
 /// otherwise wholly sound (row 8 -- `classify` already confirmed this is safe to call: no acknowledged
 /// commit is at risk, since nothing here is refused). Builds a fresh record from scratch, covering

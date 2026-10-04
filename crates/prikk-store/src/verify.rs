@@ -670,6 +670,12 @@ pub struct RepositoryVerification {
     /// RFC 166 D3/D6: the active session's commit-witness classification (rows 1-9 of RFC 166 §5).
     /// `None` when the `CommitWitness` stage did not evaluate to completion.
     pub commit_witness_verdict: Option<crate::commit_boundary::classification::Verdict>,
+    /// RFC 166 D4 (row 10): whether the witness's own running hash (W3), recomputed from scratch over
+    /// every record it claims to cover, agrees. `None` unless `commit_witness_verdict` is `Healthy` --
+    /// the one shape W2 cannot already distinguish from a substituted *earlier* record, so this is the
+    /// only case worth the O(WAL) recomputation. `Some(false)` is row 10: some record strictly before
+    /// the witness's own last acknowledged sequence was substituted for a different one after the fact.
+    pub commit_witness_running_hash_agrees: Option<bool>,
     /// DC-56 commit-index entries whose recorded content hash disagrees with the worktree's actual
     /// current content despite a matching stat — a stale-but-trusted cache entry, reported per the
     /// cache-validity specification §6 rather than silently trusted by a future commit.
@@ -995,6 +1001,17 @@ impl RepositoryVerification {
             self.commit_witness_verdict,
             Some(crate::commit_boundary::classification::Verdict::WitnessDamaged)
         )
+    }
+
+    /// Return true when the witness's own running hash (W3) disagrees (RFC 166 D4, row 10) -- a
+    /// record strictly before the witness's own last acknowledged sequence was substituted for a
+    /// different one after the fact, which W2 alone (row 6) cannot see. `None` (the check did not run
+    /// -- not evaluated, or `commit_witness_verdict` was not `Healthy`) reads as false — see
+    /// `has_trailing_partial_wal`.
+    #[must_use]
+    pub fn has_commit_witness_substituted_earlier_record(&self) -> bool {
+        self.commit_witness_running_hash_agrees
+            .is_some_and(|agrees| !agrees)
     }
 
     /// Return true when the commit-index cache disagrees with the worktree for at least one path.
@@ -1589,34 +1606,55 @@ pub fn verify_repository_with_options(
     // exact `ActiveRefMetadata` the latter already read (`active_ref_metadata_from_wal_metadata_status`
     // converts its own `ActiveWalMetadataStatus` back losslessly) rather than reading the ownership
     // file a second time, the same "one read, shared" reasoning `trust_is_valid` uses just below.
-    let commit_witness_verdict = if let (Some(replay), Some(wal_metadata_status)) =
-        (&replay, &active_wal_metadata_status)
-    {
-        pipeline.run(
+    let commit_witness_stage_result =
+        if let (Some(replay), Some(wal_metadata_status)) = (&replay, &active_wal_metadata_status) {
+            pipeline.run(
             VerificationStage::CommitWitness,
-            (|| -> Result<crate::commit_boundary::classification::Verdict> {
+            (|| -> Result<(
+                crate::commit_boundary::classification::Verdict,
+                Option<bool>,
+            )> {
                 let owning_ref = active_ref_metadata_from_wal_metadata_status(wal_metadata_status);
                 let witness =
                     crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
-                crate::commit_boundary::classification::classify(
+                let verdict = crate::commit_boundary::classification::classify(
                     layout,
                     replay,
                     &owning_ref,
                     &witness,
-                )
+                )?;
+                // RFC 166 D4 (row 10): only meaningful on top of a `Healthy` D3 verdict -- W2 (the
+                // last record's own frame hash, which D3 already checked) cannot see a *substituted
+                // earlier* record; the running hash is the one check that chains every record
+                // together, and only `verify` pays its O(WAL) cost.
+                let running_hash_agrees = match (&verdict, &witness) {
+                    (
+                        crate::commit_boundary::classification::Verdict::Healthy { .. },
+                        crate::commit_boundary::witness::WitnessState::Valid(record),
+                    ) => Some(crate::commit_boundary::witness::verify_running_hash(
+                        record, replay,
+                    )?),
+                    _ => None,
+                };
+                Ok((verdict, running_hash_agrees))
             })(),
         )
-    } else {
-        pipeline.not_evaluated(
-            VerificationStage::CommitWitness,
-            if replay.is_none() {
-                VerificationStage::WalReplay
-            } else {
-                VerificationStage::ActiveWalMetadata
-            },
-        );
-        None
-    };
+        } else {
+            pipeline.not_evaluated(
+                VerificationStage::CommitWitness,
+                if replay.is_none() {
+                    VerificationStage::WalReplay
+                } else {
+                    VerificationStage::ActiveWalMetadata
+                },
+            );
+            None
+        };
+    let commit_witness_verdict = commit_witness_stage_result
+        .as_ref()
+        .map(|(verdict, _)| verdict.clone());
+    let commit_witness_running_hash_agrees =
+        commit_witness_stage_result.and_then(|(_, agrees)| agrees);
 
     // Stage: PublicationReclassification. Cannot run at all without Refs (needs `issues` to mutate),
     // WalReplay (needs `records`), or ActiveWalMetadata (needs `metadata`) -- `NotEvaluated`, naming
@@ -1746,6 +1784,7 @@ pub fn verify_repository_with_options(
         trailing_partial_wal_bytes: replay.as_ref().map(|replay| replay.trailing_partial_bytes),
         active_wal_metadata_status,
         commit_witness_verdict,
+        commit_witness_running_hash_agrees,
         commit_index_divergences,
         lifecycle_cache_divergences,
         active_wal_ordering_issues,

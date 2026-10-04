@@ -598,7 +598,19 @@ pub(crate) fn print_verify_report(
     }
     match &report.commit_witness_verdict {
         Some(verdict) => print_commit_witness_verdict(verdict),
-        None => println!("commit witness: unknown (stage did not evaluate)"),
+        None => println!("acknowledged commits: unknown (stage did not evaluate)"),
+    }
+    // RFC 166 D4 (row 10): only printed when the check actually ran (the witness read `Healthy`).
+    if let Some(agrees) = report.commit_witness_running_hash_agrees {
+        if agrees {
+            println!("acknowledged commits history: agrees");
+        } else {
+            println!("acknowledged commits history: disagrees");
+            println!(
+                "error: a record before the last acknowledged one does not match the queued \
+                 commit you were told had succeeded; a copy is the way out"
+            );
+        }
     }
     println!(
         "commit-index divergences: {}",
@@ -681,54 +693,60 @@ fn print_active_wal_metadata_status(status: &ActiveWalMetadataStatus) {
 fn print_commit_witness_verdict(verdict: &Verdict) {
     match verdict {
         Verdict::NoWitness { .. } => {
-            println!("commit witness: absent");
+            println!("acknowledged commits: none recorded");
         }
         Verdict::Healthy { last_seq } => {
-            println!("commit witness: healthy through sequence {last_seq}");
+            println!("acknowledged commits: confirmed through sequence {last_seq}");
         }
         Verdict::Pending {
             witnessed_seq,
             last_seq,
         } => {
             println!(
-                "commit witness: pending (witnessed through {}, WAL sound through {last_seq})",
+                "acknowledged commits: pending (confirmed through {}, WAL sound through \
+                 {last_seq})",
                 witnessed_seq.map_or_else(|| "nothing yet".to_string(), |seq| seq.to_string())
             );
-            println!("note: the next commit advances the witness");
+            println!("note: the next commit updates this");
         }
         Verdict::CrashTail { .. } => {
             println!(
-                "commit witness: agrees with the sound prefix; the trailing bytes are an unacknowledged crash tail"
+                "acknowledged commits: agree with the sound prefix; the trailing bytes are an \
+                 unacknowledged crash tail"
             );
         }
         Verdict::AcknowledgedDamage { witnessed_seq } => {
-            println!("commit witness: sequence {witnessed_seq} is damaged");
+            println!("acknowledged commits: sequence {witnessed_seq} is damaged");
             println!(
-                "error: commit {witnessed_seq} was acknowledged, and it cannot be removed as a \
-                 crash leftover"
+                "error: a queued commit you were told had succeeded (sequence {witnessed_seq}) \
+                 is damaged; it cannot be removed as a crash leftover, since it was already \
+                 acknowledged"
             );
         }
         Verdict::AcknowledgedLoss { witnessed_seq } => {
-            println!("commit witness: sequence {witnessed_seq} is no longer present in the WAL");
             println!(
-                "error: commit {witnessed_seq} was acknowledged, and it cannot be removed as a \
-                 crash leftover"
+                "acknowledged commits: sequence {witnessed_seq} is no longer present in the WAL"
+            );
+            println!(
+                "error: a queued commit you were told had succeeded (sequence {witnessed_seq}) \
+                 is no longer present at all; it cannot be removed as a crash leftover, since it \
+                 was already acknowledged"
             );
         }
         Verdict::SubstitutedRecord { witnessed_seq } => {
             println!(
-                "commit witness: sequence {witnessed_seq} does not match the record the witness \
-                 acknowledged"
+                "acknowledged commits: sequence {witnessed_seq} does not match the queued \
+                 commit you were told had succeeded"
             );
             println!(
-                "error: sequence {witnessed_seq} is not the commit the witness acknowledged; a \
-                 copy is the way out"
+                "error: sequence {witnessed_seq} does not match the queued commit you were told \
+                 had succeeded; a copy is the way out"
             );
         }
         Verdict::UnknownWithDamagedWitness => {
             println!(
-                "commit witness: damaged, and the WAL has an unexplained tail that cannot be \
-                 classified"
+                "acknowledged commits: unreadable, and the WAL has an unexplained tail that \
+                 cannot be classified"
             );
             println!(
                 "error: the WAL's trailing bytes cannot be shown to be a crash leftover; it \
@@ -736,14 +754,14 @@ fn print_commit_witness_verdict(verdict: &Verdict) {
             );
         }
         Verdict::WitnessDamaged => {
-            println!("commit witness: damaged");
+            println!("acknowledged commits: unreadable");
             println!(
-                "warning: commit witness is damaged; run `prikk doctor --repair-tails` to \
-                 rebuild it"
+                "warning: this session's own acknowledgment history is unreadable; run `prikk \
+                 doctor --repair-tails` to rebuild it"
             );
         }
         Verdict::OwnershipMissing => {
-            println!("commit witness: no durable owner can be confirmed for this session");
+            println!("acknowledged commits: no durable owner can be confirmed for this session");
             println!("error: queued commits exist but no durable, matching owner names them");
         }
     }

@@ -385,11 +385,11 @@ fn push_non_default_active_session_wal_issues(
                                     DoctorIssue::error(
                                         "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-UNREADABLE",
                                         format!(
-                                            "active session {name:?}'s commit witness failed to \
-                                             read: {error}"
+                                            "active session {name:?}'s own acknowledgment history \
+                                             failed to read: {error}"
                                         ),
                                         "preserve the repository and inspect the active session's \
-                                         commit witness before attempting repair",
+                                         own acknowledgment history before attempting repair",
                                     )
                                     .for_active_session(name.clone()),
                                 );
@@ -499,7 +499,21 @@ fn push_active_session_commit_witness_issue(
     issues: &mut Vec<DoctorIssue>,
 ) {
     match verdict {
-        Verdict::NoWitness { .. }
+        // RFC 166 §13 item 16: same reasoning as `add_commit_witness_issues`'s own arm -- silent in
+        // `status`, a note here only.
+        Verdict::NoWitness { stale: true, .. } => issues.push(
+            DoctorIssue::info(
+                "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-STALE",
+                format!(
+                    "active session {name:?}'s own acknowledgment history is stale (an older \
+                     binary's own seal drained the queue it covered)"
+                ),
+                "no action is required; the next commit or `prikk doctor --repair-tails` replaces \
+                 it",
+            )
+            .for_active_session(name.to_os_string()),
+        ),
+        Verdict::NoWitness { stale: false, .. }
         | Verdict::Healthy { .. }
         | Verdict::Pending { .. }
         | Verdict::CrashTail { .. } => {}
@@ -507,10 +521,10 @@ fn push_active_session_commit_witness_issue(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE",
                 format!(
-                    "active session {name:?}'s commit witness names sequence {witnessed_seq} as \
-                     acknowledged, but the WAL no longer holds it soundly"
+                    "active session {name:?} has a queued commit you were told had succeeded \
+                     (sequence {witnessed_seq}) that is now damaged"
                 ),
-                "preserve the repository; the commit was acknowledged, and it cannot be removed \
+                "preserve the repository; it was already acknowledged, and it cannot be removed \
                  as a crash leftover",
             )
             .for_active_session(name.to_os_string()),
@@ -519,10 +533,10 @@ fn push_active_session_commit_witness_issue(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-ACKNOWLEDGED-LOSS",
                 format!(
-                    "active session {name:?}'s commit witness names sequence {witnessed_seq} as \
-                     acknowledged, but the WAL no longer contains it at all"
+                    "active session {name:?} has a queued commit you were told had succeeded \
+                     (sequence {witnessed_seq}) that is no longer present at all"
                 ),
-                "preserve the repository; the commit was acknowledged, and it cannot be removed \
+                "preserve the repository; it was already acknowledged, and it cannot be removed \
                  as a crash leftover",
             )
             .for_active_session(name.to_os_string()),
@@ -532,7 +546,7 @@ fn push_active_session_commit_witness_issue(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-SUBSTITUTED-RECORD",
                 format!(
                     "sequence {witnessed_seq} in active session {name:?}'s WAL does not match the \
-                     record its commit witness acknowledged"
+                     queued commit it was told had succeeded"
                 ),
                 "preserve the repository; this is not a crash shape, and a copy is the way out",
             )
@@ -542,11 +556,12 @@ fn push_active_session_commit_witness_issue(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-UNKNOWN",
                 format!(
-                    "active session {name:?}'s WAL has an unexplained tail and its commit witness \
-                     is damaged, so the tail cannot be shown to be a crash leftover"
+                    "active session {name:?}'s WAL has an unexplained tail, and its own \
+                     acknowledgment history is unreadable, so the tail cannot be shown to be a \
+                     crash leftover"
                 ),
-                "preserve the repository; it cannot be removed as a crash leftover without the \
-                 witness",
+                "preserve the repository; it cannot be removed as a crash leftover without being \
+                 able to confirm whether it was acknowledged",
             )
             .for_active_session(name.to_os_string()),
         ),
@@ -554,8 +569,8 @@ fn push_active_session_commit_witness_issue(
             DoctorIssue::warning(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-DAMAGED",
                 format!(
-                    "active session {name:?}'s commit witness is damaged, but its active WAL is \
-                     wholly sound"
+                    "active session {name:?}'s own acknowledgment history is unreadable, but its \
+                     active WAL is wholly sound"
                 ),
                 "run `prikk doctor --repair-tails` to rebuild it",
             )
@@ -574,8 +589,8 @@ fn push_active_session_commit_witness_issue(
                     DoctorIssue::error(
                         "PRIKK-DOCTOR-ACTIVE-SESSION-COMMIT-WITNESS-OWNERSHIP-MISSING",
                         format!(
-                            "active session {name:?}'s ref metadata names an owner its commit \
-                             witness does not recognize as its own"
+                            "active session {name:?}'s ref metadata names an owner its own \
+                             acknowledgment history does not recognize as its own"
                         ),
                         "preserve the repository and inspect the active session's WAL before \
                          attempting repair",
@@ -1390,30 +1405,43 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
         return;
     };
     match verdict {
-        Verdict::NoWitness { .. }
+        // RFC 166 §13 item 16: a stale witness (a drain an older binary's own seal left behind,
+        // connectivity-confirmed) is silent in `status` -- same as a genuinely absent one -- but
+        // `doctor` alone notes it, since the next commit or `--repair-tails` replaces it.
+        Verdict::NoWitness { stale: true, .. } => issues.push(
+            DoctorIssue::info(
+                "PRIKK-DOCTOR-COMMIT-WITNESS-STALE",
+                "this session's own acknowledgment history is stale (an older binary's own seal \
+                 drained the queue it covered)",
+                "no action is required; the next commit or `prikk doctor --repair-tails` replaces \
+                 it",
+            )
+            .for_active_session(DEFAULT_ACTIVE_NAME),
+        ),
+        Verdict::NoWitness { stale: false, .. }
         | Verdict::Healthy { .. }
         | Verdict::Pending { .. }
         | Verdict::CrashTail { .. } => {}
         Verdict::AcknowledgedDamage { witnessed_seq } => issues.push(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE",
-                format!("commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no longer holds it soundly"),
-                "preserve the repository; the commit was acknowledged, and it cannot be removed as a crash leftover",
+                format!("a queued commit you were told had succeeded (sequence {witnessed_seq}) is damaged"),
+                "preserve the repository; it was already acknowledged, and it cannot be removed as a crash leftover",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
         Verdict::AcknowledgedLoss { witnessed_seq } => issues.push(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-LOSS",
-                format!("commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no longer contains it at all"),
-                "preserve the repository; the commit was acknowledged, and it cannot be removed as a crash leftover",
+                format!("a queued commit you were told had succeeded (sequence {witnessed_seq}) is no longer present at all"),
+                "preserve the repository; it was already acknowledged, and it cannot be removed as a crash leftover",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
         Verdict::SubstitutedRecord { witnessed_seq } => issues.push(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-RECORD",
-                format!("sequence {witnessed_seq} in the WAL does not match the record the commit witness acknowledged"),
+                format!("sequence {witnessed_seq} does not match the queued commit you were told had succeeded"),
                 "preserve the repository; this is not a crash shape, and a copy is the way out",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
@@ -1421,15 +1449,15 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
         Verdict::UnknownWithDamagedWitness => issues.push(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-UNKNOWN",
-                "the WAL has an unexplained tail and the commit witness is damaged, so the tail cannot be shown to be a crash leftover",
-                "preserve the repository; it cannot be removed as a crash leftover without the witness",
+                "the queue has an unexplained tail, and this session's own acknowledgment history is unreadable, so the tail cannot be shown to be a crash leftover",
+                "preserve the repository; it cannot be removed as a crash leftover without being able to confirm whether it was acknowledged",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
         Verdict::WitnessDamaged => issues.push(
             DoctorIssue::warning(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-DAMAGED",
-                "commit witness is damaged, but the active WAL it covers is wholly sound",
+                "this session's own acknowledgment history is unreadable, but the active WAL it covers is wholly sound",
                 "run `prikk doctor --repair-tails` to rebuild it",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
@@ -1449,8 +1477,8 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
                 issues.push(
                     DoctorIssue::error(
                         "PRIKK-DOCTOR-COMMIT-WITNESS-OWNERSHIP-MISSING",
-                        "the active ref metadata names an owner the commit witness does not \
-                         recognize as its own",
+                        "the active ref metadata names an owner this session's own acknowledgment \
+                         history does not recognize as its own",
                         "preserve the repository and inspect the active WAL before sealing or \
                          appending",
                     )

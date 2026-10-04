@@ -71,11 +71,20 @@ pub(crate) const VERDICT_CONDITIONS: &[VerdictCondition] = &[
     },
     VerdictCondition {
         id: "commit-witness-integrity",
-        message: "the active session's commit witness disagrees with the WAL in a way the WAL's \
-                   own sound prefix cannot explain (RFC 166)",
+        message: "a queued commit you were told had succeeded disagrees with the WAL in a way \
+                   the WAL's own sound prefix cannot explain (RFC 166)",
         check: RepositoryVerification::has_commit_witness_integrity_issue,
         // The WAL: an acknowledged commit that the witness names is no longer sound, substituted, or
         // unexplainable without a durable owner.
+        blocks_provisional_clear: true,
+    },
+    VerdictCondition {
+        id: "commit-witness-substituted-earlier-record",
+        message: "the active session's acknowledgment history disagrees with the WAL's own \
+                   running hash -- a record before the last acknowledged one was substituted for \
+                   a different one (RFC 166 D4)",
+        check: RepositoryVerification::has_commit_witness_substituted_earlier_record,
+        // The WAL: a substituted record, the same footing as `commit-witness-integrity` above.
         blocks_provisional_clear: true,
     },
     VerdictCondition {

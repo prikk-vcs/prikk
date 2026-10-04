@@ -106,8 +106,10 @@ fn removing_a_declaration_names_its_file() {
         // `commit_witness_verdict` field, `has_commit_witness_integrity_issue`/`has_commit_witness_
         // warning`, and `active_ref_metadata_from_wal_metadata_status`, the `ActiveWalMetadataStatus`
         // inverse the stage shares with `doctor.rs` rather than reading ownership twice), 2,171 ->
-        // 2,273, then a `cargo fmt` pass, 2,273 -> 2,270.
-        detail.contains("2270"),
+        // 2,273, then a `cargo fmt` pass, 2,273 -> 2,270. RFC 166 D4: the running-hash check (row 10)
+        // folded into the same stage, its own `commit_witness_running_hash_agrees` field and
+        // `has_commit_witness_substituted_earlier_record`, 2,270 -> 2,309.
+        detail.contains("2309"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -191,9 +193,11 @@ fn an_inline_test_module_is_not_production() {
         // `commit_boundary::witness::append_patch_and_witness`, a multi-line call plus its own
         // `.map_err`, 1421 -> 1427. RFC 166 D3/D6: the commit-witness pre-write check, run after the
         // ownership branch and before the WAL append, with its own doc comment, 1427 -> 1453, then a
-        // `cargo fmt` pass, 1453 -> 1452.
+        // `cargo fmt` pass, 1453 -> 1452. RFC 166 §13 item 13: the "no node-addressed changes"
+        // refusal tells an interrupted-but-durable retry apart from a genuinely empty worktree, and
+        // `commit_witness_verdict` is kept past its own block for that check, 1452 -> 1473.
         physical,
-        1452,
+        1473,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -203,7 +207,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1403);
+    assert_eq!(counted.production_lines, 1424);
     assert_eq!(
         physical - counted.production_lines,
         49,

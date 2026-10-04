@@ -28,12 +28,18 @@ use crate::wal::WalReplay;
 /// RFC prose, not a user-facing or even an internal identifier anything branches on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// §1: no witness at all (never had one, or one removed) -- 0.48.0's own rule 3 for this
-    /// session, exactly, with a line saying so. Never worse than 0.48.0 (C2).
+    /// §1: no witness at all (never had one, or one removed), **or** a witness connectivity already
+    /// confirmed is a drain it missed (`stale: true`) -- 0.48.0's own rule 3 for this session, exactly,
+    /// either way. Never worse than 0.48.0 (C2).
     NoWitness {
         /// Whether the WAL itself (ignoring the witness entirely) reads sound today -- the exact
         /// question 0.48.0's own reader already asks, carried through unchanged.
         wal_otherwise_sound: bool,
+        /// §13 item 16: `true` when this is specifically a witness connectivity confirmed as a drain
+        /// an older binary's own seal left behind (not a genuinely absent one). Silent in `status`
+        /// either way (item 16); `doctor` alone notes the `true` case, since the next commit or
+        /// `--repair-tails` replaces it.
+        stale: bool,
     },
     /// Row 1: the WAL is sound and the witness agrees with its own last record.
     Healthy {
@@ -128,6 +134,7 @@ pub fn classify(
         WitnessState::Absent => {
             return Ok(Verdict::NoWitness {
                 wal_otherwise_sound: !replay.has_item_failure(),
+                stale: false,
             });
         }
         WitnessState::Valid(record) => record,
@@ -157,6 +164,7 @@ pub fn classify(
             )? {
                 return Ok(Verdict::NoWitness {
                     wal_otherwise_sound: !replay.has_item_failure(),
+                    stale: true,
                 });
             }
             return Ok(Verdict::SubstitutedRecord {
@@ -181,6 +189,7 @@ pub fn classify(
             )? {
                 return Ok(Verdict::NoWitness {
                     wal_otherwise_sound: !replay.has_item_failure(),
+                    stale: true,
                 });
             }
             return Ok(Verdict::AcknowledgedDamage {
@@ -197,6 +206,7 @@ pub fn classify(
         )? {
             return Ok(Verdict::NoWitness {
                 wal_otherwise_sound: !replay.has_item_failure(),
+                stale: true,
             });
         }
         return Ok(Verdict::AcknowledgedDamage {
@@ -214,6 +224,7 @@ pub fn classify(
     )? {
         return Ok(Verdict::NoWitness {
             wal_otherwise_sound: !replay.has_item_failure(),
+            stale: true,
         });
     }
     Ok(Verdict::AcknowledgedLoss {
@@ -293,22 +304,21 @@ pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
         | Verdict::CrashTail { .. }
         | Verdict::WitnessDamaged => None,
         Verdict::AcknowledgedDamage { witnessed_seq } => Some(format!(
-            "commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no \
-             longer holds it soundly; it was acknowledged, and it cannot be removed as a crash \
-             leftover"
+            "a queued commit you were told had succeeded (sequence {witnessed_seq}) is damaged; \
+             it cannot be removed as a crash leftover, since it was already acknowledged"
         )),
         Verdict::AcknowledgedLoss { witnessed_seq } => Some(format!(
-            "commit witness names sequence {witnessed_seq} as acknowledged, but the WAL no \
-             longer contains it; it was acknowledged, and it cannot be removed as a crash \
-             leftover"
+            "a queued commit you were told had succeeded (sequence {witnessed_seq}) is no \
+             longer present at all; it cannot be removed as a crash leftover, since it was \
+             already acknowledged"
         )),
         Verdict::SubstitutedRecord { witnessed_seq } => Some(format!(
-            "sequence {witnessed_seq} in the WAL does not match the record the commit witness \
-             acknowledged; this is not a crash shape, and a copy is the way out"
+            "sequence {witnessed_seq} does not match the queued commit you were told had \
+             succeeded; this is not a crash shape, and a copy is the way out"
         )),
         Verdict::UnknownWithDamagedWitness => Some(
-            "the WAL has an unexplained tail and the commit witness is damaged, so the tail \
-             cannot be shown to be a crash leftover"
+            "the queue has an unexplained tail, and this session's own acknowledgment history is \
+             unreadable, so the tail cannot be shown to be a crash leftover"
                 .to_string(),
         ),
         Verdict::OwnershipMissing => {

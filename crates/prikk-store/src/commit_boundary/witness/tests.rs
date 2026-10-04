@@ -119,6 +119,51 @@ fn second_commit_advances_the_witness_and_folds_the_running_hash() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// RFC 166 D4 (row 10): `verify_running_hash` catches a substituted *earlier* record -- the shape W2
+/// (the last record's own frame hash alone, which D3's `identity_matches` already checks) cannot see,
+/// since a record's own frame hash never depends on any record before it.
+/// **Perturb:** compare `witness_record.frame_hash` against the forged replay's own last record
+/// instead of recomputing the running hash: it would still agree (the last record is untouched here),
+/// and this test's own `assert!(!...)` goes red.
+#[test]
+fn verify_running_hash_catches_a_substituted_earlier_record() {
+    let root = unique_temp_dir("rfc166-d4-running-hash");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    commit(&layout, "b.txt", b"two");
+    commit(&layout, "c.txt", b"three");
+    let witness = match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
+        WitnessState::Valid(record) => record,
+        other => panic!("expected Valid, got {other:?}"),
+    };
+    assert_eq!(witness.last_seq, 3);
+
+    let wal = crate::wal::Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let genuine = wal.replay().unwrap();
+    assert!(
+        super::verify_running_hash(&witness, &genuine).unwrap(),
+        "the genuine, untouched replay must agree with its own witness"
+    );
+
+    // Substitute record 2's own envelope for record 3's (same shape: a real, decodable, signed
+    // envelope -- just not the one this witness actually acknowledged at that position). Record 3's
+    // own envelope, the last one, is left byte-for-byte alone: W2 (the last record's own frame hash)
+    // would see nothing wrong here.
+    let mut forged = genuine.records.clone();
+    forged[1].envelope = genuine.records[2].envelope.clone();
+    let forged_replay = crate::wal::WalReplay {
+        records: forged,
+        trailing_partial_bytes: 0,
+        record_outcomes: Vec::new(),
+    };
+    assert!(
+        !super::verify_running_hash(&witness, &forged_replay).unwrap(),
+        "a substituted earlier record must disagree with the witness's own running hash"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[test]
 fn clear_returns_to_absent() {
     let root = unique_temp_dir("rfc166-d2-clear");

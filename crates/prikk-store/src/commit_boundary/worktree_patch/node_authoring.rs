@@ -415,8 +415,10 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // removed) above and before the append below. `owning_ref` is reconstructed from exactly what
     // the branch above just established -- `Missing` for the empty-queue branch (which just enforced
     // that), `Valid(canonical_ref)` for the non-empty branch (which just confirmed that) -- never a
-    // second, independent read of the ownership file.
-    {
+    // second, independent read of the ownership file. `commit_witness_verdict` is kept past this
+    // block -- RFC 166 §13 item 13 reads it again below, at the "no node-addressed changes" refusal,
+    // to tell an interrupted-but-durable retry apart from a genuinely empty worktree.
+    let commit_witness_verdict = {
         let owning_ref = if active_replay.records.is_empty() {
             ActiveRefMetadata::Missing
         } else {
@@ -435,7 +437,8 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         {
             return Err(AuthorError::Store(PrikkError::Precondition(reason)));
         }
-    }
+        verdict
+    };
 
     // RFC 164 Rule D: this signer's own author-key check, moved here from its own previous position
     // immediately before the WAL append (near the end of this function, where `record_author_key_
@@ -865,6 +868,24 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     }
 
     if planned.is_empty() {
+        // RFC 166 §13 item 13: a `Pending` commit witness means the active WAL already durably
+        // holds a sound, unacknowledged record -- exactly what a commit killed right after its own
+        // durable append (but before reporting success) leaves behind. Retrying that same commit
+        // reaches here with nothing left to plan, since the worktree's own baseline already folds
+        // the queued patch in -- "no node-addressed changes" is true but misleading in that specific
+        // case, and indistinguishable from an older prikk having written it instead; the text says
+        // so honestly rather than picking one.
+        if matches!(
+            commit_witness_verdict,
+            crate::commit_boundary::classification::Verdict::Pending { .. }
+        ) {
+            return Err(AuthorError::Store(PrikkError::Precondition(
+                "a queued commit was already written but not confirmed, either because this \
+                 command was interrupted after its own durable write or because an older prikk \
+                 wrote it; there is nothing left to commit"
+                    .to_string(),
+            )));
+        }
         // RFC 132's Precondition variant: an empty change set names no path and involves no name
         // validation at all -- `InvalidName`'s own doc ("a path-like name failed Prikk path/ref
         // validation") never applied here.

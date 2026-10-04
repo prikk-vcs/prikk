@@ -141,9 +141,12 @@ fn row4_acknowledged_damage() {
     // acknowledged -- it is unexplained-tail-with-no-witness, i.e. NoWitness.
     clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
     match classify_now(&layout) {
-        Verdict::NoWitness { .. } => {}
+        Verdict::NoWitness { stale: false, .. } => {}
         other => {
-            panic!("control failed: expected NoWitness once the witness is gone, got {other:?}")
+            panic!(
+                "control failed: expected NoWitness with stale: false once the witness is gone, \
+                 got {other:?}"
+            )
         }
     }
     std::fs::remove_dir_all(&root).ok();
@@ -188,8 +191,8 @@ fn row4_connectivity_finds_a_drain_not_damage() {
     )
     .unwrap();
     match classify_now(&layout) {
-        Verdict::NoWitness { .. } => {}
-        other => panic!("expected NoWitness (a found drain), got {other:?}"),
+        Verdict::NoWitness { stale: true, .. } => {}
+        other => panic!("expected NoWitness with stale: true (a found drain), got {other:?}"),
     }
     std::fs::remove_dir_all(&root).ok();
 }
@@ -212,8 +215,8 @@ fn row5_acknowledged_loss() {
     // (NoWitness), never a reported loss.
     clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
     match classify_now(&layout) {
-        Verdict::NoWitness { .. } => {}
-        other => panic!("control failed: expected NoWitness, got {other:?}"),
+        Verdict::NoWitness { stale: false, .. } => {}
+        other => panic!("control failed: expected NoWitness with stale: false, got {other:?}"),
     }
     std::fs::remove_dir_all(&root).ok();
 }
@@ -243,8 +246,8 @@ fn row6_substituted_record() {
     // not merely from the WAL's own content being "unexpected" in some other sense.
     clear_witness(&layout_a, DEFAULT_ACTIVE_NAME).unwrap();
     match classify_now(&layout_a) {
-        Verdict::NoWitness { .. } => {}
-        other => panic!("control failed: expected NoWitness, got {other:?}"),
+        Verdict::NoWitness { stale: false, .. } => {}
+        other => panic!("control failed: expected NoWitness with stale: false, got {other:?}"),
     }
     std::fs::remove_dir_all(&root_a).ok();
     std::fs::remove_dir_all(&root_b).ok();
@@ -440,7 +443,8 @@ fn no_witness_falls_back_to_rule_3() {
     assert_eq!(
         classify_now(&layout),
         Verdict::NoWitness {
-            wal_otherwise_sound: true
+            wal_otherwise_sound: true,
+            stale: false,
         }
     );
     std::fs::remove_dir_all(&root).ok();

@@ -623,6 +623,15 @@ fn run_status(format_json: bool) -> std::result::Result<(), CliError> {
             .map_err(|err| err.to_string())?;
         if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
             println!("warning: the next commit or seal will refuse: {reason}");
+        } else if matches!(verdict, prikk_store::Verdict::Pending { .. }) {
+            // RFC 166 §13 item 13: a queued commit that was durably written but never confirmed --
+            // interrupted right after its own append, or written by an older prikk. Honest either
+            // way: the two cannot be told apart.
+            println!(
+                "note: a queued commit was already written but not confirmed, either because a \
+                 previous command was interrupted after its own durable write or because an \
+                 older prikk wrote it"
+            );
         }
     }
     println!("status: multi-operation text diff minimization and plugins not yet implemented");
