@@ -16,7 +16,8 @@ the architect (0.49.0 step 3, in the owner-approved schedule: *"N6's commit witn
   - report v1 was not accepted (review `rfc166-design-round-review-v1`), and that review found §1.6;
   - report v2 was accepted (review `rfc166-design-round-review-v2`), with the architect's measured corrections (§7).
 - **Round 1 (D1–D4, D6) closed 2026-10-04** (`ee34ac63`, review `rfc166-round-1-review-v1`): 0 of 300 kills stuck,
-  N6 refused end to end, 0.48.0 interop never a false loss. **Round 2 (D5) is live:**
+  N6 refused end to end, 0.48.0 interop never a false loss.
+- **D5 amended by the owner 2026-10-05 (§14);** round 2's Addendum 1 carries it. **Round 2 (D5) is live:**
   `rfcs/handoffs/166-a-queued-commit-has-a-witness/round-2-handoff-v1.md`.
 
 **Author-review independence.** The architect wrote RFC 162 rule 3, the rule that produces N6. The external architect
@@ -176,9 +177,9 @@ earlier record, which W2 cannot. Cost: 0.73 ms at 1,000 records (design round, l
   - **The ref comes from the user, never from the witness** (C2). `doctor` may show the witness's ref name as a hint.
   - **It refuses:**
     - when a witness exists and names a different ref;
-    - when the queue does not validate against `<ref>`'s current tip by the same check `seal` makes, run without
-      writing.
-  - **The implementation round shows from source that such a check exists.** If it does not, the round stops and asks.
+    - ~~when the queue does not validate against `<ref>`'s current tip by the same check `seal` makes~~ —
+      **superseded by §14:** that check does not exist, since `seal` never asks which branch a queue was built on;
+    - **without a witness, when `<ref>` is not the current branch,** unless `--not-current-branch` is given (§14).
 - **No other command calls either of them** (K5).
 
 **D6 — `ref-name` is checked against the witness.** When both exist and their ref names differ, that is damage:
@@ -392,3 +393,61 @@ input, beside RFC 164 §9.1.
 - **Round 1, item 0:** a `troubleshooting.md` entry with the manual way out (write the ref name back), pushed ahead of
   the fix, so 0.48.0 users have it now.
 - **Then** the known-limitations line until 0.49.0, and a CHANGELOG `### Fixed` entry at the cut.
+
+## 14. D5 amended: how `--restore-queue-target` chooses the branch (owner, 2026-10-05)
+
+**Why.** Round 2's review (`rfc166-round-2-review-v1`) found that the restore verb attached a queue built on
+`heads/main` to a diverged `heads/other`, and `seal` published it there with `verify` 0.
+- **D5's condition could not be met:** `seal` checks no base, and a Patch names neither its ref nor its base.
+- **The error was the architect's.** The condition was written without reading `seal`'s check.
+
+**The owner's decisions, in order:**
+1. "almost accepted", pending the architect's review of its risks;
+2. after that review, a second question: is the risk of users being confused reasonably mitigated? The answer was:
+   not by the text as delivered, but yes with items 6–10 below;
+3. *"OK. Approved."*
+
+**The architect's reading of "Approved.":** items 1–10 below bind round 2's Addendum 1, and the residual risk is
+accepted as stated.
+
+**The rule:**
+1. **With a witness:** unchanged. `<ref>` must equal the witness's ref (C2).
+2. **Without a witness** (a queue stranded by 0.20.0–0.48.0, or one whose witness was removed):
+   - `<ref>` must be the current branch, resolved by the same resolver `commit` uses for its default;
+   - **a different ref requires `--not-current-branch`;**
+   - **if the current branch cannot be resolved,** the flag is required (fail closed).
+3. **§13 item 10's tip list is dropped.** It matched only the interrupted-seal shape, and restoring to the right
+   branch then retrying `seal` already finishes that.
+4. **A restored owner is final for the verb.** A second restore refuses, because ownership is present. A wrong restore
+   is undone by hand, as documented. Re-pointing an owned queue would make the verb a general "change owner" command,
+   a larger risk than the one it removes.
+5. **Measured, 2026-10-05:** `branch switch` refuses while a queue is stranded, on 0.48.0 and on round 2. So the
+   current branch cannot move after the crash.
+
+**The text, so that users are not confused:**
+
+6. **The refusal names a concrete command,** with the current branch filled in and `--plan-only` first:
+   - for example: "2 queued commits have lost the record of which branch they belong to. Your current branch is
+     heads/main. Check with: `prikk doctor --restore-queue-target --ref heads/main --plan-only`";
+   - no internal words ("durable, matching owner").
+7. **The plan shows the user's own commits:**
+   - each queued commit's message and the paths it touches;
+   - the branch's latest sealed commit that they will go on top of;
+   - no block hashes as the primary content.
+8. **The plan states the uncertainty once:** "prikk cannot tell which branch these commits were made on; your current
+   branch is assumed. If you made them with `--ref`, restore to that branch."
+9. **The run ends with the next step:** "the 2 queued commits now belong to heads/main; publish them with `prikk seal
+   --allow-no-audit`".
+10. **The `--not-current-branch` refusal names both branches and the `--ref` case.** It never tells the user simply to
+    add the flag.
+
+**Residual, accepted:**
+- a queue made with an explicit `commit --ref X` (or `rollback-draft` on X) while the current branch was Y can still
+  be restored to Y without the flag;
+- that takes a user who does not recognise their own commit messages in the plan *and* skips `--plan-only`;
+- it reaches only queues with no witness, and is no worse than today's documented hand edit.
+
+**Considered and not taken:**
+- **record each queue's base in the witness:** it helps only queues that already have a witness, which item 1
+  protects, and it does nothing for the queues 0.48.0 stranded;
+- **keep the verb as delivered, with a warning:** a silent publish to the wrong branch, guarded only by a sentence.

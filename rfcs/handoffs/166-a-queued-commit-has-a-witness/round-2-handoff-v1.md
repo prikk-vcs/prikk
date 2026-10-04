@@ -95,3 +95,43 @@ gates on the final commit.
 
 **K7:** a second addendum on this round, or any finding that would change D5, goes back to the owner before the work
 continues.
+
+## Addendum 1 — 2026-10-05: the restore verb's branch rule, and its text (review `rfc166-round-2-review-v1`)
+
+Report v1: **not accepted, on one item.** §0 and `--discard-damaged-commits` are accepted. The owner has ruled on
+`--restore-queue-target` (K7): **read RFC 166 §14, all of it.** It replaces D5's "same check `seal` makes", which does
+not exist. **This is a fix round:** fixes only, nothing else.
+
+1. **The rule (§14 items 1–4):**
+   - **with a witness:** `<ref>` equals the witness's ref, unchanged;
+   - **without a witness:** `<ref>` is the current branch, by the same resolver `commit` uses for its default, unless
+     `--not-current-branch` is given. An unresolvable current branch requires the flag;
+   - remove `tip_matches` and `block_patch_ids_match` (§13 item 10's list);
+   - a second restore over an owned queue still refuses.
+2. **The text (§14 items 6–10), quoted from the binary in the report:**
+   - the refusal from `commit`, `seal`, `rollback-draft` and `status` names the concrete command, with the current
+     branch filled in and `--plan-only` first, and uses no internal words;
+   - **the plan shows each queued commit's message and paths,** and the branch's latest sealed commit they go on top
+     of. No block hash as the primary content;
+   - the plan's one sentence of uncertainty, including the `--ref` case;
+   - the run ends with the next step (`prikk seal --allow-no-audit`);
+   - the `--not-current-branch` refusal names both branches and the `--ref` case, and never says just "add the flag".
+3. **The discard plan's working-tree note** (review v1, carried): it did not print when the discarded commit's file
+   was still in the working tree. Make it work and test it, with a control.
+4. **Tests:**
+   - each rule condition refusing and writing nothing, with a control that turns it red;
+   - **the wrong branch:** the architect's `/home/nabbisen/.pgtmp/arch-166/restore_wrong_ref_probe.sh` (against
+     `/home/nabbisen/.pgtmp/prikk-0.48.0-5e50a661`). Restoring to `heads/other` or `heads/same` must refuse without
+     the flag, and with the flag the plan names both branches;
+   - `restore_probe.sh`: both real stranded queues are still restored to the current branch, then `seal` succeeds;
+   - an unresolvable current branch refuses without the flag.
+5. **Text:** `troubleshooting.md`, `commands.md`, `--help` and CHANGELOG `### Output changes` carry the new flag and
+   lines. State the residual (§14) once, in `durability-recovery.md`.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| A1 | items 1, 3 and 4 | 60 min |
+| A2 | items 2 and 5 | 45 min |
+
+**Report:** `.git-exclude/review-request/rfc166-round-2-report-v2.md`, with all 14 gates on the final commit and each
+unit's real start and end. **K7:** a second addendum goes back to the owner.
