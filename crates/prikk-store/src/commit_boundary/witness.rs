@@ -319,15 +319,17 @@ pub(crate) fn rebuild_witness_over_sound_wal(
 
 /// Decode a witness record from raw bytes, for a test that needs to forge one (the classification
 /// tests' own bounded-connectivity-walk test): a real record, read back, then a single field
-/// changed, keeping every other field (including the checksum, recomputed) genuine.
-#[cfg(test)]
+/// changed, keeping every other field (including the checksum, recomputed) genuine. Gated the same
+/// `target_os = "linux"` as its own sole caller (`classification::tests`) -- otherwise this reads as
+/// dead code on every other target, which the cross-target clippy gate (`-D warnings`) catches.
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn decode_for_test(bytes: &[u8]) -> Option<WitnessRecord> {
     decode_witness(bytes).ok()
 }
 
 /// The inverse of [`decode_for_test`]: re-encode a (possibly modified) record back to its own raw
 /// bytes, recomputing the checksum over whatever fields the test changed.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn encode_for_test(record: &WitnessRecord) -> Vec<u8> {
     encode_witness(record)
 }
