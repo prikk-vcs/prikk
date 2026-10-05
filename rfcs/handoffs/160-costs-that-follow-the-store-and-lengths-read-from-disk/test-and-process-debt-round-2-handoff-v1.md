@@ -83,3 +83,30 @@ and `-v2.md`.
 
 **Report:** `.git-exclude/review-request/step5-round-2-report-v1.md`, with each unit's real start and end, and the
 gates script's summary on the final commit.
+
+## Addendum 1 — 2026-10-06: CI is red, and three corrections (review `step5-round-2-review-v1`)
+
+**Outcome: Corrections Required.** U1, U2 and U3's attestation check are accepted as a checkpoint. Read review v1 in
+full; its "Corrections" section is the work list.
+
+0. **URGENT, first and alone:** fix the path assertions in `complete_damaged_record_is_not_interrupted_append.rs`,
+   which fail on macOS and Windows (CI run `37382076762`). Compare paths by identity, sweep the step 5 test files for the
+   same pattern, and commit it on its own. The architect gates it and pushes it with U1–U3.
+1. **The received-tip gap:** import refuses a chain-incomplete bundle (a missing previous state, or a missing required
+   attestation), and `verify` checks the received tip's previous state. Tests with controls, and CHANGELOG entries.
+2. **The budget charge audit:** every `ScanBudget` reader charges each candidate's header plus its body. A
+   zero-length-candidate test per reader, with a control.
+3. **U4 continues:** classification, then the ports. The architect measures CI time from the push.
+
+**Non-change scope:** no product behaviour other than item 1's import refusal and `verify` check. **Prohibited:**
+weakening an assertion, or `cfg`-ing a test away from a platform without naming the Linux-only mechanism it needs.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| A0 | item 0 | 20 min |
+| A1 | item 1 | 60 min |
+| A2 | item 2 | 60 min |
+| U4 | item 3 (as in §4) | 120 min |
+
+**Report:** `.git-exclude/review-request/step5-round-2-report-v2.md`, with `scripts/gates.py`'s summary on the final
+commit.
