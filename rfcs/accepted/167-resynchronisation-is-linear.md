@@ -17,6 +17,9 @@ recommendation is accepted."*). Proposed and rewritten as a design the same day 
   - a command-level guard whose control was run.
 
   One text note is carried into release prep.
+- **Correction (2026-10-05):** D4 asked for command-level rows on three inputs (the WAL, a container, the ref log).
+  Only the WAL row was delivered, and the architect accepted it without noticing. The other two are carried into 0.49.0
+  step 5, round 1, §3.
 
 **Author-review independence.**
 - **M5 came in through a design the architect accepted.** RFC 160 F3 has a reader fully parse every candidate frame,
