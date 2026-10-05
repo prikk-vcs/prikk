@@ -1131,7 +1131,11 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
         let plan = result.map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
         let count = plan.patch_ids.len();
-        let plural = if count == 1 { "commit" } else { "commits" };
+        let (plural, this_these, belong, its_their, it_them) = if count == 1 {
+            ("commit", "this", "belongs", "its", "it")
+        } else {
+            ("commits", "these", "belong", "their", "them")
+        };
         println!("restoring {count} queued {plural} to {}:", plan.ref_name);
         for (index, commit) in plan.queued_commits.iter().enumerate() {
             println!("  {}. {}", index + 1, describe_commit_summary(commit));
@@ -1143,7 +1147,7 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                 describe_commit_summary(latest)
             ),
             None => println!(
-                "{} has never been published -- these would be its first commits",
+                "{} has never been published -- {this_these} would be {its_their} first {plural}",
                 plan.ref_name
             ),
         }
@@ -1157,8 +1161,8 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
             println!("plan only -- nothing written");
         } else {
             println!(
-                "the {count} queued {plural} now belong to {}; publish them with `prikk seal \
-                 --allow-no-audit`",
+                "the {count} queued {plural} now {belong} to {}; publish {it_them} with `prikk \
+                 seal --allow-no-audit`",
                 plan.ref_name
             );
         }

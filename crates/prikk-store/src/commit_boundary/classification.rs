@@ -362,15 +362,15 @@ fn ownership_missing_refusal_text(restore: Option<RestoreRefusalContext<'_>>) ->
                 doctor --restore-queue-target --ref <ref>` to give the queue its owner back"
             .to_string();
     };
-    let plural = if context.queued_count == 1 {
-        "commit has"
+    let (plural, belongs) = if context.queued_count == 1 {
+        ("commit has", "it belongs")
     } else {
-        "commits have"
+        ("commits have", "they belong")
     };
     if let WitnessState::Valid(record) = context.witness {
         let ref_name = &record.ref_name;
         return format!(
-            "{} queued {plural} lost the record of which branch they belong to. This session's \
+            "{} queued {plural} lost the record of which branch {belongs} to. This session's \
              own commit record names {ref_name}. Check with: `prikk doctor \
              --restore-queue-target --ref {ref_name} --plan-only`",
             context.queued_count
@@ -378,14 +378,14 @@ fn ownership_missing_refusal_text(restore: Option<RestoreRefusalContext<'_>>) ->
     }
     match crate::refs::current_branch(context.layout) {
         Ok(current) => format!(
-            "{} queued {plural} lost the record of which branch they belong to. Your current \
+            "{} queued {plural} lost the record of which branch {belongs} to. Your current \
              branch is {current}. Check with: `prikk doctor --restore-queue-target --ref \
              {current} --plan-only`",
             context.queued_count
         ),
         Err(_) => format!(
-            "{} queued {plural} lost the record of which branch they belong to, and prikk \
-             cannot tell what your current branch is either -- run `prikk doctor \
+            "{} queued {plural} lost the record of which branch {belongs} to, and prikk cannot \
+             tell what your current branch is either -- run `prikk doctor \
              --restore-queue-target --ref <ref> --not-current-branch --plan-only`, naming the \
              branch yourself",
             context.queued_count
