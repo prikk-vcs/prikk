@@ -461,50 +461,156 @@ fn budgeted_scan_is_linear_and_resolves_to_damage() {
 /// its own bound. This measures the *whole* `verify` call instead, the way a user's own `prikk
 /// verify` actually pays for it.
 ///
-/// **Control, run by hand for this round's report, not kept as code**: temporarily restoring the
-/// second decode this round's own D5 fix removed doubles the bytes hashed here and pushes it over
-/// `k`, exactly the shape the reader-level test cannot see at all (it never calls `verify` itself).
-#[test]
-fn verify_hashes_a_hostile_wal_within_k_times_its_size() {
-    use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
+/// Where the command-level row's hostile bytes go for `format_name`, on a fresh `RepositoryLayout`
+/// (every one of these paths already exists, empty, right after `init`).
+fn command_row_fixture_path(layout: &RepositoryLayout, format_name: &str) -> std::path::PathBuf {
+    match format_name {
+        "WAL" => Wal::for_layout(layout, DEFAULT_ACTIVE_NAME)
+            .path()
+            .to_path_buf(),
+        "container frame" => layout.container_slot_path(
+            prikk_object::ObjectType::Blob,
+            crate::foundation::layout::ContainerSlot::A,
+        ),
+        "ref container" => {
+            layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A)
+        }
+        other => panic!("command_row_fixture_path: no fixture path registered for {other}"),
+    }
+}
 
-    let format = formats()
+/// 0.49.0 step 5, D11/U3: the WAL row generalized to a blob container and the ref log, the two other
+/// command rows `014-review.md:290` asked for beside it. One whole `verify`, over a 2 MiB hostile
+/// shape-A file, bytes hashed at most `k`x the input.
+///
+/// **Control, kept as code this round** (the WAL row's own control last round was run by hand): with
+/// `PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE` set, `verify_repository_with_options` re-decodes the
+/// default WAL a second time (the exact RFC 167 D5 regression, reproduced on purpose, `#[cfg(test)]`-
+/// gated in `verify.rs`) -- [`verify_command_level_row_control_a_second_wal_decode_turns_it_red`]
+/// asserts this row goes red when that happens.
+fn command_level_row(format_name: &'static str, k: u64) {
+    let format = all_formats()
         .into_iter()
-        .find(|format| format.name == "WAL")
-        .expect("the WAL format is registered");
+        .find(|format| format.name == format_name)
+        .unwrap_or_else(|| panic!("the {format_name} format is registered"));
     let valid = (format.valid)();
 
     let size = 2 * 1024 * 1024;
-    let root = unique_temp_dir("rfc167-verify-command-level-row");
+    let root = unique_temp_dir(&format!("rfc167-verify-command-level-row-{format_name}"));
     let layout = RepositoryLayout::init(root).expect("init");
-    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
-    std::fs::write(
-        wal.path(),
-        generic_hostile_shape_a(&valid, format.pre, size),
-    )
-    .expect("write");
+    let path = command_row_fixture_path(&layout, format_name);
+    std::fs::write(path, generic_hostile_shape_a(&valid, format.pre, size)).expect("write");
 
     crate::foundation::frame_resync::hash_tally::reset();
-    let report = verify_repository_with_options(
+    verify_repository_with_options(
         &layout,
         VerifyOptions {
             stop_on_first_error: false,
         },
     )
-    .expect("verify itself does not error even though it finds damage");
+    .expect("verify itself does not error even though it finds damage or a remnant");
     let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
-
-    assert!(
-        report.has_item_failure(),
-        "a budget-exhausted WAL scan is damage, and a whole verify over it must report that"
-    );
-    // k: the WAL's own 8x budget, plus slack for one overshoot candidate and the small constant cost
-    // of every other file `verify` reads in the same call (all empty or near-empty in this fixture).
-    let k = SCAN_BUDGET_MULTIPLE + 2;
     let ceiling = k * size as u64;
     assert!(
         hashed <= ceiling,
-        "verify hashed {hashed} bytes over a {size}-byte hostile WAL, over its {ceiling}-byte ({k}x) \
-         whole-command ceiling -- a second decode of the same bytes would roughly double this"
+        "{format_name}: verify hashed {hashed} bytes over a {size}-byte hostile file, over its \
+         {ceiling}-byte ({k}x) whole-command ceiling"
     );
+}
+
+#[test]
+fn verify_hashes_a_hostile_wal_within_k_times_its_size() {
+    use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
+    // The format's own 8x budget, plus slack for one overshoot candidate and the small constant
+    // cost of every other file `verify` reads in the same call (all empty or near-empty in this
+    // fixture).
+    command_level_row("WAL", SCAN_BUDGET_MULTIPLE + 2);
+}
+
+#[test]
+fn verify_hashes_a_hostile_blob_container_within_k_times_its_size() {
+    use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
+    command_level_row("container frame", SCAN_BUDGET_MULTIPLE + 2);
+}
+
+/// **Open finding (0.49.0 step 5, D11/U3), not yet root-caused to one line**: unlike the WAL and
+/// blob-container rows above, a whole `verify` over a 2 MiB hostile ref-log container hashes about
+/// 56.6 MB -- roughly 27x the input, not the ~10x the reader-level budget alone would predict.
+/// `refs/verify/scan.rs::read_logs` and `refs.rs::ref_log_tail_status` each independently call
+/// `decode_ref_container_records` on the same container (the `Refs` and `AppendedFileTails` stages
+/// never share the result, the same shape RFC 167 D5 was for the WAL), and `read_logs` then calls
+/// `replay_ref_subsequence` once per ref-name-key it finds, which is at least a third pass -- but
+/// three passes alone would be roughly 3x, not 27x, so something past "it decodes more than once"
+/// is still unaccounted for. This ceiling asserts the finding **does not get worse**, the same
+/// promotion rule `store_size_independence.rs`'s open rows already use: fixing it is what should
+/// make this assertion fail, not a quietly wider number.
+#[test]
+fn verify_hashes_a_hostile_ref_log_an_open_finding_not_yet_bounded() {
+    // 1.5x the ~56.6 MB measured for a 2 MiB input when this ceiling was written (k in units of the
+    // input size, so ~27x rounds up with margin to 40x).
+    command_level_row("ref container", 40);
+}
+
+/// The control named in [`command_level_row`]'s own doc: forcing the exact D5 regression back on
+/// (a second decode of the default WAL inside `verify`) must turn the WAL row red.
+///
+/// **Why a child process, not `std::env::set_var` in this test binary**: `PRIKK_VERIFY_TEST_FORCE_
+/// SECOND_WAL_DECODE` is read process-wide, and `cargo test` runs this crate's own tests in parallel
+/// on multiple threads of *one* process by default -- setting it here would leak into whichever
+/// other test happens to call `verify_repository_with_options` on another thread at the same moment
+/// (the exact reason `dc57_active_patch_thresholds.rs`'s own module doc gives for never doing this in
+/// a shared test binary). `isolated_with_timeout` re-execs this same binary with `--exact` and
+/// `--test-threads=1`, so the child that sets the variable (safely, on its own environment, via
+/// `Command::env`) runs this one test and nothing else.
+#[test]
+fn verify_command_level_row_control_a_second_wal_decode_turns_it_red() {
+    if std::env::var("PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE").is_ok() {
+        use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
+        let format = all_formats()
+            .into_iter()
+            .find(|format| format.name == "WAL")
+            .expect("the WAL format is registered");
+        let valid = (format.valid)();
+        let size = 2 * 1024 * 1024;
+        let root = unique_temp_dir("rfc167-verify-command-level-row-control");
+        let layout = RepositoryLayout::init(root).expect("init");
+        let path = command_row_fixture_path(&layout, "WAL");
+        std::fs::write(path, generic_hostile_shape_a(&valid, format.pre, size)).expect("write");
+
+        crate::foundation::frame_resync::hash_tally::reset();
+        verify_repository_with_options(
+            &layout,
+            VerifyOptions {
+                stop_on_first_error: false,
+            },
+        )
+        .expect("verify itself does not error even though it finds damage");
+        let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+        let k = SCAN_BUDGET_MULTIPLE + 2;
+        let ceiling = k * size as u64;
+        assert!(
+            hashed > ceiling,
+            "with the second decode forced back on, verify hashed only {hashed} bytes, at or under \
+             its {ceiling}-byte ceiling -- the control should have doubled this and pushed it over"
+        );
+        return;
+    }
+    let path = format!(
+        "{}::verify_command_level_row_control_a_second_wal_decode_turns_it_red",
+        module_path!()
+            .strip_prefix("prikk_store::")
+            .unwrap_or(module_path!())
+    );
+    let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args(["--exact", &path, "--nocapture", "--test-threads=1"])
+        .env("PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE", "1")
+        .output()
+        .expect("spawning the child test process");
+    if !child.status.success() {
+        child.stdout.extend_from_slice(&child.stderr);
+        panic!(
+            "the control did not confirm the second decode turns the row red: {}",
+            String::from_utf8_lossy(&child.stdout)
+        );
+    }
 }

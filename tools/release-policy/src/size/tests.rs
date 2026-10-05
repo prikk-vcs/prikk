@@ -112,7 +112,10 @@ fn removing_a_declaration_names_its_file() {
         // RFC 167 D5: the WAL decode `Objects` (via `reachability::compute_reachable_object_ids`)
         // and `WalReplay` each used to run independently is hoisted once, ahead of both, and handed
         // to each at its original stage position, 2,309 -> 2,326.
-        detail.contains("2326"),
+        // 0.49.0 step 5, D11/U3: a test-only, env-gated control hook (a second WAL decode, forced on
+        // by `PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE`) for the command-level row's own control,
+        // 2,326 -> 2,336.
+        detail.contains("2336"),
         "the line count is in the message: {detail}"
     );
     assert!(

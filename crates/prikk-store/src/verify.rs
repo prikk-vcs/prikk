@@ -1375,6 +1375,16 @@ pub fn verify_repository_with_options(
     // reports.
     let default_wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let default_wal_replay = default_wal.replay();
+    // 0.49.0 step 5, D11/U3: a test-only, env-gated control for the command-level row
+    // (`verify_hashes_a_hostile_wal_within_k_times_its_size`'s own control, kept as code this round
+    // rather than only verified by hand): setting this variable re-decodes the default WAL a second
+    // time, reproducing the exact RFC 167 D5 regression, so the row's own test can assert it goes
+    // red without editing this function. Inert unless both `cfg(test)` and the variable are set;
+    // compiled into no shipped binary.
+    #[cfg(test)]
+    if std::env::var_os("PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE").is_some() {
+        let _ = default_wal.replay();
+    }
 
     // Stage: Objects. No upstream stage dependency. `trust_verifier` is mutated by reference and its
     // state survives a `Failed` outcome here, since it lives in this function's own frame rather than
