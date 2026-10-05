@@ -92,3 +92,29 @@
 real use of the script.
 
 **Report:** `.git-exclude/review-request/step5-round-1-report-v1.md`, with each unit's real start and end.
+
+## Addendum 1 — 2026-10-05: two fixes (review `step5-round-1-review-v1`)
+
+Report v1: **not accepted yet.** U2, P1, P2, P4, U4 and U5 are accepted. **This is a fix round:** fixes only.
+
+1. **F1, the gates script on this checkout:**
+   - `scripts/gates.py` keeps an already-set, writable `TMPDIR`. Otherwise it uses the system temp directory if
+     writable, and the repository-local directory only as the last resort. It prints which one it chose;
+   - amend rule 9's wording to match;
+   - `rfc147_declaration_resolution::every_destination_kind_resolves_as_commit_then_acts` creates its socket in a
+     short directory of its own, independent of the checkout path, refusing clearly if even that is too long;
+   - **evidence:** the script's own summary at 14 of 14, run from this checkout.
+2. **F2, the ref log decoded at least three times inside `verify`:**
+   - decode it once per `verify` and share the result, as RFC 167 D5 did for the WAL. Say what each former caller
+     still checks;
+   - **account for the measured 27×:** three decodes explain about 3×, so find and name the rest;
+   - restore the row's real name and the 10× bound (`SCAN_BUDGET_MULTIPLE + 2`), and keep its control;
+   - measure honest `verify` on a repository with many refs, before and after.
+3. **The ×2 rule applies:** at ×2 of a unit's budget, file a question and wait.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| A1 | F1 | 30 min |
+| A2 | F2 | 90 min |
+
+**Report:** `.git-exclude/review-request/step5-round-1-report-v2.md`.
