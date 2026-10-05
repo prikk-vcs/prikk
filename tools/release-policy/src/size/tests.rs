@@ -115,7 +115,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.49.0 step 5, D11/U3: a test-only, env-gated control hook (a second WAL decode, forced on
         // by `PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE`) for the command-level row's own control,
         // 2,326 -> 2,336.
-        detail.contains("2336"),
+        // 0.49.0 step 5 round 1 addendum F2: verify reads the ref log once and hands it to both the Refs and
+        // AppendedFileTails stages, 2,336 -> 2,343.
+        detail.contains("2343"),
         "the line count is in the message: {detail}"
     );
     assert!(
