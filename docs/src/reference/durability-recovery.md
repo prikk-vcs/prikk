@@ -153,11 +153,29 @@ active-session integrity issue. Seal refuses that state rather than guessing whi
 the WAL records. Since RFC 166 (0.49.0), the same issue is also raised when the metadata is present and
 well-formed but disagrees with the session's own commit witness (D6) — a session cannot have two
 owners, so the two are checked against each other, not only the metadata's own shape. Either shape
-refuses with the same text, naming `prikk doctor --restore-queue-target --ref <ref> [--plan-only]`
-(RFC 166 D5) as the way out: the ref always comes from the caller, never from the witness, and the
-write is one atomic replace of the metadata file, never the truncate-then-append a commit itself uses
-only once, for a session's first write (RFC 166 D1) — a tear in *this* verb's own write would recreate
-the exact stranding it exists to repair, since the WAL here is, by construction, already non-empty.
+refuses with the same text, naming `prikk doctor --restore-queue-target --ref <ref>
+[--not-current-branch] [--plan-only]` (RFC 166 D5, as amended by §14) as the way out: the ref always
+comes from the caller, never from the witness, and the write is one atomic replace of the metadata
+file, never the truncate-then-append a commit itself uses only once, for a session's first write
+(RFC 166 D1) — a tear in *this* verb's own write would recreate the exact stranding it exists to
+repair, since the WAL here is, by construction, already non-empty.
+
+**Which branch the verb will accept (RFC 166 §14, 2026-10-05).** D5's original condition —
+refuse unless the queue "validates against `<ref>`'s current tip by the same check `seal` makes" —
+turned out not to exist: `seal` checks no such thing (a Patch names neither its own ref nor its own
+base), so a queue built on one branch could be silently attached to, and then published onto, a
+completely different one. §14 replaces it: with a readable commit record, `<ref>` must equal the
+record's own ref, unchanged; without one, `<ref>` must be the caller's own current branch (the same
+resolver `commit` uses for its default) unless `--not-current-branch` is given, and the same flag is
+required when the current branch cannot be resolved at all. A restored owner is final for the verb —
+a second restore refuses, the same as any healthy session.
+
+**Residual, accepted by the owner.** A queue made with an explicit `commit --ref X` (or
+`rollback-draft` on `X`) while the caller's current branch was `Y` can still be restored to `Y`
+without `--not-current-branch`, if the caller does not recognize their own commits in the plan (which
+names each one's own message and paths) and skips `--plan-only`. This reaches only a queue with no
+readable commit record — a readable one already pins `<ref>` to itself — and is no worse than the
+0.20.0-0.48.0 hand-edit this verb replaces.
 
 An empty active WAL with leftover active ref metadata is local debris. Verification and doctor report
 that distinction so empty-WAL cleanup does not get confused with sealed-history corruption.
@@ -527,7 +545,7 @@ production-readiness claims. Single-ref backup/restore tooling is no longer defe
 | Commit persistence appends exact signed Patch envelopes to the active WAL, required-syncs the WAL file, and required-syncs the parent directory after every append. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [DC-37](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) |
 | WAL replay reports incomplete trailing bytes separately from complete-record checksum failures. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [PR-004](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-004-WAL-HANDOFF.md), [PR-006](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-006-VERIFY-HANDOFF.md) |
 | WAL-tail repair truncates only a trailing prefix of the last frame, preserving every complete, sound record behind it; a damaged record with sound records behind it refuses rather than truncating past it (unchanged since RFC 162), and since RFC 166 it also refuses rather than remove a record the active session's own commit witness already names as acknowledged. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [`commit_boundary/classification.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/classification.rs), [PR-012](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-012-DOCTOR-REPAIR-HANDOFF.md), [RFC 166](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/166-a-queued-commit-has-a-witness.md) |
-| `--discard-damaged-commits` removes an acknowledged commit the active WAL no longer holds soundly, or declares it lost, saving the removed bytes first, all-or-nothing, the same way `--repair-wal-tail` does; `--restore-queue-target --ref <ref>` gives an owned queue its owner back by one atomic replace of the active ref metadata, with the ref always supplied by the caller, never read from the witness. Both are `--plan-only`-previewable and refuse, writing nothing, over every row they do not act on. | [`doctor/discard_damaged_commits.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/discard_damaged_commits.rs), [`doctor/restore_queue_target.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/restore_queue_target.rs), [RFC 166 D5](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/166-a-queued-commit-has-a-witness.md) |
+| `--discard-damaged-commits` removes an acknowledged commit the active WAL no longer holds soundly, or declares it lost, saving the removed bytes first, all-or-nothing, the same way `--repair-wal-tail` does; `--restore-queue-target --ref <ref> [--not-current-branch]` gives an owned queue its owner back by one atomic replace of the active ref metadata, with the ref always supplied by the caller, never read from the witness, and accepted only when a readable commit record agrees or (absent one) it is the caller's own current branch or `--not-current-branch` is given (RFC 166 §14). Both are `--plan-only`-previewable and refuse, writing nothing, over every row they do not act on. | [`doctor/discard_damaged_commits.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/discard_damaged_commits.rs), [`doctor/restore_queue_target.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/restore_queue_target.rs), [RFC 166 D5/§14](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/166-a-queued-commit-has-a-witness.md) |
 | Non-empty active WALs require valid active-ref ownership metadata; empty-WAL metadata debris is separate local debris. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-15](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-15-ACTIVE-SESSION-INTEGRITY-HARDENING.md) |
 | Seal rejects trailing partial WAL bytes, missing/malformed active ref metadata, and mismatched active ref ownership before publication. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [DC-15](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-15-ACTIVE-SESSION-INTEGRITY-HARDENING.md) |
 | Seal persists WAL Patches, creates signed Block and RefState objects, durably appends the pointer commit point, appends exactly one signed RefUpdate, confirms agreement, then drains active state. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`refs/publication.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/publication.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |

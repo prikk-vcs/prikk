@@ -93,11 +93,26 @@ full acknowledged queue, catching a substituted *earlier* record a per-record ch
 - `prikk doctor --discard-damaged-commits`/`--plan-only`: new output lines — `acknowledged commit at sequence N
   (patch <id>)` or `unexplained tail -- the witness itself could not be read`; `N bytes saved to <path> before
   truncation` or `nothing to truncate -- the acknowledged commit is already gone from the WAL`; `this content may
-  still be in your working tree` (only when true); `plan only -- nothing written` or `damaged commit discarded`.
-- `prikk doctor --restore-queue-target --ref <ref>`/`--plan-only`: new output lines — `restoring N queued
-  patch(es) to <ref>`; `<ref>'s current tip is block <id>` or `<ref> has never been published -- this would be
-  its first`; `more than one ref's own tip has exactly this queue's patches: <list>` (only when true); `plan only
-  -- nothing written` or `queue ownership restored`.
+  still be in your working tree` (only when true — this note is now computed correctly; it previously never fired
+  at all); `plan only -- nothing written` or `damaged commit discarded`.
+- Row 9's own refusal text (`commit`/`rollback-draft`/`seal`/`status`) names a concrete, runnable
+  `--restore-queue-target` command rather than a placeholder `<ref>`: the session's own commit record's ref when
+  one is readable, else the caller's current branch, else a direction to supply `--ref` and `--not-current-branch`
+  explicitly. No internal words (`"durable, matching owner"`) remain in any of these four surfaces' own text.
+- `prikk doctor --restore-queue-target --ref <ref> [--not-current-branch]`/`--plan-only`: new output lines —
+  `restoring N queued commit(s) to <ref>:`, followed by one numbered line per queued commit (its own message, or
+  `(no message)`, and the paths it touches); `<ref> is currently at: <description>` or `<ref> has never been
+  published -- these would be its first commits`; the one-sentence uncertainty disclosure, "prikk cannot tell
+  which branch these commits were made on; your current branch is assumed. If you made them with `--ref`,
+  restore to that branch." (only when no commit record decided the ref and `--not-current-branch` was not
+  given); `plan only -- nothing written` or the next-step line, "the N queued commit(s) now belong to `<ref>`;
+  publish them with `prikk seal --allow-no-audit`". Replaces the original round-2 design's own `<ref>'s current
+  tip is block <id>` and ambiguity-list lines, both removed per RFC 166 §14 (a tip-matching check answered
+  nothing this verb actually needed, and let a queue be silently attached to the wrong branch).
+- `prikk doctor --restore-queue-target` gains `--not-current-branch`: required to restore to a ref other than
+  the caller's own current branch, or when the current branch cannot be resolved at all, whenever there is no
+  commit record to decide the ref instead (RFC 166 §14). Without it, the refusal names both the current branch
+  and the requested one, and never simply says to add the flag.
 
 ### Fixed — a killed `bundle import` or `sync accept` could leave a dangling forward reference no repair cleared
 

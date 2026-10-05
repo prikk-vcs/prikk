@@ -150,7 +150,7 @@ repository as it is and copy `.prikk/active/` aside before doing anything else: 
 contrast, shows as `trailing partial WAL bytes: N` and a `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` warning, and `--repair-wal-tail` is the
 right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail and the repair deleted the intact records after it.)
 
-## `error: queued commits exist but no durable, matching owner names them`
+## `error: N queued commit(s) have lost the record of which branch they belong to`
 
 **Affects 0.20.0 through 0.48.0** (the stranding itself); **0.49.0 adds the way out.** A crash during a
 commit *after the first one in a session* could leave `.prikk/active/default/ref-name` empty while the
@@ -164,25 +164,36 @@ bytes are durably queued), but nothing can tell which ref it belongs to, so the 
 - `prikk status` shows `queued patches: N targeting <missing metadata>`, with a warning naming the exact
   text below;
 - `prikk verify` and `prikk doctor` both exit `1`;
-- `prikk commit`, `prikk seal` and `prikk rollback-draft` all refuse with the same text:
+- `prikk commit`, `prikk seal` and `prikk rollback-draft` all refuse with the same text, naming a
+  concrete command to run. When this session's own commit record (its "witness") is still readable, it
+  names the branch *that* record remembers:
 
   ```
-  error: queued commits exist but no durable, matching owner names them -- run `prikk doctor
-  --restore-queue-target --ref <ref>` to give the queue its owner back
+  error: 2 queued commits have lost the record of which branch they belong to. This session's own
+  commit record names heads/main. Check with: `prikk doctor --restore-queue-target --ref heads/main
+  --plan-only`
+  ```
+
+  Without one (the record itself is gone, or this is a session a pre-0.49.0 binary left behind), it
+  names your current branch instead, as a plain assumption:
+
+  ```
+  error: 1 queued commit has lost the record of which branch they belong to. Your current branch is
+  heads/main. Check with: `prikk doctor --restore-queue-target --ref heads/main --plan-only`
   ```
 
   (`commit`'s own text is prefixed `integrity error:`; the others are not, otherwise identical.)
 - `prikk doctor --repair-wal-tail` and `prikk doctor --repair-tails` do not help: there is no torn tail
   here for either of them to repair.
 
-**How to find the branch to restore**: `prikk status`'s own output, quoted above, already names it — look
-at its `current branch: <ref>` line. That line reads a different, unaffected file
-(`.prikk/current-branch`, the worktree's own checked-out branch), so it still shows the right ref even
-while `active/default/ref-name` itself is empty or disagrees. If you changed branches since the commit
-that crashed, use whichever ref you were actually committing to at the time instead. **The ref always
-comes from you** — `--restore-queue-target` never reads it from the witness, even when `doctor` shows
-one as a hint; a witness naming a *different* ref than the one you give refuses, rather than silently
-preferring one source over the other.
+**The ref always comes from you** — `--restore-queue-target` never reads it from the witness, even when
+the refusal shows one as a hint. **With a readable commit record, `--ref` must match it** — a mismatch
+refuses, rather than silently preferring one source over the other. **Without one, `--ref` must be your
+current branch** (`prikk status`'s own `current branch: <ref>` line, which reads a different, unaffected
+file and so stays right even while `ref-name` itself is empty or disagrees) **unless you pass
+`--not-current-branch`** — for example, if you made these commits with `commit --ref <other>` while
+sitting on a different branch. A current branch that cannot be resolved at all needs the same flag,
+fail closed, since there is then nothing to compare `--ref` against.
 
 **The way out**, run end to end against a real killed repository:
 
@@ -190,20 +201,57 @@ preferring one source over the other.
 # If a previous run was interrupted mid-write, its lock may still be on disk:
 prikk unlock --lock .prikk/active/default/active.lock --yes
 
-# See what this would do first, without writing anything:
+# See what this would do first, without writing anything -- the plan shows each queued commit's own
+# message and the paths it touches, and the target branch's latest sealed commit, never a bare hash:
 prikk doctor --restore-queue-target --ref heads/main --plan-only
 
 # Then do it:
 prikk doctor --restore-queue-target --ref heads/main
 
 prikk verify   # now exits 0
-prikk seal --allow-no-audit   # the queued commit(s) seal normally
+prikk seal --allow-no-audit   # the queued commit(s) seal normally, as the restore's own output says
 ```
 
-Nothing about the queued commit's own content is at risk at any point in this sequence — only the small
+```
+$ prikk doctor --restore-queue-target --ref heads/main --plan-only
+doctor repository: /path/to/.prikk
+restoring 2 queued commits to heads/main:
+  1. add a (a.txt)
+  2. add b (b.txt)
+heads/main has never been published -- these would be its first commits
+plan only -- nothing written
+
+$ prikk doctor --restore-queue-target --ref heads/main
+doctor repository: /path/to/.prikk
+restoring 2 queued commits to heads/main:
+  1. add a (a.txt)
+  2. add b (b.txt)
+heads/main has never been published -- these would be its first commits
+the 2 queued commits now belong to heads/main; publish them with `prikk seal --allow-no-audit`
+```
+
+When there is no commit record to defer to, the plan says so once, honestly, rather than guessing
+silently: "prikk cannot tell which branch these commits were made on; your current branch is assumed.
+If you made them with `--ref`, restore to that branch."
+
+**Restoring to a branch other than your current one** needs `--not-current-branch`, and the refusal
+without it names both branches:
+
+```
+$ prikk doctor --restore-queue-target --ref heads/other
+error: your current branch is heads/main, but you asked to restore to heads/other; if these commits
+were made with `commit --ref heads/other` (or `rollback-draft` on it), pass --not-current-branch to
+confirm that; otherwise restore to heads/main instead
+```
+
+Nothing about the queued commits' own content is at risk at any point in this sequence — only the small
 metadata file naming which ref owns it, replaced by one atomic write. 0.49.0 also writes this file once
 per session instead of once per commit, closing the window for every commit going forward; see [current
 limitations](../reference/current-state.md) for the status of that fix.
+
+**A restored owner is final for this verb**: once ownership is present, a second restore refuses the
+same way a healthy session does, even to a different ref and even with `--not-current-branch` — a wrong
+restore is undone by hand (write `ref-name` back, or restore from a backup), not by a second call.
 
 ## `error: a queued commit you were told had succeeded disagrees with the WAL in a way the WAL's own sound prefix cannot explain (RFC 166)`
 
