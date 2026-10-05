@@ -17,9 +17,10 @@
 //! `#[ignore]`d quadratic measurement they stood in for) with: it is not included in the per-format bound corpus below (that
 //! corpus stays at 64 KiB, where the ratio was always small, and asserts the ordinary 8x bound on *ordinary* mutations) because it
 //! needs the two deliberately hostile shapes and larger sizes M5 is specifically about.
-//! [`hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size`] is the **standing** guard (RFC 160 §9 Addendum 1): a small,
-//! fast case asserting hashed bytes stay at or below 1.5x what it measured when the ceiling was written, so a regression that makes
-//! the (still unfixed) quadratic worse is caught even though the quadratic itself is not.
+//! [`verify_hashes_a_hostile_wal_within_k_times_its_size`] is RFC 167 D4's own **command-level** row: the
+//! reader-level bound above only sees one reader's own decode call, which is exactly what let the D5
+//! regression (a second, independent decode of the same WAL inside `verify`) through unnoticed -- this
+//! measures the whole `verify_repository_with_options` call instead.
 //!
 //! The whole set (T1) runs under the R1 cgroup scope, like every other run in this round.
 
@@ -29,6 +30,10 @@ use std::time::Duration;
 
 use super::hostile_length_support::isolated_with_timeout;
 use super::hostile_lengths::{Format, envelope_bodies, formats, ref_name_length_bodies};
+use super::test_support::unique_temp_dir;
+use crate::{
+    DEFAULT_ACTIVE_NAME, RepositoryLayout, VerifyOptions, Wal, verify_repository_with_options,
+};
 
 /// A small, dependency-free deterministic PRNG (xorshift64*), so the corpus is fixed and a failure reproduces without pulling in
 /// `proptest`'s shrinking machinery for what is really a fixed, bounded fuzz sweep.
@@ -445,4 +450,61 @@ fn budgeted_scan_is_linear_and_resolves_to_damage() {
             }
         }
     }
+}
+
+/// **RFC 167 D4 -- the command-level row.** The reader-level bound above (`budgeted_scan_is_linear_
+/// and_resolves_to_damage`) calls `wal::decode_records` directly, once. That is exactly the kind of
+/// check D5's own regression slipped past: a *second*, independent decode of the same WAL, added
+/// inside `verify_repository_with_options` by a later stage (`verify::reachability::
+/// compute_reachable_object_ids`, RFC 164 Rule E, before its RFC 167 fix), doubled the real cost
+/// without any reader-level ceiling ever seeing it -- each decode, on its own, still stayed within
+/// its own bound. This measures the *whole* `verify` call instead, the way a user's own `prikk
+/// verify` actually pays for it.
+///
+/// **Control, run by hand for this round's report, not kept as code**: temporarily restoring the
+/// second decode this round's own D5 fix removed doubles the bytes hashed here and pushes it over
+/// `k`, exactly the shape the reader-level test cannot see at all (it never calls `verify` itself).
+#[test]
+fn verify_hashes_a_hostile_wal_within_k_times_its_size() {
+    use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
+
+    let format = formats()
+        .into_iter()
+        .find(|format| format.name == "WAL")
+        .expect("the WAL format is registered");
+    let valid = (format.valid)();
+
+    let size = 2 * 1024 * 1024;
+    let root = unique_temp_dir("rfc167-verify-command-level-row");
+    let layout = RepositoryLayout::init(root).expect("init");
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    std::fs::write(
+        wal.path(),
+        generic_hostile_shape_a(&valid, format.pre, size),
+    )
+    .expect("write");
+
+    crate::foundation::frame_resync::hash_tally::reset();
+    let report = verify_repository_with_options(
+        &layout,
+        VerifyOptions {
+            stop_on_first_error: false,
+        },
+    )
+    .expect("verify itself does not error even though it finds damage");
+    let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+
+    assert!(
+        report.has_item_failure(),
+        "a budget-exhausted WAL scan is damage, and a whole verify over it must report that"
+    );
+    // k: the WAL's own 8x budget, plus slack for one overshoot candidate and the small constant cost
+    // of every other file `verify` reads in the same call (all empty or near-empty in this fixture).
+    let k = SCAN_BUDGET_MULTIPLE + 2;
+    let ceiling = k * size as u64;
+    assert!(
+        hashed <= ceiling,
+        "verify hashed {hashed} bytes over a {size}-byte hostile WAL, over its {ceiling}-byte ({k}x) \
+         whole-command ceiling -- a second decode of the same bytes would roughly double this"
+    );
 }
