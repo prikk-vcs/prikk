@@ -1,15 +1,17 @@
 # RFC 167 — Resynchronisation is linear: a hostile tail cannot make a reader quadratic (M5)
 
-**Status.** **PROPOSED 2026-10-05 by the architect** (0.49.0 step 4, in the owner-approved schedule: *"M5's
-structural fix without a format change"*). **Rewritten the same day as a design, for the owner's reading.**
-- **The design round is closed** (handoff
-  `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/resync-linear-design-round-handoff-v1.md`;
-  review `rfc167-design-round-review-v1`).
-- **The owner decides (§10):**
-  1. accept the design;
-  2. object containers and the ref container are inside the budget (option (c));
-  3. the doubled `verify` cost found in this review is fixed in this RFC's implementation.
-- **No implementation handoff until the owner accepts it.**
+**Status.** **ACCEPTED 2026-10-05 by the owner** (*"1. Accepted. 2. Your recommendation is accepted. 3. Your
+recommendation is accepted."*). Proposed and rewritten as a design the same day by the architect (0.49.0 step 4).
+- **The architect's reading:**
+  - **D1–D6 are accepted as written,** with §6's guards (the 4× honest margin, one coherent message per case) binding;
+  - **decision 2:** object containers and the ref container are inside the budget (option (c)). Their way out stays
+    RFC 164's;
+  - **decision 3:** D5, the doubled `verify` cost, is fixed in this RFC's implementation;
+  - K1–K7 apply where a verdict changes. One implementation round (§8).
+- **The design round:** handoff
+  `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/resync-linear-design-round-handoff-v1.md`,
+  review `rfc167-design-round-review-v1`.
+- **Implementation live:** `rfcs/handoffs/167-resynchronisation-is-linear/implementation-handoff-v1.md`.
 
 **Author-review independence.**
 - **M5 came in through a design the architect accepted.** RFC 160 F3 has a reader fully parse every candidate frame,
