@@ -58,7 +58,8 @@ pub struct CommitSummary {
     /// Every repository-relative path this commit's own operations name directly (a rename shows
     /// as `"old -> new"`). Node-addressed operations with no path of their own (`EditText`,
     /// `ChangePerm`, `ReplaceBinary` -- FDD-03 §9.3) report plainly rather than fabricating one;
-    /// see [`commit_summary`]'s own doc for why resolving their path is out of scope here.
+    /// see this module's own `commit_summary` function doc for why resolving their path is out of
+    /// scope here.
     pub paths: Vec<String>,
 }
 
