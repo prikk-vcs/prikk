@@ -73,7 +73,7 @@ thread_local! {
 /// Test instrument, unreachable from production: how many adopted-key MAINTAINER verifications the bound
 /// has run on this thread since the last call, which resets it. Gated like its only consumer, the
 /// Linux-only `bundle` tests.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn take_bound_maintainer_verifications_for_test() -> usize {
     MAINTAINER_VERIFICATIONS.with(|count| count.replace(0))
 }

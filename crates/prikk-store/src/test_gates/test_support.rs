@@ -553,12 +553,7 @@ pub(crate) fn publish_binary_create_then_replace(
 /// kept alive here so a genuine v1 (schema 1, `dup_index`-positional identity) fixture can still be
 /// built for that demonstration -- production authoring no longer emits this shape (see
 /// `plan_authored_text_span_v1`'s own doc), so this is the only way left to construct one.
-// Gated to match its only caller: `bundle::tests` is `#[cfg(all(test, target_os = "linux"))]`, so
-// on macOS and Windows this helper has no consumer and `-D dead-code` (implied by `-D warnings`)
-// refuses the crate. The dependency is on a pre-existing platform gate elsewhere, which is why the
-// increment that added this carried no `#[cfg(target_os)]` of its own and still broke both
-// non-Linux jobs.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn publish_text_create_then_edit_block_v1(
     layout: &RepositoryLayout,
     old: &[u8],

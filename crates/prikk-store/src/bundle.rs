@@ -836,7 +836,7 @@ pub fn import_bundle(
     crate::received::validate_received_ref(&received_ref_name)?;
 
     // Gated like its only caller: `bundle`'s tests are Linux-only.
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     if let Some(change) = BEFORE_IMPORT_LOCK.with(|slot| slot.borrow_mut().take()) {
         change();
     }
@@ -910,7 +910,7 @@ pub fn import_bundle(
         object_store.write_object(envelope)?;
     }
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     if let Some(change) = DURING_IMPORT_WRITES.with(|slot| slot.borrow_mut().take()) {
         change();
     }
@@ -1133,7 +1133,7 @@ pub(crate) fn admit_carried_signatures(
     Ok(admission)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 thread_local! {
     static BEFORE_IMPORT_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
@@ -1143,14 +1143,14 @@ thread_local! {
 
 /// Test seam, unreachable from production: run `change` once, after the bundle is validated and before
 /// `import_bundle` takes its locks — where a concurrent writer could record an author key.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn before_import_lock_for_test(change: impl FnOnce() + 'static) {
     BEFORE_IMPORT_LOCK.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 /// Test seam, unreachable from production: run `change` once, after `import_bundle`'s object writes
 /// and before it records author keys — while it still holds `ActiveLock`.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn during_import_writes_for_test(change: impl FnOnce() + 'static) {
     DURING_IMPORT_WRITES.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
@@ -1675,7 +1675,7 @@ pub(crate) fn encode_bundle(
 /// Built from the same encoding primitives as `encode_bundle`, mirroring its pre-author-key-section
 /// body exactly, rather than hand-editing bytes -- a hand-built fixture would prove the parser
 /// accepts a byte shape, not that the real historical format actually decodes.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 fn encode_bundle_v1_for_test(ref_name: &str, objects: &[ObjectEnvelope]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.extend_from_slice(RETIRED_BUNDLE_MAGIC_V1);
@@ -1693,7 +1693,7 @@ fn encode_bundle_v1_for_test(ref_name: &str, objects: &[ObjectEnvelope]) -> Resu
 /// same encoding primitives as `encode_bundle`, its pre-manifest-section body exactly, rather than
 /// hand-editing bytes. Test-only: no production caller ever emits this format since `encode_bundle`
 /// above always writes `BUNDLE_MAGIC` (`PBNDL003`).
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 fn encode_bundle_v2_for_test(
     ref_name: &str,
     objects: &[ObjectEnvelope],
@@ -1861,5 +1861,5 @@ pub(crate) fn decode_bundle(
     Ok((ref_name, objects, author_keys, manifest))
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;
