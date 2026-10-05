@@ -65,3 +65,6 @@
 - Each unit's real start and end.
 - The primary tree is clean.
 - **Report:** `.git-exclude/review-request/rfc167-design-round-report-v1.md`.
+
+**Design round ACCEPTED 2026-10-05** (review `rfc167-design-round-review-v1`). RFC 167 is rewritten as a design for the
+owner's reading. **No implementation handoff until the owner accepts it.**

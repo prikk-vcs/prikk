@@ -1,11 +1,15 @@
 # RFC 167 — Resynchronisation is linear: a hostile tail cannot make a reader quadratic (M5)
 
 **Status.** **PROPOSED 2026-10-05 by the architect** (0.49.0 step 4, in the owner-approved schedule: *"M5's
-structural fix without a format change"*).
-- **This RFC sets the questions; it does not choose the mechanism.** A design round answers §5 from source and
-  measurement, with prototypes and no product code:
-  `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/resync-linear-design-round-handoff-v1.md`.
-- Then the architect rules, this RFC is rewritten into a design, and the owner reads it before any implementation.
+structural fix without a format change"*). **Rewritten the same day as a design, for the owner's reading.**
+- **The design round is closed** (handoff
+  `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/resync-linear-design-round-handoff-v1.md`;
+  review `rfc167-design-round-review-v1`).
+- **The owner decides (§10):**
+  1. accept the design;
+  2. object containers and the ref container are inside the budget (option (c));
+  3. the doubled `verify` cost found in this review is fixed in this RFC's implementation.
+- **No implementation handoff until the owner accepts it.**
 
 **Author-review independence.**
 - **M5 came in through a design the architect accepted.** RFC 160 F3 has a reader fully parse every candidate frame,
@@ -42,9 +46,11 @@ what it calls damage is a change in meaning (I6).
 4. **Ten readers share the scan** (`grep sound_frame_after_partial`): the WAL, the object containers, the object
    index, the generation logs, the pointer index, the ref log, the received index, the trust index, the author-key
    index, and `verify`'s object scan.
-   - **Some read content from outside the repository:** object containers from bundle import and `sync accept`, and
-     the received index.
-   - **So M5 is also a denial-of-service shape** on input a user receives.
+   - **Content from outside the repository reaches them indirectly.** A received blob's bytes are stored inside sound
+     frames. If any earlier frame in the same container is torn or damaged, the forward scan meets crafted headers
+     inside later bodies.
+   - **Bundle files themselves do not reach the scan:** `decode_bundle` parses sequentially, with bounded frames.
+   - **So M5 is a denial-of-service shape** that needs received content plus local damage.
 5. **What shipped instead:**
    - standing ceilings on bytes hashed (`test_gates/runaway_guards.rs:391-431`, ≤ 1.5× the measured figure at 32 and
      64 KiB), which stop a regression but leave the quadratic;
@@ -64,8 +70,8 @@ what it calls damage is a change in meaning (I6).
 - **There is no header-only checksum:** each format's checksum covers header and body together. Deciding that a
   candidate is sound needs its body hashed. That is the structural cause, and only a format change removes it.
 - **The WAL now has a witness** (RFC 166). With a valid witness that agrees with the sound prefix, any record after a
-  partial frame was never acknowledged, so the WAL's verdict may not need the scan at all. **To be confirmed from
-  source** (§5 Q3).
+  partial frame was never acknowledged by this binary. **The design round found it cannot settle a WAL that an older
+  binary appended to** (§7), so the scan stays.
 - **The WAL keeps RFC 162 rule 3:** its tail is everything after the last sound record when nothing sound follows.
 
 ## 3. Constraints
@@ -81,43 +87,128 @@ what it calls damage is a change in meaning (I6).
 - **C5 — one shared mechanism** in `frame_resync`, used by all ten readers. No per-reader copies.
 - **C6 — a way out:** if a cut-short scan reports damage, the user can still get out, and the text says how.
 
-## 4. Starting positions (to be tested, not decided)
+## 4. The design
 
-- **A shared work budget per decode call** (the RFC 160 round's sketch):
-  - counted in bytes hashed, relative to the input (for example 8× its length), not in candidates;
-  - exhaustion returns a third outcome, "undetermined", which every reader handles as damage (C3).
-- **Cheap rejections before hashing** cut the honest cost but not the adversarial one: version, plausible lengths and,
-  for the WAL, a seq that follows the last sound record. An attacker can satisfy each of them, so the budget stays as
-  the backstop.
-- **The WAL's witness may settle the WAL** without the scan (§2). That would make the WAL, the file users meet most,
-  exact, and leave the budget to the other nine.
-- **The risk to test hardest is C4 against C3:** an honest crash tail whose torn record carries content full of
-  magics. Under a budget, could that read as damage and block a repair the user needs? Measure it; do not argue it.
+**D1 — one work budget per decode call.**
+- **The unit is bytes hashed:** at most 8× the length of the input being decoded. **A constant, not a config key:** a
+  key would add a surface and a way to misconfigure a safety check.
+- **Two placements, both required** (each was measured insufficient alone):
+  - **narrow:** inside `sound_frame_after_partial`, between candidates;
+  - **broad:** in each reader's own decode loop, so that the reader's ordinary per-frame checksum is counted too.
+- **The budget is an explicit value passed through each reader's decode,** not a thread-local counter in every build.
+  It is part of the call, so it is visible and testable. The thread-local hash tally stays test-only.
 
-## 5. Questions for the design round
+**D2 — exhaustion is a third outcome, "undetermined", and every reader treats it as damage** (C3). It is never a
+tail.
+- **Six readers are affected** (measured quadratic on `main`): the WAL, object containers, trust policy, received
+  index, ref container and pointer index.
+- **Four are immune already,** by exact-length or bounded-length checks: the object index, the generation logs, the
+  trust keys and the author keys. They are unchanged.
+- **The message,** one coherent statement per reader: *"the bytes after offset N look like many frame headers; prikk
+  stopped checking after 8× the file's size and treats this as damage."*
+- **Where RFC 164's Rule E applies** (an object frame nothing references), the frame is a harmless remnant, and the
+  message says that, and only that.
 
-1. **Where the cost is, per reader:** shapes A and B against each of the ten readers, bytes hashed and time at 32 KiB,
-   256 KiB, 2 MiB and 64 MiB, on `/home`, release build. Which readers can receive hostile input from outside the
-   repository, and by which command?
-2. **The budget:** prototype it in `frame_resync`.
-   - The unit (bytes hashed or candidates), the factor, and why.
-   - Shapes A and B are linear afterwards, for every reader.
-   - **The "undetermined" outcome through every reader's arms:** list each call site, and show from source what each
-     does with it.
-3. **The WAL's witness:** from source, can a valid, agreeing witness decide the WAL's tail without the scan? Which
-   cells of RFC 166 §5 change, if any? Prototype it if yes.
-4. **Honest data (C4):**
-   - the RFC 133 corpus, the existing suite, `matrix.py`, and a repository whose committed files contain thousands of
-     frame magics: no verdict changes;
-   - **an honest crash tail whose torn record is full of magics:** its verdict with and without the budget, and the
-     way out if it reads as damage.
-5. **The way out (C6):** what the user sees and can do when the budget makes a reader report damage, for each reader.
-6. **The command-level guard:** a `verify` row, bytes hashed on hostile WAL input, that also catches a second decode
-   (the RFC 162 regression the reader-level ceiling missed).
-7. **The records:** what `current-state.md` and the CHANGELOG should say, once the mechanism is chosen.
+**D3 — the ways out stay the existing ones.**
+- WAL: `--repair-wal-tail`. Pointer index: `--repair-pointer-index-tail`. Trust policy and received index:
+  `--repair-tails`.
+- **Object containers and the ref container: no automated repair, as today** (RFC 164 ruled them report-only). An
+  unreferenced frame is a remnant (Rule E). A referenced one was damage before the budget too, and the way out is a
+  copy.
 
-## 6. Out of scope
+**D4 — guards that can fail:**
+- **The reader level:** a linear bound (bytes hashed at most 8× the input, plus slack), shapes A and B, for all six.
+  It replaces the 1.5× ceilings, and the ignored ceiling test goes.
+- **The command level:** whole-`verify` bytes hashed on hostile input (the WAL, a container, the ref log) at most k× the
+  input, **with a control: a second decode added turns it red.**
 
-- **A self-vouching header** (a header-only checksum), and any other format change: format-8 input.
-- RFC 166's verdicts, except where Q3 shows that the witness settles the WAL's tail.
+**D5 — the doubled `verify`.**
+- `verify` on a 2 MiB hostile WAL took 14.73 s on 0.48.0 and 29–33 s on `main`. **On honest input it means a second
+  full decode.**
+- It entered between `24ca5991` and `a222d2c2` (RFC 164 round 1's last fix, or round 2), and RFC 165 and 166 added
+  about 4 s more.
+- **The implementation finds the second decode and removes it.** Honest `verify` on a 1,000-commit WAL is measured
+  against 0.48.0: at most 1.2× its cost.
+
+**D6 — the records.** `current-state.md` and the 0.48.0 CHANGELOG line are corrected. The self-vouching header is
+format-8 input, not 0.49.0.
+
+## 5. Evidence
+
+- **The reviewer's generator, on `/home` (btrfs), `main` against the prototype** (architect's runs):
+
+  | size | `main` | prototype |
+  |---:|---|---|
+  | 256 KiB | `verify` exit 0, 0.54 s | exit 1, 0.00 s |
+  | 2 MiB | exit 0, 33.14 s | exit 1, 0.02 s |
+  | 16 MiB | not run (quadratic) | exit 1, 0.14 s |
+
+- **All six affected readers are linear on the prototype** up to 64 MiB, at 0.25–0.29 s (team, both shapes); on
+  `main` they take 9.9–16.3 s at 2 MiB, which extrapolates to 2.8–4.6 hours at 64 MiB.
+- **Honest data:**
+  - the existing suite, and the external reviewer's M1–M4, M8 and N1–N3 corpus: no change;
+  - **an honest crash tail dense with real frame magics** (256 MiB of content, torn by a real `SIGXFSZ`): no verdict
+    change. Random bytes after a magic almost never claim a length that fits, so they are rejected without hashing.
+- **A hostile tail in an object container,** end to end on the prototype: `verify` exits 0 (a remnant) and `commit`
+  works. Not a dead end.
+
+## 6. Self-review: security, performance, and users (2026-10-05)
+
+**Security:**
+1. **The budget turns hours into a bounded refusal** on the files that can hold received content. A false *tail* is
+   impossible by construction (D2).
+2. **A false *damage* on honest data** is the risk. **Guard:** the implementation measures the largest
+   bytes-hashed-to-input ratio over the suite, the RFC 133 corpus, `matrix.py` and a repository whose committed files
+   hold thousands of frame magics. **8× must leave at least a 4× margin over it,** or the round stops and asks.
+3. **No new trust:** the budget only ever adds a refusal or a report.
+
+**Performance:**
+
+4. **Honest cost is unchanged:** counting bytes is one addition per hash call. The implementation measures it against
+   `main`.
+5. **D5 restores the cost `verify` lost in 0.49.0.** That makes it the larger gain for ordinary users.
+
+**Users:**
+
+6. **One coherent message per case.** The prototype printed "treated as damage … a harmless remnant, not damage" in
+   one line, which contradicts itself. D2 requires one statement, in plain words, with the way out where one exists.
+7. **No new verb and no new flag:** the existing repairs are named where they apply, and "a copy" where none does.
+8. **`current-state.md` and the CHANGELOG stop promising a format change** for 0.49.0 (D6).
+
+**Residual:** a crafted container frame that something *does* reference has no automated repair. That was true before
+this RFC, and it is RFC 164's accepted ruling.
+
+## 7. Alternatives considered
+
+- **(a) a container repair verb first:** a feature, not a cost fix. Deferred.
+- **(b) leave object containers and the ref container unbudgeted:** leaves the denial-of-service shape open on the very
+  files that hold received content. Rejected.
+- **The WAL's witness instead of the scan:** it cannot settle a WAL that an older binary appended to. One mechanism
+  for all six readers is simpler anyway.
+- **A self-vouching header** (a header-only checksum): exact and cheap, but a format change. Format-8 input.
+- **A budget counted in candidates:** cheap honest candidates would use it up as fast as hostile ones.
+- **Runtime wrapping of `verify`'s stages** for the command guard: a test-level row catches the same regression,
+  without runtime code.
+
+## 8. Implementation, after acceptance (one round)
+
+- **U1:** D1 and D2 in `frame_resync` and the six readers, every call site's "undetermined" arm listed.
+- **U2:** D4: the reader-level bound and the command-level row, each with its control.
+- **U3:** D5: find the second decode, remove it, measure honest `verify` against 0.48.0.
+- **U4:** the honest margin (§6 item 2): `matrix.py` against `/home/nabbisen/.pgtmp/ext-matrix-83a42498.txt`, the RFC
+  133 corpus, and the magic-dense repository.
+- **U5:** D6 and the messages, quoted from the binary.
+
+## 9. Out of scope
+
+- A self-vouching header, and any other format change: format-8 input.
+- A container repair verb.
 - Network transport.
+
+## 10. For the owner
+
+1. **Accept the design** (D1–D6), or not.
+2. **Object containers and the ref container inside the budget** (option (c), recommended; §7). Their way out stays
+   RFC 164's: an unreferenced frame is a remnant, and a referenced one needs a copy.
+3. **D5:** the doubled `verify` cost is fixed in this RFC's implementation (recommended). The alternative is a
+   separate round.
