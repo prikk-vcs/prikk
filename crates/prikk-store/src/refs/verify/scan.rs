@@ -183,6 +183,7 @@ fn read_one_pointer_entry(
         payload.target_object_id,
         entry.ref_state_id,
     )?;
+    ensure_required_attestations_present(objects, &payload, entry.ref_state_id)?;
     Ok((
         entry.ref_name.clone(),
         PointerState {
@@ -383,7 +384,8 @@ fn verify_update(objects: &impl ObjectReader, update: &RefUpdatePayload) -> Resu
         state.kind,
         update.new_target_object_id,
         update.new_ref_state_id,
-    )
+    )?;
+    ensure_required_attestations_present(objects, &state, update.new_ref_state_id)
 }
 
 fn verified_ref_state_payload(
@@ -416,6 +418,28 @@ fn verified_ref_state_payload(
 /// bundle must ship the Tag object, or `verify` produces this). Folding this into the resolver would
 /// either drop that context or thread a message-customisation parameter through code three other
 /// callers don't need it in.
+/// 0.49.0 step 5, round 2 U3 (ruled): each attestation a RefState requires must be present as an Attestation
+/// object, by a typed read. No honest producer writes a non-empty list today (`seal.rs`, `branch.rs`,
+/// `seal_from_accepted.rs` write `Vec::new()`), so an honest repository cannot fail this. The
+/// Attestation's own target block is not checked: there is no `AttestationPayload` decoder yet.
+pub(crate) fn ensure_required_attestations_present(
+    objects: &impl ObjectReader,
+    state: &RefStatePayload,
+    owner: ObjectId,
+) -> Result<()> {
+    for attestation_id in &state.required_attestation_ids {
+        if objects
+            .read_typed(*attestation_id, ObjectType::Attestation)?
+            .is_none()
+        {
+            return Err(PrikkError::Integrity(format!(
+                "ref object {owner} requires missing attestation {attestation_id}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn ensure_ref_target_valid(
     objects: &impl ObjectReader,
     kind: RefKind,

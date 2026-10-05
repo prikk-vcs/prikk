@@ -15,14 +15,15 @@
 //!
 //! **Scope, narrower than the general principle**: only `Block`'s own existing missing-reference
 //! check (`parent_block_ids`, `patch_ids`, `snapshot_blob_ref` -- `verify_block_payload`) is made
-//! reachability-aware this round. `RefState.target_object_id`/`previous_ref_state_id`/
-//! `required_attestation_ids`, `Tag.target_block_id`, and `Attestation.target_block_id` are never
-//! existence-checked at all today, independent of Rule E -- extending existence-checking to them is
-//! separate, larger scope this round does not cover (and `AttestationPayload` has no decoder in
-//! `prikk-object` today to even read one back). A `Patch`'s own referenced blobs are not re-derived
-//! here either, by the same reasoning: no existing check makes a *sealed* patch's blob references
-//! reachability-aware (only a *queued* one's, via the root case above, matching `verify_queued_
-//! patch_connectivity`'s own narrow walk). `RecognitionClaim`'s own references are never touched:
+//! reachability-aware. The RefState and Tag references are existence-checked by `verify` today, but
+//! not through this walk: `RefState.target_object_id` and a Tag's `target_block_id` by
+//! `ensure_ref_target_valid` (`refs/verify/scan.rs`), and `required_attestation_ids` by
+//! `ensure_required_attestations_present` (0.49.0 step 5, round 2). **Disclosed gaps:** a received ref's
+//! `previous_ref_state_id` is not checked (`import_bundle` does not require it; pending the owner's ruling),
+//! and `Attestation.target_block_id` is not checked (no `AttestationPayload` decoder, no producer). A `Patch`'s
+//! own referenced blobs are not re-derived here either, by the same reasoning: no existing check makes a
+//! *sealed* patch's blob references reachability-aware (only a *queued* one's, via the root case above, matching
+//! `verify_queued_patch_connectivity`'s own narrow walk). `RecognitionClaim`'s own references are never touched:
 //! they are "never trust-conferring and never existence-checked" by standing design (the `ObjectType`
 //! doc), and reachability classification must not contradict that.
 //!

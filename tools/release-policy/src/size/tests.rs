@@ -117,7 +117,9 @@ fn removing_a_declaration_names_its_file() {
         // 2,326 -> 2,336.
         // 0.49.0 step 5 round 1 addendum F2: verify reads the ref log once and hands it to both the Refs and
         // AppendedFileTails stages, 2,336 -> 2,343.
-        detail.contains("2343"),
+        // 0.49.0 step 5 round 2 U3: the measure-first hook (test-only, `cfg(test)`) and the attestation check's
+        // import, 2,343 -> 2,347.
+        detail.contains("2347"),
         "the line count is in the message: {detail}"
     );
     assert!(

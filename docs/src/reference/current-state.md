@@ -129,6 +129,12 @@ planned for. None of these blocks 0.48.0.
   above; unreachable, it is an **unreferenced remnant** -- a warning, naming the object and what it
   lacks, and `verify` exits `0`. No command removes a remnant in 0.49.0; re-running the same `bundle
   import` is still the only way to make a still-needed one whole, exactly as before this round.
+- **Existence checks on RefState and Tag references (0.49.0 step 5, round 2).** `verify` now requires each
+  attestation a RefState's `required_attestation_ids` names to be present as an Attestation object (a typed read).
+  No producer in this repository writes a non-empty list, so an honest repository cannot fail it. **Not checked, and
+  disclosed as gaps:** `Attestation.target_block_id` (there is no `AttestationPayload` decoder, and no producer, so
+  this is a format decision, not debt); and a received ref's `previous_ref_state_id`, which `bundle import` does not
+  require to be present (the owner rules on it before any check lands).
 - **A crash inside `branch create` or `tag create` now has a command that completes it (N3, fixed in
   0.49.0).** Before this round: the ref
   log's last record is torn; `verify` fails with `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends

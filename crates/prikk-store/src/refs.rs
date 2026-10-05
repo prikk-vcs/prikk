@@ -90,7 +90,9 @@ pub use container::{RefLogRecord, RefLogReplay};
 pub use verify::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefPublicationIssue,
 };
-pub(crate) use verify::{ensure_ref_target_valid, verify_refs_with};
+pub(crate) use verify::{
+    ensure_ref_target_valid, ensure_required_attestations_present, verify_refs_with,
+};
 
 /// The two-hop ref-tip resolution `bundle.rs`, `patch_set_digest.rs`, and `patch_exchange.rs` each
 /// need: `Branch` names a Block directly; `Tag` names a Tag object one hop away, whose own

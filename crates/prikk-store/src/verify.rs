@@ -320,7 +320,8 @@ use crate::received::list_received_pointers;
 use crate::received::received_index::{ReceivedIndexRecordStatus, replay_received_index};
 use crate::refs::{
     DecodedRefLog, RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid,
-    read_and_decode_ref_log, ref_log_tail_status_of, verify_refs_with,
+    ensure_required_attestations_present, read_and_decode_ref_log, ref_log_tail_status_of,
+    verify_refs_with,
 };
 use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
 use crate::signature_diagnostics::{
@@ -1940,7 +1941,8 @@ fn verify_received_refs(
                 payload.kind,
                 payload.target_object_id,
                 pointer.ref_state_id,
-            )
+            )?;
+            ensure_required_attestations_present(object_store, &payload, pointer.ref_state_id)
         })();
         outcomes.push(RefItemOutcome {
             ref_name: pointer.ref_name,

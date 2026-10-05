@@ -23,6 +23,8 @@ pub(crate) mod release_compatibility_gate;
 #[cfg(test)]
 pub(crate) mod require_progress_scan;
 #[cfg(test)]
+pub(crate) mod required_attestation_gate;
+#[cfg(test)]
 pub(crate) mod rfc111_index_decode_cost_gate;
 #[cfg(test)]
 pub(crate) mod rfc111_seal_decode_cost_gate;
