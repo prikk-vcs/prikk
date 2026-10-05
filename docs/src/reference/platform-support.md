@@ -237,11 +237,30 @@ merely a successful compile.
 
 **The macOS mutation test suite and Windows mutation test suite CI jobs** (DC-81, DC-87 Stage 2) run
 the suite that compiles there natively on `macos-latest` and `windows-latest` — not every test in the
-workspace: some are gated to Linux only (a test that only makes sense against a Linux-specific
-fixture or path shape, `#[cfg(target_os = "linux")]` or equivalent), so each platform's own count is
-smaller than `stable`'s. Neither developer nor architect can run either platform locally as part of
-this project's own environment, so the CI job existing and being green *is* the verification for each
-backend, not a supplement to one done elsewhere.
+workspace: a few are gated more narrowly than the platform, each for a named reason, so each platform's own
+count is smaller than `stable`'s. The gates that remain, by name:
+
+- **Linux only, by necessity: invalid-UTF-8 names.** A directory or file name containing a byte that is not valid
+  UTF-8 cannot be created on macOS (APFS rejects it, `EILSEQ`), and Windows names are UTF-16, so the byte sequence
+  cannot be constructed there. Tests: `wal/tests.rs` (`wal_for_layout_produces_byte_exact_paths_for_a_non_utf8_session_name`),
+  `lock/tests.rs` (`active_lock_acquires_a_byte_exact_path_for_a_non_utf8_session_name`), and
+  `commit_boundary/worktree_patch/tests.rs` (`non_utf8_worktree_path_fails_closed`).
+- **Linux only, as written: the `LinuxDurability` conformance suite** (`foundation/fsutil.rs`'s re-export, its
+  `fsutil/tests.rs` and `fsutil/tests/conformance.rs` consumers). The suite names the Linux durability implementation.
+  macOS and Windows have their own (`MacosDurability`, `WindowsDurability`), so the same suite could run on each.
+  Porting it is a separate step; it is not yet done.
+- **Not windows (macOS and Linux), by necessity: a directory-sync injection point.** A directory fsync is a
+  failpoint only where a directory can be synced (Linux, macOS), and Windows has no such operation. The tests that
+  inject one are gated `not(windows)` and run on macOS: among them the WAL, lock, trust, refs, active-metadata and
+  patch-checkout retry tests.
+- **Unix (macOS and Linux), by necessity: symlink creation.** `a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does`
+  creates a symlink, which macOS allows and Windows allows only with a privilege.
+- **Linux only, not yet classified: the snapshot test that removes a file between stat and read**
+  (`snapshot/tests.rs`, its use of `worktree::before_stat_for_test`, gated by a `cfg` form outside the round's
+  gate list). Its reason is not recorded here; it is a named gap.
+
+Neither developer nor architect can run either platform locally as part of this project's own environment, so the
+CI job existing and being green *is* the verification for each backend, not a supplement to one done elsewhere.
 
 **`windows-mutate` → `linux-mutate-reference` → `verify-cross-platform-history`** (DC-87 Stage 2
 criterion 7) close the one property none of the jobs above can: that repository *authored on Linux,
