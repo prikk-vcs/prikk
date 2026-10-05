@@ -731,16 +731,32 @@ fn kind_rows() -> Vec<KindRow> {
         KindRow {
             tag: "socket",
             ignore: None,
-            reach: |repo| {
-                std::fs::remove_file(repo.join("b.txt")).unwrap();
-                drop(std::os::unix::net::UnixListener::bind(repo.join("b.txt")).unwrap());
-            },
+            reach: make_socket_destination,
             resolution: "rename",
             compared: false,
             commit: CommitDoes::RefusesOverThePath("worktree entry is not a regular file"),
         },
     ]);
     rows
+}
+
+/// A Unix socket at `repo/b.txt`, bound at a short path first: `bind` refuses a path of 108 bytes or more
+/// (`SUN_LEN`), and the checkout's own path is not short, so binding there directly fails on a long
+/// checkout (the gates script's repository-local `TMPDIR` made it so). The socket file survives the rename.
+#[cfg(target_os = "linux")]
+fn make_socket_destination(repo: &Path) {
+    std::fs::remove_file(repo.join("b.txt")).unwrap();
+    let dir = std::env::temp_dir().join(format!("prikk-sock-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let short = dir.join("s");
+    assert!(
+        short.as_os_str().len() < 108,
+        "even a short temp directory is too long for a Unix socket path: {}",
+        short.display()
+    );
+    drop(std::os::unix::net::UnixListener::bind(&short).unwrap());
+    std::fs::rename(&short, repo.join("b.txt")).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[cfg(target_os = "linux")]

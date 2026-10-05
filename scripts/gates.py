@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -148,12 +149,28 @@ def systemd_run_prefix():
     ]
 
 
-def run_gate(name, argv, env_overrides):
+def writable_directory(path):
+    return os.path.isdir(path) and os.access(path, os.W_OK | os.X_OK)
+
+
+def choose_tmpdir():
+    # EXECUTION-ORDER.md §6 rule 9: an existing, writable TMPDIR is kept; else the system temp
+    # directory; the repository-local directory only as a last resort. A path that is long (a deep
+    # checkout) makes Unix socket paths exceed SUN_LEN, so the repo-local choice is not the default.
+    existing = os.environ.get("TMPDIR")
+    if existing and writable_directory(existing):
+        return existing, "an existing writable TMPDIR"
+    system = tempfile.gettempdir()
+    if writable_directory(system):
+        return system, "the system temp directory"
+    local = os.path.join(ROOT, ".git-exclude", "tmp")
+    os.makedirs(local, exist_ok=True)
+    return local, "the repository-local directory (last resort)"
+
+
+def run_gate(name, argv, env_overrides, tmpdir):
     env = dict(os.environ)
-    # EXECUTION-ORDER.md §6 rule 9: a repository-local TMPDIR, since `/tmp` is read-only in this
-    # project's own gate-running environment.
-    env["TMPDIR"] = os.path.join(ROOT, ".git-exclude", "tmp")
-    os.makedirs(env["TMPDIR"], exist_ok=True)
+    env["TMPDIR"] = tmpdir
     if env_overrides:
         env.update(env_overrides)
     prefix = systemd_run_prefix()
@@ -171,11 +188,14 @@ def main():
             print(f"{name}: {' '.join(argv)}")
         return 0
 
+    tmpdir, why = choose_tmpdir()
+    print(f"TMPDIR for every gate: {tmpdir} ({why})", flush=True)
+
     results = []
     any_without_r1 = False
     for name, argv, env_overrides in GATES:
         print(f"==== {name} ====", flush=True)
-        exit_code, elapsed, r1 = run_gate(name, argv, env_overrides)
+        exit_code, elapsed, r1 = run_gate(name, argv, env_overrides, tmpdir)
         if not r1:
             any_without_r1 = True
             print(f"{name}: ran without an R1 scope -- systemd-run is not on PATH", flush=True)

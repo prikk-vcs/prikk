@@ -365,8 +365,10 @@ These apply to all work above and are not restated in each handoff.
    `cargo audit --no-fetch`; `RUSTDOCFLAGS="-D rustdoc::private_intra_doc_links" cargo doc
    --workspace --no-deps` (RFC 126 §4 — added 2026-09-02 after this exact lint sat unchecked at 7
    live warnings, since `cargo doc` had never run anywhere, local gate set or CI, before then);
-   release-policy `check`, `boundary-check`, `reference-check`, `size-check` (RFC 130 §8, added 2026-09-13). Use a repository-local `TMPDIR`
-   (`.git-exclude/tmp`) where `/tmp` is read-only.
+   release-policy `check`, `boundary-check`, `reference-check`, `size-check` (RFC 130 §8, added 2026-09-13). Use a writable `TMPDIR`:
+   an existing one if set, else the system temp directory, and the repository-local `.git-exclude/tmp` only where neither is
+   writable (amended 2026-10-06: a deep checkout path can push a Unix socket path past `SUN_LEN`, so the repository-local
+   directory is not the default). `scripts/gates.py` makes this choice and prints which one it used.
 
    **Run as one script: `scripts/gates.py`** (0.49.0 step 5, D8 — added 2026-10-05). All 14 gates below
    (the twelve above, plus the two cross-target Clippy rows next), each under an R1 scope when
