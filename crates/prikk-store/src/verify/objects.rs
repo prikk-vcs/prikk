@@ -61,12 +61,11 @@ pub struct ObjectItemOutcome {
     pub status: ObjectItemStatus,
 }
 
-/// A frame in an object container that does not parse and is not *complete* -- a checksum mismatch where nothing at all follows the
-/// claimed body (0.49.0 step 5, D11/U5) proves it was fully written, so it is excluded; one where later bytes *do* follow stays
-/// included, since those bytes may belong to a later, unrelated frame rather than prove anything about this one (a known,
-/// unresolved ambiguity -- see `foundation::container::parse_frame_at_reporting`'s own comment): an **interrupted append** (RFC
-/// 162 rule 2, superseding RFC 160 F3 Addendum 1's index-membership rule -- "the index is never evidence of anything"). It is
-/// reported here as a warning, unconditionally
+/// A frame in an object container that does not parse and is not *complete* -- a torn frame, which is one whose claimed body
+/// is not fully present, or whose checksum fails with a later sound frame starting inside its claimed range (0.49.0 step 5,
+/// round 2 U2; see `foundation::container::checksum_mismatch_is_complete`): an **interrupted append** (RFC 162 rule 2,
+/// superseding RFC 160 F3 Addendum 1's index-membership rule -- "the index is never evidence of anything"). It is reported
+/// here as a warning, unconditionally
 /// -- not damage by default. Separately, `verify.rs`'s own connectivity pass checks whether anything that still matters (a sealed
 /// block's state, a queued patch, a ref tip) references an object this scan could not read; if so, *that* check fails and names the
 /// referencing work directly, regardless of whether the corresponding frame is reported here as a remnant.
@@ -372,9 +371,8 @@ fn verify_object_type_container(
             };
             // RFC 162 rule 2: **index membership is no longer the witness.** A frame that does not parse is an unreferenced remnant,
             // reported as a warning, unless it is *complete* -- see `ContainerRecordStatus::Failed`'s own doc for exactly what that
-            // means, including the known, unresolved ambiguity when later bytes do follow (0.49.0 step 5, D11/U5 narrowed this to the
-            // unambiguous case only: a checksum mismatch with nothing physically following the claimed body is a damaged record, not
-            // an interrupted append; RFC 165 R5 §9.2's rule, applied here). Connectivity -- whether anything still
+            // means (0.49.0 step 5, D11/U5 and round 2 U2: a checksum failure is a torn frame only when a later sound frame starts
+            // inside its own claimed range). Connectivity -- whether anything still
             // referencing work (a sealed block's state, a queued patch, a ref tip) names an object this scan cannot read -- is checked
             // separately, in `verify.rs`'s own connectivity pass, and names the referencing work directly rather than reclassifying the
             // frame itself (RFC 160 F3 Addendum 1's index-membership rule is what this replaces).

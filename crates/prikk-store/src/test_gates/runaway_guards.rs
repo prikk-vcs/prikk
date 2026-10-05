@@ -616,3 +616,39 @@ fn verify_command_level_row_control_a_second_wal_decode_turns_it_red() {
         );
     }
 }
+
+/// **0.49.0 step 5, round 2 U2: the borrowed-tail probe is inside the budget.** Every frame here claims a body
+/// that ends before the file does, with fake frame headers inside each claimed range, so every frame is a
+/// checksum mismatch that the new rule must scan past to decide. The scan is budgeted (RFC 167 C3): one decode
+/// hashes at most 9x the input plus slack, the same bound the command rows use for one decode.
+/// **Perturb:** remove the budget charge from the probe's own candidate parse and this goes red on the
+/// hashed-bytes ceiling, not by a timeout.
+#[test]
+fn a_claimed_range_with_fake_headers_inside_it_stays_within_one_decodes_budget() {
+    let format = all_formats()
+        .into_iter()
+        .find(|format| format.name == "container frame")
+        .unwrap();
+    let valid = (format.valid)();
+    let prefix = &valid[..10];
+    let size = 2 * 1024 * 1024;
+    let body_len: usize = 64;
+    let mut bytes = Vec::with_capacity(size);
+    while bytes.len() + 50 + body_len <= size {
+        bytes.extend_from_slice(prefix);
+        bytes.extend_from_slice(&(body_len as u64).to_be_bytes());
+        bytes.extend_from_slice(&[0_u8; 32]);
+        bytes.extend_from_slice(prefix);
+        bytes.resize(bytes.len() + body_len - prefix.len(), 0);
+    }
+    bytes.resize(size, 0);
+
+    crate::foundation::frame_resync::hash_tally::reset();
+    let _ = (format.decode)(&bytes);
+    let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+    let ceiling = 9 * size as u64 + 4096;
+    assert!(
+        hashed <= ceiling,
+        "one decode hashed {hashed} bytes over a {size}-byte claimed-range file, past {ceiling}"
+    );
+}

@@ -17,6 +17,17 @@ both hostile shapes, every affected reader. A second, independent decode of the 
 picked up since 0.49.0's own earlier rounds (RFC 164 Rule E's reachability walk, re-decoding `default`'s WAL a
 second time) is also removed: honest `verify` cost is unchanged from 0.48.0.
 
+### Output changes — a rotted object-container frame that a later commit followed is a failed item (0.49.0 step 5 round 2, U2)
+
+An object-container frame whose full claimed body is present and whose checksum fails is now an interrupted append only
+when a later, sound frame starts **inside the range its own header claims** -- a torn frame that a later write overran.
+Otherwise it is a failed object item, even when later commits follow it. Before this, any checksum failure with bytes
+after it was worded as an interrupted append (a tolerated warning), which is what an earlier object's bit rot, followed
+by ordinary later commits, looked like. The probe that decides is the same budgeted scan a short read uses; exhaustion
+counts as damage. **Also a budget correction:** a candidate's checksum hashes its 18-byte header as well as its body, and
+the budget now charges both (a zero-length candidate used to hash 18 bytes for nothing; a claimed-range file measured at
+12.5x the input, now 4.9x, under the one-decode bound of 9x).
+
 ### Output changes — a full-length object-container frame with a bad checksum is a damaged record, not an interrupted append (0.49.0 step 5, D11/U5)
 
 An object container frame whose checksum fails is reported as a failed object item (`verify`/`doctor` exit non-zero

@@ -139,3 +139,47 @@ fn a_complete_record_with_a_bad_checksum_is_a_failed_item_not_an_interrupted_app
     );
     let _ = std::fs::remove_dir_all(repo);
 }
+
+/// **0.49.0 step 5, round 2 U2: an earlier object that rots, followed by later commits, is damage.** The first
+/// object's frame is complete and its checksum fails over a body that is fully present; the next, sound frame
+/// starts exactly at that frame's claimed end, not inside it, so nothing overran it -- it is a damaged record.
+/// **Perturb:** make the borrowed-tail rule always answer "torn" (`checksum_mismatch_is_complete` returning
+/// `false`): this test goes red (the rotted object is then an interrupted append, not a failed item).
+#[test]
+fn an_earlier_object_that_rots_before_later_commits_is_a_failed_item() {
+    let repo = support::unique_repo("u2-rot-then-later");
+    support::init(&repo);
+    std::fs::write(repo.join("first.txt"), "the first object, which will rot\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "first"),
+        "first commit",
+    );
+    for index in 0..2 {
+        std::fs::write(
+            repo.join(format!("later{index}.txt")),
+            format!("a later commit {index}\n"),
+        )
+        .unwrap();
+        support::ok(
+            &support::commit(&repo, "heads/main", &format!("later {index}")),
+            "a later commit",
+        );
+    }
+    let container = repo.join(".prikk/containers/blob/a.container");
+    let mut bytes = std::fs::read(&container).unwrap();
+    bytes[60] ^= 0x01;
+    std::fs::write(&container, &bytes).unwrap();
+
+    let (code, text) = run(&repo, &["verify"]);
+    assert_eq!(code, Some(1), "a rotted object is damage\n{text}");
+    assert!(
+        text.contains("object items: 3 scanned, 1 failed")
+            && text.contains("/#0 (blob): failed: container checksum mismatch at byte offset 0"),
+        "the rotted first object is the failed item\n{text}"
+    );
+    assert!(
+        text.contains("interrupted appends: 0") && !text.contains("warning: interrupted append"),
+        "nothing overran the rotted frame, so it is not an interrupted append\n{text}"
+    );
+    let _ = std::fs::remove_dir_all(repo);
+}

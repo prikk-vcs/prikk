@@ -78,12 +78,10 @@ pub(crate) enum ContainerRecordStatus {
         /// The error this frame's own validation raised.
         message: String,
         /// **True when this frame cannot be a torn tail.** An interrupted append leaves a *prefix* of
-        /// a frame, so a checksum mismatch where nothing at all follows the claimed body (0.49.0 step
-        /// 5, D11/U5; RFC 165 R5 §9.2's rule) is corruption of an already-complete write, not a crash
-        /// mid-write -- `verify` never calls that an interrupted append (RFC 160 F3 Addendum 1 / RFC
-        /// 162 rule 2). **Known gap:** a checksum mismatch where later bytes *do* follow stays
-        /// `false` even when those bytes are really an unrelated, later frame rather than evidence
-        /// this one was torn -- see `parse_frame_at_reporting`'s own comment at the checksum check.
+        /// a frame. A checksum mismatch over a fully-present claimed body is complete (RFC 165 R5
+        /// §9.2) unless a later sound frame starts inside that claimed range, which means a later
+        /// write overran a torn frame (0.49.0 step 5, D11/U5 and round 2 U2; see
+        /// `checksum_mismatch_is_complete`).
         complete: bool,
     },
 }
@@ -173,6 +171,46 @@ enum FrameAttempt {
         /// See [`ContainerRecordStatus::Failed`]'s own doc -- mirrored here, not redefined.
         complete: bool,
     },
+    /// The header and its full claimed body are both present, and the checksum over that body fails. Whether this is
+    /// damage or a torn frame that a later write overran is decided by the decode loop, which can scan (see
+    /// [`checksum_mismatch_is_complete`]); this variant cannot, since the classifier below would then recurse.
+    ChecksumMismatch {
+        message: String,
+        body_end: usize,
+    },
+}
+
+/// 0.49.0 step 5, round 2 U2 (RFC 164 §9, RFC 160 F3 Addendum 1): a complete record whose checksum fails
+/// is damage, unless a later, sound frame starts **inside the range its own header claims** -- then the
+/// frame was torn and a later write overran it, which is an interrupted append. Found by the same budgeted
+/// scan the short-read path uses, so exhaustion is damage (RFC 167 C3), never a tail. Nothing after the
+/// claimed body is always damage.
+fn checksum_mismatch_is_complete(
+    object_type: ObjectType,
+    magic: &[u8; 8],
+    bytes: &[u8],
+    offset: usize,
+    body_end: usize,
+    budget: &mut ScanBudget,
+) -> bool {
+    if body_end == bytes.len() {
+        return true;
+    }
+    match sound_frame_after_partial_budgeted(
+        bytes,
+        offset,
+        magic.as_slice(),
+        budget,
+        |candidate, budget| {
+            matches!(
+                parse_frame_at(object_type, magic, bytes, candidate, budget),
+                FrameAttempt::Record { .. }
+            )
+        },
+    ) {
+        BoundedScan::Sound(next) => next >= body_end,
+        BoundedScan::NoSoundFrame | BoundedScan::Undetermined => true,
+    }
 }
 
 /// Attempt to parse one container frame at `offset`. Never trusts a not-yet-checksum-validated
@@ -232,26 +270,15 @@ fn parse_frame_at_reporting(
     let Some(body) = bytes.get(header_end..body_end) else {
         return FrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    // The checksum hashes a preimage of the header's own 18 bytes plus the body, so a candidate costs its
+    // header too: charging the body alone let a zero-length candidate hash 18 bytes for free (0.49.0 step 5,
+    // round 2 U2 -- measured at 12.5x hashed on a claimed-range file, over the 9x one-decode bound).
+    budget.charge((body.len() + CONTAINER_HEADER_LEN) as u64);
     let expected = record_checksum(magic, header_values.body_len, body);
     if expected != header_values.checksum {
-        // 0.49.0 step 5, D11/U5 (RFC 165 R5 §9.2's rule, applied here): a complete record -- full
-        // header, full claimed body, both physically read above -- whose checksum fails was fully
-        // written: corruption, not a crash mid-write, so it must not be called an interrupted append.
-        //
-        // **Narrowed to `body_end == bytes.len()`, not every checksum mismatch**: when bytes remain
-        // past `body_end`, this claimed body may have read past a genuine torn frame's own short
-        // write into a *later*, unrelated frame's bytes (RFC 160 F3 Addendum 1's own motivating
-        // shape: a torn frame immediately followed by further commits) -- the checksum mismatch
-        // there proves nothing about whether THIS frame was itself fully written. Telling the two
-        // apart in general needs the same "is a sound frame hiding in the claimed range" scan
-        // `sound_frame_after_partial_budgeted` already does for a short read, budgeted the same way;
-        // doing that here is unscheduled this round and left as a known gap (the fix below covers
-        // only the unambiguous case: nothing at all follows the claimed body).
-        let complete = body_end == bytes.len();
-        return FrameAttempt::Invalid {
+        return FrameAttempt::ChecksumMismatch {
             message: format!("container checksum mismatch at byte offset {report_offset}"),
-            complete,
+            body_end,
         };
     }
     let envelope = match decode_envelope_file(body) {
@@ -319,9 +346,11 @@ pub(crate) fn decode_container_record_in_window(
     match parse_frame_at_reporting(object_type, magic, window, 0, container_offset, &mut budget) {
         FrameAttempt::Record { record, .. } => Ok(Some(record)),
         FrameAttempt::TrailingPartial { .. } => Ok(None),
-        FrameAttempt::Invalid { message, .. } => Err(PrikkError::Integrity(format!(
-            "container record at offset {container_offset} failed to validate: {message}"
-        ))),
+        FrameAttempt::Invalid { message, .. } | FrameAttempt::ChecksumMismatch { message, .. } => {
+            Err(PrikkError::Integrity(format!(
+                "container record at offset {container_offset} failed to validate: {message}"
+            )))
+        }
     }
 }
 
@@ -424,6 +453,30 @@ pub(crate) fn decode_container_records(
                 offset = require_progress("container", offset, next)?;
             }
             FrameAttempt::Invalid { message, complete } => {
+                record_outcomes.push(ContainerRecordOutcome {
+                    offset,
+                    status: ContainerRecordStatus::Failed { message, complete },
+                });
+                match resync_to_next_magic(bytes, offset + 1, magic.as_slice()) {
+                    Some(next) => offset = next,
+                    None => {
+                        return Ok(ContainerReplay {
+                            records,
+                            trailing_partial_bytes: 0,
+                            record_outcomes,
+                        });
+                    }
+                }
+            }
+            FrameAttempt::ChecksumMismatch { message, body_end } => {
+                let complete = checksum_mismatch_is_complete(
+                    object_type,
+                    magic,
+                    bytes,
+                    offset,
+                    body_end,
+                    &mut budget,
+                );
                 record_outcomes.push(ContainerRecordOutcome {
                     offset,
                     status: ContainerRecordStatus::Failed { message, complete },
