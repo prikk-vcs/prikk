@@ -241,6 +241,7 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- [`167-resynchronisation-is-linear.md`](rfcs/proposed/167-resynchronisation-is-linear.md) — M5: a hostile tail makes every framed reader quadratic (each candidate frame's body hashed to the end of the file); a linear resynchronisation without a format change, never a false tail; proposed 2026-10-05 (0.49.0 step 4); design round live, no mechanism chosen yet
 
 
 
