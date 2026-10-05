@@ -135,3 +135,5 @@ not exist. **This is a fix round:** fixes only, nothing else.
 
 **Report:** `.git-exclude/review-request/rfc166-round-2-report-v2.md`, with all 14 gates on the final commit and each
 unit's real start and end. **K7:** a second addendum goes back to the owner.
+
+**ACCEPTED and CLOSED 2026-10-05** (reviews `rfc166-round-2-review-v1`, `-v2`). Commits `a77d530f` … `fdcd06b7`, then Addendum 1 `ca63629d` … `606e0385`. One line of text (the `--not-current-branch` plan's uncertainty sentence) is carried into the 0.49.0 release-prep text sweep.
