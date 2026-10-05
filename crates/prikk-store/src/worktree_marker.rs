@@ -203,5 +203,7 @@ pub fn clear_provisional_marker_if_unchanged(
     Ok(ProvisionalClearOutcome::Cleared)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
 mod tests;

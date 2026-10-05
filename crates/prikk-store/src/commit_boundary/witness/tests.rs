@@ -25,7 +25,7 @@ fn commit(layout: &RepositoryLayout, path: &str, body: &[u8]) {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does() {
     // RFC 166 D2 item 3: the witness is written only through the anchored `MutationRoot`
     // primitives, which refuse to follow a symlink at the final path component for *any* file --

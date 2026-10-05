@@ -331,5 +331,7 @@ pub(in crate::commit_boundary) fn next_op_seq(index: usize) -> Result<u32> {
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
 mod ref_name_once_per_session_tests;

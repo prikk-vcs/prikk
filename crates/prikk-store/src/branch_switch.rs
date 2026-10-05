@@ -351,7 +351,7 @@ fn write_current_branch(layout: &RepositoryLayout, branch: &str) -> Result<()> {
     )
 }
 
-// Every test builds real repositories through `RepositoryLayout::init` and mutates the worktree,
-// which is Linux-only here, like `patch_checkout`'s own tests.
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
 mod tests;

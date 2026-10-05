@@ -393,5 +393,7 @@ fn ownership_missing_refusal_text(restore: Option<RestoreRefusalContext<'_>>) ->
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
 mod tests;

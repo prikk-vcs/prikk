@@ -5,6 +5,7 @@ use crate::{
     plan_patch_checkout_deletions,
 };
 
+#[cfg(not(windows))]
 use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
 use crate::test_gates::test_support::{
     publish_snapshot_then_patch_block, publish_text_create_then_edit_block, unique_temp_dir,
@@ -137,6 +138,7 @@ fn patch_materialization_with_deletions_removes_matching_old_file() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn patch_deletion_retry_resyncs_observed_absent_parent() -> prikk_error::Result<()> {
     let root = unique_temp_dir("patch-delete-cleanup-retry");
     let layout = RepositoryLayout::init(root.clone())?;

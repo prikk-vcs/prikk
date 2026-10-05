@@ -264,6 +264,7 @@ fn active_ref_metadata_reports_malformed_content() {
 /// (`Missing`), not the old value or the new one -- exactly the crash window the §14.6 condition moved
 /// inside this function rather than eliminating.
 #[test]
+#[cfg(not(windows))]
 fn active_metadata_write_and_removal_failures_pin_retained_state() {
     let root = unique_temp_dir("active-ref-failpoints");
     let layout = RepositoryLayout::init(root.clone()).unwrap();

@@ -313,7 +313,7 @@ pub fn require_active_ref_for_non_empty_wal(
     }
 }
 
-// DC-71: every test here sets up its scenario via real repository mutation (RepositoryLayout::init
-// or equivalent), which is Linux-only; the module never compiles a non-Linux-meaningful test.
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
 mod tests;

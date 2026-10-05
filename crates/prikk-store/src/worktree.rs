@@ -142,7 +142,7 @@ pub(crate) fn materialize_replay_manifest_entries(
     manifest: &ReplayManifest,
 ) -> Result<ManifestMaterializationReport> {
     // Gated like its only caller, `patch_checkout`'s Linux-only tests (DC-71).
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     if let Some(change) = BETWEEN_PLAN_AND_WRITE.with(|slot| slot.borrow_mut().take()) {
         change();
     }
@@ -332,7 +332,7 @@ fn entry_conflict(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 thread_local! {
     static BETWEEN_PLAN_AND_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
@@ -341,7 +341,7 @@ thread_local! {
 /// Test seam, unreachable from production (checkout-refusal round §3): run `change` once, after the
 /// plan and before the first write of the next `materialize_replay_manifest_entries` on this thread.
 /// Gated to its only caller's platform: `patch_checkout`'s tests are Linux-only (DC-71).
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn between_plan_and_write_for_test(change: impl FnOnce() + 'static) {
     BETWEEN_PLAN_AND_WRITE.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }

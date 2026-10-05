@@ -196,5 +196,7 @@ pub fn clear_rename_declarations(layout: &RepositoryLayout) -> Result<()> {
     write_declarations_map(layout, &BTreeMap::new())
 }
 
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
 mod tests;
