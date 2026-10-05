@@ -77,9 +77,13 @@ pub(crate) enum ContainerRecordStatus {
     Failed {
         /// The error this frame's own validation raised.
         message: String,
-        /// The frame's **checksum verified**: a complete frame that is wrong in some other way (an envelope that will not decode, the
-        /// wrong type). An interrupted append leaves a *prefix* of a frame, never a checksum-valid one, so `verify` never calls such a
-        /// frame an interrupted append, whatever names it (RFC 160 F3 Addendum 1).
+        /// **True when this frame cannot be a torn tail.** An interrupted append leaves a *prefix* of
+        /// a frame, so a checksum mismatch where nothing at all follows the claimed body (0.49.0 step
+        /// 5, D11/U5; RFC 165 R5 §9.2's rule) is corruption of an already-complete write, not a crash
+        /// mid-write -- `verify` never calls that an interrupted append (RFC 160 F3 Addendum 1 / RFC
+        /// 162 rule 2). **Known gap:** a checksum mismatch where later bytes *do* follow stays
+        /// `false` even when those bytes are really an unrelated, later frame rather than evidence
+        /// this one was torn -- see `parse_frame_at_reporting`'s own comment at the checksum check.
         complete: bool,
     },
 }
@@ -166,8 +170,7 @@ enum FrameAttempt {
     },
     Invalid {
         message: String,
-        /// The frame's checksum verified: a **complete** frame that is wrong in some other way (an envelope that will not decode, the
-        /// wrong type), which an interrupted append -- a prefix of a frame -- can never leave (RFC 160 F3 Addendum 1).
+        /// See [`ContainerRecordStatus::Failed`]'s own doc -- mirrored here, not redefined.
         complete: bool,
     },
 }
@@ -232,9 +235,23 @@ fn parse_frame_at_reporting(
     budget.charge(body.len() as u64);
     let expected = record_checksum(magic, header_values.body_len, body);
     if expected != header_values.checksum {
+        // 0.49.0 step 5, D11/U5 (RFC 165 R5 §9.2's rule, applied here): a complete record -- full
+        // header, full claimed body, both physically read above -- whose checksum fails was fully
+        // written: corruption, not a crash mid-write, so it must not be called an interrupted append.
+        //
+        // **Narrowed to `body_end == bytes.len()`, not every checksum mismatch**: when bytes remain
+        // past `body_end`, this claimed body may have read past a genuine torn frame's own short
+        // write into a *later*, unrelated frame's bytes (RFC 160 F3 Addendum 1's own motivating
+        // shape: a torn frame immediately followed by further commits) -- the checksum mismatch
+        // there proves nothing about whether THIS frame was itself fully written. Telling the two
+        // apart in general needs the same "is a sound frame hiding in the claimed range" scan
+        // `sound_frame_after_partial_budgeted` already does for a short read, budgeted the same way;
+        // doing that here is unscheduled this round and left as a known gap (the fix below covers
+        // only the unambiguous case: nothing at all follows the claimed body).
+        let complete = body_end == bytes.len();
         return FrameAttempt::Invalid {
             message: format!("container checksum mismatch at byte offset {report_offset}"),
-            complete: false,
+            complete,
         };
     }
     let envelope = match decode_envelope_file(body) {

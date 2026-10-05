@@ -452,6 +452,9 @@ fn interior_faults_survive_their_files_own_repair_attempt() {
 /// is dropped and named as a lost id) -- but the queued commit still references the blob, so `verify`
 /// must still fail afterward, naming the patch. Before this round's rule 2, the repair silently
 /// reclassified the frame as "an interrupted append... nothing references it" and `verify` passed.
+/// Since 0.49.0 step 5, D11/U5, this exact shape (nothing physically follows the one damaged frame in
+/// its container) is a failed object item from the start, not an interrupted-append line at all --
+/// see `foundation::container::parse_frame_at_reporting`'s own comment on `complete`.
 #[test]
 fn m1_a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_repair_index() {
     let repo = support::unique_repo("rfc162-m1");
@@ -492,13 +495,16 @@ fn m1_a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_re
     );
     assert!(
         !after_text.contains("is a harmless remnant")
-            && !after_text.contains("connectivity finds nothing"),
-        "M1: the interrupted-append line must not call the frame harmless while connectivity \
-         still needs it\n{after_text}"
+            && !after_text.contains("connectivity finds nothing")
+            && !after_text.contains("warning: interrupted append")
+            && after_text.contains("interrupted appends: 0"),
+        "M1: a complete, damaged frame with nothing after it in its container is a failed object \
+         item, never worded as an interrupted append\n{after_text}"
     );
     assert!(
-        after_text.contains("not a harmless remnant"),
-        "M1: the interrupted-append line must name the missing object instead\n{after_text}"
+        after_text.contains("object items: 1 scanned, 1 failed")
+            && after_text.contains(": failed: container checksum mismatch"),
+        "M1: the failed object item itself is named\n{after_text}"
     );
 
     // Addendum 1 fix 1: I2 applies to `doctor` too -- the documented path is repair, then `doctor`,

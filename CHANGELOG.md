@@ -17,6 +17,19 @@ both hostile shapes, every affected reader. A second, independent decode of the 
 picked up since 0.49.0's own earlier rounds (RFC 164 Rule E's reachability walk, re-decoding `default`'s WAL a
 second time) is also removed: honest `verify` cost is unchanged from 0.48.0.
 
+### Output changes — a full-length object-container frame with a bad checksum is a damaged record, not an interrupted append (0.49.0 step 5, D11/U5)
+
+An object container frame whose checksum fails is reported as a failed object item (`verify`/`doctor` exit non-zero
+unconditionally) when nothing at all follows its claimed body in the container — previously it was worded and
+counted exactly like a crash-torn frame ("interrupted append... a harmless remnant, not damage"), tolerated as a
+warning and left for connectivity to judge. RFC 165 R5 (§9.2) already drew this line for the ref log container;
+this applies the same rule, narrowed, to object containers: a torn tail is a *prefix* of a frame, and a frame with
+nothing physically after it cannot be one. **Known gap, not fixed this round:** a checksum mismatch where later
+bytes *do* follow the claimed body is still worded as an interrupted append, even when those bytes turn out to
+belong to a later, unrelated frame rather than prove anything about this one — telling the two apart in general
+needs the same budgeted "sound frame hiding in the claimed range" scan the torn-tail path already runs, which is
+unscheduled.
+
 ### Output changes — one coherent message when a resynchronisation scan is cut short (RFC 167 D2)
 
 - `doctor`/`verify`, the WAL: `error [PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE]: WAL record at offset <N>
