@@ -1008,6 +1008,17 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     }
 }
 
+/// RFC 166 §14 item 7: one line for a [`prikk_store::CommitSummary`] -- its own message (or a
+/// plain "(no message)"), then every path it touches, comma-separated. Never a block hash.
+fn describe_commit_summary(summary: &prikk_store::CommitSummary) -> String {
+    let message = summary.message.as_deref().unwrap_or("(no message)");
+    if summary.paths.is_empty() {
+        message.to_string()
+    } else {
+        format!("{message} ({})", summary.paths.join(", "))
+    }
+}
+
 fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     let doctor_args = parse_doctor_args(args)?;
     let layout = open_repository(doctor_args.root)?;
@@ -1121,8 +1132,28 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
         println!("doctor repository: {}", layout.prikk_dir().display());
         let count = plan.patch_ids.len();
         let plural = if count == 1 { "commit" } else { "commits" };
+        println!("restoring {count} queued {plural} to {}:", plan.ref_name);
+        for (index, commit) in plan.queued_commits.iter().enumerate() {
+            println!("  {}. {}", index + 1, describe_commit_summary(commit));
+        }
+        match &plan.latest_sealed_commit {
+            Some(latest) => println!(
+                "{} is currently at: {}",
+                plan.ref_name,
+                describe_commit_summary(latest)
+            ),
+            None => println!(
+                "{} has never been published -- these would be its first commits",
+                plan.ref_name
+            ),
+        }
+        if plan.current_branch_assumed {
+            println!(
+                "prikk cannot tell which branch these commits were made on; your current branch \
+                 is assumed. If you made them with `--ref`, restore to that branch."
+            );
+        }
         if doctor_args.plan_only {
-            println!("restoring {count} queued {plural} to {}", plan.ref_name);
             println!("plan only -- nothing written");
         } else {
             println!(

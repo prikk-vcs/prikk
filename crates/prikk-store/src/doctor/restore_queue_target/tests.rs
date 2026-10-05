@@ -10,9 +10,13 @@ use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
+use crate::rfc111_seal_simulation::simulate_one_seal;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::wal::Wal;
-use crate::{Ed25519AuthorSigner, WorktreePatchCommitOptions};
+use crate::{
+    Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, WorktreePatchCommitOptions,
+    add_trusted_maintainer,
+};
 
 fn signer() -> Ed25519AuthorSigner {
     Ed25519AuthorSigner::from_seed("rfc166-d5-restore", &[0x92_u8; 32]).unwrap()
@@ -82,6 +86,20 @@ fn row9_restores_ownership_and_writes_ref_name_atomically() {
         restore_queue_target(&layout, "heads/main", false).expect("row 9 is this verb's own job");
     assert_eq!(plan.ref_name, "heads/main");
     assert_eq!(plan.patch_ids.len(), 1);
+
+    // RFC 166 §14 item 7: the queued commit's own message and paths, never a bare block hash.
+    assert_eq!(plan.queued_commits.len(), 1);
+    assert_eq!(
+        plan.queued_commits[0].message,
+        Some("d5-restore".to_string())
+    );
+    assert_eq!(plan.queued_commits[0].paths, vec!["a.txt".to_string()]);
+    assert_eq!(
+        plan.latest_sealed_commit, None,
+        "heads/main has never been published"
+    );
+    // §14 item 8: a valid witness decided the ref, so there is no uncertainty to disclose.
+    assert!(!plan.current_branch_assumed);
 
     match read_active_ref_metadata(&layout).unwrap() {
         ActiveRefMetadata::Valid(name) => assert_eq!(name, "heads/main"),
@@ -187,10 +205,64 @@ fn without_a_witness_the_current_branch_succeeds_with_no_flag() {
     let plan = restore_queue_target(&layout, "heads/main", false)
         .expect("heads/main is this repository's own current branch");
     assert_eq!(plan.ref_name, "heads/main");
+    // §14 item 8: no witness decided this -- the current branch was assumed, so the plan must say
+    // so (the uncertainty sentence applies).
+    assert!(plan.current_branch_assumed);
     match read_active_ref_metadata(&layout).unwrap() {
         ActiveRefMetadata::Valid(name) => assert_eq!(name, "heads/main"),
         other => panic!("expected ownership restored, got {other:?}"),
     }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// §14 item 1, without a witness but with `--not-current-branch` given explicitly: there is
+/// nothing left to be uncertain about, even though no witness decided the ref either.
+#[test]
+fn not_current_branch_flag_clears_the_uncertainty_even_without_a_witness() {
+    let root = unique_temp_dir("rfc166-s14-item8-flag-clears-uncertainty");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    clear_ref_name(&layout);
+
+    let plan = restore_queue_target(&layout, "heads/main", true)
+        .expect("--not-current-branch always succeeds when given, even redundantly");
+    assert!(
+        !plan.current_branch_assumed,
+        "the flag was given explicitly; nothing was assumed"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// §14 item 7: the branch's own latest sealed commit, described for the plan when `<ref>` has
+/// already been published -- never a bare block hash.
+#[test]
+fn the_plan_describes_the_branchs_own_latest_sealed_commit() {
+    let root = unique_temp_dir("rfc166-s14-item7-latest-sealed");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let maintainer =
+        Ed25519MaintainerSigner::from_seed("rfc166-s14-item7-maintainer", &[0x94; 32]).unwrap();
+    add_trusted_maintainer(
+        &layout,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )
+    .unwrap();
+    commit(&layout, "a.txt", b"one");
+    simulate_one_seal(&layout, "heads/main", &maintainer).expect("seal onto heads/main");
+
+    commit(&layout, "b.txt", b"two");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    clear_ref_name(&layout);
+
+    let plan = plan_restore_queue_target(&layout, "heads/main", false)
+        .expect("heads/main is still this repository's own current branch");
+    let latest = plan
+        .latest_sealed_commit
+        .as_ref()
+        .expect("heads/main has already been sealed once");
+    assert_eq!(latest.message, Some("d5-restore".to_string()));
+    assert_eq!(latest.paths, vec!["a.txt".to_string()]);
     std::fs::remove_dir_all(&root).ok();
 }
 

@@ -28,7 +28,7 @@ pub use discard_damaged_commits::{
 };
 pub use repair_tails::{RepairTailsFileOutcome, RepairTailsReport, repair_tails};
 pub use restore_queue_target::{
-    RestoreQueueTargetPlan, plan_restore_queue_target, restore_queue_target,
+    CommitSummary, RestoreQueueTargetPlan, plan_restore_queue_target, restore_queue_target,
 };
 
 /// Severity assigned to a doctor diagnostic issue.

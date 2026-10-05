@@ -32,7 +32,7 @@
 //! between truncate and append would recreate the exact stranding this verb exists to repair.
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectId, ObjectType};
+use prikk_object::{BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload};
 
 use crate::commit_boundary::active::read_active_ref_metadata;
 use crate::commit_boundary::classification::{Verdict, classify};
@@ -40,8 +40,27 @@ use crate::commit_boundary::witness::{WitnessState, read_witness};
 use crate::foundation::fsutil::write_file_atomically;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
-use crate::refs::{current_branch, ensure_no_incomplete_publication, validate_local_branch_ref};
+use crate::object_store::{FileObjectStore, ObjectReader};
+use crate::patch_replay::decode::{
+    DecodedOperationKind, decode_patch_message, decode_patch_operations,
+};
+use crate::refs::{
+    RefStore, current_branch, ensure_no_incomplete_publication, validate_local_branch_ref,
+};
 use crate::wal::{Wal, WalRecord};
+
+/// One commit's own content, for the plan (RFC 166 §14 item 7): never a bare block hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommitSummary {
+    /// The commit's own message, if it carries one.
+    pub message: Option<String>,
+    /// Every repository-relative path this commit's own operations name directly (a rename shows
+    /// as `"old -> new"`). Node-addressed operations with no path of their own (`EditText`,
+    /// `ChangePerm`, `ReplaceBinary` -- FDD-03 §9.3) report plainly rather than fabricating one;
+    /// see [`commit_summary`]'s own doc for why resolving their path is out of scope here.
+    pub paths: Vec<String>,
+}
 
 /// The plan a real run writes from, and everything `--plan-only` prints (RFC 166 D5 K1, as amended
 /// by §14).
@@ -52,6 +71,18 @@ pub struct RestoreQueueTargetPlan {
     pub ref_name: String,
     /// Every queued patch id, in WAL order -- "the queue's records" (RFC 166 K1).
     pub patch_ids: Vec<ObjectId>,
+    /// Each queued commit's own content, in the same order as `patch_ids` (§14 item 7).
+    pub queued_commits: Vec<CommitSummary>,
+    /// `ref_name`'s own latest sealed commit, if it has ever been published -- the commit these
+    /// queued ones will go on top of (§14 item 7). `None` when `ref_name` has never been
+    /// published, or when any part of this purely informational read fails; never a gate (RFC 166
+    /// D5's own review finding: a tip check answered nothing this verb actually needed).
+    pub latest_sealed_commit: Option<CommitSummary>,
+    /// `true` when `ref_name` was not named by a witness but *assumed* to be the current branch
+    /// (no `--not-current-branch` override) -- the one case §14 item 8's uncertainty sentence
+    /// applies to. `false` when a witness decided it (C2) or the caller already overrode the
+    /// assumption explicitly.
+    pub current_branch_assumed: bool,
 }
 
 enum Mode {
@@ -106,7 +137,9 @@ fn run(
     // Without one -- absent, or itself unreadable -- `<ref>` must be the current branch unless the
     // caller explicitly overrides with `--not-current-branch`; an unresolvable current branch
     // requires the same flag, fail closed, since there is then nothing to compare `<ref>` against.
-    match &witness {
+    // §14 item 8: `current_branch_assumed` records exactly the one case its own uncertainty
+    // sentence applies to -- no witness decided it, and the caller did not already override it.
+    let current_branch_assumed = match &witness {
         WitnessState::Valid(record) => {
             if record.ref_name != ref_name {
                 return Err(PrikkError::Precondition(format!(
@@ -115,6 +148,7 @@ fn run(
                     record.ref_name
                 )));
             }
+            false
         }
         WitnessState::Absent | WitnessState::Damaged(_) => {
             match (current_branch(layout), not_current_branch) {
@@ -136,8 +170,9 @@ fn run(
                 }
                 (Err(_), true) => {}
             }
+            !not_current_branch
         }
-    }
+    };
     if replay.trailing_partial_bytes != 0 {
         return Err(PrikkError::Integrity(format!(
             "active WAL has {} trailing partial bytes; run doctor before restoring ownership",
@@ -156,9 +191,18 @@ fn run(
     }
 
     let patch_ids = collect_wal_patch_ids(&replay.records)?;
+    let queued_commits = replay
+        .records
+        .iter()
+        .map(|record| commit_summary(&record.envelope))
+        .collect::<Result<Vec<_>>>()?;
+    let latest_sealed_commit = latest_sealed_commit_summary(layout, &ref_name);
     let plan = RestoreQueueTargetPlan {
         ref_name: ref_name.clone(),
         patch_ids,
+        queued_commits,
+        latest_sealed_commit,
+        current_branch_assumed,
     };
 
     match mode {
@@ -193,6 +237,70 @@ fn require_patch_record(record: &WalRecord) -> Result<()> {
         "active WAL record {} is {}, expected patch",
         record.seq, record.envelope.object_type
     )))
+}
+
+/// RFC 166 §14 item 7: a Patch envelope's own message and the paths its operations name directly
+/// -- never a bare block hash. `CreateFile`/`DeleteNode`/`CreateSymlink` each name one path;
+/// `RenamePath` names both (`"old -> new"`). `EditText`, `ChangePerm` and `ReplaceBinary` are
+/// node-addressed only (FDD-03 §9.3): resolving the path a `node_id` currently names would need a
+/// full lifecycle replay against the worktree baseline
+/// ([`crate::patch_replay::resolve_folded_worktree_baseline`]), a much larger computation than this
+/// item's own display purpose justifies, so these report plainly instead of fabricating a path or
+/// silently dropping the operation from the count.
+fn commit_summary(envelope: &ObjectEnvelope) -> Result<CommitSummary> {
+    let bytes = &envelope.canonical_payload;
+    let schema_version = envelope.schema_version;
+    let message = decode_patch_message(bytes, schema_version)?;
+    let operations = decode_patch_operations(bytes, schema_version)?;
+    let paths = operations
+        .iter()
+        .map(|operation| match &operation.kind {
+            DecodedOperationKind::CreateFile { path, .. }
+            | DecodedOperationKind::DeleteNode { path, .. }
+            | DecodedOperationKind::CreateSymlink { path, .. } => path.clone(),
+            DecodedOperationKind::RenamePath {
+                old_path, new_path, ..
+            } => format!("{old_path} -> {new_path}"),
+            DecodedOperationKind::EditText { .. }
+            | DecodedOperationKind::ChangePerm { .. }
+            | DecodedOperationKind::ReplaceBinary { .. } => {
+                "(a change to an existing file)".to_string()
+            }
+        })
+        .collect();
+    Ok(CommitSummary { message, paths })
+}
+
+/// RFC 166 §14 item 7: `ref_name`'s own current tip, described for the plan -- purely
+/// informational, never a gate (the review's own finding: a tip check answered nothing this verb
+/// actually needed). `None` when `ref_name` has never been published, or when any part of this
+/// read fails; a failure here only withholds the description, never blocks the restore itself --
+/// the same distinction `discard_damaged_commits`'s own "may still be in your working tree" note
+/// already draws between a safety check and a best-effort read.
+fn latest_sealed_commit_summary(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Option<CommitSummary> {
+    let ref_store = RefStore::new(layout.clone());
+    let objects = FileObjectStore::new(layout.clone());
+    let ref_state_id = ref_store.read_current_ref_state_id(ref_name).ok()??;
+    let ref_state_envelope = objects
+        .read_typed(ref_state_id, ObjectType::RefState)
+        .ok()??;
+    let ref_state = RefStatePayload::decode_canonical(
+        &ref_state_envelope.canonical_payload,
+        ref_state_envelope.schema_version,
+    )
+    .ok()?;
+    let block_envelope = objects
+        .read_typed(ref_state.target_object_id, ObjectType::Block)
+        .ok()??;
+    let block = BlockPayload::decode_canonical(&block_envelope.canonical_payload).ok()?;
+    let last_patch_id = *block.patch_ids.last()?;
+    let patch_envelope = objects
+        .read_typed(last_patch_id, ObjectType::Patch)
+        .ok()??;
+    commit_summary(&patch_envelope).ok()
 }
 
 #[cfg(test)]
