@@ -41,6 +41,9 @@ by ordinary later commits, looked like. The probe that decides is the same budge
 counts as damage. **Also a budget correction:** a candidate's checksum hashes its 18-byte header as well as its body, and
 the budget now charges both (a zero-length candidate used to hash 18 bytes for nothing; a claimed-range file measured at
 12.5x the input, now 4.9x, under the one-decode bound of 9x).
+Every other framed reader (the WAL, trust keys and policy, pointer index, ref container, received index, author keys,
+generation files) now charges its candidates' headers too. Their bound held without it, since their sound-frame probe
+runs once per decode, so this is accounting, not a measured overshoot; no output changes.
 
 ### Output changes — a full-length object-container frame with a bad checksum is a damaged record, not an interrupted append (0.49.0 step 5, D11/U5)
 

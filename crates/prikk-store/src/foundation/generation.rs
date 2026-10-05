@@ -230,7 +230,7 @@ fn parse_generation_frame_at(
     let Some(body) = bytes.get(header_end..body_end) else {
         return GenerationFrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    budget.charge((body.len() + GENERATION_HEADER_LEN) as u64);
     let expected = generation_checksum(header_values.0, body);
     if expected != header_values.1 {
         // RFC 164 §9: a complete record (full header, full one-byte body) whose checksum fails was

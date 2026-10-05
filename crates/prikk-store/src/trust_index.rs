@@ -277,7 +277,7 @@ fn parse_trust_key_frame_at(
         }
         return TrustKeyFrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    budget.charge((body.len() + TRUST_KEY_HEADER_LEN) as u64);
     let expected = trust_key_checksum(body_len, body);
     if expected != checksum {
         // RFC 164 §9: the header was complete and the whole claimed body is present -- this record
@@ -688,7 +688,7 @@ fn parse_trust_policy_frame_at(
         }
         return TrustPolicyFrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    budget.charge((body.len() + TRUST_POLICY_HEADER_LEN) as u64);
     let expected = trust_policy_checksum(body_len, body);
     if expected != checksum {
         // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was

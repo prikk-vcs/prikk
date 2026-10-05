@@ -652,3 +652,60 @@ fn a_claimed_range_with_fake_headers_inside_it_stays_within_one_decodes_budget()
         "one decode hashed {hashed} bytes over a {size}-byte claimed-range file, past {ceiling}"
     );
 }
+
+/// **0.49.0 step 5, round 2 item 2: every framed reader charges its candidates' headers, not only their bodies.** A
+/// candidate's checksum hashes its header as well as its body, so a zero-length candidate hashes header bytes the
+/// budget never sees. Each registered format is fed a claimed-range file: every frame claims a body that ends
+/// before the file, with a fake frame header inside each claimed range. One decode must stay within 9x the input
+/// plus slack. This is the test per reader the review asked for, run over all ten registered formats.
+#[test]
+fn every_framed_reader_stays_within_one_decodes_budget_on_a_claimed_range_file() {
+    let size = 2 * 1024 * 1024;
+    let mut failures = Vec::new();
+    for format in all_formats() {
+        let valid = (format.valid)();
+        let header_prefix_len = 10 + format.pre;
+        let header_len = header_prefix_len + 8 + 32;
+        let prefix = &valid[..header_prefix_len];
+        let body_len: usize = 64;
+        let mut bytes = Vec::with_capacity(size);
+        while bytes.len() + header_len + body_len <= size {
+            bytes.extend_from_slice(prefix);
+            bytes.extend_from_slice(&(body_len as u64).to_be_bytes());
+            bytes.extend_from_slice(&[0_u8; 32]);
+            bytes.extend_from_slice(prefix);
+            bytes.resize(bytes.len() + body_len - prefix.len(), 0);
+        }
+        bytes.resize(size, 0);
+
+        // Shape B: one leading frame claims a body far past the file (a torn tail, so every reader's
+        // sound-frame probe runs), followed by zero-length fake headers the probe must walk.
+        let mut torn = Vec::with_capacity(size);
+        torn.extend_from_slice(prefix);
+        torn.extend_from_slice(&(1_u64 << 40).to_be_bytes());
+        torn.extend_from_slice(&[0_u8; 32]);
+        while torn.len() + header_len <= size {
+            torn.extend_from_slice(prefix);
+            torn.extend_from_slice(&0_u64.to_be_bytes());
+            torn.extend_from_slice(&[0_u8; 32]);
+        }
+        torn.resize(size, 0);
+
+        for (shape, input) in [("claimed-range", &bytes), ("torn-tail probe", &torn)] {
+            crate::foundation::frame_resync::hash_tally::reset();
+            let _ = (format.decode)(input);
+            let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+            let ceiling = 9 * size as u64 + 4096;
+            if hashed > ceiling {
+                failures.push(format!(
+                    "{} ({shape}): {hashed} bytes hashed, over {ceiling}",
+                    format.name
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "one decode over its budget: {failures:#?}"
+    );
+}

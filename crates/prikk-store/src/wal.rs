@@ -576,7 +576,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize, budget: &mut ScanBudget) -> Frame
     let Some(body) = bytes.get(header_end..body_end) else {
         return FrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    budget.charge((body.len() + WAL_HEADER_LEN) as u64);
     let expected = record_checksum(header_values.seq, header_values.body_len, body);
     if expected != header_values.checksum {
         return FrameAttempt::Invalid {

@@ -294,7 +294,7 @@ fn parse_author_key_frame_at(
         }
         return AuthorKeyFrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    budget.charge((body.len() + AUTHOR_KEY_HEADER_LEN) as u64);
     let expected = author_key_checksum(body_len, body);
     if expected != checksum {
         // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was

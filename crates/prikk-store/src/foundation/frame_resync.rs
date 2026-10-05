@@ -248,7 +248,7 @@ pub(crate) fn complete_by_checksum(
         if let Ok(claimed_usize) = usize::try_from(claimed) {
             if let Some(body_end) = header_end.checked_add(claimed_usize) {
                 if let Some(body) = bytes.get(header_end..body_end) {
-                    budget.charge(body.len() as u64);
+                    budget.charge((body.len() + header_len) as u64);
                     if checksum_of(claimed, body) == stored_checksum {
                         return Some(body_end);
                     }
@@ -261,7 +261,7 @@ pub(crate) fn complete_by_checksum(
     // the last record in the file (the only place a positional tail candidate ever arises).
     let to_eof_len = bytes.len().saturating_sub(header_end);
     if let Some(body_to_eof) = bytes.get(header_end..) {
-        budget.charge(body_to_eof.len() as u64);
+        budget.charge((body_to_eof.len() + header_len) as u64);
         if checksum_of(to_eof_len as u64, body_to_eof) == stored_checksum {
             return Some(bytes.len());
         }

@@ -240,7 +240,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize, budget: &mut ScanBudget) -> Frame
         }
         return FrameAttempt::TrailingPartial { remaining };
     };
-    budget.charge(body.len() as u64);
+    budget.charge((body.len() + RECEIVED_INDEX_HEADER_LEN) as u64);
     let expected = record_checksum(header_values.body_len, body);
     if expected != header_values.checksum {
         // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
