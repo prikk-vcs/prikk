@@ -92,3 +92,5 @@
 **Report:** `.git-exclude/review-request/rfc167-implementation-report-v1.md`, with each unit's real start and end.
 
 **K7:** a second addendum, or any finding that would change D1–D6, goes back to the owner before the work continues.
+
+**ACCEPTED and CLOSED 2026-10-06** (review `rfc167-implementation-review-v1`). Commits `2374491b`, `00674e00`, `85e2bed5`, `becaadbe`. One text note (a remnant count beside its own warning) is carried into release prep.

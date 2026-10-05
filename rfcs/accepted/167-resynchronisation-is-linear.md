@@ -11,7 +11,12 @@ recommendation is accepted."*). Proposed and rewritten as a design the same day 
 - **The design round:** handoff
   `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/resync-linear-design-round-handoff-v1.md`,
   review `rfc167-design-round-review-v1`.
-- **Implementation live:** `rfcs/handoffs/167-resynchronisation-is-linear/implementation-handoff-v1.md`.
+- **Delivered 2026-10-06** (`becaadbe`, review `rfc167-implementation-review-v1`):
+  - M5 is linear: 0.27 s at 64 MiB, against hours;
+  - the doubled `verify` is gone (`03d3be22`'s second decode);
+  - a command-level guard whose control was run.
+
+  One text note is carried into release prep.
 
 **Author-review independence.**
 - **M5 came in through a design the architect accepted.** RFC 160 F3 has a reader fully parse every candidate frame,
