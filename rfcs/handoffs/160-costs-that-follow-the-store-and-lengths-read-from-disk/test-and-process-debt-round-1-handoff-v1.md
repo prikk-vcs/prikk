@@ -118,3 +118,5 @@ Report v1: **not accepted yet.** U2, P1, P2, P4, U4 and U5 are accepted. **This 
 | A2 | F2 | 90 min |
 
 **Report:** `.git-exclude/review-request/step5-round-1-report-v2.md`.
+
+**ACCEPTED and CLOSED 2026-10-06** (reviews `step5-round-1-review-v1`, `-v2`). Commits `7bca7432` … `16d47def`, then Addendum 1 `96c8b347`, `6ef46283`, `8ccd8c7f`. Round 2: `test-and-process-debt-round-2-handoff-v1.md`.
