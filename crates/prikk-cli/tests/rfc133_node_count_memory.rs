@@ -506,7 +506,7 @@ fn run_rusage_child(cwd: &Path, binary: &Path, args: &[&str], envs: &[(&str, &st
 fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
     run_rusage_child(
         root,
-        Path::new(env!("CARGO_BIN_EXE_prikk")),
+        support::release_binary_path(),
         &["commit", "--ref", ref_name, "-m", message],
         &[
             ("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID),
@@ -525,7 +525,7 @@ fn measure_commit_rss_kib(root: &Path, ref_name: &str, message: &str) -> i64 {
 fn measure_tree_rss_kib(root: &Path, ref_name: &str) -> i64 {
     run_rusage_child(
         root,
-        Path::new(env!("CARGO_BIN_EXE_prikk")),
+        support::release_binary_path(),
         &["tree", "--ref", ref_name, "--format", "json"],
         &[],
     )
@@ -537,7 +537,7 @@ fn measure_diff_rss_kib(root: &Path, args: &[&str]) -> i64 {
     let mut full = vec!["diff"];
     full.extend_from_slice(args);
     full.extend_from_slice(&["--format", "json"]);
-    run_rusage_child(root, Path::new(env!("CARGO_BIN_EXE_prikk")), &full, &[])
+    run_rusage_child(root, support::release_binary_path(), &full, &[])
 }
 
 /// The block id `prikk log --limit 1` prints for `root`'s current tip.

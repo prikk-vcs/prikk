@@ -24,6 +24,33 @@ pub fn prikk(repo: &Path) -> Command {
     cmd
 }
 
+/// 0.49.0 step 5, D12: the one shared check every instrument under `crates/prikk-cli/tests/` that
+/// measures time, memory, or bytes read now goes through, instead of each reading
+/// `env!("CARGO_BIN_EXE_prikk")` on its own with no check at all. Mirrors
+/// `tools/corpus/tests/support/mod.rs`'s `require_optimized`, but simpler: that module has to ask
+/// Cargo's own JSON build output to even *locate* a `prikk` binary, because `tools/corpus` has no
+/// dependency on `crates/prikk-cli` for `CARGO_BIN_EXE_prikk` to resolve against. Here, inside
+/// `prikk-cli`'s own test binaries, `CARGO_BIN_EXE_prikk` already resolves correctly -- there is
+/// nothing to locate, only to check.
+///
+/// `cfg!(debug_assertions)` is the check: the test harness and the `prikk` binary it names are always
+/// compiled by the same `cargo test` invocation, under the same profile, so whether *this* compiled
+/// test binary carries debug assertions is exactly whether `--release` was passed. (This workspace
+/// sets no profile override that would decouple the two -- confirmed: no `[profile.*]` table in
+/// `Cargo.toml` sets `debug-assertions` at all.) A runtime `if`, not an `assert!` on the same
+/// condition: `assert!(!cfg!(debug_assertions), ...)` is a constant condition once either side of
+/// the `cfg!` is compiled in, which `clippy::assertions_on_constants` flags under this workspace's
+/// `-D warnings` gate -- confirmed directly, not assumed, by hitting exactly that lint first.
+pub fn release_binary_path() -> &'static Path {
+    if cfg!(debug_assertions) {
+        panic!(
+            "this measurement needs a release binary: run with `cargo test --release ...` (or \
+             `--profile release`), not a plain `cargo test`, which would measure a debug build"
+        );
+    }
+    Path::new(env!("CARGO_BIN_EXE_prikk"))
+}
+
 /// Point every test invocation at an empty, per-process key directory, and strip any `PRIKK_*` the
 /// developer's own shell is carrying.
 ///

@@ -68,7 +68,7 @@ fn sha256_of(path: &Path) -> String {
 }
 
 fn arms() -> [Arm; 2] {
-    let this = PathBuf::from(env!("CARGO_BIN_EXE_prikk"));
+    let this = support::release_binary_path().to_path_buf();
     let baseline = PathBuf::from(std::env::var("PRIKK_APPEND_BASELINE_BINARY").expect(
         "PRIKK_APPEND_BASELINE_BINARY must name 0.47.0's release binary (a release build of 21895f46, or the release asset)",
     ));

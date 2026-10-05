@@ -171,7 +171,7 @@ impl SplitMix64 {
 }
 
 fn prikk(repo: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_prikk"));
+    let mut cmd = Command::new(support::release_binary_path());
     cmd.current_dir(repo);
     // RFC 148: prikk now reads key material from the user's own config directory, so a test that
     // does not neutralise it measures whoever is running it. See `support::isolate_key_environment`.
@@ -597,7 +597,7 @@ fn run_memory_axis() -> Option<MemoryAxisResult> {
 
 fn spawn_floor_sample() -> Duration {
     let start = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_prikk"))
+    let out = Command::new(support::release_binary_path())
         .arg("--version")
         .output()
         .unwrap();
