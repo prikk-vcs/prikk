@@ -120,17 +120,19 @@ fn run(
             match (current_branch(layout), not_current_branch) {
                 (Ok(current), false) if current != ref_name => {
                     return Err(PrikkError::Precondition(format!(
-                        "your current branch is {current}, not {ref_name}; pass \
-                         --not-current-branch to restore to {ref_name} anyway"
+                        "your current branch is {current}, but you asked to restore to \
+                         {ref_name}; if these commits were made with `commit --ref {ref_name}` \
+                         (or `rollback-draft` on it), pass --not-current-branch to confirm that; \
+                         otherwise restore to {current} instead"
                     )));
                 }
                 (Ok(_), _) => {}
                 (Err(_), false) => {
-                    return Err(PrikkError::Precondition(
-                        "prikk cannot resolve your current branch; pass --not-current-branch to \
-                         restore without comparing against it"
-                            .to_string(),
-                    ));
+                    return Err(PrikkError::Precondition(format!(
+                        "prikk cannot resolve your current branch, so it cannot be compared \
+                         against {ref_name}; pass --not-current-branch to restore to {ref_name} \
+                         anyway"
+                    )));
                 }
                 (Err(_), true) => {}
             }

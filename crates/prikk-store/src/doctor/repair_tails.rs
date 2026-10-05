@@ -125,7 +125,7 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     // All or nothing: refuse before touching anything if any file has interior damage.
     let mut damaged: Vec<String> = Vec::new();
     if let Some(reason) =
-        crate::commit_boundary::classification::write_refusal_reason(&commit_witness_verdict)
+        crate::commit_boundary::classification::write_refusal_reason(&commit_witness_verdict, None)
     {
         damaged.push(format!("acknowledged commits: {reason}"));
     }

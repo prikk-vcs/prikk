@@ -198,9 +198,11 @@ fn an_inline_test_module_is_not_production() {
         // `commit_witness_verdict` is kept past its own block for that check, 1452 -> 1473. RFC 166
         // round 2 §0 (review v1's own required fix): the classification now speaks before the older
         // tail check, with a single fresh ownership read shared by the empty-queue branch below it,
-        // 1473 -> 1471.
+        // 1473 -> 1471. Round 2 Addendum 1, A2: `write_refusal_reason`'s own call here now passes a
+        // `RestoreRefusalContext` (§14 item 6's enriched row-9 text), 1471 -> 1479 (after `cargo
+        // fmt`).
         physical,
-        1471,
+        1479,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -210,7 +212,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1422);
+    assert_eq!(counted.production_lines, 1430);
     assert_eq!(
         physical - counted.production_lines,
         49,

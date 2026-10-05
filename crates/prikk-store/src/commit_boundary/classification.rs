@@ -289,18 +289,38 @@ fn patch_is_sealed_and_reachable_since(
     }
 }
 
-/// RFC 166: the exact refusal text `commit`, `rollback-draft` and `seal`'s own pre-write checks use
-/// when [`classify`] returns a blocking verdict (RFC 166 §5 rows 4, 5, 6, 7, 9) -- `None` for every
-/// verdict that does not block a write (rows `NoWitness`, 1, 2, 3, 8). Centralized so the call sites
-/// cannot drift to different sentences for the same row. **Rows 4, 5 and 7 name
+/// Extra context [`write_refusal_reason`] needs only to word row 9's own refusal concretely (RFC
+/// 166 §14 item 6): which ref to name in the suggested command. `layout` resolves the current
+/// branch when there is no witness to defer to -- the same resolver `commit` uses for its own
+/// default ([`crate::refs::current_branch`]); `queued_count` is the active WAL's own record count,
+/// for "N queued commit(s)". Every other verdict's text needs none of this.
+pub struct RestoreRefusalContext<'a> {
+    /// The repository layout, to resolve the current branch when there is no witness.
+    pub layout: &'a RepositoryLayout,
+    /// This session's own witness state, already read by the caller.
+    pub witness: &'a WitnessState,
+    /// The active WAL's own queued record count.
+    pub queued_count: usize,
+}
+
+/// RFC 166: the exact refusal text `commit`, `rollback-draft`, `seal` and `status`'s own pre-write
+/// checks use when [`classify`] returns a blocking verdict (RFC 166 §5 rows 4, 5, 6, 7, 9) --
+/// `None` for every verdict that does not block a write (rows `NoWitness`, 1, 2, 3, 8). Centralized
+/// so the call sites cannot drift to different sentences for the same row. **Rows 4, 5 and 7 name
 /// `prikk doctor --discard-damaged-commits`** (round 2, D5, §13 item 14) -- the one way out for
 /// acknowledged damage or loss. **Row 9 names `prikk doctor --restore-queue-target --ref <ref>`**
-/// (round 2, D5, §13 item 15), covering both an outright missing owner and D6's own
-/// ref-name-vs-witness mismatch, which this function folds into the same verdict. **Row 6 names no
+/// (round 2, D5 as amended by §14, §13 item 15), covering both an outright missing owner and D6's
+/// own ref-name-vs-witness mismatch, which this function folds into the same verdict -- `restore`,
+/// when given, fills the concrete ref in and uses no internal words ("durable, matching owner");
+/// `None` falls back to a plainer, still-internal-word-free sentence for a caller that does not
+/// have the extra context to hand (`verify`/`doctor`'s own report construction). **Row 6 names no
 /// verb**: a substituted record (and D4's own row 10) is not a crash shape, so a copy is the way
 /// out.
 #[must_use]
-pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
+pub fn write_refusal_reason(
+    verdict: &Verdict,
+    restore: Option<RestoreRefusalContext<'_>>,
+) -> Option<String> {
     match verdict {
         Verdict::NoWitness { .. }
         | Verdict::Healthy { .. }
@@ -328,10 +348,47 @@ pub fn write_refusal_reason(verdict: &Verdict) -> Option<String> {
              --discard-damaged-commits` to discard it"
                 .to_string(),
         ),
-        Verdict::OwnershipMissing => Some(
-            "queued commits exist but no durable, matching owner names them -- run \
-             `prikk doctor --restore-queue-target --ref <ref>` to give the queue its owner back"
-                .to_string(),
+        Verdict::OwnershipMissing => Some(ownership_missing_refusal_text(restore)),
+    }
+}
+
+/// §14 item 6: row 9's own refusal text, naming a concrete `--restore-queue-target` command --
+/// the witness's own ref when there is one (unchanged, C2), else the current branch, else (when
+/// even that cannot be resolved) a plain direction to name the branch explicitly. Never "durable,
+/// matching owner" or any other word internal to this module.
+fn ownership_missing_refusal_text(restore: Option<RestoreRefusalContext<'_>>) -> String {
+    let Some(context) = restore else {
+        return "queued commits exist but no durable, matching owner names them -- run `prikk \
+                doctor --restore-queue-target --ref <ref>` to give the queue its owner back"
+            .to_string();
+    };
+    let plural = if context.queued_count == 1 {
+        "commit has"
+    } else {
+        "commits have"
+    };
+    if let WitnessState::Valid(record) = context.witness {
+        let ref_name = &record.ref_name;
+        return format!(
+            "{} queued {plural} lost the record of which branch they belong to. This session's \
+             own commit record names {ref_name}. Check with: `prikk doctor \
+             --restore-queue-target --ref {ref_name} --plan-only`",
+            context.queued_count
+        );
+    }
+    match crate::refs::current_branch(context.layout) {
+        Ok(current) => format!(
+            "{} queued {plural} lost the record of which branch they belong to. Your current \
+             branch is {current}. Check with: `prikk doctor --restore-queue-target --ref \
+             {current} --plan-only`",
+            context.queued_count
+        ),
+        Err(_) => format!(
+            "{} queued {plural} lost the record of which branch they belong to, and prikk \
+             cannot tell what your current branch is either -- run `prikk doctor \
+             --restore-queue-target --ref <ref> --not-current-branch --plan-only`, naming the \
+             branch yourself",
+            context.queued_count
         ),
     }
 }

@@ -2088,9 +2088,11 @@ fn non_empty_wal_missing_active_ref_metadata_fails_closed() {
     .unwrap_err();
     // RFC 166 round 2 §0: the commit-witness classification now speaks first for row 9 (any owner
     // state, witness or none), before the older ownership-match check's own more specific text.
+    // Round 2 Addendum 1 (§14 item 6): with a valid witness (this session's own, naming
+    // heads/topic), the text names it directly rather than the generic, internal-worded sentence.
     assert!(
         err.to_string()
-            .contains("no durable, matching owner names them"),
+            .contains("This session's own commit record names heads/topic"),
         "unexpected error: {err}"
     );
     let _ = std::fs::remove_dir_all(root);
@@ -2126,10 +2128,11 @@ fn non_empty_wal_malformed_active_ref_metadata_fails_closed() {
     )
     .unwrap_err();
     // RFC 166 round 2 §0: same reasoning as the missing-metadata control above -- the commit-witness
-    // classification's own row 9 text speaks first.
+    // classification's own row 9 text speaks first. Round 2 Addendum 1 (§14 item 6): named via the
+    // witness, same as the missing-metadata case above.
     assert!(
         err.to_string()
-            .contains("no durable, matching owner names them"),
+            .contains("This session's own commit record names heads/topic"),
         "unexpected error: {err}"
     );
     let _ = std::fs::remove_dir_all(root);

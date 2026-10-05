@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use super::{Verdict, classify};
+use super::{RestoreRefusalContext, Verdict, classify, write_refusal_reason};
 use crate::commit_boundary::active::read_active_ref_metadata;
 use crate::commit_boundary::witness::{WitnessState, clear_witness, read_witness};
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
@@ -431,6 +431,139 @@ fn connectivity_walk_never_finds_a_patch_that_predates_the_witnessed_tip() {
         ),
     }
     std::fs::remove_dir_all(&root_a).ok();
+}
+
+// ---- RFC 166 §14 item 6: write_refusal_reason's own enriched row-9 text --------------------------
+
+// With a valid witness (unchanged, C2): the text names the witness's own ref, never "your current
+// branch" (which would be a different, and here coincidentally equal, fact), and no internal words.
+#[test]
+fn row9_refusal_text_with_a_witness_names_the_witness_ref() {
+    let root = unique_temp_dir("rfc166-s14-refusal-text-witness");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    std::fs::write(
+        layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("ref-name"),
+        [],
+    )
+    .unwrap();
+    let verdict = classify_now(&layout);
+    assert_eq!(verdict, Verdict::OwnershipMissing);
+    let witness = read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    let reason = write_refusal_reason(
+        &verdict,
+        Some(RestoreRefusalContext {
+            layout: &layout,
+            witness: &witness,
+            queued_count: 1,
+        }),
+    )
+    .expect("row 9 blocks a write");
+    assert!(
+        reason.contains("This session's own commit record names heads/main"),
+        "unexpected text: {reason}"
+    );
+    assert!(
+        reason.contains("`prikk doctor --restore-queue-target --ref heads/main --plan-only`"),
+        "must name a concrete, runnable command: {reason}"
+    );
+    assert!(
+        !reason.contains("durable, matching owner"),
+        "no internal words: {reason}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// Without a witness, with a resolvable current branch (the unborn default, heads/main here): the
+// text names the current branch instead.
+#[test]
+fn row9_refusal_text_without_a_witness_names_the_current_branch() {
+    let root = unique_temp_dir("rfc166-s14-refusal-text-no-witness");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    std::fs::write(
+        layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("ref-name"),
+        [],
+    )
+    .unwrap();
+    let verdict = classify_now(&layout);
+    assert_eq!(verdict, Verdict::OwnershipMissing);
+    let witness = read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    assert_eq!(witness, WitnessState::Absent);
+    let reason = write_refusal_reason(
+        &verdict,
+        Some(RestoreRefusalContext {
+            layout: &layout,
+            witness: &witness,
+            queued_count: 1,
+        }),
+    )
+    .expect("row 9 blocks a write");
+    assert!(
+        reason.contains("Your current branch is heads/main"),
+        "unexpected text: {reason}"
+    );
+    assert!(
+        reason.contains("`prikk doctor --restore-queue-target --ref heads/main --plan-only`"),
+        "must name a concrete, runnable command: {reason}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// Without a witness, with an unresolvable current branch: falls back to directing the caller to
+// name the branch themselves, still with no internal words and still a concrete, runnable command.
+#[test]
+fn row9_refusal_text_with_an_unresolvable_current_branch_asks_for_the_ref() {
+    let root = unique_temp_dir("rfc166-s14-refusal-text-unresolvable");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    std::fs::write(
+        layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("ref-name"),
+        [],
+    )
+    .unwrap();
+    std::fs::write(layout.current_branch_path(), b"not a valid ref\n").unwrap();
+    let verdict = classify_now(&layout);
+    assert_eq!(verdict, Verdict::OwnershipMissing);
+    let witness = read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    let reason = write_refusal_reason(
+        &verdict,
+        Some(RestoreRefusalContext {
+            layout: &layout,
+            witness: &witness,
+            queued_count: 1,
+        }),
+    )
+    .expect("row 9 blocks a write");
+    assert!(
+        reason.contains("--not-current-branch"),
+        "unexpected text: {reason}"
+    );
+    assert!(
+        !reason.contains("durable, matching owner"),
+        "no internal words: {reason}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// `None` (verify/doctor's own report construction, which has no branch to resolve): the plainer,
+// still internal-word-free fallback text, naming the verb with a placeholder ref.
+#[test]
+fn row9_refusal_text_with_no_context_falls_back_to_a_placeholder() {
+    let reason = write_refusal_reason(&Verdict::OwnershipMissing, None)
+        .expect("row 9 blocks a write even with no context");
+    assert!(
+        reason.contains("`prikk doctor --restore-queue-target --ref <ref>`"),
+        "unexpected text: {reason}"
+    );
 }
 
 // The "no witness" item (not a numbered row, D3 item 1): legacy session, never worse than 0.48.0.

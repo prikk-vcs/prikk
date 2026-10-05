@@ -380,8 +380,16 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             &witness,
         )
         .map_err(AuthorError::Store)?;
-        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(&verdict)
-        {
+        if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(
+            &verdict,
+            Some(
+                crate::commit_boundary::classification::RestoreRefusalContext {
+                    layout,
+                    witness: &witness,
+                    queued_count: active_replay.records.len(),
+                },
+            ),
+        ) {
             return Err(AuthorError::Store(PrikkError::Integrity(reason)));
         }
         verdict

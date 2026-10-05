@@ -746,7 +746,7 @@ fn print_commit_witness_verdict(verdict: &Verdict) {
             println!("acknowledged commits: no durable owner can be confirmed for this session");
         }
     }
-    if let Some(reason) = write_refusal_reason(verdict) {
+    if let Some(reason) = write_refusal_reason(verdict, None) {
         println!("error: {reason}");
     }
 }

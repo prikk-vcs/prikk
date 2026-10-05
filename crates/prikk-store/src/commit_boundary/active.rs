@@ -81,9 +81,16 @@ impl ActiveSession {
                 &owning_ref_now,
                 &witness,
             )?;
-            if let Some(reason) =
-                crate::commit_boundary::classification::write_refusal_reason(&verdict)
-            {
+            if let Some(reason) = crate::commit_boundary::classification::write_refusal_reason(
+                &verdict,
+                Some(
+                    crate::commit_boundary::classification::RestoreRefusalContext {
+                        layout: &self.layout,
+                        witness: &witness,
+                        queued_count: replay.records.len(),
+                    },
+                ),
+            ) {
                 return Err(PrikkError::Integrity(reason));
             }
         }

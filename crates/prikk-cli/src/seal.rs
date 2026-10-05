@@ -109,7 +109,14 @@ fn seal_active_no_audit(
             .map_err(|err| err.to_string())?;
         let verdict = prikk_store::classify(&layout, &replay, &owning_ref_now, &witness)
             .map_err(|err| err.to_string())?;
-        if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
+        if let Some(reason) = prikk_store::write_refusal_reason(
+            &verdict,
+            Some(prikk_store::RestoreRefusalContext {
+                layout: &layout,
+                witness: &witness,
+                queued_count: replay.records.len(),
+            }),
+        ) {
             return Err(reason);
         }
     }

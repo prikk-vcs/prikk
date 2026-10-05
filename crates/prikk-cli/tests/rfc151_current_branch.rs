@@ -336,11 +336,12 @@ fn the_current_branch_is_visible_in_worktree_status_log_and_branch_list() {
 }
 
 /// The pointer is a default, never an authority: in both production trees, the only callers of
-/// `current_branch` are the CLI's resolution module, `doctor`, and (RFC 166 §14) `doctor
-/// --restore-queue-target`'s own branch rule -- which uses it exactly the way `commit`'s own
-/// default resolution does, a default the caller can always override (`--not-current-branch`),
-/// never a trust or signing input. A new reader anywhere else -- `verify`, trust, signing, `bundle`,
-/// `sync` -- fails this.
+/// `current_branch` are the CLI's resolution module, `doctor`, (RFC 166 §14) `doctor
+/// --restore-queue-target`'s own branch rule, and its own refusal text (`classification.rs`'s
+/// `ownership_missing_refusal_text`, used by `commit`/`seal`/`rollback-draft`/`status` to name a
+/// concrete command) -- each uses it exactly the way `commit`'s own default resolution does, a
+/// default the caller can always override (`--not-current-branch`), never a trust or signing
+/// input. A new reader anywhere else -- `verify`, trust, signing, `bundle`, `sync` -- fails this.
 #[test]
 fn only_the_cli_resolution_path_and_doctor_read_the_pointer() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -374,11 +375,12 @@ fn only_the_cli_resolution_path_and_doctor_read_the_pointer() {
         callers,
         [
             "prikk-cli/src/current_branch.rs",
+            "prikk-store/src/commit_boundary/classification.rs",
             "prikk-store/src/doctor.rs",
             "prikk-store/src/doctor/restore_queue_target.rs"
         ],
-        "only the CLI's resolution module, doctor, and doctor --restore-queue-target may read the \
-         current-branch pointer"
+        "only the CLI's resolution module, doctor, doctor --restore-queue-target, and its own \
+         refusal text may read the current-branch pointer"
     );
 }
 

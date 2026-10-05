@@ -621,7 +621,14 @@ fn run_status(format_json: bool) -> std::result::Result<(), CliError> {
             .map_err(|err| err.to_string())?;
         let verdict = prikk_store::classify(&layout, &replay, &owning_ref, &witness)
             .map_err(|err| err.to_string())?;
-        if let Some(reason) = prikk_store::write_refusal_reason(&verdict) {
+        if let Some(reason) = prikk_store::write_refusal_reason(
+            &verdict,
+            Some(prikk_store::RestoreRefusalContext {
+                layout: &layout,
+                witness: &witness,
+                queued_count: replay.records.len(),
+            }),
+        ) {
             println!("warning: the next commit or seal will refuse: {reason}");
         } else if matches!(verdict, prikk_store::Verdict::Pending { .. }) {
             // RFC 166 §13 item 13: a queued commit that was durably written but never confirmed --
@@ -1112,15 +1119,17 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
         };
         let plan = result.map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
-        println!(
-            "restoring {} queued patch(es) to {}",
-            plan.patch_ids.len(),
-            plan.ref_name
-        );
+        let count = plan.patch_ids.len();
+        let plural = if count == 1 { "commit" } else { "commits" };
         if doctor_args.plan_only {
+            println!("restoring {count} queued {plural} to {}", plan.ref_name);
             println!("plan only -- nothing written");
         } else {
-            println!("queue ownership restored");
+            println!(
+                "the {count} queued {plural} now belong to {}; publish them with `prikk seal \
+                 --allow-no-audit`",
+                plan.ref_name
+            );
         }
         return Ok(());
     }
