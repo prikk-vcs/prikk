@@ -358,6 +358,8 @@ fn failed_key_append_keeps_previous_effective_policy() {
 /// but the content already moved. Same "operation happened, confirmation failed" shape the retired
 /// `atomic_replace`-based test proved for `MutableParentSync`. The skip count of 2 (not 1) is the
 /// direct consequence of the shared-failpoint fact this module's other test found the hard way.
+/// Injects `RequiredDirectorySync`, which exists only where a directory can be fsynced (Linux, macOS), not on Windows.
+#[cfg(not(windows))]
 #[test]
 fn failed_policy_append_exposes_retryable_new_effective_policy() {
     let root = unique_temp_dir("trust-policy-append-failure");
