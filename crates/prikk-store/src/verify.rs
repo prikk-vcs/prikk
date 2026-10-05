@@ -1477,6 +1477,8 @@ pub fn verify_repository_with_options(
     };
 
     // Stage: Refs. No upstream stage dependency.
+    #[cfg(test)]
+    crate::test_gates::existence_report::record(layout);
     let ref_log = read_and_decode_ref_log(layout, "verify-scan");
     let ref_verification =
         pipeline.run(VerificationStage::Refs, verify_refs_with(layout, &ref_log));

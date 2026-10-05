@@ -9,6 +9,8 @@ pub(crate) mod allocation_bound_scan;
 #[cfg(test)]
 pub(crate) mod dc55_identity_evidence;
 #[cfg(test)]
+pub(crate) mod existence_report;
+#[cfg(test)]
 pub(crate) mod format_stability_gate;
 #[cfg(test)]
 pub(crate) mod framed_decoder_fuzz;
