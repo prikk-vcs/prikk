@@ -85,11 +85,12 @@ pub(crate) fn encode_log_record_for_test(envelope: &ObjectEnvelope) -> Result<Ve
     )
 }
 
+pub(crate) use container::{DecodedRefLog, read_and_decode_ref_log};
 pub use container::{RefLogRecord, RefLogReplay};
 pub use verify::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefPublicationIssue,
 };
-pub(crate) use verify::{ensure_ref_target_valid, verify_refs};
+pub(crate) use verify::{ensure_ref_target_valid, verify_refs_with};
 
 /// The two-hop ref-tip resolution `bundle.rs`, `patch_set_digest.rs`, and `patch_exchange.rs` each
 /// need: `Branch` names a Block directly; `Tag` names a Tag object one hop away, whose own
@@ -385,32 +386,27 @@ fn ensure_publication_precondition(
 pub(crate) fn ref_log_tail_status(
     layout: &RepositoryLayout,
 ) -> Result<(usize, usize, Option<String>)> {
-    #[cfg(test)]
-    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
-    let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
-    )?;
-    let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
-        layout.repository_mutation_root(),
-        &relative,
-    )?
-    else {
+    ref_log_tail_status_of(container::read_and_decode_ref_log(layout, "ref-log-replay")?.as_ref())
+}
+
+/// [`ref_log_tail_status`] from an already-decoded ref log, for `verify`'s shared decode.
+pub(crate) fn ref_log_tail_status_of(
+    decoded: Option<&container::DecodedRefLog>,
+) -> Result<(usize, usize, Option<String>)> {
+    let Some(decoded) = decoded else {
         return Ok((0, 0, None));
     };
-    let discovery = container::decode_ref_container_records(&bytes)?;
-    if let Some(tail) = container::ref_log_container_tail(&bytes, &discovery) {
+    if let Some(tail) = container::ref_log_container_tail(&decoded.bytes, &decoded.replay) {
         return Ok((tail.len, tail.offset, None));
     }
-    let interior_damage =
-        discovery
-            .record_outcomes
-            .iter()
-            .find_map(|outcome| match &outcome.status {
-                container::RefContainerRecordStatus::Failed { message, .. } => {
-                    Some(message.clone())
-                }
-                container::RefContainerRecordStatus::Evaluated => None,
-            });
+    let interior_damage = decoded
+        .replay
+        .record_outcomes
+        .iter()
+        .find_map(|outcome| match &outcome.status {
+            container::RefContainerRecordStatus::Failed { message, .. } => Some(message.clone()),
+            container::RefContainerRecordStatus::Evaluated => None,
+        });
     Ok((0, 0, interior_damage))
 }
 
@@ -532,7 +528,8 @@ fn ref_log_damage_refusal(discovery: &container::RefContainerReplay) -> PrikkErr
 pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
     layout: &RepositoryLayout,
 ) -> Result<()> {
-    let verification = verify_refs(layout)?;
+    let ref_log = read_and_decode_ref_log(layout, "verify-scan");
+    let verification = verify_refs_with(layout, &ref_log)?;
     if verification.publication_issues.is_empty()
         && !verification.has_item_failure()
         && !evidence::has_incomplete_active_cleanup(layout, None)?

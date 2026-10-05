@@ -105,7 +105,8 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
             )));
         }
     };
-    let appended = check_appended_file_tails(layout)?;
+    let ref_log = crate::refs::read_and_decode_ref_log(layout, "ref-log-replay");
+    let appended = check_appended_file_tails(layout, &ref_log)?;
     // RFC 166 §13 item 4: `--repair-tails` also repairs the WAL, so it must also classify before
     // touching anything, the same as `--repair-wal-tail`. Row 8 (a damaged or stale witness over a
     // wholly sound WAL) is deliberately not refused here -- nothing is at risk, and this repair

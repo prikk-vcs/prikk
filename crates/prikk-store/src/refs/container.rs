@@ -795,23 +795,56 @@ pub(in crate::refs) fn read_back_ref_container_bytes(
     )
 }
 
-pub(in crate::refs) fn replay_ref_subsequence(
+/// The ref log container, read and decoded once. `verify` shares one of these across every reader it
+/// runs over the container (0.49.0 step 5 round 1 addendum F2): each decode of this shape costs about
+/// nine times the file, so a second decode is a second full cost, not a cheap re-check.
+pub(crate) struct DecodedRefLog {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) replay: RefContainerReplay,
+}
+
+/// One read and one decode of the ref log container, or `None` when the file does not exist. `scope`
+/// names the whole-read guard scope this read belongs to (`verify-scan` for `verify`'s shared read).
+pub(crate) fn read_and_decode_ref_log(
     layout: &RepositoryLayout,
-    ref_name_key: [u8; 32],
-) -> Result<RefLogReplay> {
+    scope: &'static str,
+) -> Result<Option<DecodedRefLog>> {
     #[cfg(test)]
-    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
+    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare(scope);
+    #[cfg(not(test))]
+    let _ = scope;
     let relative = layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
-        return Ok(RefLogReplay {
+        return Ok(None);
+    };
+    let replay = decode_ref_container_records(&bytes)?;
+    Ok(Some(DecodedRefLog { bytes, replay }))
+}
+
+pub(in crate::refs) fn replay_ref_subsequence(
+    layout: &RepositoryLayout,
+    ref_name_key: [u8; 32],
+) -> Result<RefLogReplay> {
+    match read_and_decode_ref_log(layout, "ref-log-replay")? {
+        Some(decoded) => ref_subsequence_of(&decoded, ref_name_key),
+        None => Ok(RefLogReplay {
             records: Vec::new(),
             trailing_partial_bytes: 0,
             record_outcomes: Vec::new(),
-        });
-    };
-    let replay = decode_ref_container_records(&bytes)?;
+        }),
+    }
+}
+
+/// One ref's own subsequence of an already-decoded ref log: [`replay_ref_subsequence`]'s body, without
+/// its own read or decode, so `verify` can replay every key from the one decode it already has.
+pub(in crate::refs) fn ref_subsequence_of(
+    decoded: &DecodedRefLog,
+    ref_name_key: [u8; 32],
+) -> Result<RefLogReplay> {
+    let bytes = &decoded.bytes;
+    let replay = &decoded.replay;
     let mut records = replay.records.iter();
     let mut ref_records = Vec::new();
     let mut ref_outcomes = Vec::new();
@@ -851,7 +884,7 @@ pub(in crate::refs) fn replay_ref_subsequence(
             }
         }
     }
-    let attributed_trailing = trailing_tail_ref_name_key(&bytes, replay.trailing_partial_bytes);
+    let attributed_trailing = trailing_tail_ref_name_key(bytes, replay.trailing_partial_bytes);
     let trailing_partial_bytes = if attributed_trailing == Some(ref_name_key) {
         replay.trailing_partial_bytes
     } else {

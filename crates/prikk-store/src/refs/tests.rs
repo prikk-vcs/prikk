@@ -364,7 +364,10 @@ fn ref_verification_returns_envelopes_from_retained_anchored_observation() -> pr
     std::fs::create_dir_all(root.join(".prikk/refs/logs"))?;
     std::fs::write(root.join(".prikk/refs/logs/replacement.log"), b"malicious")?;
 
-    let verification = super::verify_refs(&layout)?;
+    let verification = super::verify_refs_with(
+        &layout,
+        &super::read_and_decode_ref_log(&layout, "verify-scan"),
+    )?;
     assert_eq!(verification.ref_update_envelopes, vec![ref_update]);
     assert_eq!(verification.log_record_count, 1);
     let _ = std::fs::remove_dir_all(root);
@@ -666,7 +669,13 @@ fn ensure_no_incomplete_publication_refuses_when_a_ref_item_fails() {
         // Confirm the premise first: `verify_refs` itself no longer returns `Err` for this fixture
         // (item containment), so `ensure_no_incomplete_publication`'s own refusal cannot be coming
         // from that path -- it must be the `has_item_failure()` check.
-        assert!(super::verify_refs(&layout).is_ok());
+        assert!(
+            super::verify_refs_with(
+                &layout,
+                &super::read_and_decode_ref_log(&layout, "verify-scan")
+            )
+            .is_ok()
+        );
         assert!(super::ensure_no_incomplete_publication(&layout).is_err());
     }
     let _ = std::fs::remove_dir_all(root);

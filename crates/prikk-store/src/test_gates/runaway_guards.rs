@@ -541,22 +541,16 @@ fn verify_hashes_a_hostile_blob_container_within_k_times_its_size() {
     command_level_row("container frame", SCAN_BUDGET_MULTIPLE + 2);
 }
 
-/// **Open finding (0.49.0 step 5, D11/U3), not yet root-caused to one line**: unlike the WAL and
-/// blob-container rows above, a whole `verify` over a 2 MiB hostile ref-log container hashes about
-/// 56.6 MB -- roughly 27x the input, not the ~10x the reader-level budget alone would predict.
-/// `refs/verify/scan.rs::read_logs` and `refs.rs::ref_log_tail_status` each independently call
-/// `decode_ref_container_records` on the same container (the `Refs` and `AppendedFileTails` stages
-/// never share the result, the same shape RFC 167 D5 was for the WAL), and `read_logs` then calls
-/// `replay_ref_subsequence` once per ref-name-key it finds, which is at least a third pass -- but
-/// three passes alone would be roughly 3x, not 27x, so something past "it decodes more than once"
-/// is still unaccounted for. This ceiling asserts the finding **does not get worse**, the same
-/// promotion rule `store_size_independence.rs`'s open rows already use: fixing it is what should
-/// make this assertion fail, not a quietly wider number.
+/// **The ref log's own command-level row** (0.49.0 step 5, D11/U3; bound restored by round 1's
+/// addendum F2). A whole `verify` over a 2 MiB hostile ref-log container used to hash about 56.6 MB,
+/// ~27x the input: three independent decodes of the same container (`Refs`' discovery, `Refs`'
+/// per-key replay, `AppendedFileTails`' tail check), each costing ~9x on this shape -- one decode alone
+/// is the 8x budget plus the input. `verify` now reads and decodes the ref log once and shares it, so
+/// the bound is the same one the WAL and blob-container rows carry.
 #[test]
-fn verify_hashes_a_hostile_ref_log_an_open_finding_not_yet_bounded() {
-    // 1.5x the ~56.6 MB measured for a 2 MiB input when this ceiling was written (k in units of the
-    // input size, so ~27x rounds up with margin to 40x).
-    command_level_row("ref container", 40);
+fn verify_hashes_a_hostile_ref_log_within_k_times_its_size() {
+    use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
+    command_level_row("ref container", SCAN_BUDGET_MULTIPLE + 2);
 }
 
 /// The control named in [`command_level_row`]'s own doc: forcing the exact D5 regression back on

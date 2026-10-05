@@ -13,8 +13,7 @@ use prikk_object::{
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
 use crate::object_store::ObjectReader;
 use crate::refs::container::{
-    RefContainerRecordStatus, RefLogRecordStatus, RefLogReplay, decode_ref_container_records,
-    replay_ref_subsequence,
+    DecodedRefLog, RefContainerRecordStatus, RefLogRecordStatus, RefLogReplay, ref_subsequence_of,
 };
 use crate::refs::pointer_index::{
     PointerIndexEntry, PointerIndexRecordStatus, replay_pointer_index,
@@ -203,6 +202,7 @@ pub(super) fn read_logs(
     layout: &RepositoryLayout,
     objects: &impl ObjectReader,
     _pointers: &BTreeMap<String, PointerState>,
+    ref_log: &Result<Option<DecodedRefLog>>,
 ) -> Result<(
     BTreeMap<String, LogState>,
     usize,
@@ -210,35 +210,26 @@ pub(super) fn read_logs(
     BTreeMap<[u8; 32], String>,
     Vec<RefFileOutcome>,
 )> {
-    #[cfg(test)]
-    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("verify-scan");
-    let relative =
-        layout.repository_relative(&layout.ref_log_container_slot_path(ContainerSlot::A))?;
-    let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
-        layout.repository_mutation_root(),
-        &relative,
-    )?
-    else {
-        return Ok((BTreeMap::new(), 0, Vec::new(), BTreeMap::new(), Vec::new()));
+    let decoded = match ref_log {
+        Err(error) => return Err(error.clone()),
+        Ok(None) => return Ok((BTreeMap::new(), 0, Vec::new(), BTreeMap::new(), Vec::new())),
+        Ok(Some(decoded)) => decoded,
     };
-    let discovery = decode_ref_container_records(&bytes)?;
-    let mut keys: std::collections::BTreeSet<[u8; 32]> = discovery
+    let mut keys: std::collections::BTreeSet<[u8; 32]> = decoded
+        .replay
         .records
         .iter()
         .map(|record| record.ref_name_key)
         .collect();
-    keys.extend(
-        discovery
-            .record_outcomes
-            .iter()
-            .filter_map(|outcome| match &outcome.status {
-                RefContainerRecordStatus::Failed {
-                    claimed_ref_name_key: Some(key),
-                    ..
-                } => Some(*key),
-                _ => None,
-            }),
-    );
+    keys.extend(decoded.replay.record_outcomes.iter().filter_map(
+        |outcome| match &outcome.status {
+            RefContainerRecordStatus::Failed {
+                claimed_ref_name_key: Some(key),
+                ..
+            } => Some(*key),
+            _ => None,
+        },
+    ));
 
     let mut logs = BTreeMap::new();
     let mut total = 0_usize;
@@ -246,7 +237,7 @@ pub(super) fn read_logs(
     let mut failures_by_key = BTreeMap::new();
     let mut outcomes = Vec::new();
     for key in keys {
-        let replay = replay_ref_subsequence(layout, key)?;
+        let replay = ref_subsequence_of(decoded, key)?;
         let first_offset = replay
             .record_outcomes
             .first()

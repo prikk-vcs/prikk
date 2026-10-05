@@ -131,7 +131,12 @@ impl RefVerification {
 /// Read-only by construction (RFC 111 §6.1): it never writes an object, and it takes its own decoded
 /// index snapshot rather than sharing the repository verifier's, so the two cannot disagree about
 /// what they read.
-pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> {
+/// Takes a ref log `verify` has already read and decoded once (0.49.0 step 5 round 1 addendum F2), so
+/// the same container is not decoded again by this stage or by the tail check.
+pub(crate) fn verify_refs_with(
+    layout: &RepositoryLayout,
+    ref_log: &Result<Option<super::container::DecodedRefLog>>,
+) -> Result<RefVerification> {
     // RFC 111 §6.1: `verify_refs` is read-only (never calls `write_object`), so it takes its own
     // decoded index snapshot here rather than sharing `verify_repository_with_options`'s -- they are
     // two separate top-level constructions today (this one predates this change), and unifying them
@@ -142,7 +147,7 @@ pub(crate) fn verify_refs(layout: &RepositoryLayout) -> Result<RefVerification> 
     let (pointers, pointer_failures_by_key, pointer_outcomes, trailing_partial_pointer_index_bytes) =
         read_pointers(layout, &objects)?;
     let (logs, log_record_count, ref_log_envelopes, log_failures_by_key, log_outcomes) =
-        read_logs(layout, &objects, &pointers)?;
+        read_logs(layout, &objects, &pointers, ref_log)?;
     // DC-95 Stage 2 Level 2 handoff §7 Q4, ruled: stays a whole-set precheck. RFC 103: with format-1
     // retired, this is no longer "a format-2 repository contaminated by format-1 records" -- it is
     // simply malformed data, and the check is unconditional rather than format-gated. Still a claim

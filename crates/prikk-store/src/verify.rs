@@ -319,8 +319,8 @@ use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::received::list_received_pointers;
 use crate::received::received_index::{ReceivedIndexRecordStatus, replay_received_index};
 use crate::refs::{
-    RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid, ref_log_tail_status,
-    verify_refs,
+    DecodedRefLog, RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid,
+    read_and_decode_ref_log, ref_log_tail_status_of, verify_refs_with,
 };
 use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
 use crate::signature_diagnostics::{
@@ -1208,6 +1208,7 @@ pub fn verify_repository(layout: &RepositoryLayout) -> Result<RepositoryVerifica
 /// independently.
 pub(crate) fn check_appended_file_tails(
     layout: &RepositoryLayout,
+    ref_log: &Result<Option<DecodedRefLog>>,
 ) -> Result<Vec<AppendedFileTailStatus>> {
     let mut rows = Vec::with_capacity(8);
 
@@ -1326,7 +1327,11 @@ pub(crate) fn check_appended_file_tails(
         }
     }
 
-    match ref_log_tail_status(layout) {
+    let ref_log_status = match ref_log {
+        Ok(decoded) => ref_log_tail_status_of(decoded.as_ref()),
+        Err(error) => Err(error.clone()),
+    };
+    match ref_log_status {
         Ok((trailing_partial_bytes, tail_offset, interior_damage)) => {
             rows.push(AppendedFileTailStatus {
                 label: "ref log",
@@ -1472,7 +1477,9 @@ pub fn verify_repository_with_options(
     };
 
     // Stage: Refs. No upstream stage dependency.
-    let ref_verification = pipeline.run(VerificationStage::Refs, verify_refs(layout));
+    let ref_log = read_and_decode_ref_log(layout, "verify-scan");
+    let ref_verification =
+        pipeline.run(VerificationStage::Refs, verify_refs_with(layout, &ref_log));
 
     // Stage: ReceivedRefs (RFC 115 Stage 3 §6). No upstream stage dependency -- reads the received
     // index and the object store directly, the same footing `Refs` has.
@@ -1763,7 +1770,7 @@ pub fn verify_repository_with_options(
     let appended_file_tails = pipeline
         .run(
             VerificationStage::AppendedFileTails,
-            check_appended_file_tails(layout),
+            check_appended_file_tails(layout, &ref_log),
         )
         .unwrap_or_default();
 
