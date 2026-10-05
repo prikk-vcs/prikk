@@ -110,3 +110,5 @@ weakening an assertion, or `cfg`-ing a test away from a platform without naming 
 
 **Report:** `.git-exclude/review-request/step5-round-2-report-v2.md`, with `scripts/gates.py`'s summary on the final
 commit.
+
+**Round 2 closed 2026-10-06 for U1–U3 and Addendum 1** (reviews `step5-round-2-review-v1`, `-v2`). Commits `86a40b4f` … `c2e43920`, then `917792f6`, `d3b72787`, `10155238`. **U4 moved to round 3:** `test-and-process-debt-round-3-handoff-v1.md`.
