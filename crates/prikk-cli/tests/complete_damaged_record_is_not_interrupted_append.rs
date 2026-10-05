@@ -14,6 +14,30 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
+/// The container path and frame offset a printed line names after `prefix`, the path split off at `end`. The path is
+/// compared by identity (`support::assert_same_path`), never as text: a temp directory prints differently on macOS
+/// and Windows.
+fn assert_printed_frame(
+    text: &str,
+    marker: &str,
+    prefix: &str,
+    end: &str,
+    container: &Path,
+    offset: usize,
+) {
+    let line = text
+        .lines()
+        .find(|line| line.contains(marker))
+        .unwrap_or_else(|| panic!("no line contains {marker:?}\n{text}"));
+    let rest = &line[line.find(prefix).unwrap() + prefix.len()..];
+    let location = rest.split(end).next().unwrap();
+    let (printed, printed_offset) = location
+        .rsplit_once(&format!("{}#", std::path::MAIN_SEPARATOR))
+        .unwrap_or_else(|| panic!("no separator-#offset in {location:?}"));
+    support::assert_same_path(printed, container);
+    assert_eq!(printed_offset, offset.to_string(), "{line}");
+}
+
 fn run(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
     let output = support::prikk(repo).args(args).output().unwrap();
     (
@@ -79,12 +103,17 @@ fn a_torn_tail_is_reported_as_an_interrupted_append() {
         text.contains("interrupted appends: 1"),
         "the torn frame is counted as an interrupted append\n{text}"
     );
+    assert_printed_frame(
+        &text,
+        "warning: interrupted append in Blob at ",
+        "warning: interrupted append in Blob at ",
+        ": ",
+        &container,
+        torn_at,
+    );
     assert!(
-        text.contains(&format!(
-            "warning: interrupted append in Blob at {}/#{torn_at}",
-            container.display()
-        )) && text.contains("connectivity finds nothing that still needs it"),
-        "the warning names the torn offset as an interrupted append\n{text}"
+        text.contains("connectivity finds nothing that still needs it"),
+        "the warning says nothing references the torn frame\n{text}"
     );
     assert!(
         !text.contains("damaged record"),
@@ -116,11 +145,16 @@ fn a_complete_record_with_a_bad_checksum_is_a_failed_item_not_an_interrupted_app
         text.contains("object items: 1 scanned, 1 failed"),
         "the one record is a failed item\n{text}"
     );
+    assert_printed_frame(
+        &text,
+        ": failed: container checksum mismatch",
+        "object ",
+        " (blob)",
+        &container,
+        0,
+    );
     assert!(
-        text.contains(&format!(
-            "object {}/#0 (blob): failed: container checksum mismatch at byte offset 0",
-            container.display()
-        )),
+        text.contains(": failed: container checksum mismatch at byte offset 0"),
         "the failure names the checksum mismatch, worded as a failed object, not an interrupted \
          append\n{text}"
     );
@@ -174,7 +208,7 @@ fn an_earlier_object_that_rots_before_later_commits_is_a_failed_item() {
     assert_eq!(code, Some(1), "a rotted object is damage\n{text}");
     assert!(
         text.contains("object items: 3 scanned, 1 failed")
-            && text.contains("/#0 (blob): failed: container checksum mismatch at byte offset 0"),
+            && text.contains("#0 (blob): failed: container checksum mismatch at byte offset 0"),
         "the rotted first object is the failed item\n{text}"
     );
     assert!(
