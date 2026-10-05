@@ -117,6 +117,36 @@ These reviewed designs may govern downstream work but have not yet released.
 
 | ID | Title | Milestone |
 |---|---|---|
+| 105 | [RFC naming gate](./accepted/105-rfc-naming-gate.md) | Accepted 2026-08-17 |
+| 106 | [Anchor race control](./accepted/106-anchor-race-control.md) | Accepted 2026-08-17 (the residual DC-99 recorded) |
+| 107 | [Release distribution surface](./accepted/107-release-distribution-surface.md) | Accepted 2026-08-17 |
+| 118 | [Derive, never transcribe](./accepted/118-derive-never-transcribe.md) | Accepted 2026-08-24 |
+| 119 | [Release policy tooling: reset](./accepted/119-release-policy-reset.md) | Accepted 2026-08-24 |
+| 120 | [Open-work inventory](./accepted/120-open-work-inventory.md) | Accepted 2026-08-27, at the reduced scope of its §6 |
+| 131 | [Module grouping and visibility scoping](./accepted/131-module-grouping-and-visibility-scoping.md) | Accepted 2026-09-01 |
+| 139 | [The measurement corpus](./accepted/139-measurement-corpus.md) | Accepted 2026-09-06 |
+| 141 | [Publishing through CI](./accepted/141-publication-through-ci.md) | Accepted 2026-09-06 |
+| 150 | [Signing readiness: `prikk key status`](./accepted/150-signing-readiness.md) | Accepted 2026-09-12 |
+| 152 | [How prikk releases](./accepted/152-how-prikk-releases.md) | Accepted 2026-09-13 |
+| 153 | [`prikk diff`](./accepted/153-content-diff.md) | Accepted 2026-09-17 |
+| 154 | [A branch several maintainers advance](./accepted/154-shared-branch-adoption.md) | Accepted 2026-09-16; unimplemented, after RFC 155 |
+| 155 | [The repository-complete artifact](./accepted/155-repository-complete-artifact.md) | Accepted 2026-09-16; unimplemented |
+| 156 | [One object, several signers](./accepted/156-one-object-several-signers.md) | Accepted 2026-09-16; delivered in 0.45.0 |
+| 157 | [Reading a point of history: `tree` and `cat`](./accepted/157-reading-a-point.md) | Accepted 2026-09-17; delivered |
+| 158 | [Large objects](./accepted/158-large-objects.md) | Accepted 2026-09-21; Stage A delivered, Stages B–D open |
+| 159 | [Sealing without re-walking the lineage](./accepted/159-sealing-without-rewalking-the-lineage.md) | Accepted 2026-09-26; stack A delivered, stack B open |
+| 160 | [Guards against costs that follow the store, and lengths read from disk](./accepted/160-costs-that-follow-the-store-and-lengths-read-from-disk.md) | Accepted 2026-09-26; 0.49.0 step 5 under it |
+| 161 | [Release notes a reader and a consumer can use](./accepted/161-release-notes-a-reader-and-a-consumer-can-use.md) | Accepted 2026-09-26 |
+| 162 | [The recovery model](./accepted/162-the-recovery-model-caches-never-refuse-logs-end-positively.md) | Accepted 2026-09-27; delivered in 0.48.0 |
+| 163 | [A write never buries a crash state](./accepted/163-a-write-never-buries-a-crash-state.md) | Accepted 2026-09-29 |
+| 164 | [Every appended file has a way out](./accepted/164-every-appended-file-has-a-way-out.md) | Accepted 2026-09-30; delivered, unreleased (0.49.0) |
+| 165 | [Ref publication](./accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) | Accepted 2026-10-01; delivered, unreleased (0.49.0) |
+| 166 | [A queued commit has a witness](./accepted/166-a-queued-commit-has-a-witness.md) | Accepted 2026-10-03; delivered, unreleased (0.49.0) |
+| 167 | [Resynchronisation is linear](./accepted/167-resynchronisation-is-linear.md) | Accepted 2026-10-05; delivered, unreleased (0.49.0) |
+| DC-96 | [Windows anchor identity](./accepted/DC-96-WINDOWS-ANCHOR-IDENTITY.md) | Accepted 2026-08-16 |
+| DC-97 | [Windows durability evidence](./accepted/DC-97-WINDOWS-DURABILITY-EVIDENCE.md) | Accepted 2026-08-16 |
+| DC-98 | [Windows crash injection](./accepted/DC-98-WINDOWS-CRASH-INJECTION.md) | Accepted 2026-08-17 |
+| DC-99 | [Windows capability parity](./accepted/DC-99-WINDOWS-CAPABILITY-PARITY.md) | Accepted 2026-08-17 |
 | 148 | [Key Material Across Sessions](./accepted/148-key-material-across-sessions.md) | **Accepted 2026-09-12**, amended twice that day; handoff live; 0.40.0's headline. `PRIKK_*_SEED_FILE` path variables: one non-secret line persisted once; prikk never invents the location. The trade RFC 135 §9 deferred to the owner. |
 | 147 | [Refusal Visibility](./accepted/147-refusal-visibility.md) | **Accepted 2026-09-12**; both cases delivered; one residue handoff live. Opened 2026-09-10 on two stikk reports, both reproduced first. A read surface must not describe as ordinary a path a write will refuse: a symlink reads `untracked` while `unsupported paths: 0`, and a tag created at a block is declined by checkout outside checkout's own vocabulary. |
 | 146 | [Machine-Readable Listings](./accepted/146-machine-readable-listings.md) | **Accepted 2026-09-10**, the day it was opened; handoff live. `--format json` for `log`, `branch` and `tag` — the three listing commands that lack it while nine others have it. Consistency only; decides nothing about RFC 145 |
@@ -167,7 +197,9 @@ These reviewed designs may govern downstream work but have not yet released.
 These records currently live under `done/`.
 
 | ID | Title | Status |
-|---|---|
+|---|---|---|
+| 137 | [The project's entrance: a landing page](./done/137-project-entrance-landing-page.md) | Closed 2026-09-13 |
+| 151 | [The current branch, and `branch switch`](./done/151-the-current-branch.md) | Done 2026-09-13 |
 | RFC-000 | [RFC lifecycle policy](./done/000-rfc-lifecycle-policy.md) | — |
 | DC-10 | [Rollback Draft Identity and AUTHOR Signing](./done/DC-10-ROLLBACK-DRAFT-SIGNING.md) | — |
 | DC-11 | [Publication Signing and Minimal Trust Store](./done/DC-11-MAINTAINER-TRUST-STORE.md) | — |
