@@ -861,6 +861,9 @@ pub(crate) fn decode_trust_policy_records(bytes: &[u8]) -> Result<TrustPolicyRep
 /// Generation-aware (RFC 102 Stage 6 Step 1, design-v1.md §15.6): resolves to `A` today, since
 /// nothing has ever appended a generation record.
 pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPolicyReplay> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("trust-policy-replay");
     let slot = resolve_live_slot(layout, &layout.trust_policy_generation_log_path())?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {

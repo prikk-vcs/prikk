@@ -995,11 +995,17 @@ fn author_key_container_bytes(layout: &RepositoryLayout) -> prikk_error::Result<
 fn received_index_bytes(
     layout: &RepositoryLayout,
 ) -> prikk_error::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    // 0.49.0 step 5, D11/P1: this is fixture inspection (proving a refused import's "before" and
+    // "after" bytes are identical), not a production reader, so a ranged read standing in for a
+    // whole one -- not a new declared scope -- is the honest fix: the guard is about production
+    // reads whose cost follows the store, and this test helper's own cost already does not.
     let read = |path: std::path::PathBuf| -> prikk_error::Result<Vec<u8>> {
         let relative = layout.repository_relative(&path)?;
-        Ok(crate::foundation::fsutil::read_file_if_exists(
+        Ok(crate::foundation::fsutil::read_file_range_if_exists(
             layout.repository_mutation_root(),
             &relative,
+            0,
+            usize::MAX,
         )?
         .unwrap_or_default())
     };

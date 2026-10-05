@@ -468,6 +468,11 @@ impl Wal {
 
     fn read_bytes(&self) -> Result<Option<Vec<u8>>> {
         if let Some((root, relative)) = &self.mutation {
+            // 0.49.0 step 5, D11/P1: declared once, here, so every caller of `Wal::replay` is
+            // covered without needing to know this guard exists.
+            #[cfg(test)]
+            let _whole_read_scope =
+                crate::foundation::fsutil::whole_read_guard::declare("wal-replay");
             read_file_if_exists(root, relative)
         } else {
             match fs::read(&self.path) {

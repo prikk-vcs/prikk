@@ -73,9 +73,46 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reason: "`prikk doctor --rebuild-pointer-index` re-derives the whole ref-pointer index from every record in the ref log                  container, once per run (`decode_ref_log_for_rebuild`); re-deriving the pointer index from the ref log is                  what rebuilding means, the same reasoning `index-rebuild` already has for the object index",
         reference: "RFC 165 R5",
     },
+    // 0.49.0 step 5, D11/P1: the four rows below extend this guard to the other RFC 167 M5 readers
+    // (the WAL, pointer index, received index, trust policy). Each one's own replay function reads
+    // its file whole, by the same reasoning `index-whole-decode` already has for the object index:
+    // there is no "tail-only" form of "decode every record this file holds", so a whole read is the
+    // operation's definition, not a cost that follows a caller's own choice. Each is declared exactly
+    // once, inside the one function every caller of that family funnels through (`Wal::read_bytes`,
+    // `replay_pointer_index`, `replay_received_index`, `replay_trust_policy`), so no caller elsewhere
+    // needs to know this guard exists.
+    DeclaredScope {
+        id: "wal-replay",
+        status: ScopeStatus::Intentional,
+        reason: "`Wal::replay` (via `Wal::read_bytes`) decodes the whole active WAL: replaying a log means reading every record it                  holds, the same reasoning `index-whole-decode` already has for the object index",
+        reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1",
+    },
+    DeclaredScope {
+        id: "pointer-index-replay",
+        status: ScopeStatus::Intentional,
+        reason: "`replay_pointer_index` decodes the whole live pointer-index slot: the same reasoning `index-whole-decode` has for                  the object index, for the ref pointer index's own container",
+        reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1",
+    },
+    DeclaredScope {
+        id: "received-index-replay",
+        status: ScopeStatus::Intentional,
+        reason: "`replay_received_index` decodes the whole live received-index slot: the same reasoning `index-whole-decode` has                  for the object index, for the received-ref index's own container",
+        reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1",
+    },
+    DeclaredScope {
+        id: "trust-policy-replay",
+        status: ScopeStatus::Intentional,
+        reason: "`replay_trust_policy` decodes the whole live trust-policy slot: the same reasoning `index-whole-decode` has for                  the object index, for the trust-policy container",
+        reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1",
+    },
 ];
 
 /// Which family of store-growing file `relative` (relative to the repository's `.prikk/` directory) is in, if it is in one.
+///
+/// 0.49.0 step 5, D11/P1: four more families, each a RFC 167 M5 reader this guard did not see before
+/// -- the pointer index, the received index, trust policy, and the WAL. Each one's own cost already
+/// follows the store the same way the original three do (RFC 167's own six quadratic readers minus
+/// the two -- object containers, the ref log -- this guard already covered).
 pub(crate) fn store_growing_kind(relative: &Path) -> Option<&'static str> {
     let text = relative.to_str()?.replace('\\', "/");
     if text == "containers/index.container" {
@@ -90,6 +127,22 @@ pub(crate) fn store_growing_kind(relative: &Path) -> Option<&'static str> {
     if let Some(rest) = text.strip_prefix("refs/containers/") {
         if rest.starts_with("log-") && rest.ends_with(".container") {
             return Some("ref log container");
+        }
+        if rest.starts_with("pointer-index-") && rest.ends_with(".container") {
+            return Some("pointer index");
+        }
+        if rest.starts_with("received-index-") && rest.ends_with(".container") {
+            return Some("received index");
+        }
+    }
+    if let Some(rest) = text.strip_prefix("trust/") {
+        if rest.starts_with("policy-") && rest.ends_with(".container") {
+            return Some("trust policy");
+        }
+    }
+    if let Some(rest) = text.strip_prefix("active/") {
+        if rest.ends_with("/queue.wal") {
+            return Some("WAL");
         }
     }
     None
@@ -208,11 +261,15 @@ mod tests {
 
     use super::{SCOPES, ScopeStatus, declare, store_growing_kind};
 
-    /// The classifier names the three families and nothing else -- in particular not the compacting containers, whose size follows
-    /// refs and trust records rather than objects.
-    /// **Perturb:** return `Some` for every `.container`: the second half goes red.
+    /// The classifier names the seven families and nothing else -- in particular not the compacting
+    /// containers that are not one of the seven (trust keys, author keys, the three generation
+    /// logs), whose size follows refs and trust records rather than objects, and not the ref-name/
+    /// witness files that sit beside the WAL in the same `active/<name>/` directory.
+    /// 0.49.0 step 5, D11/P1: four more families added to the original three -- the pointer index,
+    /// the received index, trust policy, and the WAL -- the other RFC 167 M5 readers.
+    /// **Perturb:** return `Some` for every `.container`: the non-families half goes red.
     #[test]
-    fn the_guard_classifies_the_three_growing_families_and_only_those() {
+    fn the_guard_classifies_the_seven_growing_families_and_only_those() {
         assert_eq!(
             store_growing_kind(Path::new("containers/blob/a.container")),
             Some("object container")
@@ -229,13 +286,37 @@ mod tests {
             store_growing_kind(Path::new("refs/containers/log-a.container")),
             Some("ref log container")
         );
+        assert_eq!(
+            store_growing_kind(Path::new("refs/containers/pointer-index-a.container")),
+            Some("pointer index")
+        );
+        assert_eq!(
+            store_growing_kind(Path::new("refs/containers/received-index-b.container")),
+            Some("received index")
+        );
+        assert_eq!(
+            store_growing_kind(Path::new("trust/policy-a.container")),
+            Some("trust policy")
+        );
+        assert_eq!(
+            store_growing_kind(Path::new("active/default/queue.wal")),
+            Some("WAL")
+        );
+        assert_eq!(
+            store_growing_kind(Path::new("active/some-other-session/queue.wal")),
+            Some("WAL")
+        );
         for other in [
             "containers/generations.log",
-            "refs/containers/pointer-index-a.container",
-            "refs/containers/received-index-a.container",
-            "trust/policy-a.container",
+            "refs/containers/pointer-index-generation.log",
+            "refs/containers/received-index-generation.log",
+            "trust/policy-generation.log",
+            "trust/keys.container",
+            "trust/author-keys.container",
+            "active/default/ref-name",
+            "active/default/witness",
             "HEAD",
-            "wal/active.wal",
+            "FORMAT",
         ] {
             assert_eq!(store_growing_kind(Path::new(other)), None, "{other}");
         }
@@ -284,10 +365,24 @@ mod tests {
         let root = crate::test_gates::test_support::unique_temp_dir("whole-read-guard-fires");
         let layout = RepositoryLayout::init(root.clone()).expect("init");
         let mutation = layout.repository_mutation_root();
-        for relative in [
-            "containers/blob/a.container",
-            "containers/index.container",
-            "refs/containers/log-a.container",
+        // 0.49.0 step 5, D11/P1: the four new families, each paired with one of its own declared
+        // scopes (any one of them, when a family has more than one caller-site scope) -- the same
+        // "fails outside, succeeds inside, a ranged read is never a whole one" proof the original
+        // three already had.
+        for (relative, scope_id) in [
+            ("containers/blob/a.container", "verify-scan"),
+            ("containers/index.container", "verify-scan"),
+            ("refs/containers/log-a.container", "verify-scan"),
+            ("active/default/queue.wal", "wal-replay"),
+            (
+                "refs/containers/pointer-index-a.container",
+                "pointer-index-replay",
+            ),
+            (
+                "refs/containers/received-index-a.container",
+                "received-index-replay",
+            ),
+            ("trust/policy-a.container", "trust-policy-replay"),
         ] {
             // Built from components, so the separators are the platform's (the message names the path as `Path::display` prints it).
             let path: std::path::PathBuf = relative.split('/').collect();
@@ -304,7 +399,7 @@ mod tests {
                 "{relative}: {message}"
             );
             {
-                let _scope = declare("verify-scan");
+                let _scope = declare(scope_id);
                 read_file_if_exists(mutation, path).expect("declared scope reads");
             }
             read_file_range_if_exists(mutation, path, 0, usize::MAX)

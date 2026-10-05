@@ -513,6 +513,9 @@ fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize, bool)> {
 /// Uses [`scan_received_index_tail`], not a full replay: this check does not need any entry's own
 /// fields, only whether the file ends at its last sound record.
 pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Result<()> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("received-index-replay");
     let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -540,6 +543,9 @@ pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Re
 /// pointer index. Generation-aware (RFC 102 Stage 6 Step 1, design-v1.md §15.6): resolves to `A`
 /// today, since nothing has ever appended a generation record.
 pub(crate) fn replay_received_index(layout: &RepositoryLayout) -> Result<ReceivedIndexReplay> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("received-index-replay");
     let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
