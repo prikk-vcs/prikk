@@ -313,18 +313,26 @@ runaway_guard_case!(r3_ref_container, ref_container_format());
 #[test]
 fn every_format_has_a_runaway_guard_case() {
     let names: Vec<&str> = all_formats().iter().map(|format| format.name).collect();
-    for name in [
-        "container frame",
-        "object index",
-        "WAL",
-        "trust key",
-        "trust policy",
-        "author key",
-        "received index",
-        "generation",
-        "pointer index",
-        "ref container",
-    ] {
+    // 0.49.0 step 5, D11/P4: read from `hostile_lengths::FRAMED_FORMAT_CASES`, the one registry,
+    // rather than this test's own separate copy of the name list -- the two names that differ from
+    // the registry's own spelling (`FRAMED_FORMAT_CASES` names the two trust-index cases by what
+    // they decode; `all_formats()` names them by what they guard) are translated explicitly, not
+    // silently dropped. "lifecycle cache", "verified-blocks record" and "commit index" are in the
+    // registry but outside `all_formats()`'s own resync-scan family (RFC 160 §3.4's wider "any
+    // length or count field" scope, not RFC 167 M5's narrower one) and are excluded by name, not by
+    // being absent from a second, separately-maintained list.
+    let outside_the_resync_family = ["lifecycle cache", "verified-blocks record", "commit index"];
+    for (registry_name, _case) in super::hostile_lengths::FRAMED_FORMAT_CASES {
+        if outside_the_resync_family.contains(registry_name) {
+            continue;
+        }
+        let name = match *registry_name {
+            "trust index: key entries" => "trust key",
+            "trust index: policy snapshots" => "trust policy",
+            "author-key index" => "author key",
+            "generation file" => "generation",
+            other => other,
+        };
         assert!(names.contains(&name), "{name}: no case in `all_formats()`");
     }
 }

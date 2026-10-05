@@ -676,9 +676,42 @@ fn a_cursors_bounded_capacity_is_what_the_remaining_bytes_could_hold() {
     assert_eq!(cursor.bounded_capacity(1 << 32, 2), 0, "nothing is left");
 }
 
-/// **The list of formats, and the case that covers each.** A format with no case fails here by name. (`pointer index` and `ref
-/// container` are in `refs/tests/hostile_lengths.rs`; the rest are above.) Add a format's row, and its case, in the round that adds
-/// a record format with a length or a count.
+/// **The one registry** (0.49.0 step 5, D11/P4, `014-review.md:290`: "P4 discovers its formats
+/// instead of listing them") **every format-completeness check in this suite reads, instead of each
+/// keeping its own separate hand list** -- before this round, [`the_suite_covers_every_format`] and
+/// `runaway_guards.rs::every_format_has_a_runaway_guard_case` each carried their own copy, which could
+/// drift from each other the same way they could each drift from [`formats`]/`all_formats`. A format
+/// with no row here is simply not checked for completeness at all; a row with no matching
+/// `hostile_case!` fails [`the_suite_covers_every_format`] by name. `pointer index` and `ref
+/// container` are the two also-framed formats whose replay types are private to `refs` (their own
+/// `hostile_case!`s live in `refs/tests/hostile_lengths.rs`); the rest are above. **Add a row here**,
+/// and its case, in the round that adds a record format with a length or a count -- not two rows in
+/// two files.
+pub(crate) const FRAMED_FORMAT_CASES: &[(&str, &str)] = &[
+    ("container frame", "hostile_length_container_frame"),
+    ("object index", "hostile_length_object_index"),
+    ("WAL", "hostile_length_wal"),
+    ("trust index: key entries", "hostile_length_trust_key"),
+    (
+        "trust index: policy snapshots",
+        "hostile_length_trust_policy",
+    ),
+    ("author-key index", "hostile_length_author_key"),
+    ("pointer index", "hostile_length_pointer_index"),
+    ("received index", "hostile_length_received_index"),
+    ("ref container", "hostile_length_ref_container"),
+    ("lifecycle cache", "hostile_length_lifecycle_cache"),
+    ("verified-blocks record", "hostile_length_verified_blocks"),
+    ("commit index", "hostile_length_commit_index"),
+    ("generation file", "hostile_length_generation"),
+];
+
+/// **Control**: add a row to [`FRAMED_FORMAT_CASES`] with no matching `hostile_case!` (a dummy
+/// fourteenth format), and this test fails, naming it -- the registry alone is not self-enforcing
+/// (nothing stops an entry from being added without its case), which is exactly why this check
+/// still runs rather than trusting the registry's own existence. Verified by hand this round: adding
+/// `("dummy fourteenth format", "hostile_length_dummy_fourteenth")` made this test fail, naming it
+/// exactly; reverted immediately after.
 #[test]
 fn the_suite_covers_every_format() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -690,24 +723,7 @@ fn the_suite_covers_every_format() {
         sources
             .push_str(&std::fs::read_to_string(root.join(file)).expect("reading a suite source"));
     }
-    for (format, case) in [
-        ("container frame", "hostile_length_container_frame"),
-        ("object index", "hostile_length_object_index"),
-        ("WAL", "hostile_length_wal"),
-        ("trust index: key entries", "hostile_length_trust_key"),
-        (
-            "trust index: policy snapshots",
-            "hostile_length_trust_policy",
-        ),
-        ("author-key index", "hostile_length_author_key"),
-        ("pointer index", "hostile_length_pointer_index"),
-        ("received index", "hostile_length_received_index"),
-        ("ref container", "hostile_length_ref_container"),
-        ("lifecycle cache", "hostile_length_lifecycle_cache"),
-        ("verified-blocks record", "hostile_length_verified_blocks"),
-        ("commit index", "hostile_length_commit_index"),
-        ("generation file", "hostile_length_generation"),
-    ] {
+    for (format, case) in FRAMED_FORMAT_CASES {
         assert!(
             sources.contains(&format!("hostile_case!({case},")),
             "{format}: no hostile-length case `{case}`"

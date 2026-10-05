@@ -152,36 +152,6 @@ pub(crate) fn isolated_with_timeout(module: &str, case: &str, timeout: Duration,
     );
 }
 
-pub(crate) fn isolated(module: &str, case: &str, body: fn()) {
-    if std::env::var("PRIKK_HOSTILE_CHILD").as_deref() == Ok(case) {
-        limit_address_space();
-        body();
-        return;
-    }
-    let path = format!(
-        "{}::{case}",
-        module.strip_prefix("prikk_store::").unwrap_or(module)
-    );
-    let output = Command::new(std::env::current_exe().expect("this test binary"))
-        .args(["--exact", &path, "--nocapture", "--test-threads=1"])
-        .env("PRIKK_HOSTILE_CHILD", case)
-        .output()
-        .expect("spawning the child test process");
-    assert!(
-        output.status.success(),
-        "{case}: the child process did not exit cleanly ({:?}) -- a hostile length was allocated or panicked\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    // The child ran the case (a filter that matched nothing also "succeeds").
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-        "{case}: the child ran no test: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-}
-
 #[cfg(target_os = "linux")]
 fn limit_address_space() {
     use rustix::process::{Resource, Rlimit, setrlimit};
@@ -205,9 +175,14 @@ macro_rules! hostile_case {
     ($name:ident, $body:path) => {
         #[test]
         fn $name() {
-            $crate::test_gates::hostile_length_support::isolated(
+            // 0.49.0 step 5, D11/P4: every child process gets a timeout (`014-review.md:290`) --
+            // `isolated` had none, so a hung child (R2 should make this impossible, but a wall-clock
+            // timeout is the same belt-and-suspenders every other R1 run already has) would block
+            // this test, and every test after it, forever instead of failing one case.
+            $crate::test_gates::hostile_length_support::isolated_with_timeout(
                 module_path!(),
                 stringify!($name),
+                std::time::Duration::from_secs(30),
                 $body,
             );
         }
