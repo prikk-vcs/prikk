@@ -1338,6 +1338,43 @@ fn validate_bundle_contents(
         ref_state_envelope.schema_version,
     )?;
 
+    // 0.49.0 step 5, round 2 item 1 (ruled): the exported ref's own chain and the attestations each link requires
+    // must be present, carried by this bundle or already here. The walk follows carried RefStates only; a link
+    // the bundle does not carry must be present locally, and a local link ends the walk.
+    let mut chain_seen: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut link = ref_state_payload.clone();
+    loop {
+        for attestation_id in &link.required_attestation_ids {
+            if !present(ObjectType::Attestation, *attestation_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
+                )));
+            }
+        }
+        let Some(previous) = link.previous_ref_state_id else {
+            break;
+        };
+        if !chain_seen.insert(previous) {
+            return Err(PrikkError::MalformedData(format!(
+                "RefState chain for {origin_ref_name} contains a cycle at {previous}"
+            )));
+        }
+        if !present(ObjectType::RefState, previous) {
+            return Err(PrikkError::Integrity(format!(
+                "RefState chain for {origin_ref_name} names previous RefState {previous}, which is {missing_clause}"
+            )));
+        }
+        match bundle_objects_by_id.get(&previous) {
+            Some(envelope) => {
+                link = RefStatePayload::decode_canonical(
+                    &envelope.canonical_payload,
+                    envelope.schema_version,
+                )?;
+            }
+            None => break,
+        }
+    }
+
     // DC-44 increment 3, control 4: a manifest that disagrees with the payload is refused, the
     // same shape as the bundle-internal author-key self-consistency check above. `declared_ref_-
     // name`/`declared_object_count` exist on the wire only to be checked here -- checked against

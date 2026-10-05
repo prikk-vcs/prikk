@@ -119,7 +119,8 @@ fn removing_a_declaration_names_its_file() {
         // AppendedFileTails stages, 2,336 -> 2,343.
         // 0.49.0 step 5 round 2 U3: the measure-first hook (test-only, `cfg(test)`) and the attestation check's
         // import, 2,343 -> 2,347.
-        detail.contains("2347"),
+        // 0.49.0 step 5 round 2 item 1: verify reads each received tip's previous state, 2,347 -> 2361.
+        detail.contains("2361"),
         "the line count is in the message: {detail}"
     );
     assert!(

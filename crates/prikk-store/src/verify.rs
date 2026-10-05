@@ -1942,7 +1942,21 @@ fn verify_received_refs(
                 payload.target_object_id,
                 pointer.ref_state_id,
             )?;
-            ensure_required_attestations_present(object_store, &payload, pointer.ref_state_id)
+            ensure_required_attestations_present(object_store, &payload, pointer.ref_state_id)?;
+            // 0.49.0 step 5, round 2 item 1: one read of the tip's own previous state (defence in depth; the
+            // import refuses a chain whose link is absent, and no received ref has a RefUpdate log to check it).
+            if let Some(previous) = payload.previous_ref_state_id {
+                if object_store
+                    .read_typed(previous, ObjectType::RefState)?
+                    .is_none()
+                {
+                    return Err(PrikkError::Integrity(format!(
+                        "received RefState {} names missing previous RefState {previous}",
+                        pointer.ref_state_id
+                    )));
+                }
+            }
+            Ok(())
         })();
         outcomes.push(RefItemOutcome {
             ref_name: pointer.ref_name,

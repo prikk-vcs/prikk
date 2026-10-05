@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed — `bundle import` refuses a bundle whose ref's chain or required attestations are not carried (0.49.0 step 5, round 2, item 1)
+
+An imported bundle's exported ref must carry, or already have, every earlier RefState on its chain
+(`previous_ref_state_id`) and every attestation its RefStates require. Before this, the import checked the
+exported target, blobs, parents and manifests, but not these, so a bundle with a cut chain imported a received
+ref whose history was missing. Honest exports are unaffected: `bundle export` already carries the whole chain
+and every required attestation. The refusal happens before any write, the same as the other closure checks.
+
+### Output changes — a received ref whose previous state is missing is a failed received-ref item (0.49.0 step 5, round 2, item 1)
+
+`verify` reads the previous RefState of each received ref's tip and reports
+`received RefState <id> names missing previous RefState <id>` as that ref's failed item. This is one read per
+received ref, the tip's link only (a received ref has no RefUpdate log to check deeper links against).
+
 ### Fixed — resynchronising past a torn or invalid frame was quadratic on crafted content (RFC 167, M5)
 
 The WAL, object containers, trust policy, the received index, the ref log container and the pointer index share

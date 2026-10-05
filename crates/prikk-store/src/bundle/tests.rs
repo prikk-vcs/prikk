@@ -3228,3 +3228,219 @@ fn the_bound_stops_verifying_once_the_count_passes_the_limit() -> prikk_error::R
     let _ = std::fs::remove_dir_all(target.root());
     Ok(())
 }
+
+/// `seal_two_block_history` plus one more published RefState on top of its tip, so the ref's chain has a link
+/// to walk (the first RefState has no previous state, so the item-1 refusal needs a second one).
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn seal_two_ref_states(layout: &RepositoryLayout) -> prikk_error::Result<()> {
+    let child_block_id = seal_two_block_history(layout)?;
+    let ref_store = RefStore::new(layout.clone());
+    let first = ref_store
+        .read_current_ref_state_id("heads/main")?
+        .expect("the first publication made a tip");
+    let second_state = signed_ref_state_envelope("heads/main", Some(first), child_block_id, 2);
+    let second_id = second_state.object_id();
+    let second_update =
+        signed_ref_update_envelope("heads/main", Some(first), second_id, child_block_id, 2);
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: Some(first),
+        ref_state: second_state,
+        ref_update: second_update,
+    })?;
+    Ok(())
+}
+
+/// 0.49.0 step 5, round 2 item 1: an honest export re-encoded in the manifest-free shape, with `edit` applied to
+/// the object list first. The re-encoding is the same one the existing manifest-free fixtures use.
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn forged_bundle(
+    source: &RepositoryLayout,
+    edit: impl FnOnce(&mut Vec<ObjectEnvelope>),
+) -> prikk_error::Result<Vec<u8>> {
+    let (_, bytes) = export_bundle(source, "heads/main")?;
+    let (ref_name, mut objects, author_keys, _manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+    edit(&mut objects);
+    encode_bundle_v2_for_test(&ref_name, &objects, &author_keys)
+}
+
+/// **Item 1, refusal A: a bundle whose exported ref's previous RefState is not carried is refused.** The honest
+/// export carries the whole chain, so the control (the unforged bundle) imports.
+/// **Perturb:** delete the chain-walk's presence check and this goes green.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_bundle_whose_chain_lacks_a_previous_ref_state_is_refused() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("item1-chain-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_ref_states(&source)?;
+
+    let honest = forged_bundle(&source, |_| {})?;
+    let target_root = unique_temp_dir("item1-chain-control-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    import_bundle(&target, &honest, &BundleImportOptions::default_limits())?;
+
+    let forged = forged_bundle(&source, |objects| {
+        let tip = RefStatePayload::decode_canonical(
+            &objects[0].canonical_payload,
+            objects[0].schema_version,
+        )
+        .expect("the exported tip decodes");
+        let previous = tip
+            .previous_ref_state_id
+            .expect("the fixture has a history");
+        objects.retain(|envelope| envelope.object_id() != previous);
+    })?;
+    let refused_root = unique_temp_dir("item1-chain-refused-target");
+    let refused = RepositoryLayout::init(refused_root.clone())?;
+    let error = import_bundle(&refused, &forged, &BundleImportOptions::default_limits())
+        .expect_err("a chain with a missing previous state is refused");
+    assert!(
+        error.to_string().contains("names previous RefState"),
+        "{error}"
+    );
+    assert!(read_received_pointer(&refused, "remotes/heads/main")?.is_none());
+
+    for root in [source_root, target_root, refused_root] {
+        let _ = std::fs::remove_dir_all(root);
+    }
+    Ok(())
+}
+
+/// **Item 1, refusal B: a required attestation the bundle does not carry is refused.** The tip is re-encoded with a
+/// required attestation id that no object carries. **Control:** the same tip with that attestation carried is not
+/// refused on this rule. **Perturb:** remove the attestation presence check and the refusal goes away.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_bundle_requiring_an_absent_attestation_is_refused_and_a_carried_one_is_not()
+-> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("item1-attest-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+
+    let attestation =
+        ObjectEnvelope::unsigned(ObjectType::Attestation, 1, b"an attestation body".to_vec());
+    let attestation_id = attestation.object_id();
+    let requiring = |objects: &mut Vec<ObjectEnvelope>| {
+        let mut tip = RefStatePayload::decode_canonical(
+            &objects[0].canonical_payload,
+            objects[0].schema_version,
+        )
+        .expect("the exported tip decodes");
+        tip.required_attestation_ids.push(attestation_id);
+        objects[0] = ObjectEnvelope::unsigned(
+            ObjectType::RefState,
+            objects[0].schema_version,
+            tip.to_canonical_bytes().expect("the edited tip encodes"),
+        );
+    };
+
+    let absent = forged_bundle(&source, requiring)?;
+    let refused_root = unique_temp_dir("item1-attest-refused-target");
+    let refused = RepositoryLayout::init(refused_root.clone())?;
+    let error = import_bundle(&refused, &absent, &BundleImportOptions::default_limits())
+        .expect_err("an absent required attestation is refused");
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("requires attestation {attestation_id}")),
+        "{error}"
+    );
+
+    let carried = forged_bundle(&source, |objects| {
+        requiring(objects);
+        objects.push(attestation.clone());
+    })?;
+    let carried_root = unique_temp_dir("item1-attest-carried-target");
+    let carried_target = RepositoryLayout::init(carried_root.clone())?;
+    let carried_error = import_bundle(
+        &carried_target,
+        &carried,
+        &BundleImportOptions::default_limits(),
+    )
+    .err()
+    .map(|error| error.to_string())
+    .unwrap_or_default();
+    assert!(
+        !carried_error.contains("requires attestation"),
+        "a carried attestation is not refused on the presence rule: {carried_error}"
+    );
+
+    for root in [source_root, refused_root, carried_root] {
+        let _ = std::fs::remove_dir_all(root);
+    }
+    Ok(())
+}
+
+/// 0.49.0 step 5, round 2 item 1 (verify's half): a received ref whose tip is stored but whose previous state is not
+/// is damage at `verify`, not a clean received ref. **Control:** the same received tip with its previous state stored
+/// is evaluated clean. **Perturb:** remove the one-read check in `verify_received_refs` and the first case goes green.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn verify_fails_a_received_tip_whose_previous_state_is_absent_and_passes_it_when_present()
+-> prikk_error::Result<()> {
+    use crate::object_store::ObjectWriter;
+    use crate::received::write_received_pointer;
+    use crate::refs::RefItemStatus;
+
+    let source_root = unique_temp_dir("item1-received-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_ref_states(&source)?;
+    let source_refs = RefStore::new(source.clone());
+    let tip_id = source_refs
+        .read_current_ref_state_id("heads/main")?
+        .expect("the source has a tip");
+    let tip = FileObjectStore::new(source.clone())
+        .read_object(tip_id)?
+        .expect("the tip envelope is readable");
+    let payload = RefStatePayload::decode_canonical(&tip.canonical_payload, tip.schema_version)?;
+    let previous_id = payload
+        .previous_ref_state_id
+        .expect("the fixture has a history");
+    let previous = FileObjectStore::new(source.clone())
+        .read_object(previous_id)?
+        .expect("the previous state is readable");
+    let block = FileObjectStore::new(source.clone())
+        .read_object(payload.target_object_id)?
+        .expect("the target block is readable");
+
+    let received_outcome = |with_previous: bool| -> prikk_error::Result<RefItemStatus> {
+        let root = unique_temp_dir(if with_previous {
+            "item1-received-control"
+        } else {
+            "item1-received-forged"
+        });
+        let target = RepositoryLayout::init(root.clone())?;
+        let mut store = FileObjectStore::new(target.clone());
+        store.write_object(&block)?;
+        store.write_object(&tip)?;
+        if with_previous {
+            store.write_object(&previous)?;
+        }
+        write_received_pointer(&target, "remotes/heads/main", tip_id)?;
+        let report = crate::verify_repository(&target)?;
+        let status = report
+            .received_ref_item_outcomes
+            .iter()
+            .find(|outcome| outcome.ref_name == "remotes/heads/main")
+            .expect("the received ref is reported")
+            .status
+            .clone();
+        let _ = std::fs::remove_dir_all(root);
+        Ok(status)
+    };
+
+    let forged = received_outcome(false)?;
+    assert!(
+        matches!(&forged, RefItemStatus::Failed { message } if message.contains("names missing previous RefState")),
+        "{forged:?}"
+    );
+    let control = received_outcome(true)?;
+    assert!(matches!(control, RefItemStatus::Evaluated), "{control:?}");
+
+    let _ = std::fs::remove_dir_all(source_root);
+    Ok(())
+}
