@@ -273,14 +273,11 @@ fn framed_decoders_survive_mutation() {
     );
 }
 
-/// The long run, deliberately: `cargo test -p prikk-store -- --ignored framed_decoders_long_run`.
+/// The long run, deliberately: `cargo test -p prikk-store --lib -- --ignored framed_decoders_long_run`.
+/// In-process, not a child: a child re-exec does not pass `--ignored`, so it would run nothing. The
+/// address-space cap and the timeout the default run gets are not applied here; it is run by hand.
 #[test]
 #[ignore = "a long run: LONG_RUN_CASES mutated decodes per format, run deliberately"]
 fn framed_decoders_long_run() {
-    isolated_with_timeout(
-        module_path!(),
-        "framed_decoders_long_run",
-        Duration::from_secs(3600),
-        || run_suite(LONG_RUN_CASES),
-    );
+    run_suite(LONG_RUN_CASES);
 }
