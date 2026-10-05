@@ -6,6 +6,8 @@ use crate::{
     ActiveLock, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout, acquire_container_locks,
 };
 
+/// Injects `RequiredDirectorySync`, which exists only where a directory can be fsynced (Linux, macOS), not on Windows.
+#[cfg(not(windows))]
 #[test]
 fn failed_lock_directory_sync_retains_stale_lock() {
     let root = unique_temp_dir("lock-directory-sync-failure");
