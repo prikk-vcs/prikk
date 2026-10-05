@@ -110,7 +110,7 @@ impl RefVerification {
     /// `#[cfg(all(test, target_os = "linux"))]` (RFC 165 Addendum 1 §2: that oracle's sole consumer
     /// is `refs::tests`, DC-71-gated the same way) -- matched here rather than the broader
     /// `#[cfg(test)]` this had before, which left this dead code on Windows and macOS.
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(in crate::refs) fn has_item_failure(&self) -> bool {
         self.pointer_outcomes
             .iter()

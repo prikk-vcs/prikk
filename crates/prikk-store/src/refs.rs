@@ -18,7 +18,7 @@ mod verify;
 // Windows before it shipped; see `EXECUTION-ORDER.md` §6 rule 9's own cross-target amendment.
 // RFC 131 §3/§5: `pub(in crate::refs)`, not `pub(crate)` -- the sole consumer named above is
 // inside `refs` itself, and the function's own declaration is `pub(in crate::refs)` now too.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(in crate::refs) use container::append_ref_container_record;
 #[cfg(test)]
 pub(crate) use container::{
@@ -526,7 +526,7 @@ fn ref_log_damage_refusal(discovery: &container::RefContainerReplay) -> PrikkErr
 /// rather than the broader `#[cfg(test)]` this had before: that left it (and `RefVerification::
 /// has_item_failure`, its own sole remaining caller) dead code on Windows and macOS, where
 /// `refs::tests` does not compile at all.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
     layout: &RepositoryLayout,
 ) -> Result<()> {
@@ -720,7 +720,7 @@ impl RefStore {
         publication::finish_interrupted(self, object_store, publication)
     }
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn finish_interrupted_publication_for_test(
         &self,
         publication: &RefPublication,
@@ -1183,8 +1183,7 @@ pub fn validate_local_tag_ref(ref_name: &str) -> Result<String> {
     Ok(ref_name.to_string())
 }
 
-// DC-71: every test here (including the nested publication_recovery/state_matrix trees) sets up
-// its scenario via real repository mutation, which is Linux-only; the module never compiles a
-// non-Linux-meaningful test.
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); the
+// directory-sync injection point is not(windows) inside the tests that use it.
+#[cfg(test)]
 mod tests;

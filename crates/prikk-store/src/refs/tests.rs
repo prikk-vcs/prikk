@@ -248,10 +248,15 @@ fn ref_store_publishes_ref_state_and_log() {
 
 #[test]
 fn first_publication_retries_completed_log_sync_without_duplicate() -> prikk_error::Result<()> {
-    for point in [
+    // A directory fsync is an injection point on Linux and macOS only (`anchored/failpoints.rs`).
+    #[cfg(not(windows))]
+    let points = [
         TestFailPoint::RequiredFileSync,
         TestFailPoint::RequiredDirectorySync,
-    ] {
+    ];
+    #[cfg(windows)]
+    let points = [TestFailPoint::RequiredFileSync];
+    for point in points {
         let root = unique_temp_dir("ref-publication-log-sync-retry");
         let layout = RepositoryLayout::init(root.clone())?;
         let mut object_store = FileObjectStore::new(layout.clone());
