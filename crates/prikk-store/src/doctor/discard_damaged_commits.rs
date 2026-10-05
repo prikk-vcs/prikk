@@ -28,8 +28,8 @@ use crate::commit_boundary::classification::{Verdict, classify};
 use crate::commit_boundary::witness::{WitnessState, read_witness, rebuild_witness_over_sound_wal};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
-use crate::wal::Wal;
-use crate::worktree_status::worktree_status;
+use crate::wal::{Wal, WalReplay};
+use crate::worktree_status::worktree_status_over_sound_replay;
 
 /// The plan a real run writes from, and everything `--plan-only` prints (RFC 166 D5 K1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,16 +123,23 @@ fn run(layout: &RepositoryLayout, mode: Mode) -> Result<DiscardDamagedCommitsPla
         }
     };
 
-    // RFC 166 D5: "may still be in your working tree" only when it genuinely is -- read from the
-    // same worktree-status computation `prikk status` itself uses, never assumed. This is an
-    // informational note, not a safety check: `worktree_status` reads the active WAL's own folded
-    // baseline and can itself refuse over the very tail/damage this verb exists to act on (it has
-    // no way to know the repair is about to resolve that) -- a failure here only means the note is
-    // withheld, never that the discard itself is blocked by a check this verb's own classification
-    // already decided was actionable.
-    let working_tree_may_still_hold_content = worktree_status(layout, &owning_ref_name)
-        .ok()
-        .is_some_and(|status| !status.is_clean());
+    // RFC 166 D5 (review v1, carried): "may still be in your working tree" only when it genuinely
+    // is -- read from the same worktree-status computation `prikk status` itself uses, never
+    // assumed. `worktree_status`'s own public entry point re-derives the active replay from disk
+    // and refuses over the very tail/damage this verb exists to act on, which previously made this
+    // note silently withhold itself every time (the `.ok()` swallowed exactly that error, always).
+    // `replay.records` is already the sound prefix -- `WalReplay`'s own doc: valid records only,
+    // never one with a failure -- so a sound-only replay built from it lets the baseline resolve
+    // without tripping that same guard a second time over a condition this verb already classified.
+    let sound_replay_for_status = WalReplay {
+        records: replay.records.clone(),
+        trailing_partial_bytes: 0,
+        record_outcomes: Vec::new(),
+    };
+    let working_tree_may_still_hold_content =
+        worktree_status_over_sound_replay(layout, &owning_ref_name, &sound_replay_for_status)
+            .ok()
+            .is_some_and(|status| !status.is_clean());
 
     match mode {
         Mode::PlanOnly => {

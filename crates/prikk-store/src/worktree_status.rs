@@ -33,7 +33,7 @@ use crate::patch_replay::decode::{
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::{RepoPath, join_repo_path_to_root};
 use crate::rename_declaration::read_rename_declarations;
-use crate::wal::Wal;
+use crate::wal::{Wal, WalReplay};
 use crate::{ActiveRefMetadata, read_active_ref_metadata};
 
 /// Read-only worktree status report against the replay baseline.
@@ -169,7 +169,6 @@ impl WorktreeChangeKind {
 /// caller is actually asking, and it agrees with `commit` by construction rather than by
 /// coincidence).
 pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<WorktreeStatusReport> {
-    let object_store = ObjectReadSnapshot::open(layout)?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let active_replay = wal.replay()?;
     if active_replay.trailing_partial_bytes != 0 {
@@ -185,12 +184,26 @@ pub fn worktree_status(layout: &RepositoryLayout, ref_name: &str) -> Result<Work
                 .to_string(),
         ));
     }
+    worktree_status_over_sound_replay(layout, ref_name, &active_replay)
+}
+
+/// The bulk of [`worktree_status`], over an `active_replay` the caller already knows is sound --
+/// extracted so a caller that has *already* classified a damaged WAL as actionable by some other
+/// means (RFC 166 D5's own repair verbs) can supply the sound prefix it already has in hand, rather
+/// than hitting this module's own trailing-partial-bytes/damaged-record guard a second time over a
+/// condition it is already in the middle of repairing.
+pub(crate) fn worktree_status_over_sound_replay(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    active_replay: &WalReplay,
+) -> Result<WorktreeStatusReport> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
     let mut text_cache = TextCache::new();
     let resolved = resolve_folded_worktree_baseline(
         layout,
         &object_store,
         ref_name,
-        &active_replay,
+        active_replay,
         &mut text_cache,
     )?;
 

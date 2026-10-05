@@ -107,6 +107,58 @@ fn row4_discards_the_damaged_record_and_rebuilds_the_witness() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// Review v1 (carried into Addendum 1 item 3): the "may still be in your working tree" note did not
+/// print, even though the discarded commit's own file was still there, because the check used to
+/// call `worktree_status`'s own public entry point, which re-derives the active replay from disk
+/// and refuses over the very damage this verb exists to act on -- the `.ok()` around it swallowed
+/// that refusal every single time, silently. Fixed by computing the check over the already-sound
+/// replay this verb already has in hand (`worktree_status_over_sound_replay`), which never re-trips
+/// that guard. **Control:** when the file is genuinely gone from the working tree too, the same
+/// check must read `false` -- proving this is a real, state-sensitive answer, not a constant that
+/// happens to look right in the acting case.
+#[test]
+fn the_working_tree_note_prints_when_the_file_is_still_there_and_not_when_it_is_not() {
+    let root = unique_temp_dir("rfc166-d5-worktree-note");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    assert_eq!(
+        classify_now(&layout),
+        Verdict::AcknowledgedDamage { witnessed_seq: 1 }
+    );
+
+    let plan =
+        plan_discard_damaged_commits(&layout).expect("row 4 is this verb's own job (plan-only)");
+    assert!(
+        plan.working_tree_may_still_hold_content,
+        "a.txt is still on disk; the note must fire"
+    );
+
+    // Control: the same acknowledged-damage shape, but the file is genuinely gone this time.
+    let root_b = unique_temp_dir("rfc166-d5-worktree-note-control");
+    let layout_b = RepositoryLayout::init(root_b.clone()).unwrap();
+    commit(&layout_b, "a.txt", b"one");
+    let wal_path_b = layout_b.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes_b = std::fs::read(&wal_path_b).unwrap();
+    let flip_at_b = bytes_b.len() - 5;
+    bytes_b[flip_at_b] ^= 0xFF;
+    std::fs::write(&wal_path_b, &bytes_b).unwrap();
+    std::fs::remove_file(layout_b.root().join("a.txt")).unwrap();
+    let plan_b =
+        plan_discard_damaged_commits(&layout_b).expect("row 4 is this verb's own job (plan-only)");
+    assert!(
+        !plan_b.working_tree_may_still_hold_content,
+        "a.txt is gone; the note must not fire"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&root_b).ok();
+}
+
 /// RFC 166 D5 K1: `--plan-only` and a real run share one computation. The plan it prints is
 /// exactly what a real run would do, and it leaves the repository byte for byte as it found it.
 #[test]
@@ -657,7 +709,7 @@ fn no_other_command_touches_the_wal_witness_or_ref_name_over_row4() {
         "--rebuild-pointer-index touches the ref-pointer index only"
     );
 
-    let _ = crate::restore_queue_target(&layout, "heads/main");
+    let _ = crate::restore_queue_target(&layout, "heads/main", false);
     assert_eq!(
         before,
         session_snapshot(&layout),

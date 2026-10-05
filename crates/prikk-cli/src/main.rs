@@ -1102,9 +1102,13 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // real run would also print before writing.
     if let Some(ref_name) = &doctor_args.restore_queue_target_ref {
         let result = if doctor_args.plan_only {
-            prikk_store::plan_restore_queue_target(&layout, ref_name)
+            prikk_store::plan_restore_queue_target(
+                &layout,
+                ref_name,
+                doctor_args.not_current_branch,
+            )
         } else {
-            prikk_store::restore_queue_target(&layout, ref_name)
+            prikk_store::restore_queue_target(&layout, ref_name, doctor_args.not_current_branch)
         };
         let plan = result.map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
@@ -1113,19 +1117,6 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
             plan.patch_ids.len(),
             plan.ref_name
         );
-        match plan.current_tip_block_id {
-            Some(block_id) => println!("{}'s current tip is block {block_id}", plan.ref_name),
-            None => println!(
-                "{} has never been published -- this would be its first",
-                plan.ref_name
-            ),
-        }
-        if plan.tip_matches.len() > 1 {
-            println!(
-                "more than one ref's own tip has exactly this queue's patches: {}",
-                plan.tip_matches.join(", ")
-            );
-        }
         if doctor_args.plan_only {
             println!("plan only -- nothing written");
         } else {

@@ -3,23 +3,16 @@
 #![allow(clippy::indexing_slicing, clippy::expect_used, clippy::unwrap_used)]
 
 use super::{plan_restore_queue_target, restore_queue_target};
-use crate::commit_boundary::active::{ActiveRefMetadata, ActiveSession, read_active_ref_metadata};
+use crate::commit_boundary::active::{ActiveRefMetadata, read_active_ref_metadata};
 use crate::commit_boundary::classification::{Verdict, classify};
-use crate::commit_boundary::witness::read_witness;
+use crate::commit_boundary::witness::{clear_witness, read_witness};
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
-use crate::rfc111_seal_simulation::simulate_one_seal;
-use crate::test_gates::test_support::{
-    signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
-};
+use crate::test_gates::test_support::unique_temp_dir;
 use crate::wal::Wal;
-use crate::{
-    Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectReader,
-    RefPublication, RefStore, WorktreePatchCommitOptions, add_trusted_maintainer,
-};
-use prikk_object::{BlockPayload, ObjectType};
+use crate::{Ed25519AuthorSigner, WorktreePatchCommitOptions};
 
 fn signer() -> Ed25519AuthorSigner {
     Ed25519AuthorSigner::from_seed("rfc166-d5-restore", &[0x92_u8; 32]).unwrap()
@@ -85,14 +78,10 @@ fn row9_restores_ownership_and_writes_ref_name_atomically() {
     clear_ref_name(&layout);
     assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
 
-    let plan = restore_queue_target(&layout, "heads/main").expect("row 9 is this verb's own job");
+    let plan =
+        restore_queue_target(&layout, "heads/main", false).expect("row 9 is this verb's own job");
     assert_eq!(plan.ref_name, "heads/main");
     assert_eq!(plan.patch_ids.len(), 1);
-    assert_eq!(
-        plan.current_tip_block_id, None,
-        "heads/main has never been published"
-    );
-    assert!(plan.tip_matches.is_empty());
 
     match read_active_ref_metadata(&layout).unwrap() {
         ActiveRefMetadata::Valid(name) => assert_eq!(name, "heads/main"),
@@ -116,7 +105,7 @@ fn witness_naming_a_different_ref_refuses_writing_nothing() {
     assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
 
     let before = snapshot_tree(&layout);
-    let err = restore_queue_target(&layout, "heads/other")
+    let err = restore_queue_target(&layout, "heads/other", false)
         .expect_err("the witness names heads/main, not heads/other");
     assert!(
         err.to_string().contains("names heads/main"),
@@ -139,7 +128,8 @@ fn a_healthy_session_refuses_writing_nothing() {
     assert!(matches!(classify_now(&layout), Verdict::Healthy { .. }));
 
     let before = snapshot_tree(&layout);
-    let err = restore_queue_target(&layout, "heads/main").expect_err("ownership is not missing");
+    let err =
+        restore_queue_target(&layout, "heads/main", false).expect_err("ownership is not missing");
     assert!(
         err.to_string()
             .contains("already has a durable, matching owner"),
@@ -163,12 +153,12 @@ fn plan_only_matches_the_real_runs_own_plan_and_touches_nothing() {
     clear_ref_name(&layout);
 
     let before = snapshot_tree(&layout);
-    let plan =
-        plan_restore_queue_target(&layout, "heads/main").expect("plan-only does not refuse row 9");
+    let plan = plan_restore_queue_target(&layout, "heads/main", false)
+        .expect("plan-only does not refuse row 9");
     let after_plan_only = snapshot_tree(&layout);
     assert_eq!(before, after_plan_only, "plan-only must touch nothing");
 
-    let real = restore_queue_target(&layout, "heads/main").expect("the real run");
+    let real = restore_queue_target(&layout, "heads/main", false).expect("the real run");
     assert_eq!(
         plan, real,
         "the plan-only computation must equal the real run's own"
@@ -176,74 +166,124 @@ fn plan_only_matches_the_real_runs_own_plan_and_touches_nothing() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// RFC 166 §13 item 10: when more than one ref's own current tip validates against this queue,
-/// the plan lists every one. Built from a realistic compounded shape: `heads/main` is already
-/// sealed at a block whose patches this orphaned queue happens to hold again (the seal published
-/// the block but crashed before draining its own queue), and `heads/other` was independently
-/// published pointing at that same block.
+// ---- RFC 166 §14: without a witness, `<ref>` must be the current branch ----------------------
+
+/// §14 item 1, without a witness: this is the 0.20.0-0.48.0 legacy shape exactly -- no witness ever
+/// recorded it, ownership is missing, and the caller's `<ref>` matches the current branch (the
+/// unborn default, `heads/main`, since this repository never switched). Succeeds with no flag.
 #[test]
-fn more_than_one_ref_validating_is_listed_in_the_plan() {
-    let root = unique_temp_dir("rfc166-d5-restore-ambiguous");
+fn without_a_witness_the_current_branch_succeeds_with_no_flag() {
+    let root = unique_temp_dir("rfc166-d5-restore-no-witness-current-branch");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
-    let maintainer =
-        Ed25519MaintainerSigner::from_seed("rfc166-d5-restore-maintainer", &[0x93; 32]).unwrap();
-    add_trusted_maintainer(
-        &layout,
-        maintainer.key_id(),
-        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
-    )
-    .unwrap();
-
     commit(&layout, "a.txt", b"one");
-    let ref_state_id =
-        simulate_one_seal(&layout, "heads/main", &maintainer).expect("seal onto heads/main");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    clear_ref_name(&layout);
+    assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
+    match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
+        crate::commit_boundary::witness::WitnessState::Absent => {}
+        other => panic!("expected no witness, got {other:?}"),
+    }
 
-    let ref_store = RefStore::new(layout.clone());
-    let objects = FileObjectStore::new(layout.clone());
-    let sealed_ref_state_envelope = objects
-        .read_typed(ref_state_id, ObjectType::RefState)
-        .unwrap()
-        .expect("the seal's own published RefState");
-    let block_id = prikk_object::RefStatePayload::decode_canonical(
-        &sealed_ref_state_envelope.canonical_payload,
-        sealed_ref_state_envelope.schema_version,
-    )
-    .unwrap()
-    .target_object_id;
+    let plan = restore_queue_target(&layout, "heads/main", false)
+        .expect("heads/main is this repository's own current branch");
+    assert_eq!(plan.ref_name, "heads/main");
+    match read_active_ref_metadata(&layout).unwrap() {
+        ActiveRefMetadata::Valid(name) => assert_eq!(name, "heads/main"),
+        other => panic!("expected ownership restored, got {other:?}"),
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
 
-    let other_ref_state_envelope = signed_ref_state_envelope("heads/other", None, block_id, 1);
-    let other_ref_state_id = other_ref_state_envelope.object_id();
-    let other_ref_update_envelope =
-        signed_ref_update_envelope("heads/other", None, other_ref_state_id, block_id, 1);
-    ref_store
-        .publish(&RefPublication {
-            ref_name: "heads/other".to_string(),
-            expected_previous_ref_state_id: None,
-            ref_state: other_ref_state_envelope,
-            ref_update: other_ref_update_envelope,
-        })
-        .expect("publish heads/other pointing at the same block");
-
-    let block_envelope = objects
-        .read_typed(block_id, ObjectType::Block)
-        .unwrap()
-        .unwrap();
-    let block = BlockPayload::decode_canonical(&block_envelope.canonical_payload).unwrap();
-    let patch_id = block.patch_ids[0];
-    let patch_envelope = objects
-        .read_typed(patch_id, ObjectType::Patch)
-        .unwrap()
-        .unwrap();
-    ActiveSession::new(layout.clone())
-        .append_patch(&patch_envelope, 1_000)
-        .expect("re-queue the already-sealed patch into a fresh active WAL");
+/// §14 item 1, without a witness: `<ref>` disagreeing with the current branch refuses, naming it --
+/// without `--not-current-branch` a restore never attaches an unidentified queue to a branch the
+/// caller did not explicitly ask to override. **Control:** the same request with the flag succeeds.
+#[test]
+fn without_a_witness_a_different_ref_needs_the_flag() {
+    let root = unique_temp_dir("rfc166-d5-restore-no-witness-wrong-branch");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
     clear_ref_name(&layout);
     assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
 
-    let plan = restore_queue_target(&layout, "heads/main").expect("row 9 is this verb's own job");
+    let before = snapshot_tree(&layout);
+    let err = restore_queue_target(&layout, "heads/other", false)
+        .expect_err("heads/other is not the current branch, and no flag was given");
+    assert!(
+        err.to_string().contains("heads/main"),
+        "the refusal must name the current branch: {err}"
+    );
     assert_eq!(
-        plan.tip_matches,
-        vec!["heads/main".to_string(), "heads/other".to_string()]
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+
+    // Control: the one condition this case is built from (no flag) removed, the same request now
+    // succeeds and attaches the queue to the requested, non-current branch.
+    let plan = restore_queue_target(&layout, "heads/other", true)
+        .expect("--not-current-branch explicitly overrides the current-branch rule");
+    assert_eq!(plan.ref_name, "heads/other");
+    match read_active_ref_metadata(&layout).unwrap() {
+        ActiveRefMetadata::Valid(name) => assert_eq!(name, "heads/other"),
+        other => panic!("expected ownership restored to heads/other, got {other:?}"),
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// §14 item 1: an unresolvable current branch (here, a malformed `.prikk/current-branch` pointer)
+/// requires `--not-current-branch` too, fail closed -- there is nothing to compare `<ref>` against.
+/// **Control:** the flag lets the same request through regardless.
+#[test]
+fn an_unresolvable_current_branch_needs_the_flag_too() {
+    let root = unique_temp_dir("rfc166-d5-restore-no-witness-unresolvable");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    clear_ref_name(&layout);
+    std::fs::write(layout.current_branch_path(), b"not a valid ref\n").unwrap();
+    assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
+
+    let before = snapshot_tree(&layout);
+    let err = restore_queue_target(&layout, "heads/main", false)
+        .expect_err("the current branch cannot be resolved, and no flag was given");
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
+    );
+    drop(err);
+
+    // Control: the flag lets it through even though the current branch stays unresolvable.
+    restore_queue_target(&layout, "heads/main", true)
+        .expect("--not-current-branch bypasses the comparison entirely");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// §14 item 1's fourth bullet: a restored owner is final for this verb. A second restore over an
+/// already-owned queue refuses, the same as any other healthy session -- even to a different ref,
+/// and even with `--not-current-branch`.
+#[test]
+fn a_second_restore_over_an_owned_queue_still_refuses() {
+    let root = unique_temp_dir("rfc166-d5-restore-second-restore");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    clear_ref_name(&layout);
+    restore_queue_target(&layout, "heads/main", false).expect("the first restore succeeds");
+
+    let before = snapshot_tree(&layout);
+    let err = restore_queue_target(&layout, "heads/other", true)
+        .expect_err("ownership is already present; a second restore must refuse");
+    assert!(
+        err.to_string()
+            .contains("already has a durable, matching owner"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(&layout),
+        "a refusal must write nothing"
     );
     std::fs::remove_dir_all(&root).ok();
 }
@@ -270,7 +310,7 @@ fn row4_acknowledged_damage_is_not_this_verbs_job() {
     );
 
     let before = snapshot_tree(&layout);
-    let err = restore_queue_target(&layout, "heads/main")
+    let err = restore_queue_target(&layout, "heads/main", false)
         .expect_err("row 4 is discard_damaged_commits's job");
     assert!(
         err.to_string()
@@ -310,7 +350,7 @@ fn trailing_partial_bytes_refuses_even_though_classify_already_reached_ownership
     );
 
     let before = snapshot_tree(&layout);
-    let err = restore_queue_target(&layout, "heads/main")
+    let err = restore_queue_target(&layout, "heads/main", false)
         .expect_err("a torn tail on top of row 9 is still a torn tail");
     assert!(
         err.to_string().contains("trailing partial bytes"),
@@ -325,7 +365,7 @@ fn trailing_partial_bytes_refuses_even_though_classify_already_reached_ownership
     // Control: removing the tail (the one condition this case is built from) lets the same
     // request succeed -- the refusal really did depend on the tail, not on something else.
     std::fs::write(&wal_path, &bytes[..bytes.len() - 10]).unwrap();
-    restore_queue_target(&layout, "heads/main")
+    restore_queue_target(&layout, "heads/main", false)
         .expect("with the tail gone, row 9 alone is this verb's own job");
     std::fs::remove_dir_all(&root).ok();
 }
@@ -353,7 +393,7 @@ fn a_damaged_earlier_record_refuses_even_though_classify_already_reached_ownersh
     );
 
     let before = snapshot_tree(&layout);
-    let err = restore_queue_target(&layout, "heads/main")
+    let err = restore_queue_target(&layout, "heads/main", false)
         .expect_err("a damaged earlier record is still a damaged record");
     assert!(
         err.to_string().contains("damaged record"),
@@ -373,7 +413,7 @@ fn a_damaged_earlier_record_refuses_even_though_classify_already_reached_ownersh
         fixed
     })
     .unwrap();
-    restore_queue_target(&layout, "heads/main")
+    restore_queue_target(&layout, "heads/main", false)
         .expect("with both records sound, row 9 alone is this verb's own job");
     std::fs::remove_dir_all(&root).ok();
 }
@@ -391,7 +431,7 @@ fn restore_races_an_ordinary_commit_under_the_shared_active_lock() {
     clear_ref_name(&layout);
 
     let held = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).unwrap();
-    let raced = restore_queue_target(&layout, "heads/main");
+    let raced = restore_queue_target(&layout, "heads/main", false);
     assert!(
         matches!(raced, Err(prikk_error::PrikkError::LockConflict(_))),
         "restore_queue_target racing a held ActiveLock must refuse as a lock conflict, got \
@@ -399,7 +439,8 @@ fn restore_races_an_ordinary_commit_under_the_shared_active_lock() {
     );
     drop(held);
 
-    restore_queue_target(&layout, "heads/main").expect("succeeds once the active lock is free");
+    restore_queue_target(&layout, "heads/main", false)
+        .expect("succeeds once the active lock is free");
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -428,7 +469,7 @@ fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
         assert!(before.is_empty(), "the stranded state this verb repairs");
 
         fail_after_for_test(point, 0);
-        let crashed = restore_queue_target(&layout, "heads/main");
+        let crashed = restore_queue_target(&layout, "heads/main", false);
         clear_failpoint_for_test();
         assert!(
             crashed.is_err(),
@@ -445,7 +486,7 @@ fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
             // the job. (`MutableParentSync` fires *after* `renameat` already succeeded, so the
             // new value can already be on disk even though this call reported failure; that
             // case is handled below, not here.)
-            restore_queue_target(&layout, "heads/main")
+            restore_queue_target(&layout, "heads/main", false)
                 .unwrap_or_else(|err| panic!("{point:?}: a clean second run completes it: {err}"));
         }
         assert_eq!(

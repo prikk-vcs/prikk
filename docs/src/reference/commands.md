@@ -77,7 +77,7 @@ prikk doctor [path] --repair-tails
 prikk doctor [path] --repair-main-ref
 prikk doctor [path] --rebuild-pointer-index [--plan-only]
 prikk doctor [path] --discard-damaged-commits [--plan-only]
-prikk doctor [path] --restore-queue-target --ref <ref> [--plan-only]
+prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]
 prikk ref complete <ref> [--plan-only]
 prikk format upgrade [path]
 prikk unlock

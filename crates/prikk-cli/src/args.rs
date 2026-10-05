@@ -115,6 +115,10 @@ pub(crate) struct DoctorArgs {
     /// given; the ref always comes from the caller (C2), never from the witness. Mutually exclusive
     /// with every other repair flag.
     pub(crate) restore_queue_target_ref: Option<String>,
+    /// RFC 166 §14 item 1: without a witness, override the current-branch rule -- `<ref>` need not
+    /// be the current branch, or the current branch could not be resolved at all. Accepted only
+    /// alongside `--restore-queue-target`.
+    pub(crate) not_current_branch: bool,
     /// RFC 165 R5 K1 / RFC 166 D5 K1: print the repair's own plan and write nothing. Shared between
     /// every repair verb that has a plan (`--rebuild-pointer-index`, `--discard-damaged-commits`,
     /// `--restore-queue-target`) -- accepted only alongside exactly one of them.
@@ -466,6 +470,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut discard_damaged_commits = false;
     let mut restore_queue_target = false;
     let mut restore_queue_target_ref: Option<String> = None;
+    let mut not_current_branch = false;
     let mut plan_only = false;
     let mut path = None;
     let mut iter = args.into_iter();
@@ -498,6 +503,9 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
                     ));
                 }
                 restore_queue_target_ref.set_once("--ref", value)?;
+            }
+            "--not-current-branch" => {
+                mark_seen(&mut not_current_branch, "--not-current-branch")?;
             }
             "--plan-only" => mark_seen(&mut plan_only, "--plan-only")?,
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
@@ -569,6 +577,11 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             "--restore-queue-target requires --ref <ref>".to_string(),
         ));
     }
+    if not_current_branch && !restore_queue_target {
+        return Err(CliError::Usage(
+            "--not-current-branch is only accepted alongside --restore-queue-target".to_string(),
+        ));
+    }
     if plan_only && !rebuild_pointer_index && !discard_damaged_commits && !restore_queue_target {
         return Err(CliError::Usage(
             "--plan-only is only accepted alongside --rebuild-pointer-index, \
@@ -586,6 +599,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         rebuild_pointer_index,
         discard_damaged_commits,
         restore_queue_target_ref,
+        not_current_branch,
         plan_only,
     })
 }
