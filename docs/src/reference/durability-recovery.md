@@ -66,6 +66,17 @@ but "is this the last thing in the file, with no sound record after it." Widenin
 repair keeps every byte it removes, below — including, now, a record that was in fact a real write, torn
 in a way this file cannot tell apart from a crash.)
 
+**Fixed in 0.49.0 (RFC 167, M5): checking "does a sound record follow the fault" used to cost time
+proportional to the square of the file's size on a file packed with fake frame headers, each claiming a
+body reaching exactly to the end of the file** — every one of them had to be fully read and checksummed
+before the scan could rule it out, and on this shape nearly every candidate claims nearly the whole
+remaining file. 0.49.0 gives the scan a work budget (bytes hashed, at most 8x the file's own size, shared
+across every candidate it checks and every ordinary record check in the same read); once the budget runs
+out the scan stops and the file is damage, not a tail — ambiguity always resolves to damage, so a scan
+that cannot finish is treated exactly as a sound frame it did find would be, never as if it had found
+none. The same mechanism and bound apply to five other files with the identical scan: object containers,
+trust policy, the received index, the ref log container, and the pointer index.
+
 **Fixed in 0.49.0 (N6): a damaged last record used to read as a tail, and the repair could remove one the
 user was told had succeeded.** A record whose own bytes are all present but whose checksum fails (bit rot, a
 partial write the storage layer itself reordered, and similar) is, by rule 3, indistinguishable from a

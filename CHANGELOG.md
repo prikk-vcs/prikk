@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Fixed — resynchronising past a torn or invalid frame was quadratic on crafted content (RFC 167, M5)
+
+The WAL, object containers, trust policy, the received index, the ref log container and the pointer index share
+one scan that, on meeting a torn or invalid frame, checks the rest of the file for a sound frame hidden behind
+it. A file packed with fake frame headers, each claiming a body reaching exactly to the end of the file, made
+that scan quadratic: `verify` over a 2 MiB hostile WAL tail took 13.98 s (0.24 s at 256 KiB), extrapolating to
+hours at 64 MiB; a received blob's bytes sit inside sound frames, so this was reachable from outside the
+repository through `bundle import`/`sync accept` given one torn or damaged frame earlier in the same container.
+**Affected: every release since this scan existed.** Each of the six readers now carries a work budget (bytes
+hashed, at most 8x the input) shared across every candidate the scan visits; a scan the budget cuts short is
+always damage, never a tail — never silently accepted, whatever the cost. Measured at 64 MiB: 0.25–0.29 s on
+both hostile shapes, every affected reader. A second, independent decode of the same WAL that `verify` had
+picked up since 0.49.0's own earlier rounds (RFC 164 Rule E's reachability walk, re-decoding `default`'s WAL a
+second time) is also removed: honest `verify` cost is unchanged from 0.48.0.
+
+### Output changes — one coherent message when a resynchronisation scan is cut short (RFC 167 D2)
+
+- `doctor`/`verify`, the WAL: `error [PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE]: WAL record at offset <N>
+  failed verification: the bytes after byte offset <N> look like many frame headers` — followed by "stopped
+  checking after 8x the file's size and treats this as damage, not a torn tail" — the way out is
+  `--repair-wal-tail`, unchanged.
+- The pointer index, trust policy, and the received index report the identical "look like many frame headers
+  ... treats this as damage" text at their own offset; the way out is `--repair-pointer-index-tail` or
+  `--repair-tails`, unchanged.
+- Object containers and the ref log container report the same text **without** "damage" (their own existing
+  wrapper already says "a harmless remnant, not damage" or "not a harmless remnant until repaired" /
+  "a damaged record ... the way out is a copy", and the inner text no longer contradicts it — RFC 167's own
+  design round found the prototype did, and the review rejected it).
+
 ### Fixed — an acknowledged commit damaged after the fact could read, and be removed, as a crash leftover (RFC 166, N6)
 
 One flipped byte in the body of a queued commit's own last frame read exactly like an interrupted write: the

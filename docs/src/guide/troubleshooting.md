@@ -150,6 +150,25 @@ repository as it is and copy `.prikk/active/` aside before doing anything else: 
 contrast, shows as `trailing partial WAL bytes: N` and a `PRIKK-DOCTOR-WAL-TRAILING-PARTIAL` warning, and `--repair-wal-tail` is the
 right answer to it. (Before 0.48.0 a damaged length was mistaken for a torn tail and the repair deleted the intact records after it.)
 
+## `error: ... the bytes after byte offset N look like many frame headers; …`
+
+**0.49.0 (RFC 167).** A torn or invalid frame's own resynchronisation scan — checking whether a sound
+frame is hidden somewhere later in the file, before concluding this is an ordinary crash tail — gave up
+after reading 8 times the file's own size without finishing (the message's own words: this binary
+"stopped checking ... and treats this as damage, not a torn tail"). This is not a torn tail: the scan
+could not rule one out, and ambiguity always resolves to damage, never silently to a tail. In practice
+this needs a file deliberately packed with fake frame headers; an honest crash does not produce it
+(random bytes following an accidental magic match almost never also claim a plausible length).
+
+The way out matches whichever file this names, exactly as any other damage there:
+
+- the WAL: `prikk doctor --repair-wal-tail`;
+- the pointer index: `prikk doctor --repair-pointer-index-tail`;
+- trust policy or the received index: `prikk doctor --repair-tails`;
+- an object container or the ref log container: **no automated repair.** If `doctor` also reports it as an
+  unreferenced remnant, nothing needs the frame and no action is required; otherwise the way out is a copy
+  of a sound repository, the same as any other damaged record in these two files.
+
 ## `error: N queued commit(s) have lost the record of which branch they belong to`
 
 **Affects 0.20.0 through 0.48.0** (the stranding itself); **0.49.0 adds the way out.** A crash during a

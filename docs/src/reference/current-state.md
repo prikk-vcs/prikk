@@ -207,11 +207,16 @@ planned for. None of these blocks 0.48.0.
   container: `verify` and `doctor` exit 0 with no warning, a `seal` appends behind them, and `verify`
   stays 0 with the garbage in the middle of the file. The state is harmless (ref-log records are signed
   and chained), but nothing reports the bytes. Planned for 0.49.0, alongside the ref publication fix above.
-- **Resynchronisation over hostile content is quadratic.** `verify` over a WAL torn tail packed with fake
-  frame headers, release build: 256 KiB 0.24 s, 512 KiB 0.88 s, 1 MiB 3.48 s, 2 MiB 13.98 s (a plain,
-  unpacked tail costs 0.01–0.02 s at every size). Each doubling costs about four times as much; 64 MiB
-  extrapolates to hours. A standing test keeps this from getting worse; the structural fix (a header that
-  vouches for itself, so a candidate is never fully re-parsed to be rejected) is planned for 0.49.0.
+- **Fixed in 0.49.0 (RFC 167): resynchronisation over hostile content is linear, not quadratic.** `verify`
+  over a WAL torn tail packed with fake frame headers used to grow from 0.24 s at 256 KiB to 13.98 s at
+  2 MiB, extrapolating to hours at 64 MiB (a plain, unpacked tail stayed 0.01–0.02 s at every size, so the
+  cost was specific to the hostile shape). Six readers shared the defect: the WAL, object containers,
+  trust policy, the received index, the ref log container and the pointer index. Each now carries a work
+  budget (bytes hashed, at most 8x the input) shared by every candidate the resynchronisation scan visits;
+  a scan the budget cuts short is always reported as damage, never silently read as a tail. Measured at
+  64 MiB: 0.25–0.29 s, down from a projected 2.8–4.6 hours. **Not a self-vouching header** (a header-only
+  checksum, which would remove the re-parse entirely): that is a format change, format-8 input, still
+  planned for a future increment, not this one.
 - **A `commit`'s cost follows the number of refs, roughly squared.** Branches created from `heads/main`,
   one tiny commit timed at each point: 1 ref 1.4 ms, 50 refs 3.0 ms, 100 refs 7.2 ms, 200 refs 21.4 ms,
   400 refs 72.1 ms. `status` stays flat (0.6–1.4 ms) at every point, which shows the cost is the write
