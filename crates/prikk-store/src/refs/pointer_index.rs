@@ -30,8 +30,9 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    complete_by_checksum, partial_before_sound_frame_message, require_progress,
-    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
+    BoundedScan, ScanBudget, complete_by_checksum, partial_before_sound_frame_message,
+    require_progress, resync_to_next_magic, scan_budget_exceeded_as_damage_message,
+    sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
@@ -213,7 +214,7 @@ enum FrameAttempt {
     },
 }
 
-fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
+fn parse_frame_at(bytes: &[u8], offset: usize, budget: &mut ScanBudget) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < POINTER_INDEX_HEADER_LEN {
         return FrameAttempt::TrailingPartial { remaining };
@@ -228,8 +229,14 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
             // RFC 164 §9.2: a corrupted magic or version byte alone does not rule out a complete,
             // fully written record -- the checksum decides, computed with this format's own real
             // magic and version.
-            if complete_by_checksum(bytes, offset, POINTER_INDEX_HEADER_LEN, record_checksum)
-                .is_some()
+            if complete_by_checksum(
+                bytes,
+                offset,
+                POINTER_INDEX_HEADER_LEN,
+                budget,
+                record_checksum,
+            )
+            .is_some()
             {
                 return FrameAttempt::Invalid {
                     message: format!("{err}, but a complete record's own checksum verifies"),
@@ -258,7 +265,14 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
         // conceding this is a torn tail, check whether the checksum verifies against the length to the
         // end of the file instead.
-        if complete_by_checksum(bytes, offset, POINTER_INDEX_HEADER_LEN, record_checksum).is_some()
+        if complete_by_checksum(
+            bytes,
+            offset,
+            POINTER_INDEX_HEADER_LEN,
+            budget,
+            record_checksum,
+        )
+        .is_some()
         {
             return FrameAttempt::Invalid {
                 message:
@@ -270,6 +284,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         }
         return FrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = record_checksum(header_values.body_len, body);
     if expected != header_values.checksum {
         // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
@@ -298,8 +313,23 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
     let mut entries = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_frame_at(bytes, offset) {
+        if budget.exceeded() {
+            record_outcomes.push(PointerIndexRecordOutcome {
+                offset,
+                status: PointerIndexRecordStatus::Failed {
+                    message: scan_budget_exceeded_as_damage_message(offset),
+                },
+            });
+            return Ok(PointerIndexReplay {
+                entries,
+                trailing_partial_bytes: 0,
+                tail_offset: offset,
+                record_outcomes,
+            });
+        }
+        match parse_frame_at(bytes, offset, &mut budget) {
             FrameAttempt::Record { entry, next_offset } => {
                 record_outcomes.push(PointerIndexRecordOutcome {
                     offset,
@@ -310,17 +340,42 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after =
-                    sound_frame_after_partial(bytes, offset, POINTER_INDEX_MAGIC.as_slice(), |c| {
-                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
-                    });
-                let Some(next) = sound_after else {
-                    return Ok(PointerIndexReplay {
-                        entries,
-                        trailing_partial_bytes: remaining,
-                        tail_offset: offset,
-                        record_outcomes,
-                    });
+                let sound_after = sound_frame_after_partial_budgeted(
+                    bytes,
+                    offset,
+                    POINTER_INDEX_MAGIC.as_slice(),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
+                );
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => {
+                        return Ok(PointerIndexReplay {
+                            entries,
+                            trailing_partial_bytes: remaining,
+                            tail_offset: offset,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Undetermined => {
+                        record_outcomes.push(PointerIndexRecordOutcome {
+                            offset,
+                            status: PointerIndexRecordStatus::Failed {
+                                message: scan_budget_exceeded_as_damage_message(offset),
+                            },
+                        });
+                        return Ok(PointerIndexReplay {
+                            entries,
+                            trailing_partial_bytes: 0,
+                            tail_offset: offset,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Sound(next) => next,
                 };
                 let message = partial_before_sound_frame_message(offset, next);
                 record_outcomes.push(PointerIndexRecordOutcome {
@@ -340,20 +395,43 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                 // mechanism this replaces). Except a complete record whose checksum or envelope
                 // fails (`never_a_tail`): that was fully written, so it stays damage unconditionally,
                 // even when it is last -- RFC 164 §9 amends this rule for the pointer index too.
-                let sound_after = (!never_a_tail)
-                    .then(|| {
-                        sound_frame_after_partial(
-                            bytes,
-                            offset,
-                            POINTER_INDEX_MAGIC.as_slice(),
-                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
-                        )
-                    })
-                    .flatten();
-                if sound_after.is_none() && !never_a_tail {
+                let sound_after = if never_a_tail {
+                    None
+                } else {
+                    Some(sound_frame_after_partial_budgeted(
+                        bytes,
+                        offset,
+                        POINTER_INDEX_MAGIC.as_slice(),
+                        &mut budget,
+                        |c, budget| {
+                            matches!(
+                                parse_frame_at(bytes, c, budget),
+                                FrameAttempt::Record { .. }
+                            )
+                        },
+                    ))
+                };
+                if matches!(sound_after, Some(BoundedScan::NoSoundFrame)) {
                     return Ok(PointerIndexReplay {
                         entries,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        tail_offset: offset,
+                        record_outcomes,
+                    });
+                }
+                if matches!(sound_after, Some(BoundedScan::Undetermined)) {
+                    record_outcomes.push(PointerIndexRecordOutcome {
+                        offset,
+                        status: PointerIndexRecordStatus::Failed {
+                            message: format!(
+                                "{message}; {}",
+                                scan_budget_exceeded_as_damage_message(offset)
+                            ),
+                        },
+                    });
+                    return Ok(PointerIndexReplay {
+                        entries,
+                        trailing_partial_bytes: 0,
                         tail_offset: offset,
                         record_outcomes,
                     });
@@ -363,8 +441,8 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
                     status: PointerIndexRecordStatus::Failed { message },
                 });
                 let resumed = match sound_after {
-                    Some(next) => Some(next),
-                    None => resync_to_next_magic(bytes, offset + 1, POINTER_INDEX_MAGIC.as_slice()),
+                    Some(BoundedScan::Sound(next)) => Some(next),
+                    _ => resync_to_next_magic(bytes, offset + 1, POINTER_INDEX_MAGIC.as_slice()),
                 };
                 match resumed {
                     Some(next) => offset = require_progress("pointer index", offset, next)?,

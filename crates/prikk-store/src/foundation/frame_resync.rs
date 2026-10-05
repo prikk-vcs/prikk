@@ -75,6 +75,125 @@ pub(crate) fn partial_before_sound_frame_message(
     )
 }
 
+/// RFC 167 D1: an explicit, per-decode work budget, passed through the call rather than tracked in
+/// a thread-local counter live in every build (the design round's prototype used the latter; the
+/// accepted design corrects it -- `rfc167-design-round-review-v1`, ruling 1). One instance is
+/// created per decode call (`for_input`, at the input's own length) and shared by `&mut` reference
+/// into both placements the design round measured as each insufficient alone:
+/// - **narrow**, inside [`sound_frame_after_partial_budgeted`]'s own loop, between candidates;
+/// - **broad**, in each reader's own outer decode loop, charging that reader's ordinary per-frame
+///   checksum cost too -- the cost a `never_a_tail`-shaped candidate pays without ever reaching the
+///   narrow placement at all.
+///
+/// Both placements charge the *same* counter, so either one alone still sees the other's cost.
+#[derive(Debug)]
+pub(crate) struct ScanBudget {
+    limit: u64,
+    spent: u64,
+}
+
+/// RFC 167 D1: 8x the input length -- a constant, not a config key (a key would add a surface and a
+/// way to misconfigure a safety check). RFC 167 §6 item 2 ("the honest margin"): 8x must leave at
+/// least a 4x margin over the largest bytes-hashed-to-input ratio seen on honest data anywhere in
+/// the suite, the RFC 133 corpus, `matrix.py`, and a magic-dense repository -- measured in this
+/// round's own report, not re-derived here.
+pub(crate) const SCAN_BUDGET_MULTIPLE: u64 = 8;
+
+impl ScanBudget {
+    /// A fresh budget for one decode call over an input of `input_len` bytes. `.max(1)` so a
+    /// zero-length input still has a (trivial) budget rather than none at all.
+    pub(crate) fn for_input(input_len: usize) -> Self {
+        Self {
+            limit: SCAN_BUDGET_MULTIPLE * (input_len as u64).max(1),
+            spent: 0,
+        }
+    }
+
+    /// Record `n` more bytes hashed against this budget. Saturating: a budget this far over its
+    /// limit is already exceeded, and nothing downstream needs the exact overshoot.
+    pub(crate) fn charge(&mut self, n: u64) {
+        self.spent = self.spent.saturating_add(n);
+    }
+
+    /// Whether this budget's limit has been passed. Checked after charging, never before -- the
+    /// charge that crosses the limit is itself allowed to complete (it is already paid for), and
+    /// only the *next* candidate is refused.
+    pub(crate) fn exceeded(&self) -> bool {
+        self.spent > self.limit
+    }
+}
+
+/// RFC 167 D2: the third outcome a budgeted scan can reach, alongside finding a sound frame or
+/// finding none. **Every reader treats `Undetermined` as damage, never as a tail** (C3) -- the scan
+/// could not rule out a sound frame hidden in the remainder, and ambiguity resolves to damage, the
+/// same rule [`sound_frame_after_partial`] already applies to a frame it *did* finish checking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BoundedScan {
+    /// A sound frame starts at this offset: damage, with the offset to resume at (mirrors
+    /// [`sound_frame_after_partial`]'s `Some`).
+    Sound(usize),
+    /// Nothing sound anywhere in the remainder: a true tail (mirrors [`sound_frame_after_partial`]'s
+    /// `None`).
+    NoSoundFrame,
+    /// The budget ran out before every candidate could be checked. Never a tail.
+    Undetermined,
+}
+
+/// The budgeted sibling of [`sound_frame_after_partial`] (RFC 167 D1/D2): identical scan, except
+/// each candidate's check is charged against `budget` (the narrow placement) and a budget already
+/// exceeded when a candidate is reached stops the scan with [`BoundedScan::Undetermined`] rather
+/// than continuing. `sound_frame_at` takes the same `&mut ScanBudget` explicitly, not by closure
+/// capture, so a reader's own full-frame check (which hashes a candidate's claimed body) can charge
+/// the identical counter the broad placement, in that reader's own outer loop, also charges.
+pub(crate) fn sound_frame_after_partial_budgeted(
+    bytes: &[u8],
+    offset: usize,
+    magic: &[u8],
+    budget: &mut ScanBudget,
+    mut sound_frame_at: impl FnMut(usize, &mut ScanBudget) -> bool,
+) -> BoundedScan {
+    let Some(mut from) = offset.checked_add(1) else {
+        return BoundedScan::NoSoundFrame;
+    };
+    while let Some(candidate) = resync_to_next_magic(bytes, from, magic) {
+        if budget.exceeded() {
+            return BoundedScan::Undetermined;
+        }
+        if sound_frame_at(candidate, budget) {
+            return BoundedScan::Sound(candidate);
+        }
+        from = match candidate.checked_add(1) {
+            Some(next) => next,
+            None => return BoundedScan::NoSoundFrame,
+        };
+    }
+    BoundedScan::NoSoundFrame
+}
+
+/// RFC 167 D2: the one coherent message every reader gives a scan the budget cut short, before that
+/// reader's own wrapper (a hard failure, or -- for object containers and the ref container, RFC 164
+/// Rule E -- "a harmless remnant" once reachability says nothing needs it) adds its own verdict. This
+/// text alone never says "damage": the two readers with a remnant classification would otherwise read
+/// as self-contradictory ("damage ... a harmless remnant, not damage"), exactly what the design
+/// round's own prototype said and the review rejected (`rfc167-design-round-review-v1`, "What I
+/// verified").
+pub(crate) fn scan_budget_exceeded_message(reported_offset: usize) -> String {
+    format!(
+        "the bytes after byte offset {reported_offset} look like many frame headers; prikk stopped checking after {SCAN_BUDGET_MULTIPLE}x the file's size"
+    )
+}
+
+/// Like [`scan_budget_exceeded_message`], for the four readers with no remnant classification (the
+/// WAL, trust policy, received index, the pointer index): every `Undetermined` there is an
+/// unconditional hard failure, so the message says so itself instead of leaving it to a wrapper that
+/// does not exist for these formats.
+pub(crate) fn scan_budget_exceeded_as_damage_message(reported_offset: usize) -> String {
+    format!(
+        "{} and treats this as damage, not a torn tail",
+        scan_budget_exceeded_message(reported_offset)
+    )
+}
+
 /// RFC 164 §9.2: **the checksum decides.** §9 decided whether the bytes at a tail candidate are a
 /// *complete* record (never a tail, whatever its shape) from the header's own magic, version, and
 /// length fields -- but any one of those three can itself be the single corrupted byte a full write
@@ -98,10 +217,17 @@ pub(crate) fn partial_before_sound_frame_message(
 /// every format's own shared layout, confirmed against each module's `*_HEADER_LEN` constant).
 /// Returns the record's own total length (header + body) from `offset` when a checksum-verified
 /// interpretation exists, `None` otherwise.
+///
+/// RFC 167 D1: charges `budget` with each candidate body's length right before hashing it (up to
+/// two charges per call -- the stored length, and the to-EOF length). The four readers that call
+/// this and are immune to M5 (generation logs, trust keys, author keys) pass a budget too, purely to
+/// satisfy this signature; they never check it for `exceeded()`, and RFC 167 D2 leaves them
+/// unchanged.
 pub(crate) fn complete_by_checksum(
     bytes: &[u8],
     offset: usize,
     header_len: usize,
+    budget: &mut ScanBudget,
     checksum_of: impl Fn(u64, &[u8]) -> [u8; 32],
 ) -> Option<usize> {
     let header_end = offset.checked_add(header_len)?;
@@ -122,6 +248,7 @@ pub(crate) fn complete_by_checksum(
         if let Ok(claimed_usize) = usize::try_from(claimed) {
             if let Some(body_end) = header_end.checked_add(claimed_usize) {
                 if let Some(body) = bytes.get(header_end..body_end) {
+                    budget.charge(body.len() as u64);
                     if checksum_of(claimed, body) == stored_checksum {
                         return Some(body_end);
                     }
@@ -134,6 +261,7 @@ pub(crate) fn complete_by_checksum(
     // the last record in the file (the only place a positional tail candidate ever arises).
     let to_eof_len = bytes.len().saturating_sub(header_end);
     if let Some(body_to_eof) = bytes.get(header_end..) {
+        budget.charge(body_to_eof.len() as u64);
         if checksum_of(to_eof_len as u64, body_to_eof) == stored_checksum {
             return Some(bytes.len());
         }

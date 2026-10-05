@@ -27,7 +27,7 @@ use prikk_error::{PrikkError, Result};
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::{
-    complete_by_checksum, partial_before_sound_frame_message, require_progress,
+    ScanBudget, complete_by_checksum, partial_before_sound_frame_message, require_progress,
     resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, read_file_if_exists};
@@ -166,7 +166,11 @@ enum GenerationFrameAttempt {
     },
 }
 
-fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAttempt {
+fn parse_generation_frame_at(
+    bytes: &[u8],
+    offset: usize,
+    budget: &mut ScanBudget,
+) -> GenerationFrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < GENERATION_HEADER_LEN {
         return GenerationFrameAttempt::TrailingPartial { remaining };
@@ -181,8 +185,14 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
             // RFC 164 §9.2: a corrupted magic or version byte alone does not rule out a complete,
             // fully written record -- the checksum decides, computed with this format's own real
             // magic and version.
-            if complete_by_checksum(bytes, offset, GENERATION_HEADER_LEN, generation_checksum)
-                .is_some()
+            if complete_by_checksum(
+                bytes,
+                offset,
+                GENERATION_HEADER_LEN,
+                budget,
+                generation_checksum,
+            )
+            .is_some()
             {
                 return GenerationFrameAttempt::Invalid {
                     message: format!("{err}, but a complete record's own checksum verifies"),
@@ -220,6 +230,7 @@ fn parse_generation_frame_at(bytes: &[u8], offset: usize) -> GenerationFrameAtte
     let Some(body) = bytes.get(header_end..body_end) else {
         return GenerationFrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = generation_checksum(header_values.0, body);
     if expected != header_values.1 {
         // RFC 164 §9: a complete record (full header, full one-byte body) whose checksum fails was
@@ -268,8 +279,9 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_generation_frame_at(bytes, offset) {
+        match parse_generation_frame_at(bytes, offset, &mut budget) {
             GenerationFrameAttempt::Record {
                 record,
                 next_offset,
@@ -286,7 +298,11 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                 let sound_after =
                     sound_frame_after_partial(bytes, offset, GENERATION_MAGIC.as_slice(), |c| {
                         matches!(
-                            parse_generation_frame_at(bytes, c),
+                            parse_generation_frame_at(
+                                bytes,
+                                c,
+                                &mut ScanBudget::for_input(bytes.len())
+                            ),
                             GenerationFrameAttempt::Record { .. }
                         )
                     });
@@ -319,7 +335,11 @@ pub(crate) fn decode_generation_records(bytes: &[u8]) -> Result<GenerationReplay
                     .then(|| {
                         sound_frame_after_partial(bytes, offset, GENERATION_MAGIC.as_slice(), |c| {
                             matches!(
-                                parse_generation_frame_at(bytes, c),
+                                parse_generation_frame_at(
+                                    bytes,
+                                    c,
+                                    &mut ScanBudget::for_input(bytes.len())
+                                ),
                                 GenerationFrameAttempt::Record { .. }
                             )
                         })

@@ -61,7 +61,7 @@ use std::path::Path;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::push_string_u16;
 use crate::foundation::frame_resync::{
-    complete_by_checksum, partial_before_sound_frame_message, require_progress,
+    ScanBudget, complete_by_checksum, partial_before_sound_frame_message, require_progress,
     resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
@@ -174,7 +174,11 @@ enum AuthorKeyFrameAttempt {
     },
 }
 
-fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttempt {
+fn parse_author_key_frame_at(
+    bytes: &[u8],
+    offset: usize,
+    budget: &mut ScanBudget,
+) -> AuthorKeyFrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < AUTHOR_KEY_HEADER_LEN {
         return AuthorKeyFrameAttempt::TrailingPartial { remaining };
@@ -202,7 +206,14 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
     if &magic != AUTHOR_KEY_MAGIC {
         // RFC 164 §9.2: a corrupted magic byte alone does not rule out a complete, fully written
         // record -- the checksum decides, computed with this format's own real magic and version.
-        if complete_by_checksum(bytes, offset, AUTHOR_KEY_HEADER_LEN, author_key_checksum).is_some()
+        if complete_by_checksum(
+            bytes,
+            offset,
+            AUTHOR_KEY_HEADER_LEN,
+            budget,
+            author_key_checksum,
+        )
+        .is_some()
         {
             return AuthorKeyFrameAttempt::Invalid {
                 message:
@@ -218,7 +229,14 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
     }
     if version != AUTHOR_KEY_VERSION {
         // RFC 164 §9.2: same reasoning as the magic check above.
-        if complete_by_checksum(bytes, offset, AUTHOR_KEY_HEADER_LEN, author_key_checksum).is_some()
+        if complete_by_checksum(
+            bytes,
+            offset,
+            AUTHOR_KEY_HEADER_LEN,
+            budget,
+            author_key_checksum,
+        )
+        .is_some()
         {
             return AuthorKeyFrameAttempt::Invalid {
                 message: format!(
@@ -258,7 +276,14 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
         // conceding this is a torn tail, check whether the checksum verifies against the length to the
         // end of the file instead.
-        if complete_by_checksum(bytes, offset, AUTHOR_KEY_HEADER_LEN, author_key_checksum).is_some()
+        if complete_by_checksum(
+            bytes,
+            offset,
+            AUTHOR_KEY_HEADER_LEN,
+            budget,
+            author_key_checksum,
+        )
+        .is_some()
         {
             return AuthorKeyFrameAttempt::Invalid {
                 message: "author key record length claims more bytes than remain, but a complete \
@@ -269,6 +294,7 @@ fn parse_author_key_frame_at(bytes: &[u8], offset: usize) -> AuthorKeyFrameAttem
         }
         return AuthorKeyFrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = author_key_checksum(body_len, body);
     if expected != checksum {
         // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
@@ -296,8 +322,9 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
     let mut entries = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_author_key_frame_at(bytes, offset) {
+        match parse_author_key_frame_at(bytes, offset, &mut budget) {
             AuthorKeyFrameAttempt::Record { entry, next_offset } => {
                 record_outcomes.push(AuthorKeyRecordOutcome {
                     offset,
@@ -311,7 +338,11 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
                 let sound_after =
                     sound_frame_after_partial(bytes, offset, AUTHOR_KEY_MAGIC.as_slice(), |c| {
                         matches!(
-                            parse_author_key_frame_at(bytes, c),
+                            parse_author_key_frame_at(
+                                bytes,
+                                c,
+                                &mut ScanBudget::for_input(bytes.len())
+                            ),
                             AuthorKeyFrameAttempt::Record { .. }
                         )
                     });
@@ -343,7 +374,11 @@ pub(crate) fn decode_author_key_records(bytes: &[u8]) -> Result<AuthorKeyReplay>
                     .then(|| {
                         sound_frame_after_partial(bytes, offset, AUTHOR_KEY_MAGIC.as_slice(), |c| {
                             matches!(
-                                parse_author_key_frame_at(bytes, c),
+                                parse_author_key_frame_at(
+                                    bytes,
+                                    c,
+                                    &mut ScanBudget::for_input(bytes.len())
+                                ),
                                 AuthorKeyFrameAttempt::Record { .. }
                             )
                         })

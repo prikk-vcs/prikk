@@ -49,8 +49,9 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    complete_by_checksum, partial_before_sound_frame_message, require_progress,
-    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
+    BoundedScan, ScanBudget, complete_by_checksum, partial_before_sound_frame_message,
+    require_progress, resync_to_next_magic, scan_budget_exceeded_message,
+    sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
@@ -347,7 +348,7 @@ fn raw_ref_name_key_at(header: &[u8]) -> Option<[u8; 32]> {
 
 /// Attempt to parse one ref-log container frame at `offset`. Never trusts a not-yet-checksum-validated
 /// header's own `body_len` for anything beyond locating where its claimed body would end.
-fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
+fn parse_frame_at(bytes: &[u8], offset: usize, budget: &mut ScanBudget) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < REF_CONTAINER_HEADER_LEN {
         return FrameAttempt::TrailingPartial { remaining };
@@ -364,9 +365,13 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
             // own real magic and version constants (`record_checksum` always uses the constants, never
             // whatever bytes are actually on disk at this offset).
             let never_a_tail = raw_ref_name_key_at(header).is_some_and(|key| {
-                complete_by_checksum(bytes, offset, REF_CONTAINER_HEADER_LEN, |body_len, body| {
-                    record_checksum(key, body_len, body)
-                })
+                complete_by_checksum(
+                    bytes,
+                    offset,
+                    REF_CONTAINER_HEADER_LEN,
+                    budget,
+                    |body_len, body| record_checksum(key, body_len, body),
+                )
                 .is_some()
             });
             return FrameAttempt::Invalid {
@@ -395,11 +400,14 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         // RFC 165 R5 (§9.2): a corrupted length field can claim a body past the end of the file --
         // before conceding this is a torn tail, check whether the checksum verifies against the
         // length to the end of the file instead.
-        let never_a_tail =
-            complete_by_checksum(bytes, offset, REF_CONTAINER_HEADER_LEN, |len, body| {
-                record_checksum(header_values.ref_name_key, len, body)
-            })
-            .is_some();
+        let never_a_tail = complete_by_checksum(
+            bytes,
+            offset,
+            REF_CONTAINER_HEADER_LEN,
+            budget,
+            |len, body| record_checksum(header_values.ref_name_key, len, body),
+        )
+        .is_some();
         if never_a_tail {
             return FrameAttempt::Invalid {
                 message: "ref container record length claims more bytes than remain, but a \
@@ -412,6 +420,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         }
         return FrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = record_checksum(header_values.ref_name_key, header_values.body_len, body);
     if expected != header_values.checksum {
         // RFC 165 R5 (§9.2): a complete record (full header, full claimed body) whose checksum
@@ -458,8 +467,24 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_frame_at(bytes, offset) {
+        if budget.exceeded() {
+            record_outcomes.push(RefContainerRecordOutcome {
+                offset,
+                status: RefContainerRecordStatus::Failed {
+                    message: scan_budget_exceeded_message(offset),
+                    claimed_ref_name_key: None,
+                    never_a_tail: false,
+                },
+            });
+            return Ok(RefContainerReplay {
+                records,
+                trailing_partial_bytes: 0,
+                record_outcomes,
+            });
+        }
+        match parse_frame_at(bytes, offset, &mut budget) {
             FrameAttempt::Record {
                 record,
                 next_offset,
@@ -498,16 +523,42 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after =
-                    sound_frame_after_partial(bytes, offset, REF_CONTAINER_MAGIC.as_slice(), |c| {
-                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
-                    });
-                let Some(next) = sound_after else {
-                    return Ok(RefContainerReplay {
-                        records,
-                        trailing_partial_bytes: remaining,
-                        record_outcomes,
-                    });
+                let sound_after = sound_frame_after_partial_budgeted(
+                    bytes,
+                    offset,
+                    REF_CONTAINER_MAGIC.as_slice(),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
+                );
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => {
+                        return Ok(RefContainerReplay {
+                            records,
+                            trailing_partial_bytes: remaining,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Undetermined => {
+                        record_outcomes.push(RefContainerRecordOutcome {
+                            offset,
+                            status: RefContainerRecordStatus::Failed {
+                                message: scan_budget_exceeded_message(offset),
+                                claimed_ref_name_key: None,
+                                never_a_tail: false,
+                            },
+                        });
+                        return Ok(RefContainerReplay {
+                            records,
+                            trailing_partial_bytes: 0,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Sound(next) => next,
                 };
                 let message = partial_before_sound_frame_message(offset, next);
                 let claimed = bytes.get(offset..).and_then(raw_ref_name_key_at);
@@ -534,20 +585,41 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                 // genuine tail: RFC 162 rule 3's own rule, unchanged -- no `Failed` outcome is
                 // recorded for it at all, exactly like `TrailingPartial`'s own tail case above;
                 // `trailing_partial_bytes` alone represents it.
-                let sound_after = (!never_a_tail)
-                    .then(|| {
-                        sound_frame_after_partial(
-                            bytes,
-                            offset,
-                            REF_CONTAINER_MAGIC.as_slice(),
-                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
-                        )
-                    })
-                    .flatten();
-                if sound_after.is_none() && !never_a_tail {
+                let sound_after = if never_a_tail {
+                    None
+                } else {
+                    Some(sound_frame_after_partial_budgeted(
+                        bytes,
+                        offset,
+                        REF_CONTAINER_MAGIC.as_slice(),
+                        &mut budget,
+                        |c, budget| {
+                            matches!(
+                                parse_frame_at(bytes, c, budget),
+                                FrameAttempt::Record { .. }
+                            )
+                        },
+                    ))
+                };
+                if matches!(sound_after, Some(BoundedScan::NoSoundFrame)) {
                     return Ok(RefContainerReplay {
                         records,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        record_outcomes,
+                    });
+                }
+                if matches!(sound_after, Some(BoundedScan::Undetermined)) {
+                    record_outcomes.push(RefContainerRecordOutcome {
+                        offset,
+                        status: RefContainerRecordStatus::Failed {
+                            message: format!("{message}; {}", scan_budget_exceeded_message(offset)),
+                            claimed_ref_name_key,
+                            never_a_tail,
+                        },
+                    });
+                    return Ok(RefContainerReplay {
+                        records,
+                        trailing_partial_bytes: 0,
                         record_outcomes,
                     });
                 }
@@ -560,8 +632,8 @@ pub(crate) fn decode_ref_container_records(bytes: &[u8]) -> Result<RefContainerR
                     },
                 });
                 let resumed = match sound_after {
-                    Some(next) => Some(next),
-                    None => resync_to_next_magic(bytes, offset + 1, REF_CONTAINER_MAGIC.as_slice()),
+                    Some(BoundedScan::Sound(next)) => Some(next),
+                    _ => resync_to_next_magic(bytes, offset + 1, REF_CONTAINER_MAGIC.as_slice()),
                 };
                 match resumed {
                     Some(next) => offset = require_progress("ref container", offset, next)?,

@@ -12,7 +12,8 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, sound_frame_after_partial, tallied_sha256,
+    BoundedScan, ScanBudget, partial_before_sound_frame_message, require_progress,
+    scan_budget_exceeded_as_damage_message, sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{
     MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
@@ -533,7 +534,12 @@ enum FrameAttempt {
 /// Attempt to parse one frame at `offset`. Never trusts a not-yet-checksum-validated header's own
 /// `body_len` for anything beyond locating where its claimed body would end -- the checksum, not
 /// the length field, is what makes a `Record` result trustworthy.
-fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
+///
+/// RFC 167 D1: charges `budget` with the claimed body's length right before hashing it, whether this
+/// call is the reader's own ordinary per-offset attempt (the broad placement, in [`decode_records`])
+/// or one candidate inside [`sound_frame_after_partial_budgeted`]'s own scan (the narrow placement) --
+/// this one function is both placements' single choke point for the WAL, since both call it.
+fn parse_frame_at(bytes: &[u8], offset: usize, budget: &mut ScanBudget) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < WAL_HEADER_LEN {
         return FrameAttempt::TrailingPartial { remaining };
@@ -565,6 +571,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
     let Some(body) = bytes.get(header_end..body_end) else {
         return FrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = record_checksum(header_values.seq, header_values.body_len, body);
     if expected != header_values.checksum {
         return FrameAttempt::Invalid {
@@ -667,8 +674,26 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    // RFC 167 D1: one budget per decode call, shared by both placements below.
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_frame_at(bytes, offset) {
+        // The broad placement: checked once per outer iteration, so cost this reader's own ordinary
+        // per-offset attempt paid (via `parse_frame_at`, just below) on earlier iterations is caught
+        // even when no `TrailingPartial`/`Invalid` arm's own scan ever runs.
+        if budget.exceeded() {
+            record_outcomes.push(WalRecordOutcome {
+                offset,
+                status: WalRecordStatus::Failed {
+                    message: scan_budget_exceeded_as_damage_message(offset),
+                },
+            });
+            return Ok(WalReplay {
+                records,
+                trailing_partial_bytes: 0,
+                record_outcomes,
+            });
+        }
+        match parse_frame_at(bytes, offset, &mut budget) {
             FrameAttempt::Record {
                 record,
                 next_offset,
@@ -682,16 +707,40 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after =
-                    sound_frame_after_partial(bytes, offset, WAL_RECORD_MAGIC.as_slice(), |c| {
-                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
-                    });
-                let Some(next) = sound_after else {
-                    return Ok(WalReplay {
-                        records,
-                        trailing_partial_bytes: remaining,
-                        record_outcomes,
-                    });
+                let sound_after = sound_frame_after_partial_budgeted(
+                    bytes,
+                    offset,
+                    WAL_RECORD_MAGIC.as_slice(),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
+                );
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => {
+                        return Ok(WalReplay {
+                            records,
+                            trailing_partial_bytes: remaining,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Undetermined => {
+                        record_outcomes.push(WalRecordOutcome {
+                            offset,
+                            status: WalRecordStatus::Failed {
+                                message: scan_budget_exceeded_as_damage_message(offset),
+                            },
+                        });
+                        return Ok(WalReplay {
+                            records,
+                            trailing_partial_bytes: 0,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Sound(next) => next,
                 };
                 let message = partial_before_sound_frame_message(offset, next);
                 record_outcomes.push(WalRecordOutcome {
@@ -708,16 +757,43 @@ pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
                 // this fix, an invalid frame with nothing sound after it was pushed as a permanent `Failed` outcome and
                 // `trailing_partial_bytes` was left at `0` -- the exact mechanism behind M3's "100 zero bytes" / "4,096 zero bytes" /
                 // "100 random bytes" rows staying refused forever, since nothing ever reported them as a repairable tail.
-                let sound_after =
-                    sound_frame_after_partial(bytes, offset, WAL_RECORD_MAGIC.as_slice(), |c| {
-                        matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. })
-                    });
-                let Some(next) = sound_after else {
-                    return Ok(WalReplay {
-                        records,
-                        trailing_partial_bytes: bytes.len().saturating_sub(offset),
-                        record_outcomes,
-                    });
+                let sound_after = sound_frame_after_partial_budgeted(
+                    bytes,
+                    offset,
+                    WAL_RECORD_MAGIC.as_slice(),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
+                );
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => {
+                        return Ok(WalReplay {
+                            records,
+                            trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Undetermined => {
+                        record_outcomes.push(WalRecordOutcome {
+                            offset,
+                            status: WalRecordStatus::Failed {
+                                message: format!(
+                                    "{message}; {}",
+                                    scan_budget_exceeded_as_damage_message(offset)
+                                ),
+                            },
+                        });
+                        return Ok(WalReplay {
+                            records,
+                            trailing_partial_bytes: 0,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Sound(next) => next,
                 };
                 record_outcomes.push(WalRecordOutcome {
                     offset,

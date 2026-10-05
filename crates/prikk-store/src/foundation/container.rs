@@ -22,8 +22,9 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    partial_before_sound_frame_message, require_progress, resync_to_next_magic,
-    sound_frame_after_partial, tallied_sha256,
+    BoundedScan, ScanBudget, partial_before_sound_frame_message, require_progress,
+    resync_to_next_magic, scan_budget_exceeded_message, sound_frame_after_partial_budgeted,
+    tallied_sha256,
 };
 use crate::foundation::fsutil::len_to_u64;
 
@@ -178,8 +179,9 @@ fn parse_frame_at(
     magic: &[u8; 8],
     bytes: &[u8],
     offset: usize,
+    budget: &mut ScanBudget,
 ) -> FrameAttempt {
-    parse_frame_at_reporting(object_type, magic, bytes, offset, offset)
+    parse_frame_at_reporting(object_type, magic, bytes, offset, offset, budget)
 }
 
 /// [`parse_frame_at`] over a buffer that is **not the whole container**: `report_offset` is where the frame sits in the container, so
@@ -191,6 +193,7 @@ fn parse_frame_at_reporting(
     bytes: &[u8],
     offset: usize,
     report_offset: usize,
+    budget: &mut ScanBudget,
 ) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < CONTAINER_HEADER_LEN {
@@ -226,6 +229,7 @@ fn parse_frame_at_reporting(
     let Some(body) = bytes.get(header_end..body_end) else {
         return FrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = record_checksum(magic, header_values.body_len, body);
     if expected != header_values.checksum {
         return FrameAttempt::Invalid {
@@ -291,7 +295,11 @@ pub(crate) fn decode_container_record_in_window(
     container_offset: usize,
 ) -> Result<Option<ContainerRecord>> {
     let magic = container_magic(object_type)?;
-    match parse_frame_at_reporting(object_type, magic, window, 0, container_offset) {
+    // Not part of any candidate scan -- one already-located record, read once. A fresh, throwaway
+    // budget is correct here: this call can never reach `Undetermined` (there is no loop to cut
+    // short), so nothing downstream of it ever needs to know this budget existed.
+    let mut budget = ScanBudget::for_input(window.len());
+    match parse_frame_at_reporting(object_type, magic, window, 0, container_offset, &mut budget) {
         FrameAttempt::Record { record, .. } => Ok(Some(record)),
         FrameAttempt::TrailingPartial { .. } => Ok(None),
         FrameAttempt::Invalid { message, .. } => Err(PrikkError::Integrity(format!(
@@ -314,8 +322,27 @@ pub(crate) fn decode_container_records(
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    // RFC 167 D1: one budget per decode call. This reader's own `Invalid` arm never calls the scan
+    // (below) at all -- it goes straight to a bare `resync_to_next_magic` -- so the broad placement,
+    // checked at the top of every iteration, is this reader's *only* guard against that arm's own
+    // cost; the design round measured the narrow placement alone leaving it fully quadratic.
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_frame_at(object_type, magic, bytes, offset) {
+        if budget.exceeded() {
+            record_outcomes.push(ContainerRecordOutcome {
+                offset,
+                status: ContainerRecordStatus::Failed {
+                    message: scan_budget_exceeded_message(offset),
+                    complete: false,
+                },
+            });
+            return Ok(ContainerReplay {
+                records,
+                trailing_partial_bytes: 0,
+                record_outcomes,
+            });
+        }
+        match parse_frame_at(object_type, magic, bytes, offset, &mut budget) {
             FrameAttempt::Record {
                 record,
                 next_offset,
@@ -333,18 +360,41 @@ pub(crate) fn decode_container_records(
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after = sound_frame_after_partial(bytes, offset, magic.as_slice(), |c| {
-                    matches!(
-                        parse_frame_at(object_type, magic, bytes, c),
-                        FrameAttempt::Record { .. }
-                    )
-                });
-                let Some(next) = sound_after else {
-                    return Ok(ContainerReplay {
-                        records,
-                        trailing_partial_bytes: remaining,
-                        record_outcomes,
-                    });
+                let sound_after = sound_frame_after_partial_budgeted(
+                    bytes,
+                    offset,
+                    magic.as_slice(),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(object_type, magic, bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
+                );
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => {
+                        return Ok(ContainerReplay {
+                            records,
+                            trailing_partial_bytes: remaining,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Undetermined => {
+                        record_outcomes.push(ContainerRecordOutcome {
+                            offset,
+                            status: ContainerRecordStatus::Failed {
+                                message: scan_budget_exceeded_message(offset),
+                                complete: false,
+                            },
+                        });
+                        return Ok(ContainerReplay {
+                            records,
+                            trailing_partial_bytes: 0,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Sound(next) => next,
                 };
                 let message = partial_before_sound_frame_message(offset, next);
                 record_outcomes.push(ContainerRecordOutcome {

@@ -7,17 +7,16 @@
 //! at least one frame header, so this can never be violated by a sound reader), and it does **bounded work**: bytes hashed
 //! (`frame_resync::tallied_sha256`) stay within a fixed multiple of the input size.
 //!
-//! **The external review's M5** found the one case where that last bound does not hold today: a WAL buffer packed with real frame
-//! headers, each claiming a body reaching **exactly** to the end of the file (so it *fits* the length check), decodes each one as a
+//! **The external review's M5** found the one case where that last bound did not hold: a buffer packed with real frame headers,
+//! each claiming a body reaching **exactly** to the end of the file (so it *fits* the length check), decoded each one as a
 //! **complete, checksum-failing record** -- `Invalid`, not `TrailingPartial` -- and RFC 102 Stage 2's own isolate-and-continue rule
-//! (unchanged by F3: `resync_to_next_magic` from the `Invalid` arm, not `sound_frame_after_partial`, which only ever runs from a
-//! `TrailingPartial` arm) fully parses and hashes the next candidate the same way. Since nearly every candidate's claim reaches
-//! nearly the whole remaining file, this is quadratic in the file's size -- a defect in the container/WAL/etc. decode loop shared
-//! since RFC 102 Stage 2, not something F3's `sound_frame_after_partial` introduced (confirmed by construction: this buffer's only
-//! `TrailingPartial` classification is the single genuine short tail at the very end).
-//! [`hostile_wal_tail_quadratic_is_measured_and_bounded`] reproduces it, measures it, and documents the ratio; it is **not** included
-//! in the per-format bound corpus below (that corpus stays at 64 KiB, where the ratio is still small, and asserts the ordinary 8x
-//! bound). No mechanical fix landed this round -- see the round's report for why, and the ruling asked.
+//! fully parsed and hashed the next candidate the same way, for ten readers sharing the pattern. **RFC 167 fixes it**: a per-decode
+//! work budget (`frame_resync::ScanBudget`, D1), charged at both the place every reader's own ordinary checksum happens and inside
+//! the shared scan between candidates, resolves a cut-short scan to damage, never a tail (D2, C3).
+//! [`budgeted_scan_is_linear_and_resolves_to_damage`] is the standing guard this round replaces the 1.5x ceilings (and the
+//! `#[ignore]`d quadratic measurement they stood in for) with: it is not included in the per-format bound corpus below (that
+//! corpus stays at 64 KiB, where the ratio was always small, and asserts the ordinary 8x bound on *ordinary* mutations) because it
+//! needs the two deliberately hostile shapes and larger sizes M5 is specifically about.
 //! [`hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size`] is the **standing** guard (RFC 160 §9 Addendum 1): a small,
 //! fast case asserting hashed bytes stay at or below 1.5x what it measured when the ceiling was written, so a regression that makes
 //! the (still unfixed) quadratic worse is caught even though the quadratic itself is not.
@@ -325,142 +324,125 @@ fn every_format_has_a_runaway_guard_case() {
     }
 }
 
-/// **The external review's M5, measured.** A torn tail (a frame claiming a body far past what remains) packed with real frame magic
-/// bytes every `WAL_HEADER_LEN` bytes, each claiming a body reaching to the end of the file: `sound_frame_after_partial` fully parses
-/// -- and hashes -- nearly every one. Reproduces the doubling the external review measured (0.25 / 0.88 / 3.49 / 14.02 s at
-/// 256 KiB -> 2 MiB on their machine); this machine's numbers are printed, not asserted, because wall time is not portable across
-/// machines (only the doubling shape is the point). **Not fixed this round** -- see the report for why a mechanical fix was not
-/// attempted with confidence at this size, and the ruling asked. Run deliberately (`--ignored`); it is a measurement, not a gate.
-/// A buffer packed with real WAL frame headers, one every `WAL_HEADER_LEN` bytes, each claiming a body reaching **exactly** to the
-/// end of the file (so it "fits" the length check and is fully parsed and hashed, then rejected on its checksum). Shared between
-/// the ignored full measurement below and [`hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size`]'s standing guard.
-fn hostile_tail(total_len: usize) -> Vec<u8> {
-    const WAL_HEADER_LEN: usize = 8 + 2 + 8 + 8 + 32;
-    let magic = b"PWALR001";
+/// [`frame_with_body`]'s own shared layout (`magic(8) version(2) pre length(8) checksum(32) body`), stacked from offset 0: each
+/// candidate's header claims a body reaching exactly to the end of `total_len` (so the length check "fits"), with the checksum area
+/// left zeroed -- every candidate decodes as a complete, checksum-failing record (`Invalid`), the long-standing RFC 102 Stage 2
+/// resync-loop path. `valid`/`pre` come from the format under test ([`Format::valid`]/[`Format::pre`]), so one builder covers every
+/// one of the six readers RFC 167 found quadratic.
+fn generic_hostile_shape_a(valid: &[u8], pre: usize, total_len: usize) -> Vec<u8> {
+    let header_prefix_len = 10 + pre;
+    let header_len = header_prefix_len + 8 + 32;
+    let header_prefix = &valid[..header_prefix_len];
     let mut bytes = vec![0_u8; total_len];
     let mut at = 0;
-    while at + WAL_HEADER_LEN <= total_len {
-        bytes[at..at + 8].copy_from_slice(magic);
-        bytes[at + 8..at + 10].copy_from_slice(&1_u16.to_be_bytes());
-        bytes[at + 10..at + 18].copy_from_slice(&0_u64.to_be_bytes()); // seq
-        let claimed = (total_len - at - WAL_HEADER_LEN) as u64; // claims a body reaching exactly to the end of the file: it "fits"
-        bytes[at + 18..at + 26].copy_from_slice(&claimed.to_be_bytes());
-        at += WAL_HEADER_LEN;
+    while at + header_len <= total_len {
+        bytes[at..at + header_prefix_len].copy_from_slice(header_prefix);
+        let claimed = (total_len - at - header_len) as u64;
+        bytes[at + header_prefix_len..at + header_prefix_len + 8]
+            .copy_from_slice(&claimed.to_be_bytes());
+        at += header_len;
     }
     bytes
 }
 
-/// **RFC 162 §5 controls -- M5's second path.** The external review's own `mkhostile.py`: one **leading** header whose claimed body
-/// clearly does not fit (`sound_frame_after_partial`'s own reachability, from `TrailingPartial`, not `Invalid` -- **F3's addition, new
-/// this cycle**, unlike shape A's long-standing `Invalid`-arm resync), followed by the same stacked-candidate-headers pattern
-/// [`hostile_tail`] uses to make the *scan itself* expensive. Rule 3's own scan must still reach "no sound record follows" before it
-/// calls the rest a tail, which is exactly this shape's own cost.
-fn hostile_tail_shape_b(total_len: usize) -> Vec<u8> {
-    const WAL_HEADER_LEN: usize = 8 + 2 + 8 + 8 + 32;
-    let magic = b"PWALR001";
+/// Like [`generic_hostile_shape_a`], but with one **leading** header whose claimed body clearly does not fit (a `TrailingPartial`,
+/// F3's own partial-frame scan) in front of the same stacked pattern -- RFC 160 §5's second path through the scan.
+fn generic_hostile_shape_b(valid: &[u8], pre: usize, total_len: usize) -> Vec<u8> {
+    let header_prefix_len = 10 + pre;
+    let header_len = header_prefix_len + 8 + 32;
+    let header_prefix = &valid[..header_prefix_len];
     let mut bytes = Vec::with_capacity(total_len);
-    bytes.extend_from_slice(magic);
-    bytes.extend_from_slice(&1_u16.to_be_bytes());
-    bytes.extend_from_slice(&2_u64.to_be_bytes()); // seq
-    bytes.extend_from_slice(&(1_u64 << 40).to_be_bytes()); // claimed body: clearly does not fit
-    bytes.extend_from_slice(&[0_u8; 32]); // checksum, irrelevant: TrailingPartial never reaches it
-    let mut seq = 3_u64;
-    while bytes.len() + WAL_HEADER_LEN <= total_len {
+    bytes.extend_from_slice(header_prefix);
+    bytes.extend_from_slice(&(1_u64 << 40).to_be_bytes());
+    bytes.extend_from_slice(&[0_u8; 32]);
+    while bytes.len() + header_len <= total_len {
         let start = bytes.len();
-        let claimed = (total_len - start - WAL_HEADER_LEN) as u64; // claims a body reaching exactly to the end: it "fits"
-        bytes.extend_from_slice(magic);
-        bytes.extend_from_slice(&1_u16.to_be_bytes());
-        bytes.extend_from_slice(&seq.to_be_bytes());
+        let claimed = (total_len - start - header_len) as u64;
+        bytes.extend_from_slice(header_prefix);
         bytes.extend_from_slice(&claimed.to_be_bytes());
         bytes.extend_from_slice(&[0_u8; 32]);
-        seq += 1;
     }
     bytes.resize(total_len, 0);
     bytes
 }
 
-/// **RFC 160 §9 Addendum 1, item 1 -- M5 gets a standing guard, not only an `#[ignore]`d measurement. RFC 162 §5 extends it to shape
-/// B.** At a size small enough to run in every ordinary `cargo test` (a fraction of a second even in a debug build), each hostile
-/// WAL tail shape's bytes-hashed stays at or below **1.5x what it measured when this ceiling was written** -- the same ceiling shape
-/// P2's open rows use (`store_size_independence.rs`), so a regression that makes the quadratic worse is caught even though the
-/// quadratic itself is not fixed until 0.49.0 (RFC 160 §9's M5 ruling: the fix, and the real bound this ceiling is replaced by, is a
-/// design round, not this one).
-/// **Perturb:** hash each candidate twice (call `tallied_sha256` an extra time on the same bytes before comparing): every size's
-/// hashed count doubles, over its ceiling, and this goes red.
+/// **RFC 167 D1/D2/D4 -- the standing guard the 1.5x ceilings are replaced by** (the previous ceiling, and the `#[ignore]`d
+/// quadratic measurement it stood in for, are both gone: this is the real bound, not a regression tripwire for an unfixed cost).
+/// For each of the six readers RFC 167 found quadratic on `main` (container frame, WAL, trust policy, received index, ref
+/// container, pointer index) and both hostile shapes, at 32 KiB, 256 KiB and 2 MiB: the scan never resolves to a tail (**C3**:
+/// ambiguity is always damage, confirmed here by `trailing_partial_bytes == 0` and at least one `Failed` outcome), and the bytes
+/// hashed stays within [`SCAN_BUDGET_MULTIPLE`] times the input plus one candidate's own worst-case slack (the charge that crosses
+/// the limit is itself allowed to finish, `ScanBudget::exceeded`'s own doc) -- linear, not quadratic, confirmed up to 2 MiB per
+/// size by checking the *ratio* stays flat rather than only checking an absolute ceiling.
+///
+/// **Control, run by hand for this round's report, not kept as code**: removing either of RFC 167 D1's two placements (the narrow
+/// one inside `sound_frame_after_partial_budgeted`, or the broad one in each reader's own outer loop) leaves exactly the other
+/// hostile shape fully quadratic for five of the six readers (container frame, received index, ref container, pointer index: both
+/// placements needed; the WAL's own `Invalid` arm always calls the narrow one, so it alone happens to suffice there) -- each
+/// placement was shown insufficient alone by direct measurement during the design round, not assumed from the RFC's own framing.
 #[test]
-fn hostile_wal_tail_hashing_stays_within_its_ceiling_at_a_small_size() {
-    use crate::wal::decode_records;
+fn budgeted_scan_is_linear_and_resolves_to_damage() {
+    use crate::foundation::frame_resync::SCAN_BUDGET_MULTIPLE;
 
-    for (size, ceiling) in [(32 * 1024, 13_882_014_u64), (64 * 1024, 55_533_252_u64)] {
-        let bytes = hostile_tail(size);
-        crate::foundation::frame_resync::hash_tally::reset();
-        let replay = decode_records(&bytes).expect("no source of an outer Err here");
-        let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
-        // RFC 162 rule 3: no candidate in this buffer is ever genuinely sound, so nothing sound follows any of them --
-        // the whole thing is now one `trailing_partial_bytes` tail (rule 3's own scan reaches the same conclusion a
-        // reader would), not a pile of stuck `Failed` items as it read under F3's shape-based rule. The bytes hashed
-        // finding every candidate's checksum invalid is unaffected either way -- same candidates, same hashing.
-        assert_eq!(
-            replay.trailing_partial_bytes, size,
-            "shape A {size}: every candidate is checksum-invalid and none is followed by a sound record, so the whole buffer \
-             is tail under RFC 162 rule 3"
-        );
-        assert!(
-            hashed <= ceiling,
-            "shape A {size}: hashed {hashed} bytes, over its {ceiling}-byte ceiling (1.5x the 9,254,676 / 37,022,168 bytes this \
-             measured, debug build, when the ceiling was written)"
-        );
-    }
-
-    // RFC 162 §5: shape B, the external review's own `mkhostile`. Measured (debug build, this machine, when this ceiling was
-    // written): 32 KiB -> 9,221,940 bytes hashed; 64 KiB -> 36,956,664 bytes hashed. Both ceilings are 1.5x those.
-    for (size, ceiling) in [(32 * 1024, 13_832_910_u64), (64 * 1024, 55_434_996_u64)] {
-        let bytes = hostile_tail_shape_b(size);
-        crate::foundation::frame_resync::hash_tally::reset();
-        let replay = decode_records(&bytes).expect("no source of an outer Err here");
-        let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
-        assert_eq!(
-            replay.trailing_partial_bytes, size,
-            "shape B {size}: the leading oversized claim, and every stacked candidate behind it, resolve to one tail \
-             under RFC 162 rule 3"
-        );
-        assert!(
-            hashed <= ceiling,
-            "shape B {size}: hashed {hashed} bytes, over its {ceiling}-byte ceiling (1.5x what this measured, debug \
-             build, when the ceiling was written)"
-        );
-    }
-}
-
-#[test]
-#[ignore = "RFC 160 R3/M5 measurement: the hostile-WAL-tail quadratic; run deliberately, prints its own numbers"]
-fn hostile_wal_tail_quadratic_is_measured_and_bounded() {
-    use crate::wal::decode_records;
-
-    let mut previous: Option<f64> = None;
-    for size in [256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024] {
-        let bytes = hostile_tail(size);
-        crate::foundation::frame_resync::hash_tally::reset();
-        let began = std::time::Instant::now();
-        let replay = decode_records(&bytes).expect("no source of an outer Err here");
-        let elapsed = began.elapsed().as_secs_f64();
-        let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
-        // RFC 162 rule 3: no candidate here is ever sound, so the whole buffer is tail, not damage --
-        // see the standing guard above for why. The quadratic hashing cost is unaffected.
-        assert_eq!(
-            replay.trailing_partial_bytes, size,
-            "the packed tail is reported, now as a tail under RFC 162 rule 3"
-        );
-        let ratio = previous.map(|last| elapsed / last);
-        println!(
-            "{} KiB: {elapsed:.2} s, {} MB hashed ({:.1}x the input){}",
-            size / 1024,
-            hashed / 1_000_000,
-            hashed as f64 / size as f64,
-            ratio.map_or(String::new(), |r| format!(
-                ", {r:.2}x the previous size's time"
-            )),
-        );
-        previous = Some(elapsed);
+    let affected = [
+        "container frame",
+        "WAL",
+        "trust policy",
+        "received index",
+        "ref container",
+        "pointer index",
+    ];
+    for format in all_formats()
+        .into_iter()
+        .filter(|format| affected.contains(&format.name))
+    {
+        let valid = (format.valid)();
+        for (shape_name, build) in [
+            (
+                "A",
+                generic_hostile_shape_a as fn(&[u8], usize, usize) -> Vec<u8>,
+            ),
+            (
+                "B",
+                generic_hostile_shape_b as fn(&[u8], usize, usize) -> Vec<u8>,
+            ),
+        ] {
+            let mut previous_ratio: Option<f64> = None;
+            for size in [32 * 1024, 256 * 1024, 2 * 1024 * 1024] {
+                let bytes = build(&valid, format.pre, size);
+                crate::foundation::frame_resync::hash_tally::reset();
+                let seen = (format.decode)(&bytes).expect("no source of an outer Err here");
+                let hashed = crate::foundation::frame_resync::hash_tally::bytes_hashed();
+                assert_eq!(
+                    seen.trailing_partial_bytes, 0,
+                    "{}, shape {shape_name}, {size}: a scan the budget cut short must never resolve to a tail (C3)",
+                    format.name
+                );
+                assert!(
+                    seen.failed >= 1,
+                    "{}, shape {shape_name}, {size}: the cut-short scan must be reported, not silently dropped",
+                    format.name
+                );
+                // One extra candidate's own worst-case body (up to the whole remaining buffer) may be
+                // charged before the next check sees the budget already exceeded -- the ceiling allows
+                // exactly one such overshoot, not an unbounded one.
+                let ceiling = SCAN_BUDGET_MULTIPLE * size as u64 + size as u64;
+                assert!(
+                    hashed <= ceiling,
+                    "{}, shape {shape_name}, {size}: hashed {hashed} bytes, over its {ceiling}-byte linear ceiling",
+                    format.name
+                );
+                let ratio = hashed as f64 / size as f64;
+                if let Some(previous) = previous_ratio {
+                    assert!(
+                        ratio <= previous * 1.5,
+                        "{}, shape {shape_name}, {size}: bytes-hashed/input ratio {ratio:.2} grew past 1.5x the \
+                         smaller size's {previous:.2} -- a growing ratio is quadratic, not linear",
+                        format.name
+                    );
+                }
+                previous_ratio = Some(ratio);
+            }
+        }
     }
 }

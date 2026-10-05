@@ -20,8 +20,9 @@ use prikk_object::ObjectId;
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_bytes_u64, push_u16};
 use crate::foundation::frame_resync::{
-    complete_by_checksum, partial_before_sound_frame_message, require_progress,
-    resync_to_next_magic, sound_frame_after_partial, tallied_sha256,
+    BoundedScan, ScanBudget, complete_by_checksum, partial_before_sound_frame_message,
+    require_progress, resync_to_next_magic, scan_budget_exceeded_as_damage_message,
+    sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
@@ -168,7 +169,7 @@ enum FrameAttempt {
     },
 }
 
-fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
+fn parse_frame_at(bytes: &[u8], offset: usize, budget: &mut ScanBudget) -> FrameAttempt {
     let remaining = bytes.len().saturating_sub(offset);
     if remaining < RECEIVED_INDEX_HEADER_LEN {
         return FrameAttempt::TrailingPartial { remaining };
@@ -184,8 +185,14 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
             // fully written record -- the checksum decides, computed with this format's own real
             // magic and version. Covers the write-side tail scan too (`scan_received_index_tail`
             // calls this same function).
-            if complete_by_checksum(bytes, offset, RECEIVED_INDEX_HEADER_LEN, record_checksum)
-                .is_some()
+            if complete_by_checksum(
+                bytes,
+                offset,
+                RECEIVED_INDEX_HEADER_LEN,
+                budget,
+                record_checksum,
+            )
+            .is_some()
             {
                 return FrameAttempt::Invalid {
                     message: format!("{err}, but a complete record's own checksum verifies"),
@@ -214,7 +221,14 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         // RFC 164 §9.2: a corrupted length field can claim a body past the end of the file -- before
         // conceding this is a torn tail, check whether the checksum verifies against the length to the
         // end of the file instead.
-        if complete_by_checksum(bytes, offset, RECEIVED_INDEX_HEADER_LEN, record_checksum).is_some()
+        if complete_by_checksum(
+            bytes,
+            offset,
+            RECEIVED_INDEX_HEADER_LEN,
+            budget,
+            record_checksum,
+        )
+        .is_some()
         {
             return FrameAttempt::Invalid {
                 message:
@@ -226,6 +240,7 @@ fn parse_frame_at(bytes: &[u8], offset: usize) -> FrameAttempt {
         }
         return FrameAttempt::TrailingPartial { remaining };
     };
+    budget.charge(body.len() as u64);
     let expected = record_checksum(header_values.body_len, body);
     if expected != header_values.checksum {
         // RFC 164 §9: a complete record (full header, full claimed body) whose checksum fails was
@@ -254,8 +269,23 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
     let mut entries = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_frame_at(bytes, offset) {
+        if budget.exceeded() {
+            record_outcomes.push(ReceivedIndexRecordOutcome {
+                offset,
+                status: ReceivedIndexRecordStatus::Failed {
+                    message: scan_budget_exceeded_as_damage_message(offset),
+                },
+            });
+            return Ok(ReceivedIndexReplay {
+                entries,
+                trailing_partial_bytes: 0,
+                tail_offset: offset,
+                record_outcomes,
+            });
+        }
+        match parse_frame_at(bytes, offset, &mut budget) {
             FrameAttempt::Record { entry, next_offset } => {
                 record_outcomes.push(ReceivedIndexRecordOutcome {
                     offset,
@@ -266,19 +296,42 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after = sound_frame_after_partial(
+                let sound_after = sound_frame_after_partial_budgeted(
                     bytes,
                     offset,
                     RECEIVED_INDEX_MAGIC.as_slice(),
-                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
                 );
-                let Some(next) = sound_after else {
-                    return Ok(ReceivedIndexReplay {
-                        entries,
-                        trailing_partial_bytes: remaining,
-                        tail_offset: offset,
-                        record_outcomes,
-                    });
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => {
+                        return Ok(ReceivedIndexReplay {
+                            entries,
+                            trailing_partial_bytes: remaining,
+                            tail_offset: offset,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Undetermined => {
+                        record_outcomes.push(ReceivedIndexRecordOutcome {
+                            offset,
+                            status: ReceivedIndexRecordStatus::Failed {
+                                message: scan_budget_exceeded_as_damage_message(offset),
+                            },
+                        });
+                        return Ok(ReceivedIndexReplay {
+                            entries,
+                            trailing_partial_bytes: 0,
+                            tail_offset: offset,
+                            record_outcomes,
+                        });
+                    }
+                    BoundedScan::Sound(next) => next,
                 };
                 let message = partial_before_sound_frame_message(offset, next);
                 record_outcomes.push(ReceivedIndexRecordOutcome {
@@ -296,20 +349,43 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
                 // it is a tail, whatever its shape (zeros, random bytes), the same rule RFC 162
                 // rule 3 already gives the WAL and the pointer index. Except a complete record whose
                 // checksum or envelope fails (`never_a_tail`), which stays damage unconditionally.
-                let sound_after = (!never_a_tail)
-                    .then(|| {
-                        sound_frame_after_partial(
-                            bytes,
-                            offset,
-                            RECEIVED_INDEX_MAGIC.as_slice(),
-                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
-                        )
-                    })
-                    .flatten();
-                if sound_after.is_none() && !never_a_tail {
+                let sound_after = if never_a_tail {
+                    None
+                } else {
+                    Some(sound_frame_after_partial_budgeted(
+                        bytes,
+                        offset,
+                        RECEIVED_INDEX_MAGIC.as_slice(),
+                        &mut budget,
+                        |c, budget| {
+                            matches!(
+                                parse_frame_at(bytes, c, budget),
+                                FrameAttempt::Record { .. }
+                            )
+                        },
+                    ))
+                };
+                if matches!(sound_after, Some(BoundedScan::NoSoundFrame)) {
                     return Ok(ReceivedIndexReplay {
                         entries,
                         trailing_partial_bytes: bytes.len().saturating_sub(offset),
+                        tail_offset: offset,
+                        record_outcomes,
+                    });
+                }
+                if matches!(sound_after, Some(BoundedScan::Undetermined)) {
+                    record_outcomes.push(ReceivedIndexRecordOutcome {
+                        offset,
+                        status: ReceivedIndexRecordStatus::Failed {
+                            message: format!(
+                                "{message}; {}",
+                                scan_budget_exceeded_as_damage_message(offset)
+                            ),
+                        },
+                    });
+                    return Ok(ReceivedIndexReplay {
+                        entries,
+                        trailing_partial_bytes: 0,
                         tail_offset: offset,
                         record_outcomes,
                     });
@@ -319,10 +395,8 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
                     status: ReceivedIndexRecordStatus::Failed { message },
                 });
                 let resumed = match sound_after {
-                    Some(next) => Some(next),
-                    None => {
-                        resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice())
-                    }
+                    Some(BoundedScan::Sound(next)) => Some(next),
+                    _ => resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice()),
                 };
                 match resumed {
                     Some(next) => offset = require_progress("received index", offset, next)?,
@@ -357,20 +431,36 @@ pub(crate) fn decode_received_index_records(bytes: &[u8]) -> Result<ReceivedInde
 fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize, bool)> {
     let mut offset = 0_usize;
     let mut damaged = false;
+    // RFC 167 D1: this walk shares `parse_frame_at` with `decode_received_index_records` and is
+    // exposed to the identical cost -- a pre-write guard run against whatever is already on disk,
+    // so a hostile file sitting there would make every subsequent write pay it too. Same budget,
+    // same two placements.
+    let mut budget = ScanBudget::for_input(bytes.len());
     loop {
-        match parse_frame_at(bytes, offset) {
+        if budget.exceeded() {
+            return Ok((0, offset, true));
+        }
+        match parse_frame_at(bytes, offset, &mut budget) {
             FrameAttempt::Record { next_offset, .. } => {
                 offset = require_progress("received index", offset, next_offset)?;
             }
             FrameAttempt::TrailingPartial { remaining } => {
-                let sound_after = sound_frame_after_partial(
+                let sound_after = sound_frame_after_partial_budgeted(
                     bytes,
                     offset,
                     RECEIVED_INDEX_MAGIC.as_slice(),
-                    |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
+                    &mut budget,
+                    |c, budget| {
+                        matches!(
+                            parse_frame_at(bytes, c, budget),
+                            FrameAttempt::Record { .. }
+                        )
+                    },
                 );
-                let Some(next) = sound_after else {
-                    return Ok((remaining, offset, damaged));
+                let next = match sound_after {
+                    BoundedScan::NoSoundFrame => return Ok((remaining, offset, damaged)),
+                    BoundedScan::Undetermined => return Ok((0, offset, true)),
+                    BoundedScan::Sound(next) => next,
                 };
                 damaged = true;
                 offset = require_progress("received index", offset, next)?;
@@ -380,25 +470,32 @@ fn scan_received_index_tail(bytes: &[u8]) -> Result<(usize, usize, bool)> {
                 // above. A `never_a_tail` record (a complete record whose checksum or envelope
                 // fails) is damage unconditionally, never resolved to a tail even when nothing
                 // sound follows.
-                let sound_after = (!never_a_tail)
-                    .then(|| {
-                        sound_frame_after_partial(
-                            bytes,
-                            offset,
-                            RECEIVED_INDEX_MAGIC.as_slice(),
-                            |c| matches!(parse_frame_at(bytes, c), FrameAttempt::Record { .. }),
-                        )
-                    })
-                    .flatten();
-                if sound_after.is_none() && !never_a_tail {
+                let sound_after = if never_a_tail {
+                    None
+                } else {
+                    Some(sound_frame_after_partial_budgeted(
+                        bytes,
+                        offset,
+                        RECEIVED_INDEX_MAGIC.as_slice(),
+                        &mut budget,
+                        |c, budget| {
+                            matches!(
+                                parse_frame_at(bytes, c, budget),
+                                FrameAttempt::Record { .. }
+                            )
+                        },
+                    ))
+                };
+                if matches!(sound_after, Some(BoundedScan::NoSoundFrame)) {
                     return Ok((bytes.len().saturating_sub(offset), offset, damaged));
+                }
+                if matches!(sound_after, Some(BoundedScan::Undetermined)) {
+                    return Ok((0, offset, true));
                 }
                 damaged = true;
                 let resumed = match sound_after {
-                    Some(next) => Some(next),
-                    None => {
-                        resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice())
-                    }
+                    Some(BoundedScan::Sound(next)) => Some(next),
+                    _ => resync_to_next_magic(bytes, offset + 1, RECEIVED_INDEX_MAGIC.as_slice()),
                 };
                 match resumed {
                     Some(next) => offset = require_progress("received index", offset, next)?,
