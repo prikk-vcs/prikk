@@ -853,7 +853,7 @@ fn record_checksum(seq: u64, body_len: u64, body: &[u8]) -> [u8; 32] {
     tallied_sha256(&preimage)
 }
 
-// DC-71: every test here sets up its scenario via real repository mutation (RepositoryLayout::init
-// or equivalent), which is Linux-only; the module never compiles a non-Linux-meaningful test.
-#[cfg(all(test, target_os = "linux"))]
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); the
+// tests that need a Linux-only or Unix-only mechanism carry their own narrower gate.
+#[cfg(test)]
 mod tests;

@@ -142,6 +142,8 @@ fn wal_file_sync_failure_retains_replayable_record() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Injects `RequiredDirectorySync`, which exists only where a directory can be fsynced (Linux, macOS), not on Windows.
+#[cfg(not(windows))]
 #[test]
 fn first_wal_directory_sync_failure_retains_replayable_record() {
     let root = unique_temp_dir("wal-directory-sync-failure");
