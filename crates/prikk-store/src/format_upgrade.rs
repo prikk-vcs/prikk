@@ -73,7 +73,7 @@ pub fn upgrade_repository_format(
         ))
     })?;
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     if let Some(change) = BEFORE_MARKER_WRITE.with(|slot| slot.borrow_mut().take()) {
         change();
     }
@@ -96,7 +96,7 @@ pub fn upgrade_repository_format(
     })
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 thread_local! {
     static BEFORE_MARKER_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
@@ -104,10 +104,10 @@ thread_local! {
 
 /// Test seam, unreachable from production: run `change` once, after verification passes and before the
 /// marker is written — while the upgrade holds its lock.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) fn before_marker_write_for_test(change: impl FnOnce() + 'static) {
     BEFORE_MARKER_WRITE.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;
