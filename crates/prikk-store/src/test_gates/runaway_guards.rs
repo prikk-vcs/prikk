@@ -222,7 +222,7 @@ fn pointer_index_format() -> Format {
     }
 }
 
-fn all_formats() -> Vec<Format> {
+pub(crate) fn all_formats() -> Vec<Format> {
     let mut list = formats();
     list.push(ref_container_format());
     list.push(pointer_index_format());

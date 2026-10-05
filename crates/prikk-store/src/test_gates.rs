@@ -11,6 +11,8 @@ pub(crate) mod dc55_identity_evidence;
 #[cfg(test)]
 pub(crate) mod format_stability_gate;
 #[cfg(test)]
+pub(crate) mod framed_decoder_fuzz;
+#[cfg(test)]
 pub(crate) mod hostile_length_support;
 #[cfg(test)]
 pub(crate) mod hostile_lengths;
