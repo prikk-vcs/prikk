@@ -1365,6 +1365,17 @@ pub fn verify_repository_with_options(
     let mut trust_verifier = PublicationTrustVerifier::new(layout);
     let mut pipeline = StagePipeline::new(options.stop_on_first_error);
 
+    // RFC 167 D5: decoded once, here, ahead of both the stages below that each used to decode it
+    // independently -- `Objects` (via `reachability::compute_reachable_object_ids`, added by RFC 164
+    // Rule E, `03d3be22`) and `WalReplay` itself. That second decode of a possibly-hostile WAL was
+    // the real cost behind the ~2x `verify` regression RFC 167's own design round measured: the
+    // per-reader work budget (below, `wal::decode_records`) bounds *each* decode, but a second whole
+    // decode still paid the bound twice. `WalReplay`'s own stage position, dependency bookkeeping and
+    // reported outcome are unchanged -- only *when* the bytes are read moved, not what either stage
+    // reports.
+    let default_wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
+    let default_wal_replay = default_wal.replay();
+
     // Stage: Objects. No upstream stage dependency. `trust_verifier` is mutated by reference and its
     // state survives a `Failed` outcome here, since it lives in this function's own frame rather than
     // inside `verify_objects` -- reused safely by RefUpdateSchemaTrust and PublicationReclassification
@@ -1372,7 +1383,12 @@ pub fn verify_repository_with_options(
     // result from partial evaluation).
     let object_summary = pipeline.run(
         VerificationStage::Objects,
-        verify_objects(layout, &object_store, &mut trust_verifier),
+        verify_objects(
+            layout,
+            &object_store,
+            &mut trust_verifier,
+            default_wal_replay.as_ref().ok(),
+        ),
     );
     let objects_evaluated = object_summary.is_some();
     let object_interrupted_appends = object_summary
@@ -1526,9 +1542,10 @@ pub fn verify_repository_with_options(
         ),
     };
 
-    // Stage: WalReplay. No upstream stage dependency.
-    let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
-    let replay = pipeline.run(VerificationStage::WalReplay, wal.replay());
+    // Stage: WalReplay. No upstream stage dependency. The decode itself already happened, above
+    // (RFC 167 D5) -- this only hands the already-computed result to the pipeline at this stage's
+    // original position, so every downstream `Depends on WalReplay` comment below still reads true.
+    let replay = pipeline.run(VerificationStage::WalReplay, default_wal_replay);
 
     // Stage: WalPersistence. Depends on WalReplay.
     let persisted_wal_patches = if let Some(replay) = &replay {

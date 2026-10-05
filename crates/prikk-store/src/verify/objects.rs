@@ -21,6 +21,7 @@ use crate::object_store::ObjectReader;
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
 };
+use crate::wal::WalReplay;
 
 /// Outcome of attempting to verify one persisted object record (DC-95 Stage 2 Level 2, Phase A). No
 /// `NotEvaluated` variant: Phase A's per-object checks (decode, schema, signature, trust, reference
@@ -150,6 +151,7 @@ pub(super) fn verify_objects(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     trust_verifier: &mut PublicationTrustVerifier<'_>,
+    default_wal_replay: Option<&WalReplay>,
 ) -> Result<ObjectSummary> {
     // DC-92 §4.2: Phase A (below) collects every CurrentV6 Block's already-decoded payload instead
     // of verifying its state inline, in whatever order the generic scan visits objects. Phase B
@@ -250,7 +252,11 @@ pub(super) fn verify_objects(
 
     // RFC 164 Rule E: computed once per run, from committed state only, and reused for every
     // object type's own missing-reference classification below.
-    let reachable = super::reachability::compute_reachable_object_ids(layout, object_store)?;
+    let reachable = super::reachability::compute_reachable_object_ids(
+        layout,
+        object_store,
+        default_wal_replay,
+    )?;
     for object_type in persisted_object_types() {
         summary.add(verify_object_type_container(
             layout,

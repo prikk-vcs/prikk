@@ -109,7 +109,10 @@ fn removing_a_declaration_names_its_file() {
         // 2,273, then a `cargo fmt` pass, 2,273 -> 2,270. RFC 166 D4: the running-hash check (row 10)
         // folded into the same stage, its own `commit_witness_running_hash_agrees` field and
         // `has_commit_witness_substituted_earlier_record`, 2,270 -> 2,309.
-        detail.contains("2309"),
+        // RFC 167 D5: the WAL decode `Objects` (via `reachability::compute_reachable_object_ids`)
+        // and `WalReplay` each used to run independently is hoisted once, ahead of both, and handed
+        // to each at its original stage position, 2,309 -> 2,326.
+        detail.contains("2326"),
         "the line count is in the message: {detail}"
     );
     assert!(

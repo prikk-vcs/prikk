@@ -36,15 +36,24 @@ use std::collections::BTreeSet;
 use prikk_error::Result;
 use prikk_object::{BlockPayload, ObjectId, ObjectType, RefStatePayload, TagPayload};
 
-use crate::foundation::layout::RepositoryLayout;
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::object_store::ObjectReader;
 use crate::received::list_received_pointers;
 use crate::refs::RefStore;
-use crate::wal::Wal;
+use crate::wal::{Wal, WalReplay};
 
+/// `default_replay`: the `WalReplay` stage's own already-decoded result for
+/// [`DEFAULT_ACTIVE_NAME`], when one exists. RFC 167 D5: this walk used to call `Wal::replay()` on
+/// `default` a second time, unconditionally -- paying a (possibly hostile) WAL's decode cost twice
+/// per `verify`, which is what RFC 167's M5 regression actually was (bisected to this module's own
+/// introduction, `03d3be22`). Reusing the caller's own result for `default` closes it, mirroring
+/// `verify_queued_patch_connectivity`'s identical fix for the same cost (RFC 162 Addendum 1 fix 4).
+/// Every other active session has no shared result to reuse and is still replayed fresh -- the same
+/// asymmetry `verify_queued_patch_connectivity` already has, for the same reason.
 pub(super) fn compute_reachable_object_ids(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
+    default_replay: Option<&WalReplay>,
 ) -> Result<BTreeSet<ObjectId>> {
     let mut reached: BTreeSet<ObjectId> = BTreeSet::new();
     let mut frontier: Vec<ObjectId> = Vec::new();
@@ -57,8 +66,18 @@ pub(super) fn compute_reachable_object_ids(
         frontier.push(pointer.ref_state_id);
     }
     for name in layout.active_session_names()? {
-        let Ok(replay) = Wal::for_layout(layout, &name).replay() else {
-            continue;
+        let replay_owned;
+        let replay = if name == DEFAULT_ACTIVE_NAME {
+            match default_replay {
+                Some(replay) => replay,
+                None => continue,
+            }
+        } else {
+            let Ok(fresh) = Wal::for_layout(layout, &name).replay() else {
+                continue;
+            };
+            replay_owned = fresh;
+            &replay_owned
         };
         for record in &replay.records {
             let Ok(blob_ids) = crate::patch_replay::decode::patch_referenced_blob_ids(
