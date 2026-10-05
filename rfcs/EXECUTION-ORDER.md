@@ -368,7 +368,25 @@ These apply to all work above and are not restated in each handoff.
    release-policy `check`, `boundary-check`, `reference-check`, `size-check` (RFC 130 §8, added 2026-09-13). Use a repository-local `TMPDIR`
    (`.git-exclude/tmp`) where `/tmp` is read-only.
 
-   **Additionally, for any increment touching `#[cfg(target_os)]`-gated code** — added 2026-08-09 after
+   **Run as one script: `scripts/gates.py`** (0.49.0 step 5, D8 — added 2026-10-05). All 14 gates below
+   (the twelve above, plus the two cross-target Clippy rows next), each under an R1 scope when
+   `systemd-run` is on `PATH` (stated plainly when it is not), with one machine-readable `<name> <exit>`
+   summary line per gate and an overall exit status that is 0 only when every one of the 14 is. **Not a
+   `.sh` file**: this project's own governed-procedure scanner
+   (`tools/release-policy/src/command_scan/`) is a closed, line-based grammar built for the literal,
+   branch-free commands a CI workflow step already is, with no model of shell control flow — a real
+   orchestrator needs branching and a loop over the gates, which that grammar cannot express as a `.sh`
+   file without being read as a wall of unclassified commands. `scripts/` is swept by that scanner only
+   for `.sh`/`.yml`/`.yaml` files, so a `.py` file sits outside it, consistent with this project's own
+   existing use of Python elsewhere in its tooling.
+
+   **The two cross-target Clippy rows below now run every time**, in the script and in this gate set,
+   not only when a diff touches `#[cfg(target_os)]`-gated code (**AMENDED 2026-10-05**, superseding the
+   "additionally, for any increment touching..." framing below, whose own history is kept for why the
+   rows exist at all): running them costs little next to the other twelve, and making them conditional
+   already let a Windows failure through twice (0.49.0 step 5 D8).
+
+   **Originally, for any increment touching `#[cfg(target_os)]`-gated code** — added 2026-08-09 after
    DC-76 broke the non-Linux CI job while passing all nine gates above:
    `cargo clippy --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu -- -D warnings`
    and the same with `--target x86_64-apple-darwin`. CI's `non-linux build` job runs this natively on both

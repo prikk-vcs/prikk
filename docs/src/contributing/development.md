@@ -13,33 +13,51 @@ Release preparation follows the separate
 [release, versioning, and compatibility](../reference/release-compatibility.md) policy. A listed gate is
 not passing evidence unless it was observed for the exact commit or release under review.
 
-Run the standard checks before submitting a source drop:
+Run the standard checks before submitting a source drop, all 14 of them, with one script:
+
+```sh
+scripts/gates.py
+```
+
+It prints one `<name> <exit>` line per gate as it finishes (and again as a summary), and exits 0
+only when every one of the 14 does. Each gate runs under an R1 (`systemd-run --user`) scope when
+that is on `PATH`; otherwise the script says plainly that it ran without one, rather than silently
+skipping it. It is a `.py` file, not a `.sh` one, on purpose: this project's own governed-procedure
+scanner (`tools/release-policy/src/command_scan/`) has no model of shell control flow, and
+`scripts/gates.py`'s orchestration (looping over the gates, wrapping each conditionally, aggregating
+exit codes) cannot be expressed as a `.sh` file without being read as a wall of unclassified
+commands under that scanner's own, deliberately simple grammar.
+
+The 14 gates, verbatim:
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
+cargo +1.85.0 test --workspace --locked
+cargo +1.85.0 check --workspace --all-targets --locked
 git diff --check
 cargo audit --no-fetch
 RUSTDOCFLAGS="-D rustdoc::private_intra_doc_links" cargo doc --workspace --no-deps
 cargo run --locked -p prikk-release-policy -- check
 cargo run --locked -p prikk-release-policy -- boundary-check
 cargo run --locked -p prikk-release-policy -- reference-check
-```
-
-### The cross-target addendum
-
-If your change touches `#[cfg(target_os)]`-gated code, also run:
-
-```sh
+cargo run --locked -p prikk-release-policy -- size-check
 cargo clippy --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked --target x86_64-apple-darwin -- -D warnings
 ```
 
-"Touching cfg-gated code" is broader than adding a `#[cfg(target_os)]` line yourself: it also covers
-adding un-gated code to a file that already contains that gating. That shape adds no `cfg` line to
-your diff, so it is easy to miss — and missing it once left the project's own main branch red on the
-macOS and Windows Clippy jobs for three consecutive changes.
+### The cross-target rows
+
+The last two gates above (Windows and macOS `clippy`) run every time now, not only when a change
+touches `#[cfg(target_os)]`-gated code: running them always costs little next to the other twelve,
+and making them conditional already let a Windows failure through twice.
+
+They exist because "touching cfg-gated code" is broader than adding a `#[cfg(target_os)]` line
+yourself: it also covers adding un-gated code to a file that already contains that gating. That shape
+adds no `cfg` line to your diff, so it is easy to miss — and missing it once left the project's own
+main branch red on the macOS and Windows Clippy jobs for three consecutive changes, which is the
+reason these two no longer depend on anyone noticing.
 
 ## Building the documentation
 

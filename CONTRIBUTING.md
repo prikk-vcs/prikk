@@ -47,8 +47,21 @@ reference pages) is easiest to redirect before it exists.
 ## Building and testing
 
 The [Development](docs/src/contributing/development.md) reference page has the full detail
-(including how to build the documentation book). The gate every candidate change must pass,
-verbatim from `rfcs/EXECUTION-ORDER.md` §6 rule 9:
+(including how to build the documentation book).
+
+Run the whole gate set with one script:
+
+```sh
+scripts/gates.py
+```
+
+It runs all 14 gates below, prints one `<name> <exit>` line per gate as it finishes (and again as a
+summary), and exits 0 only when every one of them does. Each runs under an R1 (`systemd-run --user`)
+scope when that is on `PATH`; the script says plainly when it is not, rather than silently running
+without one.
+
+The gate every candidate change must pass, verbatim from `rfcs/EXECUTION-ORDER.md` §6 rule 9 (what
+`scripts/gates.py` runs):
 
 ```sh
 cargo fmt --all -- --check
@@ -59,15 +72,15 @@ cargo +1.85.0 check --workspace --all-targets --locked
 git diff --check
 cargo audit --no-fetch
 RUSTDOCFLAGS="-D rustdoc::private_intra_doc_links" cargo doc --workspace --no-deps
+cargo clippy --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked --target x86_64-apple-darwin -- -D warnings
 ```
 
-Plus release-policy `check`, `boundary-check`, and `reference-check` — see the Development page for
-what those verify.
-
-A change touching platform-conditional (`#[cfg(target_os)]`) code, or adding anything whose only
-caller sits behind such a gate elsewhere, also needs the two cross-target `clippy` runs (Windows and
-macOS targets) — this project has been caught by CI going red from exactly that gap before, on a
-change that carried no `cfg(target_os)` of its own.
+Plus release-policy `check`, `boundary-check`, `reference-check`, and `size-check` — see the
+Development page for what those verify. The two cross-target `clippy` runs above run every time, not
+only on a change touching platform-conditional (`#[cfg(target_os)]`) code — this project has been
+caught by CI going red from exactly that gap before, on a change that carried no `cfg(target_os)` of
+its own, and running them always costs little next to the other twelve.
 
 In restricted environments where the default temporary directory is read-only, use a workspace-local
 one for the integration tests:
