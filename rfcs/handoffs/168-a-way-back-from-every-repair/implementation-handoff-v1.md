@@ -1,0 +1,161 @@
+# RFC 168 implementation — one recovery log, a way back, and no rename on the durable path
+
+**Live 2026-10-06, and it is next.** RFC 168 is ACCEPTED by the owner.
+
+## Task title and purpose
+
+Implement `rfcs/accepted/168-a-way-back-from-every-repair.md`: §3.1–§3.4 as revised in §8, with §7 as the required
+evidence.
+- **D6:** every repair's removed bytes can be listed and restored, under exact conditions.
+- **D5:** repository state that cannot be rebuilt no longer depends on a Windows rename for durability.
+
+## Background and governing RFC
+
+- **Read all of RFC 168 first,** above all §3, §6 (the residuals the owner accepted) and §8.
+- **Then read the design-round reviews,** `.git-exclude/reviewed/rfc168-design-round-review-v1.md` and `-v2.md`:
+  rulings R1–R8, and the lost-rename method.
+- **The prototype** (`/home/nabbisen/Desktop/prikk/scratch-168/proto`) is a reference, not a patch to copy:
+  - it still writes `.bytes` files;
+  - it hard-codes the pointer index's container path;
+  - its `verify` view was never built.
+
+## Change scope
+
+### U1 — the log, the commands, the writers (§3.1, §3.2)
+
+1. **`recovery/log`** in the container frame (magic `PRECLOG1`), with the entry fields of §3.1. It is appended and
+   flushed **before** the truncate, and never truncated by anything except `--recovery-clear`.
+2. **Every repair writes only the log.** No `.bytes` file is written any more.
+   - **Writers:** `wal.rs:350` (both callers), `refs/pointer_index.rs:514`, `doctor/repair_tails.rs:336` (ten files),
+     and `foundation/index.rs:958`.
+   - **The object index's lost ids:** the entry lists them, and the restore never writes them. Its plan names the
+     rebuild.
+3. **The meaning-file table, from source, one row per writer:** WAL → `ref-name` and the witness; pointer index → the
+   ref-log container it precedes (**resolve the live slot; never hard-code `log-a`**); and each `repair_tails` file.
+   - **Stop and ask** if any file's meaning cannot be captured by file identity.
+4. **Commands (§3.2):**
+   - `prikk doctor --recovery-list`;
+   - `prikk doctor --recovery-restore <id> [--plan-only]`;
+   - `prikk doctor --recovery-clear [--plan-only]`.
+
+   **Each command:**
+   - **its text** is as §3.1–§3.2 words it, including the plan's "what follows" sentence and the listing's last line;
+   - **its locks** are every lock the repair it undoes takes. `--recovery-clear` takes the union of the repairs' locks;
+   - **its id** is the full 16 hex characters; anything else refuses.
+5. **`verify`'s log line (§3.1):** a line of its own; **`verify`'s exit status is unchanged by it.**
+6. **The allowlist (RFC 168 Status):** a restore refuses any source not on the fixed list of repairable files, whatever
+   the entry says.
+
+### U2 — in-place writes, the marker's target, early creation (§3.3)
+
+1. **One in-place writer per §3.3 row, on every platform** (no `cfg(windows)` branch):
+   - **the pointer:** D1's truncate-then-append, inside the marker;
+   - **`FORMAT`:** a one-byte overwrite, then flush;
+   - **the witness:** overwrite from offset 0, set the length, flush; **never truncate first.** Its clear (to empty) is a
+     truncate to 0;
+   - **`ref-name`'s restore:** D1's writer.
+
+   **The four caches keep `atomic_replace`:** `verified_blocks.rs:66`, `lifecycle_cache/incremental.rs:288`,
+   `commit_index.rs:80` and `foundation/index.rs:920`. **Afterwards, grep: every remaining `write_file_atomically`
+   caller is one of those four, or a worktree writer.** List them in the report.
+2. **The marker's target line:**
+   - the switch appends `target heads/<name>\n` after the sentinel; a checkout appends its ref;
+   - with a malformed pointer and the marker set, `status` and every refusal name the exact command;
+   - a target line without its newline is ignored.
+3. **Early creation:**
+   - **`init`** creates `recovery/log` and the default session's empty witness;
+   - **in an existing repository,** the first command that writes creates any that are missing. **This happens at one
+     call site, named in the report.**
+
+### U3 — the worktree route (§3.4)
+
+**Find the command that writes the current branch's files over files whose bytes differ,** with the marker clear. Run it
+in exactly the state P1/W1 built.
+- **If no such command exists, stop and ask.** Do not add one, and do not quote a route that refuses.
+
+### U4 — docs
+
+- **`repository-layout.md`, `durability-recovery.md` and `troubleshooting.md`:** the log, the three commands, and the
+  older files listed only. Remove *"nothing reads it back"* and *"by hand"* for new saves.
+- **`platform-support.md`:**
+  - the `atomic_replace` row (now only caches and worktree files);
+  - the `durable_directory_entry` row, whose crash-before argument is wrong (RFC 168 §1 item 3);
+  - residuals (a), (b) and (c), each by name.
+- **The CHANGELOG entry.**
+
+### U5 — timing
+
+- **The build:** release, from the final commit, sha256 stated; on `/home`, with `stat -f -c %T` printed; inside an R1
+  scope.
+- **The comparison:** the repair's cost against `main` (built from `9c0c2b53` in its own target dir), at two file sizes.
+
+## Explicit non-change scope
+
+- **No format version change.**
+- **No change to:**
+  - the four caches;
+  - worktree writes (they keep `atomic_replace`);
+  - the classification of RFC 166 / RFC 167;
+  - `release-signers.toml`.
+- **Old `.bytes` files are never deleted or rewritten** by any command.
+
+## Required tests
+
+- **Rehearsals:** for each writer (the WAL, the pointer index, and each of the ten `repair_tails` files): repair, list,
+  restore, then a byte-identical file, then `verify`'s report.
+- **Controls, each shown red with its check removed:**
+  - the source written since;
+  - a same-length change to the prefix;
+  - a meaning file changed (R2's WAL-at-offset-0 example);
+  - a damaged region in the log, with the entry after it still listed;
+  - a source outside the allowlist;
+  - a wrong-length id.
+- **A torn-write failpoint at each §3.3 site,** and what every reader then does.
+- **Lost-rename runs** (complete the operation and the steps after it, then put the old bytes back, or remove the new
+  name):
+  - the witness's first creation in a repository from 0.48.0;
+  - `ref-name`'s restore.
+- **The marker's target:** a torn pointer under a set marker; the refusal's exact command; that command run; then
+  `status` clean.
+- **Text tests** for the three commands and `verify`'s log line.
+- **An old-repository test:** a 0.48.0 repository (`/home/nabbisen/.pgtmp/prikk-0.48.0-5e50a661`) with an old `.bytes`
+  file. The first 0.49.0 write creates the log; the listing shows the old file as older; nothing is deleted.
+
+## Prohibited shortcuts
+
+- A `cfg(windows)` branch for the in-place writers.
+- Claiming Windows durability from a Linux run. Say "from source".
+- Text-matching printed paths (`support::assert_same_path`).
+- Modelling a lost rename as a crash before it.
+- A restore without the allowlist.
+- Quoting a route in docs or a refusal that was not run.
+
+## Compatibility and security constraints
+
+- **A 0.48.0 repository needs no migration,** and older binaries ignore `recovery/log`. Every in-place write keeps its
+  file's bytes exactly as today.
+- **A restore and a clear are writers:** the repairs' locks, the exact file and offset, the allowlist, and a plan first.
+- **The log may hold user content.** `--recovery-clear` is the way to remove it, and the docs say so.
+
+## Known risks
+
+- **A torn pointer on Linux, where today's rename never tore.** The marker's target line is what keeps the refusal
+  clear. Test it.
+- **The witness's in-place write is a new torn shape.** Row 8 must rebuild it, never treat it as cleared.
+- **U3 may find no route,** which is a stop, not a workaround.
+- **More tests on Windows CI.** Estimate the Windows job's time. If it would exceed 50 minutes, stop and ask.
+
+## Required evidence and review request
+
+- **Per unit:** the real start and end, with `date` printed in the session log at each boundary.
+- **The tables:** the meaning files, the remaining `write_file_atomically` callers, and the early-creation call site.
+- **Gates:** `scripts/gates.py`'s summary on the final commit, and the primary tree clean.
+- **Report:** `.git-exclude/review-request/rfc168-implementation-report-v1.md`.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| U1 | the log, the commands, the writers, the rehearsals | 240 min |
+| U2 | in-place writes, the marker's target, early creation, failpoints | 180 min |
+| U3 | the worktree route | 45 min |
+| U4 | docs | 60 min |
+| U5 | timing | 30 min |

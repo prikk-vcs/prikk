@@ -241,7 +241,6 @@ item is open.
 
 <!-- open-work-index:start -->
 
-- [`168-a-way-back-from-every-repair.md`](rfcs/proposed/168-a-way-back-from-every-repair.md) — D6 and D5: one durable recovery log, a reader and a restore under exact conditions, and every Windows replace site of non-rebuildable state classified; proposed 2026-10-06 (0.49.0 step 6); design round closed 2026-10-06, rewritten as a design awaiting the owner's reading (§6: the design, three disclosed Windows residuals); also moves repository-state writes off rename (pointer, FORMAT, witness)
 - [`169-when-the-release-key-is-lost-or-compromised.md`](rfcs/proposed/169-when-the-release-key-is-lost-or-compromised.md) — D7: a written procedure for a lost or compromised release key, what a tag signature covers (binaries are unsigned today), soft and hard revocation certificates, a signing subkey, a tag ruleset, a rehearsal; proposed 2026-10-06 and revised after the owner-philosophy review (0.49.0 step 6); owner decisions in §5
 
 

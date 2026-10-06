@@ -1,7 +1,14 @@
 # RFC 168 — A way back from every repair: one durable recovery log, a restore, and no rename on the durable path (D6, D5)
 
-**Status.** **PROPOSED 2026-10-06 by the architect; rewritten as a design 2026-10-06; revised the same day after the
-architect's review against the owner's philosophy (§8). For the owner's reading.**
+**Status.** **ACCEPTED 2026-10-06 by the owner** (*"RFC 168 is accepted."*).
+- **History:** proposed 2026-10-06 by the architect; rewritten as a design the same day; revised after the architect's
+  review against the owner's philosophy (§8).
+- **The architect's reading of that acceptance:** the whole RFC as committed at `9c0c2b53`. That is §3 (the design,
+  with §8's revisions) and §6 item 2, the three disclosed Windows residuals (a), (b) and (c).
+- **Implementation:** `rfcs/handoffs/168-a-way-back-from-every-repair/implementation-handoff-v1.md`.
+- **One constraint, added at handoff, that narrows §3.2 and does not widen it:** a restore writes only to a file on a
+  fixed list of repairable files (the WAL, the pointer index, and the ten `repair_tails` files). Whatever source path a
+  log entry names, a tampered log cannot point a restore at `FORMAT`, a ref, or any other file.
 - **Source:** 0.49.0 step 6, in the owner-approved schedule (*"D6, D5, D7"*), from external review 014. D7, the release
   key, is RFC 169.
 - **The design round is closed:**
