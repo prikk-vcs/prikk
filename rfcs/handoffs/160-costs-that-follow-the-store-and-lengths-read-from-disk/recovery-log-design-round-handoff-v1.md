@@ -1,6 +1,6 @@
 # A way back from every repair — RFC 168 design round, handoff v1
 
-**Live 2026-10-06, and it is next.** 0.49.0 step 5 is closed (review `step5-round-3-review-v3`). **Addendum 1 (round 2) is live.**
+**Closed 2026-10-06** (see the closure line at the end). It was live from 2026-10-06, after 0.49.0 step 5 closed (review `step5-round-3-review-v3`).
 
 ## Task title and purpose
 
@@ -111,3 +111,5 @@ No product code, no format version change, no change to rebuildable caches, no c
 | V3 | Q6, measured | 30 min |
 
 **Report:** `.git-exclude/review-request/rfc168-design-round-report-v2.md`, with each unit's start and end as the clock shows them.
+
+**Design round CLOSED 2026-10-06** (reviews `rfc168-design-round-review-v1`, `-v2`: Approved). RFC 168 is rewritten as a design for the owner's reading. The evidence not delivered is required evidence in the implementation round (RFC 168 §7). **No implementation handoff until the owner accepts RFC 168.**

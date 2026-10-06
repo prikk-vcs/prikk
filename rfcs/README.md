@@ -50,7 +50,7 @@ These records are under design review. All proposed RFCs must respect the depend
 
 | ID | Title | Milestone |
 |---|---|---|
-| 168 | [A way back from every repair](./proposed/168-a-way-back-from-every-repair.md) | Proposed 2026-10-06; design round live (0.49.0 step 6) |
+| 168 | [A way back from every repair](./proposed/168-a-way-back-from-every-repair.md) | Proposed 2026-10-06; design round closed, rewritten as a design for the owner's reading (0.49.0 step 6) |
 | 169 | [When the release key is lost or compromised](./proposed/169-when-the-release-key-is-lost-or-compromised.md) | Proposed 2026-10-06; owner decisions in §5 (0.49.0 step 6) |
 | 136 | [Block Aggregation Payoff](./done/136-block-aggregation-payoff.md) | **Done — shipped in 0.43.0 (2026-09-16)** as "sealed snapshots": checkpoints every 64 blocks, anchored checkouts, provisional worktrees behind a derivation gate. Increment 2c (baseline reconstruction) follows 0.43.0 |
 
