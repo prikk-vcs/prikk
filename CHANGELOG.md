@@ -96,11 +96,11 @@ unscheduled.
 
 - `doctor`/`verify`, the WAL: `error [PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE]: WAL record at offset <N>
   failed verification: the bytes after byte offset <N> look like many frame headers` — followed by "stopped
-  checking after 8x the file's size and treats this as damage, not a torn tail" — the way out is
-  `--repair-wal-tail`, unchanged.
+  checking after 8x the file's size and treats this as damage, not a torn tail" — the repair
+  `--repair-wal-tail` refuses it (it truncates a torn tail only); run `prikk doctor` for diagnosis.
 - The pointer index, trust policy, and the received index report the identical "look like many frame headers
-  ... treats this as damage" text at their own offset; the way out is `--repair-pointer-index-tail` or
-  `--repair-tails`, unchanged.
+  ... treats this as damage" text at their own offset; the repair
+  refuses it (the tail repairs truncate a torn tail only); run `prikk doctor` for diagnosis.
 - Object containers and the ref log container report the same text **without** "damage" (their own existing
   wrapper already says "a harmless remnant, not damage" or "not a harmless remnant until repaired" /
   "a damaged record ... the way out is a copy", and the inner text no longer contradicts it — RFC 167's own
@@ -265,10 +265,10 @@ container.
 ### Added — `prikk doctor --repair-tails` (RFC 164 Rule C)
 
 One repair for every tail RFC 164 Rule A defines, across every file that has one: the WAL, the pointer index, trust
-keys, trust policy, author keys, the received index, and the three generation logs. Reads all nine once before
+keys, trust policy, author keys, the received index, the ref log, and the three generation logs. Reads all ten once before
 touching any of them; if any one has interior damage, refuses immediately, naming every such file, and truncates
 nothing anywhere. Otherwise truncates each file's own tail under that file's own lock, saving the removed bytes to
-`.prikk/recovery/` first. `--repair-wal-tail` and `--repair-pointer-index-tail` stay, unchanged, as the single-file
+`recovery/log` first. `--repair-wal-tail` and `--repair-pointer-index-tail` stay, unchanged, as the single-file
 forms; `--repair-tails` cannot be combined with them or with `--repair-index`/`--repair-main-ref` in one invocation.
 
 ### Fixed — trust keys, trust policy, author keys, the received index, and the three generation logs read a tail by
@@ -549,7 +549,7 @@ publication, a known, disclosed gap carried to the next round, not worked around
   snapshot whose body will not decode included): **exit 1**, `<container> has a damaged entry; run doctor for
   diagnosis`; they exited 0.
 - `prikk doctor --repair-wal-tail` now **writes a recovery file first**: its output gains `the N removed byte(s)
-  are saved, exactly, in .prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes`.
+  are saved, exactly, in recovery/log, run <id>`.
 - The refusal of `prikk commit` (and of any command that mutates over a damaged active WAL) now names the damage
   and points to `doctor` for diagnosis: `active WAL has a damaged record (damaged record at byte offset N; K
   sound record(s) follow it); run doctor for diagnosis before committing`, where it said `active WAL has a damaged
@@ -575,7 +575,7 @@ publication, a known, disclosed gap carried to the next round, not worked around
   behind it: **exit 0 with a warning**, and `doctor --repair-wal-tail` (or the new `--repair-pointer-index-tail`) repairs it; they exited 1
   forever, and the repair refused.
 - `prikk doctor --repair-pointer-index-tail` is new: truncates an incomplete trailing pointer-index record, saving the removed bytes to
-  `.prikk/recovery/`, exactly as `--repair-wal-tail` does for the WAL.
+  `recovery/log`, exactly as `--repair-wal-tail` does for the WAL.
 - `--help`'s `bundle`/`sync accept` blocks now note that `--max-object-bytes` bounds an object's **encoded** size,
   content plus a 69-byte header, so a file of N bytes needs a bound of N + 69 (already true; only the help text
   was silent about it).
@@ -644,7 +644,7 @@ F3 Addendum 1's own ruling that the object index witnesses commitment); **the ot
   reported as possibly holding a missing object connectivity found, and named as one, rather than being called an unreferenced remnant,
   whenever connectivity reports anything missing of that container's own type -- an unreferenced remnant (a warning) otherwise.
   `--repair-index` itself never forgets silently: an id the old index named that the rebuild cannot re-derive is written to a durable file
-  under `.prikk/recovery/`, named on stderr together with any work `verify`'s own connectivity check still finds referencing it, and the
+  under `recovery/log`, named on stderr together with any work `verify`'s own connectivity check still finds referencing it, and the
   command exits non-zero. **`doctor` now fails wherever `verify` fails on connectivity** -- its own health check used to stay clean after
   an index repair even though `verify` still refused, because nothing in `doctor`'s own issue list ever consulted the connectivity finding.
   And the object index's own trailing-partial or interior-record damage, and the pointer index's own trailing-partial tail, now get a
@@ -732,7 +732,7 @@ file) or a bounded one (the two key indexes) a header that claims a length no re
 `verify` and `doctor` now also report a damaged entry in the author key index and the trust key and trust policy containers (a policy
 snapshot whose body will not decode was refused by `trust maintainer list` and by nothing else). **Still a torn tail:** a WAL, container or
 ref-log file whose *only* damaged record has nothing sound behind it and a header that could be a real record's, since a genuine interrupted
-append looks exactly the same; so `doctor --repair-wal-tail` **saves every byte it removes** to `.prikk/recovery/` (durably, before it truncates,
+append looks exactly the same; so `doctor --repair-wal-tail` **saves every byte it removes** to `recovery/log` (durably, before it truncates,
 naming the file), and a repair that was wrong about what it removed loses nothing.
 
 ### Changed — breaking once: `RepositoryVerification` and `WalRepair` gain fields and are now `#[non_exhaustive]`
