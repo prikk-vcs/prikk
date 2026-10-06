@@ -279,3 +279,29 @@ design"* and *"users must not be confused or misunderstand"*.
 | robustness | Low (Linux, macOS); Medium (Windows) | repository state is now durable on Windows; worktree files and two first-creation cases stay residual, of the class no Windows primitive closes |
 | performance | Low | one append per repair, measured at 222 bytes of overhead; a restore hashes its source once; a listing reads only the log |
 | user confusion | Low | one place, one listing, a plan that says what follows, refusals that name the command; the Windows residual is in docs, with a route that must be tested |
+
+## 9. Amendment A1 — a restore undoes a repair (proposed 2026-10-06, for the owner's reading)
+
+**Why.** The implementation review (`rfc168-implementation-review-v1`) found that some repairs cut more than one file, or
+rewrite a file without cutting it.
+- **`--discard-damaged-commits`** cuts the WAL, then rewrites the commit witness. Its entry recorded the old witness, so
+  **its restore is refused for ever.**
+- **`--repair-tails` row 8** rewrites a damaged witness **and keeps none of its bytes,** which breaks RFC 162 rule 3.
+- **One `--repair-tails` run** can cut files that are each other's meaning files. Its restores then succeed only in an
+  order nobody is told.
+
+**The amendment:**
+1. **Every byte a repair replaces is saved too, not only bytes it cuts.** A *replace* entry holds the file's previous
+   bytes, and the hash of the bytes the repair wrote.
+2. **One id per repair the user ran.** A repair run's entries share a run id, which the repair prints and the listing
+   groups by.
+3. **`--recovery-restore <id>` undoes the whole run,** in reverse order.
+   - **Every condition is checked first,** against the state each earlier step would leave, before anything is written.
+   - **Then each step writes:** a cut is appended at its offset; a replace writes its previous bytes in place.
+   - **It holds the union of the run's locks.** If any condition fails, nothing is written, and the plan names the step.
+4. **The meaning-file rule (§3.2) is unchanged.** Reverse-order checking makes each meaning file match the state at that
+   step's save.
+
+**What users see:** the same three commands, and one id per repair they ran. **For a one-file repair, nothing changes.**
+**After a discard is undone,** the WAL and the witness are byte-identical to before it, and `verify` reports what it
+reported then.

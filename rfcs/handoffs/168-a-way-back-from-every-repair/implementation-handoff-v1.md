@@ -159,3 +159,74 @@ in exactly the state P1/W1 built.
 | U3 | the worktree route | 45 min |
 | U4 | docs | 60 min |
 | U5 | timing | 30 min |
+
+## Addendum 1 — 2026-10-06: fix round (review `rfc168-implementation-review-v1`)
+
+**Corrections Required.** The core holds. Fix the items below. **Item 9 (amendment A1's mechanism) waits** until the owner has read A1; the architect marks it live here.
+
+1. **F1 — `verify` and the log:**
+   - a log that cannot be read prints one line, *"recovery log: cannot be read (<reason>)"*;
+   - **`verify`'s exit status is the same as without the log,** in prose and in JSON;
+   - **tests:** the log is a directory; the log is a symlink.
+2. **F2 — the plan tells the truth:**
+   - **`--plan-only` exits as the real run would.** If a condition fails: *"plan only -- this restore would be refused"*, exit 1, and no "After this" sentence.
+   - **Each row states the fact found:**
+     - `ok  the source is 680 bytes, the length the repair left`, or `no  the source is 690 bytes; the repair left 680`;
+     - `ok  active/default/witness is unchanged since the repair`, or `no  active/default/witness has changed since the repair`.
+   - **After a written restore,** the sentence reads *"The file now holds…"*.
+3. **F3 — a torn tail is only a prefix of one frame** (RFC 160 F3): a short header, or a sound magic whose body runs past the end of the file.
+   - **A complete frame at the end that fails its checksum is damage,** listed and printed by `verify`.
+   - **Tests:** both shapes; and the reproduced case (one byte flipped in the only entry) must now report damage.
+4. **F4 — the budget bounds the work:**
+   - charge each candidate its header plus its claimed body (clamped to the bytes remaining) **before** hashing, as `sound_frame_after_partial_budgeted` does;
+   - hash in place, with no copy;
+   - **test:** a damaged entry whose payload holds many in-range `PRECLOG1` headers keeps the bytes hashed within 8× the input. **Control:** remove the charge, and the test goes red.
+5. **F5 — the locks of restore and clear** are the union of every repair's locks: the object-store lock, and the active lock of each session a repair can cut. List the set from source.
+6. **F6 — `--plan-only` writes nothing:** no `ensure_write_state` on any plan-only path, including `--discard-damaged-commits --plan-only` and `--restore-queue-target --plan-only`.
+   - **Test:** a repository with no log and no witness, then each plan-only command; both files still absent.
+7. **F8 — meaning paths:** a restore recomputes them from the table. An entry whose list differs refuses, naming why.
+8. **F9 and F12 — messages and the version field:**
+   - the allowlist refusal names the source, and says a restore does not write that file;
+   - ids are compared ignoring case;
+   - `--recovery-clear` lists the entries it removes (id, source, size), in the plan and in the run;
+   - **the header's version is read.** A newer version lists as *"written by a newer prikk; this version cannot read it"*. It is not damage.
+   - **Creating the log and the witness tolerates `AlreadyExists`,** so a concurrent first write does not fail.
+9. **A1's mechanism (held; marked live when the owner has read A1):**
+   - replace entries (the witness rewrite in `--discard-damaged-commits` and `--repair-tails` row 8);
+   - run ids;
+   - a run-level restore in reverse order, every condition checked first;
+   - **tests:**
+     - a discard, then its restore, gives the WAL **and** the witness byte-identical to before the discard;
+     - a two-file `--repair-tails` run, restored by one id;
+     - a run whose middle step fails its condition, and nothing is written.
+10. **Docs and the code comment:**
+    - **`platform-support.md`'s `durable_directory_entry` row:** the marker argument holds only for a crash *before* the marker clear. A power loss after a completed operation is residual (a);
+    - **`troubleshooting.md`:**
+      - "never gone" becomes "kept until `prikk doctor --recovery-clear`";
+      - drop "by hand" for log entries;
+      - add the residual-(a) route as ruled: move the files `status` names out of the worktree, then `prikk checkout --patch-materialize --ref <current branch>`. **Run it before quoting it;**
+    - **the CHANGELOG:** do not count the WAL and the pointer index twice against "the ten";
+    - **`anchored.rs`:** the displaced doc comment goes back on `truncate_existing_file_required`.
+11. **Tests:**
+    - **P1 becomes a regression test:** a failpoint at the marker clear leaves the new pointer in place;
+    - **the snapshot-checkout route:** an interrupted `checkout --snapshot-materialize` names a command that, when run, finishes it.
+12. **U5:** the timing, with the 1-minute load recorded per sample. If the load stays above 4, report the load and stop.
+13. **`scripts/gates.py`'s full summary** on the final commit, and a Windows CI time estimate.
+
+**Not in this round** (carried to the 0.49.0 release-prep triage):
+- the stale `active.lock` left by a sync failure at its own creation;
+- the stranded `ref-name`, which `verify` does not report as an item.
+
+**Prohibited:**
+- a `cfg(windows)` branch;
+- weakening a condition to pass a test;
+- quoting a route not run;
+- starting item 9 before it is marked live.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| A | items 1–8, 10–11 | 180 min |
+| B | item 12 | 30 min |
+| C | item 9 (when live) | 180 min |
+
+**Report:** `.git-exclude/review-request/rfc168-implementation-report-v2.md`, with `date` at each unit's start and end.
