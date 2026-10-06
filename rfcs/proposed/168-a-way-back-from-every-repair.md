@@ -6,6 +6,14 @@ from external review 014).
   round answers §5 with prototypes and no product code:
   `rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/recovery-log-design-round-handoff-v1.md`.
 - Then the architect rules, the RFC is rewritten into a design, and the owner reads it.
+- **2026-10-06, round 1 reviewed** (`rfc168-design-round-review-v1`, Corrections Required).
+  - **Ruled:**
+    - one append-only log, never truncated, saved before the truncate;
+    - restore only on a byte-identical prefix, with the files that give the bytes meaning unchanged;
+    - `init` creates the log, and the first Windows repair in an existing repository says its save is not yet durable;
+    - old `.bytes` files are list-only.
+  - **Round 2** builds the prototype and redoes Q5, modelling a lost rename after the later steps survive. That adds
+    worktree files to the sites.
 - **D7, the release key, is RFC 169.**
 
 **Author-review independence.** RFC 162 rule 3 ("a repair keeps every byte it removes") and the recovery file's shape

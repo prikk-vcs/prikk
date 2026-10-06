@@ -1,6 +1,6 @@
 # A way back from every repair — RFC 168 design round, handoff v1
 
-**Live 2026-10-06, and it is next.** 0.49.0 step 5 is closed (review `step5-round-3-review-v3`).
+**Live 2026-10-06, and it is next.** 0.49.0 step 5 is closed (review `step5-round-3-review-v3`). **Addendum 1 (round 2) is live.**
 
 ## Task title and purpose
 
@@ -72,3 +72,42 @@ No product code, no format version change, no change to rebuildable caches, no c
 | U2 | Q3, Q4: Windows creation, the old files | 45 min |
 | U3 | Q5: the replace sites and their failpoints | 60 min |
 | U4 | Q6: cost | 30 min |
+
+## Addendum 1 — 2026-10-06: round 2 (review `rfc168-design-round-review-v1`)
+
+**Corrections Required.** Q1–Q4 are ruled (R1–R4 in the review). Build the prototype against the rulings, redo Q5 with the method below, and measure Q6. **Still a design round: no product code lands.**
+
+1. **V1 — the prototype** (`scratch-168/proto`), under R1–R2:
+   - the log, appended before the truncate, and never truncated itself;
+   - `--recovery-list`;
+   - `--recovery-restore <entry> [--plan-only]` under condition (ii).
+   - **Rehearsals:** for the WAL, the pointer index and each of the ten `repair_tails` files: repair, restore, then a byte-identical file, then `verify`'s report.
+   - **Controls:**
+     - the file was written since;
+     - a related file differs (R2's WAL-at-offset-0 example);
+     - a damaged region in the log is followed by a sound entry that is still listed.
+   - **A table, from source:** for each writer, the files that give the removed bytes meaning.
+2. **V2 — Q5, redone.** For each site, run the operation **and the operations after it** to completion. Then put the old bytes back, or remove a new name, to model the lost rename. Then run `status`, `verify`, `commit`, `seal` and `switch`, and record what each does.
+   - **Sites:**
+     - worktree files after a switch, and after a checkout;
+     - the branch pointer after the switch marker is cleared, and then after a commit;
+     - `FORMAT` after a format-7 write (RFC 156);
+     - the witness's first creation (the new name removed);
+     - `ref-name`'s restore.
+   - **The witness clear is already answered** by `row4_connectivity_finds_a_drain_not_damage`. Cite it; don't rerun it.
+   - **The caches:** one row each saying why they are rebuildable.
+   - **For any unsafe site,** lay out a fix and a disclosure, and choose neither.
+3. **V3 — Q6, measured:** a release build on `/home`, inside the R1 scope, the repair's cost with the log against `main` at two file sizes, and the log's growth per repair.
+
+**Prohibited:**
+- claiming Windows durability from a Linux run;
+- modelling a lost rename as a crash before it;
+- setting aside the clock (it is correct; report the times it shows).
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| V1 | the prototype, the rehearsals, the controls | 120 min |
+| V2 | Q5, redone | 90 min |
+| V3 | Q6, measured | 30 min |
+
+**Report:** `.git-exclude/review-request/rfc168-design-round-report-v2.md`, with each unit's start and end as the clock shows them.
