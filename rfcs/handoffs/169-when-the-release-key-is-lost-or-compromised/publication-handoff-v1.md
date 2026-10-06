@@ -87,3 +87,13 @@ Add to items 1 and 2:
   - a key that may be in someone else's hands is revoked, after which `git tag -v` fails on the old tags and the advisory
     lists the confirmed releases by commit id;
   - a key that is simply gone is retired without revocation, so old tags keep verifying.
+
+## Addendum 2 — 2026-10-07: three text fixes (review `rfc169-publication-review-v1`)
+
+1. **`install.md` and `SECURITY.md`:**
+   - say the check runs in a clone (`git clone https://github.com/prikk-vcs/prikk && cd prikk`);
+   - show `git verify-tag --raw <tag> 2>&1 | grep VALIDSIG`.
+2. **The release-notes line leads with that check:** *"Release key <fp>: in a clone, `git verify-tag --raw <tag> 2>&1 | grep VALIDSIG` must end with this fingerprint (SECURITY.md, "Verifying a release")."* Update its test.
+3. **`release-compatibility.md`:** the same `verify-tag --raw` check in place of `git tag -v X.Y.Z`.
+
+**Budget:** 20 min. **Report:** `.git-exclude/review-request/rfc169-publication-report-v2.md`, with `scripts/gates.py`'s summary.

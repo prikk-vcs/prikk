@@ -260,3 +260,5 @@ in exactly the state P1/W1 built.
 | D | item 12 (timing, interleaved) | 45 min |
 
 **Items 9 and 12 ACCEPTED 2026-10-07** (review `rfc168-implementation-review-v4`, `d4fd0068`). **RFC 168 is delivered,** on condition that CI is green on every job of its push. If a job goes red, this handoff reopens as a fix round.
+
+**RFC 168 CLOSED 2026-10-07:** CI `37487680419` on `b7108c91` (A1 included) is green on all 16 jobs (Windows mutation 34m11s, macOS 10m30s). The delivery's condition is met.
