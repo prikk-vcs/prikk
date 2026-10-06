@@ -155,3 +155,37 @@ done (not the key material).
 | **"Never moved" only promised** | discipline | a GitHub tag ruleset (item 6) |
 | **Users unable to verify after a hard revocation** | not addressed | the advisory lists confirmed releases by commit id |
 | **A backup left as "your choice"** | no recommendation | recommended, with the reason |
+
+## 8. Correction C1 — what a revocation costs, found by the rehearsal (2026-10-07, for the owner's reading)
+
+**The rehearsal** (§3.5, by the architect, with a throwaway rsa4096 `[SC]` key in isolated keyrings; GnuPG 2.4.9, git
+2.56.0; record `.git-exclude/reviewed/rfc169-rehearsal-v1.md`) **found that §3.2 item 1 and §3.3 are wrong for the tool
+users actually run:**
+- **After any revocation, soft or hard, `git tag -v` exits 1 on every tag the revoked key signed.** GnuPG still prints
+  *"Good signature"*, then *"This key has been revoked by its owner!"*, and git treats that as a failure.
+  - The soft/hard distinction is honoured by some OpenPGP tools, **not by git with GnuPG.** So *"a soft revocation keeps
+    old releases valid"* is false for most users.
+- **A tag signed by a revoked subkey also fails** (exit 1).
+- **GnuPG's automatic certificate** (`openpgp-revocs.d/`) has reason `0x00`, "no reason". That much of §3.2 was right.
+- **Also observed:**
+  - a user checking a correct tag always sees *"WARNING: This key is not certified with a trusted signature!"*, unless
+    they have certified the key themselves;
+  - once a subkey signs, `git tag -v` shows the subkey's id, not the published fingerprint;
+  - `git verify-tag --raw <tag>` prints a `VALIDSIG` line whose **last field is the primary fingerprint** in both cases.
+
+**The corrected procedure:**
+1. **A revocation is only for a key that someone else may hold.** Revoking makes every old release tag fail `git tag
+   -v`, so it is never used for retirement or rotation.
+2. **A lost key splits on exposure:**
+   - **gone and in no one's hands** (a forgotten passphrase, destroyed media, no backup left): **do not revoke.** Announce
+     the retirement (a `SECURITY.md` commit and an advisory), introduce the new key as in §3.3, and old tags keep
+     verifying;
+   - **possibly in someone's hands** (a lost or stolen device, an exposed backup): **this is §3.4, a compromise.**
+3. **Item 1 becomes one certificate, the compromise certificate, kept offline.** GnuPG's automatic one serves, because a
+   revocation with no reason is treated as hard. A second one, with reason "compromised", is optional; it only gives the
+   advisory clearer text. **The soft certificate is dropped:** it would only ever break old tags for nothing.
+4. **Planned rotation never revokes.** Add a new subkey and stop using the old one; tags it signed keep verifying.
+5. **Users verify** with `git verify-tag --raw <tag>`. The last field of the `VALIDSIG` line must equal the published
+   fingerprint, and the docs say why the "not certified" warning is expected.
+
+**What changes for the owner:** less work. One certificate copied offline, not two made, and the rest as §5.

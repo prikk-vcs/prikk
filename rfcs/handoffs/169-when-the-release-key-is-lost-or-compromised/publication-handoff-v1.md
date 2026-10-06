@@ -74,3 +74,16 @@ what that check covers and what it does not. **No sentence may claim more than t
 | unit | what | budget (stop at ×2) |
 |---|---|---:|
 | P1 | items 1–3 | 60 min |
+
+## Addendum 1 — 2026-10-07: what users see (RFC 169 §8, correction C1, from the rehearsal)
+
+Add to items 1 and 2:
+- **The check users run is `git verify-tag --raw <tag>`.** The **last field of the `VALIDSIG` line** must equal
+  `25757DA6CBF7022C4E14CCAC1B3066B87DB99A34`. This holds whether the primary key or a subkey signed the tag, and
+  `git tag -v` alone shows a subkey's id once one signs.
+- **Say that *"This key is not certified with a trusted signature"* is expected** unless the user has certified the key
+  (`gpg --lsign-key`). What matters is the fingerprint match.
+- **The lost/compromised paragraph follows §8:**
+  - a key that may be in someone else's hands is revoked, after which `git tag -v` fails on the old tags and the advisory
+    lists the confirmed releases by commit id;
+  - a key that is simply gone is retired without revocation, so old tags keep verifying.
