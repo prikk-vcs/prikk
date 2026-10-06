@@ -22,8 +22,6 @@
 //! a container append instead of a candidate-write-then-promote file dance. `refs/tmp/`'s candidate
 //! mechanism has no equivalent here because there is nothing left for it to stage.
 
-use std::path::PathBuf;
-
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
@@ -35,8 +33,7 @@ use crate::foundation::frame_resync::{
     sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{
-    MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
-    truncate_existing_file_required, write_file_atomically,
+    append_file_required, len_to_u64, read_file_if_exists, truncate_existing_file_required,
 };
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::RepositoryLayout;
@@ -499,20 +496,7 @@ pub struct PointerIndexRepair {
     /// durably before the truncation -- mirrors the WAL repair's own contract
     /// (`wal.rs::save_removed_bytes`). `None` when nothing was removed. Never authority: `verify`
     /// ignores it.
-    pub recovery_file: Option<PathBuf>,
-}
-
-/// Durably write `removed` to `recovery/pointer-index-at-<offset>-<hash>.bytes` under `.prikk/`, and
-/// return that path (relative to `.prikk/`) -- mirrors `wal.rs::save_removed_bytes` exactly, one copy
-/// per framed file rather than a shared abstraction introduced mid-round.
-fn save_removed_bytes(root: &MutationRoot, offset: u64, removed: &[u8]) -> Result<PathBuf> {
-    let digest = prikk_hash::to_hex(&prikk_hash::sha256(removed));
-    let short = digest.get(..16).unwrap_or(&digest);
-    let directory = PathBuf::from("recovery");
-    let file = directory.join(format!("pointer-index-at-{offset}-{short}.bytes"));
-    ensure_directory_required(root, &directory)?;
-    write_file_atomically(root, &file, removed)?;
-    Ok(file)
+    pub recovery: Option<crate::recovery_log::RecoveryRef>,
 }
 
 /// Safely truncate an incomplete trailing pointer-index record, if one exists (RFC 162 rule 3: a log
@@ -534,7 +518,7 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
         return Ok(PointerIndexRepair {
             preserved_entries: 0,
             truncated_bytes: 0,
-            recovery_file: None,
+            recovery: None,
         });
     };
     let replay = decode_pointer_index_records(&bytes)?;
@@ -549,7 +533,7 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
         return Ok(PointerIndexRepair {
             preserved_entries: replay.entries.len(),
             truncated_bytes: 0,
-            recovery_file: None,
+            recovery: None,
         });
     }
     let current_len = len_to_u64(bytes.len())?;
@@ -559,16 +543,16 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
             "trailing pointer index byte count exceeds file length".to_string(),
         )
     })?;
-    let removed = bytes
-        .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
-        .unwrap_or_default();
     let root = layout.repository_mutation_root();
-    let recovery_file = save_removed_bytes(root, repaired_len, removed)?;
+    let source = relative.to_string_lossy().replace('\\', "/");
+    let entry =
+        crate::recovery_log::entry_for(layout, &source, &bytes, repaired_len, "pointer index")?;
+    let recovery = crate::recovery_log::append(root, &entry)?;
     truncate_existing_file_required(root, &relative, repaired_len)?;
     Ok(PointerIndexRepair {
         preserved_entries: replay.entries.len(),
         truncated_bytes: replay.trailing_partial_bytes,
-        recovery_file: Some(recovery_file),
+        recovery: Some(recovery),
     })
 }
 

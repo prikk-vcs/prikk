@@ -119,10 +119,23 @@ pub(crate) struct DoctorArgs {
     /// be the current branch, or the current branch could not be resolved at all. Accepted only
     /// alongside `--restore-queue-target`.
     pub(crate) not_current_branch: bool,
+    /// RFC 168 §3.2: a recovery-log command (`--recovery-list`, `--recovery-restore`, `--recovery-clear`), run alone.
+    pub(crate) recovery: Option<RecoveryCommand>,
     /// RFC 165 R5 K1 / RFC 166 D5 K1: print the repair's own plan and write nothing. Shared between
     /// every repair verb that has a plan (`--rebuild-pointer-index`, `--discard-damaged-commits`,
     /// `--restore-queue-target`) -- accepted only alongside exactly one of them.
     pub(crate) plan_only: bool,
+}
+
+/// The three recovery-log commands of RFC 168 §3.2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecoveryCommand {
+    /// `--recovery-list`: print the entries, the damaged regions, and the older files.
+    List,
+    /// `--recovery-restore <id> [--plan-only]`: restore one entry under its conditions.
+    Restore(String),
+    /// `--recovery-clear [--plan-only]`: empty the log in place.
+    Clear,
 }
 
 /// `prikk verify`'s output format (RFC 118 stage 5). `Prose` is the default and must remain
@@ -472,6 +485,9 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut restore_queue_target_ref: Option<String> = None;
     let mut not_current_branch = false;
     let mut plan_only = false;
+    let mut recovery_list = false;
+    let mut recovery_clear = false;
+    let mut recovery_restore: Option<String> = None;
     let mut path = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -508,6 +524,12 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
                 mark_seen(&mut not_current_branch, "--not-current-branch")?;
             }
             "--plan-only" => mark_seen(&mut plan_only, "--plan-only")?,
+            "--recovery-list" => mark_seen(&mut recovery_list, "--recovery-list")?,
+            "--recovery-clear" => mark_seen(&mut recovery_clear, "--recovery-clear")?,
+            "--recovery-restore" => {
+                let value = flag_value(&mut iter, "doctor --recovery-restore")?;
+                recovery_restore.set_once("--recovery-restore", value)?;
+            }
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
             _ => {
                 if path.is_some() {
@@ -582,13 +604,62 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             "--not-current-branch is only accepted alongside --restore-queue-target".to_string(),
         ));
     }
-    if plan_only && !rebuild_pointer_index && !discard_damaged_commits && !restore_queue_target {
+    let recovery_count = usize::from(recovery_list)
+        + usize::from(recovery_clear)
+        + usize::from(recovery_restore.is_some());
+    if recovery_count > 1 {
         return Err(CliError::Usage(
-            "--plan-only is only accepted alongside --rebuild-pointer-index, \
-             --discard-damaged-commits or --restore-queue-target"
+            "--recovery-list, --recovery-restore and --recovery-clear are separate commands -- \
+             give one"
                 .to_string(),
         ));
     }
+    if recovery_count == 1
+        && (repair_wal_tail
+            || repair_main_ref
+            || repair_index
+            || repair_pointer_index_tail
+            || repair_tails
+            || rebuild_pointer_index
+            || discard_damaged_commits
+            || restore_queue_target
+            || not_current_branch
+            || restore_queue_target_ref.is_some())
+    {
+        return Err(CliError::Usage(
+            "a recovery-log command cannot be combined with a repair flag -- run it alone"
+                .to_string(),
+        ));
+    }
+    if plan_only && recovery_list {
+        return Err(CliError::Usage(
+            "--plan-only is not accepted with --recovery-list: a listing judges no entry's restorability; \
+             `--recovery-restore <id> --plan-only` does"
+                .to_string(),
+        ));
+    }
+    if plan_only
+        && !rebuild_pointer_index
+        && !discard_damaged_commits
+        && !restore_queue_target
+        && recovery_restore.is_none()
+        && !recovery_clear
+    {
+        return Err(CliError::Usage(
+            "--plan-only is only accepted alongside --rebuild-pointer-index, \
+             --discard-damaged-commits, --restore-queue-target, --recovery-restore or --recovery-clear"
+                .to_string(),
+        ));
+    }
+    let recovery = if recovery_list {
+        Some(RecoveryCommand::List)
+    } else if let Some(id) = recovery_restore {
+        Some(RecoveryCommand::Restore(id))
+    } else if recovery_clear {
+        Some(RecoveryCommand::Clear)
+    } else {
+        None
+    };
     Ok(DoctorArgs {
         root: optional_path_or_current(path)?,
         repair_wal_tail,
@@ -600,6 +671,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         discard_damaged_commits,
         restore_queue_target_ref,
         not_current_branch,
+        recovery,
         plan_only,
     })
 }

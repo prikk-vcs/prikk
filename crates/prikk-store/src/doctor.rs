@@ -1163,7 +1163,7 @@ fn empty_wal_repair() -> WalRepair {
         preserved_records: 0,
         truncated_bytes: 0,
         preserved_patch_ids: Vec::new(),
-        recovery_file: None,
+        recovery: None,
         complete_records_removed: 0,
     }
 }
@@ -1200,12 +1200,19 @@ fn empty_wal_repair() -> WalRepair {
 /// - a stale `objects.lock` — left by a failed acquisition, see `concurrency-locking.md` — refuses
 ///   the repair with the message naming `prikk unlock`, which is the one case where the operator
 ///   must act before the repair can run.
+///
+/// The second element is the recovery-log entry holding any lost ids (RFC 162 rule 2, RFC 168 §3.1), `None` when none were lost.
 pub fn repair_object_index(
     layout: &RepositoryLayout,
-) -> Result<crate::foundation::index::IndexRepairReport> {
+) -> Result<(
+    crate::foundation::index::IndexRepairReport,
+    Option<crate::recovery_log::RecoveryRef>,
+)> {
     layout.require_current_format()?;
     let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
-    crate::foundation::index::repair_index_from_containers(layout)
+    crate::foundation::index::repair_index_from_containers(layout, |lost| {
+        crate::recovery_log::save_lost_ids(layout, lost)
+    })
 }
 
 /// Safely truncate an incomplete trailing pointer-index record, if one exists —

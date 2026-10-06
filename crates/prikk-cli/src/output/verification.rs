@@ -17,8 +17,8 @@ pub(crate) fn print_repair_tails_report(report: &RepairTailsReport) {
                 "{}: truncated {} trailing byte(s)",
                 file.label, file.truncated_bytes
             );
-            if let Some(recovery_file) = &file.recovery_file {
-                println!("  removed bytes saved to: {}", recovery_file.display());
+            if let Some(recovery) = &file.recovery {
+                println!("  removed bytes saved to: {recovery}");
             }
         }
     }
@@ -206,11 +206,10 @@ pub(crate) fn print_active_session_repairs(active_repairs: &[ActiveSessionRepair
                     println!("  preserved queued patch {patch_id}");
                 }
                 // RFC 160 F3 Addendum 1: every byte a repair removes is kept.
-                if let Some(file) = &wal_repair.recovery_file {
+                if let Some(recovery) = &wal_repair.recovery {
                     println!(
-                        "  the {} removed byte(s) are saved, exactly, in .prikk/{} (never authority; `verify` ignores it)",
+                        "  the {} removed byte(s) are saved, exactly, in {recovery} (`prikk doctor --recovery-list` reads them back)",
                         wal_repair.truncated_bytes,
-                        file.display().to_string().replace('\\', "/")
                     );
                 }
                 // RFC 163 §4 (N6): a removed acknowledged commit is never silent. A true crash-torn

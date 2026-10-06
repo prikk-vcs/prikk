@@ -16,6 +16,7 @@ use crate::{
 /// `doctor --repair-index` must not make that failure disappear (rule 1's rebuild dropping the
 /// unreadable blob's own entry must not silence rule 2's connectivity check).
 #[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
 fn a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_repair_index()
 -> Result<()> {
     let root = unique_temp_dir("connectivity-m1");
@@ -60,7 +61,7 @@ fn a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_repai
     // M1's exact regression: `doctor --repair-index` must not silently clear this. The rebuild drops
     // the damaged blob's own index entry (it cannot re-derive it), but the queued patch still
     // references it, so verify must still fail afterward.
-    let repair = repair_object_index(&layout)?;
+    let (repair, recovery) = repair_object_index(&layout)?;
     assert_eq!(
         repair.objects_recovered, 0,
         "the damaged blob cannot be recovered by the rebuild"
@@ -72,10 +73,15 @@ fn a_queued_patch_referencing_a_damaged_blob_fails_verify_before_and_after_repai
         vec![blob_id],
         "the repair must name exactly the one id it could not re-derive"
     );
-    let recovery_file = repair.recovery_file.as_ref().ok_or_else(|| {
-        prikk_error::PrikkError::Integrity("expected a recovery file".to_string())
-    })?;
-    let recovered = std::fs::read_to_string(layout.prikk_dir().join(recovery_file))?;
+    let recovery_id = &recovery
+        .as_ref()
+        .ok_or_else(|| prikk_error::PrikkError::Integrity("expected a recovery entry".to_string()))?
+        .id;
+    let recovered = String::from_utf8_lossy(
+        &crate::recovery_log::removed_bytes(&layout, recovery_id)?
+            .expect("the recovery log holds the entry"),
+    )
+    .into_owned();
     assert!(
         recovered.contains(&blob_id.to_string()),
         "the recovery file must name the lost id: {recovered}"

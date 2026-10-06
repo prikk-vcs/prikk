@@ -471,11 +471,11 @@ const GUARDED: &[GuardedFunction] = &[
         locked_calls: &[
             (
                 "doctor.rs",
-                "crate::foundation::index::repair_index_from_containers(layout)",
+                "crate::foundation::index::repair_index_from_containers(layout, |lost| {",
             ),
             (
                 "object_store.rs",
-                "index::repair_index_from_containers(layout)?;",
+                "index::repair_index_from_containers(layout, |lost| {",
             ),
         ],
     },
@@ -636,7 +636,7 @@ fn a_crash_during_index_repair_leaves_the_previous_index_intact() -> prikk_error
 
         // And the repair still works on the retry, which is what makes the failure recoverable
         // rather than merely non-destructive.
-        let report = crate::doctor::repair_object_index(&layout)?;
+        let (report, _) = crate::doctor::repair_object_index(&layout)?;
         assert!(
             !report.already_correct,
             "{point:?}: the retry must do the work"
@@ -695,7 +695,7 @@ fn a_repair_meeting_a_held_object_store_lock_is_refused_and_writes_nothing()
 
     // And it works once the lock is free, which is what makes the refusal a wait-and-retry rather
     // than a dead end.
-    let report = crate::doctor::repair_object_index(&layout)?;
+    let (report, _) = crate::doctor::repair_object_index(&layout)?;
     assert!(!report.already_correct);
     assert_eq!(report.entries_after, 2);
 

@@ -82,6 +82,7 @@ mod rfc111_seal_simulation;
 mod rollback;
 mod seal_from_accepted;
 // RFC 142: `prikk show` -- what a block or patch changed.
+mod recovery_log;
 mod show;
 mod signature_diagnostics;
 mod snapshot;
@@ -259,6 +260,10 @@ pub use received::{
 };
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
+};
+pub use recovery_log::{
+    RecoveryClearView, RecoveryEntryView, RecoveryListing, RecoveryRef, RestoreConditionView,
+    RestorePlanView, recovery_clear, recovery_list, recovery_restore, recovery_verify_line,
 };
 pub use ref_completion::{
     CompletionPlan, CompletionRefusal, complete_ref_publication, plan_ref_completion,

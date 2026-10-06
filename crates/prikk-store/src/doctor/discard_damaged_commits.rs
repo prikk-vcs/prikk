@@ -21,7 +21,6 @@
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
-use std::path::PathBuf;
 
 use crate::commit_boundary::active::{ActiveRefMetadata, read_active_ref_metadata};
 use crate::commit_boundary::classification::{Verdict, classify};
@@ -45,7 +44,7 @@ pub struct DiscardDamagedCommitsPlan {
     pub truncated_bytes: usize,
     /// The recovery file (relative to `.prikk/`) the removed bytes go to, byte for byte, saved
     /// before the truncation. `None` when `truncated_bytes` is zero.
-    pub recovery_file: Option<PathBuf>,
+    pub recovery: Option<crate::recovery_log::RecoveryRef>,
     /// Whether the worktree still holds uncommitted changes for the content this removes -- RFC 166
     /// D5's own instruction: say the content "may still be in your working tree" only when this is
     /// true, never unconditionally.
@@ -148,7 +147,7 @@ fn run(layout: &RepositoryLayout, mode: Mode) -> Result<DiscardDamagedCommitsPla
                 witnessed_seq,
                 patch_id,
                 truncated_bytes: preview.truncated_bytes,
-                recovery_file: preview.recovery_file,
+                recovery: preview.recovery,
                 working_tree_may_still_hold_content,
             })
         }
@@ -165,7 +164,7 @@ fn run(layout: &RepositoryLayout, mode: Mode) -> Result<DiscardDamagedCommitsPla
                 witnessed_seq,
                 patch_id,
                 truncated_bytes: repair.truncated_bytes,
-                recovery_file: repair.recovery_file,
+                recovery: repair.recovery,
                 working_tree_may_still_hold_content,
             })
         }

@@ -225,7 +225,9 @@ fn resolve_object_location_locked(
     // would land behind it, sandwiching the tail between two sound regions and turning a clean tail
     // into interior damage. So the writer rebuilds first on *either* condition, not only on damage.
     let entries = if replay.has_item_failure() || replay.trailing_partial_bytes != 0 {
-        index::repair_index_from_containers(layout)?;
+        index::repair_index_from_containers(layout, |lost| {
+            crate::recovery_log::save_lost_ids(layout, lost)
+        })?;
         index::replay_index(layout)?.entries
     } else {
         replay.entries
@@ -436,7 +438,9 @@ impl IndexSnapshot {
         // persisted: only `ensure_current_locked`'s caller, inside `append_object_under_lock`'s hold,
         // may -- every unlocked caller scans in memory instead, for the same reason `open` above does.
         if already_locked {
-            index::repair_index_from_containers(layout)?;
+            index::repair_index_from_containers(layout, |lost| {
+                crate::recovery_log::save_lost_ids(layout, lost)
+            })?;
             let (fresh, fresh_length) = index::replay_index_with_extent(layout)?;
             self.entries = fresh.entries;
             self.known_length = fresh_length;

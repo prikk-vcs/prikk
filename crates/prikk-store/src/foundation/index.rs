@@ -31,15 +31,13 @@ use crate::foundation::frame_resync::{
     sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
-    append_file_reporting_offset_required, append_file_required, ensure_directory_required,
-    len_to_u64, read_file_if_exists, read_file_range_if_exists, stat_file_state_if_exists,
-    write_file_atomically,
+    append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
+    read_file_range_if_exists, stat_file_state_if_exists, write_file_atomically,
 };
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 const INDEX_MAGIC: &[u8; 8] = b"PIDXENT1";
 const INDEX_VERSION: u16 = 1;
@@ -806,14 +804,10 @@ pub struct IndexRepairReport {
     pub already_correct: bool,
     /// RFC 162 rule 2: object ids the old index named that a fresh container scan could not
     /// re-derive -- gone from the rebuilt index, because their own container frame is itself damaged
-    /// or unreadable. **Never silent**: when non-empty, these are also durably recorded in
-    /// `recovery_file`, and the repair's own caller must name any work that still references them
+    /// or unreadable. **Never silent**: when non-empty, these are also durably recorded in the
+    /// recovery log before the rebuild is installed (the caller's `save_lost` callback), and the repair's own caller must name any work that still references them
     /// (`verify`'s connectivity check, RFC 162 rule 2) and exit non-zero.
     pub lost_ids: Vec<ObjectId>,
-    /// The recovery file (relative to `.prikk/`) holding exactly `lost_ids`, written durably before
-    /// the rebuilt index is installed -- mirrors the WAL repair's own `recovery/` contract
-    /// (`wal.rs::save_removed_bytes`). `None` when `lost_ids` is empty.
-    pub recovery_file: Option<PathBuf>,
 }
 
 /// Rebuild the object index from the containers and install it atomically.
@@ -833,7 +827,13 @@ pub struct IndexRepairReport {
 /// The install is [`write_file_atomically`]: write a temporary, fsync it, rename over the
 /// destination, sync the parent. A crash before the rename leaves the old index whole; after it,
 /// the new one. There is no window in which a reader sees a partial index.
-pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<IndexRepairReport> {
+///
+/// `save_lost` durably records the lost ids before the rebuilt index is installed (RFC 162 rule 2, RFC 168 §3.1); the caller
+/// supplies it, so this layer names no recovery type. Its result comes back with the report, `None` when nothing was lost.
+pub(crate) fn repair_index_from_containers<S>(
+    layout: &RepositoryLayout,
+    save_lost: impl FnOnce(&[ObjectId]) -> Result<S>,
+) -> Result<(IndexRepairReport, Option<S>)> {
     #[cfg(test)]
     let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("index-rebuild");
     let index_relative = layout.repository_relative(&layout.container_index_path())?;
@@ -910,10 +910,10 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
     let before_ids: BTreeSet<ObjectId> = before.iter().map(|entry| entry.object_id).collect();
     let rebuilt_ids: BTreeSet<ObjectId> = rebuilt.iter().map(|entry| entry.object_id).collect();
     let lost_ids: Vec<ObjectId> = before_ids.difference(&rebuilt_ids).copied().collect();
-    let recovery_file = if lost_ids.is_empty() {
+    let saved = if lost_ids.is_empty() {
         None
     } else {
-        Some(save_lost_ids(layout.repository_mutation_root(), &lost_ids)?)
+        Some(save_lost(&lost_ids)?)
     };
 
     if !already_correct {
@@ -924,39 +924,17 @@ pub(crate) fn repair_index_from_containers(layout: &RepositoryLayout) -> Result<
         )?;
     }
 
-    Ok(IndexRepairReport {
-        entries_before: before.len(),
-        entries_after: rebuilt.len(),
-        entries_relocated,
-        objects_recovered,
-        already_correct,
-        lost_ids,
-        recovery_file,
-    })
-}
-
-/// Durably write `lost_ids` (sorted, one hex id per line) to
-/// `recovery/index-lost-ids-<hash>.bytes` under `.prikk/`, and return that path (relative to
-/// `.prikk/`) -- mirrors `wal.rs::save_removed_bytes` exactly: never authority, nothing reads it back,
-/// `verify` ignores it.
-fn save_lost_ids(
-    root: &crate::foundation::fsutil::MutationRoot,
-    lost_ids: &[ObjectId],
-) -> Result<PathBuf> {
-    let mut sorted = lost_ids.to_vec();
-    sorted.sort();
-    let mut contents = String::new();
-    for id in &sorted {
-        contents.push_str(&id.to_string());
-        contents.push('\n');
-    }
-    let digest = prikk_hash::to_hex(&prikk_hash::sha256(contents.as_bytes()));
-    let short = digest.get(..16).unwrap_or(&digest);
-    let directory = PathBuf::from("recovery");
-    let file = directory.join(format!("index-lost-ids-{short}.bytes"));
-    ensure_directory_required(root, &directory)?;
-    write_file_atomically(root, &file, contents.as_bytes())?;
-    Ok(file)
+    Ok((
+        IndexRepairReport {
+            entries_before: before.len(),
+            entries_after: rebuilt.len(),
+            entries_relocated,
+            objects_recovered,
+            already_correct,
+            lost_ids,
+        },
+        saved,
+    ))
 }
 
 /// Remove exactly one object's index entry, leaving its container bytes untouched -- the container-

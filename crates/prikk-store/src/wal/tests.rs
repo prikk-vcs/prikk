@@ -403,14 +403,17 @@ fn wal_replay_and_append_remain_on_retained_repository_root() -> prikk_error::Re
 
 // ---- RFC 160 F3 Addendum 1: a repair keeps every byte it removes ------------------------------------------------------------------
 
-fn recovery_bytes(layout: &RepositoryLayout, file: &std::path::Path) -> Vec<u8> {
-    std::fs::read(layout.prikk_dir().join(file)).unwrap_or_default()
+fn recovery_bytes(layout: &RepositoryLayout, saved: &crate::recovery_log::RecoveryRef) -> Vec<u8> {
+    crate::recovery_log::removed_bytes(layout, &saved.id)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// **A true torn tail: the recovery file holds exactly the removed bytes.** Two queued records and seven bytes of a torn third: the
 /// repair saves those seven bytes, byte for byte, to `recovery/` **before** it truncates, names the file in its report, and leaves
 /// the two records.
-/// **Perturb:** truncate without saving (skip `save_removed_bytes`): `recovery_file` is `None` and this goes red.
+/// **Perturb:** truncate without saving (skip `save_removed_bytes`): `recovery` is `None` and this goes red.
 #[test]
 #[allow(clippy::expect_used, clippy::indexing_slicing)]
 fn a_repair_saves_exactly_the_torn_bytes_it_removes() -> prikk_error::Result<()> {
@@ -427,18 +430,15 @@ fn a_repair_saves_exactly_the_torn_bytes_it_removes() -> prikk_error::Result<()>
     drop(file);
 
     let repair = wal.truncate_trailing_partial()?;
-    let saved = repair
-        .recovery_file
-        .expect("the repair names its recovery file");
+    let saved = repair.recovery.expect("the repair names its recovery file");
     assert_eq!(
         recovery_bytes(&layout, &saved),
         b"partial",
         "the file holds exactly the removed bytes"
     );
-    assert!(
-        saved.to_string_lossy().contains("recovery")
-            && !saved.to_string_lossy().contains("quarantine"),
-        "{saved:?}"
+    assert_eq!(
+        saved.source, "active/default/queue.wal",
+        "the entry names the WAL it cut"
     );
     assert_eq!(
         std::fs::read(wal.path())?,
@@ -467,7 +467,7 @@ fn a_repair_of_a_lone_damaged_record_keeps_the_record_byte_for_byte() -> prikk_e
     let repair = wal.truncate_trailing_partial()?;
     assert_eq!(repair.preserved_records, 0);
     assert_eq!(repair.truncated_bytes, bytes.len());
-    let saved = repair.recovery_file.expect("named");
+    let saved = repair.recovery.expect("named");
     assert_eq!(
         recovery_bytes(&layout, &saved),
         bytes,
@@ -500,23 +500,150 @@ fn a_failure_between_the_save_and_the_truncation_leaves_the_wal_and_a_complete_r
     fail_once_for_test(TestFailPoint::Truncate);
     assert!(wal.truncate_trailing_partial().is_err());
     assert_eq!(std::fs::read(wal.path())?, before, "the WAL is untouched");
-    let recovery: Vec<_> = std::fs::read_dir(layout.prikk_dir().join("recovery"))?
-        .flatten()
-        .collect();
-    assert_eq!(recovery.len(), 1, "one recovery file");
+    let listing = crate::recovery_log::list(layout.repository_mutation_root())?;
     assert_eq!(
-        std::fs::read(recovery[0].path())?,
-        b"partial",
+        listing.entries.len(),
+        1,
+        "one entry saved before the truncate"
+    );
+    assert_eq!(
+        listing.entries[0].entry.removed, b"partial",
         "and it is complete"
     );
 
     let repair = wal.truncate_trailing_partial()?;
-    let saved = repair.recovery_file.expect("named");
+    let saved = repair.recovery.expect("named");
     assert_eq!(recovery_bytes(&layout, &saved), b"partial");
+    // The retry appends the same entry again: same source, offset and bytes, so the same id (RFC 168 §3.1).
+    let listing = crate::recovery_log::list(layout.repository_mutation_root())?;
+    assert_eq!(listing.entries.len(), 2, "the retry appends its own entry");
     assert_eq!(
-        std::fs::read_dir(layout.prikk_dir().join("recovery"))?.count(),
-        1,
-        "the retry rewrote the same file"
+        listing.entries[0].id, listing.entries[1].id,
+        "an identical retry has the same id"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Builds a WAL with two sound records and seven torn bytes at its end, repairs it, and returns the layout, the WAL, the
+/// bytes before the repair, and the entry id. The shared fixture for the RFC 168 §7 WAL rehearsal and its controls.
+#[allow(clippy::expect_used)]
+fn torn_wal_repaired(
+    name: &str,
+) -> prikk_error::Result<(std::path::PathBuf, RepositoryLayout, Wal, Vec<u8>, String)> {
+    use std::io::Write;
+
+    let root = unique_temp_dir(name);
+    let layout = RepositoryLayout::init(root.clone())?;
+    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    wal.append_patch(&signed_patch_envelope())?;
+    wal.append_patch(&rollback_patch_envelope())?;
+    let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+    file.write_all(b"partial")?;
+    drop(file);
+    let before = std::fs::read(wal.path())?;
+    let repair = wal.truncate_trailing_partial()?;
+    let id = repair.recovery.expect("the repair names its entry").id;
+    Ok((root, layout, wal, before, id))
+}
+
+/// **RFC 168 §7 rehearsal, the WAL:** repair, list, restore, then a WAL byte-identical to its state before the repair, and
+/// `verify` reports the torn tail again, as the plan promised.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_wal_repair_restores_byte_for_byte_from_the_log() -> prikk_error::Result<()> {
+    let (root, layout, wal, before, id) = torn_wal_repaired("wal-rehearsal-restore")?;
+    let listed = crate::recovery_log::list(layout.repository_mutation_root())?;
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(listed.entries[0].id, id);
+    assert_eq!(listed.entries[0].entry.removed, b"partial");
+
+    let plan = crate::recovery_log::restore(&layout, &id, false)?;
+    assert!(
+        plan.written,
+        "every condition holds after the repair: {plan:?}"
+    );
+    assert_eq!(
+        std::fs::read(wal.path())?,
+        before,
+        "the WAL is byte-identical to before the repair"
+    );
+    assert_eq!(
+        wal.replay()?.trailing_partial_bytes,
+        7,
+        "the torn tail is back, as the plan said"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Control: the source written since.** A byte appended after the repair makes the length differ from the offset: refused,
+/// and the WAL is left as it is.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_wal_restore_is_refused_when_the_wal_was_written_since() -> prikk_error::Result<()> {
+    use std::io::Write;
+    let (root, layout, wal, _before, id) = torn_wal_repaired("wal-rehearsal-written-since")?;
+    let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+    file.write_all(b"x")?;
+    drop(file);
+    let after = std::fs::read(wal.path())?;
+    let plan = crate::recovery_log::restore(&layout, &id, false)?;
+    assert!(!plan.written);
+    assert!(
+        plan.conditions
+            .iter()
+            .any(|c| !c.holds && c.text.contains("length")),
+        "{plan:?}"
+    );
+    assert_eq!(std::fs::read(wal.path())?, after);
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Control: a meaning file changed.** `ref-name` changed after the repair: the restore is refused even though the WAL is
+/// byte-identical to its repaired state (R2's WAL-at-offset-0 example).
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_wal_restore_is_refused_when_a_meaning_file_changed() -> prikk_error::Result<()> {
+    let (root, layout, wal, _before, id) = torn_wal_repaired("wal-rehearsal-meaning")?;
+    let repaired = std::fs::read(wal.path())?;
+    std::fs::write(layout.default_active_ref_name_path(), b"heads/elsewhere")?;
+    let plan = crate::recovery_log::restore(&layout, &id, false)?;
+    assert!(!plan.written);
+    assert!(
+        plan.conditions
+            .iter()
+            .any(|c| !c.holds && c.text.contains("ref-name")),
+        "{plan:?}"
+    );
+    assert_eq!(
+        std::fs::read(wal.path())?,
+        repaired,
+        "the WAL is left as the repair left it"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **Control: a same-length change to the prefix.** One byte of the sound records is flipped, the length is unchanged: the
+/// prefix hash refuses the restore.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_wal_restore_is_refused_when_the_prefix_changed_at_the_same_length() -> prikk_error::Result<()>
+{
+    let (root, layout, wal, _before, id) = torn_wal_repaired("wal-rehearsal-prefix")?;
+    let mut bytes = std::fs::read(wal.path())?;
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    std::fs::write(wal.path(), &bytes)?;
+    let plan = crate::recovery_log::restore(&layout, &id, false)?;
+    assert!(!plan.written);
+    assert!(
+        plan.conditions
+            .iter()
+            .any(|c| !c.holds && c.text.contains("prefix")),
+        "{plan:?}"
     );
     let _ = std::fs::remove_dir_all(root);
     Ok(())

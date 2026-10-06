@@ -4,7 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
-use prikk_hash::sha256;
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
 use crate::foundation::byte_cursor::ByteCursor;
@@ -16,10 +15,11 @@ use crate::foundation::frame_resync::{
     scan_budget_exceeded_as_damage_message, sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{
-    MutationRoot, append_file_required, ensure_directory_required, len_to_u64, read_file_if_exists,
-    truncate_existing_file_required, truncate_file_empty_required, write_file_atomically,
+    MutationRoot, append_file_required, len_to_u64, read_file_if_exists,
+    truncate_existing_file_required, truncate_file_empty_required,
 };
 use crate::foundation::layout::RepositoryLayout;
+use crate::recovery_log::{self, RecoveryRef};
 
 const WAL_RECORD_MAGIC: &[u8; 8] = b"PWALR001";
 const WAL_RECORD_VERSION: u16 = 1;
@@ -132,10 +132,10 @@ pub struct WalRepair {
     /// queue of N must say *which* authors' work survived, not just how many records — "3 records
     /// preserved" does not answer that for N > 1 the way it unambiguously did for N = 1.
     pub preserved_patch_ids: Vec<ObjectId>,
-    /// The recovery file (relative to `.prikk/`) holding **exactly the bytes this repair removed**, written durably before the
-    /// truncation (RFC 160 F3 Addendum 1): a repair can be wrong about what it removed, torn tail or damage, without anything being
-    /// lost. `None` when nothing was removed. Never authority: `verify` ignores it.
-    pub recovery_file: Option<PathBuf>,
+    /// The recovery-log entry holding **exactly the bytes this repair removed**, appended durably before the truncation (RFC 160 F3
+    /// Addendum 1, RFC 168 §3.1): a repair can be wrong about what it removed, torn tail or damage, without anything being lost.
+    /// `None` when nothing was removed. Never authority: no classification reads it.
+    pub recovery: Option<RecoveryRef>,
     /// RFC 163 §4 (N6): how many of the removed bytes are **complete** records -- their own claimed
     /// length fully present, whatever their checksum -- as opposed to a genuine short fragment. A
     /// crash-torn append can never produce one (its last frame is short by construction); a damaged
@@ -301,7 +301,7 @@ impl Wal {
                 preserved_records: 0,
                 truncated_bytes: 0,
                 preserved_patch_ids: Vec::new(),
-                recovery_file: None,
+                recovery: None,
                 complete_records_removed: 0,
             });
         };
@@ -325,7 +325,7 @@ impl Wal {
                 preserved_records: replay.records.len(),
                 truncated_bytes: 0,
                 preserved_patch_ids,
-                recovery_file: None,
+                recovery: None,
                 complete_records_removed: 0,
             });
         }
@@ -347,21 +347,38 @@ impl Wal {
             .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
             .unwrap_or_default();
         let complete_records_removed = count_complete_record_shapes(removed);
-        let recovery_file = save_removed_bytes(root, relative, repaired_len, removed)?;
+        let recovery = self.save_removed_bytes(root, relative, &bytes, repaired_len)?;
         truncate_existing_file_required(root, relative, repaired_len)?;
         Ok(WalRepair {
             preserved_records: replay.records.len(),
             truncated_bytes: replay.trailing_partial_bytes,
             preserved_patch_ids,
-            recovery_file: Some(recovery_file),
+            recovery: Some(recovery),
             complete_records_removed,
         })
     }
 
+    /// Append the bytes a repair is about to truncate to `recovery/log` (RFC 168 §3.1), before the truncate.
+    fn save_removed_bytes(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        file_bytes: &[u8],
+        repaired_len: u64,
+    ) -> Result<RecoveryRef> {
+        let layout = self.layout.as_ref().ok_or_else(|| PrikkError::Io {
+            kind: None,
+            context: "WAL repair requires a validated repository layout".to_string(),
+        })?;
+        let source = relative.to_string_lossy().replace('\\', "/");
+        let entry = recovery_log::entry_for(layout, &source, file_bytes, repaired_len, "wal")?;
+        recovery_log::append(root, &entry)
+    }
+
     /// Report what [`Self::truncate_trailing_partial`] would do, without writing anything (RFC 166
-    /// D5, K1): the same read, the same slice of bytes that would be removed, and the same
-    /// [`recovery_file_path_for`] computation its own write uses -- never a second, independently
-    /// computed path that could drift from the one a real repair actually writes to.
+    /// D5, K1): the same read, the same slice of bytes that would be removed, and the same entry
+    /// [`recovery_log::entry_for`] builds for its own write -- so the id it names is the one a real
+    /// repair appends, by construction, never a second computation that could drift.
     pub(crate) fn preview_truncate_trailing_partial(&self) -> Result<WalRepair> {
         self.require_current_format()?;
         let Some(bytes) = self.read_bytes()? else {
@@ -369,7 +386,7 @@ impl Wal {
                 preserved_records: 0,
                 truncated_bytes: 0,
                 preserved_patch_ids: Vec::new(),
-                recovery_file: None,
+                recovery: None,
                 complete_records_removed: 0,
             });
         };
@@ -390,7 +407,7 @@ impl Wal {
                 preserved_records: replay.records.len(),
                 truncated_bytes: 0,
                 preserved_patch_ids,
-                recovery_file: None,
+                recovery: None,
                 complete_records_removed: 0,
             });
         }
@@ -407,12 +424,23 @@ impl Wal {
             .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
             .unwrap_or_default();
         let complete_records_removed = count_complete_record_shapes(removed);
-        let recovery_file = recovery_file_path_for(relative, repaired_len, removed);
+        let layout = self.layout.as_ref().ok_or_else(|| PrikkError::Io {
+            kind: None,
+            context: "WAL repair preview requires a validated repository layout".to_string(),
+        })?;
+        let source = relative.to_string_lossy().replace('\\', "/");
+        let entry = recovery_log::entry_for(layout, &source, &bytes, repaired_len, "wal")?;
+        let recovery = RecoveryRef {
+            id: recovery_log::id_of(&entry),
+            source,
+            offset: repaired_len,
+            len: removed.len() as u64,
+        };
         Ok(WalRepair {
             preserved_records: replay.records.len(),
             truncated_bytes: replay.trailing_partial_bytes,
             preserved_patch_ids,
-            recovery_file: Some(recovery_file),
+            recovery: Some(recovery),
             complete_records_removed,
         })
     }
@@ -645,36 +673,6 @@ fn count_complete_record_shapes(removed: &[u8]) -> usize {
 /// this WAL's own content, which is why the return type stays `Result` at all: none exist below,
 /// `decode_records` cannot fail, kept fallible for API stability and because `parse_header`'s errors
 /// are folded into `FrameAttempt::Invalid` rather than raised.
-/// Durably write `removed` -- the bytes a WAL repair is about to truncate away -- to `recovery/wal-<session>-at-<offset>-<hash>.bytes`
-/// under `.prikk/`, and return that path (relative to `.prikk/`). The name says the session and the offset the removed bytes started at,
-/// and carries the first bytes of their SHA-256, so a second repair of a different tail never overwrites the first's file and a
-/// repeat of the same one rewrites the same bytes. **Never authority**: nothing reads it back, `verify` ignores it, and it is not
-/// `quarantine/`, which is retired.
-fn save_removed_bytes(
-    root: &MutationRoot,
-    wal_relative: &Path,
-    offset: u64,
-    removed: &[u8],
-) -> Result<PathBuf> {
-    let file = recovery_file_path_for(wal_relative, offset, removed);
-    ensure_directory_required(root, &PathBuf::from("recovery"))?;
-    write_file_atomically(root, &file, removed)?;
-    Ok(file)
-}
-
-/// The exact path [`save_removed_bytes`] would write `removed` to, computed without writing
-/// anything -- pure, so a plan-only preview (RFC 166 D5) can name the same path a real repair
-/// would use, by construction, never a second computation that could drift from it.
-pub(crate) fn recovery_file_path_for(wal_relative: &Path, offset: u64, removed: &[u8]) -> PathBuf {
-    let session = wal_relative.parent().and_then(Path::file_name).map_or_else(
-        || "wal".to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let digest = prikk_hash::to_hex(&sha256(removed));
-    let short = digest.get(..16).unwrap_or(&digest);
-    PathBuf::from("recovery").join(format!("wal-{session}-at-{offset}-{short}.bytes"))
-}
-
 pub(crate) fn decode_records(bytes: &[u8]) -> Result<WalReplay> {
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();

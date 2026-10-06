@@ -88,16 +88,30 @@ fn run(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
     )
 }
 
-/// The recovery file a `doctor --repair-wal-tail` run names (`.prikk/recovery/wal-…bytes`), as an absolute path.
-fn named_recovery_file(repo: &Path, output: &str) -> PathBuf {
+/// The entry a repair names: its 16-hex-character id, from `recovery/log, entry <id>`.
+fn named_entry(output: &str) -> String {
     let start = output
-        .find(".prikk/recovery/")
-        .unwrap_or_else(|| panic!("the repair names its recovery file\n{output}"));
-    let name: String = output[start..]
-        .chars()
-        .take_while(|c| !c.is_whitespace() && *c != '(')
-        .collect();
-    repo.join(name)
+        .find("recovery/log, entry ")
+        .unwrap_or_else(|| panic!("the repair names its recovery entry\n{output}"))
+        + "recovery/log, entry ".len();
+    output[start..].chars().take(16).collect()
+}
+
+/// RFC 168 §3.2: the recovery log holds exactly `expected` as the removed bytes of the entry the repair named, and the
+/// listing shows that entry. The removed bytes are stored raw in the frame, so a byte search finds them.
+fn assert_log_holds_named_entry(repo: &Path, output: &str, expected: &[u8]) {
+    let id = named_entry(output);
+    let log = std::fs::read(repo.join(".prikk/recovery/log")).unwrap();
+    assert!(
+        log.windows(expected.len()).any(|window| window == expected),
+        "the recovery log holds the removed bytes"
+    );
+    let (code, listing) = run(repo, &["doctor", "--recovery-list"]);
+    assert_eq!(code, Some(0), "{listing}");
+    assert!(
+        listing.contains(&id),
+        "the listing shows the entry the repair named ({id}):\n{listing}"
+    );
 }
 
 /// **Addendum 1, control 1 -- a lone damaged record with no witness: the repair truncates it, and keeps it.** One queued commit, its
@@ -125,12 +139,7 @@ fn a_repair_of_a_lone_damaged_record_with_no_witness_saves_the_record_byte_for_b
         std::fs::read(&wal).unwrap().is_empty(),
         "the lone record is removed"
     );
-    let saved = named_recovery_file(&repo, &text);
-    assert_eq!(
-        std::fs::read(&saved).unwrap(),
-        bytes,
-        "the recovery file is the removed record, whole"
-    );
+    assert_log_holds_named_entry(&repo, &text, &bytes);
     let _ = std::fs::remove_dir_all(repo);
 }
 
@@ -282,13 +291,8 @@ fn a_true_torn_wal_tail_is_still_tolerated_and_still_truncated_by_the_repair() {
         bytes[..first_end].to_vec(),
         "exactly the torn bytes are gone and the record before them is untouched"
     );
-    // RFC 160 F3 Addendum 1: the removed bytes are kept, exactly, in a file the output names.
-    let saved = named_recovery_file(&repo, &repair_text);
-    assert_eq!(
-        std::fs::read(&saved).unwrap(),
-        bytes[first_end..cut].to_vec(),
-        "the recovery file holds exactly the removed bytes"
-    );
+    // RFC 160 F3 Addendum 1, RFC 168: the removed bytes are kept, exactly, in the log entry the output names.
+    assert_log_holds_named_entry(&repo, &repair_text, &bytes[first_end..cut]);
     assert_eq!(
         run(&repo, &["verify"]).0,
         Some(0),

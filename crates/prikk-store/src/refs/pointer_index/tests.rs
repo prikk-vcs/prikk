@@ -239,6 +239,7 @@ fn damaged_entry_fails_closed_rather_than_silently_resolving_a_stale_entry() -> 
 /// the removed bytes are saved, and every sound entry survives -- the pointer-index analogue of
 /// `wal.rs::wal_truncate_preserves_all_complete_records_in_a_torn_queue_and_reports_their_ids`.
 #[test]
+#[allow(clippy::expect_used)]
 fn truncate_pointer_index_trailing_partial_truncates_a_torn_tail_and_saves_the_bytes() -> Result<()>
 {
     let root = unique_temp_dir("pointer-index-repair-torn-tail");
@@ -263,15 +264,19 @@ fn truncate_pointer_index_trailing_partial_truncates_a_torn_tail_and_saves_the_b
     let repair = truncate_pointer_index_trailing_partial(&layout)?;
     assert_eq!(repair.preserved_entries, 1);
     assert_eq!(repair.truncated_bytes, 7);
-    let recovery_file = repair.recovery_file.as_ref().ok_or_else(|| {
-        prikk_error::PrikkError::Integrity(
-            "a repair that truncated bytes names its recovery file".to_string(),
-        )
-    })?;
+    let recovery_id = &repair
+        .recovery
+        .as_ref()
+        .ok_or_else(|| {
+            prikk_error::PrikkError::Integrity(
+                "a repair that truncated bytes names its recovery entry".to_string(),
+            )
+        })?
+        .id;
     assert_eq!(
-        std::fs::read(layout.prikk_dir().join(recovery_file))?,
+        crate::recovery_log::removed_bytes(&layout, recovery_id)?.expect("the log holds the entry"),
         torn,
-        "the recovery file holds exactly the removed bytes"
+        "the recovery log holds exactly the removed bytes"
     );
 
     let replay = replay_pointer_index(&layout)?;
@@ -281,7 +286,7 @@ fn truncate_pointer_index_trailing_partial_truncates_a_torn_tail_and_saves_the_b
     // Idempotent: a second run finds nothing left to truncate.
     let second = truncate_pointer_index_trailing_partial(&layout)?;
     assert_eq!(second.truncated_bytes, 0);
-    assert_eq!(second.recovery_file, None);
+    assert_eq!(second.recovery, None);
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
@@ -330,6 +335,66 @@ fn truncate_pointer_index_trailing_partial_refuses_on_interior_damage() -> Resul
         "a refused repair must leave the file byte for byte as it was"
     );
 
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// **RFC 168 §7 rehearsal, the pointer index:** repair, list, restore, then a slot byte-identical to its pre-repair state.
+/// The meaning file is the ref log's live slot, and the restore holds while it is unchanged.
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_pointer_index_repair_is_restored_byte_for_byte_from_the_log() -> Result<()> {
+    let root = unique_temp_dir("pointer-index-rehearsal");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let entry = PointerIndexEntry {
+        ref_name_key: ref_name_key_bytes("heads/main"),
+        ref_name: "heads/main".to_string(),
+        ref_state_id: sample_object_id("main-state"),
+    };
+    append_ref_pointer_entry(&layout, &entry)?;
+    let path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let before = std::fs::read(&path)?;
+    let mut with_tail = before.clone();
+    with_tail.extend_from_slice(&[0xCD_u8; 7]);
+    std::fs::write(&path, &with_tail)?;
+
+    let repair = truncate_pointer_index_trailing_partial(&layout)?;
+    let id = repair
+        .recovery
+        .as_ref()
+        .expect("the repair names its entry")
+        .id
+        .clone();
+    assert_eq!(
+        std::fs::read(&path)?,
+        before,
+        "truncated to the sound prefix"
+    );
+
+    let plan = crate::recovery_log::restore(&layout, &id, false)?;
+    assert!(plan.written, "every condition holds: {plan:?}");
+    assert_eq!(
+        std::fs::read(&path)?,
+        with_tail,
+        "byte-identical to before the repair"
+    );
+
+    // Control: the ref log's live slot changed after the repair: the restore is refused and the slot is left alone.
+    let repaired_again = truncate_pointer_index_trailing_partial(&layout)?;
+    let id = repaired_again.recovery.expect("named").id;
+    std::fs::write(
+        layout.ref_log_container_slot_path(ContainerSlot::A),
+        b"changed",
+    )?;
+    let refused = crate::recovery_log::restore(&layout, &id, false)?;
+    assert!(!refused.written);
+    assert!(
+        refused
+            .conditions
+            .iter()
+            .any(|condition| !condition.holds && condition.text.contains("log-a")),
+        "{refused:?}"
+    );
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

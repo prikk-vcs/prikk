@@ -273,7 +273,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 166 D3 added `commit_boundary/classification.rs`; its own `tests.rs` is `cfg(test)`-invisible: 154 -> 155.
     // RFC 166 round 2 §1 added `doctor/discard_damaged_commits.rs` (D5): 155 -> 156.
     // RFC 166 round 2 §2 added `doctor/restore_queue_target.rs` (D5): 156 -> 157.
-    assert_eq!(store.production_files, 157);
+    // RFC 168 §3.1 added `recovery_log.rs`, whose own `tests` module is `cfg(test)`-invisible: 157 -> 158.
+    assert_eq!(store.production_files, 158);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

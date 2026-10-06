@@ -56,6 +56,15 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reference: "RFC 102 Stage 3 (repair-index); RFC 160 §3.1",
     },
     DeclaredScope {
+        id: "recovery-log-identity",
+        status: ScopeStatus::OpenFinding,
+        reason: "a repair and a restore record or check the identity of the meaning files an entry names (RFC 168 §3.2, condition 3). \
+                 Two of them are store-growing: the ref log container (a pointer-index entry's meaning) and the pointer index container \
+                 (the ref log's). The identity is a whole-file SHA-256, so the cost follows the size of the file it names. Repairs are \
+                 rare and restores are rarer, but the cost is the store's",
+        reference: "RFC 168 §3.1-§3.2 (the meaning-file table); the round's report names the bounded identity as the open question",
+    },
+    DeclaredScope {
         id: "type-enumeration",
         status: ScopeStatus::OpenFinding,
         reason: "`accepted_but_unsealed_patch_ids`, `enumerate_stored_claims` and `received_tag_ids` list every object of one type by                  reading that type's whole container: there is no by-type index, so listing costs the type's container. The listing                  commands are the operation's definition; but `seal_from_accepted_claim` and `refuse_if_order_ambiguous` call two of                  them on the way to sealing a claim, so a per-claim cost follows the patch and claim containers",

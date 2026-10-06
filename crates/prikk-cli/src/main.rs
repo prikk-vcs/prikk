@@ -960,6 +960,12 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
         print_verify_report_json(&report)?;
     } else {
         print_verify_report(&layout, &report);
+        // RFC 168 §3.1: the recovery log's own line. It never changes the exit status, and the JSON report stays as it was.
+        if let Some(line) =
+            prikk_store::recovery_verify_line(&layout).map_err(|err| err.to_string())?
+        {
+            println!("{line}");
+        }
         // Received refs (DC-78 ruling 4) are never read by verify_repository itself — every object
         // they point at is already checked by the ordinary type-based object scan regardless of
         // which ref (if any) points to it, so this is purely additive presentation, not a new check.
@@ -1016,6 +1022,119 @@ fn describe_commit_summary(summary: &prikk_store::CommitSummary) -> String {
         message.to_string()
     } else {
         format!("{message} ({})", summary.paths.join(", "))
+    }
+}
+
+/// RFC 168 §3.2: `--recovery-list`, `--recovery-restore <id> [--plan-only]` and `--recovery-clear [--plan-only]`.
+fn run_recovery_command(
+    layout: &prikk_store::RepositoryLayout,
+    command: &args::RecoveryCommand,
+    plan_only: bool,
+) -> std::result::Result<(), CliError> {
+    let after = "After this, the file holds what it held before the repair, damage included. `verify` will report that damage \
+                 again, and commands that refused before the repair will refuse again.";
+    match command {
+        args::RecoveryCommand::List => {
+            let listing = prikk_store::recovery_list(layout).map_err(|err| err.to_string())?;
+            let count = listing.entries.len();
+            println!(
+                "recovery log: {count} entr{} in .prikk/recovery/log",
+                if count == 1 { "y" } else { "ies" }
+            );
+            for entry in &listing.entries {
+                println!(
+                    "  {}  {}  cut at {}  {} bytes  ({}, prikk {})",
+                    entry.id,
+                    entry.source,
+                    entry.offset,
+                    entry.len,
+                    entry.label,
+                    entry.binary_version
+                );
+            }
+            if listing.damaged_regions > 0 {
+                println!(
+                    "damaged regions: {} -- a save there cannot be restored; the entries after it are still listed",
+                    listing.damaged_regions
+                );
+            }
+            if listing.torn_tail {
+                println!(
+                    "a torn tail: a save was interrupted before its truncate, so nothing was removed"
+                );
+            }
+            if listing.unread_tail {
+                println!("part of the log was not read within the scan budget");
+            }
+            for older in &listing.older_files {
+                println!("older format: list only; read or delete by hand: {older}");
+            }
+            println!(
+                "a listing judges no entry; `prikk doctor --recovery-restore <id> --plan-only` says whether one can be restored"
+            );
+            Ok(())
+        }
+        args::RecoveryCommand::Restore(id) => {
+            let plan = prikk_store::recovery_restore(layout, id, plan_only)
+                .map_err(|err| err.to_string())?;
+            if let Some(refusal) = &plan.refusal {
+                return Err(format!("restore refused: {refusal}").into());
+            }
+            println!(
+                "restore {} from {} at offset {}",
+                plan.id, plan.source, plan.offset
+            );
+            for condition in &plan.conditions {
+                println!(
+                    "  {}  {}",
+                    if condition.holds {
+                        "ok     "
+                    } else {
+                        "refused"
+                    },
+                    condition.text
+                );
+            }
+            if plan.written {
+                println!(
+                    "wrote {} bytes at offset {} of {}",
+                    plan.would_write, plan.offset, plan.source
+                );
+            } else if plan_only {
+                println!(
+                    "plan only -- nothing written; this restore would write {} bytes at offset {} of {}",
+                    plan.would_write, plan.offset, plan.source
+                );
+            } else {
+                return Err(format!(
+                    "restore refused: a condition does not hold, so nothing was written to {}",
+                    plan.source
+                )
+                .into());
+            }
+            println!("{after}");
+            Ok(())
+        }
+        args::RecoveryCommand::Clear => {
+            let cleared =
+                prikk_store::recovery_clear(layout, plan_only).map_err(|err| err.to_string())?;
+            if cleared.cleared {
+                println!(
+                    "removed {} entr{} ({} bytes); recovery/log is empty. Older .bytes files are not touched.",
+                    cleared.entries,
+                    if cleared.entries == 1 { "y" } else { "ies" },
+                    cleared.bytes
+                );
+            } else {
+                println!(
+                    "would remove {} entr{} ({} bytes) from recovery/log; plan only -- nothing written",
+                    cleared.entries,
+                    if cleared.entries == 1 { "y" } else { "ies" },
+                    cleared.bytes
+                );
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1093,11 +1212,10 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
             _ => println!("unexplained tail -- the witness itself could not be read"),
         }
         if plan.truncated_bytes > 0 {
-            if let Some(recovery_file) = &plan.recovery_file {
+            if let Some(recovery) = &plan.recovery {
                 println!(
-                    "{} bytes saved to {} before truncation",
-                    plan.truncated_bytes,
-                    recovery_file.display()
+                    "{} bytes saved to {recovery} before truncation",
+                    plan.truncated_bytes
                 );
             }
         } else {
@@ -1168,6 +1286,10 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
         }
         return Ok(());
     }
+    // RFC 168 §3.2: the recovery-log commands. args.rs refuses to combine them with a repair flag, so nothing below runs.
+    if let Some(command) = &doctor_args.recovery {
+        return run_recovery_command(&layout, command, doctor_args.plan_only);
+    }
     // RFC 164 Rule C: handled first and returns immediately -- args.rs already refuses to combine
     // it with any other repair flag, so nothing below this block runs when it is set.
     if doctor_args.repair_tails {
@@ -1190,7 +1312,8 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // still only diagnoses.
     let mut index_lost_ids = false;
     if doctor_args.repair_index {
-        let report = prikk_store::repair_object_index(&layout).map_err(|err| err.to_string())?;
+        let (report, index_recovery) =
+            prikk_store::repair_object_index(&layout).map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
         if report.already_correct {
             println!(
@@ -1233,8 +1356,8 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                     }
                 }
             }
-            if let Some(recovery_file) = &report.recovery_file {
-                eprintln!("  lost ids recorded at: {}", recovery_file.display());
+            if let Some(recovery) = &index_recovery {
+                eprintln!("  lost ids recorded at: {recovery}");
             }
         }
         if !doctor_args.repair_wal_tail
@@ -1269,8 +1392,8 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                 "pointer index: truncated {} trailing byte(s), {} entries preserved",
                 report.truncated_bytes, report.preserved_entries
             );
-            if let Some(recovery_file) = &report.recovery_file {
-                println!("  removed bytes saved to: {}", recovery_file.display());
+            if let Some(recovery) = &report.recovery {
+                println!("  removed bytes saved to: {recovery}");
             }
         }
         if !doctor_args.repair_wal_tail && !doctor_args.repair_main_ref {

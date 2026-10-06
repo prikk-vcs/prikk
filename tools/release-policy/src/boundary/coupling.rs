@@ -113,7 +113,7 @@ const UPPER_LAYER: [&str; 27] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 36] = [
+const LOWER_LAYER: [&str; 37] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -131,6 +131,9 @@ const LOWER_LAYER: [&str; 36] = [
     // depends on no store module, and `diff` (upper) is its only caller.
     "line_diff",
     "lock",
+    // RFC 168 §3.1: the recovery log. Its own dependencies are the foundation and the locks; the repairs (`wal`, `refs`,
+    // `doctor`) and the object index reach it, and it reaches nothing above them.
+    "recovery_log",
     "maintainer_signing",
     "node",
     "object_store",
@@ -561,6 +564,16 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   Its own fan-out is the same durable-file toolkit `author::author_key_index` (above) \
                   already depends on, plus `refs` (the ref's own tip, for D3's bounded connectivity \
                   walk) and `wal` (the frame checksum it reuses rather than recomputing)",
+    },
+    DeclaredHub {
+        module: "object_store",
+        reason: "RFC 168 §3.1: the object store's two automatic index rebuilds, both on the write path under \
+                  the object-store lock (`resolve_object_location_locked`, and `ensure_current_impl` when \
+                  `already_locked`), can lose object ids, and RFC 162 rule 2 says a loss is never silent. The store therefore names \
+                  `recovery_log` to record the lost ids before the rebuilt index is installed, through the \
+                  one callback `foundation::index` takes, so the foundation layer itself names no recovery \
+                  type. That is one new edge from the store's own façade, not a second route into the \
+                  index: every object read and write still enters the object layer here",
     },
 ];
 

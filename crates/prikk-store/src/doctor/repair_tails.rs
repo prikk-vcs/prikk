@@ -36,10 +36,7 @@ use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
 
-use crate::foundation::fsutil::{
-    MutationRoot, ensure_directory_required, len_to_u64, read_file_if_exists,
-    truncate_existing_file_required, write_file_atomically,
-};
+use crate::foundation::fsutil::{len_to_u64, read_file_if_exists, truncate_existing_file_required};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
 use crate::lock::{ActiveLock, acquire_container_locks};
@@ -60,7 +57,7 @@ pub struct RepairTailsFileOutcome {
     pub truncated_bytes: usize,
     /// The recovery file (relative to `.prikk/`) holding exactly the bytes removed, written durably
     /// before the truncation. `None` when nothing was removed.
-    pub recovery_file: Option<PathBuf>,
+    pub recovery: Option<crate::recovery_log::RecoveryRef>,
 }
 
 /// `prikk doctor --repair-tails`'s own report: one row per covered file, in a fixed order (the WAL,
@@ -179,14 +176,14 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     files.push(RepairTailsFileOutcome {
         label: "WAL",
         truncated_bytes: wal_repair.truncated_bytes,
-        recovery_file: wal_repair.recovery_file,
+        recovery: wal_repair.recovery,
     });
 
     let pointer_repair = truncate_pointer_index_trailing_partial(layout)?;
     files.push(RepairTailsFileOutcome {
         label: "pointer index",
         truncated_bytes: pointer_repair.truncated_bytes,
-        recovery_file: pointer_repair.recovery_file,
+        recovery: pointer_repair.recovery,
     });
 
     for status in &appended {
@@ -194,17 +191,12 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
             files.push(RepairTailsFileOutcome {
                 label: status.label,
                 truncated_bytes: 0,
-                recovery_file: None,
+                recovery: None,
             });
             continue;
         }
         let relative = appended_file_relative_path(layout, status.label)?;
-        let outcome = truncate_one_tail(
-            layout.repository_mutation_root(),
-            &relative,
-            status.label,
-            status.tail_offset,
-        )?;
+        let outcome = truncate_one_tail(layout, &relative, status.label, status.tail_offset)?;
         files.push(outcome);
     }
 
@@ -273,7 +265,7 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
 /// (a label and a relative path) instead of one copy per format -- Rule C's own point ("one
 /// implementation... cannot leave a file behind").
 fn truncate_one_tail(
-    root: &MutationRoot,
+    layout: &RepositoryLayout,
     relative: &Path,
     label: &'static str,
     tail_offset: usize,
@@ -284,11 +276,12 @@ fn truncate_one_tail(
     // declared exception, matching `truncate_incomplete_tail`'s own declaration for the same file.
     #[cfg(test)]
     let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
+    let root = layout.repository_mutation_root();
     let Some(bytes) = read_file_if_exists(root, relative)? else {
         return Ok(RepairTailsFileOutcome {
             label,
             truncated_bytes: 0,
-            recovery_file: None,
+            recovery: None,
         });
     };
     let repaired_len = len_to_u64(tail_offset)?;
@@ -297,44 +290,18 @@ fn truncate_one_tail(
         return Ok(RepairTailsFileOutcome {
             label,
             truncated_bytes: 0,
-            recovery_file: None,
+            recovery: None,
         });
     }
-    let recovery_file = save_removed_bytes(root, label, tail_offset, removed)?;
+    let source = relative.to_string_lossy().replace('\\', "/");
+    let entry = crate::recovery_log::entry_for(layout, &source, &bytes, repaired_len, label)?;
+    let recovery = crate::recovery_log::append(root, &entry)?;
     truncate_existing_file_required(root, relative, repaired_len)?;
     Ok(RepairTailsFileOutcome {
         label,
         truncated_bytes: removed.len(),
-        recovery_file: Some(recovery_file),
+        recovery: Some(recovery),
     })
-}
-
-/// Durably write `removed` to `recovery/<slug>-at-<offset>-<hash>.bytes` under `.prikk/`, and return
-/// that path (relative to `.prikk/`) -- mirrors `wal.rs`/`pointer_index.rs`'s own `save_removed_
-/// bytes` exactly, generic over the file's label instead of a fixed name.
-fn save_removed_bytes(
-    root: &MutationRoot,
-    label: &str,
-    offset: usize,
-    removed: &[u8],
-) -> Result<PathBuf> {
-    let digest = prikk_hash::to_hex(&prikk_hash::sha256(removed));
-    let short = digest.get(..16).unwrap_or(&digest);
-    let slug: String = label
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let directory = PathBuf::from("recovery");
-    let file = directory.join(format!("{slug}-at-{offset}-{short}.bytes"));
-    ensure_directory_required(root, &directory)?;
-    write_file_atomically(root, &file, removed)?;
-    Ok(file)
 }
 
 #[cfg(test)]

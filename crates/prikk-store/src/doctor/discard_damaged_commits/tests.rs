@@ -85,8 +85,10 @@ fn row4_discards_the_damaged_record_and_rebuilds_the_witness() {
     assert_eq!(plan.witnessed_seq, Some(1));
     assert!(plan.patch_id.is_some());
     assert!(plan.truncated_bytes > 0);
-    let recovery_file = plan.recovery_file.as_ref().expect("recovery file named");
-    let recovered = std::fs::read(layout.prikk_dir().join(recovery_file)).unwrap();
+    let recovery_id = &plan.recovery.as_ref().expect("recovery entry named").id;
+    let recovered = crate::recovery_log::removed_bytes(&layout, recovery_id)
+        .unwrap()
+        .expect("the recovery log holds the entry");
     assert_eq!(
         recovered,
         bytes[bytes.len() - plan.truncated_bytes..],
@@ -184,7 +186,7 @@ fn plan_only_matches_the_real_runs_own_plan_and_touches_nothing() {
             witnessed_seq: real.witnessed_seq,
             patch_id: real.patch_id,
             truncated_bytes: real.truncated_bytes,
-            recovery_file: real.recovery_file.clone(),
+            recovery: real.recovery.clone(),
             working_tree_may_still_hold_content: real.working_tree_may_still_hold_content,
         },
         "the plan-only computation must equal the real run's own"
@@ -210,7 +212,7 @@ fn row5_declares_the_loss_with_nothing_to_truncate() {
     assert_eq!(plan.witnessed_seq, Some(2));
     assert!(plan.patch_id.is_some());
     assert_eq!(plan.truncated_bytes, 0);
-    assert!(plan.recovery_file.is_none());
+    assert!(plan.recovery.is_none());
     match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
         WitnessState::Absent => {}
         other => panic!("expected the witness cleared over an empty WAL, got {other:?}"),
@@ -246,7 +248,7 @@ fn row7_discards_the_tail_with_no_sequence_named() {
     assert_eq!(plan.witnessed_seq, None);
     assert_eq!(plan.patch_id, None);
     assert_eq!(plan.truncated_bytes, 10);
-    assert!(plan.recovery_file.is_some());
+    assert!(plan.recovery.is_some());
     // The one real, sound record (seq 1) survives, and the rebuilt witness covers exactly it.
     match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
         WitnessState::Valid(record) => assert_eq!(record.last_seq, 1),
@@ -512,10 +514,21 @@ fn a_crash_saving_the_recovery_file_leaves_the_wal_and_witness_untouched() {
         .join("witness");
     let witness_before = std::fs::read(&witness_path).unwrap();
 
-    fail_after_for_test(TestFailPoint::MutableRename, 0);
+    // The save is the first entry of `recovery/log` (RFC 168 §3.1): the log is created exclusively, and the failure is
+    // injected at that create's file sync, after the bytes are written and before they are durable.
+    // Skip the active lock's own exclusive create (its sync is the first hit); the second hit is the log's first create.
+    fail_after_for_test(TestFailPoint::RequiredFileSync, 1);
     let crashed = discard_damaged_commits(&layout);
     clear_failpoint_for_test();
-    assert!(crashed.is_err(), "the injected failure must actually fire");
+    let message = crashed
+        .as_ref()
+        .err()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    assert!(
+        message.contains("recovery/log"),
+        "the injected failure must fire in the log's create, not elsewhere: {message}"
+    );
     assert_eq!(
         std::fs::read(&wal_path).unwrap(),
         wal_before,

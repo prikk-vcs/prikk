@@ -44,7 +44,7 @@ fn a_clean_repository_reports_every_file_untouched() {
             "{}: a clean repository has nothing to repair",
             file.label
         );
-        assert!(file.recovery_file.is_none(), "{}", file.label);
+        assert!(file.recovery.is_none(), "{}", file.label);
     }
     let _ = std::fs::remove_dir_all(layout.root());
 }
@@ -65,9 +65,10 @@ fn a_tail_on_trust_keys_is_repaired_and_recovered() {
         .find(|file| file.label == "trust keys")
         .expect("trust keys row");
     assert_eq!(row.truncated_bytes, 100);
-    let recovery_file = row.recovery_file.as_ref().expect("recovery file recorded");
-    let recovery_bytes =
-        std::fs::read(layout.prikk_dir().join(recovery_file)).expect("read recovery file");
+    let recovery_id = &row.recovery.as_ref().expect("recovery entry recorded").id;
+    let recovery_bytes = crate::recovery_log::removed_bytes(&layout, recovery_id)
+        .expect("read the recovery log")
+        .expect("the recovery log holds the entry");
     assert_eq!(
         recovery_bytes,
         vec![0_u8; 100],
@@ -226,9 +227,10 @@ fn a_tail_on_the_ref_log_is_repaired_and_recovered() {
         .find(|file| file.label == "ref log")
         .expect("ref log row");
     assert_eq!(row.truncated_bytes, 100);
-    let recovery_file = row.recovery_file.as_ref().expect("recovery file recorded");
-    let recovery_bytes =
-        std::fs::read(layout.prikk_dir().join(recovery_file)).expect("read recovery file");
+    let recovery_id = &row.recovery.as_ref().expect("recovery entry recorded").id;
+    let recovery_bytes = crate::recovery_log::removed_bytes(&layout, recovery_id)
+        .expect("read the recovery log")
+        .expect("the recovery log holds the entry");
     assert_eq!(
         recovery_bytes,
         vec![0_u8; 100],
@@ -415,4 +417,193 @@ fn repair_tails_races_an_ordinary_commit_under_the_shared_active_lock() {
     repair_tails(&layout).expect("repair_tails succeeds once the active lock is free");
 
     let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// **RFC 168 §7 rehearsal, the appended files:** for each of the eight Rule-A containers and the ref log, a torn tail is
+/// repaired, the saved entry is listed and restored, the file is byte-identical to its pre-repair state with the tail, and
+/// the restored tail is one `verify` reports again (the plan's promise, RFC 168 §3.2).
+#[test]
+fn every_appended_file_is_rehearsed_and_restored_byte_for_byte() {
+    let rows = appended_rows();
+    for (label, path_of) in rows {
+        let layout =
+            repo_with_published_main(&format!("rfc168-rehearsal-{}", label.replace(' ', "-")));
+        let path = path_of(&layout);
+        let before = std::fs::read(&path).unwrap_or_default();
+        let mut with_tail = before.clone();
+        with_tail.extend(vec![0_u8; 100]);
+        std::fs::write(&path, &with_tail).unwrap();
+
+        let report = repair_tails(&layout).expect("repair_tails");
+        let row = report
+            .files
+            .iter()
+            .find(|file| file.label == label)
+            .unwrap_or_else(|| panic!("{label}: a row"));
+        assert_eq!(row.truncated_bytes, 100, "{label}: the tail is repaired");
+        let id = row
+            .recovery
+            .as_ref()
+            .unwrap_or_else(|| panic!("{label}: an entry"))
+            .id
+            .clone();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "{label}: truncated to the sound prefix"
+        );
+
+        let plan = crate::recovery_log::restore(&layout, &id, false).expect("restore");
+        assert!(plan.written, "{label}: every condition holds: {plan:?}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            with_tail,
+            "{label}: byte-identical to before the repair"
+        );
+        // RFC 164 Rule B: verify reports an appended file's tail on its own row, not as an item failure.
+        let verdict = crate::verify_repository(&layout).expect("verify");
+        let tail = verdict
+            .appended_file_tails
+            .iter()
+            .find(|status| status.label == label)
+            .unwrap_or_else(|| panic!("{label}: verify has a row for the file"));
+        assert_eq!(
+            tail.trailing_partial_bytes, 100,
+            "{label}: verify reports the tail again"
+        );
+        let _ = std::fs::remove_dir_all(layout.root());
+    }
+}
+
+/// A path getter over a layout, as the rehearsals name the files they write.
+type PathOf = fn(&RepositoryLayout) -> std::path::PathBuf;
+
+/// The eight appended files, each with the path its tail is written to (the slot A where a file has slots, as the
+/// repository holds it before any generation record exists).
+fn appended_rows() -> [(&'static str, PathOf); 8] {
+    [
+        ("trust keys", |layout| layout.trust_key_container_path()),
+        ("trust policy", |layout| {
+            layout.trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A)
+        }),
+        ("author keys", |layout| layout.author_key_container_path()),
+        ("received index", |layout| {
+            layout.received_index_slot_path(crate::foundation::layout::ContainerSlot::A)
+        }),
+        ("pointer index generation log", |layout| {
+            layout.ref_pointer_index_generation_log_path()
+        }),
+        ("received index generation log", |layout| {
+            layout.received_index_generation_log_path()
+        }),
+        ("trust policy generation log", |layout| {
+            layout.trust_policy_generation_log_path()
+        }),
+        ("ref log", |layout| {
+            layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A)
+        }),
+    ]
+}
+
+/// **RFC 168 §7 control, per file: the source written since the repair.** A byte appended after the repair makes the
+/// length differ from the offset, so the restore is refused and the file is left as the write made it.
+#[test]
+fn every_appended_file_refuses_a_restore_once_written_since() {
+    for (label, path_of) in appended_rows() {
+        let layout =
+            repo_with_published_main(&format!("rfc168-written-since-{}", label.replace(' ', "-")));
+        let path = path_of(&layout);
+        let before = std::fs::read(&path).unwrap_or_default();
+        let mut with_tail = before.clone();
+        with_tail.extend(vec![0_u8; 100]);
+        std::fs::write(&path, &with_tail).unwrap();
+        let report = repair_tails(&layout).expect("repair_tails");
+        let id = report
+            .files
+            .iter()
+            .find(|file| file.label == label)
+            .and_then(|row| row.recovery.as_ref())
+            .unwrap_or_else(|| panic!("{label}: an entry"))
+            .id
+            .clone();
+        let mut written = std::fs::read(&path).unwrap();
+        written.push(0x01);
+        std::fs::write(&path, &written).unwrap();
+
+        let plan = crate::recovery_log::restore(&layout, &id, false).expect("plan");
+        assert!(
+            !plan.written,
+            "{label}: a file written since must refuse: {plan:?}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            written,
+            "{label}: left as the write made it"
+        );
+        let _ = std::fs::remove_dir_all(layout.root());
+    }
+}
+
+/// **RFC 168 §7 control, per file with a meaning row: the meaning file changed.** The ref log, the pointer index, the
+/// trust policy and the received index name a meaning file; a change to it refuses the restore even though the file itself
+/// is byte-identical to its repaired state.
+#[test]
+fn an_appended_file_refuses_a_restore_when_its_meaning_file_changed() {
+    let rows: [(&str, PathOf, PathOf); 3] = [
+        (
+            "trust policy",
+            |layout| {
+                layout.trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A)
+            },
+            |layout| layout.trust_policy_generation_log_path(),
+        ),
+        (
+            "received index",
+            |layout| layout.received_index_slot_path(crate::foundation::layout::ContainerSlot::A),
+            |layout| layout.received_index_generation_log_path(),
+        ),
+        (
+            "ref log",
+            |layout| {
+                layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A)
+            },
+            |layout| {
+                layout.ref_pointer_index_slot_path(crate::foundation::layout::ContainerSlot::A)
+            },
+        ),
+    ];
+    for (label, path_of, meaning_of) in rows {
+        let layout =
+            repo_with_published_main(&format!("rfc168-meaning-{}", label.replace(' ', "-")));
+        let path = path_of(&layout);
+        let before = std::fs::read(&path).unwrap_or_default();
+        let mut with_tail = before.clone();
+        with_tail.extend(vec![0_u8; 100]);
+        std::fs::write(&path, &with_tail).unwrap();
+        let report = repair_tails(&layout).expect("repair_tails");
+        let id = report
+            .files
+            .iter()
+            .find(|file| file.label == label)
+            .and_then(|row| row.recovery.as_ref())
+            .unwrap_or_else(|| panic!("{label}: an entry"))
+            .id
+            .clone();
+        let meaning = meaning_of(&layout);
+        let meaning_before = std::fs::read(&meaning).unwrap_or_default();
+        std::fs::write(&meaning, b"a meaning file that changed\n").unwrap();
+
+        let plan = crate::recovery_log::restore(&layout, &id, false).expect("plan");
+        assert!(
+            !plan.written,
+            "{label}: a changed meaning file must refuse: {plan:?}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "{label}: the file stays truncated"
+        );
+        std::fs::write(&meaning, meaning_before).unwrap();
+        let _ = std::fs::remove_dir_all(layout.root());
+    }
 }
