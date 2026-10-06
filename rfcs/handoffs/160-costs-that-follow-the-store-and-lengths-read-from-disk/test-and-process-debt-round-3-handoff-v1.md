@@ -79,3 +79,5 @@ with a `"/tests/"` text match, which never matches a Windows path. **This is a f
 | A1 | items 1–4 | 45 min |
 
 **Report:** `.git-exclude/review-request/step5-round-3-report-v2.md`, with `scripts/gates.py`'s summary.
+
+**Round 3 ACCEPTED and CLOSED 2026-10-06** (reviews `step5-round-3-review-v1`, `-v2`, `-v3`). Commits `31bf7d96` … `aa7851a5`, then Addendum 1 `35a03e9c`. CI `37450069646` green on every job. **0.49.0 step 5 is closed.**
