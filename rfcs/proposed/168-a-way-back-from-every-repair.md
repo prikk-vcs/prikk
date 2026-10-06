@@ -1,6 +1,7 @@
 # RFC 168 — A way back from every repair: one durable recovery log, a restore, and no rename on the durable path (D6, D5)
 
-**Status.** **PROPOSED 2026-10-06 by the architect; rewritten as a design 2026-10-06, for the owner's reading.**
+**Status.** **PROPOSED 2026-10-06 by the architect; rewritten as a design 2026-10-06; revised the same day after the
+architect's review against the owner's philosophy (§8). For the owner's reading.**
 - **Source:** 0.49.0 step 6, in the owner-approved schedule (*"D6, D5, D7"*), from external review 014. D7, the release
   key, is RFC 169.
 - **The design round is closed:**
@@ -79,28 +80,47 @@ and examines the 0.49.0 candidate (K6).
   - the removed bytes.
 - **The save comes first:** the entry is appended and flushed, then the source is truncated. If the append fails, the
   repair refuses, as today.
+- **Repairs stop writing `.bytes` files.** The log is the one place a repair saves to, so there is one place to look.
 - **Nothing ever truncates the log.** An entry is appended at its end, even after a torn or damaged region. The reader
   resynchronises past damage under RFC 167's budget and counts the damaged regions.
 - **The log is never authority.** No classification reads it.
-- **`verify` reports damage in the log as damage, naming the log, and never blocks a writer on it** (R8).
-- **No compaction.** The log is the only copy of what a repair removed. The design round measured 222 bytes of overhead
-  per entry.
+- **`verify` reports damage in the log on its own line, and it is not repository damage** (R8, revised by the §8
+  review).
+  - **The line:** *"recovery log: 1 damaged region; a save there cannot be restored (`prikk doctor --recovery-list`)"*.
+  - **`verify`'s exit status is unchanged by it.** The log is not history. A torn tail (a repair interrupted mid-save,
+    which then truncated nothing) is harmless.
+  - **Otherwise** `verify` would fail forever on a file that no command repairs.
+- **No compaction, and the user decides what is kept:**
+  - **`prikk doctor --recovery-clear [--plan-only]`** lists what it will remove, then empties the log in place;
+  - **the name is kept,** so later saves stay durable on Windows;
+  - removed bytes can include file contents a user wants gone, so there must be a way to remove them;
+  - **old `.bytes` files are not touched:** the listing says they can be deleted by hand.
+  - The design round measured 222 bytes of overhead per entry.
 - **Creating the log** (R3):
   - **`init` creates it** (the `init` exemption: an interrupted `init` loses nothing).
-  - **In an existing repository, the first repair creates it.** On Linux and macOS that creation is durable (the
-    directory is synced).
-  - **On Windows it is not,** and the repair says so in one sentence: *"This repository's recovery log was just created;
-    on Windows, its first save is not guaranteed to survive a power loss."*
+  - **In an existing repository, the first 0.49.0 command that writes to it creates the log,** not the first repair.
+    - So a repair almost never creates it. Repairs mostly follow a crash, and a crash means a later boot.
+    - On Linux and macOS the creation is durable (the directory is synced).
+  - **On Windows, a repair in the same boot as the log's creation** carries the new-name residual (§6, item 2b).
+    - It is disclosed in `platform-support.md`, **not printed by the repair.**
+    - *Revised by the §8 review:* a warning the user can do nothing about is noise.
   - Every later repair appends to an existing name, which is durable.
 
 ### 3.2 A way back (R2, R6, R7)
 
 - **`prikk doctor --recovery-list`:**
   - prints each entry: its id (the first 16 hex characters of its frame checksum), the source, offset, length, repair
-    and version, and **whether it can be restored now, with the reason if not**;
-  - lists the old `.bytes` files separately, as *"older format, read by hand"*.
+    and version;
+  - **it does not judge whether an entry can be restored.** That needs a whole-file hash of the source, which would make
+    a listing slow. The restore's `--plan-only` checks it, and the listing says so in its last line;
+  - lists the old `.bytes` files separately, as *"older format: list only; read or delete by hand"*.
 - **`prikk doctor --recovery-restore <id> [--plan-only]`** prints its plan first: each condition with its result, then
-  what it will write, then what `verify` will report.
+  what it will write, then what follows.
+  - **What follows, stated in the plan:** *"After this, the file holds what it held before the repair, damage included.
+    `verify` will report that damage again, and commands that refused before the repair will refuse again."*
+  - **Who it is for:** someone who believes a repair removed something it should not have, or who wants a newer prikk to
+    judge the same bytes.
+  - **The id is the full 16-character id.** No prefixes, so no ambiguity.
   - **It writes only when all of these hold:**
     1. the source's length equals the entry's offset;
     2. the source's bytes `[0, offset)` hash to the recorded prefix hash;
@@ -130,12 +150,21 @@ every platform,** so that the Linux failpoint suites exercise the same torn-writ
 
 | site | how it is written | what a torn write means |
 |---|---|---|
-| the current-branch pointer | truncate, then append (RFC 166 D1's writer), inside the switch marker | an empty or unresolvable pointer with the marker set: today's refusal, and running the switch again completes it |
+| the current-branch pointer | truncate, then append (RFC 166 D1's writer), inside the switch marker | a pointer without its trailing newline, which `refs.rs:1094-1096` already rejects. With the marker set, the refusal names the switch's target (below), and running that switch completes it |
 | `FORMAT` | `6\n` → `7\n`, one byte overwritten, then flushed | none: a one-byte write does not tear. A later format-7 write can no longer outlive its marker |
 | the witness | overwritten from offset 0, then its length set, then flushed; **never truncated first** | its checksum fails: a damaged witness over a sound WAL, RFC 166 row 8, rebuilt. It never reads as the empty "cleared" state |
 | `ref-name`'s restore | D1's truncate-then-append writer | as D1 |
 | the recovery saves | the log's append (§3.1) | a torn tail of the log, which the reader resynchronises past |
 
+- **The marker names what it covers.**
+  - **Today** the worktree marker holds only a sentinel (`worktree_marker.rs:44`), so a refusal over an unreadable
+    pointer can say only "switch to the current branch". The user cannot know which branch that is.
+  - **Under this RFC,** the switch appends one more line after the sentinel, `target heads/<name>`, and a checkout
+    appends its ref.
+  - **Then a refusal says exactly what to type:** *"a branch switch to heads/other was interrupted; run `prikk branch
+    switch heads/other` to finish it."*
+  - **Older binaries are unaffected:** they treat any non-empty marker as set (`worktree_marker.rs:78-81`).
+  - **A target line without its newline is ignored,** and the refusal falls back to today's text.
 - **`init` also creates the default session's empty witness.** In a new repository, every witness write is then to an
   existing name.
 - **The four caches keep `atomic_replace`.** A lost write there loses a cache, which is rebuilt.
@@ -154,8 +183,14 @@ every platform,** so that the Linux failpoint suites exercise the same torn-writ
   - *on Windows, a power loss shortly after a completed `branch switch` or `checkout` can bring back old contents of
     rewritten files, bring back deleted files, or lose created files;*
   - *nothing in the repository is damaged;*
-  - *if `status` shows changes you did not make right after a switch, run `prikk checkout --patch-materialize --ref
-    <current branch>` before committing.*
+  - *if `status` shows changes you did not make right after a switch, write the branch's files again before
+    committing* — **with the exact command named.**
+  - **That command must work in exactly this state:** the marker is clear, and the files differ from the branch.
+    - Today's checkout refuses to overwrite a file whose bytes differ (`worktree.rs:55`). So the route cannot simply be
+      today's `checkout`.
+    - **The implementation round runs the route before the docs quote it** (the stikk 012 lesson).
+    - **If no command can write a branch's files over files that differ, stop and ask.** A route that refuses is worse
+      than no route.
 - **`platform-support.md` is corrected** for `atomic_replace` (which no longer writes only caches) and for
   `durable_directory_entry` (§1 item 3).
 
@@ -184,7 +219,8 @@ every platform,** so that the Linux failpoint suites exercise the same torn-writ
 2. **Accept three disclosed Windows residuals,** all of the new-name or rename class that RFC 101 found no Windows
    primitive for:
    - **(a)** worktree files after a completed switch or checkout (§3.4);
-   - **(b)** the first repair's save, in a repository created before 0.49.0 (§3.1);
+   - **(b)** a repair's save in the same Windows boot as the log's creation, in a repository created before 0.49.0
+     (§3.1). The log is created early, by the first write command, so this is rare;
    - **(c)** the witness's first creation, in a repository created before 0.49.0. A lost creation falls back to the
      older classification (RFC 166 rule 3), the one a session written by an older binary gets today.
 
@@ -199,9 +235,40 @@ every platform,** so that the Linux failpoint suites exercise the same torn-writ
 - **Failpoints and lost-rename runs:**
   - a torn-write failpoint at each §3.3 site;
   - the witness's first creation, and `ref-name`'s restore, each run as a lost rename.
-- **Commands:** the commands (§3.2) and `verify`'s view of the log (§3.1), with text tests.
+- **Commands:** `--recovery-list`, `--recovery-restore`, `--recovery-clear` and `verify`'s log line (§3.1–3.2), each
+  with a text test. Also:
+  - the marker's target line (§3.3): a torn pointer under a set marker, and the refusal's exact command, then that
+    command run;
+  - the §3.4 route, run in its state before any doc quotes it.
 - **Timing:** a release build on `/home`, inside the R1 scope, the repair's cost against `main` at two file sizes.
 - **Docs:**
   - `repository-layout.md`, `durability-recovery.md` and `troubleshooting.md` (no longer *"nothing reads it back"*);
   - `platform-support.md` (§3.4).
 - **Each unit's start and end, as the clock shows them.**
+
+## 8. The owner-philosophy review (2026-10-06)
+
+The owner asked the architect to review this RFC against *"finally clean, safe and secure, and robust and sophisticated
+design"* and *"users must not be confused or misunderstand"*.
+
+### What it changed
+
+| finding | before | after |
+|---|---|---|
+| **Two places to look for saved bytes** | the log, and `.bytes` files still written | repairs write only the log; old files are listed as older |
+| **`verify` failing forever** | log damage counted as repository damage, and no command repairs the log | its own line, exit status unchanged |
+| **No way to remove saved content** | no compaction and no delete; removed bytes may hold content the user wants gone | `--recovery-clear`, which keeps the name so later saves stay durable |
+| **A warning nobody can act on** | the first Windows repair printed a durability sentence | the log is created early, by the first write command; the residual is documented, not printed |
+| **A slow listing** | `--recovery-list` judged every entry's restorability, which means a whole-file hash each | the listing lists; `--plan-only` judges |
+| **A restore whose result surprises** | nothing said what happens after | the plan says verify and refusals return, and says who the command is for |
+| **A refusal naming nothing to type** | an unreadable pointer said "switch to the current branch" | the marker names the target; the refusal names the exact command |
+| **A documented route that may refuse** | the worktree disclosure quoted `checkout`, which refuses over differing bytes | the route must be run first; if none exists, stop and ask |
+
+### Risk per dimension, after the changes
+
+| dimension | risk | why |
+|---|---|---|
+| security | Low | a restore writes one named file and offset under three conditions and the repair's locks; the log's content can be cleared by the user |
+| robustness | Low (Linux, macOS); Medium (Windows) | repository state is now durable on Windows; worktree files and two first-creation cases stay residual, of the class no Windows primitive closes |
+| performance | Low | one append per repair, measured at 222 bytes of overhead; a restore hashes its source once; a listing reads only the log |
+| user confusion | Low | one place, one listing, a plan that says what follows, refusals that name the command; the Windows residual is in docs, with a route that must be tested |
