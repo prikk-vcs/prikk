@@ -103,3 +103,5 @@ Add to items 1 and 2:
 **2026-10-07: the owner approved C1** (RFC 169 §8). Item 3 is pushed with this record. **Item 3 is closed.**
 
 **2026-10-07: RFC 169 parked by the owner** (acceptance withdrawn; back in `proposed/`). Item 3's factual docs stay; the lost/compromised paragraph in `SECURITY.md` is removed in the 0.49.0 release prep. Nothing else here is live.
+
+**2026-10-07: moved here from `rfcs/handoffs/169-…/`.** The owner parked RFC 169 (it is back in `proposed/`), and a proposed RFC carries no handoff directory (RFC 120 §9.4a). This file records release-verification docs work that shipped in `d9a60467`, so it lives with the release policy's handoffs. Nothing in it is live.
