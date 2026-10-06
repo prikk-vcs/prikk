@@ -304,3 +304,33 @@ fn real_changelog_produces_notes_for_the_stage_2_matrix() {
     );
     assert!(notes.contains("macOS binaries are unsigned"), "{notes}");
 }
+
+/// RFC 169 §5 item 3: every release's notes end with the fingerprint line, naming the fingerprint and `git tag -v <tag>`.
+#[test]
+fn the_notes_end_with_the_fingerprint_line_for_the_tag() {
+    let temporary = tempfile::tempdir().unwrap();
+    std::fs::write(temporary.path().join("CHANGELOG.md"), SAMPLE_CHANGELOG).unwrap();
+    let dist = temporary.path().join("dist");
+    std::fs::create_dir_all(&dist).unwrap();
+    write_target(&dist, "x86_64-unknown-linux-gnu");
+    let notes = assemble(temporary.path(), "0.22.0", &dist).unwrap();
+    let last = notes.trim_end().lines().last().unwrap();
+    assert_eq!(last, super::fingerprint_line("0.22.0"));
+    assert!(last.contains(super::RELEASE_KEY_FINGERPRINT), "{last}");
+    assert!(last.contains("`git tag -v 0.22.0`"), "{last}");
+}
+
+/// RFC 169 §5 item 3 and Addendum 1: the fingerprint constant, `SECURITY.md` and `install.md` agree, or this test fails.
+/// Control: change one hex digit of the constant and this goes red.
+#[test]
+fn the_fingerprint_agrees_with_the_docs() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for file in ["SECURITY.md", "docs/src/guide/install.md"] {
+        let text = std::fs::read_to_string(repo.join(file)).unwrap();
+        assert!(
+            text.contains(super::RELEASE_KEY_FINGERPRINT),
+            "{file} must state the release key fingerprint {}",
+            super::RELEASE_KEY_FINGERPRINT
+        );
+    }
+}

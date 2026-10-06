@@ -102,8 +102,32 @@ This should print `True`. **Unverified on a Windows machine** — this command w
 the release build produces the checksum file (a lowercase hex digest, matching `sha256sum`'s own
 format), not confirmed by running it.
 
-A passing checksum proves the download matches what was published; it does not prove *who*
-published it — see [Release, Versioning, and Compatibility](../reference/release-compatibility.md#core-caveats).
+A passing checksum means the download was not damaged in transit. It does not show that the file is genuine:
+whoever can replace an asset can replace its checksum too. To check that a release came from the project's key, see
+[Verify the tag](#verify-the-tag) below. The wider caveats are in [Release, Versioning, and
+Compatibility](../reference/release-compatibility.md#core-caveats).
+
+## Verify the tag
+
+Release tags are signed with the project's one maintainer key. Its fingerprint is:
+
+    25757DA6CBF7022C4E14CCAC1B3066B87DB99A34
+
+Fetch the key, then check the tag of the version you installed:
+
+```sh
+curl -fsSL https://github.com/nabbisen.gpg | gpg --import
+git verify-tag --raw 0.48.0
+```
+
+Look for the `VALIDSIG` line. Its **last field** must equal the fingerprint above; that is the check, and it holds
+whether the primary key or a signing subkey made the signature. The warning *"This key is not certified with a trusted
+signature"* is expected unless you have certified the key yourself (`gpg --lsign-key`). What matters is the fingerprint
+match.
+
+What the tag covers: **the source at the tagged commit.** The release binaries are built from that tag by the release
+workflow and are **not signed**, so the tag does not cover them. A checksum (above) detects a damaged download, not a
+substituted one. If the release key is ever lost or compromised, see [Verifying a release in SECURITY.md](https://github.com/prikk-vcs/prikk/blob/main/SECURITY.md).
 
 ## Build from source
 

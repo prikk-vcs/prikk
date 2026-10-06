@@ -42,12 +42,24 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 
+/// RFC 169 §3.1: the release key's fingerprint. One constant in this tool. A test pins it against `SECURITY.md` and
+/// `docs/src/guide/install.md`, so a second typed copy cannot drift without the test failing.
+pub(crate) const RELEASE_KEY_FINGERPRINT: &str = "25757DA6CBF7022C4E14CCAC1B3066B87DB99A34";
+
+/// The one line every release's notes end with (RFC 169 §5 item 3): the fingerprint, and the command that checks the tag.
+pub(crate) fn fingerprint_line(tag: &str) -> String {
+    format!(
+        "Release key {RELEASE_KEY_FINGERPRINT}: check this tag with `git tag -v {tag}` (or `git verify-tag --raw {tag}`)."
+    )
+}
+
+/// RFC 169 §3.1 and Addendum 1: says only what the mechanism gives. The tag covers the source; the binaries are built from
+/// it and are not signed; a checksum detects a damaged download, not a substituted one.
 const RELEASE_AUTHORITY: &str = "## Release authority — read before relying on this release\n\
 \n\
-This release's tag is signed by the project's one maintainer key and was verified before it was\n\
-pushed. The checksum and build-info published beside each asset on this page prove integrity of\n\
-transport — the file you download is the one this page published — not who published it; the\n\
-signed tag does that. There is no second signer, no\n\
+This release's tag is signed by the project's one maintainer key. The tag covers the source at the tagged commit. The\n\
+binaries are built from that tag by the release workflow and are not signed. The checksum beside each asset detects a\n\
+damaged download, not a substituted one. There is no second signer, no\n\
 support window and no stability promise before 1.0. Verify what you obtain by content — see\n\
 `prikk verify` and this project's\n\
 [release-compatibility reference](https://prikk.org/docs/reference/release-compatibility.html).";
@@ -63,7 +75,10 @@ pub(crate) fn assemble(root: &Path, tag: &str, dist_dir: &Path) -> Result<String
         ))
     })?;
     let platforms = platform_paragraph(dist_dir)?;
-    Ok(format!("{section}\n\n{platforms}\n\n{RELEASE_AUTHORITY}\n"))
+    Ok(format!(
+        "{section}\n\n{platforms}\n\n{RELEASE_AUTHORITY}\n\n{}\n",
+        fingerprint_line(tag)
+    ))
 }
 
 /// The version token is bounded on both sides -- `"## "` prefix, `" — "` suffix -- so a tag can

@@ -30,10 +30,40 @@ stating a timeline nobody has agreed to meet would be worse than stating none.
 
 ## Verifying a release
 
-Every release tag is signed by the project's one maintainer key and verified before it is pushed. The
-checksum beside each downloaded asset proves the file matches what the release page published, and its
-build-info names the commit and tag it was built from; neither proves *who* published it — the signed
-tag does. There is
+Release tags are signed with the project's one maintainer key. Its fingerprint is:
+
+    25757DA6CBF7022C4E14CCAC1B3066B87DB99A34
+
+Fetch the key, then check a tag:
+
+    curl -fsSL https://github.com/nabbisen.gpg | gpg --import
+    git verify-tag --raw 0.48.0
+
+`git verify-tag --raw <version>` prints a `VALIDSIG` line. Its **last field** must equal the fingerprint above. That is
+the check; it holds whether the primary key or a signing subkey made the signature, and `git tag -v <version>` shows a
+subkey's own id once one signs, so compare the `VALIDSIG` line rather than that output. The warning *"This key is not
+certified with a trusted signature"* is expected unless you have certified the key yourself (`gpg --lsign-key`). What
+matters is the fingerprint match.
+
+**What each thing covers:**
+
+- **The tag signature** covers the source at the tagged commit.
+- **The release binaries** are built from that tag by the release workflow. They are not signed, so the tag does not
+  cover them.
+- **The `.sha256` beside each asset** is made in the same job as the asset. It detects a damaged download, not a
+  substituted one: whoever can replace an asset can replace its checksum too.
+
+**If the release key is lost or compromised:**
+
+- **A key that may be in someone else's hands** is revoked. After that, `git verify-tag` fails on the old tags it
+  signed. The announcement comes as a GitHub Security Advisory, which lists each confirmed release by its commit id, so
+  you can check a checkout by commit id. A new key is introduced by a `SECURITY.md` commit naming its fingerprint and by
+  an advisory.
+- **A key that is simply gone** is retired without revocation, so old tags keep verifying. A new key is introduced the
+  same way.
+- **Tags are never moved or re-signed.**
+
+There is
 **no second signer**, **no support window** (only the latest release gets fixes) and **no stability
 promise** for the object format, the CLI's JSON schemas or the library API before 1.0. The
 release-signer allowlist (`release-signers.toml`) is empty because no multi-signer policy exists yet.
