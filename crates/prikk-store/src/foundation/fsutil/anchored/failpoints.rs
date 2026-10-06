@@ -48,6 +48,8 @@ pub(crate) enum Point {
     AppendWrite,
     /// The a truncation.
     Truncate,
+    /// An in-place overwrite of an existing file's bytes (RFC 168 §3.3), before any byte of it is written.
+    InPlaceWrite,
     /// The an unlink.
     Unlink,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -158,6 +160,10 @@ pub(super) fn truncate() -> Result<()> {
     check_test_point(TestPoint::Truncate)
 }
 
+pub(super) fn in_place_write() -> Result<()> {
+    check_test_point(TestPoint::InPlaceWrite)
+}
+
 pub(super) fn unlink() -> Result<()> {
     check_test_point(TestPoint::Unlink)
 }
@@ -195,6 +201,8 @@ enum TestPoint {
     AppendWrite,
     /// The a truncation.
     Truncate,
+    /// An in-place overwrite of an existing file's bytes (RFC 168 §3.3), before any byte of it is written.
+    InPlaceWrite,
     /// The an unlink.
     Unlink,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -233,6 +241,7 @@ impl From<TestPoint> for Point {
             TestPoint::RequiredOpen => Self::RequiredOpen,
             TestPoint::AppendWrite => Self::AppendWrite,
             TestPoint::Truncate => Self::Truncate,
+            TestPoint::InPlaceWrite => Self::InPlaceWrite,
             TestPoint::Unlink => Self::Unlink,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             TestPoint::CleanupDirectorySync => Self::CleanupDirectorySync,

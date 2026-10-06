@@ -16,7 +16,7 @@ use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
 
-use crate::foundation::fsutil::write_file_atomically;
+use crate::foundation::fsutil::overwrite_in_place_required;
 use crate::foundation::layout::{
     CURRENT_FORMAT_VERSION, DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout,
 };
@@ -78,10 +78,13 @@ pub fn upgrade_repository_format(
         change();
     }
 
-    write_file_atomically(
+    // RFC 168 §3.3: the marker is a one-byte overwrite of its own `6\n`, flushed. A one-byte write does not tear, and a
+    // later format-7 write cannot outlive a marker that reverts, because the marker is never renamed.
+    overwrite_in_place_required(
         current.repository_mutation_root(),
         Path::new("FORMAT"),
-        CURRENT_FORMAT_VERSION,
+        0,
+        CURRENT_FORMAT_VERSION.get(..1).unwrap_or_default(),
     )?;
     let upgraded = RepositoryLayout::open(layout.root().to_path_buf())?;
     if upgraded.format() != RepositoryFormat::V7 {

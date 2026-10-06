@@ -20,7 +20,10 @@ use prikk_object::{ObjectEnvelope, ObjectId};
 
 use crate::foundation::byte_cursor::ByteCursor;
 use crate::foundation::file_codec::{push_u16, push_u64};
-use crate::foundation::fsutil::{read_file_if_exists, write_file_atomically};
+use crate::foundation::fsutil::{
+    MutationRoot, create_new_file_required, overwrite_in_place_required, read_file_if_exists,
+    read_file_range_if_exists, truncate_existing_file_required,
+};
 use crate::foundation::layout::RepositoryLayout;
 use crate::refs::RefStore;
 use crate::wal::{Wal, record_frame_checksum};
@@ -196,11 +199,27 @@ fn witness_checksum(
     sha256(&preimage)
 }
 
+/// RFC 168 §3.3: the witness is written in place. The new bytes overwrite the old ones from offset 0, the length is then set to
+/// theirs, and both are flushed. It is **never truncated first**: a torn write leaves a damaged witness over a sound WAL (RFC 166
+/// row 8, rebuilt), never the empty "cleared" state, which would read as no witness at all. An absent witness (a repository
+/// created before 0.49.0) is created exclusively: the one new-name case (RFC 168 §6, residual (c)).
+fn write_witness_in_place(
+    root: &MutationRoot,
+    relative: &std::path::Path,
+    bytes: &[u8],
+) -> Result<()> {
+    if read_file_range_if_exists(root, relative, 0, 0)?.is_none() {
+        return Ok(create_new_file_required(root, relative, bytes)?);
+    }
+    overwrite_in_place_required(root, relative, 0, bytes)?;
+    truncate_existing_file_required(root, relative, bytes.len() as u64)
+}
+
 /// Clear the witness (the drain's own second step, after the WAL truncate and before `ref-name`'s
 /// own clear -- §4 D2, today's order, the safe one).
 pub fn clear_witness(layout: &RepositoryLayout, name: impl AsRef<std::path::Path>) -> Result<()> {
     let relative = layout.repository_relative(&witness_path(layout, &name))?;
-    write_file_atomically(layout.repository_mutation_root(), &relative, &[])
+    write_witness_in_place(layout.repository_mutation_root(), &relative, &[])
 }
 
 /// RFC 166 §13 item 2: fold every sound record the current witness does not yet cover, not only
@@ -265,7 +284,7 @@ pub fn append_patch_and_witness(
     };
     let bytes = encode_witness(&record);
     let relative = layout.repository_relative(&witness_path(layout, name))?;
-    write_file_atomically(layout.repository_mutation_root(), &relative, &bytes)?;
+    write_witness_in_place(layout.repository_mutation_root(), &relative, &bytes)?;
     Ok(seq)
 }
 
@@ -314,7 +333,7 @@ pub(crate) fn rebuild_witness_over_sound_wal(
     };
     let bytes = encode_witness(&record);
     let relative = layout.repository_relative(&witness_path(layout, name))?;
-    write_file_atomically(layout.repository_mutation_root(), &relative, &bytes)
+    write_witness_in_place(layout.repository_mutation_root(), &relative, &bytes)
 }
 
 /// Decode a witness record from raw bytes, for a test that needs to forge one (the classification

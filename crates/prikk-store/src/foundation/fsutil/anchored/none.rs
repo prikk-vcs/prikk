@@ -40,6 +40,17 @@ impl DurabilityContract for NoDurability {
         unsupported_mutation()
     }
 
+    fn durable_overwrite(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let _ = (root, relative, offset, bytes);
+        unsupported_mutation()
+    }
+
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()> {
         let _ = (root, relative, len);
         unsupported_mutation()

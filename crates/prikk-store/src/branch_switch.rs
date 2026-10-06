@@ -44,8 +44,8 @@ use prikk_object::{NodeKind, ObjectId, ObjectType, RefStatePayload};
 use crate::blob_access::ensure_blob_matches_node_kind;
 use crate::foundation::fsutil::{
     EntryKind, ensure_directory_required, inspect_entry, read_file_required,
-    remove_worktree_file_required, set_regular_file_mode_required, stat_file_state_if_exists,
-    write_file_atomically, write_worktree_file_atomically,
+    remove_worktree_file_required, rewrite_in_place_or_create_required,
+    set_regular_file_mode_required, stat_file_state_if_exists, write_worktree_file_atomically,
 };
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
@@ -56,7 +56,9 @@ use crate::patch_replay::{
 };
 use crate::refs::{RefStore, validate_local_branch_ref};
 use crate::wal::Wal;
-use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty, worktree_is_dirty};
+use crate::worktree_marker::{
+    MarkedTarget, clear_worktree_dirty, mark_worktree_dirty, worktree_is_dirty,
+};
 use crate::worktree_status::{WorktreeChangeKind, worktree_status};
 use crate::{ActiveRefOwnership, active_ref_ownership};
 
@@ -207,7 +209,7 @@ pub fn switch_branch(
     // The transition: writes, then deletions, then the pointer, and only then the marker -- so an
     // interruption anywhere, the pointer write included, leaves a switch that running it again
     // completes (module doc).
-    mark_worktree_dirty(layout)?;
+    mark_worktree_dirty(layout, &MarkedTarget::Switch(target.to_string()))?;
     for entry in &writes {
         let relative = Path::new(entry.path.as_str());
         let parent = relative.parent().unwrap_or_else(|| Path::new(""));
@@ -340,11 +342,11 @@ fn matches_blob(bytes: &[u8], blob: ObjectId, kind: NodeKind) -> bool {
     ensure_blob_matches_node_kind(bytes, blob, kind).is_ok()
 }
 
-/// The one writer of the pointer besides `init`: `heads/<name>\n`, atomically, after every worktree
-/// write has completed.
+/// The one writer of the pointer besides `init`: `heads/<name>\n`, in place (RFC 168 §3.3: truncate, then append), after every
+/// worktree write has completed. The switch marker covers the write: a torn pointer is refused, and the refusal names the switch.
 fn write_current_branch(layout: &RepositoryLayout, branch: &str) -> Result<()> {
     let relative = layout.repository_relative(&layout.current_branch_path())?;
-    write_file_atomically(
+    rewrite_in_place_or_create_required(
         layout.repository_mutation_root(),
         &relative,
         format!("{branch}\n").as_bytes(),

@@ -43,11 +43,120 @@ use crate::lock::ActiveLock;
 /// bytes" is meaningful -- but a recognizable magic makes the file self-explanatory to inspection.
 const DIRTY_SENTINEL: &[u8] = b"PRIKK-WORKTREE-DIRTY\n";
 
-/// Mark the worktree dirty. Must be called before the first worktree write of a materialization
-/// call, and its success must be confirmed before that write begins.
-pub(crate) fn mark_worktree_dirty(layout: &RepositoryLayout) -> Result<()> {
+/// Which operation a set marker records, and its ref (RFC 168 §3.3: the marker names what it covers, so a refusal can name the
+/// exact command that finishes it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MarkedTarget {
+    /// `branch switch` to `ref_name`.
+    Switch(String),
+    /// `checkout` (`--patch-materialize` or a snapshot checkout) of `ref_name`.
+    Checkout(String),
+}
+
+impl MarkedTarget {
+    /// The exact command that finishes the interrupted operation.
+    fn command(&self) -> String {
+        match self {
+            Self::Switch(ref_name) => format!("prikk branch switch {ref_name}"),
+            Self::Checkout(ref_name) => {
+                format!("prikk checkout --patch-materialize --ref {ref_name}")
+            }
+        }
+    }
+
+    /// What was interrupted, in words.
+    fn describe(&self) -> String {
+        match self {
+            Self::Switch(ref_name) => format!("a branch switch to {ref_name} was interrupted"),
+            Self::Checkout(ref_name) => format!("a checkout of {ref_name} was interrupted"),
+        }
+    }
+}
+
+/// The marker's target line: `target switch <ref>\n` or `target checkout <ref>\n`, after the sentinel (RFC 168 §3.3). A line
+/// without its newline is ignored, so a torn append of it leaves the refusal's fallback text.
+const TARGET_PREFIX: &str = "target ";
+
+/// Mark the worktree dirty, naming what the marker covers. Must be called before the first worktree write of a materialization
+/// call, and its success must be confirmed before that write begins. The sentinel and the target line go in one append.
+pub(crate) fn mark_worktree_dirty(layout: &RepositoryLayout, target: &MarkedTarget) -> Result<()> {
     let relative = layout.repository_relative(&layout.worktree_unclean_shutdown_marker_path())?;
-    append_file_required(layout.repository_mutation_root(), &relative, DIRTY_SENTINEL)
+    let (verb, ref_name) = match target {
+        MarkedTarget::Switch(ref_name) => ("switch", ref_name),
+        MarkedTarget::Checkout(ref_name) => ("checkout", ref_name),
+    };
+    let mut record = DIRTY_SENTINEL.to_vec();
+    record.extend_from_slice(format!("{TARGET_PREFIX}{verb} {ref_name}\n").as_bytes());
+    append_file_required(layout.repository_mutation_root(), &relative, &record)
+}
+
+/// The target the marker names, from its last complete target line. `None` when the marker is clear, has no target line, or
+/// its only target line is torn.
+pub(crate) fn interrupted_target(layout: &RepositoryLayout) -> Result<Option<MarkedTarget>> {
+    let relative = layout.repository_relative(&layout.worktree_unclean_shutdown_marker_path())?;
+    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
+        return Ok(None);
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut target = None;
+    for line in text.split_inclusive('\n') {
+        let Some(body) = line.strip_suffix('\n') else {
+            continue;
+        };
+        let Some(rest) = body.strip_prefix(TARGET_PREFIX) else {
+            continue;
+        };
+        if let Some((verb, ref_name)) = rest.split_once(' ') {
+            target = match verb {
+                "switch" => Some(MarkedTarget::Switch(ref_name.to_string())),
+                "checkout" => Some(MarkedTarget::Checkout(ref_name.to_string())),
+                _ => target,
+            };
+        }
+    }
+    Ok(target)
+}
+
+/// The route a refusal over a set marker names (RFC 168 §3.3): the exact command when the marker names its target, otherwise
+/// the general route the marker has always named.
+pub(crate) fn dirty_marker_route(layout: &RepositoryLayout) -> Result<String> {
+    Ok(match interrupted_target(layout)? {
+        Some(target) => format!(
+            "run `{}` to finish it ({})",
+            target.command(),
+            target.describe()
+        ),
+        None => DIRTY_MARKER_ROUTE.to_string(),
+    })
+}
+
+/// The refusal text for a malformed current-branch pointer (`display` is the pointer's path, as a user edits it). Under a set
+/// switch marker that names its target, RFC 168 §3.3 names the exact command that finishes the switch; otherwise the general
+/// wording. A marker that cannot be read leaves the general wording: the pointer is malformed either way, and the marker's own
+/// read error surfaces wherever the marker is read.
+pub(crate) fn malformed_pointer_message(
+    layout: &RepositoryLayout,
+    display: &str,
+    detail: &str,
+) -> String {
+    let fix = match interrupted_sentence(layout) {
+        Ok(Some(sentence)) => sentence,
+        _ => "it must hold one local branch ref name followed by a newline, such as heads/main"
+            .to_string(),
+    };
+    format!("{display} is malformed ({detail}); {fix}")
+}
+
+/// The sentence a torn pointer names under a set marker that has a target: "a branch switch to heads/other was interrupted; run
+/// `prikk branch switch heads/other` to finish it.", or `None` when the marker names no target.
+pub(crate) fn interrupted_sentence(layout: &RepositoryLayout) -> Result<Option<String>> {
+    Ok(interrupted_target(layout)?.map(|target| {
+        format!(
+            "{}; run `{}` to finish it.",
+            target.describe(),
+            target.command()
+        )
+    }))
 }
 
 /// Clear the worktree-dirty marker. Must be called only after every worktree write of the

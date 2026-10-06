@@ -37,7 +37,7 @@ use prikk_object::{BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStateP
 use crate::commit_boundary::active::read_active_ref_metadata;
 use crate::commit_boundary::classification::{Verdict, classify};
 use crate::commit_boundary::witness::{WitnessState, read_witness};
-use crate::foundation::fsutil::write_file_atomically;
+use crate::foundation::fsutil::rewrite_in_place_or_create_required;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::object_store::{FileObjectStore, ObjectReader};
@@ -210,7 +210,7 @@ fn run(
         Mode::PlanOnly => Ok(plan),
         Mode::Execute => {
             let relative = layout.repository_relative(&layout.default_active_ref_name_path())?;
-            write_file_atomically(
+            rewrite_in_place_or_create_required(
                 layout.repository_mutation_root(),
                 &relative,
                 ref_name.as_bytes(),

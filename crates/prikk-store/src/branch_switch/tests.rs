@@ -8,7 +8,9 @@ use prikk_object::{
 };
 
 use super::switch_branch;
-use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
+use crate::foundation::fsutil::{
+    TestFailPoint, clear_failpoint_for_test, fail_after_for_test, fail_once_for_test,
+};
 use crate::test_gates::test_support::{
     dummy_signature, signed_block_with_state_root, signed_patch_envelope,
     signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir, write_blob,
@@ -245,14 +247,12 @@ fn a_switch_interrupted_while_deleting_leaves_the_old_pointer_and_resumes() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Crash at the pointer write. Rename ordinals measured on this fixture: 0 and 1 are the lifecycle
-/// cache's own best-effort writes during baseline resolution, 2..=4 the three target files in path
-/// order, 5 the pointer. The worktree is fully on the target, the pointer still names the old branch,
-/// the marker is still set -- and the same switch run again completes it.
+/// Crash at the pointer write, before its truncate: the pointer keeps its old value, the marker is set, and the same switch run
+/// again completes it (the pre-RFC 168 behaviour, unchanged: the worktree is already on the target).
 #[test]
-fn a_switch_interrupted_at_the_pointer_write_leaves_the_old_pointer_and_resumes() {
+fn a_switch_interrupted_before_the_pointer_write_leaves_the_old_pointer_and_resumes() {
     let (root, layout) = two_branches("switch-crash-pointer");
-    fail_after_for_test(TestFailPoint::MutableRename, 5);
+    fail_once_for_test(TestFailPoint::Truncate);
     assert!(switch_branch(&layout, Some("heads/main"), "heads/other").is_err());
 
     assert_eq!(pointer(&root), "heads/main\n");
@@ -266,13 +266,54 @@ fn a_switch_interrupted_at_the_pointer_write_leaves_the_old_pointer_and_resumes(
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Crash at the marker clear, after the pointer: the pointer already names the target and the
-/// marker is still set. "Already on the target" must then finish the job, not return early.
+/// Crash between the pointer's truncate and its append (RFC 168 §3.3): the pointer is empty in place, the marker is set and
+/// names its target. The refusal names the exact command, and running that command completes the switch. The marker's own
+/// append is the first append of a switch, so skip it.
+#[test]
+fn a_switch_interrupted_between_the_pointer_truncate_and_append_leaves_a_torn_pointer_and_the_named_switch_completes_it()
+ {
+    let (root, layout) = two_branches("switch-crash-pointer-torn");
+    fail_after_for_test(TestFailPoint::AppendWrite, 1);
+    assert!(switch_branch(&layout, Some("heads/main"), "heads/other").is_err());
+    clear_failpoint_for_test();
+
+    assert_eq!(
+        pointer(&root),
+        "",
+        "the pointer was emptied in place and not yet appended"
+    );
+    assert!(worktree_is_dirty(&layout).unwrap());
+    assert_on_other(&root);
+    let refusal = crate::refs::current_branch(&layout)
+        .expect_err("a torn pointer is refused")
+        .to_string();
+    assert!(
+        refusal.contains("a branch switch to heads/other was interrupted; run `prikk branch switch heads/other` to finish it"),
+        "the refusal names the exact command: {refusal}"
+    );
+
+    // The command the refusal names: the CLI reads the pointer as `from`, and a torn one reads as none.
+    let report = switch_branch(&layout, None, "heads/other").unwrap();
+    assert_eq!((report.written_files, report.deleted_files), (0, 0));
+    assert_eq!(pointer(&root), "heads/other\n");
+    assert!(!worktree_is_dirty(&layout).unwrap());
+    let status = crate::worktree_status::worktree_status(&layout, "heads/other").unwrap();
+    assert!(
+        status.changes.is_empty(),
+        "status is clean after the named switch: {status:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Crash at the marker clear, after the pointer: the pointer already names the target and the marker is still set. "Already
+/// on the target" must then finish the job, not return early. The pointer's own truncate is the first truncate of a switch, so
+/// skip it: the marker clear is the second.
 #[test]
 fn a_switch_interrupted_at_the_marker_clear_is_finished_by_switching_again() {
     let (root, layout) = two_branches("switch-crash-marker");
-    fail_once_for_test(TestFailPoint::Truncate);
+    fail_after_for_test(TestFailPoint::Truncate, 1);
     assert!(switch_branch(&layout, Some("heads/main"), "heads/other").is_err());
+    clear_failpoint_for_test();
 
     assert_eq!(pointer(&root), "heads/other\n");
     assert!(worktree_is_dirty(&layout).unwrap());

@@ -514,10 +514,9 @@ fn a_crash_saving_the_recovery_file_leaves_the_wal_and_witness_untouched() {
         .join("witness");
     let witness_before = std::fs::read(&witness_path).unwrap();
 
-    // The save is the first entry of `recovery/log` (RFC 168 §3.1): the log is created exclusively, and the failure is
-    // injected at that create's file sync, after the bytes are written and before they are durable.
-    // Skip the active lock's own exclusive create (its sync is the first hit); the second hit is the log's first create.
-    fail_after_for_test(TestFailPoint::RequiredFileSync, 1);
+    // The save is an append to `recovery/log` (RFC 168 §3.1; `init` created the log): the failure is injected at that append,
+    // after the write and before the sync that makes it durable, so the WAL is still untouched.
+    fail_after_for_test(TestFailPoint::AppendWrite, 0);
     let crashed = discard_damaged_commits(&layout);
     clear_failpoint_for_test();
     let message = crashed

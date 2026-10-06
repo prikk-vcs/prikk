@@ -936,7 +936,11 @@ fn dirty_worktree_marker_refuses_to_infer_deletion() {
     );
     std::fs::remove_file(root.join("gone.txt")).unwrap();
 
-    crate::worktree_marker::mark_worktree_dirty(&layout).unwrap();
+    crate::worktree_marker::mark_worktree_dirty(
+        &layout,
+        &crate::worktree_marker::MarkedTarget::Checkout("heads/main".to_string()),
+    )
+    .unwrap();
 
     let mut generator = deterministic_generator();
     let refused = commit_worktree_changes_with_generator(
@@ -950,9 +954,9 @@ fn dirty_worktree_marker_refuses_to_infer_deletion() {
     // Checkout-refusal round §2.3: `Precondition`, naming a route that clears the marker.
     let refused = format!("{:?}", refused.err());
     assert!(refused.contains("Precondition("), "{refused}");
+    // RFC 168 §3.3: the marker names its target, so the route is the exact command, not the general one.
     assert!(
-        refused.contains("prikk checkout --patch-materialize --ref <the current branch>")
-            && refused.contains("prikk branch switch <the current branch>"),
+        refused.contains("run `prikk checkout --patch-materialize --ref heads/main` to finish it"),
         "{refused}"
     );
 

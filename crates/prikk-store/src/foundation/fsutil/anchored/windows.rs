@@ -34,7 +34,7 @@
 //! acceptable given today's callers.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -343,6 +343,24 @@ impl DurabilityContract for WindowsDurability {
         failpoints::required_file_sync()?;
         file.sync_all().map_err(|error| io_error(&path, error))?;
         Ok(offset)
+    }
+
+    fn durable_overwrite(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let path = resolved_existing_path(root, relative)?;
+        let mut file = required_existing_file_no_follow(&path, OpenOptions::new().write(true))?;
+        failpoints::in_place_write()?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| io_error(&path, error))?;
+        file.write_all(bytes)
+            .map_err(|error| io_error(&path, error))?;
+        failpoints::required_file_sync()?;
+        file.sync_all().map_err(|error| io_error(&path, error))
     }
 
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()> {

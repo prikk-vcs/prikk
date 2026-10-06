@@ -255,10 +255,14 @@ fn init_allocates_every_active_default_container_name_once_excluding_the_runtime
     let root = unique_temp_dir("layout-active-default-allocation");
     let layout = RepositoryLayout::init(root.clone())?;
 
+    // RFC 168 §3.3: the default session's witness is created at `init` too, an empty "no witness yet".
     let active_container_paths = vec![
         layout.default_queue_wal_path(),
         layout.default_active_ref_name_path(),
         layout.default_declarations_path(),
+        layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("witness"),
     ];
     for path in &active_container_paths {
         assert!(path.is_file(), "expected {path:?} to exist after init");
@@ -273,7 +277,7 @@ fn init_allocates_every_active_default_container_name_once_excluding_the_runtime
     assert_eq!(
         files_under(&layout.default_active_dir())?,
         expected,
-        "before any lock is ever acquired, active/default/ must contain exactly the three init-\
+        "before any lock is ever acquired, active/default/ must contain exactly the four init-\
          allocated names"
     );
 

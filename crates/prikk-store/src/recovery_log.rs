@@ -31,7 +31,7 @@ const VERSION: u16 = 1;
 /// Magic (8), version (2), body length (8), checksum (32).
 const HEADER_LEN: usize = 8 + 2 + 8 + 32;
 /// The log's path under `.prikk/`.
-pub(crate) const LOG_PATH: &str = "recovery/log";
+pub(crate) const LOG_PATH: &str = crate::foundation::layout::RECOVERY_LOG_RELATIVE;
 /// The full entry id is the first 16 hex characters of the frame's checksum (RFC 168 §3.2).
 pub(crate) const ID_LEN: usize = 16;
 
@@ -240,7 +240,9 @@ pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> 
             PrikkError::MalformedData(format!("creating recovery/log: {error}"))
         })?;
     } else {
-        append_file_required(root, path, &framed)?;
+        append_file_required(root, path, &framed).map_err(|error| {
+            PrikkError::MalformedData(format!("appending recovery/log: {error}"))
+        })?;
     }
     Ok(RecoveryRef {
         id,
@@ -971,4 +973,80 @@ pub fn recovery_clear(layout: &RepositoryLayout, plan_only: bool) -> Result<Reco
 /// status (RFC 168 §3.1).
 pub fn recovery_verify_line(layout: &RepositoryLayout) -> Result<Option<String>> {
     verify_line(layout)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod early_creation {
+    use super::*;
+    use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+    use crate::lock::ActiveLock;
+    use crate::test_gates::test_support::unique_temp_dir;
+
+    /// RFC 168 §3.1 and §3.3: `init` creates the log and the default session's empty witness.
+    #[test]
+    fn init_creates_the_log_and_the_default_witness_empty() {
+        let root = unique_temp_dir("recovery-log-init");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        assert_eq!(
+            std::fs::metadata(root.join(".prikk").join(LOG_PATH))
+                .expect("log")
+                .len(),
+            0
+        );
+        let witness = layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("witness");
+        assert_eq!(std::fs::metadata(witness).expect("witness").len(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 §3.1 and §3.3: a repository created before the log and the witness existed gets them at its first write, and
+    /// the lock taken for that write is released when it ends. An older `recovery/*.bytes` file is untouched.
+    #[test]
+    fn the_first_write_creates_a_missing_log_and_witness_and_leaves_older_files_alone() {
+        let root = unique_temp_dir("recovery-log-first-write");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let witness = layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("witness");
+        let log = root.join(".prikk").join(LOG_PATH);
+        std::fs::remove_file(&log).expect("remove the log, as an older repository has none");
+        std::fs::remove_file(&witness).expect("remove the witness");
+        let older = root
+            .join(".prikk")
+            .join("recovery")
+            .join("wal-default-at-3-0123456789abcdef.bytes");
+        std::fs::write(&older, b"removed by a 0.48.0 repair").expect("an older file");
+
+        {
+            let _lock = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+                .expect("the write takes the lock");
+            assert!(log.is_file(), "the log is created at the first write");
+            assert!(
+                witness.is_file(),
+                "the witness is created at the first write"
+            );
+        }
+        assert!(
+            !root
+                .join(".prikk")
+                .join("active")
+                .join("default")
+                .join("active.lock")
+                .exists(),
+            "the lock is released"
+        );
+        assert_eq!(
+            std::fs::read(&older).expect("older file"),
+            b"removed by a 0.48.0 repair",
+            "nothing is deleted"
+        );
+        let listing = list(layout.repository_mutation_root()).expect("list");
+        assert_eq!(
+            listing.older_files,
+            vec!["recovery/wal-default-at-3-0123456789abcdef.bytes".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -9,7 +9,6 @@ use prikk_object::{ObjectId, ObjectType, is_windows_reserved_name};
 use crate::foundation::fsutil::{
     EntryKind, MutationRoot, create_new_file_required, ensure_directory_required, inspect_entry,
     list_directory, read_file_if_exists, read_file_range_if_exists, read_file_required,
-    write_file_atomically,
 };
 
 const REPO_DIR: &str = ".prikk";
@@ -30,6 +29,9 @@ pub(crate) const FORMAT_6_VERSION: &[u8] = b"6\n";
 /// pinning test can assert this byte form and `CURRENT_FORMAT_VERSION_NUMERIC` against literal expected
 /// values side by side.
 pub(crate) const CURRENT_FORMAT_VERSION: &[u8] = b"7\n";
+/// RFC 168 §3.1: the recovery log's path under `.prikk/`. Named here, not in `recovery_log`, so the layout layer does not depend on
+/// the recovery module that depends on it.
+pub(crate) const RECOVERY_LOG_RELATIVE: &str = "recovery/log";
 /// Numeric companion to `CURRENT_FORMAT_VERSION`, for `format_stability_gate.rs`'s own range
 /// arithmetic (RFC 114 §4, Gate B layer 1). Kept as an independent literal, not parsed from
 /// `CURRENT_FORMAT_VERSION` at compile or test time -- see
@@ -283,6 +285,9 @@ impl RepositoryLayout {
         // -append, cleared by truncate-to-empty, never removed. Previously created lazily on the
         // empty-to-non-empty WAL transition (`active.rs::prepare_empty_active_ref_for_append`).
         create_empty_file_once(&layout, &layout.default_active_ref_name_path())?;
+        // RFC 168 §3.1 and §3.3: the recovery log and the default session's witness are created here, so every later write to
+        // either is to an existing name. An empty witness is "no witness yet", the state a new repository has always had.
+        layout.ensure_write_state()?;
         // RFC 144 §4o.2: the live rename-declaration store, on the same marker pattern as the two
         // files just above. `write_declarations_map` (`rename_declaration.rs`) also self-heals a
         // missing file for a repository initialized before this line existed -- this is only the
@@ -295,7 +300,7 @@ impl RepositoryLayout {
         // `heads/main` (`refs::current_branch`), which never writes one.
         let pointer = layout.repository_relative(&layout.current_branch_path())?;
         if read_file_if_exists(layout.repository_mutation_root(), &pointer)?.is_none() {
-            write_file_atomically(layout.repository_mutation_root(), &pointer, b"heads/main\n")?;
+            create_new_file_required(layout.repository_mutation_root(), &pointer, b"heads/main\n")?;
         }
         // RFC 102 Stage 3, design-v1.md §2: every container name, both slots, plus the index and the
         // (currently unused) compaction generation log -- all allocated here, at `init`, and nowhere
@@ -730,6 +735,19 @@ impl RepositoryLayout {
     pub fn ref_log_container_slot_path(&self, slot: ContainerSlot) -> PathBuf {
         self.refs_containers_dir()
             .join(format!("log-{}.container", slot.as_str()))
+    }
+
+    /// RFC 168 §3.1 and §3.3: the recovery log and the default session's witness exist before a write relies on them. `init`
+    /// creates them; a repository created earlier gets them at its first write, through `ActiveLock::acquire` for the default
+    /// session (the one call site every writer passes through). An absent file is created exclusively: the one new-name case
+    /// (RFC 168 §6, residuals (b) and (c)).
+    pub(crate) fn ensure_write_state(&self) -> Result<()> {
+        ensure_directory_required(self.repository_mutation_root(), Path::new("recovery"))?;
+        create_empty_file_once(self, &self.prikk_dir().join(RECOVERY_LOG_RELATIVE))?;
+        create_empty_file_once(
+            self,
+            &self.active_session_dir(DEFAULT_ACTIVE_NAME).join("witness"),
+        )
     }
 
     /// Return the ref-pointer-index container path for a given slot (RFC 102 Stage 6 Step 1,

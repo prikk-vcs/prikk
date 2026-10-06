@@ -26,15 +26,22 @@ impl ActiveLock {
     /// `wal.rs::Wal::for_layout`. No other change needed here -- `relative` was already **derived**
     /// from `path` via `repository_relative`, never reconstructed from `name` the way `Wal` used to.
     pub fn acquire(layout: &RepositoryLayout, name: impl AsRef<Path>) -> Result<Self> {
+        let is_default = name.as_ref() == Path::new(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
         let path = layout.active_lock_path(name);
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
         acquire_lock_file(&mutation_root, &relative, &path, "active")?;
-        Ok(Self {
+        let lock = Self {
             path,
             relative,
             mutation_root,
-        })
+        };
+        // RFC 168 §3.1, §3.3: the one call site where a repository created before the recovery log and the witness gets them.
+        // Taken after the lock is held and returned as the guard, so a failure here releases the lock on drop.
+        if is_default {
+            layout.ensure_write_state()?;
+        }
+        Ok(lock)
     }
 
     /// Return lock file path.

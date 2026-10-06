@@ -356,7 +356,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
             "worktree materialization was interrupted, so the worktree is not verified against its \
              baseline and nothing can be committed; {}",
-            crate::worktree_marker::DIRTY_MARKER_ROUTE
+            crate::worktree_marker::dirty_marker_route(layout).map_err(AuthorError::Store)?
         ))));
     }
 

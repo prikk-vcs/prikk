@@ -15,7 +15,7 @@ use crate::foundation::layout::RepositoryLayout;
 use crate::patch_replay::{PatchReplayDeletedFile, SnapshotAnchorFallback};
 use crate::path::join_repo_path_to_root;
 use crate::worktree::{materialize_replay_manifest_entries, refuse_manifest_conflicts};
-use crate::worktree_marker::{clear_worktree_dirty, mark_worktree_dirty};
+use crate::worktree_marker::{MarkedTarget, clear_worktree_dirty, mark_worktree_dirty};
 
 /// Result of an opt-in patch replay materialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +221,7 @@ fn materialize_patch_checkout_inner(
     // through either phase does not match either the pre- or post-checkout baseline, and bracketing
     // both under one marker cycle is simpler to reason about than two different granularities with
     // two different soundness arguments.
-    mark_worktree_dirty(layout)?;
+    mark_worktree_dirty(layout, &MarkedTarget::Checkout(ref_name.to_string()))?;
     let write_report = materialize_replay_manifest_entries(layout, &snapshot.manifest)?;
     let deleted_files = if delete_removed {
         apply_deletions(

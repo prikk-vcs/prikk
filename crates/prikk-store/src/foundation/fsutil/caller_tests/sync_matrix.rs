@@ -35,7 +35,9 @@ use crate::{
 #[test]
 fn repository_format_create_sync_failure_retains_and_retries() -> prikk_error::Result<()> {
     let root = unique_temp_dir("repository-sync-matrix");
-    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 34);
+    // RFC 168 §3.1 and §3.3 added the recovery log and the default witness to `init` before `FORMAT`: two names, and the
+    // `recovery/` directory's own create and sync. The directory sync that lands on `FORMAT`'s create is the 37th.
+    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 37);
     assert!(RepositoryLayout::init(root.clone()).is_err());
     assert!(
         root.join(".prikk/FORMAT").is_file(),

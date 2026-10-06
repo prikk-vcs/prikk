@@ -118,6 +118,16 @@ pub(crate) trait DurabilityContract {
     /// Durably truncate an existing regular file to `len`.
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()>;
 
+    /// Durably overwrite `bytes.len()` bytes of an existing regular file, starting at `offset`, **in place**: no rename and no
+    /// new name (RFC 168 §3.3). The length is unchanged; a caller that needs a new length truncates after the overwrite.
+    fn durable_overwrite(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<()>;
+
     /// Durably truncate an existing regular file to empty. RFC 102 Stage 5, design-v1.md §14.8:
     /// requires the file (and its parent directory) to already exist -- does not create either, the
     /// same discipline `durable_append` follows and `durable_truncate` already did.

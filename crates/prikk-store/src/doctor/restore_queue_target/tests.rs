@@ -528,9 +528,9 @@ fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
     // established pattern, rather than left unconditional and invisible to a Linux-only `cargo
     // test` run until cross-target clippy for Windows catches the missing variant.
     #[allow(unused_mut)]
-    let mut points = vec![TestFailPoint::MutableFileSync, TestFailPoint::MutableRename];
+    let mut points = vec![TestFailPoint::Truncate, TestFailPoint::AppendWrite];
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    points.push(TestFailPoint::MutableParentSync);
+    points.push(TestFailPoint::RequiredFileSync);
     for point in points {
         let root = unique_temp_dir(&format!("rfc166-d5-restore-k4-atomic-{point:?}"));
         let layout = RepositoryLayout::init(root.clone()).unwrap();
@@ -540,7 +540,9 @@ fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
         let before = std::fs::read(&ref_name_path).unwrap();
         assert!(before.is_empty(), "the stranded state this verb repairs");
 
-        fail_after_for_test(point, 0);
+        // The active lock's own exclusive create is the first RequiredFileSync of the verb: skip it for that point.
+        let skip = usize::from(matches!(point, TestFailPoint::RequiredFileSync));
+        fail_after_for_test(point, skip);
         let crashed = restore_queue_target(&layout, "heads/main", false);
         clear_failpoint_for_test();
         assert!(
@@ -684,4 +686,41 @@ fn no_other_command_touches_the_wal_witness_or_ref_name_over_row9() {
     );
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// **RFC 168 §7, lost-rename run for `ref-name`'s restore:** the restore completes, and then its old bytes come back (the lost
+/// write). The stranded state is then the one row 9 names (`OwnershipMissing`), and `verify` does not report it as an item
+/// failure: the writers refuse it, and `--restore-queue-target` is the way out.
+#[test]
+fn a_lost_ref_name_restore_leaves_the_stranded_state_that_writers_refuse() {
+    let root = unique_temp_dir("rfc168-ref-name-restore-lost");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    clear_ref_name(&layout);
+    let ref_name_path = layout.default_active_ref_name_path();
+    let before = std::fs::read(&ref_name_path).unwrap();
+    restore_queue_target(&layout, "heads/main", false).unwrap();
+    assert_eq!(std::fs::read(&ref_name_path).unwrap(), b"heads/main");
+
+    // The lost write: the old bytes come back after the restore's own success.
+    std::fs::write(&ref_name_path, &before).unwrap();
+    assert_eq!(classify_now(&layout), Verdict::OwnershipMissing);
+    assert!(
+        !crate::verify_repository(&layout)
+            .unwrap()
+            .has_item_failure()
+    );
+    std::fs::write(root.join("b.txt"), b"two").unwrap();
+    let refused = commit_worktree_changes_signed(
+        &layout,
+        "heads/main",
+        "d5-restore",
+        WorktreePatchCommitOptions::file_level(),
+        &signer(),
+    )
+    .expect_err("a writer refuses the stranded state");
+    let message = refused.to_string();
+    eprintln!("RFC168 next commit refusal: {message}");
+    assert!(message.contains("restore-queue-target"), "{message}");
+    let _ = std::fs::remove_dir_all(root);
 }

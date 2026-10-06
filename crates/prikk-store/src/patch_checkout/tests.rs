@@ -304,9 +304,9 @@ fn a_file_changed_during_the_checkout_keeps_the_marker_and_names_the_route()
         message.contains("extra.txt changed during the checkout"),
         "{message}"
     );
+    // RFC 168 §3.3: the marker names its target, so the route is the exact command, not the general one.
     assert!(
-        message.contains("`prikk checkout --patch-materialize --ref <the current branch>`")
-            && message.contains("`prikk branch switch <the current branch>`"),
+        message.contains("`prikk checkout --patch-materialize --ref heads/main` to finish it"),
         "{message}"
     );
     assert!(

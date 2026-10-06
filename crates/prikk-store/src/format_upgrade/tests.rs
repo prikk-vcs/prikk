@@ -117,3 +117,23 @@ fn the_upgrade_holds_its_lock_through_the_marker_write() -> prikk_error::Result<
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+/// RFC 168 §3.3, torn at the marker's one-byte overwrite: the write does not happen, so the marker still reads format 6 and
+/// the repository opens as format 6.
+#[test]
+fn a_format_marker_write_torn_before_its_byte_leaves_the_marker_at_six() -> prikk_error::Result<()>
+{
+    use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
+    let (root, layout) = format_6_repository("format-torn-marker")?;
+    fail_once_for_test(TestFailPoint::InPlaceWrite);
+    let torn = upgrade_repository_format(&layout, passes);
+    clear_failpoint_for_test();
+    assert!(torn.is_err(), "the injected failure must fire");
+    assert_eq!(marker(&root), b"6\n", "the marker still reads format 6");
+    assert_eq!(
+        RepositoryLayout::open(root.clone())?.format(),
+        RepositoryFormat::CurrentV6
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

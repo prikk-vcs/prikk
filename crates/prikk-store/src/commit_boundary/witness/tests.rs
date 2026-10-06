@@ -352,3 +352,100 @@ fn visit_rs_files(dir: &std::path::Path, visit: &mut impl FnMut(&std::path::Path
         }
     }
 }
+
+/// **RFC 168 §3.3, torn at the witness's clear:** the clear overwrites nothing and truncates to zero, so a failed truncate
+/// leaves the old record whole. The witness must read as its record, never as the empty "cleared" state, which would read as
+/// no witness at all.
+#[test]
+fn a_witness_clear_torn_at_its_truncate_still_reads_as_its_record_never_as_cleared() {
+    use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
+    let root = unique_temp_dir("rfc168-witness-torn-clear");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    assert!(matches!(
+        read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+        WitnessState::Valid(_)
+    ));
+
+    fail_once_for_test(TestFailPoint::Truncate);
+    assert!(clear_witness(&layout, DEFAULT_ACTIVE_NAME).is_err());
+    clear_failpoint_for_test();
+    assert!(
+        matches!(
+            read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+            WitnessState::Valid(_)
+        ),
+        "a torn clear keeps the record whole"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// **RFC 168 §3.3, torn at the witness's write:** the new bytes are written over the old from offset 0, and the length is set
+/// after. A shorter record whose length step fails leaves its own prefix over the old tail: a damaged witness, which RFC 166
+/// row 8 rebuilds from the WAL. It is never the empty "cleared" state.
+#[test]
+fn a_shorter_witness_torn_before_its_length_is_set_reads_as_damaged_never_as_absent() {
+    use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
+    let root = unique_temp_dir("rfc168-witness-torn-write");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let path = layout
+        .repository_relative(
+            &layout
+                .active_session_dir(DEFAULT_ACTIVE_NAME)
+                .join("witness"),
+        )
+        .unwrap();
+    let whole = std::fs::read(
+        layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("witness"),
+    )
+    .unwrap();
+    let mut shorter = whole[..whole.len() / 2].to_vec();
+    shorter[0] ^= 0xFF;
+
+    fail_once_for_test(TestFailPoint::Truncate);
+    let torn = super::write_witness_in_place(layout.repository_mutation_root(), &path, &shorter);
+    clear_failpoint_for_test();
+    assert!(torn.is_err(), "the length step fails");
+    assert!(
+        matches!(
+            read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+            WitnessState::Damaged(_)
+        ),
+        "the shorter prefix over the old tail is damage, not a cleared witness"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// **RFC 168 §6, residual (c), lost-rename run:** a repository from before 0.49.0 has a WAL and no witness. The witness's first
+/// creation is the new name a Windows power loss can lose; its loss falls back to RFC 166 rule 3, the classification a
+/// pre-0.49.0 session always had. The next commit creates the witness, and `verify` is clean.
+#[test]
+fn a_lost_first_witness_creation_falls_back_to_rule_3_and_the_next_commit_recreates_it() {
+    let root = unique_temp_dir("rfc168-witness-first-creation-lost");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let witness = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    // The lost creation: the name is gone, the WAL keeps its record.
+    std::fs::remove_file(&witness).unwrap();
+    assert!(matches!(
+        read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+        WitnessState::Absent
+    ));
+
+    commit(&layout, "b.txt", b"two");
+    assert!(matches!(
+        read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap(),
+        WitnessState::Valid(_)
+    ));
+    let verdict = crate::verify_repository(&layout).unwrap();
+    assert!(
+        !verdict.has_item_failure(),
+        "verify is clean after the fall-back"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}

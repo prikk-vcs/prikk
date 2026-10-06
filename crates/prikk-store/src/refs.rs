@@ -1061,6 +1061,15 @@ const UNBORN_DEFAULT_BRANCH: &str = "heads/main";
 /// How the pointer file is named in a refusal -- repository-relative, the path a user edits.
 const CURRENT_BRANCH_DISPLAY: &str = ".prikk/current-branch";
 
+/// The refusal for a malformed pointer, naming the exact route when a set switch marker names its target (RFC 168 §3.3).
+fn malformed_pointer(layout: &RepositoryLayout, detail: String) -> PrikkError {
+    PrikkError::Precondition(crate::worktree_marker::malformed_pointer_message(
+        layout,
+        CURRENT_BRANCH_DISPLAY,
+        &detail,
+    ))
+}
+
 /// RFC 151 §2.1: the branch `--ref` defaults to, read from `.prikk/current-branch`.
 ///
 /// **A default, never an authority.** Local, mutable and unsigned, so nothing that decides trust
@@ -1084,17 +1093,17 @@ pub fn current_branch(layout: &RepositoryLayout) -> Result<String> {
     else {
         return Ok(UNBORN_DEFAULT_BRANCH.to_string());
     };
-    let malformed = |detail: String| {
-        PrikkError::Precondition(format!(
-            "{CURRENT_BRANCH_DISPLAY} is malformed ({detail}); it must hold one local branch ref \
-             name followed by a newline, such as heads/main"
-        ))
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        Err(err) => {
+            return Err(malformed_pointer(layout, format!("not UTF-8: {err}")));
+        }
     };
-    let text = std::str::from_utf8(&bytes).map_err(|err| malformed(format!("not UTF-8: {err}")))?;
-    let name = text
-        .strip_suffix('\n')
-        .ok_or_else(|| malformed("no trailing newline".to_string()))?;
-    let canonical = validate_local_branch_ref(name).map_err(|err| malformed(err.to_string()))?;
+    let Some(name) = text.strip_suffix('\n') else {
+        return Err(malformed_pointer(layout, "no trailing newline".to_string()));
+    };
+    let canonical = validate_local_branch_ref(name)
+        .map_err(|err| malformed_pointer(layout, err.to_string()))?;
     let routes = "run `prikk branch switch heads/<name>` to a branch that exists and is open, or \
                   `prikk branch create` it";
     let Some(ref_state_id) = RefStore::new(layout.clone()).read_current_ref_state_id(&canonical)?

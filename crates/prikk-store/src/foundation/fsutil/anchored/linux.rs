@@ -4,7 +4,7 @@
 //! `Linux` is the sole implementor; no `target_os` gate is relaxed by this file's existence.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 
 use prikk_error::Result;
@@ -64,6 +64,25 @@ impl DurabilityContract for LinuxDurability {
         failpoints::required_directory_sync()?;
         directory.sync()?;
         Ok(offset)
+    }
+
+    fn durable_overwrite(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let directory = open_existing_directory_required(root, required_parent(relative)?)?;
+        let fd =
+            open_existing_regular(&directory.fd, required_file_name(relative)?, OFlags::WRONLY)?;
+        let mut file = File::from(fd);
+        failpoints::in_place_write()?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(bytes)?;
+        failpoints::required_file_sync()?;
+        file.sync_all()?;
+        Ok(())
     }
 
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()> {

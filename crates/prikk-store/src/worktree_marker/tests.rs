@@ -14,7 +14,13 @@ fn marker_is_created_clean_at_init_and_round_trips_dirty_and_clean() {
         assert!(layout.worktree_unclean_shutdown_marker_path().exists());
         assert!(worktree_is_dirty(&layout).is_ok_and(|dirty| !dirty));
 
-        assert!(mark_worktree_dirty(&layout).is_ok());
+        assert!(
+            mark_worktree_dirty(
+                &layout,
+                &crate::worktree_marker::MarkedTarget::Checkout("heads/main".to_string())
+            )
+            .is_ok()
+        );
         assert!(worktree_is_dirty(&layout).is_ok_and(|dirty| dirty));
 
         assert!(clear_worktree_dirty(&layout).is_ok());
@@ -35,11 +41,23 @@ fn marker_dirty_set_appends_rather_than_replaces() {
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
     if let Ok(layout) = layout {
-        assert!(mark_worktree_dirty(&layout).is_ok());
+        assert!(
+            mark_worktree_dirty(
+                &layout,
+                &crate::worktree_marker::MarkedTarget::Checkout("heads/main".to_string())
+            )
+            .is_ok()
+        );
         let after_first = std::fs::read(layout.worktree_unclean_shutdown_marker_path());
         assert!(after_first.is_ok());
 
-        assert!(mark_worktree_dirty(&layout).is_ok());
+        assert!(
+            mark_worktree_dirty(
+                &layout,
+                &crate::worktree_marker::MarkedTarget::Checkout("heads/main".to_string())
+            )
+            .is_ok()
+        );
         let after_second = std::fs::read(layout.worktree_unclean_shutdown_marker_path());
 
         if let (Ok(first), Ok(second)) = (after_first, after_second) {
@@ -61,7 +79,13 @@ fn crash_during_clear_leaves_the_marker_dirty_not_clean() {
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
     if let Ok(layout) = layout {
-        assert!(mark_worktree_dirty(&layout).is_ok());
+        assert!(
+            mark_worktree_dirty(
+                &layout,
+                &crate::worktree_marker::MarkedTarget::Checkout("heads/main".to_string())
+            )
+            .is_ok()
+        );
         assert!(worktree_is_dirty(&layout).is_ok_and(|dirty| dirty));
 
         fail_once_for_test(TestFailPoint::Truncate);

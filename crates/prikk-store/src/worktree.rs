@@ -22,7 +22,8 @@ use crate::patch_replay::read::{files_to_replay_manifest, replay_state_from_snap
 use crate::patch_replay::{ReplayManifest, ReplayManifestEntry};
 use crate::path::join_repo_path_to_root;
 use crate::worktree_marker::{
-    DIRTY_MARKER_ROUTE, clear_worktree_dirty, mark_worktree_dirty, mark_worktree_provisional,
+    MarkedTarget, clear_worktree_dirty, dirty_marker_route, mark_worktree_dirty,
+    mark_worktree_provisional,
 };
 
 /// Result of an opt-in snapshot worktree materialization.
@@ -91,7 +92,7 @@ pub fn materialize_snapshot_checkout(
     // RFC 102 Stage 1: dirty before the first possible worktree write, cleared only after every
     // write in this call has durably completed -- see `worktree_marker`'s own doc for why the
     // ordering, not just the primitive, is what closes T12.
-    mark_worktree_dirty(layout)?;
+    mark_worktree_dirty(layout, &MarkedTarget::Checkout(ref_name.to_string()))?;
     let write_report = materialize_replay_manifest_entries(layout, &manifest)?;
     clear_worktree_dirty(layout)?;
     Ok(SnapshotMaterializationReport {
@@ -176,8 +177,9 @@ fn materialize_replay_entry(
         if current != entry.bytes {
             return Err(PrikkError::Precondition(format!(
                 "{} changed during the checkout, so the worktree is partly written; move that file \
-                 aside, then {DIRTY_MARKER_ROUTE}",
-                entry.path.as_str()
+                 aside, then {}",
+                entry.path.as_str(),
+                dirty_marker_route(layout)?
             )));
         }
         // Gated like the seam above, and for the same reason: its only callers are Linux-only tests.
@@ -194,8 +196,9 @@ fn materialize_replay_entry(
         else {
             return Err(PrikkError::Precondition(format!(
                 "{} changed during the checkout, so the worktree is partly written; move that file \
-                 aside, then {DIRTY_MARKER_ROUTE}",
-                entry.path.as_str()
+                 aside, then {}",
+                entry.path.as_str(),
+                dirty_marker_route(layout)?
             )));
         };
         // Re-sync the containing directory on every arm: identical bytes here may be an earlier

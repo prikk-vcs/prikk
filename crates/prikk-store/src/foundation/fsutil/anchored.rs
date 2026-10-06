@@ -132,6 +132,32 @@ pub(crate) fn append_file_reporting_offset_required(
 }
 
 /// Truncate an existing regular file to a retained length and sync its parent.
+/// RFC 168 §3.3, the pointer and `ref-name` writer (RFC 166 D1): empty the file, then append the bytes, both in place and both
+/// flushed. A torn state is an empty or short value, which the readers already refuse. An absent file (a repository created
+/// before the file existed) is created exclusively, the one new-name case.
+pub(crate) fn rewrite_in_place_or_create_required(
+    root: &MutationRoot,
+    relative: &Path,
+    bytes: &[u8],
+) -> Result<()> {
+    if read_file_range_if_exists(root, relative, 0, 0)?.is_none() {
+        return Ok(create_new_file_required(root, relative, bytes)?);
+    }
+    truncate_file_empty_required(root, relative)?;
+    append_file_required(root, relative, bytes)
+}
+
+/// Durably overwrite bytes of an existing regular file in place, at `offset` (RFC 168 §3.3): no rename, no new name, one code path
+/// on every platform.
+pub(crate) fn overwrite_in_place_required(
+    root: &MutationRoot,
+    relative: &Path,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<()> {
+    ACTIVE_DURABILITY.durable_overwrite(root, relative, offset, bytes)
+}
+
 pub(crate) fn truncate_existing_file_required(
     root: &MutationRoot,
     relative: &Path,
