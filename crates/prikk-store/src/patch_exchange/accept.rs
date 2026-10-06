@@ -312,7 +312,7 @@ pub fn accept_exchange_artifact(
     // them behind — design §8.1 called that harmless because they are content-addressed, but a refused
     // exchange that changes the repository is not one a user can reason about. Item 5b stays as the
     // cheap early refusal before signature work; this one is what makes the refusal complete.
-    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     for (&key_id, &public_key) in &artifact_key_ids {
         check_author_key_conflict(layout, key_id, public_key)?;
     }

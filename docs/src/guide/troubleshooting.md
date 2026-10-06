@@ -344,9 +344,9 @@ acknowledged commit at sequence 1 (patch 01157f0c...)
 damaged commit discarded
 ```
 
-After it, `prikk verify` exits 0 again. The removed bytes are never gone — they are the exact bytes the
-named entry in `recovery/log` holds (`prikk doctor --recovery-list` shows it, and `--recovery-restore` writes it back), in case the content needs to be recovered by hand
-from them (the queued commit's own content, not just its presence, since the WAL body is the signed
+After it, `prikk verify` exits 0 again. The removed bytes are kept until `prikk doctor --recovery-clear` removes them: they
+are the exact bytes the named entry in `recovery/log` holds (`prikk doctor --recovery-list` shows it, and `--recovery-restore`
+writes it back when its conditions hold), so the content can be read back from it (the queued commit's own content, not just its presence, since the WAL body is the signed
 Patch envelope itself). Rows 5 (the record no longer present at all) and 7 (the acknowledgment history
 itself unreadable) are the same verb's job too, with no sequence or Patch id to name in row 7's case —
 the plan still says so, honestly, rather than guessing one.
@@ -801,6 +801,17 @@ them differs from the branch you are on — it would otherwise overwrite or dele
 message lists each path and whether it is `modified`, `missing` or an `unsupported-path`;
 `prikk worktree-status` shows the same list. Commit the changes, or restore the files, and switch
 again. Untracked files do not count and are never touched.
+
+**After a power loss on Windows, following a completed `branch switch` or `checkout` (RFC 168 residual (a)).** The rewritten files
+can hold their old contents, deleted files can come back, and created files can be lost. Nothing in the repository is damaged.
+`prikk worktree-status` lists what differs. The route, run in this order:
+
+1. Move each file it lists as modified out of the worktree. The moved copy is yours: keep it or delete it.
+2. For a file it lists as missing, do nothing: the checkout writes it.
+3. For a file it lists as untracked that you deleted on the branch, a file that came back, delete it.
+4. Run `prikk checkout --patch-materialize --ref <the current branch>`. It writes the branch's files into the paths that are now free.
+
+`prikk worktree-status` should then list nothing for those paths.
 
 ## `error: precondition not met: refusing to switch to heads/<name>: <n> in the way of its files: …`
 

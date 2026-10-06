@@ -961,9 +961,7 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     } else {
         print_verify_report(&layout, &report);
         // RFC 168 §3.1: the recovery log's own line. It never changes the exit status, and the JSON report stays as it was.
-        if let Some(line) =
-            prikk_store::recovery_verify_line(&layout).map_err(|err| err.to_string())?
-        {
+        if let Some(line) = prikk_store::recovery_verify_line(&layout) {
             println!("{line}");
         }
         // Received refs (DC-78 ruling 4) are never read by verify_repository itself — every object
@@ -1052,6 +1050,22 @@ fn run_recovery_command(
                     entry.binary_version
                 );
             }
+            if listing.newer_versions > 0 {
+                println!(
+                    "{} entr{} written by a newer prikk; this version cannot read {}",
+                    listing.newer_versions,
+                    if listing.newer_versions == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    },
+                    if listing.newer_versions == 1 {
+                        "it"
+                    } else {
+                        "them"
+                    }
+                );
+            }
             if listing.damaged_regions > 0 {
                 println!(
                     "damaged regions: {} -- a save there cannot be restored; the entries after it are still listed",
@@ -1078,7 +1092,11 @@ fn run_recovery_command(
             let plan = prikk_store::recovery_restore(layout, id, plan_only)
                 .map_err(|err| err.to_string())?;
             if let Some(refusal) = &plan.refusal {
-                return Err(format!("restore refused: {refusal}").into());
+                return Err(if plan_only {
+                    format!("plan only -- this restore would be refused: {refusal}").into()
+                } else {
+                    format!("restore refused: {refusal}").into()
+                });
             }
             println!(
                 "restore {} from {} at offset {}",
@@ -1087,50 +1105,60 @@ fn run_recovery_command(
             for condition in &plan.conditions {
                 println!(
                     "  {}  {}",
-                    if condition.holds {
-                        "ok     "
-                    } else {
-                        "refused"
-                    },
+                    if condition.holds { "ok  " } else { "no  " },
                     condition.text
                 );
+            }
+            let can_restore = plan.conditions.iter().all(|condition| condition.holds);
+            if !can_restore {
+                return Err(if plan_only {
+                    "plan only -- this restore would be refused"
+                        .to_string()
+                        .into()
+                } else {
+                    format!(
+                        "restore refused: a condition does not hold, so nothing was written to {}",
+                        plan.source
+                    )
+                    .into()
+                });
             }
             if plan.written {
                 println!(
                     "wrote {} bytes at offset {} of {}",
                     plan.would_write, plan.offset, plan.source
                 );
-            } else if plan_only {
+                println!(
+                    "The file now holds what it held before the repair, damage included. `verify` will report that damage again, and commands that refused before the repair will refuse again."
+                );
+            } else {
                 println!(
                     "plan only -- nothing written; this restore would write {} bytes at offset {} of {}",
                     plan.would_write, plan.offset, plan.source
                 );
-            } else {
-                return Err(format!(
-                    "restore refused: a condition does not hold, so nothing was written to {}",
-                    plan.source
-                )
-                .into());
+                println!("{after}");
             }
-            println!("{after}");
             Ok(())
         }
         args::RecoveryCommand::Clear => {
             let cleared =
                 prikk_store::recovery_clear(layout, plan_only).map_err(|err| err.to_string())?;
+            for entry in &cleared.entries {
+                println!("  {}  {}  {} bytes", entry.id, entry.source, entry.len);
+            }
+            let count = cleared.entries.len();
+            let noun = format!(
+                "entr{} ({} bytes)",
+                if count == 1 { "y" } else { "ies" },
+                cleared.bytes
+            );
             if cleared.cleared {
                 println!(
-                    "removed {} entr{} ({} bytes); recovery/log is empty. Older .bytes files are not touched.",
-                    cleared.entries,
-                    if cleared.entries == 1 { "y" } else { "ies" },
-                    cleared.bytes
+                    "removed {count} {noun}; recovery/log is empty. Older .bytes files are not touched."
                 );
             } else {
                 println!(
-                    "would remove {} entr{} ({} bytes) from recovery/log; plan only -- nothing written",
-                    cleared.entries,
-                    if cleared.entries == 1 { "y" } else { "ies" },
-                    cleared.bytes
+                    "would remove {count} {noun} from recovery/log; plan only -- nothing written"
                 );
             }
             Ok(())

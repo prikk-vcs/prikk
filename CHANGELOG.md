@@ -4,8 +4,8 @@
 
 ### Added — one recovery log, and `doctor --recovery-list`, `--recovery-restore`, `--recovery-clear` (RFC 168 §3.1–§3.2)
 
-Every repair that removes bytes from a framed file (the WAL, the pointer index, the ten `--repair-tails` files, and the object
-index's lost ids) now appends them to `recovery/log` before it truncates, and names the entry in its output. The log is one
+Every repair that removes bytes from a framed file (the WAL, the pointer index, the other `--repair-tails` files, ten in all, and
+the object index's lost ids) now appends them to `recovery/log` before it truncates, and names the entry in its output. The log is one
 file, never truncated by a repair, and read by three commands: `--recovery-list` lists the entries; `--recovery-restore <id>
 [--plan-only]` writes an entry back only when the file is still as long as the entry's offset, its prefix is unchanged, and the
 files that give the bytes their meaning are unchanged, and it prints its plan first; `--recovery-clear [--plan-only]` removes

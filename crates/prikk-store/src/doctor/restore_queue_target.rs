@@ -118,6 +118,10 @@ fn run(
 ) -> Result<RestoreQueueTargetPlan> {
     let ref_name = validate_local_branch_ref(ref_name)?;
     let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    if matches!(mode, Mode::Execute) {
+        // RFC 168 F6: a plan-only run creates nothing; the execute path is a writer (RFC 168 §3.1, §3.3).
+        layout.ensure_write_state()?;
+    }
     ensure_no_incomplete_publication(layout)?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay()?;

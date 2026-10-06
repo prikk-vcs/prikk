@@ -135,7 +135,7 @@ pub fn append_rollback_draft(
     let inverse_patch_id = envelope.object_id();
 
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
-    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     crate::refs::ensure_no_incomplete_publication(layout)?;
     let replay = wal.replay()?;
     // RFC 166 round 2 §0: the commit-witness classification speaks first, before the older

@@ -99,6 +99,8 @@ pub(crate) struct Listing {
     pub(crate) torn_tail: bool,
     /// The pre-RFC 168 `recovery/*.bytes` files, listed separately as "older format".
     pub(crate) older_files: Vec<String>,
+    /// Complete frames written by a newer prikk, which this version cannot read. Not damage (RFC 168 F12).
+    pub(crate) newer_versions: usize,
 }
 
 fn sha(bytes: &[u8]) -> [u8; 32] {
@@ -138,13 +140,15 @@ fn short_id(checksum: &[u8; 32]) -> String {
     prikk_hash::to_hex(checksum).chars().take(ID_LEN).collect()
 }
 
+/// The frame checksum: over the magic, version, length and body, hashed in place (RFC 168 F4: no copy of the body).
 fn checksum_of(body: &[u8]) -> [u8; 32] {
-    let mut preimage = Vec::with_capacity(8 + 2 + 8 + body.len());
-    preimage.extend_from_slice(MAGIC);
-    preimage.extend_from_slice(&VERSION.to_be_bytes());
-    preimage.extend_from_slice(&(body.len() as u64).to_be_bytes());
-    preimage.extend_from_slice(body);
-    sha(&preimage)
+    let len = (body.len() as u64).to_be_bytes();
+    crate::foundation::frame_resync::tallied_sha256_parts(&[
+        MAGIC,
+        &VERSION.to_be_bytes(),
+        &len,
+        body,
+    ])
 }
 
 /// The framed bytes of one entry, and its id.
@@ -235,10 +239,19 @@ pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> 
     ensure_directory_required(root, Path::new("recovery"))?;
     let path = Path::new(LOG_PATH);
     if read_file_range_if_exists(root, path, 0, 0)?.is_none() {
-        // The log's first appearance is a new name: on Windows it is not durable (RFC 168 §3.1, residual (b)).
-        create_new_file_required(root, path, &framed).map_err(|error| {
-            PrikkError::MalformedData(format!("creating recovery/log: {error}"))
-        })?;
+        // The log's first appearance is a new name: on Windows it is not durable (RFC 168 §3.1, residual (b)). A concurrent first
+        // write may have created it already (RFC 168 F12): then this entry is appended like any other.
+        match create_new_file_required(root, path, &framed) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                append_file_required(root, path, &framed)?;
+            }
+            Err(error) => {
+                return Err(PrikkError::MalformedData(format!(
+                    "creating recovery/log: {error}"
+                )));
+            }
+        }
     } else {
         append_file_required(root, path, &framed).map_err(|error| {
             PrikkError::MalformedData(format!("appending recovery/log: {error}"))
@@ -252,7 +265,21 @@ pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> 
     })
 }
 
-/// Read every sound entry, skipping damaged regions byte-wise to the next magic (RFC 167 budget).
+/// What one position of the log holds.
+enum Candidate {
+    /// A sound entry, and the offset after it.
+    Entry(Listed, usize),
+    /// A complete frame written by a newer prikk (its version is above this one's), and the offset after it. Not damage.
+    Newer(usize),
+    /// Bytes that cannot be a frame, the start of one that runs past the end, or a short header: a prefix of one frame at
+    /// the end of the log. Whether it is a torn tail depends on whether a sound frame follows it.
+    Prefix,
+    /// Bytes that are not a sound frame, and cannot be a prefix of one.
+    Damage,
+}
+
+/// Read every sound entry, skipping damaged regions byte-wise to the next magic. The RFC 167 budget bounds the work: each
+/// candidate is charged its header and its claimed body (clamped to the bytes that remain) **before** it is hashed (RFC 168 F4).
 pub(crate) fn list(root: &MutationRoot) -> Result<Listing> {
     let mut listing = Listing {
         older_files: older_files(root)?,
@@ -265,19 +292,35 @@ pub(crate) fn list(root: &MutationRoot) -> Result<Listing> {
     let mut at = 0_usize;
     let mut in_damage = false;
     while at < bytes.len() {
+        budget.charge(claimed_span(&bytes, at));
         if budget.exceeded() {
             listing.unread_tail = true;
             break;
         }
-        match parse_at(&bytes, at) {
-            Some((listed_entry, next, charged)) => {
-                budget.charge(charged);
-                listing.entries.push(listed_entry);
+        match classify_at(&bytes, at) {
+            Candidate::Entry(listed, next) => {
+                listing.entries.push(listed);
                 in_damage = false;
                 at = next;
             }
-            None => {
-                budget.charge(1);
+            Candidate::Newer(next) => {
+                listing.newer_versions += 1;
+                in_damage = false;
+                at = next;
+            }
+            Candidate::Prefix => {
+                if sound_frame_after(&bytes, at + 1, &mut budget) == Some(false) {
+                    // Nothing sound follows, and the question was answered: a torn tail, from an interrupted save (C2: nothing removed).
+                    listing.torn_tail = true;
+                    break;
+                }
+                if !in_damage {
+                    listing.damaged_regions += 1;
+                    in_damage = true;
+                }
+                at += 1;
+            }
+            Candidate::Damage => {
                 if !in_damage {
                     listing.damaged_regions += 1;
                     in_damage = true;
@@ -286,36 +329,101 @@ pub(crate) fn list(root: &MutationRoot) -> Result<Listing> {
             }
         }
     }
-    if in_damage && !listing.unread_tail {
-        // The unreadable run reached the end of the log: a torn tail, not a damaged region.
-        listing.damaged_regions -= 1;
-        listing.torn_tail = true;
-    }
     Ok(listing)
 }
 
-/// Parse one framed entry at `at`: its listing, the offset after it, and the bytes charged to the budget.
-fn parse_at(bytes: &[u8], at: usize) -> Option<(Listed, usize, u64)> {
-    let header = bytes.get(at..at.checked_add(HEADER_LEN)?)?;
-    if header.get(..8)? != MAGIC {
-        return None;
+/// The bytes a candidate at `at` may cost to examine: its header and its claimed body, clamped to what remains; one byte when
+/// the position does not start with the magic.
+fn claimed_span(bytes: &[u8], at: usize) -> u64 {
+    let rest = bytes.get(at..).unwrap_or_default();
+    if rest.len() < HEADER_LEN || rest.get(..8) != Some(MAGIC.as_slice()) {
+        return 1;
     }
-    let body_len =
-        usize::try_from(u64::from_be_bytes(header.get(10..18)?.try_into().ok()?)).ok()?;
-    let body_start = at.checked_add(HEADER_LEN)?;
-    let body_end = body_start.checked_add(body_len)?;
-    let body = bytes.get(body_start..body_end)?;
-    let stored: [u8; 32] = header.get(18..50)?.try_into().ok()?;
-    if checksum_of(body) != stored {
-        return None;
+    let claimed = rest
+        .get(10..18)
+        .and_then(|field| <[u8; 8]>::try_from(field).ok())
+        .map_or(0, u64::from_be_bytes);
+    let body = usize::try_from(claimed)
+        .unwrap_or(usize::MAX)
+        .min(rest.len() - HEADER_LEN);
+    (HEADER_LEN + body) as u64
+}
+
+/// Classify the position `at`. A complete candidate is checksummed in place, after the caller has charged it.
+fn classify_at(bytes: &[u8], at: usize) -> Candidate {
+    let rest = bytes.get(at..).unwrap_or_default();
+    if rest.len() < HEADER_LEN {
+        return if rest.get(..rest.len().min(8)) == MAGIC.get(..rest.len().min(8)) {
+            Candidate::Prefix
+        } else {
+            Candidate::Damage
+        };
     }
-    let entry = decode_body(body)?;
-    let id = short_id(&stored);
-    Some((
-        Listed { id, entry },
-        body_end,
-        (HEADER_LEN + body_len) as u64,
-    ))
+    if rest.get(..8) != Some(MAGIC.as_slice()) {
+        return Candidate::Damage;
+    }
+    let version = rest
+        .get(8..10)
+        .and_then(|field| <[u8; 2]>::try_from(field).ok())
+        .map_or(0, u16::from_be_bytes);
+    let claimed = rest
+        .get(10..18)
+        .and_then(|field| <[u8; 8]>::try_from(field).ok())
+        .map_or(0, u64::from_be_bytes);
+    let Ok(body_len) = usize::try_from(claimed) else {
+        return Candidate::Prefix;
+    };
+    if body_len > rest.len() - HEADER_LEN {
+        return Candidate::Prefix;
+    }
+    let body_end = at + HEADER_LEN + body_len;
+    let Some(body) = bytes.get(at + HEADER_LEN..body_end) else {
+        return Candidate::Prefix;
+    };
+    let Some(stored) = rest
+        .get(18..HEADER_LEN)
+        .and_then(|field| <[u8; 32]>::try_from(field).ok())
+    else {
+        return Candidate::Damage;
+    };
+    if version > VERSION {
+        return Candidate::Newer(body_end);
+    }
+    if version != VERSION || checksum_of(body) != stored {
+        return Candidate::Damage;
+    }
+    match decode_body(body) {
+        Some(entry) => Candidate::Entry(
+            Listed {
+                id: short_id(&stored),
+                entry,
+            },
+            body_end,
+        ),
+        None => Candidate::Damage,
+    }
+}
+
+/// Whether a sound frame starts at or after `from`: `Some(true)`, `Some(false)`, or `None` when the budget ran out before the
+/// question could be answered (an ambiguity, which resolves to damage: RFC 167 D2).
+fn sound_frame_after(bytes: &[u8], from: usize, budget: &mut ScanBudget) -> Option<bool> {
+    let mut cursor = from;
+    while let Some(found) =
+        crate::foundation::frame_resync::resync_to_next_magic(bytes, cursor, MAGIC)
+    {
+        budget.charge(claimed_span(bytes, found));
+        if budget.exceeded() {
+            return None;
+        }
+        if matches!(
+            classify_at(bytes, found),
+            Candidate::Entry(..) | Candidate::Newer(_)
+        ) {
+            return Some(true);
+        }
+        cursor = found + 1;
+    }
+    Some(false)
 }
 
 /// The pre-RFC 168 `recovery/*.bytes` files, by name.
@@ -500,14 +608,14 @@ pub(crate) fn lost_ids_entry(source: &str, contents: &[u8]) -> Entry {
     }
 }
 
-/// One restore condition and whether it holds.
+/// One restore condition: the fact it found, in the words the plan prints, and whether it holds (RFC 168 F2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Condition {
     pub(crate) text: String,
     pub(crate) holds: bool,
 }
 
-/// What a restore would do, condition by condition (RFC 168 §3.2: the plan prints each condition, then what it writes).
+/// What a restore would do, condition by condition (RFC 168 §3.2). `refusal` is set when the restore cannot run at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestorePlan {
     pub(crate) id: String,
@@ -516,55 +624,67 @@ pub(crate) struct RestorePlan {
     pub(crate) conditions: Vec<Condition>,
     /// The bytes that would be written at `offset`.
     pub(crate) would_write: Vec<u8>,
-    /// Set when the entry's source is not on the allowlist, or the id names no entry.
+    /// Set when the entry's source is not on the repair list, or the entry does not match the table, or the id names no entry.
     pub(crate) refusal: Option<String>,
     pub(crate) written: bool,
 }
 
 impl RestorePlan {
-    /// Whether every condition holds and no refusal applies.
+    /// Whether every condition holds and no refusal applies: the restore runs, and a plan-only run exits 0.
     pub(crate) fn can_restore(&self) -> bool {
         self.refusal.is_none() && self.conditions.iter().all(|condition| condition.holds)
     }
 }
 
-/// Plan, and when `plan_only` is false and every condition holds, write the removed bytes back at the recorded offset.
-/// Writes nothing otherwise. The caller holds the repair's locks.
+/// An id is 16 hex characters, compared ignoring case (RFC 168 F9). Returns the lowercase form.
+fn normalize_id(id: &str) -> Option<String> {
+    (id.len() == ID_LEN && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| id.to_ascii_lowercase())
+}
+
+fn refused_plan(id: &str, reason: String) -> RestorePlan {
+    RestorePlan {
+        id: id.to_string(),
+        source: String::new(),
+        offset: 0,
+        conditions: Vec::new(),
+        would_write: Vec::new(),
+        refusal: Some(reason),
+        written: false,
+    }
+}
+
+/// Plan a restore, and unless `plan_only`, write the removed bytes back when the plan can run (RFC 168 §3.2, F2, F8, F9). The
+/// meaning files are recomputed from the table: an entry that names different ones is refused. The caller holds the repair's locks.
 pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> Result<RestorePlan> {
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("recovery-log-identity");
     let root = layout.repository_mutation_root();
-    if id.len() != ID_LEN || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Ok(RestorePlan {
-            id: id.to_string(),
-            source: String::new(),
-            offset: 0,
-            conditions: Vec::new(),
-            would_write: Vec::new(),
-            refusal: Some(format!(
+    let Some(normalized) = normalize_id(id) else {
+        return Ok(refused_plan(
+            id,
+            format!(
                 "an entry id is {ID_LEN} hex characters; {id:?} is not one (`prikk doctor --recovery-list` prints the ids)"
-            )),
-            written: false,
-        });
-    }
+            ),
+        ));
+    };
     let listing = list(root)?;
-    let Some(listed) = listing.entries.iter().find(|listed| listed.id == id) else {
-        return Ok(RestorePlan {
-            id: id.to_string(),
-            source: String::new(),
-            offset: 0,
-            conditions: Vec::new(),
-            would_write: Vec::new(),
-            refusal: Some(format!(
-                "no recovery entry has id {id}; run `prikk doctor --recovery-list` for the ids"
-            )),
-            written: false,
-        });
+    let Some(listed) = listing
+        .entries
+        .iter()
+        .find(|listed| listed.id == normalized)
+    else {
+        return Ok(refused_plan(
+            id,
+            format!(
+                "no recovery entry has id {normalized}; `prikk doctor --recovery-list` prints the ids"
+            ),
+        ));
     };
     let entry = &listed.entry;
     let mut plan = RestorePlan {
-        id: id.to_string(),
+        id: normalized,
         source: entry.source.clone(),
         offset: entry.offset,
         conditions: Vec::new(),
@@ -574,48 +694,72 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
     };
     if !repairable_sources(layout)?.contains(&entry.source) {
         plan.refusal = Some(format!(
-            "{} is not a file a restore may write: the object index is rebuilt from its containers \
-             (`prikk doctor --repair-index`), and the other files on the repair list are the only \
-             ones a restore writes",
+            "a restore does not write {}: it is not on the repair list (the WAL, the pointer index, the ref log, the trust and \
+             received files and their generation logs), so this entry cannot be restored",
             entry.source
         ));
         return Ok(plan);
     }
-    let source_path = Path::new(&entry.source);
-    let stat = stat_file_state_if_exists(root, source_path)?;
-    let length_ok = stat.is_some_and(|state| state.size == entry.offset);
-    plan.conditions.push(Condition {
-        text: format!(
-            "the source's length equals the recorded offset {}",
-            entry.offset
-        ),
-        holds: length_ok,
-    });
-    let prefix_ok = match (
-        length_ok,
-        read_file_range_if_exists(
-            root,
-            source_path,
-            0,
-            usize::try_from(entry.offset).unwrap_or(usize::MAX),
-        )?,
-    ) {
-        (true, Some(prefix)) => sha(&prefix) == entry.prefix_hash,
-        _ => false,
+    let expected = meaning_paths_for(layout, &entry.source)?;
+    let named: Vec<String> = entry
+        .meaning
+        .iter()
+        .map(|meaning| meaning.path.clone())
+        .collect();
+    if expected != named {
+        plan.refusal = Some(format!(
+            "the entry names the meaning files {named:?}, but the repair table gives {} the meaning files {expected:?}; the \
+             entry does not match the table, so it cannot be restored",
+            entry.source
+        ));
+        return Ok(plan);
+    }
+    let offset = entry.offset;
+    let current =
+        stat_file_state_if_exists(root, Path::new(&entry.source))?.map(|state| state.size);
+    let length_ok = current == Some(offset);
+    let length_text = match current {
+        Some(len) if len == offset => {
+            format!("the source is {offset} bytes, the length the repair left")
+        }
+        Some(len) => format!("the source is {len} bytes; the repair left {offset}"),
+        None => format!("the source is absent; the repair left {offset} bytes"),
     };
     plan.conditions.push(Condition {
-        text: "the source's prefix hashes to the recorded prefix hash".to_string(),
+        text: length_text,
+        holds: length_ok,
+    });
+    let prefix_ok = length_ok
+        && read_file_range_if_exists(
+            root,
+            Path::new(&entry.source),
+            0,
+            usize::try_from(offset).unwrap_or(usize::MAX),
+        )?
+        .is_some_and(|prefix| sha(&prefix) == entry.prefix_hash);
+    let prefix_text = if !length_ok {
+        "the bytes before the offset are not compared: the length differs".to_string()
+    } else if prefix_ok {
+        "the bytes before the offset are the bytes the repair left".to_string()
+    } else {
+        "the bytes before the offset have changed since the repair".to_string()
+    };
+    plan.conditions.push(Condition {
+        text: prefix_text,
         holds: prefix_ok,
     });
     for meaning in &entry.meaning {
         let now = read_file_if_exists(root, Path::new(&meaning.path))?.map(|bytes| sha(&bytes));
-        plan.conditions.push(Condition {
-            text: format!("the meaning file {} is unchanged", meaning.path),
-            holds: now == meaning.hash,
-        });
+        let holds = now == meaning.hash;
+        let text = if holds {
+            format!("{} is unchanged since the repair", meaning.path)
+        } else {
+            format!("{} has changed since the repair", meaning.path)
+        };
+        plan.conditions.push(Condition { text, holds });
     }
     if plan.can_restore() && !plan_only {
-        append_file_required(root, source_path, &entry.removed)?;
+        append_file_required(root, Path::new(&entry.source), &entry.removed)?;
         plan.written = true;
     }
     Ok(plan)
@@ -633,12 +777,16 @@ pub(crate) fn removed_bytes(layout: &RepositoryLayout, id: &str) -> Result<Optio
 }
 
 /// The one line `verify` prints about the log (RFC 168 §3.1), or `None` when the log is sound and fully read.
-pub(crate) fn verify_line(layout: &RepositoryLayout) -> Result<Option<String>> {
-    let listing = list(layout.repository_mutation_root())?;
+pub(crate) fn verify_line(layout: &RepositoryLayout) -> Option<String> {
+    // RFC 168 F1: a log that cannot be read is one line, and `verify`'s exit status does not change by it.
+    let listing = match list(layout.repository_mutation_root()) {
+        Ok(listing) => listing,
+        Err(error) => return Some(format!("recovery log: cannot be read ({error})")),
+    };
     if listing.damaged_regions == 0 && !listing.unread_tail {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(format!(
+    Some(format!(
         "recovery log: {} damaged region{}{}; a save there cannot be restored (`prikk doctor --recovery-list`)",
         listing.damaged_regions,
         if listing.damaged_regions == 1 {
@@ -651,7 +799,7 @@ pub(crate) fn verify_line(layout: &RepositoryLayout) -> Result<Option<String>> {
         } else {
             ""
         },
-    )))
+    ))
 }
 
 #[cfg(test)]
@@ -680,11 +828,12 @@ mod tests {
         let entry = sample();
         let (framed, id) = frame(&entry);
         assert_eq!(id.len(), ID_LEN);
-        let (listed, next, charged) = parse_at(&framed, 0).expect("a sound frame parses");
+        let Candidate::Entry(listed, next) = classify_at(&framed, 0) else {
+            panic!("a sound frame classifies as an entry");
+        };
         assert_eq!(listed.entry, entry);
         assert_eq!(listed.id, id);
         assert_eq!(next, framed.len());
-        assert_eq!(charged as usize, framed.len());
     }
 
     #[test]
@@ -767,7 +916,7 @@ mod controls {
         assert_eq!(listing.entries.len(), 1);
         assert_eq!(listing.damaged_regions, 0);
         assert!(listing.torn_tail);
-        assert_eq!(verify_line(&layout).expect("line"), None);
+        assert_eq!(verify_line(&layout), None);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -785,7 +934,7 @@ mod controls {
         assert!(
             plan.refusal
                 .as_deref()
-                .is_some_and(|text| text.contains("not a file a restore may write")),
+                .is_some_and(|text| text.contains("a restore does not write FORMAT")),
             "{plan:?}"
         );
         assert_eq!(
@@ -839,6 +988,8 @@ pub struct RecoveryListing {
     pub torn_tail: bool,
     /// The RFC 167 budget stopped the scan before the end of the log.
     pub unread_tail: bool,
+    /// Entries written by a newer prikk, which this version cannot read. Not damage.
+    pub newer_versions: usize,
     /// The `recovery/*.bytes` files a repair wrote before this format: listed, never restored, never deleted (RFC 168 C4).
     pub older_files: Vec<String>,
 }
@@ -871,34 +1022,56 @@ pub struct RestorePlanView {
     pub written: bool,
 }
 
+/// One entry `--recovery-clear` removes, listed before it does (RFC 168 F9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClearedEntry {
+    /// The entry's id.
+    pub id: String,
+    /// The source the entry saved bytes from.
+    pub source: String,
+    /// How many bytes it saved.
+    pub len: u64,
+}
+
 /// What `--recovery-clear` removed, or would remove under `--plan-only`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryClearView {
-    /// How many sound entries the log held.
-    pub entries: usize,
+    /// Each sound entry, listed.
+    pub entries: Vec<ClearedEntry>,
     /// How many bytes the log held.
     pub bytes: usize,
     /// Whether the log was emptied (false under `--plan-only`).
     pub cleared: bool,
 }
 
-/// The locks a repair takes (`doctor::repair_tails`'s own set): restore and clear take the same ones, so neither runs
-/// beside a repair or a writer of the files it may write.
+/// The locks a repair takes, taken together by a restore and a clear (RFC 168 F5): the object-store lock, the ref-pointer-index,
+/// ref-log, received-index and trust-policy container locks, and the active lock of every session on disk, the default included.
+/// Active locks come first, then the containers, in the order the repairs take them.
 fn repair_locks(
     layout: &RepositoryLayout,
-) -> Result<(crate::lock::ActiveLock, crate::lock::ContainerLockGuard)> {
+) -> Result<(
+    Vec<crate::lock::ActiveLock>,
+    crate::lock::ContainerLockGuard,
+)> {
     use crate::foundation::layout::LockableContainer;
-    let active = crate::lock::ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let mut sessions: std::collections::BTreeSet<std::ffi::OsString> =
+        layout.active_session_names()?.into_iter().collect();
+    sessions.insert(std::ffi::OsString::from(DEFAULT_ACTIVE_NAME));
+    let mut actives = Vec::with_capacity(sessions.len());
+    for name in &sessions {
+        actives.push(crate::lock::ActiveLock::acquire(layout, name)?);
+    }
     let containers = crate::lock::acquire_container_locks(
         layout,
         &[
+            LockableContainer::ObjectStore,
             LockableContainer::RefPointerIndex,
             LockableContainer::RefLog,
             LockableContainer::ReceivedIndex,
             LockableContainer::TrustPolicy,
         ],
     )?;
-    Ok((active, containers))
+    Ok((actives, containers))
 }
 
 /// `prikk doctor --recovery-list`: read the log. Judges no entry's restorability (that needs the source's whole hash, which a
@@ -921,6 +1094,7 @@ pub fn recovery_list(layout: &RepositoryLayout) -> Result<RecoveryListing> {
         damaged_regions: listing.damaged_regions,
         torn_tail: listing.torn_tail,
         unread_tail: listing.unread_tail,
+        newer_versions: listing.newer_versions,
         older_files: listing.older_files,
     })
 }
@@ -951,7 +1125,8 @@ pub fn recovery_restore(
     })
 }
 
-/// `prikk doctor --recovery-clear [--plan-only]`: under the repair's locks, empty the log in place (the name is kept).
+/// `prikk doctor --recovery-clear [--plan-only]`: under the repair's locks, list the entries and, unless `plan_only`, empty the log
+/// in place (the name is kept).
 pub fn recovery_clear(layout: &RepositoryLayout, plan_only: bool) -> Result<RecoveryClearView> {
     let _locks = repair_locks(layout)?;
     let root = layout.repository_mutation_root();
@@ -963,7 +1138,15 @@ pub fn recovery_clear(layout: &RepositoryLayout, plan_only: bool) -> Result<Reco
         cleared = true;
     }
     Ok(RecoveryClearView {
-        entries: listing.entries.len(),
+        entries: listing
+            .entries
+            .iter()
+            .map(|listed| ClearedEntry {
+                id: listed.id.clone(),
+                source: listed.entry.source.clone(),
+                len: listed.entry.removed.len() as u64,
+            })
+            .collect(),
         bytes,
         cleared,
     })
@@ -971,7 +1154,7 @@ pub fn recovery_clear(layout: &RepositoryLayout, plan_only: bool) -> Result<Reco
 
 /// The one line `verify` prints about the log, or `None` when the log is sound and fully read. Never changes `verify`'s exit
 /// status (RFC 168 §3.1).
-pub fn recovery_verify_line(layout: &RepositoryLayout) -> Result<Option<String>> {
+pub fn recovery_verify_line(layout: &RepositoryLayout) -> Option<String> {
     verify_line(layout)
 }
 
@@ -1020,7 +1203,7 @@ mod early_creation {
         std::fs::write(&older, b"removed by a 0.48.0 repair").expect("an older file");
 
         {
-            let _lock = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+            let _lock = ActiveLock::acquire_for_write(&layout, DEFAULT_ACTIVE_NAME)
                 .expect("the write takes the lock");
             assert!(log.is_file(), "the log is created at the first write");
             assert!(
@@ -1046,6 +1229,252 @@ mod early_creation {
         assert_eq!(
             listing.older_files,
             vec!["recovery/wal-default-at-3-0123456789abcdef.bytes".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+mod review_fixes {
+    use super::*;
+    use crate::foundation::frame_resync::hash_tally;
+    use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+    use crate::test_gates::test_support::unique_temp_dir;
+
+    fn entry(source: &str, removed: &[u8]) -> Entry {
+        Entry {
+            source: source.to_string(),
+            offset: 4,
+            label: "review".to_string(),
+            binary_version: env!("CARGO_PKG_VERSION").to_string(),
+            prefix_hash: sha(b"abcd"),
+            meaning: Vec::new(),
+            removed: removed.to_vec(),
+        }
+    }
+
+    fn log_path(root: &std::path::Path) -> std::path::PathBuf {
+        root.join(".prikk").join(LOG_PATH)
+    }
+
+    /// RFC 168 F3: a short header is a torn tail.
+    #[test]
+    fn a_short_header_at_the_end_is_a_torn_tail() {
+        let root = unique_temp_dir("recovery-log-f3-short");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        append(layout.repository_mutation_root(), &entry("FORMAT", b"x")).expect("append");
+        let mut bytes = std::fs::read(log_path(&root)).expect("read");
+        bytes.extend_from_slice(&MAGIC[..5]);
+        std::fs::write(log_path(&root), &bytes).expect("write");
+        let listing = list(layout.repository_mutation_root()).expect("list");
+        assert!(listing.torn_tail);
+        assert_eq!(listing.damaged_regions, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F3: a sound magic whose body runs past the end of the file is a torn tail, when nothing sound follows it.
+    #[test]
+    fn a_body_that_runs_past_the_end_is_a_torn_tail() {
+        let root = unique_temp_dir("recovery-log-f3-past-end");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        append(layout.repository_mutation_root(), &entry("FORMAT", b"x")).expect("append");
+        let mut bytes = std::fs::read(log_path(&root)).expect("read");
+        let mut header = Vec::new();
+        header.extend_from_slice(MAGIC);
+        header.extend_from_slice(&VERSION.to_be_bytes());
+        header.extend_from_slice(&1000_u64.to_be_bytes());
+        header.extend_from_slice(&[0_u8; 32]);
+        header.extend_from_slice(b"short body");
+        bytes.extend_from_slice(&header);
+        std::fs::write(log_path(&root), &bytes).expect("write");
+        let listing = list(layout.repository_mutation_root()).expect("list");
+        assert_eq!(listing.entries.len(), 1);
+        assert!(listing.torn_tail);
+        assert_eq!(listing.damaged_regions, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F3: a complete last frame that fails its checksum is damage, listed and printed by `verify`. One byte flipped in
+    /// the only entry is the reproduced case.
+    #[test]
+    fn a_complete_frame_at_the_end_that_fails_its_checksum_is_damage() {
+        let root = unique_temp_dir("recovery-log-f3-flipped");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        append(
+            layout.repository_mutation_root(),
+            &entry("FORMAT", b"only entry"),
+        )
+        .expect("append");
+        let mut bytes = std::fs::read(log_path(&root)).expect("read");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        std::fs::write(log_path(&root), &bytes).expect("write");
+        let listing = list(layout.repository_mutation_root()).expect("list");
+        assert!(listing.entries.is_empty());
+        assert_eq!(listing.damaged_regions, 1, "the flipped entry is damage");
+        assert!(!listing.torn_tail, "a complete frame is never a torn tail");
+        assert!(verify_line(&layout).is_some_and(|line| line.contains("1 damaged region")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F12: a frame written by a newer prikk lists as such, and is not damage.
+    #[test]
+    fn a_newer_version_frame_is_not_damage() {
+        let root = unique_temp_dir("recovery-log-f12-newer");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        append(layout.repository_mutation_root(), &entry("FORMAT", b"old")).expect("append");
+        let body = encode_body(&entry("FORMAT", b"newer"));
+        let len = (body.len() as u64).to_be_bytes();
+        let version: u16 = VERSION + 1;
+        let checksum = crate::foundation::frame_resync::tallied_sha256_parts(&[
+            MAGIC,
+            &version.to_be_bytes(),
+            &len,
+            &body,
+        ]);
+        let mut framed = Vec::new();
+        framed.extend_from_slice(MAGIC);
+        framed.extend_from_slice(&version.to_be_bytes());
+        framed.extend_from_slice(&len);
+        framed.extend_from_slice(&checksum);
+        framed.extend_from_slice(&body);
+        let mut bytes = std::fs::read(log_path(&root)).expect("read");
+        bytes.extend_from_slice(&framed);
+        std::fs::write(log_path(&root), &bytes).expect("write");
+        let listing = list(layout.repository_mutation_root()).expect("list");
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.newer_versions, 1);
+        assert_eq!(listing.damaged_regions, 0);
+        assert_eq!(
+            verify_line(&layout),
+            None,
+            "a newer entry prints no damage line"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F4: a damaged entry whose payload holds many in-range `PRECLOG1` headers keeps the bytes hashed within the budget's
+    /// 8× of the input. Without the charge before hashing, every candidate hashes its whole claimed body: quadratic in the input.
+    #[test]
+    fn a_payload_full_of_headers_keeps_the_bytes_hashed_within_eight_times_the_input() {
+        let root = unique_temp_dir("recovery-log-f4-budget");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let mut bytes = Vec::new();
+        while bytes.len() < 256 * 1024 {
+            let remaining = 256 * 1024 - bytes.len();
+            let claimed = remaining.saturating_sub(HEADER_LEN) as u64;
+            bytes.extend_from_slice(MAGIC);
+            bytes.extend_from_slice(&VERSION.to_be_bytes());
+            bytes.extend_from_slice(&claimed.to_be_bytes());
+            bytes.extend_from_slice(&[0_u8; 32]);
+            bytes.extend_from_slice(&[0xAB_u8; 64]);
+        }
+        let input = bytes.len();
+        std::fs::write(log_path(&root), &bytes).expect("write");
+        hash_tally::reset();
+        let listing = list(layout.repository_mutation_root()).expect("list");
+        let hashed = hash_tally::bytes_hashed();
+        assert!(
+            listing.entries.is_empty(),
+            "nothing in the payload is a sound entry"
+        );
+        assert!(
+            hashed <= 8 * input as u64,
+            "hashed {hashed} bytes of a {input}-byte log: more than the budget's 8x"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F8: an entry whose meaning list differs from the table refuses, and names why.
+    #[test]
+    fn a_restore_refuses_an_entry_whose_meaning_list_differs_from_the_table() {
+        let root = unique_temp_dir("recovery-log-f8-meaning");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let wal = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+        let source = layout
+            .repository_relative(&wal)
+            .expect("relative")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let mut forged = entry(&source, b"removed");
+        forged.meaning = Vec::new();
+        let reference = append(layout.repository_mutation_root(), &forged).expect("append");
+        let plan = restore(&layout, &reference.id, true).expect("plan");
+        assert!(!plan.written);
+        assert!(
+            plan.refusal
+                .as_deref()
+                .is_some_and(|text| text.contains("does not match the table")),
+            "{plan:?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F9: ids compare ignoring case.
+    #[test]
+    fn an_uppercase_id_names_the_same_entry() {
+        let root = unique_temp_dir("recovery-log-f9-case");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let reference =
+            append(layout.repository_mutation_root(), &entry("FORMAT", b"x")).expect("append");
+        let plan = restore(&layout, &reference.id.to_uppercase(), true).expect("plan");
+        // The id resolves to the entry: the refusal is the allowlist's (FORMAT is not on the repair list), not "no entry".
+        assert!(
+            plan.refusal
+                .as_deref()
+                .is_some_and(|text| text.contains("a restore does not write FORMAT")),
+            "{plan:?}"
+        );
+        assert_eq!(plan.id, reference.id);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F6: plan-only paths create nothing: the log and the witness stay absent.
+    #[test]
+    fn plan_only_restore_and_clear_create_nothing() {
+        let root = unique_temp_dir("recovery-log-f6-plan");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let witness = layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("witness");
+        std::fs::remove_file(root.join(".prikk").join(LOG_PATH)).expect("remove the log");
+        std::fs::remove_file(&witness).expect("remove the witness");
+        let _ = crate::recovery_restore(&layout, &"0".repeat(16), true);
+        let _ = crate::recovery_clear(&layout, true);
+        let _ = crate::plan_discard_damaged_commits(&layout);
+        let _ = crate::plan_restore_queue_target(&layout, "heads/main", false);
+        assert!(
+            !root.join(".prikk").join(LOG_PATH).exists(),
+            "plan-only restore and clear create no log"
+        );
+        assert!(
+            !witness.exists(),
+            "plan-only restore and clear create no witness"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 F5: restore and clear take the object-store lock too: while an index rebuild holds it, neither runs.
+    #[test]
+    fn restore_and_clear_wait_for_the_object_store_lock() {
+        use crate::foundation::layout::LockableContainer;
+        let root = unique_temp_dir("recovery-log-f5-locks");
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let held = crate::lock::acquire_container_locks(&layout, &[LockableContainer::ObjectStore])
+            .expect("hold it");
+        assert!(
+            crate::recovery_restore(&layout, &"0".repeat(16), true).is_err(),
+            "restore waits for the lock"
+        );
+        assert!(
+            crate::recovery_clear(&layout, true).is_err(),
+            "clear waits for the lock"
+        );
+        drop(held);
+        assert!(
+            crate::recovery_clear(&layout, true).is_ok(),
+            "and runs once it is free"
         );
         let _ = std::fs::remove_dir_all(root);
     }

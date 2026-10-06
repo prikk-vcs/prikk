@@ -92,7 +92,7 @@ pub fn switch_branch(
 ) -> Result<BranchSwitchReport> {
     layout.require_current_format()?;
     let target = validate_local_branch_ref(target)?;
-    let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
 

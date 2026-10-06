@@ -74,7 +74,7 @@ pub struct RepairTailsReport {
 /// `prikk doctor --repair-tails`. See the module doc for the locking order and the all-or-nothing
 /// rule.
 pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
-    let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let _container_locks = acquire_container_locks(
         layout,
         &[

@@ -633,3 +633,37 @@ fn a_lying_snapshot_on_an_unverified_block_never_reaches_the_worktree() -> prikk
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+/// RFC 168 Addendum 1 item 11, the snapshot route: an interrupted `checkout --snapshot-materialize` leaves the marker set and names
+/// a command; running that command finishes the checkout and clears the marker. Its first worktree write is faulted, so the
+/// worktree is untouched when the route runs.
+#[test]
+fn an_interrupted_snapshot_checkout_names_a_command_that_finishes_it() -> prikk_error::Result<()> {
+    use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
+    use crate::test_gates::test_support::{SnapshotAt, publish_snapshot_history};
+    let root = unique_temp_dir("snapshot-route-interrupted");
+    let layout = RepositoryLayout::init(root.clone())?;
+    publish_snapshot_history(&layout, SnapshotAt::Tip)?;
+
+    fail_after_for_test(TestFailPoint::MutableRename, 0);
+    let interrupted = materialize_snapshot_checkout(&layout, MAIN);
+    clear_failpoint_for_test();
+    assert!(interrupted.is_err(), "the injected failure fires");
+    assert!(
+        crate::worktree_marker::worktree_is_dirty(&layout)?,
+        "the marker stays set"
+    );
+
+    let route = crate::worktree_marker::dirty_marker_route(&layout)?;
+    assert!(
+        route.contains("run `prikk checkout --patch-materialize --ref heads/main` to finish it"),
+        "the route names the command: {route}"
+    );
+    materialize_patch_checkout(&layout, MAIN)?;
+    assert!(
+        !crate::worktree_marker::worktree_is_dirty(&layout)?,
+        "running the named command clears the marker"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

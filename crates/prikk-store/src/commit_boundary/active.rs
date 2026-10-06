@@ -63,7 +63,7 @@ impl ActiveSession {
         active_patch_limit: usize,
     ) -> Result<ActiveCommitResult> {
         self.layout.require_current_format()?;
-        let _lock = ActiveLock::acquire(&self.layout, DEFAULT_ACTIVE_NAME)?;
+        let _lock = ActiveLock::acquire_for_write(&self.layout, DEFAULT_ACTIVE_NAME)?;
         ensure_no_incomplete_publication(&self.layout)?;
         let wal = Wal::for_layout(&self.layout, DEFAULT_ACTIVE_NAME);
         let replay = wal.replay()?;

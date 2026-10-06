@@ -31,13 +31,20 @@ impl ActiveLock {
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
         acquire_lock_file(&mutation_root, &relative, &path, "active")?;
-        let lock = Self {
+        let _ = is_default;
+        Ok(Self {
             path,
             relative,
             mutation_root,
-        };
-        // RFC 168 §3.1, §3.3: the one call site where a repository created before the recovery log and the witness gets them.
-        // Taken after the lock is held and returned as the guard, so a failure here releases the lock on drop.
+        })
+    }
+
+    /// The lock a writer takes. RFC 168 §3.1, §3.3: a repository created before the recovery log and the witness gets them here,
+    /// at its first write. A plan-only path takes [`Self::acquire`] instead and creates nothing (RFC 168 F6). Created after the lock
+    /// is held and returned as the guard, so a failure here releases the lock on drop.
+    pub fn acquire_for_write(layout: &RepositoryLayout, name: impl AsRef<Path>) -> Result<Self> {
+        let is_default = name.as_ref() == Path::new(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+        let lock = Self::acquire(layout, name)?;
         if is_default {
             layout.ensure_write_state()?;
         }

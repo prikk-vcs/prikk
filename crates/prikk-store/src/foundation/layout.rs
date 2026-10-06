@@ -1021,13 +1021,26 @@ pub(crate) fn validate_maintainer_key_id_storage_safety(key_id: &str) -> Result<
 /// against an already-initialized repository never clobbers it -- the same rule RFC 102 Stage 1
 /// established for the worktree marker and the active WAL, now shared by every `init`-time file this
 /// layout creates.
+/// RFC 168 F12: a concurrent first write may create the same name first. `AlreadyExists` is that outcome, not a failure.
+pub(crate) fn create_if_absent(
+    layout: &RepositoryLayout,
+    relative: &Path,
+    bytes: &[u8],
+) -> Result<()> {
+    match create_new_file_required(layout.repository_mutation_root(), relative, bytes) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn create_empty_file_once(layout: &RepositoryLayout, path: &Path) -> Result<()> {
     let relative = layout.repository_relative(path)?;
     // An existence check, not a read: a zero-length ranged read opens exactly as the whole read did (same refusals, same failpoint)
     // and reads no byte. It used to read the whole file, so `init` over an existing repository read every container and the index
     // whole (RFC 160 P1's inventory found it; the whole-read guard is red if it is put back).
     if read_file_range_if_exists(layout.repository_mutation_root(), &relative, 0, 0)?.is_none() {
-        create_new_file_required(layout.repository_mutation_root(), &relative, &[])?;
+        create_if_absent(layout, &relative, &[])?;
     }
     Ok(())
 }

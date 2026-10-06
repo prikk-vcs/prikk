@@ -28,6 +28,17 @@ pub fn sha256(input: &[u8]) -> Sha256Digest {
     hasher.finalize().into()
 }
 
+/// SHA-256 over several byte slices in order, without concatenating them: the same digest as [`sha256`] of their
+/// concatenation. Used where a checksum covers a header and a body that are held apart, so the body is hashed in place.
+#[must_use]
+pub fn sha256_parts(parts: &[&[u8]]) -> Sha256Digest {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
 /// Convert bytes to lowercase hex.
 #[must_use]
 pub fn to_hex(bytes: &[u8]) -> String {

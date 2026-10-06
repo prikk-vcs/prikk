@@ -48,7 +48,7 @@ pub(crate) fn simulate_one_seal(
     ref_name: &str,
     signer: &Ed25519MaintainerSigner,
 ) -> Result<ObjectId> {
-    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay()?;
 

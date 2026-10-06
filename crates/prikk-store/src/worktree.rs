@@ -81,7 +81,7 @@ pub fn materialize_snapshot_checkout(
     // The active lock is held across the marker and every write, so `verify`'s compare-and-remove of
     // the marker cannot interleave with this append. The marker is durable before the first write; a
     // crash between the two leaves it set, which fails closed.
-    let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // Checkout-refusal round §2.1: every conflict refuses here, before the provisional marker and the
     // dirty marker, so a refused materialization writes nothing at all.
     refuse_manifest_conflicts(layout, &manifest)?;

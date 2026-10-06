@@ -89,7 +89,7 @@ pub fn add_trusted_maintainer(
     public_key_hex: &str,
 ) -> Result<(AdoptedMaintainerKey, bool)> {
     layout.require_current_format()?;
-    let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // RFC 102 Stage 6 Step 2, design-v1.md §15.8: `TrustPolicy` gets its own container-scoped lock,
     // not just `ActiveLock` -- the owner's decision 2 (design-v1.md §15.7) that the exclusion
     // mechanism against the compactor must be container-scoped, so a `prikk compact` run on an
@@ -197,7 +197,7 @@ pub fn add_trusted_maintainer(
 /// introducing it now would be a new state `verify`'s trust classification does not account for.
 pub fn remove_trusted_maintainer(layout: &RepositoryLayout, key_id: &str) -> Result<bool> {
     layout.require_current_format()?;
-    let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // See `add_trusted_maintainer`'s identical comment: `TrustPolicy`'s own container-scoped lock,
     // additional to `ActiveLock`, per design-v1.md §15.7/§15.8.
     let _trust_policy_lock = acquire_container_locks(layout, &[LockableContainer::TrustPolicy])?;

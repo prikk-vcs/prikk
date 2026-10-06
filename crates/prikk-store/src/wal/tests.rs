@@ -642,7 +642,7 @@ fn a_wal_restore_is_refused_when_the_prefix_changed_at_the_same_length() -> prik
     assert!(
         plan.conditions
             .iter()
-            .any(|c| !c.holds && c.text.contains("prefix")),
+            .any(|c| !c.holds && c.text.contains("have changed since the repair")),
         "{plan:?}"
     );
     let _ = std::fs::remove_dir_all(root);

@@ -299,6 +299,13 @@ pub(crate) fn tallied_sha256(bytes: &[u8]) -> [u8; 32] {
     prikk_hash::sha256(bytes)
 }
 
+/// [`tallied_sha256`] over several slices in order, hashed in place: the bytes are counted once each, as if concatenated.
+pub(crate) fn tallied_sha256_parts(parts: &[&[u8]]) -> [u8; 32] {
+    #[cfg(test)]
+    hash_tally::record(parts.iter().map(|part| part.len()).sum());
+    prikk_hash::sha256_parts(parts)
+}
+
 /// **Test-only tally** (RFC 160 §9 R3 / the external review's M5): bytes passed to [`tallied_sha256`] on this thread since the last
 /// [`reset`]. Mirrors `fsutil::anchored::read_tally` exactly, for the same reason: a property test can assert "this reader hashed at
 /// most K times its input" only if something counts the hashing.

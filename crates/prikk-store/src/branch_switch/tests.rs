@@ -309,7 +309,7 @@ fn a_switch_interrupted_between_the_pointer_truncate_and_append_leaves_a_torn_po
 /// on the target" must then finish the job, not return early. The pointer's own truncate is the first truncate of a switch, so
 /// skip it: the marker clear is the second.
 #[test]
-fn a_switch_interrupted_at_the_marker_clear_is_finished_by_switching_again() {
+fn a_failpoint_at_the_marker_clear_leaves_the_new_pointer_in_place() {
     let (root, layout) = two_branches("switch-crash-marker");
     fail_after_for_test(TestFailPoint::Truncate, 1);
     assert!(switch_branch(&layout, Some("heads/main"), "heads/other").is_err());

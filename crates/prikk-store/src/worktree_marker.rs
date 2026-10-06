@@ -300,7 +300,7 @@ pub fn clear_provisional_marker_if_unchanged(
     layout: &RepositoryLayout,
     observed: &[u8],
 ) -> Result<ProvisionalClearOutcome> {
-    let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let Some(current) = provisional_marker_bytes(layout)? else {
         return Ok(ProvisionalClearOutcome::NotSet);
     };

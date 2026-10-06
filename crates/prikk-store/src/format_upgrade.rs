@@ -53,7 +53,7 @@ pub fn upgrade_repository_format(
     layout: &RepositoryLayout,
     verdict: impl FnOnce(&RepositoryVerification) -> std::result::Result<(), String>,
 ) -> Result<FormatUpgradeOutcome> {
-    let _lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let _lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // The marker as it is now, under the lock — not as it was when `layout` was opened.
     let current = RepositoryLayout::open(layout.root().to_path_buf())?;
     match current.format() {

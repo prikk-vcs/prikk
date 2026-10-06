@@ -855,7 +855,7 @@ pub fn import_bundle(
     //
     // Before this, the author-key conflict check ran after every object was written, so a refused
     // import left the bundle's objects behind -- appended to containers nothing prunes.
-    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let _received_index_lock =
         acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
     // RFC 163 §2, Addendum 1 item 1: the received index's own write-side tail guard belongs here too --

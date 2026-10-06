@@ -1302,7 +1302,7 @@ pub fn repair_repository(
             });
             continue;
         }
-        let lock = match ActiveLock::acquire(layout, &name) {
+        let lock = match ActiveLock::acquire_for_write(layout, &name) {
             Ok(lock) => lock,
             Err(error) => {
                 active_repairs.push(ActiveSessionRepairOutcome {

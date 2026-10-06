@@ -90,6 +90,10 @@ fn refusal_reason(verdict: &Verdict) -> Option<&'static str> {
 
 fn run(layout: &RepositoryLayout, mode: Mode) -> Result<DiscardDamagedCommitsPlan> {
     let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    if matches!(mode, Mode::Execute) {
+        // RFC 168 F6: a plan-only run creates nothing; the execute path is a writer (RFC 168 §3.1, §3.3).
+        layout.ensure_write_state()?;
+    }
     crate::refs::ensure_no_incomplete_publication(layout)?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay()?;

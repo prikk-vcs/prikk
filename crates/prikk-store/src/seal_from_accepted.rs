@@ -168,7 +168,7 @@ pub fn seal_from_accepted_claim(
     let trust_policy = load_maintainer_trust_policy_or_empty(layout)?;
     let claim_signature_outcome = verify_claim_signature(&claim_envelope, &trust_policy)?;
 
-    let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     crate::refs::ensure_no_incomplete_publication(layout)?;
 
     // §5: the active WAL must be empty. Sealing accepted patches advances the branch tip; locally

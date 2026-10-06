@@ -340,7 +340,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // record and fails the "seal first" guard. Released on return (RAII). The append below uses the
     // raw WAL under this held lock (not `ActiveSession::append_patch`, which would re-acquire).
     let active_lock =
-        ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME).map_err(AuthorError::Store)?;
+        ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME).map_err(AuthorError::Store)?;
     crate::refs::ensure_no_incomplete_publication(layout).map_err(AuthorError::Store)?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout).map_err(AuthorError::Store)?;
