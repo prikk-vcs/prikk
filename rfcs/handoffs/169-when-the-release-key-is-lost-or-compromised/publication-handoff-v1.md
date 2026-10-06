@@ -9,7 +9,7 @@ what that check covers and what it does not. **No sentence may claim more than t
 
 ## Background and governing RFC
 
-- **Read `rfcs/accepted/169-when-the-release-key-is-lost-or-compromised.md` whole,** above all §1 (the facts), §3.1, §3.3,
+- **Read `rfcs/proposed/169-when-the-release-key-is-lost-or-compromised.md` whole,** above all §1 (the facts), §3.1, §3.3,
   §3.4 and §7.
 - **The key:** RSA `25757DA6CBF7022C4E14CCAC1B3066B87DB99A34`. Users fetch it from `https://github.com/nabbisen.gpg`.
 - **The facts the docs must match:**
@@ -101,3 +101,5 @@ Add to items 1 and 2:
 **Item 3 ACCEPTED 2026-10-07** (reviews `rfc169-publication-review-v1`, `-v2`; `2ba2c755`, `d9a60467`). The push follows the owner's reading of RFC 169 §8 (C1). **Owner actions still open:** items 1, 2 and 6 now, and item 4 before the first stable release (runbook `.git-exclude/runbooks/release-key-runbook.md`).
 
 **2026-10-07: the owner approved C1** (RFC 169 §8). Item 3 is pushed with this record. **Item 3 is closed.**
+
+**2026-10-07: RFC 169 parked by the owner** (acceptance withdrawn; back in `proposed/`). Item 3's factual docs stay; the lost/compromised paragraph in `SECURITY.md` is removed in the 0.49.0 release prep. Nothing else here is live.

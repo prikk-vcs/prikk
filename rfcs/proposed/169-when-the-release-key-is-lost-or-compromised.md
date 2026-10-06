@@ -1,6 +1,17 @@
 # RFC 169 — When the release key is lost or compromised: a written procedure, and what a signature covers (D7)
 
-**Status.** **ACCEPTED 2026-10-07 by the owner** (*"Accepted."*).
+**Status.** **PARKED 2026-10-07: the owner withdrew the acceptance** (*"RFC 169 can be less prioritized with my
+acceptance initialized (reverted)."*). It is back in `proposed/`, deprioritized, and not part of 0.49.0.
+- **The architect's reading of that withdrawal:**
+  - **Kept:** the factual verification docs already published (`d9a60467`, pushed in `7001f61d`). These are the
+    fingerprint, the `VALIDSIG` check, and what a tag, a binary and a checksum each cover. They correct false claims
+    `SECURITY.md` made before, and do not depend on this RFC's procedure.
+  - **Removed in the 0.49.0 release prep:** the *"If the release key is lost or compromised"* paragraph in `SECURITY.md`.
+    It is a commitment from this RFC, and the RFC is no longer accepted.
+  - **Dropped:** the owner actions (§5 items 1, 2, 4 and 6) and item 5. The runbook stays private, unused.
+  - **External review:** at the 0.49.0 candidate, D7 is reported as deferred by the owner, with the verification docs
+    published.
+- **Earlier status, kept for the record:** accepted 2026-10-07 (*"Accepted."*); correction C1 (§8) approved the same day.
 - **History:** proposed 2026-10-06 by the architect (0.49.0 step 6, *"D6, D5, D7"*, from external review 014); revised
   the same day after the architect's review against the owner's philosophy (§7).
 - **The architect's reading of that acceptance:** §3 as written, and §5's seven recommendations, carried out as the owner

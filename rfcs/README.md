@@ -50,6 +50,7 @@ These records are under design review. All proposed RFCs must respect the depend
 
 | ID | Title | Milestone |
 |---|---|---|
+| 169 | [When the release key is lost or compromised](./proposed/169-when-the-release-key-is-lost-or-compromised.md) | Proposed 2026-10-06; accepted 2026-10-07, then parked by the owner the same day (deprioritized, not in 0.49.0) |
 | 136 | [Block Aggregation Payoff](./done/136-block-aggregation-payoff.md) | **Done — shipped in 0.43.0 (2026-09-16)** as "sealed snapshots": checkpoints every 64 blocks, anchored checkouts, provisional worktrees behind a derivation gate. Increment 2c (baseline reconstruction) follows 0.43.0 |
 
 **Blocked, not available:** **DC-43** waits on a release-lane event, and additionally
@@ -138,7 +139,6 @@ These reviewed designs may govern downstream work but have not yet released.
 | 166 | [A queued commit has a witness](./accepted/166-a-queued-commit-has-a-witness.md) | Accepted 2026-10-03; delivered, unreleased (0.49.0) |
 | 167 | [Resynchronisation is linear](./accepted/167-resynchronisation-is-linear.md) | Accepted 2026-10-05; delivered, unreleased (0.49.0) |
 | 168 | [A way back from every repair](./accepted/168-a-way-back-from-every-repair.md) | Accepted 2026-10-06; delivered, unreleased (0.49.0) |
-| 169 | [When the release key is lost or compromised](./accepted/169-when-the-release-key-is-lost-or-compromised.md) | Accepted 2026-10-07; publication handoff live, rehearsal by the architect, owner actions 1, 2, 4, 6 (0.49.0 step 6) |
 | DC-96 | [Windows anchor identity](./accepted/DC-96-WINDOWS-ANCHOR-IDENTITY.md) | Accepted 2026-08-16 |
 | DC-97 | [Windows durability evidence](./accepted/DC-97-WINDOWS-DURABILITY-EVIDENCE.md) | Accepted 2026-08-16 |
 | DC-98 | [Windows crash injection](./accepted/DC-98-WINDOWS-CRASH-INJECTION.md) | Accepted 2026-08-17 |
