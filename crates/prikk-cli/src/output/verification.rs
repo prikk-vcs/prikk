@@ -6,6 +6,20 @@ use prikk_store::{
     RefItemStatus, RepairTailsReport, RepositoryLayout, StageStatus, Verdict, write_refusal_reason,
 };
 
+/// The warning for one unreferenced remnant (RFC 164 Rule E, in the canonical form RFC 165 R6
+/// gave the blocking message). The role already names what kind of object is missing, so no
+/// owner or missing-object type repeats it.
+pub(crate) fn remnant_warning(
+    owner_id: &impl std::fmt::Display,
+    missing_role: &str,
+    missing_id: &impl std::fmt::Display,
+) -> String {
+    format!(
+        "warning: object {owner_id} references missing {missing_role} {missing_id} -- re-run the \
+         import if you still have the bundle; otherwise it is harmless"
+    )
+}
+
 /// `prikk doctor --repair-tails` (RFC 164 Rule C): one line per covered file, always -- clean or
 /// repaired, so a run's own report names every file it read, never only the ones it changed.
 pub(crate) fn print_repair_tails_report(report: &RepairTailsReport) {
@@ -502,13 +516,12 @@ pub(crate) fn print_verify_report(
     );
     for remnant in &report.unreferenced_remnants {
         println!(
-            "warning: {} {} references missing {} {} ({}) -- re-run the import if you still have \
-             the bundle; otherwise it is harmless",
-            remnant.owner_object_type,
-            remnant.owner_object_id,
-            remnant.missing_object_type,
-            remnant.missing_object_id,
-            remnant.missing_role
+            "{}",
+            remnant_warning(
+                &remnant.owner_object_id,
+                &remnant.missing_role,
+                &remnant.missing_object_id
+            )
         );
     }
     for append in &report.object_interrupted_appends {

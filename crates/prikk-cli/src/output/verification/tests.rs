@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use super::{escape_json_string, print_verify_report_json};
+use super::{escape_json_string, print_verify_report_json, remnant_warning};
 
 /// Windows hostile-test fix handoff Sec 2: the hostile-input proof used to live only in an
 /// integration test that planted a directory whose name carried these exact bytes -- a double
@@ -50,4 +50,14 @@ fn missing_stage_outcome_is_refused_not_panicked() {
     let err = print_verify_report_json(&report)
         .expect_err("a report missing a declared stage outcome must be refused, not panic");
     assert!(err.contains("missing an outcome"), "{err}");
+}
+
+/// Audit P3: the remnant warning uses the canonical form, with no type prefix before the owner.
+#[test]
+fn a_remnant_warning_names_the_owner_and_role_without_a_type_prefix() {
+    assert_eq!(
+        remnant_warning(&"abc123", "parent block", &"def456"),
+        "warning: object abc123 references missing parent block def456 -- re-run the import if \
+         you still have the bundle; otherwise it is harmless"
+    );
 }
