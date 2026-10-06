@@ -1,7 +1,21 @@
 # RFC 169 — When the release key is lost or compromised: a written procedure, and what a signature covers (D7)
 
-**Status.** **PROPOSED 2026-10-06 by the architect** (0.49.0 step 6: *"D6, D5, D7"*, from external review 014).
-**Revised the same day after the architect's review against the owner's philosophy (§7). For the owner's reading.**
+**Status.** **ACCEPTED 2026-10-07 by the owner** (*"Accepted."*).
+- **History:** proposed 2026-10-06 by the architect (0.49.0 step 6, *"D6, D5, D7"*, from external review 014); revised
+  the same day after the architect's review against the owner's philosophy (§7).
+- **The architect's reading of that acceptance:** §3 as written, and §5's seven recommendations, carried out as the owner
+  delegated on 2026-10-06 (*"All except 6. can be processed without me (including 7.)?"*, answered in this session):
+
+  | item | what | who | when |
+  |---|---|---|---|
+  | 3 | publish the fingerprint and what it covers | the dev team, then the architect's review | 0.49.0: `rfcs/handoffs/169-when-the-release-key-is-lost-or-compromised/publication-handoff-v1.md` |
+  | 7 | the rehearsal | the architect, with a throwaway key in an isolated keyring | now; it produces a tested runbook for items 1, 2 and 4 |
+  | 1, 2, 4 | the two revocation certificates, the encrypted backup, the signing subkey with the primary offline | **the owner only** (the private key and its passphrase) | 1 and 2 now; 4 before the first stable release |
+  | 6 | the GitHub tag ruleset | **the owner only** (a repository setting) | now |
+  | 5 | the binary chain (tag-signature check, attestations) | a separate RFC | after 0.49.0 |
+
+  - **Item 7's reading:** the owner's own walk-through is replaced by the tested runbook. Carrying out items 1, 2 and 4 from
+    it is the owner's practice of §3.2.
 - **A procedure and a few owner actions; no product code.** It does not touch `release-signers.toml`.
 - **The owner holds the key, so every action that needs the private key is the owner's.** No agent handles key material.
 - **Once accepted,** the procedure lands in `SECURITY.md` and the docs, reviewed by the dev team before push (RFC 152
