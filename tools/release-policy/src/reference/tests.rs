@@ -205,3 +205,17 @@ fn genuine_comment_hides_non_executable_reference() {
         assert!(verify(temporary.path(), &inventory).unwrap().is_empty());
     }
 }
+
+#[test]
+fn a_docs_link_names_its_repository_path_without_the_fragment() {
+    let text = "see [layout](../../../crates/prikk-store/src/foundation/layout.rs#L12), \
+                [web](https://github.com/prikk-vcs/prikk/blob/main/tools/release-policy/src/args.rs#L3) \
+                and [other](https://example.com/crates/x.rs) and [page](../reference/data-model.md)";
+    assert_eq!(
+        super::repository_paths(text),
+        vec![
+            "crates/prikk-store/src/foundation/layout.rs".to_owned(),
+            "tools/release-policy/src/args.rs".to_owned(),
+        ]
+    );
+}

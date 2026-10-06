@@ -205,9 +205,58 @@ fn verify(root: &Path, inventory: &Inventory) -> Result<Vec<String>> {
             ));
         }
     }
+    docs_repository_paths(root, &mut errors)?;
     msrv::check(root, &mut errors)?;
     errors.sort();
     Ok(errors)
+}
+
+// Audit 2026-10-07 row 36: 48 links in `docs/src` pointed at files that had moved, and nothing
+// failed. Every repository path a docs page names must now exist.
+fn docs_repository_paths(root: &Path, errors: &mut Vec<String>) -> Result<()> {
+    let mut files = Vec::new();
+    collect_text_files(root, root, &mut files)?;
+    for path in files {
+        let relative = relative(root, &path);
+        if !relative.starts_with("docs/src/") || !relative.ends_with(".md") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for target in repository_paths(&text) {
+            if !root.join(&target).exists() {
+                errors.push(format!("docs-path:{relative}:{target}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+// The repository paths a page names: a relative link target that reaches into `crates/` or
+// `tools/`, and the path after each `blob/main/` in a GitHub URL. A `#fragment` is not part of it.
+fn repository_paths(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for link in text.split("](").skip(1) {
+        let target = link.split(')').next().unwrap_or_default();
+        let target = target.split('#').next().unwrap_or_default();
+        let target = target.trim_start_matches("../").trim_start_matches("./");
+        if target.starts_with("crates/") || target.starts_with("tools/") {
+            paths.push(target.to_owned());
+        }
+    }
+    for url in text.split("blob/main/").skip(1) {
+        let path = url
+            .split(|character: char| {
+                character.is_whitespace() || matches!(character, ')' | '"' | '\'' | '#' | '>')
+            })
+            .next()
+            .unwrap_or_default();
+        if !path.is_empty() {
+            paths.push(path.to_owned());
+        }
+    }
+    paths
 }
 
 fn authority_descriptor(executable: &Executable) -> Option<AuthorityDescriptor> {
