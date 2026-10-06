@@ -23,7 +23,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::COMMANDS;
+use super::{COMMANDS, find};
 
 /// `README.md` plus every `docs/src/` page found (by direct search, not glob) to mention a real
 /// `prikk <command>` — declared, not scanned by wildcard (§3), so a new `docs/` file cannot
@@ -611,5 +611,25 @@ fn document_text_returns_nothing_for_the_landing_page() {
     assert_eq!(
         text, "",
         "the landing page must contribute nothing to rule (B)"
+    );
+}
+
+/// Audit P2: `doctor --help` names each recovery command, the ref log in `--repair-tails`, and says
+/// that `--recovery-clear` removes entries permanently.
+#[test]
+fn doctor_help_names_the_recovery_commands_and_the_ref_log() {
+    let help = find("doctor").map(|command| command.help_lines.join("\n")).unwrap_or_default();
+    for flag in ["--recovery-list", "--recovery-restore <run id>", "--recovery-clear"] {
+        assert!(help.contains(flag), "doctor help must name {flag}");
+    }
+    assert!(
+        help.lines()
+            .any(|line| line.contains("--repair-tails") && line.contains("the ref log")),
+        "--repair-tails must name the ref log"
+    );
+    assert!(
+        help.lines()
+            .any(|line| line.contains("--recovery-clear") && line.contains("permanently")),
+        "--recovery-clear must say the removal is permanent"
     );
 }

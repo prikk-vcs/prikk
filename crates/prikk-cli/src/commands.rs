@@ -332,7 +332,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]  Give a queued, un-owned commit its ref back (RFC 166 D5/§14); the ref always comes from you, never from the witness; without a witness it must be your current branch unless you pass --not-current-branch; --plan-only previews without writing",
             "  prikk doctor [path] --recovery-list       List the saved entries, grouped by the repair run that wrote them (RFC 168)",
             "  prikk doctor [path] --recovery-restore <run id> [--plan-only]  Undo one repair run, its steps in reverse order; refuses unless every file still holds what the run left; --plan-only previews without writing",
-            "  prikk doctor [path] --recovery-clear [--plan-only]  Remove the recovery log's entries; --plan-only previews without writing",
+            "  prikk doctor [path] --recovery-clear [--plan-only]  Remove every saved entry, permanently; --plan-only previews without writing",
         ],
     },
     Command {
