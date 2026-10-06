@@ -19,7 +19,7 @@ acceptance initialized (reverted)."*). It is back in `proposed/`, deprioritized,
 
   | item | what | who | when |
   |---|---|---|---|
-  | 3 | publish the fingerprint and what it covers | the dev team, then the architect's review | 0.49.0: `rfcs/handoffs/169-when-the-release-key-is-lost-or-compromised/publication-handoff-v1.md` |
+  | 3 | publish the fingerprint and what it covers | the dev team, then the architect's review | 0.49.0: `rfcs/handoffs/119-release-policy-reset/release-verification-docs-handoff-v1.md` |
   | 7 | the rehearsal | the architect, with a throwaway key in an isolated keyring | now; it produces a tested runbook for items 1, 2 and 4 |
   | 1, 2, 4 | the two revocation certificates, the encrypted backup, the signing subkey with the primary offline | **the owner only** (the private key and its passphrase) | 1 and 2 now; 4 before the first stable release |
   | 6 | the GitHub tag ruleset | **the owner only** (a repository setting) | now |
