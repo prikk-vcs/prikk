@@ -339,7 +339,7 @@ fn ensure_publication_precondition(
                         "the ref log",
                         tail.len,
                         tail.offset,
-                        "a repair arrives with RFC 165 R5",
+                        "`prikk doctor --repair-tails` truncates it",
                     )?;
                 }
             }

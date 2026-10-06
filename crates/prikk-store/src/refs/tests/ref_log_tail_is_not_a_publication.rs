@@ -293,8 +293,8 @@ fn a_lead_free_tail_still_refuses_every_publication_that_appends_to_the_ref_log(
             "{label}: must name the ref log, got: {message}"
         );
         assert!(
-            message.contains("RFC 165 R5"),
-            "{label}: must say the repair arrives with R5, got: {message}"
+            message.contains("--repair-tails"),
+            "{label}: must name the repair --repair-tails, got: {message}"
         );
         assert!(
             !message.contains("incomplete ref publication"),

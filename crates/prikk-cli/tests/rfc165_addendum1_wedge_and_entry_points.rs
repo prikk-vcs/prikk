@@ -190,8 +190,8 @@ fn a_lead_free_tail_still_refuses_seal_through_the_real_binary() {
         "must name the ref log: {text}"
     );
     assert!(
-        text.contains("RFC 165 R5"),
-        "must say the repair arrives with R5: {text}"
+        text.contains("--repair-tails"),
+        "must name the repair --repair-tails: {text}"
     );
     assert!(
         !text.contains("incomplete ref publication"),
@@ -224,8 +224,8 @@ fn a_lead_free_tail_still_refuses_branch_create_through_the_real_binary() {
         "must name the ref log: {text}"
     );
     assert!(
-        text.contains("RFC 165 R5"),
-        "must say the repair arrives with R5: {text}"
+        text.contains("--repair-tails"),
+        "must name the repair --repair-tails: {text}"
     );
     assert!(
         !text.contains("incomplete ref publication"),
@@ -258,8 +258,8 @@ fn a_lead_free_tail_still_refuses_branch_close_through_the_real_binary() {
         "must name the ref log: {text}"
     );
     assert!(
-        text.contains("RFC 165 R5"),
-        "must say the repair arrives with R5: {text}"
+        text.contains("--repair-tails"),
+        "must name the repair --repair-tails: {text}"
     );
     assert!(
         !text.contains("incomplete ref publication"),
