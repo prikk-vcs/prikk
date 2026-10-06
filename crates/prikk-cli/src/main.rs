@@ -1035,20 +1035,31 @@ fn run_recovery_command(
         args::RecoveryCommand::List => {
             let listing = prikk_store::recovery_list(layout).map_err(|err| err.to_string())?;
             let count = listing.entries.len();
-            println!(
-                "recovery log: {count} entr{} in .prikk/recovery/log",
-                if count == 1 { "y" } else { "ies" }
-            );
+            let mut runs: Vec<(String, Vec<&prikk_store::RecoveryEntryView>)> = Vec::new();
             for entry in &listing.entries {
+                match runs.iter_mut().find(|(id, _)| *id == entry.id) {
+                    Some((_, members)) => members.push(entry),
+                    None => runs.push((entry.id.clone(), vec![entry])),
+                }
+            }
+            println!(
+                "recovery log: {count} entr{} in {} run{} in .prikk/recovery/log",
+                if count == 1 { "y" } else { "ies" },
+                runs.len(),
+                if runs.len() == 1 { "" } else { "s" }
+            );
+            for (run, members) in &runs {
                 println!(
-                    "  {}  {}  cut at {}  {} bytes  ({}, prikk {})",
-                    entry.id,
-                    entry.source,
-                    entry.offset,
-                    entry.len,
-                    entry.label,
-                    entry.binary_version
+                    "run {run}: {} entr{}",
+                    members.len(),
+                    if members.len() == 1 { "y" } else { "ies" }
                 );
+                for entry in members {
+                    println!(
+                        "  {}  cut at {}  {} bytes  ({}, prikk {})",
+                        entry.source, entry.offset, entry.len, entry.label, entry.binary_version
+                    );
+                }
             }
             if listing.newer_versions > 0 {
                 println!(
@@ -1098,43 +1109,61 @@ fn run_recovery_command(
                     format!("restore refused: {refusal}").into()
                 });
             }
+            let total = plan.steps.len();
             println!(
-                "restore {} from {} at offset {}",
-                plan.id, plan.source, plan.offset
+                "restore run {} ({total} step{}, undone in reverse order)",
+                plan.id,
+                if total == 1 { "" } else { "s" }
             );
-            for condition in &plan.conditions {
+            for (index, step) in plan.steps.iter().enumerate() {
                 println!(
-                    "  {}  {}",
-                    if condition.holds { "ok  " } else { "no  " },
-                    condition.text
+                    "step {} of {total}: {} ({})",
+                    index + 1,
+                    step.source,
+                    step.kind
                 );
+                if step.done {
+                    println!(
+                        "  done  {} already holds the bytes this step writes",
+                        step.source
+                    );
+                }
+                for condition in &step.conditions {
+                    println!(
+                        "  {}  {}",
+                        if condition.holds { "ok  " } else { "no  " },
+                        condition.text
+                    );
+                }
             }
-            let can_restore = plan.conditions.iter().all(|condition| condition.holds);
+            let can_restore = plan
+                .steps
+                .iter()
+                .all(|step| step.done || step.conditions.iter().all(|condition| condition.holds));
             if !can_restore {
                 return Err(if plan_only {
                     "plan only -- this restore would be refused"
                         .to_string()
                         .into()
                 } else {
-                    format!(
-                        "restore refused: a condition does not hold, so nothing was written to {}",
-                        plan.source
-                    )
-                    .into()
+                    "restore refused: a condition does not hold, so nothing was written"
+                        .to_string()
+                        .into()
                 });
             }
             if plan.written {
                 println!(
-                    "wrote {} bytes at offset {} of {}",
-                    plan.would_write, plan.offset, plan.source
+                    "wrote {} bytes in {total} step{}",
+                    plan.would_write,
+                    if total == 1 { "" } else { "s" }
                 );
                 println!(
                     "The file now holds what it held before the repair, damage included. `verify` will report that damage again, and commands that refused before the repair will refuse again."
                 );
             } else {
                 println!(
-                    "plan only -- nothing written; this restore would write {} bytes at offset {} of {}",
-                    plan.would_write, plan.offset, plan.source
+                    "plan only -- nothing written; this restore would write {} bytes",
+                    plan.would_write
                 );
                 println!("{after}");
             }

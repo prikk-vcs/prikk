@@ -514,12 +514,12 @@ fn a_failure_between_the_save_and_the_truncation_leaves_the_wal_and_a_complete_r
     let repair = wal.truncate_trailing_partial()?;
     let saved = repair.recovery.expect("named");
     assert_eq!(recovery_bytes(&layout, &saved), b"partial");
-    // The retry appends the same entry again: same source, offset and bytes, so the same id (RFC 168 §3.1).
+    // The retry is a different repair, so a different run (RFC 168 A1, item 2), with the same removed bytes.
     let listing = crate::recovery_log::list(layout.repository_mutation_root())?;
     assert_eq!(listing.entries.len(), 2, "the retry appends its own entry");
-    assert_eq!(
+    assert_ne!(
         listing.entries[0].id, listing.entries[1].id,
-        "an identical retry has the same id"
+        "a re-run repair is a different run"
     );
     let _ = std::fs::remove_dir_all(root);
     Ok(())

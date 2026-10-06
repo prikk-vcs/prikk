@@ -607,3 +607,158 @@ fn an_appended_file_refuses_a_restore_when_its_meaning_file_changed() {
         let _ = std::fs::remove_dir_all(layout.root());
     }
 }
+
+/// RFC 168 A1, item 9: a two-file `--repair-tails` run is one run, restored by one id.
+#[test]
+fn a_two_file_repair_tails_run_is_restored_by_one_id() {
+    let layout = repo_with_published_main("rfc168-a1-two-file");
+    let wal_path = layout.active_queue_wal_path(crate::DEFAULT_ACTIVE_NAME);
+    let wal_before = std::fs::read(&wal_path).unwrap_or_default();
+    let mut wal_with = wal_before.clone();
+    wal_with.extend_from_slice(b"partial");
+    std::fs::write(&wal_path, &wal_with).unwrap();
+    let trust = layout.trust_key_container_path();
+    let trust_before = std::fs::read(&trust).unwrap();
+    let mut trust_with = trust_before.clone();
+    trust_with.extend(vec![0_u8; 100]);
+    std::fs::write(&trust, &trust_with).unwrap();
+
+    let report = repair_tails(&layout).expect("repair_tails");
+    let ids: Vec<String> = report
+        .files
+        .iter()
+        .filter(|file| file.truncated_bytes > 0)
+        .map(|file| file.recovery.as_ref().expect("a run entry").id.clone())
+        .collect();
+    assert!(
+        ids.len() >= 2,
+        "the WAL and the trust keys were both repaired"
+    );
+    assert!(
+        ids.iter().all(|id| id == &ids[0]),
+        "one run id for the whole run: {ids:?}"
+    );
+
+    let plan = crate::recovery_restore(&layout, &ids[0], false).expect("restore by the run id");
+    assert!(plan.written, "{plan:?}");
+    assert_eq!(
+        std::fs::read(&wal_path).unwrap(),
+        wal_with,
+        "the WAL is back"
+    );
+    assert_eq!(
+        std::fs::read(&trust).unwrap(),
+        trust_with,
+        "the trust keys are back"
+    );
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// RFC 168 A1, item 9: a run whose middle step fails its condition writes nothing. The undo order is trust keys, pointer index,
+/// WAL; the pointer index step (the middle) has grown since the repair, so the whole run is refused and every file stays as it is.
+#[test]
+fn a_run_whose_middle_step_fails_its_condition_writes_nothing() {
+    let layout = repo_with_published_main("rfc168-a1-middle");
+    let wal_path = layout.active_queue_wal_path(crate::DEFAULT_ACTIVE_NAME);
+    let wal_before = std::fs::read(&wal_path).unwrap_or_default();
+    let mut wal_with = wal_before.clone();
+    wal_with.extend_from_slice(b"partial");
+    std::fs::write(&wal_path, &wal_with).unwrap();
+    let pointer = layout.ref_pointer_index_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let pointer_before = std::fs::read(&pointer).unwrap();
+    let mut pointer_with = pointer_before.clone();
+    pointer_with.extend_from_slice(&[0xCD_u8; 7]);
+    std::fs::write(&pointer, &pointer_with).unwrap();
+    let trust = layout.trust_key_container_path();
+    let trust_before = std::fs::read(&trust).unwrap();
+    let mut trust_with = trust_before.clone();
+    trust_with.extend(vec![0_u8; 100]);
+    std::fs::write(&trust, &trust_with).unwrap();
+
+    let report = repair_tails(&layout).expect("repair_tails");
+    let run = report
+        .files
+        .iter()
+        .find(|file| file.truncated_bytes > 0)
+        .and_then(|file| file.recovery.as_ref())
+        .expect("a run")
+        .id
+        .clone();
+    // The pointer index, the middle step, has grown since the repair: its condition fails.
+    let mut grown = std::fs::read(&pointer).unwrap();
+    grown.push(0xEE);
+    std::fs::write(&pointer, &grown).unwrap();
+    let before_restore = (
+        std::fs::read(&wal_path).unwrap(),
+        std::fs::read(&trust).unwrap(),
+    );
+
+    let plan = crate::recovery_restore(&layout, &run, false).expect("the plan");
+    assert!(!plan.written, "{plan:?}");
+    assert_eq!(
+        std::fs::read(&wal_path).unwrap(),
+        before_restore.0,
+        "the WAL is untouched"
+    );
+    assert_eq!(
+        std::fs::read(&trust).unwrap(),
+        before_restore.1,
+        "the trust keys are untouched"
+    );
+    assert_eq!(
+        std::fs::read(&pointer).unwrap(),
+        grown,
+        "the pointer index is untouched"
+    );
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// RFC 168 A1, item 1, the RFC 162 rule 3 breach: row 8's witness rewrite keeps the damaged witness's bytes. They are a replace
+/// entry in the run, so restoring the run puts the damaged witness back byte-for-byte.
+#[test]
+fn row_eight_keeps_the_damaged_witness_it_rewrites() {
+    let layout =
+        RepositoryLayout::init(unique_temp_dir("rfc168-a1-row8-keeps-bytes")).expect("init");
+    std::fs::write(layout.root().join("a.txt"), b"hello\n").unwrap();
+    commit_worktree_changes_signed(
+        &layout,
+        "heads/main",
+        "queued",
+        WorktreePatchCommitOptions::file_level(),
+        &author_signer(),
+    )
+    .expect("commit");
+    let witness_path = layout
+        .active_session_dir(crate::DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let mut corrupted = std::fs::read(&witness_path).unwrap();
+    let flip_at = corrupted.len() / 2;
+    corrupted[flip_at] ^= 0xFF;
+    std::fs::write(&witness_path, &corrupted).unwrap();
+
+    repair_tails(&layout).expect("row 8 does not refuse");
+    assert_ne!(
+        std::fs::read(&witness_path).unwrap(),
+        corrupted,
+        "row 8 rewrote the witness"
+    );
+    let listing = crate::recovery_list(&layout).expect("list");
+    let entry = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "witness")
+        .expect("the rewrite is saved as a replace entry");
+    assert_eq!(
+        entry.len,
+        corrupted.len() as u64,
+        "the saved bytes are the whole damaged witness"
+    );
+    let plan = crate::recovery_restore(&layout, &entry.id, false).expect("restore the run");
+    assert!(plan.written, "{plan:?}");
+    assert_eq!(
+        std::fs::read(&witness_path).unwrap(),
+        corrupted,
+        "the damaged witness is back, byte-for-byte"
+    );
+    let _ = std::fs::remove_dir_all(layout.root());
+}

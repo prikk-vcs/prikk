@@ -1209,6 +1209,7 @@ pub fn repair_object_index(
     Option<crate::recovery_log::RecoveryRef>,
 )> {
     layout.require_current_format()?;
+    let _run = crate::recovery_log::begin_run();
     let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
     crate::foundation::index::repair_index_from_containers(layout, |lost| {
         crate::recovery_log::save_lost_ids(layout, lost)

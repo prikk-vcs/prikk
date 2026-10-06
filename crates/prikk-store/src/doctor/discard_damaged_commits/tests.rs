@@ -180,6 +180,13 @@ fn plan_only_matches_the_real_runs_own_plan_and_touches_nothing() {
     assert_eq!(before, after_plan_only, "plan-only must touch nothing");
 
     let real = discard_damaged_commits(&layout).expect("the real run");
+    // A plan names no run; the real run names its own (RFC 168 A1). Everything else must agree.
+    let mut plan = plan;
+    if let Some(recovery) = plan.recovery.as_mut() {
+        recovery
+            .id
+            .clone_from(&real.recovery.as_ref().expect("the run names its run").id);
+    }
     assert_eq!(
         plan,
         DiscardDamagedCommitsPlan {
@@ -613,7 +620,10 @@ fn the_control_rebuilding_the_witness_before_truncating_is_a_real_inconsistency(
     // still physically in the file).
     let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay().unwrap();
-    rebuild_witness_over_sound_wal(&layout, DEFAULT_ACTIVE_NAME, "heads/main", &replay).unwrap();
+    rebuild_witness_over_sound_wal(&layout, DEFAULT_ACTIVE_NAME, "heads/main", &replay, |_| {
+        Ok(())
+    })
+    .unwrap();
     match read_witness(&layout, DEFAULT_ACTIVE_NAME).unwrap() {
         WitnessState::Absent => {}
         other => panic!(
@@ -729,4 +739,136 @@ fn no_other_command_touches_the_wal_witness_or_ref_name_over_row4() {
     );
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// RFC 168 A1, item 9: a discard, then its restore, gives the WAL **and** the witness byte-identical to before the discard. The
+/// discard's witness rewrite is a replace entry; its WAL cut is a cut entry; both are one run, undone in reverse.
+#[test]
+fn a_discard_then_its_restore_gives_the_wal_and_the_witness_back_byte_for_byte() {
+    let root = unique_temp_dir("rfc168-a1-discard-restore");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    let wal_before = std::fs::read(&wal_path).unwrap();
+    let witness_before = std::fs::read(&witness_path).unwrap();
+
+    let plan = discard_damaged_commits(&layout).expect("the discard runs");
+    assert_ne!(
+        std::fs::read(&witness_path).unwrap(),
+        witness_before,
+        "the discard rewrote the witness"
+    );
+    let run = plan.recovery.expect("the discard names its run").id;
+
+    let restored = crate::recovery_restore(&layout, &run, false).expect("the run restores");
+    assert!(restored.written, "{restored:?}");
+    assert_eq!(
+        std::fs::read(&wal_path).unwrap(),
+        wal_before,
+        "the WAL is byte-identical to before the discard"
+    );
+    assert_eq!(
+        std::fs::read(&witness_path).unwrap(),
+        witness_before,
+        "the witness is byte-identical to before the discard"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 168 A1, item 9: a restore interrupted after its first step finishes when run again. The first step (the witness, undone
+/// first) is done; the second (the WAL append) is faulted; the second run completes it, and a step already done is skipped.
+#[test]
+fn a_restore_interrupted_after_its_first_step_completes_when_run_again() {
+    use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
+    let root = unique_temp_dir("rfc168-a1-resume");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    let wal_before = std::fs::read(&wal_path).unwrap();
+    let witness_before = std::fs::read(&witness_path).unwrap();
+    let run = discard_damaged_commits(&layout)
+        .unwrap()
+        .recovery
+        .expect("named")
+        .id;
+
+    // The WAL append is the second step of the undo; the first, the witness overwrite, is in place by then.
+    fail_once_for_test(TestFailPoint::AppendWrite);
+    let interrupted = crate::recovery_restore(&layout, &run, false);
+    clear_failpoint_for_test();
+    assert!(interrupted.is_err(), "the second step is faulted");
+    assert_eq!(
+        std::fs::read(&witness_path).unwrap(),
+        witness_before,
+        "the first step is done"
+    );
+
+    let finished = crate::recovery_restore(&layout, &run, false).expect("run again");
+    assert!(finished.written, "{finished:?}");
+    assert_eq!(
+        finished.steps.iter().filter(|step| step.done).count(),
+        1,
+        "the finished step is skipped"
+    );
+    assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before);
+    assert_eq!(std::fs::read(&witness_path).unwrap(), witness_before);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// RFC 168 A1, item 9: a run that a later run overlaps refuses, and the plan names the later run to restore first.
+#[test]
+fn an_overlapped_run_names_the_later_run_to_restore_first() {
+    use crate::wal::Wal;
+    let root = unique_temp_dir("rfc168-a1-overlap");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let flip_at = bytes.len() - 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    let first = discard_damaged_commits(&layout)
+        .unwrap()
+        .recovery
+        .expect("named")
+        .id;
+
+    // A later repair cuts the same WAL at a different length: a new record, then a torn tail after it.
+    commit(&layout, "b.txt", b"two");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&wal_path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, b"partial").unwrap();
+    drop(file);
+    let later = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+        .truncate_trailing_partial()
+        .unwrap()
+        .recovery
+        .expect("the later repair names its run")
+        .id;
+    assert_ne!(first, later);
+
+    let plan = crate::recovery_restore(&layout, &first, true).expect("the plan");
+    assert!(!plan.written);
+    let refusal = plan.refusal.unwrap_or_default();
+    assert!(
+        refusal.contains(&format!("restore run {later} first")),
+        "the plan names the later run: {refusal}"
+    );
+    let _ = std::fs::remove_dir_all(root);
 }

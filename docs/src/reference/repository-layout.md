@@ -79,9 +79,9 @@ after `init`** — that is a design invariant, not an implementation detail, and
 repository durable on filesystems that cannot make a new directory entry durable. **The one exception is `recovery/`**
 (next paragraph), which is never authority. `init` creates its log; a repository created before 0.49.0 gets the log at its first write.
 
-`recovery/log` holds the bytes a repair removed, one entry per repair, appended and flushed **before** the repair truncates. Every repair writes
+`recovery/log` holds the bytes a repair removed, appended and flushed **before** the repair truncates. Each repair is one run, and each file it changes is one entry in that run. Every repair writes
 here and nowhere else. Each entry records its source file, the offset it was cut at, the removed bytes, a hash of the file before that offset, and the
-identity of the files that give those bytes their meaning. A repair names its entry, for example `recovery/log, entry 3f9a0c1e8b2d4a57`. It exists so that
+identity of the files that give those bytes their meaning. A repair names its run, for example `recovery/log, run 3f9a0c1e8b2d4a57`. A rewrite in place (the commit witness, `ref-name`) keeps the file's previous bytes too, so a run can be undone exactly. It exists so that
 a repair can be wrong about what it removed (a torn tail and a lone damaged record look the same) without anything being lost. It is **never
 authority**: no classification reads it, and `verify` reports damage in it on its own line without changing its exit status. The log is never truncated
 except by `prikk doctor --recovery-clear`, which removes the saved content for good. It is not `quarantine/`, which is retired.
@@ -89,7 +89,7 @@ except by `prikk doctor --recovery-clear`, which removes the saved content for g
 The three commands:
 
 - `prikk doctor --recovery-list` prints each entry's id, source, offset, length and repair. It does not judge whether an entry can be restored.
-- `prikk doctor --recovery-restore <id> [--plan-only]` prints its plan first: each condition and its result, the bytes it will write, and what follows.
+- `prikk doctor --recovery-restore <run id> [--plan-only]` undoes the whole run, in reverse order: it prints its plan first (each step, and its conditions), then writes only when every condition holds. A step that already holds its result is skipped, so an interrupted restore finishes when it is run again. A later run that changed the same files is named, and the restore waits for it.
   It writes only when the source is exactly as long as the recorded offset, its bytes before that offset hash to the recorded hash, and the files that give the
   bytes their meaning are unchanged.
 - `prikk doctor --recovery-clear [--plan-only]` lists what it will remove, then empties the log.
@@ -337,7 +337,7 @@ persist across key removal, so it stays a single append-only file, never compact
 | `cache/` | Initialized, rebuildable, non-root | Never authority; a corrupt or absent cache file is not an error and does not change any result. |
 | `refs/tmp/` | Initialized, unwritten, required | `init` still allocates it; nothing writes into it since ref publication moved into containers, but `verify` lists it on every run, so its absence fails verification. Not authority for anything. |
 | `objects/` (and its six type subdirectories), `quarantine/`, `refs/by-id/`, `refs/logs/` | Retired, no longer initialized | `init` no longer creates these; nothing has written into any of them since object and ref publication state moved into containers. Not validated at open, so a repository initialized before this change keeps them harmlessly. Not authority for anything. `objects/` alone still has one dormant reader — see [Object Store](#object-store). |
-| `recovery/log` | Created by `init` (and at the first write to an older repository), never authority | The bytes every repair removed, one entry per repair, appended durably before the truncation. Listed, restored and cleared by `prikk doctor --recovery-list`, `--recovery-restore` and `--recovery-clear`. Older `recovery/*.bytes` files from before 0.49.0 are listed separately. |
+| `recovery/log` | Created by `init` (and at the first write to an older repository), never authority | The bytes every repair removed, one run per repair, appended durably before the truncation. Listed, restored and cleared by `prikk doctor --recovery-list`, `--recovery-restore` and `--recovery-clear`. Older `recovery/*.bytes` files from before 0.49.0 are listed separately. |
 | `gc/` | Deferred/not present | No current initialized directory or released behavior. |
 
 ## Deferred and Not Stable

@@ -15,13 +15,17 @@
 
 use std::path::{Path, PathBuf};
 
+mod restore;
+pub(crate) use restore::restore;
+
 use prikk_error::{PrikkError, Result};
 
 use crate::foundation::frame_resync::ScanBudget;
 use crate::foundation::fsutil::{
     EntryKind, MutationRoot, append_file_required, create_new_file_required,
-    ensure_directory_required, inspect_entry, list_directory, read_file_if_exists,
-    read_file_range_if_exists, stat_file_state_if_exists, truncate_existing_file_required,
+    ensure_directory_required, inspect_entry, list_directory, overwrite_in_place_required,
+    read_file_if_exists, read_file_range_if_exists, stat_file_state_if_exists,
+    truncate_existing_file_required,
 };
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryLayout};
@@ -43,26 +47,41 @@ pub(crate) struct Meaning {
     pub(crate) hash: Option<[u8; 32]>,
 }
 
-/// One saved repair: what it removed and everything a restore must check first.
+/// What an entry records (RFC 168 A1, item 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Bytes a repair removed from the end of a file (the original RFC 168 entry).
+    Cut,
+    /// The previous bytes of a file a repair rewrote in place; `new_hash` identifies what the repair wrote.
+    Replace,
+}
+
+/// One saved step of a repair (RFC 168 §3.1, A1). Entries of one repair share a `run` (A1 item 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
+    pub(crate) kind: Kind,
+    /// The run this entry belongs to: one id per repair the user ran. Stamped by [`append`].
+    pub(crate) run: [u8; 8],
     /// The source file, relative to the repository root, `/`-separated.
     pub(crate) source: String,
-    /// The offset the source was cut at; the removed bytes start here.
+    /// `Cut`: the offset the source was cut at; the removed bytes start here. `Replace`: always 0.
     pub(crate) offset: u64,
     /// Which repair wrote the entry (for the listing and the plan).
     pub(crate) label: String,
     pub(crate) binary_version: String,
-    /// SHA-256 of the source's bytes `[0, offset)` at repair time.
+    /// `Cut`: SHA-256 of the source's bytes `[0, offset)` at repair time. `Replace`: SHA-256 of the previous bytes.
     pub(crate) prefix_hash: [u8; 32],
     pub(crate) meaning: Vec<Meaning>,
+    /// `Cut`: the removed bytes. `Replace`: the previous bytes of the file.
     pub(crate) removed: Vec<u8>,
+    /// `Replace`: SHA-256 of the bytes the repair wrote. Zero for `Cut`.
+    pub(crate) new_hash: [u8; 32],
 }
 
 /// What a repair reports about the entry it wrote: enough to name it on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryRef {
-    /// The 16-hex-character entry id.
+    /// The 16-hex-character run id: the id a user restores by. Empty for a plan-only preview, which writes nothing.
     pub id: String,
     /// The source the entry saved bytes from, relative to the repository root.
     pub source: String,
@@ -73,9 +92,13 @@ pub struct RecoveryRef {
 }
 
 impl std::fmt::Display for RecoveryRef {
-    /// How a repair names its entry on screen: where it is, and how to read it back.
+    /// How a repair names its run on screen: where it is, and the id to restore by.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "recovery/log, entry {}", self.id)
+        if self.id.is_empty() {
+            write!(f, "recovery/log (planned, nothing written)")
+        } else {
+            write!(f, "recovery/log, run {}", self.id)
+        }
     }
 }
 
@@ -114,6 +137,11 @@ fn put_str(out: &mut Vec<u8>, value: &str) {
 
 fn encode_body(entry: &Entry) -> Vec<u8> {
     let mut out = Vec::new();
+    out.push(match entry.kind {
+        Kind::Cut => 0,
+        Kind::Replace => 1,
+    });
+    out.extend_from_slice(&entry.run);
     put_str(&mut out, &entry.source);
     out.extend_from_slice(&entry.offset.to_be_bytes());
     put_str(&mut out, &entry.label);
@@ -132,12 +160,8 @@ fn encode_body(entry: &Entry) -> Vec<u8> {
     }
     out.extend_from_slice(&(entry.removed.len() as u64).to_be_bytes());
     out.extend_from_slice(&entry.removed);
+    out.extend_from_slice(&entry.new_hash);
     out
-}
-
-/// The first [`ID_LEN`] hex characters of a checksum: an entry's id.
-fn short_id(checksum: &[u8; 32]) -> String {
-    prikk_hash::to_hex(checksum).chars().take(ID_LEN).collect()
 }
 
 /// The frame checksum: over the magic, version, length and body, hashed in place (RFC 168 F4: no copy of the body). The version
@@ -152,24 +176,77 @@ fn checksum_with_version(version: u16, body: &[u8]) -> [u8; 32] {
     ])
 }
 
-/// The framed bytes of one entry, and its id.
-fn frame(entry: &Entry) -> (Vec<u8>, String) {
+/// The framed bytes of one entry.
+fn frame(entry: &Entry) -> Vec<u8> {
     let body = encode_body(entry);
     let checksum = checksum_with_version(VERSION, &body);
-    let id = short_id(&checksum);
     let mut out = Vec::with_capacity(HEADER_LEN + body.len());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&VERSION.to_be_bytes());
     out.extend_from_slice(&(body.len() as u64).to_be_bytes());
     out.extend_from_slice(&checksum);
     out.extend_from_slice(&body);
-    (out, id)
+    out
 }
 
-/// The id an entry would get, computed without writing anything. A plan-only preview names the same id a real repair
-/// writes, because both come from the same frame.
-pub(crate) fn id_of(entry: &Entry) -> String {
-    frame(entry).1
+thread_local! {
+    /// The run the repair on this thread is writing (A1 item 2): every entry it appends shares this id.
+    static CURRENT_RUN: std::cell::Cell<Option<[u8; 8]>> = const { std::cell::Cell::new(None) };
+}
+
+/// Counts runs begun by this process, so two runs begun in the same instant still differ.
+static RUN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A fresh run id: 8 bytes from a digest of the time, the process and a counter.
+fn new_run_id() -> [u8; 8] {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let count = RUN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let digest = sha(&[
+        nanos.to_be_bytes().as_slice(),
+        &std::process::id().to_be_bytes(),
+        &count.to_be_bytes(),
+    ]
+    .concat());
+    let mut id = [0_u8; 8];
+    id.copy_from_slice(&digest[..8]);
+    id
+}
+
+/// Begin a run: every entry appended on this thread until the returned scope ends shares one run id (A1 item 2). A nested call
+/// joins the run that is already open, so a repair that calls another repair writes one run.
+pub(crate) fn begin_run() -> RunScope {
+    let owned = CURRENT_RUN.with(|current| {
+        if current.get().is_none() {
+            current.set(Some(new_run_id()));
+            true
+        } else {
+            false
+        }
+    });
+    RunScope { owned }
+}
+
+/// Ends the run it began, when it was the outermost (see [`begin_run`]).
+pub(crate) struct RunScope {
+    owned: bool,
+}
+
+impl Drop for RunScope {
+    fn drop(&mut self) {
+        if self.owned {
+            CURRENT_RUN.with(|current| current.set(None));
+        }
+    }
+}
+
+/// The run an entry appended now belongs to: the open run, or a run of its own for a save outside any repair.
+fn run_for_append() -> [u8; 8] {
+    CURRENT_RUN.with(|current| match current.get() {
+        Some(run) => run,
+        None => new_run_id(),
+    })
 }
 
 struct Reader<'a> {
@@ -200,6 +277,12 @@ impl<'a> Reader<'a> {
 
 fn decode_body(body: &[u8]) -> Option<Entry> {
     let mut r = Reader { bytes: body, at: 0 };
+    let kind = match r.take(1)?.first().copied()? {
+        0 => Kind::Cut,
+        1 => Kind::Replace,
+        _ => return None,
+    };
+    let run: [u8; 8] = r.take(8)?.try_into().ok()?;
     let source = r.str()?;
     let offset = r.u64()?;
     let label = r.str()?;
@@ -219,10 +302,13 @@ fn decode_body(body: &[u8]) -> Option<Entry> {
     }
     let n = usize::try_from(r.u64()?).ok()?;
     let removed = r.take(n)?.to_vec();
+    let new_hash = r.hash()?;
     if r.at != body.len() {
         return None;
     }
     Some(Entry {
+        kind,
+        run,
         source,
         offset,
         label,
@@ -230,18 +316,21 @@ fn decode_body(body: &[u8]) -> Option<Entry> {
         prefix_hash,
         meaning,
         removed,
+        new_hash,
     })
 }
 
 /// Append one entry and return its reference. The first save creates `recovery/log` (`init` creates it too, so in a
 /// new repository the first save is an append). The caller holds the repair's locks.
 pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> {
-    let (framed, id) = frame(entry);
+    let mut stamped = entry.clone();
+    stamped.run = run_for_append();
+    let framed = frame(&stamped);
     ensure_directory_required(root, Path::new("recovery"))?;
     let path = Path::new(LOG_PATH);
     if read_file_range_if_exists(root, path, 0, 0)?.is_none() {
-        // The log's first appearance is a new name: on Windows it is not durable (RFC 168 §3.1, residual (b)). A concurrent first
-        // write may have created it already (RFC 168 F12): then this entry is appended like any other.
+        // The log's first appearance is a new name: on Windows it is not durable (RFC 168 §3.1, residual (b)). A concurrent
+        // first write may have created it already (RFC 168 F12): then this entry is appended like any other.
         match create_new_file_required(root, path, &framed) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -259,7 +348,7 @@ pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> 
         })?;
     }
     Ok(RecoveryRef {
-        id,
+        id: prikk_hash::to_hex(&stamped.run),
         source: entry.source.clone(),
         offset: entry.offset,
         len: entry.removed.len() as u64,
@@ -269,7 +358,7 @@ pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> 
 /// What one position of the log holds.
 enum Candidate {
     /// A sound entry, and the offset after it.
-    Entry(Listed, usize),
+    Entry(Box<Listed>, usize),
     /// A complete frame written by a newer prikk (its version is above this one's), and the offset after it. Not damage.
     Newer(usize),
     /// Bytes that cannot be a frame, the start of one that runs past the end, or a short header: a prefix of one frame at
@@ -300,7 +389,7 @@ pub(crate) fn list(root: &MutationRoot) -> Result<Listing> {
         }
         match classify_at(&bytes, at) {
             Candidate::Entry(listed, next) => {
-                listing.entries.push(listed);
+                listing.entries.push(*listed);
                 in_damage = false;
                 at = next;
             }
@@ -399,10 +488,10 @@ fn classify_at(bytes: &[u8], at: usize) -> Candidate {
     }
     match decode_body(body) {
         Some(entry) => Candidate::Entry(
-            Listed {
-                id: short_id(&stored),
+            Box::new(Listed {
+                id: prikk_hash::to_hex(&entry.run),
                 entry,
-            },
+            }),
             body_end,
         ),
         None => Candidate::Damage,
@@ -453,7 +542,14 @@ fn older_files(root: &MutationRoot) -> Result<Vec<String>> {
 /// The fixed list of files a restore may write (RFC 168 Status: the allowlist). Derived from the layout, so it names the
 /// live paths: both slots of every slot-based file, and the generation logs that select them.
 pub(crate) fn repairable_sources(layout: &RepositoryLayout) -> Result<Vec<String>> {
-    let mut paths: Vec<PathBuf> = vec![layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME)];
+    // A1 (item 1): the commit witness and ref-name are rewritten by repairs, so their replace entries must restore too.
+    let mut paths: Vec<PathBuf> = vec![
+        layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME),
+        layout
+            .active_session_dir(DEFAULT_ACTIVE_NAME)
+            .join("witness"),
+        layout.default_active_ref_name_path(),
+    ];
     for slot in [ContainerSlot::A, ContainerSlot::B] {
         paths.push(layout.ref_pointer_index_slot_path(slot));
         paths.push(layout.ref_log_container_slot_path(slot));
@@ -495,6 +591,18 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
             .to_string_lossy()
             .replace('\\', "/"))
     };
+    // A1 (item 1): the witness and ref-name are the state of the WAL they belong to, so the WAL is their meaning file.
+    let wal_relative = relative(&layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME))?;
+    if source
+        == relative(
+            &layout
+                .active_session_dir(DEFAULT_ACTIVE_NAME)
+                .join("witness"),
+        )?
+        || source == relative(&layout.default_active_ref_name_path())?
+    {
+        return Ok(vec![wal_relative]);
+    }
     if source == relative(&layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME))? {
         return Ok(vec![
             relative(&layout.default_active_ref_name_path())?,
@@ -567,6 +675,9 @@ pub(crate) fn entry_for(
         &meaning_paths_for(layout, source)?,
     )?;
     Ok(Entry {
+        kind: Kind::Cut,
+        run: [0; 8],
+        new_hash: [0; 32],
         source: source.to_string(),
         offset: cut,
         label: label.to_string(),
@@ -603,6 +714,9 @@ pub(crate) fn save_lost_ids(
 /// empty. Its source is the object index, which no restore may write.
 pub(crate) fn lost_ids_entry(source: &str, contents: &[u8]) -> Entry {
     Entry {
+        kind: Kind::Cut,
+        run: [0; 8],
+        new_hash: [0; 32],
         source: source.to_string(),
         offset: 0,
         label: "object index lost ids".to_string(),
@@ -613,161 +727,61 @@ pub(crate) fn lost_ids_entry(source: &str, contents: &[u8]) -> Entry {
     }
 }
 
-/// One restore condition: the fact it found, in the words the plan prints, and whether it holds (RFC 168 F2).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Condition {
-    pub(crate) text: String,
-    pub(crate) holds: bool,
-}
-
-/// What a restore would do, condition by condition (RFC 168 §3.2). `refusal` is set when the restore cannot run at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RestorePlan {
-    pub(crate) id: String,
-    pub(crate) source: String,
-    pub(crate) offset: u64,
-    pub(crate) conditions: Vec<Condition>,
-    /// The bytes that would be written at `offset`.
-    pub(crate) would_write: Vec<u8>,
-    /// Set when the entry's source is not on the repair list, or the entry does not match the table, or the id names no entry.
-    pub(crate) refusal: Option<String>,
-    pub(crate) written: bool,
-}
-
-impl RestorePlan {
-    /// Whether every condition holds and no refusal applies: the restore runs, and a plan-only run exits 0.
-    pub(crate) fn can_restore(&self) -> bool {
-        self.refusal.is_none() && self.conditions.iter().all(|condition| condition.holds)
-    }
-}
-
-/// An id is 16 hex characters, compared ignoring case (RFC 168 F9). Returns the lowercase form.
-fn normalize_id(id: &str) -> Option<String> {
-    (id.len() == ID_LEN && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| id.to_ascii_lowercase())
-}
-
-fn refused_plan(id: &str, reason: String) -> RestorePlan {
-    RestorePlan {
-        id: id.to_string(),
-        source: String::new(),
+/// Save the previous bytes of a file a repair is about to rewrite in place (RFC 168 A1, item 1). Call it before the write: `previous`
+/// are the file's bytes now, and `written` are the bytes the repair will write. The meaning files are taken now, too.
+pub(crate) fn save_replace(
+    layout: &RepositoryLayout,
+    source: &str,
+    previous: &[u8],
+    written: &[u8],
+    label: &str,
+) -> Result<RecoveryRef> {
+    let meaning = meaning_now(
+        layout.repository_mutation_root(),
+        &meaning_paths_for(layout, source)?,
+    )?;
+    let entry = Entry {
+        kind: Kind::Replace,
+        run: [0; 8],
+        source: source.to_string(),
         offset: 0,
-        conditions: Vec::new(),
-        would_write: Vec::new(),
-        refusal: Some(reason),
-        written: false,
-    }
+        label: label.to_string(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        prefix_hash: sha(previous),
+        meaning,
+        removed: previous.to_vec(),
+        new_hash: sha(written),
+    };
+    append(layout.repository_mutation_root(), &entry)
 }
 
-/// Plan a restore, and unless `plan_only`, write the removed bytes back when the plan can run (RFC 168 §3.2, F2, F8, F9). The
-/// meaning files are recomputed from the table: an entry that names different ones is refused. The caller holds the repair's locks.
-pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> Result<RestorePlan> {
-    #[cfg(test)]
-    let _whole_read_scope =
-        crate::foundation::fsutil::whole_read_guard::declare("recovery-log-identity");
-    let root = layout.repository_mutation_root();
-    let Some(normalized) = normalize_id(id) else {
-        return Ok(refused_plan(
-            id,
-            format!(
-                "an entry id is {ID_LEN} hex characters; {id:?} is not one (`prikk doctor --recovery-list` prints the ids)"
-            ),
-        ));
-    };
-    let listing = list(root)?;
-    let Some(listed) = listing
-        .entries
-        .iter()
-        .find(|listed| listed.id == normalized)
-    else {
-        return Ok(refused_plan(
-            id,
-            format!(
-                "no recovery entry has id {normalized}; `prikk doctor --recovery-list` prints the ids"
-            ),
-        ));
-    };
-    let entry = &listed.entry;
-    let mut plan = RestorePlan {
-        id: normalized,
-        source: entry.source.clone(),
-        offset: entry.offset,
-        conditions: Vec::new(),
-        would_write: entry.removed.clone(),
-        refusal: None,
-        written: false,
-    };
-    if !repairable_sources(layout)?.contains(&entry.source) {
-        plan.refusal = Some(format!(
-            "a restore does not write {}: it is not on the repair list (the WAL, the pointer index, the ref log, the trust and \
-             received files and their generation logs), so this entry cannot be restored",
-            entry.source
-        ));
-        return Ok(plan);
-    }
-    let expected = meaning_paths_for(layout, &entry.source)?;
-    let named: Vec<String> = entry
-        .meaning
-        .iter()
-        .map(|meaning| meaning.path.clone())
-        .collect();
-    if expected != named {
-        plan.refusal = Some(format!(
-            "the entry names the meaning files {named:?}, but the repair table gives {} the meaning files {expected:?}; the \
-             entry does not match the table, so it cannot be restored",
-            entry.source
-        ));
-        return Ok(plan);
-    }
-    let offset = entry.offset;
-    let current =
-        stat_file_state_if_exists(root, Path::new(&entry.source))?.map(|state| state.size);
-    let length_ok = current == Some(offset);
-    let length_text = match current {
-        Some(len) if len == offset => {
-            format!("the source is {offset} bytes, the length the repair left")
-        }
-        Some(len) => format!("the source is {len} bytes; the repair left {offset}"),
-        None => format!("the source is absent; the repair left {offset} bytes"),
-    };
-    plan.conditions.push(Condition {
-        text: length_text,
-        holds: length_ok,
-    });
-    let prefix_ok = length_ok
-        && read_file_range_if_exists(
-            root,
-            Path::new(&entry.source),
-            0,
-            usize::try_from(offset).unwrap_or(usize::MAX),
-        )?
-        .is_some_and(|prefix| sha(&prefix) == entry.prefix_hash);
-    let prefix_text = if !length_ok {
-        "the bytes before the offset are not compared: the length differs".to_string()
-    } else if prefix_ok {
-        "the bytes before the offset are the bytes the repair left".to_string()
-    } else {
-        "the bytes before the offset have changed since the repair".to_string()
-    };
-    plan.conditions.push(Condition {
-        text: prefix_text,
-        holds: prefix_ok,
-    });
-    for meaning in &entry.meaning {
-        let now = read_file_if_exists(root, Path::new(&meaning.path))?.map(|bytes| sha(&bytes));
-        let holds = now == meaning.hash;
-        let text = if holds {
-            format!("{} is unchanged since the repair", meaning.path)
-        } else {
-            format!("{} has changed since the repair", meaning.path)
-        };
-        plan.conditions.push(Condition { text, holds });
-    }
-    if plan.can_restore() && !plan_only {
-        append_file_required(root, Path::new(&entry.source), &entry.removed)?;
-        plan.written = true;
-    }
-    Ok(plan)
+/// Save the commit witness's current bytes before a repair rewrites it (RFC 168 A1, item 1). `written` are the bytes the rewrite puts in
+/// place; the witness's meaning is the WAL it covers, recorded now.
+pub(crate) fn save_witness_replace(layout: &RepositoryLayout, written: &[u8]) -> Result<()> {
+    let path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    save_current_replace(layout, &path, written, "witness")
+}
+
+/// Save ref-name's current bytes before a repair rewrites it (RFC 168 A1, item 1).
+pub(crate) fn save_ref_name_replace(layout: &RepositoryLayout, written: &[u8]) -> Result<()> {
+    let path = layout.default_active_ref_name_path();
+    save_current_replace(layout, &path, written, "ref-name")
+}
+
+fn save_current_replace(
+    layout: &RepositoryLayout,
+    path: &Path,
+    written: &[u8],
+    label: &str,
+) -> Result<()> {
+    let relative = layout.repository_relative(path)?;
+    let previous =
+        read_file_if_exists(layout.repository_mutation_root(), &relative)?.unwrap_or_default();
+    let source = relative.to_string_lossy().replace('\\', "/");
+    save_replace(layout, &source, &previous, written, label)?;
+    Ok(())
 }
 
 /// The removed bytes of one entry, by id: for the repairs' own tests and for `verify`'s rehearsal reads.
@@ -815,6 +829,9 @@ mod tests {
 
     fn sample() -> Entry {
         Entry {
+            kind: Kind::Cut,
+            run: [0; 8],
+            new_hash: [0; 32],
             source: "active/default/queue.wal".to_string(),
             offset: 12,
             label: "wal".to_string(),
@@ -830,8 +847,10 @@ mod tests {
 
     #[test]
     fn an_entry_round_trips_through_its_frame_and_is_listed_under_its_id() {
-        let entry = sample();
-        let (framed, id) = frame(&entry);
+        let mut entry = sample();
+        entry.run = [7; 8];
+        let framed = frame(&entry);
+        let id = prikk_hash::to_hex(&entry.run);
         assert_eq!(id.len(), ID_LEN);
         let Candidate::Entry(listed, next) = classify_at(&framed, 0) else {
             panic!("a sound frame classifies as an entry");
@@ -868,6 +887,9 @@ mod controls {
 
     fn entry(source: &str, removed: &[u8]) -> Entry {
         Entry {
+            kind: Kind::Cut,
+            run: [0; 8],
+            new_hash: [0; 32],
             source: source.to_string(),
             offset: 4,
             label: "control".to_string(),
@@ -1011,8 +1033,10 @@ pub struct RestoreConditionView {
 /// What `--recovery-restore` prints first: each condition, what it would write, and whether it wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestorePlanView {
-    /// The entry id the plan is for.
+    /// The run id the plan is for.
     pub id: String,
+    /// The steps of the run, in the order they are undone (A1 item 3).
+    pub steps: Vec<RestoreStepView>,
     /// The file the restore would write to.
     pub source: String,
     /// The offset it would write at.
@@ -1036,6 +1060,21 @@ pub struct ClearedEntry {
     pub source: String,
     /// How many bytes it saved.
     pub len: u64,
+}
+
+/// One step of a run's restore, as `--recovery-restore` prints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreStepView {
+    /// The file the step writes.
+    pub source: String,
+    /// `cut` (bytes appended at an offset) or `rewrite` (the previous bytes written in place).
+    pub kind: String,
+    /// Already holds what the step writes: skipped (A1 item 5).
+    pub done: bool,
+    /// The step's conditions, each with the fact found.
+    pub conditions: Vec<RestoreConditionView>,
+    /// How many bytes the step writes.
+    pub bytes: usize,
 }
 
 /// What `--recovery-clear` removed, or would remove under `--plan-only`.
@@ -1113,6 +1152,27 @@ pub fn recovery_restore(
     let _locks = repair_locks(layout)?;
     let plan = restore(layout, id, plan_only)?;
     Ok(RestorePlanView {
+        steps: plan
+            .steps
+            .iter()
+            .map(|step| RestoreStepView {
+                source: step.source.clone(),
+                kind: match step.kind {
+                    Kind::Cut => "cut".to_string(),
+                    Kind::Replace => "rewrite".to_string(),
+                },
+                done: step.done,
+                conditions: step
+                    .conditions
+                    .iter()
+                    .map(|condition| RestoreConditionView {
+                        text: condition.text.clone(),
+                        holds: condition.holds,
+                    })
+                    .collect(),
+                bytes: step.bytes,
+            })
+            .collect(),
         id: plan.id,
         source: plan.source,
         offset: plan.offset,
@@ -1124,7 +1184,7 @@ pub fn recovery_restore(
                 holds: condition.holds,
             })
             .collect(),
-        would_write: plan.would_write.len(),
+        would_write: plan.would_write,
         refusal: plan.refusal,
         written: plan.written,
     })
@@ -1249,6 +1309,9 @@ mod review_fixes {
 
     fn entry(source: &str, removed: &[u8]) -> Entry {
         Entry {
+            kind: Kind::Cut,
+            run: [0; 8],
+            new_hash: [0; 32],
             source: source.to_string(),
             offset: 4,
             label: "review".to_string(),

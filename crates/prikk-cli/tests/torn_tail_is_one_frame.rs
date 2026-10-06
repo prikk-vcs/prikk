@@ -91,9 +91,9 @@ fn run(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
 /// The entry a repair names: its 16-hex-character id, from `recovery/log, entry <id>`.
 fn named_entry(output: &str) -> String {
     let start = output
-        .find("recovery/log, entry ")
+        .find("recovery/log, run ")
         .unwrap_or_else(|| panic!("the repair names its recovery entry\n{output}"))
-        + "recovery/log, entry ".len();
+        + "recovery/log, run ".len();
     output[start..].chars().take(16).collect()
 }
 

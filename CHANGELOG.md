@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed — a repair is one recovery run, and a restore undoes the whole run (RFC 168 amendment A1)
+
+Each repair the user runs has one run id, printed as `recovery/log, run <id>`, and its entries are grouped under it in `--recovery-list`. `--recovery-restore <run id>` undoes every step of the run in reverse order, after checking every condition, so a discard (its WAL cut and its commit witness rewrite) comes back byte-for-byte. The commit witness and `ref-name` are saved before a repair rewrites them, so their previous bytes are kept too. An interrupted restore finishes when it is run again, and a run that a later repair overlaps names that run to restore first. The log is unreleased in 0.49.0, so no earlier entry format is read.
+
 ### Added — one recovery log, and `doctor --recovery-list`, `--recovery-restore`, `--recovery-clear` (RFC 168 §3.1–§3.2)
 
 Every repair that removes bytes from a framed file (the WAL, the pointer index, the other `--repair-tails` files, ten in all, and
@@ -28,7 +32,7 @@ marker, and the dirty-worktree refusals, now name the command that finishes the 
 
 ### Output changes — repair messages name the recovery entry; `verify` prints a line for a damaged log
 
-Repair output says `saved to recovery/log, entry <id>` in place of `saved to .prikk/recovery/<name>.bytes`. `verify` prints one
+Repair output says `saved to recovery/log, run <id>` in place of `saved to .prikk/recovery/<name>.bytes`. `verify` prints one
 line when `recovery/log` has damage: `recovery log: N damaged region; a save there cannot be restored`. Its exit status and its
 JSON report are unchanged.
 

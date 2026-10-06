@@ -116,6 +116,8 @@ fn run(
     not_current_branch: bool,
     mode: Mode,
 ) -> Result<RestoreQueueTargetPlan> {
+    // RFC 168 A1, item 2: the ref-name rewrite is one run.
+    let _run = crate::recovery_log::begin_run();
     let ref_name = validate_local_branch_ref(ref_name)?;
     let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
     if matches!(mode, Mode::Execute) {
@@ -213,6 +215,8 @@ fn run(
     match mode {
         Mode::PlanOnly => Ok(plan),
         Mode::Execute => {
+            // RFC 168 A1, item 1: ref-name's previous bytes are saved before the restore writes it.
+            crate::recovery_log::save_ref_name_replace(layout, ref_name.as_bytes())?;
             let relative = layout.repository_relative(&layout.default_active_ref_name_path())?;
             rewrite_in_place_or_create_required(
                 layout.repository_mutation_root(),

@@ -53,9 +53,9 @@ fn wal(repo: &Path) -> PathBuf {
 /// The entry a repair names, from `recovery/log, entry <id>`.
 fn named_entry(output: &str) -> String {
     let start = output
-        .find("recovery/log, entry ")
+        .find("recovery/log, run ")
         .unwrap_or_else(|| panic!("the repair names its entry\n{output}"))
-        + "recovery/log, entry ".len();
+        + "recovery/log, run ".len();
     output[start..].chars().take(16).collect()
 }
 
@@ -72,7 +72,7 @@ fn an_empty_log_lists_no_entries_and_says_how_to_judge_one() {
     let (code, text) = run(&repo, &["doctor", "--recovery-list"]);
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains("recovery log: 0 entries in .prikk/recovery/log"),
+        text.contains("recovery log: 0 entries in 0 runs in .prikk/recovery/log"),
         "{text}"
     );
     assert!(
@@ -91,7 +91,7 @@ fn a_repair_is_listed_under_the_id_it_named() {
     let (code, text) = run(&repo, &["doctor", "--recovery-list"]);
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains("recovery log: 1 entry in .prikk/recovery/log"),
+        text.contains("recovery log: 1 entry in 1 run in .prikk/recovery/log"),
         "{text}"
     );
     assert!(text.contains(&id), "{text}");
@@ -146,7 +146,7 @@ fn a_restore_writes_the_removed_bytes_back_at_their_offset() {
     );
     let (code, text) = run(&repo, &["doctor", "--recovery-restore", &id]);
     assert_eq!(code, Some(0), "{text}");
-    assert!(text.contains("wrote 7 bytes at offset"), "{text}");
+    assert!(text.contains("wrote 7 bytes in 1 step"), "{text}");
     assert_eq!(
         std::fs::read(wal(&repo)).unwrap(),
         before_repair,
@@ -190,7 +190,7 @@ fn a_malformed_id_is_refused_with_the_length_it_needs() {
         &["doctor", "--recovery-restore", "abc", "--plan-only"],
     );
     assert_ne!(code, Some(0), "{text}");
-    assert!(text.contains("an entry id is 16 hex characters"), "{text}");
+    assert!(text.contains("a run id is 16 hex characters"), "{text}");
     let _ = std::fs::remove_dir_all(repo);
 }
 

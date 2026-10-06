@@ -145,7 +145,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 166 round 2 §1 added `doctor::discard_damaged_commits` (D5, `--discard-damaged-commits`): 154 -> 155.
     // RFC 166 round 2 §2 added `doctor::restore_queue_target` (D5, `--restore-queue-target`): 155 -> 156.
     // RFC 168 §3.1 added `recovery_log`, the one recovery log and its restore: 156 -> 157.
-    assert_eq!(modules.len(), 157, "modules: {modules:?}");
+    // RFC 168 A1 split the restore out of `recovery_log` into `recovery_log::restore`: 157 -> 158.
+    assert_eq!(modules.len(), 158, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

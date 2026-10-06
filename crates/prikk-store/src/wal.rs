@@ -295,6 +295,8 @@ impl Wal {
     /// already refuses earlier via `doctor_repository`'s own item-outcome reporting; this check is
     /// defense in depth for this function's own contract, not the only thing enforcing it.
     pub fn truncate_trailing_partial(&self) -> Result<WalRepair> {
+        // RFC 168 A1, item 2: a repair's entries share one run id; nested inside another repair, this joins its run.
+        let _run = crate::recovery_log::begin_run();
         self.require_current_format()?;
         let Some(bytes) = self.read_bytes()? else {
             return Ok(WalRepair {
@@ -424,14 +426,9 @@ impl Wal {
             .get(usize::try_from(repaired_len).unwrap_or(usize::MAX)..)
             .unwrap_or_default();
         let complete_records_removed = count_complete_record_shapes(removed);
-        let layout = self.layout.as_ref().ok_or_else(|| PrikkError::Io {
-            kind: None,
-            context: "WAL repair preview requires a validated repository layout".to_string(),
-        })?;
         let source = relative.to_string_lossy().replace('\\', "/");
-        let entry = recovery_log::entry_for(layout, &source, &bytes, repaired_len, "wal")?;
         let recovery = RecoveryRef {
-            id: recovery_log::id_of(&entry),
+            id: String::new(),
             source,
             offset: repaired_len,
             len: removed.len() as u64,

@@ -263,7 +263,8 @@ pub use recognition_claim::{
 };
 pub use recovery_log::{
     RecoveryClearView, RecoveryEntryView, RecoveryListing, RecoveryRef, RestoreConditionView,
-    RestorePlanView, recovery_clear, recovery_list, recovery_restore, recovery_verify_line,
+    RestorePlanView, RestoreStepView, recovery_clear, recovery_list, recovery_restore,
+    recovery_verify_line,
 };
 pub use ref_completion::{
     CompletionPlan, CompletionRefusal, complete_ref_publication, plan_ref_completion,

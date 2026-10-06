@@ -316,8 +316,10 @@ pub(crate) fn rebuild_witness_over_sound_wal(
     name: impl AsRef<std::path::Path> + Copy,
     ref_name: &str,
     replay: &crate::wal::WalReplay,
+    save: impl FnOnce(&[u8]) -> Result<()>,
 ) -> Result<()> {
     let Some(last) = replay.records.last() else {
+        save(&[])?;
         return clear_witness(layout, name);
     };
     let running_hash = fold_running_hash([0u8; 32], &replay.records, 0, last.seq)?;
@@ -332,6 +334,8 @@ pub(crate) fn rebuild_witness_over_sound_wal(
         ref_tip_at_write,
     };
     let bytes = encode_witness(&record);
+    // RFC 168 A1: the bytes the witness had are saved before this rewrite, so the rewrite can be undone.
+    save(&bytes)?;
     let relative = layout.repository_relative(&witness_path(layout, name))?;
     write_witness_in_place(layout.repository_mutation_root(), &relative, &bytes)
 }

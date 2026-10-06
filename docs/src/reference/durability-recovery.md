@@ -93,7 +93,7 @@ witness is rewritten to cover the resulting sound prefix.
 **A repair keeps every byte it removes.** A record whose only fault is a damaged length, with nothing sound behind it, is
 indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it appends exactly the bytes it will remove to
 the recovery log (`recovery/log`, durably, under the same lock), and only then truncates; its output names the entry. `prikk doctor --recovery-list`
-shows the entry, and `prikk doctor --recovery-restore <id>` writes the bytes back at their offset, under the conditions in
+shows the entries by run, and `prikk doctor --recovery-restore <run id>` undoes the run, under the conditions in
 [Recovery log](./repository-layout.md) (the file is unchanged since the repair, its prefix is unchanged, and the files that give the bytes their meaning are unchanged). The
 entry holds the raw WAL bytes, so a record that was removed by mistake can also be read from it: the removed region starts at the recorded offset of the
 old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` ignores it, and it can be

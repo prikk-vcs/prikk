@@ -74,6 +74,8 @@ pub struct RepairTailsReport {
 /// `prikk doctor --repair-tails`. See the module doc for the locking order and the all-or-nothing
 /// rule.
 pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
+    // RFC 168 A1, item 2: every file this run cuts or rewrites shares one run id.
+    let _run = crate::recovery_log::begin_run();
     let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let _container_locks = acquire_container_locks(
         layout,
@@ -219,6 +221,7 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
                 DEFAULT_ACTIVE_NAME,
                 ref_name,
                 &wal_replay,
+                |written| crate::recovery_log::save_witness_replace(layout, written),
             )?;
         } else if wal_replay.records.is_empty() {
             crate::commit_boundary::witness::clear_witness(layout, DEFAULT_ACTIVE_NAME)?;

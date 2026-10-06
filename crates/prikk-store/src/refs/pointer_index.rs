@@ -509,6 +509,7 @@ pub struct PointerIndexRepair {
 pub(crate) fn truncate_pointer_index_trailing_partial(
     layout: &RepositoryLayout,
 ) -> Result<PointerIndexRepair> {
+    let _run = crate::recovery_log::begin_run();
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("pointer-index-replay");

@@ -334,20 +334,22 @@ prikk doctor --discard-damaged-commits
 $ prikk doctor --discard-damaged-commits --plan-only
 doctor repository: /path/to/.prikk
 acknowledged commit at sequence 1 (patch 01157f0c...)
-340 bytes saved to recovery/log, entry 3f9a0c1e8b2d4a57 before truncation
+340 bytes saved to recovery/log, run 3f9a0c1e8b2d4a57 before truncation
 plan only -- nothing written
 
 $ prikk doctor --discard-damaged-commits
 doctor repository: /path/to/.prikk
 acknowledged commit at sequence 1 (patch 01157f0c...)
-340 bytes saved to recovery/log, entry 3f9a0c1e8b2d4a57 before truncation
+340 bytes saved to recovery/log, run 3f9a0c1e8b2d4a57 before truncation
 damaged commit discarded
 ```
 
-After it, `prikk verify` exits 0 again. The removed bytes are kept until `prikk doctor --recovery-clear` removes them: they
-are the exact bytes the named entry in `recovery/log` holds (`prikk doctor --recovery-list` shows it, and `--recovery-restore`
-writes it back when its conditions hold), so the content can be read back from it (the queued commit's own content, not just its presence, since the WAL body is the signed
-Patch envelope itself). Rows 5 (the record no longer present at all) and 7 (the acknowledgment history
+After it, `prikk verify` exits 0 again. The removed bytes are kept until `prikk doctor --recovery-clear` removes them.
+They are saved under the run the output names. `prikk doctor --recovery-list` groups the saved entries by run, and
+`prikk doctor --recovery-restore <run id>` undoes the whole discard when its conditions hold: the WAL and the commit
+witness come back byte-for-byte, and the run's files are checked first, so a later repair that changed one of them is
+named (`restore run <later id> first`). The content can be read back from the saved entries too (the queued commit's own
+content, not just its presence, since the WAL body is the signed Patch envelope itself). Rows 5 (the record no longer present at all) and 7 (the acknowledgment history
 itself unreadable) are the same verb's job too, with no sequence or Patch id to name in row 7's case —
 the plan still says so, honestly, rather than guessing one.
 
