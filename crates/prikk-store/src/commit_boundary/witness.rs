@@ -1,5 +1,5 @@
 //! RFC 166 D2: the commit witness. One record, in its own file
-//! (`.prikk/active/<name>/witness`), replaced atomically after every acknowledged commit, written
+//! (`.prikk/active/<name>/witness`), overwritten in place after every acknowledged commit (RFC 168 §3.3), written
 //! by the one session-level function every appender goes through
 //! ([`append_patch_and_witness`]) -- `commit` (`author_inner`), `ActiveSession::append_patch` and
 //! `rollback-draft` all call it; `Wal::append_patch` itself is reachable from nowhere else
@@ -251,7 +251,7 @@ fn fold_running_hash(
 }
 
 /// The one session-level function every appender goes through (§13 item 1): appends `envelope` to
-/// the named session's WAL, then writes the witness, atomically, after the durable append and
+/// the named session's WAL, then writes the witness in place (RFC 168 §3.3), after the durable append and
 /// before returning. Returns the assigned (or, for an idempotent retry, the pre-existing) seq.
 pub fn append_patch_and_witness(
     layout: &RepositoryLayout,

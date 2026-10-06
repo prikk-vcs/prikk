@@ -23,7 +23,7 @@
 //!   that `prikk ref complete`/seal's own retry already cover, and answering it gave no protection
 //!   against the real risk the review found.
 //! - **A restored owner is final for this verb.** A second restore over an owned queue still
-//!   refuses (unchanged) -- a wrong restore is undone by hand, not by a second call that would make
+//!   refuses (unchanged) -- a wrong restore is undone by `prikk doctor --recovery-restore <run id>`, the run its output names, not by a second call that would make
 //!   this a general "change owner" command.
 //!
 //! **The write, last:** `ref-name`, by atomic replace -- never the truncate-then-append

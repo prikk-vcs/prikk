@@ -167,10 +167,7 @@
 //! `DC-95-VERIFY-COVERAGE-AND-FINDING-ACCUMULATION.md`'s own handoff trail).
 //!
 //! **Scope limit**: this enumerates checks `verify` *has*, not checks it *should have* -- a gap of a
-//! different kind this method cannot surface. One known instance: the received-ref index
-//! (`received_index.rs`, RFC 102 Stage 5 -- formerly `refs/received/`) is never read by
-//! `verify_repository` at all (RFC 101 §5.2's independently-derived transition trace); registered in
-//! reported in the review result, not a row here, since there is no existing check to classify.
+//! different kind this method cannot surface.
 //!
 //! ## `verify/objects.rs` + `block_state.rs` (`verify/tests.rs`)
 //!
