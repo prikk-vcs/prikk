@@ -60,3 +60,22 @@
 | U3 | `platform-support.md` | 20 min |
 
 **Report:** `.git-exclude/review-request/step5-round-3-report-v1.md`, with each unit's real start and end.
+
+## Addendum 1 — 2026-10-06: Windows red on the push (review `step5-round-3-review-v2`)
+
+**Corrections Required.** macOS passed. Windows failed one test on `aa7851a5`: the witness source scan skips test files
+with a `"/tests/"` text match, which never matches a Windows path. **This is a fix round:** fixes only.
+
+1. **One shared `is_test_source`** (by `Path::components()`, from `block_state/anchored_parent/tests.rs`) in a shared
+   test-support module, used by every source scan in `prikk-store`. List each scan from source.
+2. **Keep its control** with the shared function, adding rows for `caller_tests` and `test_support`.
+3. **Sweep** `crates/` and `tools/` tests for text matches against `/` in paths, and fix each.
+4. **Commit alone, first.** The architect pushes it through the service and reads the Windows job.
+
+**Prohibited:** `cfg(not(windows))` on any scan.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| A1 | items 1–4 | 45 min |
+
+**Report:** `.git-exclude/review-request/step5-round-3-report-v2.md`, with `scripts/gates.py`'s summary.
