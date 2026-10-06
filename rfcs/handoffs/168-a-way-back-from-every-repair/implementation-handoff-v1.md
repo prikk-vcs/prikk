@@ -234,3 +234,12 @@ in exactly the state P1/W1 built.
 | C | item 9 (when live) | 180 min |
 
 **Report:** `.git-exclude/review-request/rfc168-implementation-report-v2.md`, with `date` at each unit's start and end.
+
+**Fix round ACCEPTED 2026-10-06 with conditions** (review `rfc168-implementation-review-v2`). `bcebf76f` is pushed with that review's record.
+- **Still owed before the 0.49.0 cut:** item 9 (A1, once the owner has read it), item 12 (the timing, on a quiet machine), and item 14 below.
+
+14. **(live now) A frame's version is trusted only after its checksum holds.**
+    - `checksum_of` hashes the header's own version, not the constant;
+    - `classify_at` calls a frame `Newer` only when that checksum holds; a failing frame is damage.
+    - **Test:** flip each version byte of a sound entry, and it reads as damage, with the entries after it still listed. **Control:** go back to the constant, and the test goes red.
+    - **Budget:** 30 min. **Report:** `.git-exclude/review-request/rfc168-implementation-report-v3.md` (with item 9, if it is live by then).
