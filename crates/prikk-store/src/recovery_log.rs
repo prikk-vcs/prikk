@@ -140,12 +140,13 @@ fn short_id(checksum: &[u8; 32]) -> String {
     prikk_hash::to_hex(checksum).chars().take(ID_LEN).collect()
 }
 
-/// The frame checksum: over the magic, version, length and body, hashed in place (RFC 168 F4: no copy of the body).
-fn checksum_of(body: &[u8]) -> [u8; 32] {
+/// The frame checksum: over the magic, version, length and body, hashed in place (RFC 168 F4: no copy of the body). The version
+/// is the one the frame's own header carries, so a frame's version is trusted only after its checksum holds (RFC 168 item 14).
+fn checksum_with_version(version: u16, body: &[u8]) -> [u8; 32] {
     let len = (body.len() as u64).to_be_bytes();
     crate::foundation::frame_resync::tallied_sha256_parts(&[
         MAGIC,
-        &VERSION.to_be_bytes(),
+        &version.to_be_bytes(),
         &len,
         body,
     ])
@@ -154,7 +155,7 @@ fn checksum_of(body: &[u8]) -> [u8; 32] {
 /// The framed bytes of one entry, and its id.
 fn frame(entry: &Entry) -> (Vec<u8>, String) {
     let body = encode_body(entry);
-    let checksum = checksum_of(&body);
+    let checksum = checksum_with_version(VERSION, &body);
     let id = short_id(&checksum);
     let mut out = Vec::with_capacity(HEADER_LEN + body.len());
     out.extend_from_slice(MAGIC);
@@ -386,10 +387,14 @@ fn classify_at(bytes: &[u8], at: usize) -> Candidate {
     else {
         return Candidate::Damage;
     };
+    // The checksum first: a version field that is not covered by a holding checksum is damage, not a newer frame (item 14).
+    if checksum_with_version(version, body) != stored {
+        return Candidate::Damage;
+    }
     if version > VERSION {
         return Candidate::Newer(body_end);
     }
-    if version != VERSION || checksum_of(body) != stored {
+    if version != VERSION {
         return Candidate::Damage;
     }
     match decode_body(body) {
@@ -1477,5 +1482,42 @@ mod review_fixes {
             "and runs once it is free"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RFC 168 item 14: a flipped byte in a sound entry's version field is damage, never a newer frame, and the entry after it stays
+    /// listed. Control: taking the version from the constant instead of the header turns this red.
+    #[test]
+    fn a_flipped_version_byte_is_damage_and_the_entry_after_it_stays_listed() {
+        for offset in [8_usize, 9] {
+            let root = unique_temp_dir("recovery-log-item14-version");
+            let layout = RepositoryLayout::init(root.clone()).expect("init");
+            let mutation = layout.repository_mutation_root();
+            append(mutation, &entry("FORMAT", b"first")).expect("first");
+            let second = append(mutation, &entry("FORMAT", b"second")).expect("second");
+            let path = root.join(".prikk").join(LOG_PATH);
+            let mut bytes = std::fs::read(&path).expect("read");
+            bytes[offset] ^= 0x01;
+            std::fs::write(&path, &bytes).expect("write");
+            let listing = list(mutation).expect("list");
+            assert_eq!(
+                listing.newer_versions, 0,
+                "byte {offset}: a flipped version is not a newer frame"
+            );
+            assert_eq!(
+                listing.damaged_regions, 1,
+                "byte {offset}: the flipped frame is damage"
+            );
+            let ids: Vec<&str> = listing
+                .entries
+                .iter()
+                .map(|listed| listed.id.as_str())
+                .collect();
+            assert_eq!(
+                ids,
+                vec![second.id.as_str()],
+                "byte {offset}: the entry after it stays listed"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }
