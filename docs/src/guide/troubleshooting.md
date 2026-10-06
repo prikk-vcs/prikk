@@ -326,7 +326,7 @@ and why
 # See what this would remove first, without writing anything:
 prikk doctor --discard-damaged-commits --plan-only
 
-# Then do it -- the removed bytes are saved to .prikk/recovery/ first, all-or-nothing:
+# Then do it -- the removed bytes are saved to the recovery log first, all-or-nothing:
 prikk doctor --discard-damaged-commits
 ```
 
@@ -334,18 +334,18 @@ prikk doctor --discard-damaged-commits
 $ prikk doctor --discard-damaged-commits --plan-only
 doctor repository: /path/to/.prikk
 acknowledged commit at sequence 1 (patch 01157f0c...)
-340 bytes saved to recovery/wal-default-at-0-bbbeb7e7a8a62c38.bytes before truncation
+340 bytes saved to recovery/log, entry 3f9a0c1e8b2d4a57 before truncation
 plan only -- nothing written
 
 $ prikk doctor --discard-damaged-commits
 doctor repository: /path/to/.prikk
 acknowledged commit at sequence 1 (patch 01157f0c...)
-340 bytes saved to recovery/wal-default-at-0-bbbeb7e7a8a62c38.bytes before truncation
+340 bytes saved to recovery/log, entry 3f9a0c1e8b2d4a57 before truncation
 damaged commit discarded
 ```
 
 After it, `prikk verify` exits 0 again. The removed bytes are never gone — they are the exact bytes the
-named recovery file under `.prikk/recovery/` holds, in case the content needs to be recovered by hand
+named entry in `recovery/log` holds (`prikk doctor --recovery-list` shows it, and `--recovery-restore` writes it back), in case the content needs to be recovered by hand
 from them (the queued commit's own content, not just its presence, since the WAL body is the signed
 Patch envelope itself). Rows 5 (the record no longer present at all) and 7 (the acknowledgment history
 itself unreadable) are the same verb's job too, with no sequence or Patch id to name in row 7's case —
@@ -379,7 +379,7 @@ prikk doctor --repair-pointer-index-tail
 ```
 
 which truncates the incomplete trailing record under the pointer-index lock, saving the removed bytes to
-`.prikk/recovery/`, the same way `--repair-wal-tail` does for the WAL. After it, `prikk verify` should exit
+`recovery/log`, the same way `--repair-wal-tail` does for the WAL. After it, `prikk verify` should exit
 0, and the publication that refused can be retried.
 
 ## `error: integrity error: the trust key container has an incomplete tail at byte offset N (M byte(s) follow); …`
@@ -398,7 +398,7 @@ prikk doctor --repair-tails
 ```
 
 which truncates the incomplete trailing record under this file's own lock, saving the removed bytes to
-`.prikk/recovery/` first. After it, `prikk verify` should exit 0, and `trust maintainer add` can be
+`recovery/log` first. After it, `prikk verify` should exit 0, and `trust maintainer add` can be
 retried.
 
 ## `error: integrity error: the trust policy container has an incomplete tail at byte offset N (M byte(s) follow); …`

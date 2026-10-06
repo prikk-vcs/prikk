@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added — one recovery log, and `doctor --recovery-list`, `--recovery-restore`, `--recovery-clear` (RFC 168 §3.1–§3.2)
+
+Every repair that removes bytes from a framed file (the WAL, the pointer index, the ten `--repair-tails` files, and the object
+index's lost ids) now appends them to `recovery/log` before it truncates, and names the entry in its output. The log is one
+file, never truncated by a repair, and read by three commands: `--recovery-list` lists the entries; `--recovery-restore <id>
+[--plan-only]` writes an entry back only when the file is still as long as the entry's offset, its prefix is unchanged, and the
+files that give the bytes their meaning are unchanged, and it prints its plan first; `--recovery-clear [--plan-only]` removes
+the saved content for good. Repairs written before this release are in `recovery/*.bytes` files: `--recovery-list` lists them as
+older files, and no command writes or deletes them. `init` creates the log; a repository created earlier gets it at its first
+write.
+
+### Changed — repository state that cannot be rebuilt is written in place, not renamed (RFC 168 §3.3)
+
+The current-branch pointer, the `FORMAT` marker, the commit witness and `ref-name` no longer depend on a rename for their
+durability. The pointer and `ref-name` are truncated and appended; the marker is a one-byte overwrite; the witness is overwritten
+from its first byte with its length set after, and never truncated first. A torn write of any of them is refused or rebuilt,
+never read as cleared. The four rebuildable caches and the worktree files keep their replace (RFC 168 §3.4).
+
+### Changed — a set switch or checkout marker names its target, and refusals name the exact command (RFC 168 §3.3)
+
+A branch switch or checkout appends its target to the worktree marker. A refusal over a torn current-branch pointer under a set
+marker, and the dirty-worktree refusals, now name the command that finishes the interrupted operation, such as
+`prikk branch switch heads/other`. A marker without a target keeps the general wording.
+
+### Output changes — repair messages name the recovery entry; `verify` prints a line for a damaged log
+
+Repair output says `saved to recovery/log, entry <id>` in place of `saved to .prikk/recovery/<name>.bytes`. `verify` prints one
+line when `recovery/log` has damage: `recovery log: N damaged region; a save there cannot be restored`. Its exit status and its
+JSON report are unchanged.
+
 ### Changed — `bundle import` refuses a bundle whose ref's chain or required attestations are not carried (0.49.0 step 5, round 2, item 1)
 
 An imported bundle's exported ref must carry, or already have, every earlier RefState on its chain

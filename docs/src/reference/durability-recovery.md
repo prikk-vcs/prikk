@@ -87,13 +87,15 @@ acknowledges, checked against the WAL independently of the WAL's own content —
 apart: a genuine, never-acknowledged crash tail is still removed exactly as before; an *acknowledged* record
 that is now damaged or missing refuses instead (`verify` exits 1; `commit`/`seal`/`rollback-draft` refuse,
 naming it), and `prikk doctor --discard-damaged-commits [--plan-only]` (RFC 166 D5) is its own way out — the
-removed bytes are still saved to `.prikk/recovery/`, exactly as `--repair-wal-tail` saves them, before the
+removed bytes are still saved to the recovery log (`recovery/log`), exactly as `--repair-wal-tail` saves them, before the
 witness is rewritten to cover the resulting sound prefix.
 
 **A repair keeps every byte it removes.** A record whose only fault is a damaged length, with nothing sound behind it, is
-indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it writes exactly the bytes it will remove to
-`.prikk/recovery/wal-<session>-at-<offset>-<hash>.bytes` (durably, under the same lock), and only then truncates; its output names the file. The
-file is the raw WAL bytes, so a record that was removed by mistake can be read back from it: the removed region starts at the named offset of the
+indistinguishable from an interrupted append, so `--repair-wal-tail` truncates it. Before it does, it appends exactly the bytes it will remove to
+the recovery log (`recovery/log`, durably, under the same lock), and only then truncates; its output names the entry. `prikk doctor --recovery-list`
+shows the entry, and `prikk doctor --recovery-restore <id>` writes the bytes back at their offset, under the conditions in
+[Recovery log](./repository-layout.md) (the file is unchanged since the repair, its prefix is unchanged, and the files that give the bytes their meaning are unchanged). The
+entry holds the raw WAL bytes, so a record that was removed by mistake can also be read from it: the removed region starts at the recorded offset of the
 old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` ignores it, and it can be
 deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage.
 **What counts as a tail is not one rule for every framed file** (RFC 162):
@@ -120,13 +122,16 @@ no recovery file, as part of `prikk ref complete <ref>`'s own write (RFC 165 R4 
 retry is one instance of the same mechanism, not a separate path). A lead-*free* tail (RFC 165 R5's
 own M4) goes through `--repair-tails` instead, saving what it removes like every other file it covers.
 
-**On Windows, the recovery file's own save is not claimed durable.** It writes through the same platform
-durability contract as every other atomic replace on this repository (`foundation/fsutil/anchored/windows.rs`), and that
-contract's own Windows implementation does not assert `std::fs::rename`'s durability on return — a documented gap, not
-an oversight, since `MOVEFILE_WRITE_THROUGH`'s same-volume guarantee could not be established from primary sources.
-Nothing is ever truncated without the save call returning success first, so a repair still never *drops* bytes silently
-on any platform; what is weaker on Windows is only the recovery file's own guarantee of surviving a crash between that
-return and the next durable point. "A repair keeps every byte it removes" holds as written on Linux and macOS.
+**The recovery log is written in place, so its saves do not depend on a rename.** A save is an append to an existing
+name, flushed, like every other in-place write of repository state (RFC 168 §3.3). The one exception is the log's first
+appearance in a repository created before 0.49.0: it is a new name, and on Windows a power loss in the same boot can lose it
+(RFC 168 §6, residual (b)): a power loss in that boot can keep the truncate and lose the entry. Nothing is ever truncated without the save call returning success first, so on a running system a repair still never
+*drops* bytes silently on any platform. "A repair keeps every byte it removes" holds as written on Linux and macOS.
+
+**What is written in place (RFC 168 §3.3).** The current-branch pointer (truncated, then appended, under the switch marker), the
+`FORMAT` marker (a one-byte overwrite), the commit witness (overwritten from its first byte, then its length set, never truncated
+first), and `ref-name` (truncated, then appended). A torn write of any of them is refused or rebuilt, never read as cleared. The
+four caches keep their replace, and worktree files keep theirs (RFC 168 §3.4, residual (a)).
 One consequence to know: a crash-torn append of a blob **whose content is itself a prikk container file** leaves a partial frame with a sound frame in
 its payload; by the rule that is damage, and `doctor --repair-index` indexes the embedded frame as an object. That object is content-addressed and
 nothing references it, so it changes no state root and no signed output.
