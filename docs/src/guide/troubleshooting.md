@@ -348,7 +348,7 @@ After it, `prikk verify` exits 0 again. The removed bytes are kept until `prikk 
 They are saved under the run the output names. `prikk doctor --recovery-list` groups the saved entries by run, and
 `prikk doctor --recovery-restore <run id>` undoes the whole discard when its conditions hold: the WAL and the commit
 witness come back byte-for-byte, and the run's files are checked first, so a later repair that changed one of them is
-named (`restore run <later id> first`). The content can be read back from the saved entries too (the queued commit's own
+named (`restore run <later id> first`). The content is read back by restoring the run (the queued commit's own
 content, not just its presence, since the WAL body is the signed Patch envelope itself). Rows 5 (the record no longer present at all) and 7 (the acknowledgment history
 itself unreadable) are the same verb's job too, with no sequence or Patch id to name in row 7's case —
 the plan still says so, honestly, rather than guessing one.
