@@ -168,3 +168,13 @@ worst, and each was confirmed. This addendum supersedes §1.3's narrower list wh
 
 **Report:** fold into `release-0.49.0-prep-report-v1.md`, one row per audit row (fixed / answered, with the reason).
 **The candidate follows these units,** so that the release commit sits on docs that are true.
+
+**Record note, 2026-10-07:**
+- **Commit `6c9bed36`'s message** (*"clear the documentation debt …"*) names Addendum 1's **scope, as an instruction**.
+  It only added this text; none of that work was done in it. Where work is done is in the commits that do it. (Raised
+  by the development team.)
+- **Interim, seen:** `acb1b980` (P1) and `0033a7d2` (P2).
+  - **P2 still needs its own test,** as item 2 asks for a message: `doctor --help` names the three `--recovery-*`
+    commands, and `--repair-tails`'s line names the ref log.
+  - **Make `--recovery-clear`'s help line say the removal is permanent** (*"Remove every saved entry, permanently"*),
+    because it is the one destructive recovery command.
