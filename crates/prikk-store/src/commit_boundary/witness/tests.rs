@@ -4,6 +4,7 @@ use super::{WitnessState, clear_witness, read_witness};
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::node::node_id_gen::NodeIdGenerator;
+use crate::test_gates::source_classification::is_test_source;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::{Ed25519AuthorSigner, WorktreePatchCommitOptions};
 
@@ -310,24 +311,10 @@ fn append_patch_and_witness_is_the_only_caller_of_wal_append_patch() {
     // RFC 166 §13 item 1: `Wal::append_patch` is reachable from nowhere else. A fourth appender
     // calling it directly, anywhere else in production (non-test) source, fails this test.
     let src = repo_root().join("crates/prikk-store/src");
-    // This crate's own established naming for test-only code, consistently used everywhere a file
-    // or directory is test-only but does not literally match `/tests/` or end in `tests.rs`: found
-    // empirically by running this exact scan first and checking every match it returned traces to
-    // one of these (`test_gates/`, `caller_tests*`, `*_test_support*`), not assumed in advance.
-    const TEST_ONLY_MARKERS: &[&str] = &[
-        "/tests/",
-        "tests.rs",
-        "test_gates",
-        "caller_tests",
-        "test_support",
-    ];
     let mut non_test_callers = Vec::new();
     visit_rs_files(&src, &mut |path, contents| {
-        let path_text = path.to_string_lossy();
-        if TEST_ONLY_MARKERS
-            .iter()
-            .any(|marker| path_text.contains(marker))
-        {
+        let relative = path.strip_prefix(&src).unwrap_or(path);
+        if is_test_source(relative) {
             return;
         }
         for (line_number, line) in contents.lines().enumerate() {

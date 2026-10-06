@@ -7,6 +7,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::test_gates::source_classification::is_test_source;
 use prikk_object::{
     BlockKind, BlockPayload, CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType,
 };
@@ -602,50 +603,6 @@ fn a_checkpoint_is_written_over_a_damaged_live_blob_below_the_anchor_and_verify_
         verification.has_item_failure() || verification.has_stage_failure(),
         "verify reports the damage: {verification:?}"
     );
-}
-
-/// Whether a source file, given by its path **relative to `src`**, is test code: some component is `tests` or
-/// `test_gates`, or its file name ends in `tests.rs`. **By components, never by the path's spelling**: a rendered path
-/// spells its separator `\` on Windows, so a `contains("/tests/")` test skipped nothing there and this scan flagged a test
-/// file as production (CI run 36202895907, Windows mutation suite, RFC 159 Addendum 2). `Path` compares and splits by
-/// component on every platform.
-fn is_test_source(relative: &std::path::Path) -> bool {
-    relative
-        .components()
-        .any(|part| part.as_os_str() == "tests" || part.as_os_str() == "test_gates")
-        || relative
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().ends_with("tests.rs"))
-}
-
-/// **The classifier, on paths built from components** -- what a Windows directory walk yields (`a\b\c.rs`) is a path
-/// whose components are `a`, `b`, `c.rs`, exactly as `PathBuf::from_iter` builds it here. Linux and macOS cannot render a
-/// backslash path, so this control proves the component reading, and the Windows mutation suite proves the platform.
-/// **Perturb:** classify by `relative.to_string_lossy().contains("/tests/")`: this stays green on Linux (its separator
-/// is `/`), which is the defect's whole shape; the scan below is what the Windows job runs.
-#[test]
-fn test_sources_are_classified_by_component_not_by_spelling() {
-    use std::path::PathBuf;
-    let path = |parts: &[&str]| parts.iter().collect::<PathBuf>();
-    assert!(is_test_source(&path(&["snapshot", "tests", "writer.rs"])));
-    assert!(is_test_source(&path(&[
-        "block_state",
-        "tests",
-        "deep",
-        "x.rs"
-    ])));
-    assert!(is_test_source(&path(&["merge", "execute", "tests.rs"])));
-    assert!(is_test_source(&path(&["seal_from_accepted", "tests.rs"])));
-    assert!(is_test_source(&path(&["test_gates", "test_support.rs"])));
-    assert!(!is_test_source(&path(&["block_state.rs"])));
-    assert!(!is_test_source(&path(&[
-        "block_state",
-        "anchored_parent.rs"
-    ])));
-    assert!(!is_test_source(&path(&["merge", "execute.rs"])));
-    // A component that merely contains the word is not the directory.
-    assert!(!is_test_source(&path(&["contests", "x.rs"])));
-    assert!(!is_test_source(&path(&["tests_helper.rs"])));
 }
 
 /// **The anchored derivation names no function of the environment.** No knob decides how a signed root is derived: this

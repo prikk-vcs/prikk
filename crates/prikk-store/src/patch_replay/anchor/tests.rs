@@ -26,13 +26,10 @@ fn every_read_only_anchor_caller_is_a_read_only_report() {
                 stack.push(path);
                 continue;
             }
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
             if path.extension().and_then(|e| e.to_str()) != Some("rs")
-                || name == "tests.rs"
-                || path.components().any(|c| c.as_os_str() == "tests")
+                || crate::test_gates::source_classification::is_test_source(
+                    path.strip_prefix(&src).unwrap_or(&path),
+                )
             {
                 continue;
             }

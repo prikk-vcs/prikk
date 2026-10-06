@@ -28,6 +28,7 @@
     clippy::panic
 )]
 
+use crate::test_gates::source_classification::is_test_source;
 use std::path::{Path, PathBuf};
 
 /// How one allocation site's size expression is bounded.
@@ -88,22 +89,6 @@ fn source_roots() -> Vec<(&'static str, PathBuf)> {
         ("", manifest.join("src")),
         ("prikk-object/", manifest.join("../prikk-object/src")),
     ]
-}
-
-/// Files that are not production code (test modules and fixtures); see the module doc.
-fn is_test_file(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    name == "tests.rs"
-        || name.contains("test_support")
-        || name.contains("_tests")
-        || name.ends_with("_test.rs")
-        || path.components().any(|component| {
-            let part = component.as_os_str();
-            part == "tests" || part == "test_gates" || part == "caller_tests"
-        })
 }
 
 /// Blank out comments (so a `//` line naming `with_capacity(` is not a site) and inline `#[cfg(test)] mod x { ... }` blocks, keeping
@@ -387,7 +372,7 @@ fn all_sites() -> Vec<Site> {
                     continue;
                 }
                 if path.extension().and_then(|ext| ext.to_str()) != Some("rs")
-                    || is_test_file(&path)
+                    || is_test_source(path.strip_prefix(&root).unwrap_or(&path))
                 {
                     continue;
                 }

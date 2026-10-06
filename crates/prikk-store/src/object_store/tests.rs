@@ -364,11 +364,9 @@ fn every_object_store_writer_goes_through_a_locked_caller() {
             }
             // Test code legitimately drives the raw append -- `foundation/index/tests.rs` exists to
             // exercise the write protocol itself, below the lock.
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            if name == "tests.rs" || path.components().any(|c| c.as_os_str() == "tests") {
+            if crate::test_gates::source_classification::is_test_source(
+                path.strip_prefix(&crate_src).unwrap_or(&path),
+            ) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else {

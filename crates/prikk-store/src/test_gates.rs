@@ -35,6 +35,8 @@ pub(crate) mod runaway_guards;
 #[cfg(test)]
 pub(crate) mod signature_contract_tests;
 #[cfg(test)]
+pub(crate) mod source_classification;
+#[cfg(test)]
 pub(crate) mod store_size_independence;
 #[cfg(test)]
 pub(crate) mod test_support;

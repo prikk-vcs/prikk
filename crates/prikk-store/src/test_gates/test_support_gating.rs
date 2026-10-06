@@ -11,6 +11,7 @@
 //! A module-level inner `cfg` is not accepted in place of the item's own: moving the item out of its
 //! module must not ungate it. A violation names the file and the item.
 
+use crate::test_gates::source_classification::is_test_source;
 use std::path::{Path, PathBuf};
 
 const GATE: &str = "feature = \"test-support\"";
@@ -37,17 +38,13 @@ fn production_files() -> Vec<PathBuf> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_string();
+            let relative = path.strip_prefix(&crates).unwrap_or(&path);
             if path.is_dir() {
-                if name != "tests" && name != "test_gates" {
+                if !is_test_source(relative) {
                     stack.push(path);
                 }
             } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs")
-                && name != "tests.rs"
+                && !is_test_source(relative)
             {
                 files.push(path);
             }

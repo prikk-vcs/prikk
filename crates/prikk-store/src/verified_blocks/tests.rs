@@ -111,9 +111,10 @@ fn only_seal_and_verify_write_the_record() {
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
             if path.extension().and_then(|e| e.to_str()) != Some("rs")
-                || name == "tests.rs"
                 || name == "verified_blocks.rs"
-                || path.components().any(|c| c.as_os_str() == "tests")
+                || crate::test_gates::source_classification::is_test_source(
+                    path.strip_prefix(&src).unwrap_or(&path),
+                )
             {
                 continue;
             }

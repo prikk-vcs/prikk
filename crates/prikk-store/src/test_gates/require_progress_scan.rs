@@ -22,6 +22,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
+use crate::test_gates::source_classification::is_test_source;
 use std::path::{Path, PathBuf};
 
 /// One matched advance-point site (the owning file is the caller's own map key, not repeated here).
@@ -35,10 +36,12 @@ struct Site {
 /// `test_gates/` tree and any file whose path contains a `tests` component (mirrors P3's own
 /// exclusion, for the same reason: a test's own fixture code is not a reader).
 fn production_files(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
     let src = root.join("crates/prikk-store/src");
-    collect(&src, &mut files);
-    files
+    let mut all = Vec::new();
+    collect(&src, &mut all);
+    all.into_iter()
+        .filter(|path| !is_test_source(path.strip_prefix(&src).unwrap_or(path)))
+        .collect()
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -48,24 +51,9 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path
-                .components()
-                .any(|component| component.as_os_str() == "test_gates")
-                || path.ends_with("tests")
-            {
-                continue;
-            }
             collect(&path, out);
-            continue;
-        }
-        if path.extension().is_some_and(|extension| extension == "rs") {
-            let relative_has_tests = path
-                .components()
-                .any(|component| component.as_os_str() == "tests")
-                || path.file_stem().is_some_and(|stem| stem == "tests");
-            if !relative_has_tests {
-                out.push(path);
-            }
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            out.push(path);
         }
     }
 }
