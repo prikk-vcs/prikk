@@ -322,7 +322,7 @@ implemented.
 
 | Claim | Source anchors |
 |---|---|
-| A bundle carries one ref's own `RefState` plus every object reachable from its target block back to genesis; the active WAL is not part of that walk. | [`bundle.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/bundle.rs), [`worktree_patch.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/worktree_patch.rs) |
+| A bundle carries one ref's own `RefState` plus every object reachable from its target block back to genesis; the active WAL is not part of that walk. | [`bundle.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/bundle.rs), [`worktree_patch.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/worktree_patch.rs) |
 | `bundle export` refuses an existing destination unless `--force` is passed, and writes atomically. | [`bundle.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/bundle.rs), [`durable_output.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/durable_output.rs) |
 | The `PBNDL003` manifest states repository format, tool version, and that the bundle's scope is a single ref. | [`bundle.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/bundle.rs), [Release, Versioning, and Compatibility](../reference/release-compatibility.md) |
 | `bundle verify` checks structure, framing, and closure resolution with no repository and no write; it performs no cryptographic signature check. | [`bundle.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/bundle.rs) |

@@ -28,7 +28,7 @@ handle, not to a re-walked path string. **Windows has no equivalent**: no Win32 
 directory handle as a resolution root for opening a child by name, so the walk itself is always a
 re-walked path string on Windows, by construction.
 
-Windows' actual implementation (`crates/prikk-store/src/fsutil/anchored/windows.rs`) refuses a reparse
+Windows' actual implementation (`crates/prikk-store/src/foundation/fsutil/anchored/windows.rs`) refuses a reparse
 point at each component as it is opened (`FILE_FLAG_OPEN_REPARSE_POINT` plus a post-open attribute
 check), which defeats a symlink or junction that is already in place. **It does not close the window
 between checking a component and opening the next one.** So a concurrent local process that
@@ -116,7 +116,7 @@ future increment needs a stronger per-filesystem guarantee, that is its own desi
 | `durable_truncate` / `durable_truncate_to_empty` | **Held.** |
 | `create_exclusive` | **Held at `init` only.** The new directory entry it creates is not itself durably confirmed — see the `init`-time exemption below. |
 | `ensure_directory` | **Held at `init` only**, same caveat. |
-| `remove_if_present` | **Held**, conditional on every open in the Windows backend requesting `FILE_SHARE_DELETE` — enforced in one place ([`open_no_follow`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/fsutil/anchored/windows.rs)), not per call site. |
+| `remove_if_present` | **Held**, conditional on every open in the Windows backend requesting `FILE_SHARE_DELETE` — enforced in one place ([`open_no_follow`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/fsutil/anchored/windows.rs)), not per call site. |
 | `atomic_replace` | **Weaker.** `std::fs::rename` over the destination, with no durability lever asserted for the rename itself (`MOVEFILE_WRITE_THROUGH`'s same-volume guarantee was investigated to three independent primary sources and found genuinely undeterminable). Its remaining callers are the four rebuildable caches and the worktree file writes. Repository state that cannot be rebuilt is written in place, not renamed (RFC 168 §3.3), so it does not depend on this row. |
 | `set_permission_bits` | **Vacuous — a documented no-op.** NTFS has no POSIX execute bit; prikk's own recorded mode is never derived from the filesystem, so a round-trip checkout on Linux restores the node's recorded mode faithfully regardless of what this method does on Windows. |
 | `durable_directory_entry` | **Vacuous — a documented no-op.** `FlushFileBuffers`'s own documentation covers file, communications-device, named-pipe, and volume handles and says nothing about a directory handle — there is no contract to implement against. The argument that a crash between this call and the entry becoming durable leaves the worktree marker dirty holds only for a crash before the marker clear. A power loss after a completed operation is residual (a) below, not covered by the marker. |
