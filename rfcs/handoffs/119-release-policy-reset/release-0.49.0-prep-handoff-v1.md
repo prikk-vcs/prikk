@@ -129,3 +129,42 @@ Follow `release-prep-handoff-template.md`; this file fills in the blanks and add
 
 **Report:** `.git-exclude/review-request/release-0.49.0-prep-report-v1.md`, with `date` at each unit's start and end.
 **The Security list comes to the architect before the block is written:** one review request, then continue.
+
+## Addendum 1 — 2026-10-07: the documentation debt, cleared before the candidate
+
+**The owner's rule:** *incomplete content stays in RFCs, except plans and declarations of intent.* An independent audit
+(`.git-exclude/reviewed/docs-audit-2026-10-07-v1.md`) found **47 wrong or stale statements** in `docs/src`,
+`SECURITY.md` and the CHANGELOG, plus five product-text items. Many predate this cycle. The architect spot-checked the
+worst, and each was confirmed. This addendum supersedes §1.3's narrower list where they overlap.
+
+1. **Every row of the audit, 1–47, is fixed or answered.**
+   - **Check each against source before changing it.** The audit is a lead, not an authority.
+   - **If a row turns out to be right as written, say why** in the report.
+   - **Where a page restates a behaviour another page owns, link to the owner page** rather than restate it. Fewer
+     copies is less future debt.
+2. **The product-text items P1–P5,** each its own small commit with a test where it is a message:
+   - **P1:** `refs.rs:342` names `--repair-tails`;
+   - **P2:** `doctor --help` lists the three `--recovery-*` commands, and `--repair-tails`'s ten files;
+   - **P3:** `verify`'s remnant warning uses the corrected wording;
+   - **P4:** the CHANGELOG entries;
+   - **P5:** the stale source comments.
+3. **The three items the audit could not verify:** M6's figure (measure or cite it, else say "unmeasured"),
+   `--recovery-clear`'s output, and `--rebuild-pointer-index` over a damaged generation log. Run each.
+4. **A guard, so that row 36 cannot come back silently:** a check in `prikk-release-policy`, run by the existing gates,
+   that every repository path in `docs/src` resolves. That covers link targets to `crates/…` or `tools/…`, and
+   `github.com/prikk-vcs/prikk/blob/main/<path>` URLs.
+   - **Control:** rename one linked file in a scratch tree, and the check goes red.
+   - It is a gate change, so state it in the report.
+5. **Prohibited:**
+   - a sentence describing parked or unaccepted work as fact;
+   - "planned for 0.49.0" left on anything that did not ship (say the release it moved to, from `ROADMAP.md`);
+   - restating a fix in prose without checking the source.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| D1 | items 1 and 3, the docs rows and the unverified items | 180 min |
+| D2 | item 2, the product text | 45 min |
+| D3 | item 4, the guard and its control | 45 min |
+
+**Report:** fold into `release-0.49.0-prep-report-v1.md`, one row per audit row (fixed / answered, with the reason).
+**The candidate follows these units,** so that the release commit sits on docs that are true.
