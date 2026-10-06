@@ -156,7 +156,7 @@ done (not the key material).
 | **Users unable to verify after a hard revocation** | not addressed | the advisory lists confirmed releases by commit id |
 | **A backup left as "your choice"** | no recommendation | recommended, with the reason |
 
-## 8. Correction C1 — what a revocation costs, found by the rehearsal (2026-10-07, for the owner's reading)
+## 8. Correction C1 — what a revocation costs, found by the rehearsal (APPROVED by the owner 2026-10-07: *"Approved."*)
 
 **The rehearsal** (§3.5, by the architect, with a throwaway rsa4096 `[SC]` key in isolated keyrings; GnuPG 2.4.9, git
 2.56.0; record `.git-exclude/reviewed/rfc169-rehearsal-v1.md`) **found that §3.2 item 1 and §3.3 are wrong for the tool

@@ -99,3 +99,5 @@ Add to items 1 and 2:
 **Budget:** 20 min. **Report:** `.git-exclude/review-request/rfc169-publication-report-v2.md`, with `scripts/gates.py`'s summary.
 
 **Item 3 ACCEPTED 2026-10-07** (reviews `rfc169-publication-review-v1`, `-v2`; `2ba2c755`, `d9a60467`). The push follows the owner's reading of RFC 169 §8 (C1). **Owner actions still open:** items 1, 2 and 6 now, and item 4 before the first stable release (runbook `.git-exclude/runbooks/release-key-runbook.md`).
+
+**2026-10-07: the owner approved C1** (RFC 169 §8). Item 3 is pushed with this record. **Item 3 is closed.**
