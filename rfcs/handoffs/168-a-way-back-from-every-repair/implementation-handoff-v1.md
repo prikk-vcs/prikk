@@ -195,8 +195,12 @@ in exactly the state P1/W1 built.
    - replace entries (the witness rewrite in `--discard-damaged-commits` and `--repair-tails` row 8);
    - run ids;
    - a run-level restore in reverse order, every condition checked first;
+   - **an interrupted restore finishes when run again:** a step whose file already holds its result counts as done;
+   - **a run overlapped by a later run** refuses, naming *"restore run <later id> first"*;
    - **tests:**
      - a discard, then its restore, gives the WAL **and** the witness byte-identical to before the discard;
+     - a restore interrupted after its first step (failpoint), then run again, completes;
+     - an overlapped run names the later run;
      - a two-file `--repair-tails` run, restored by one id;
      - a run whose middle step fails its condition, and nothing is written.
 10. **Docs and the code comment:**

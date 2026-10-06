@@ -301,6 +301,14 @@ rewrite a file without cutting it.
    - **It holds the union of the run's locks.** If any condition fails, nothing is written, and the plan names the step.
 4. **The meaning-file rule (§3.2) is unchanged.** Reverse-order checking makes each meaning file match the state at that
    step's save.
+5. **An interrupted restore can be finished by running it again.**
+   - A step whose file already holds what that step would write counts as done: a cut already appended, or a replace
+     already holding its previous bytes.
+   - So a second run completes the rest, rather than refusing for ever over a half-undone repair.
+6. **A run that a later run overlaps names that run.**
+   - A condition fails because a later repair cut or replaced the same file. The plan then says: *"restore run <later
+     id> first"*.
+   - So the user is never left guessing an order.
 
 **What users see:** the same three commands, and one id per repair they ran. **For a one-file repair, nothing changes.**
 **After a discard is undone,** the WAL and the witness are byte-identical to before it, and `verify` reports what it
