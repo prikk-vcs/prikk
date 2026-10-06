@@ -213,7 +213,7 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
    commit, and runs the smoke script against a release build of it.
 3. **Push, then CI green** on every job, including the Windows and macOS suites — the only place
    platform code runs.
-4. **Tag.** Annotated, GPG-signed with the repository's configured key, verified with `git tag -v`,
+4. **Tag.** Annotated, GPG-signed with the repository's configured key, verified with `git verify-tag --raw <tag> 2>&1 | grep VALIDSIG`,
    then pushed. From 0.48.0 the tag's message has as its subject the project name followed by the
    version (for 0.48.0: prikk 0.48.0), then a blank line, then the line
    `Release notes: https://github.com/prikk-vcs/prikk/releases/tag/X.Y.Z`.
@@ -222,7 +222,7 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
    successfully. The Release workflow builds four targets and publishes the assets. **The Release page carries that
    version's CHANGELOG section in full**, so the notes are read there and not behind a link to a file
    that is reorganised over time. The signed tag covers the source at the tagged commit, and
-   the section is part of that commit: verify the tag (`git tag -v X.Y.Z`) and read the same section from the tagged tree
+   the section is part of that commit: verify the tag (`git verify-tag --raw X.Y.Z 2>&1 | grep VALIDSIG`, as in [Verifying a release](https://github.com/prikk-vcs/prikk/blob/main/SECURITY.md)) and read the same section from the tagged tree
    (`git show X.Y.Z:CHANGELOG.md`) to compare it with the Release page. The tag does not cover the binaries (see
    [Verifying a release](https://github.com/prikk-vcs/prikk/blob/main/SECURITY.md)). **A tag is never moved or re-signed**; a mistake ships as the next patch
    release. Tags before 0.48.0 keep their bare version message.

@@ -317,7 +317,10 @@ fn the_notes_end_with_the_fingerprint_line_for_the_tag() {
     let last = notes.trim_end().lines().last().unwrap();
     assert_eq!(last, super::fingerprint_line("0.22.0"));
     assert!(last.contains(super::RELEASE_KEY_FINGERPRINT), "{last}");
-    assert!(last.contains("`git tag -v 0.22.0`"), "{last}");
+    assert!(
+        last.contains("`git verify-tag --raw 0.22.0 2>&1 | grep VALIDSIG`"),
+        "{last}"
+    );
 }
 
 /// RFC 169 §5 item 3 and Addendum 1: the fingerprint constant, `SECURITY.md` and `install.md` agree, or this test fails.

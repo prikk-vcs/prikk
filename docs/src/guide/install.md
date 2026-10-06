@@ -113,14 +113,17 @@ Release tags are signed with the project's one maintainer key. Its fingerprint i
 
     25757DA6CBF7022C4E14CCAC1B3066B87DB99A34
 
-Fetch the key, then check the tag of the version you installed:
+Fetch the key, then check the tag of the version you installed. The check runs in a clone of the repository, so
+you need one (an installed binary has none):
 
 ```sh
 curl -fsSL https://github.com/nabbisen.gpg | gpg --import
-git verify-tag --raw 0.48.0
+git clone https://github.com/prikk-vcs/prikk && cd prikk
+git verify-tag --raw 0.48.0 2>&1 | grep VALIDSIG
 ```
 
-Look for the `VALIDSIG` line. Its **last field** must equal the fingerprint above; that is the check, and it holds
+`git verify-tag --raw` prints the `VALIDSIG` line on stderr, hence `2>&1`. Its **last field** must equal the fingerprint
+above; that is the check, and it holds
 whether the primary key or a signing subkey made the signature. The warning *"This key is not certified with a trusted
 signature"* is expected unless you have certified the key yourself (`gpg --lsign-key`). What matters is the fingerprint
 match.

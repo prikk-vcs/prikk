@@ -49,7 +49,8 @@ pub(crate) const RELEASE_KEY_FINGERPRINT: &str = "25757DA6CBF7022C4E14CCAC1B3066
 /// The one line every release's notes end with (RFC 169 §5 item 3): the fingerprint, and the command that checks the tag.
 pub(crate) fn fingerprint_line(tag: &str) -> String {
     format!(
-        "Release key {RELEASE_KEY_FINGERPRINT}: check this tag with `git tag -v {tag}` (or `git verify-tag --raw {tag}`)."
+        "Release key {RELEASE_KEY_FINGERPRINT}: in a clone, `git verify-tag --raw {tag} 2>&1 | grep VALIDSIG` must end with \
+         this fingerprint (SECURITY.md, \"Verifying a release\")."
     )
 }
 

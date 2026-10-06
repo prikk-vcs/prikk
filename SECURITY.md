@@ -34,13 +34,14 @@ Release tags are signed with the project's one maintainer key. Its fingerprint i
 
     25757DA6CBF7022C4E14CCAC1B3066B87DB99A34
 
-Fetch the key, then check a tag:
+Fetch the key, then check a tag from a clone of the repository:
 
     curl -fsSL https://github.com/nabbisen.gpg | gpg --import
-    git verify-tag --raw 0.48.0
+    git clone https://github.com/prikk-vcs/prikk && cd prikk
+    git verify-tag --raw 0.48.0 2>&1 | grep VALIDSIG
 
-`git verify-tag --raw <version>` prints a `VALIDSIG` line. Its **last field** must equal the fingerprint above. That is
-the check; it holds whether the primary key or a signing subkey made the signature, and `git tag -v <version>` shows a
+`git verify-tag --raw <version>` prints a `VALIDSIG` line, on stderr (hence `2>&1`). Its **last field** must equal the
+fingerprint above. That is the check; it holds whether the primary key or a signing subkey made the signature, and `git tag -v <version>` shows a
 subkey's own id once one signs, so compare the `VALIDSIG` line rather than that output. The warning *"This key is not
 certified with a trusted signature"* is expected unless you have certified the key yourself (`gpg --lsign-key`). What
 matters is the fingerprint match.
