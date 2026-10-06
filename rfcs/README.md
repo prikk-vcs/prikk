@@ -50,14 +50,9 @@ These records are under design review. All proposed RFCs must respect the depend
 
 | ID | Title | Milestone |
 |---|---|---|
-| 109 | [Agent-Native Interface](./proposed/109-agent-native-interface.md) | Unscheduled. Owner concept, 2026-08-18. Depends on criterion 3 (now met) and criterion 2 (open — it gates the AST-sealing question). **No design exists** |
-| 110 | [Agent Safety and Provenance](./proposed/110-agent-safety-and-provenance.md) | Unscheduled. Owner concept, 2026-08-18, **direction not yet established** and recorded as such. Pillar 1 largely redistributes into RFC 108; Pillar 2 needs criterion 5 as a floor, since provenance sealed over unverified authorship manufactures the appearance of verification. **No design exists** |
-| 113 | [History Import Foundations](./proposed/113-history-import-foundations.md) | Unscheduled. Owner direction 2026-08-19: migrate from Git, Subversion and CVS with history preserved. **Amended the same day — the decoder/encoder tooling becomes its own project**, because prikk's whole third-party runtime surface is five crates and a Git decoder needs `gix` or `libgit2`. **This RFC is therefore prikk's import *contract***, not an importer plan. Records the shared problem (prikk records node identity these systems never had; imported commits cannot carry valid prikk AUTHOR signatures — **DC-53's `Unverifiable` is already the right vocabulary**) and §3.1's three IR questions: what a record is, what must be preserved, what may be omitted. Depends on criteria 2 and 1. **No design exists** |
-| DC-43 | [Release Security and Distribution Controls](./proposed/DC-43-RELEASE-SECURITY-CONTROLS.md) | M2 / **0.20.0** (retargeted from 0.19.0, owner ruling 2026-08-08). **Release-blocked** — inherits key lifecycle from DC-35, which needs amendment, and blocked behind criterion 4's signer bootstrap |
-| 133 | [Performance Cost and Its Evidence](./proposed/133-performance-cost-and-its-evidence.md) | Unscheduled. Extracted from RFC 126 on the owner's instruction 2026-09-03. **Owner ruling required** — whether peak RSS gets standing protection. Carries the measured commit-memory shape: O(nodes), not O(bytes) |
+| 168 | [A way back from every repair](./proposed/168-a-way-back-from-every-repair.md) | Proposed 2026-10-06; design round live (0.49.0 step 6) |
+| 169 | [When the release key is lost or compromised](./proposed/169-when-the-release-key-is-lost-or-compromised.md) | Proposed 2026-10-06; owner decisions in §5 (0.49.0 step 6) |
 | 136 | [Block Aggregation Payoff](./done/136-block-aggregation-payoff.md) | **Done — shipped in 0.43.0 (2026-09-16)** as "sealed snapshots": checkpoints every 64 blocks, anchored checkouts, provisional worktrees behind a derivation gate. Increment 2c (baseline reconstruction) follows 0.43.0 |
-| 145 | [Serving a Repository for Reading](./proposed/145-serving-a-repository-for-reading.md) | Unscheduled, ranked second. Opened 2026-09-10 on the owner's 2026-09-06 direction. Rules the shape of a read-only browse view — static export, a separate server project, or a serving subcommand. **Owner rulings required** (§9). **Decides no build** |
-| 149 | [Layering prikk-store](./proposed/149-layering-prikk-store.md) | Unscheduled. Opened 2026-09-12. A measured one-directional cut above the six-module cyclic core; the 26 surface modules — where recent growth landed — move to a crate the owner names. Supersedes RFC 130 §6's scope, not its ruling. **Owner rulings required** |
 
 **Blocked, not available:** **DC-43** waits on a release-lane event, and additionally
 inherits DC-35's unamended key lifecycle and criterion 4's signer bootstrap, which only the project owner
@@ -117,6 +112,7 @@ These reviewed designs may govern downstream work but have not yet released.
 
 | ID | Title | Milestone |
 |---|---|---|
+| 113 | [History Import Foundations](./accepted/113-history-import-foundations.md) | Unscheduled. Owner direction 2026-08-19: migrate from Git, Subversion and CVS with history preserved. **Amended the same day — the decoder/encoder tooling becomes its own project**, because prikk's whole third-party runtime surface is five crates and a Git decoder needs `gix` or `libgit2`. **This RFC is therefore prikk's import *contract***, not an importer plan. Records the shared problem (prikk records node identity these systems never had; imported commits cannot carry valid prikk AUTHOR signatures — **DC-53's `Unverifiable` is already the right vocabulary**) and §3.1's three IR questions: what a record is, what must be preserved, what may be omitted. Depends on criteria 2 and 1. **No design exists** |
 | 105 | [RFC naming gate](./accepted/105-rfc-naming-gate.md) | Accepted 2026-08-17 |
 | 106 | [Anchor race control](./accepted/106-anchor-race-control.md) | Accepted 2026-08-17 (the residual DC-99 recorded) |
 | 107 | [Release distribution surface](./accepted/107-release-distribution-surface.md) | Accepted 2026-08-17 |
@@ -154,7 +150,6 @@ These reviewed designs may govern downstream work but have not yet released.
 | 143 | [Content at a point](./accepted/143-content-at-a-point.md) | **Accepted 2026-09-08**, the day it was opened, at the stikk project's request. A read-only `--format json` for `checkout --patch-plan`, path-scoped. **Commissions no computation** — `ReplayManifestEntry` already carries `bytes: Vec<u8>` and the plan reports their summed length instead. **`prikk diff` stays refused** (RFC 142 §5/§7): no comparison semantics, the consumer takes the comparison and the responsibility. **§6 binds the replay's partial coverage into a machine-readable field** — RFC 140 §7b's third instance |
 | 144 | [Two-point comparison](./accepted/144-two-point-comparison.md) | **Accepted 2026-09-09** after three external review rounds. **`prikk diff` declined, not deferred**; the pre-acceptance bundle-impact preview is owned and is separable. **Rename identity follows only from a declaration, never an inference** — a per-operation provenance field would be forgeable, so provenance rides in the signature and **no `Patch` schema change** is needed. **Trust policy is never an input to replay**: provenance is a read-time annotation, facts shared and judgements local. §4i.1's honesty invariant binds every future read surface |
 | DC-34 | [Publication and Identity Authority](./accepted/DC-34-PUBLICATION-IDENTITY-AUTHORITY.md) | M0 complete; governs DC-38 through DC-40 |
-| DC-35 | [Release Compatibility and Status Correction](./accepted/DC-35-RELEASE-COMPATIBILITY-STATUS-CORRECTION.md) | M1 / 0.18.0; implementation accepted; signer bootstrap pending separately |
 | DC-36 | [Existing-Object Publication Integrity](./accepted/DC-36-EXISTING-OBJECT-PUBLICATION-INTEGRITY.md) | M1 / 0.18.0; implementation accepted |
 | DC-37 | [Required Filesystem Durability](./accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) | M1 / 0.18.0; implementation accepted |
 | DC-38 | [Ref Publication Crash Recovery](./accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) | M1 / 0.18.0; implementation accepted |
@@ -198,6 +193,9 @@ These records currently live under `done/`.
 
 | ID | Title | Status |
 |---|---|---|
+| 133 | [Performance Cost and Its Evidence](./done/133-performance-cost-and-its-evidence.md) | Unscheduled. Extracted from RFC 126 on the owner's instruction 2026-09-03. **Owner ruling required** — whether peak RSS gets standing protection. Carries the measured commit-memory shape: O(nodes), not O(bytes) |
+| 145 | [Serving a Repository for Reading](./done/145-serving-a-repository-for-reading.md) | Unscheduled, ranked second. Opened 2026-09-10 on the owner's 2026-09-06 direction. Rules the shape of a read-only browse view — static export, a separate server project, or a serving subcommand. **Owner rulings required** (§9). **Decides no build** |
+| 149 | [Layering prikk-store](./done/149-layering-prikk-store.md) | Unscheduled. Opened 2026-09-12. A measured one-directional cut above the six-module cyclic core; the 26 surface modules — where recent growth landed — move to a crate the owner names. Supersedes RFC 130 §6's scope, not its ruling. **Owner rulings required** |
 | 137 | [The project's entrance: a landing page](./done/137-project-entrance-landing-page.md) | Closed 2026-09-13 |
 | 151 | [The current branch, and `branch switch`](./done/151-the-current-branch.md) | Done 2026-09-13 |
 | RFC-000 | [RFC lifecycle policy](./done/000-rfc-lifecycle-policy.md) | — |
@@ -309,6 +307,10 @@ These records currently live under `archive/`.
 
 | ID | Title | Status |
 |---|---|---|
+| 109 | [Agent-Native Interface](./archive/109-agent-native-interface.md) | Unscheduled. Owner concept, 2026-08-18. Depends on criterion 3 (now met) and criterion 2 (open — it gates the AST-sealing question). **No design exists** |
+| 110 | [Agent Safety and Provenance](./archive/110-agent-safety-and-provenance.md) | Unscheduled. Owner concept, 2026-08-18, **direction not yet established** and recorded as such. Pillar 1 largely redistributes into RFC 108; Pillar 2 needs criterion 5 as a floor, since provenance sealed over unverified authorship manufactures the appearance of verification. **No design exists** |
+| DC-43 | [Release Security and Distribution Controls](./archive/DC-43-RELEASE-SECURITY-CONTROLS.md) | M2 / **0.20.0** (retargeted from 0.19.0, owner ruling 2026-08-08). **Release-blocked** — inherits key lifecycle from DC-35, which needs amendment, and blocked behind criterion 4's signer bootstrap |
+| DC-35 | [Release Compatibility and Status Correction](./archive/DC-35-RELEASE-COMPATIBILITY-STATUS-CORRECTION.md) | M1 / 0.18.0; implementation accepted; signer bootstrap pending separately |
 | DC-49 | [Portable-Logic Platform Matrix](./archive/DC-49-PORTABLE-LOGIC-PLATFORM-MATRIX.md) | Closed 2026-08-28 — satisfied by other means; the five crates already run on macOS and Windows via the mutation jobs since 0.21.0 |
 | DC-09 | [Phase 4 Node Model and Operation Application](./archive/DC-09-PHASE-4-NODE-MODEL.md) | Superseded / partially implemented historical umbrella. |
 | DC-42 | [Performance and Maintainability Gates](./archive/DC-42-PERFORMANCE-MAINTAINABILITY-GATES.md) | Superseded 2026-07-29 into DC-56, DC-57, DC-58. Never implemented; design review found it bundled three unrelated increments. |

@@ -241,6 +241,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- [`168-a-way-back-from-every-repair.md`](rfcs/proposed/168-a-way-back-from-every-repair.md) — D6 and D5: one durable recovery log, a reader and a restore under exact conditions, and every Windows replace site of non-rebuildable state classified; proposed 2026-10-06 (0.49.0 step 6); design round live
+- [`169-when-the-release-key-is-lost-or-compromised.md`](rfcs/proposed/169-when-the-release-key-is-lost-or-compromised.md) — D7: a written procedure for a lost or compromised release key, the fingerprint published, a rehearsal; proposed 2026-10-06 (0.49.0 step 6); owner decisions in §5
 
 
 
