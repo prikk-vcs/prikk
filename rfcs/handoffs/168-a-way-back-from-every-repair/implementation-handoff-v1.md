@@ -191,7 +191,7 @@ in exactly the state P1/W1 built.
    - `--recovery-clear` lists the entries it removes (id, source, size), in the plan and in the run;
    - **the header's version is read.** A newer version lists as *"written by a newer prikk; this version cannot read it"*. It is not damage.
    - **Creating the log and the witness tolerates `AlreadyExists`,** so a concurrent first write does not fail.
-9. **A1's mechanism (held; marked live when the owner has read A1):**
+9. **A1's mechanism — LIVE 2026-10-06** (the owner approved A1, RFC 168 §9). Fix `troubleshooting.md:347-348` to match what lands:
    - replace entries (the witness rewrite in `--discard-damaged-commits` and `--repair-tails` row 8);
    - run ids;
    - a run-level restore in reverse order, every condition checked first;
@@ -245,3 +245,16 @@ in exactly the state P1/W1 built.
     - **Budget:** 30 min. **Report:** `.git-exclude/review-request/rfc168-implementation-report-v3.md` (with item 9, if it is live by then).
 
 **Item 14 ACCEPTED 2026-10-06** (review `rfc168-implementation-review-v3`, `51b17edc`). **Still owed before the 0.49.0 cut:** item 9 (A1, after the owner's reading) and item 12 (the timing, on a quiet machine).
+
+**2026-10-06: item 9 is LIVE** (the owner approved A1). **Item 12's method changes:** the load rule ("above 4, stop") cannot be met on this machine, which other projects share. Measure under load, but so that load cancels:
+- **The binaries:** release builds of `main` (`9c0c2b53`, its own target dir) and of the final commit;
+- **the samples:** at each of two WAL sizes, 15 interleaved pairs (main, then new, alternating which goes first), each on a fresh fixture made outside the timed region, with the 1-minute load recorded per sample;
+- **the report:** each side's median, the median of the per-pair ratios, and their min–max spread;
+- **the reading:** if the median ratio is at most 1.10, or its excess lies inside the spread, the log costs nothing visible, and item 12 is done. Otherwise **stop and report:** a visible cost needs a quiet machine to size it.
+
+**Report for items 9 and 12:** `.git-exclude/review-request/rfc168-implementation-report-v4.md`, with `date` at each unit's start and end.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| C | item 9 (A1) | 180 min |
+| D | item 12 (timing, interleaved) | 45 min |

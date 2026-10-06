@@ -280,7 +280,9 @@ design"* and *"users must not be confused or misunderstand"*.
 | performance | Low | one append per repair, measured at 222 bytes of overhead; a restore hashes its source once; a listing reads only the log |
 | user confusion | Low | one place, one listing, a plan that says what follows, refusals that name the command; the Windows residual is in docs, with a route that must be tested |
 
-## 9. Amendment A1 — a restore undoes a repair (proposed 2026-10-06, for the owner's reading)
+## 9. Amendment A1 — a restore undoes a repair (APPROVED by the owner 2026-10-06: *"Approved."*)
+
+**The architect's reading of that approval:** items 1–6 below, as committed at `2f9ca885`. Implemented under the implementation handoff's item 9.
 
 **Why.** The implementation review (`rfc168-implementation-review-v1`) found that some repairs cut more than one file, or
 rewrite a file without cutting it.
