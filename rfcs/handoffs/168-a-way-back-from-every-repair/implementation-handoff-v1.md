@@ -258,3 +258,5 @@ in exactly the state P1/W1 built.
 |---|---|---:|
 | C | item 9 (A1) | 180 min |
 | D | item 12 (timing, interleaved) | 45 min |
+
+**Items 9 and 12 ACCEPTED 2026-10-07** (review `rfc168-implementation-review-v4`, `d4fd0068`). **RFC 168 is delivered,** on condition that CI is green on every job of its push. If a job goes red, this handoff reopens as a fix round.

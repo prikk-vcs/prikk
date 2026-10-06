@@ -5,7 +5,7 @@
   review against the owner's philosophy (§8).
 - **The architect's reading of that acceptance:** the whole RFC as committed at `9c0c2b53`. That is §3 (the design,
   with §8's revisions) and §6 item 2, the three disclosed Windows residuals (a), (b) and (c).
-- **Implementation:** `rfcs/handoffs/168-a-way-back-from-every-repair/implementation-handoff-v1.md`.
+- **Implementation:** `rfcs/handoffs/168-a-way-back-from-every-repair/implementation-handoff-v1.md`. **Delivered 2026-10-07** (`90d91474` … `d4fd0068`; reviews `rfc168-implementation-review-v1` to `-v4`), on condition that CI is green on its push.
 - **One constraint, added at handoff, that narrows §3.2 and does not widen it:** a restore writes only to a file on a
   fixed list of repairable files (the WAL, the pointer index, and the ten `repair_tails` files). Whatever source path a
   log entry names, a tampered log cannot point a restore at `FORMAT`, a ref, or any other file.

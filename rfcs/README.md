@@ -138,7 +138,7 @@ These reviewed designs may govern downstream work but have not yet released.
 | 165 | [Ref publication](./accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) | Accepted 2026-10-01; delivered, unreleased (0.49.0) |
 | 166 | [A queued commit has a witness](./accepted/166-a-queued-commit-has-a-witness.md) | Accepted 2026-10-03; delivered, unreleased (0.49.0) |
 | 167 | [Resynchronisation is linear](./accepted/167-resynchronisation-is-linear.md) | Accepted 2026-10-05; delivered, unreleased (0.49.0) |
-| 168 | [A way back from every repair](./accepted/168-a-way-back-from-every-repair.md) | Accepted 2026-10-06; implementation live (0.49.0 step 6) |
+| 168 | [A way back from every repair](./accepted/168-a-way-back-from-every-repair.md) | Accepted 2026-10-06; delivered, unreleased (0.49.0) |
 | DC-96 | [Windows anchor identity](./accepted/DC-96-WINDOWS-ANCHOR-IDENTITY.md) | Accepted 2026-08-16 |
 | DC-97 | [Windows durability evidence](./accepted/DC-97-WINDOWS-DURABILITY-EVIDENCE.md) | Accepted 2026-08-16 |
 | DC-98 | [Windows crash injection](./accepted/DC-98-WINDOWS-CRASH-INJECTION.md) | Accepted 2026-08-17 |
