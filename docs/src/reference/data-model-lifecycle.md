@@ -164,11 +164,12 @@ outcome refuses adoption rather than guessing.
 received `RefState`'s embedded `ref_name` still names the *origin's own* ref (rewriting it would
 invalidate the object's content-addressed identity and signature). Turning received history into local
 history is an ordinary `merge`, using machinery that already exists — receiving is never itself a "pull"
-that advances anything. The received-pointer index is its own small append-only container, **never read
-by `verify_repository`**: every object a received pointer leads to (RefState, Block, Patch, Blob,
-Attestation) is an ordinary object-store entry, checked exactly like any other by the existing
-type-based object scan, so there is no new verification path — only a new way to *discover* a receiver's
-own object graph by name.
+that advances anything. The received-pointer index is its own small append-only container, and `verify_repository` reads it. The
+`ReceivedRefs` stage checks each received pointer's RefState, target, required attestations, and previous
+state (`verify.rs:1484-1489`, `verify.rs:1916-1960`), and the index file's own tail and interior damage are
+reported with the other appended files (`verify.rs:1273`). Every object a received pointer leads to (RefState,
+Block, Patch, Blob, Attestation) is also an ordinary object-store entry, checked by the type-based object
+scan like any other. See [integrity and recovery diagnostics](./integrity-recovery.md#verify-scope).
 
 ## Lifecycle: content, from worktree to sealed history
 
@@ -241,10 +242,11 @@ There is no decommission or deletion lifecycle for a repository as a whole — c
 branch-ref level (see [Lifecycle: a ref](#lifecycle-a-ref) above), with no repository-level equivalent.
 
 `doctor` and `unlock` are not lifecycle stages; they operate on whatever state a repository is already
-in, regardless of how it got there. `doctor`'s only supported repair is truncating an incomplete
-trailing active-WAL record (`--repair-wal-tail`); `--repair-main-ref` is a recognized input that
-performs no repair and is always refused — see the
-[integrity and recovery diagnostics](./integrity-recovery.md) reference. `unlock` reports, and on
+in, regardless of how it got there. `doctor` has a set of opt-in repairs, each narrow, among them
+a tail truncation (`--repair-wal-tail`) and a pointer-index rebuild from the ref log
+(`--rebuild-pointer-index`). `--repair-main-ref` is a recognized input that performs no repair and is always
+refused. The full list is in the
+[integrity and recovery diagnostics](./integrity-recovery.md#doctor-repair-boundary) reference. `unlock` reports, and on
 request clears, stale lock files. Neither `doctor` nor `unlock` advances a repository through a stage
 the way `init`/`commit`/`seal`/`publish` do.
 
