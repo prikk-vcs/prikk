@@ -178,3 +178,10 @@ worst, and each was confirmed. This addendum supersedes §1.3's narrower list wh
     commands, and `--repair-tails`'s line names the ref log.
   - **Make `--recovery-clear`'s help line say the removal is permanent** (*"Remove every saved entry, permanently"*),
     because it is the one destructive recovery command.
+
+**Interim, seen 2026-10-07:** P3 `3bafeca3`, P4 `e1932e82`, P5 `4e5c4bdf`. One condition on row 14, both copies (the
+CHANGELOG and `troubleshooting.md`):
+- **"Run `prikk doctor` for diagnosis" is only an answer if `doctor` then names a route.**
+- **Run `doctor` on a WAL whose damage exhausts the budget** (RFC 167's shape A or B), and quote what it recommends.
+- **If it names an actionable command, say that command.** If none exists, say so plainly and list it in current-state's
+  limitations. A user must never be sent to a command that only describes the problem.
