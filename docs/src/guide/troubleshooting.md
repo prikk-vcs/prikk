@@ -474,7 +474,7 @@ one a repair can safely remove. Restore the repository from a backup or a clone 
 
 ## `warning: <container>'s generation log names no live slot; slot <X> was deduced from the entries (…)`
 
-0.50.0 step 1 Part E2 (019 §5.7). Seen from `prikk verify` or `prikk doctor`, when a compacting
+0.50.0 step 1 Part E3 (019 §5.7). Seen from `prikk verify` or `prikk doctor`, when a compacting
 container's generation log reads as empty or absent — not damaged, not a tail, genuinely nothing —
 while the *other* slot (`b`) holds real data. Slot `b` is never written except alongside the one
 generation record that names it live, so this shape can only mean a compaction (or, for the ref
@@ -482,20 +482,35 @@ pointer index, `prikk doctor --rebuild-pointer-index`'s own rebuild) genuinely h
 of it was lost afterward — an accidental deletion, or a partial restore from backup.
 
 **This is a warning, not a refusal: every ordinary command already resolves it correctly.** Content
-decides which slot is live, rather than every reader and writer being made to guess or to refuse:
-every entry the other slot holds that this one already has means nothing changed since the switch
-(this slot stays live — the same shape a crash between a compaction's own new-slot write and its
-generation record leaves, which a bare retry of `compact` still heals exactly as always); an entry
-this slot never had means the other slot took a real write after becoming live, and it becomes live
-instead, so that write still reads correctly rather than silently disappearing. Only when the
-deduction itself cannot be made (one of the two slots is damaged) does a read refuse, naming the
-container's own damage directly (see the next entry).
+decides which slot is live, rather than every reader and writer being made to guess or to refuse: slot
+`b`'s own decoded entries are compared, positionally, against `C` — the exact reduction `compact`
+itself would write from this slot's entries. Equal to `C`, or a prefix of it, means nothing changed
+since the switch (this slot stays live — the same shape a crash between a compaction's own new-slot
+write and its generation record leaves, which a bare retry of `compact` still heals exactly as
+always, and the same shape a partly written slot `b` leaves); anything else means the other slot took
+a real write after becoming live, and it becomes live instead, so that write still reads correctly
+rather than silently disappearing (bare membership — "does this entry occur anywhere in the other
+slot's history" — was tried and rejected: a maintainer revoked and later re-trusted can recur, fooling
+a membership test into picking the wrong slot). Only when the deduction itself cannot be made (one of
+the two slots is damaged) does a read refuse, naming the container's own damage directly (see the next
+entry). A restore from the recovery log refuses outright in this state instead of deducing, since it
+is a deliberate writer and a stale meaning file could otherwise compare unchanged and pass.
 
 **The way out, named in the warning itself:** run `prikk compact` for the named container. It resolves
 the identical way and then writes a fresh generation record, ending the ambiguous state for good.
 `prikk doctor --rebuild-pointer-index` also remains available for the ref pointer index specifically —
 it re-derives the whole index from the ref log directly, without reading either slot as live — though
 nothing requires it just to clear this warning.
+
+## `error: integrity error: the ref pointer index's live slot is not recorded; run \`prikk compact --pointer-index\` first`
+
+0.50.0 step 1 Part E3 (019 §5.7). Seen from `prikk doctor --recovery-restore` (plan or run), when the entry being
+restored names a meaning file in the ref pointer index or the ref log, and the pointer index's own
+generation log is in the ambiguous state the previous entry describes. Unlike an ordinary read, a
+restore does not deduce here: it is a deliberate writer, checking that a meaning file's state still
+matches what the entry recorded before trusting it, and a stale meaning file in this exact state could
+compare unchanged and let a restore through that should not proceed. Run `prikk compact
+--pointer-index` first, as the message says, then retry the restore.
 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 

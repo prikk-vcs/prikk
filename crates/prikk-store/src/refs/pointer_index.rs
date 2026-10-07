@@ -43,6 +43,21 @@ use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 const POINTER_INDEX_DAMAGE_TEXT: &str =
     "ref pointer index has a damaged entry; run doctor before reading";
 
+/// The exact reduction `compact_ref_pointer_index` performs: last entry per `ref_name_key` survives,
+/// in the order each key's own last occurrence appears in `entries`. Factored out so Part E3's
+/// deduction (`C = compaction(A)`) uses the identical logic the real compactor uses, rather than a
+/// second implementation that could drift from it.
+pub(crate) fn reduce_pointer_index_entries(
+    entries: Vec<PointerIndexEntry>,
+) -> Vec<PointerIndexEntry> {
+    let mut reduced: Vec<PointerIndexEntry> = Vec::new();
+    for entry in entries {
+        reduced.retain(|existing: &PointerIndexEntry| existing.ref_name_key != entry.ref_name_key);
+        reduced.push(entry);
+    }
+    reduced
+}
+
 /// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
 /// whether the decode hit a damaged record.
 pub(crate) fn decode_pointer_index_entries_for_resolver(
@@ -503,6 +518,7 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
+        reduce_pointer_index_entries,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -558,6 +574,7 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
+        reduce_pointer_index_entries,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -711,6 +728,7 @@ pub(in crate::refs) fn append_ref_pointer_entry(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
+        reduce_pointer_index_entries,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
@@ -743,6 +761,7 @@ pub(crate) fn remove_pointer_entries_for_test(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
+        reduce_pointer_index_entries,
     )?;
     let path = layout.ref_pointer_index_slot_path(slot);
     let bytes = std::fs::read(&path)?;

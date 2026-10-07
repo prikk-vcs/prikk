@@ -49,6 +49,15 @@ use crate::foundation::generation::{self, resolve_live_slot};
 const TRUST_POLICY_DAMAGE_TEXT: &str =
     "trust policy container has a damaged snapshot; run doctor before reading";
 
+/// The exact reduction `compact_trust_policy` performs: only the last snapshot survives (0 or 1
+/// entries). Factored out so Part E3's deduction (`C = compaction(A)`) uses the identical logic the
+/// real compactor uses.
+pub(crate) fn reduce_trust_policy_entries(
+    entries: Vec<TrustPolicySnapshotEntry>,
+) -> Vec<TrustPolicySnapshotEntry> {
+    entries.into_iter().next_back().into_iter().collect()
+}
+
 /// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
 /// whether the decode hit a damaged record.
 pub(crate) fn decode_trust_policy_entries_for_resolver(
@@ -888,6 +897,7 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         TRUST_POLICY_DAMAGE_TEXT,
         decode_trust_policy_entries_for_resolver,
+        reduce_trust_policy_entries,
     )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -952,6 +962,7 @@ pub(crate) fn append_trust_policy_snapshot(
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         TRUST_POLICY_DAMAGE_TEXT,
         decode_trust_policy_entries_for_resolver,
+        reduce_trust_policy_entries,
     )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)

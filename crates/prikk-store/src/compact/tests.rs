@@ -12,7 +12,7 @@ use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{ContainerSlot, LockableContainer};
 use crate::lock::acquire_container_locks;
-use crate::refs::decode_pointer_index_entries_for_resolver;
+use crate::refs::{decode_pointer_index_entries_for_resolver, reduce_pointer_index_entries};
 use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, unique_temp_dir,
 };
@@ -78,6 +78,7 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         decode_pointer_index_entries_for_resolver,
+        reduce_pointer_index_entries,
     )?;
     assert_eq!(live_before, ContainerSlot::A);
 
@@ -92,6 +93,7 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         decode_pointer_index_entries_for_resolver,
+        reduce_pointer_index_entries,
     )?;
     assert_eq!(live_after, ContainerSlot::B);
 
@@ -152,6 +154,7 @@ fn plan_compact_reports_the_same_counts_as_a_real_run_and_touches_nothing() -> R
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::A
     );
@@ -225,6 +228,7 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::A
     );
@@ -242,6 +246,7 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::B
     );
@@ -283,6 +288,7 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::A
     );
@@ -298,6 +304,7 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::B
     );
@@ -334,6 +341,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::B
     );
@@ -355,6 +363,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::B
     );
@@ -370,6 +379,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::A
     );
@@ -469,6 +479,7 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::A
     );
@@ -517,6 +528,7 @@ fn compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?,
         ContainerSlot::A
     );
@@ -838,6 +850,96 @@ fn a_damaged_slot_refuses_the_deduction_rather_than_guessing() -> Result<()> {
         store.read_current_ref_state_id("heads/main").is_err(),
         "a damaged slot must refuse the deduction, not silently prefer the other one"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E3, the corrected rule's own "partly written B" row: a sound prefix of `C` (the reduction
+/// `compact` would write from A), not merely "every entry found somewhere in A" -- the review's own
+/// distinction. Simulated by truncating a genuinely compacted slot B to its first record only, which
+/// is exactly what an interrupted multi-record compaction write would leave behind.
+#[test]
+fn a_partly_written_slot_b_resolves_to_the_old_generation() -> Result<()> {
+    let root = unique_temp_dir("part-e3-pointer-index-partly-written-slot-b");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    let main_target = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+
+    compact_ref_pointer_index(&layout)?;
+
+    let slot_b_path = layout.ref_pointer_index_slot_path(ContainerSlot::B);
+    let bytes = std::fs::read(&slot_b_path)?;
+    let replay = crate::refs::decode_pointer_index_records(&bytes)?;
+    assert_eq!(
+        replay.entries.len(),
+        2,
+        "fixture: two distinct refs compact to two entries"
+    );
+    let first_record_len = crate::refs::encode_pointer_index_record(&replay.entries[0])?.len();
+    std::fs::write(&slot_b_path, &bytes[..first_record_len])?;
+
+    // Lose the record of the switch -- slot B now holds only the first of C's two records.
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    assert_eq!(
+        resolve_live_slot(
+            &layout,
+            &layout.ref_pointer_index_generation_log_path(),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
+            &slot_b_path,
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
+        )?,
+        ContainerSlot::A,
+        "a sound prefix of C must still resolve to A, the same as an interrupted write would"
+    );
+    assert_eq!(
+        store.read_current_ref_state_id("heads/main")?,
+        Some(main_target)
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E3's own un-revocation sequence (the review): a repeated snapshot defeats bare membership,
+/// since `TrustPolicySnapshotEntry` carries no sequence, only a full `{key_ids}` set. The corrected
+/// rule compares against `C` positionally, which repetition cannot fool.
+#[test]
+fn trust_policy_un_revocation_sequence_resolves_to_the_newer_slot_and_the_key_stays_revoked()
+-> Result<()> {
+    let root = unique_temp_dir("part-e3-trust-policy-un-revocation");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let k_key = public_key_hex(&[21_u8; 32]);
+    let l_key = public_key_hex(&[22_u8; 32]);
+
+    // Slot A's history: {K,L}, then {K} (L revoked), then {K,L} (L re-trusted) -- three snapshots.
+    add_trusted_maintainer(&layout, "k", &k_key)?;
+    add_trusted_maintainer(&layout, "l", &l_key)?;
+    remove_trusted_maintainer(&layout, "l")?;
+    add_trusted_maintainer(&layout, "l", &l_key)?;
+
+    // Compaction keeps only the last snapshot: C = [{K,L}].
+    compact_trust_policy(&layout)?;
+
+    // A real write after the switch: L revoked again, in the now-live slot B -- B = [{K,L}, {K}].
+    remove_trusted_maintainer(&layout, "l")?;
+
+    // Lose the record of the switch. Bare membership would find both of B's entries somewhere in
+    // A's history ({K,L} and {K} both occurred) and wrongly resolve to A, un-revoking L.
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    let policy = load_maintainer_trust_policy(&layout)?;
+    assert_eq!(
+        policy.keys.len(),
+        1,
+        "L must stay revoked -- the sequence resolves to B, not back to A's own history"
+    );
+    assert_eq!(policy.keys[0].key_id, "k");
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

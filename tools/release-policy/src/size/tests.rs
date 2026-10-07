@@ -128,7 +128,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.50.0 step 1, Part E2: the `generation_log_deductions` field, `GenerationLogDeductionNote`,
         // and `check_generation_log_deductions` reading all three compacting containers' generation
         // logs directly, 2,394 -> 2,475.
-        detail.contains("2475"),
+        // 0.50.0 step 1, Part E3: `check_generation_log_deductions`'s three resolver calls each gained
+        // a `reduce_*_entries` argument, 2,475 -> 2,479.
+        detail.contains("2479"),
         "the line count is in the message: {detail}"
     );
     assert!(

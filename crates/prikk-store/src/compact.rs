@@ -47,14 +47,15 @@ use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayo
 use crate::lock::acquire_container_locks;
 use crate::received::received_index::{
     ReceivedIndexEntry, decode_received_index_entries_for_resolver, encode_received_index_record,
-    replay_received_index,
+    reduce_received_index_entries, replay_received_index,
 };
 use crate::refs::{
     PointerIndexEntry, decode_pointer_index_entries_for_resolver, encode_pointer_index_record,
-    replay_pointer_index,
+    reduce_pointer_index_entries, replay_pointer_index,
 };
 use crate::trust_index::{
-    decode_trust_policy_entries_for_resolver, encode_trust_policy_record, replay_trust_policy,
+    decode_trust_policy_entries_for_resolver, encode_trust_policy_record,
+    reduce_trust_policy_entries, replay_trust_policy,
 };
 
 /// Outcome of one compaction run: how many live records existed before and after reduction. This is
@@ -103,6 +104,7 @@ pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry; run doctor before reading",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the ref pointer index's generation log",
@@ -137,6 +139,7 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
             &layout.received_index_slot_path(ContainerSlot::B),
             "received-ref index has a damaged entry; run doctor before reading",
             decode_received_index_entries_for_resolver,
+            reduce_received_index_entries,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the received index's generation log",
@@ -171,6 +174,7 @@ pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Res
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
             "trust policy container has a damaged snapshot; run doctor before reading",
             decode_trust_policy_entries_for_resolver,
+            reduce_trust_policy_entries,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the trust policy container's generation log",
@@ -209,6 +213,7 @@ fn run_ref_pointer_index_compaction(
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry; run doctor before reading",
             decode_pointer_index_entries_for_resolver,
+            reduce_pointer_index_entries,
         )?;
 
     let replay = replay_pointer_index(layout)?;
@@ -305,6 +310,7 @@ fn run_received_index_compaction(
             &layout.received_index_slot_path(ContainerSlot::B),
             "received-ref index has a damaged entry; run doctor before reading",
             decode_received_index_entries_for_resolver,
+            reduce_received_index_entries,
         )?;
 
     let replay = replay_received_index(layout)?;
@@ -393,6 +399,7 @@ fn run_trust_policy_compaction(
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
             "trust policy container has a damaged snapshot; run doctor before reading",
             decode_trust_policy_entries_for_resolver,
+            reduce_trust_policy_entries,
         )?;
 
     let replay = replay_trust_policy(layout)?;

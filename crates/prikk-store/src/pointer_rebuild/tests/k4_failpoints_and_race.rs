@@ -83,6 +83,7 @@ fn failpoints_at_every_write_ordinal_read_as_old_or_new_never_a_mix() {
                     &layout.ref_pointer_index_slot_path(ContainerSlot::B),
                     "ref pointer index has a damaged entry",
                     crate::refs::decode_pointer_index_entries_for_resolver,
+                    crate::refs::reduce_pointer_index_entries,
                 )
                 .unwrap_or_else(|err| {
                     panic!("{point:?} skip={skip}: generation log must stay readable, got {err}")

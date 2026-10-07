@@ -26,24 +26,33 @@ defect whose triggering code is unchanged since 0.20.0. No advisory (disclosure 
 every reader and writer of the three containers now deduces the live slot from its own content in this
 exact state, rather than silently trusting the original slot.
 
-Fixed in this release (0.50.0 step 1 Parts E/E2): `resolve_live_slot`/`resolve_live_slot_with_tail`
-(`foundation/generation.rs`) now **deduce** the live slot from the two slots' own entries, compared by value
-(compaction only ever re-encodes the live slot's entries into the other one, never copies raw bytes), when
-the generation log names no live slot but the non-default slot holds data. Every entry the non-default slot
-holds that the default slot already has means nothing was written since the switch (or the switch itself
-never completed) — the default slot stays live. An entry the default slot never had means the non-default
-slot took real writes after becoming live — it becomes live instead, and the entry reads correctly rather
-than silently disappearing. Only when the deduction itself cannot be made (either slot is damaged) does this
-refuse, naming the container's own existing damage text. `prikk verify` and `prikk doctor` now warn when this
-state is found — naming the container, the deduced slot, and `prikk compact` as the way to record it and end
-the state for good — since every ordinary reader and writer already resolve it silently. `prikk doctor
+Fixed in this release (0.50.0 step 1 Parts E/E2/E3): `resolve_live_slot`/`resolve_live_slot_with_tail`
+(`foundation/generation.rs`) now **deduce** the live slot from the two slots' own entries when the
+generation log names no live slot but the non-default slot holds data, compared against `C` — the exact
+reduction `compact` itself would write from the default slot's entries, never a raw byte copy (compaction
+re-encodes). The non-default slot's own decoded entries equal `C`, or are a prefix of it (a crash before the
+record, or a partly written slot), means it is derived from the default slot, which stays live; anything
+else means the non-default slot took a real write after becoming live, and it becomes live instead, so that
+write reads correctly rather than silently disappearing or an earlier, repeated state silently winning. Only
+when the deduction itself cannot be made (either slot is damaged) does this refuse, naming the container's
+own existing damage text. `prikk verify` and `prikk doctor` now warn when this state is found — naming the
+container, the deduced slot, and `prikk compact` as the way to record it and end the state for good — since
+every ordinary reader and writer already resolve it silently. A restore from the recovery log is the one
+exception: it is a deliberate writer, so it refuses outright when a meaning file's own container is in this
+ambiguous state, rather than risk comparing against a meaning file that is itself stale. `prikk doctor
 --rebuild-pointer-index` remains a way out for the pointer index specifically, reaching the same state through
 an independent path (re-deriving from the ref log without reading either slot as live), though the ordinary
-deduction above no longer requires it. An earlier version of this fix (Part E) made every reader and writer
-refuse unconditionally in this state; review found that refusal was itself wrong for a crash between a
-compaction's new-slot write and its generation-record append — file-identical to a genuinely lost record, but
-content-equivalent to the slot already live — so Part E2 corrects it to deduce rather than refuse, restoring
-the pre-existing crash-recovery test (a bare retry heals it) to its original behavior.
+deduction above no longer requires it.
+
+Two corrections along the way, both from review, neither reaching a release: Part E made every reader and
+writer refuse unconditionally in this state, which was itself wrong for a crash between a compaction's
+new-slot write and its generation-record append — file-identical to a genuinely lost record, but
+content-equivalent to the slot already live — so Part E2 corrected it to deduce rather than refuse. Part E2's
+own deduction compared by bare membership ("does the non-default slot's entry appear anywhere in the
+default slot's history"), which a repeated value can defeat: the trust policy's snapshot entries carry no
+sequence, only a full `{key_ids}` set, so a maintainer revoked, then re-trusted, then revoked again could
+read as still trusted if the generation log were lost at exactly the wrong moment. Part E3 compares against
+`C` positionally instead, which repetition cannot fool.
 
 ## 0.49.0 — 2026-10-07
 

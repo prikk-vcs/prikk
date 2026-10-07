@@ -27,7 +27,7 @@ use crate::foundation::fsutil::{
     read_file_if_exists, read_file_range_if_exists, stat_file_state_if_exists,
     truncate_existing_file_required,
 };
-use crate::foundation::generation::resolve_live_slot_trusting_default_on_ambiguity;
+use crate::foundation::generation::{self, resolve_live_slot_trusting_default_on_ambiguity};
 use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryLayout};
 
 const MAGIC: &[u8; 8] = b"PRECLOG1";
@@ -614,9 +614,26 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
             )?,
         ]);
     }
+    let ref_pointer_index_generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let ref_pointer_index_slot_b_path = layout.ref_pointer_index_slot_path(ContainerSlot::B);
+    // Part E3 (the review): a restore is a deliberate writer, so it must not trust slot A in the
+    // ambiguous state the way the best-effort default above does for every other caller -- a stale
+    // meaning file would then compare unchanged and pass, though the live slot actually changed. The
+    // existing cheap boolean check (no decode, no new dependency) is enough to refuse this one case.
+    if generation::generation_log_lost(
+        layout,
+        &ref_pointer_index_generation_log_path,
+        &ref_pointer_index_slot_b_path,
+    )? {
+        return Err(PrikkError::Integrity(
+            "the ref pointer index's live slot is not recorded; run `prikk compact \
+             --pointer-index` first"
+                .to_string(),
+        ));
+    }
     let pointer_slot = resolve_live_slot_trusting_default_on_ambiguity(
         layout,
-        &layout.ref_pointer_index_generation_log_path(),
+        &ref_pointer_index_generation_log_path,
     )?;
     if source == relative(&layout.ref_pointer_index_slot_path(pointer_slot))? {
         return Ok(vec![relative(
@@ -830,6 +847,68 @@ pub(crate) fn verify_line(layout: &RepositoryLayout) -> Option<String> {
 mod tests {
     use super::*;
     use crate::foundation::layout::RepositoryLayout;
+    use crate::test_gates::test_support::{signed_empty_block_envelope, signed_ref_state_envelope};
+    use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore};
+
+    fn publish(
+        store: &RefStore,
+        objects: &mut FileObjectStore,
+        ref_name: &str,
+    ) -> prikk_object::ObjectId {
+        let target = objects
+            .write_object(&signed_empty_block_envelope())
+            .expect("write object");
+        let ref_state = signed_ref_state_envelope(ref_name, None, target, 1);
+        let ref_state_id = ref_state.object_id();
+        store
+            .publish(&RefPublication {
+                ref_name: ref_name.to_string(),
+                expected_previous_ref_state_id: None,
+                ref_update: crate::test_gates::test_support::signed_ref_update_envelope(
+                    ref_name,
+                    None,
+                    ref_state_id,
+                    target,
+                    1,
+                ),
+                ref_state,
+            })
+            .expect("publish");
+        ref_state_id
+    }
+
+    /// Part E3 (the review): a restore must not trust slot A in the ambiguous state the way the
+    /// best-effort default resolver does for every other caller -- it refuses instead.
+    #[test]
+    fn meaning_paths_for_refuses_when_the_pointer_index_live_slot_is_ambiguous() {
+        let root = crate::test_gates::test_support::unique_temp_dir(
+            "recovery-log-meaning-paths-ambiguous",
+        );
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let mut objects = FileObjectStore::new(layout.clone());
+        let store = RefStore::new(layout.clone());
+        publish(&store, &mut objects, "heads/main");
+
+        crate::compact::compact_ref_pointer_index(&layout).expect("compact");
+        std::fs::write(layout.ref_pointer_index_generation_log_path(), b"").expect("lose log");
+
+        let ref_log_a = layout.repository_relative(
+            &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
+        );
+        let ref_log_a = ref_log_a
+            .expect("relative path")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let result = meaning_paths_for(&layout, &ref_log_a);
+        let Err(error) = result else {
+            panic!("expected a refusal, got {result:?}");
+        };
+        let error = error.to_string();
+        assert!(error.contains("ref pointer index"), "{error}");
+        assert!(error.contains("prikk compact --pointer-index"), "{error}");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn sample() -> Entry {
         Entry {

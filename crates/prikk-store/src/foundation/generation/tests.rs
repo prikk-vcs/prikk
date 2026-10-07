@@ -22,6 +22,11 @@ fn trivial_decode(bytes: &[u8]) -> Result<DecodedEntries<Vec<u8>>> {
     })
 }
 
+/// A placeholder reduction matching `trivial_decode`'s own never-reached branch.
+fn trivial_reduce(entries: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    entries
+}
+
 #[test]
 fn a_single_record_round_trips_through_decode() -> Result<()> {
     let record = GenerationRecord {
@@ -138,6 +143,7 @@ fn an_empty_or_missing_generation_log_resolves_to_slot_a() -> Result<()> {
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         trivial_decode,
+        trivial_reduce,
     )?;
     assert_eq!(resolved, ContainerSlot::A);
     let _ = std::fs::remove_dir_all(root);
@@ -166,6 +172,7 @@ fn resolver_takes_the_last_complete_record() -> Result<()> {
         &layout.received_index_slot_path(ContainerSlot::B),
         "received-ref index has a damaged entry",
         trivial_decode,
+        trivial_reduce,
     )?;
     assert_eq!(resolved, ContainerSlot::B);
     let _ = std::fs::remove_dir_all(root);
@@ -201,6 +208,7 @@ fn a_damaged_generation_record_fails_closed_rather_than_resolving_silently() -> 
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
             "trust policy container has a damaged snapshot",
             trivial_decode,
+            trivial_reduce,
         )
         .is_err()
     );
