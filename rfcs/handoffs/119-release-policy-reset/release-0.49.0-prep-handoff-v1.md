@@ -190,3 +190,23 @@ CHANGELOG and `troubleshooting.md`):
 **Report once, in `release-0.49.0-prep-report-v1.md`, when the round is done or when you are blocked.** Interim seen:
 `b298457b` (the size pin follows P5's line count; fine). **Row 14's condition above (`fbdc1ace`) still applies to the
 troubleshooting copy.**
+
+## Addendum 2 — 2026-10-07: Addendum 1 approved; six rulings; then the sweep and the candidate (review `release-0.49.0-prep-review-v1`)
+
+**Addendum 1 is ACCEPTED.** Apply the rulings, then do §1 and §2 as written above.
+
+1. **Version wording:** keep "0.49.0".
+2. **Methods versus guarantees:** as written. A count always names its noun.
+3. **M6 and M7, in `current-state.md`'s limitations:**
+   - **M6:** every commit replays the whole WAL (6.2 ms at 800 queued commits against 4.0 ms at 100; external review
+     014, measured on 0.48.0's candidate); deferred to 0.50.0+;
+   - **M7:** one damaged blob makes every file at that point unreadable (no salvage read); deferred to 0.50.0+.
+4. **Row 34:** drop "authoritative"; say the table is derived from each command's help.
+5. **Row 14, live, in §2:** run `doctor` on `reproduce.sh`'s hostile M5 repository; quote its recommendation; fix the
+   page if they differ.
+6. **Drop §1.3's "stranded `ref-name` is not reported" gap.** The architect's probe shows `verify` exits 1 over it.
+7. **A product fix:** `--rebuild-pointer-index --plan-only` refuses exactly as the real run does, over a torn
+   generation-log tail, with a test. **Control:** remove the precondition from the plan, and the test goes red.
+
+**Then §1.1–§1.8 and §2.** The `### Security` list comes to the architect first (§1.2). **Report once:**
+`.git-exclude/review-request/release-0.49.0-prep-report-v2.md`.
