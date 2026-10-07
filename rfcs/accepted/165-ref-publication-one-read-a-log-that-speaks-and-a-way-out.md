@@ -187,3 +187,18 @@ A `seal` no longer appends behind another ref's interrupted publication.
      - It matches prikk's object-trust model, and it does not strand a repository whose original signer is away.
    - **The alternative: only the key that signed the leading RefState.** It is narrower, but a repository whose original
      signer's key is unavailable stays stuck until a rebuild, and the rebuild drops the authorized transition.
+
+## Amendment, 2026-10-07 — R5 refuses a lead that fails only by depth (external review 019 §5.1; the architect's ruling)
+
+- **What R5 did:** it dropped every lead that failed R4's rule.
+- **What review 019 found:** with the ref log emptied, the rebuild dropped `heads/main`, whose lead was **two** signed,
+  chained, present transitions. It failed only (b) by depth. The plan warned, but the result left two sealed
+  generations unreferenced, and nothing reported them.
+- **Why:** R5's own reason for refusing over a completable lead is that *a rebuild would drop an authorized
+  transition.*
+- **The rule now:**
+  - **dropped:** a lead that fails (a), its signature, or (c), its target;
+  - **refused:** a lead that fails only (b) by depth, with every RefState verifying and chaining. The refusal names
+    the ref, the depth, and the way out: restore the ref log from a copy.
+- **What it changes:** the rebuild refuses more, and never drops more. No format change.
+- **Implemented:** in 0.50.0 step 1 (`rfcs/handoffs/165-…/review-019-corrections-handoff-v1.md`, A1).
