@@ -270,7 +270,7 @@ limitations](../reference/current-state.md) for the status of that fix.
 
 **A restored owner is final for this verb**: once ownership is present, a second restore refuses the
 same way a healthy session does, even to a different ref and even with `--not-current-branch` — a wrong
-restore is undone by hand (write `ref-name` back, or restore from a backup), not by a second call.
+restore is undone by `prikk doctor --recovery-restore <run id>`, the run its output names, not by a second call.
 
 ## `error: a queued commit you were told had succeeded disagrees with the WAL in a way the WAL's own sound prefix cannot explain (RFC 166)`
 
@@ -334,13 +334,13 @@ prikk doctor --discard-damaged-commits
 $ prikk doctor --discard-damaged-commits --plan-only
 doctor repository: /path/to/.prikk
 acknowledged commit at sequence 1 (patch 01157f0c...)
-340 bytes saved to recovery/log, run 3f9a0c1e8b2d4a57 before truncation
+340 bytes saved to recovery/log (planned, nothing written) before truncation
 plan only -- nothing written
 
 $ prikk doctor --discard-damaged-commits
 doctor repository: /path/to/.prikk
 acknowledged commit at sequence 1 (patch 01157f0c...)
-340 bytes saved to recovery/log, run 3f9a0c1e8b2d4a57 before truncation
+340 bytes saved to recovery/log (planned, nothing written) before truncation
 damaged commit discarded
 ```
 
