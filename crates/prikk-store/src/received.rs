@@ -9,10 +9,10 @@
 //! index format, sidesteps that conflict entirely rather than patching the check to allow it — the
 //! latter would be new verification-path surface, which §D6 rules out.
 //!
-//! This index is never read by `verify_repository`. Every object a received pointer leads to
-//! (RefState, Block, Patch, Blob, Attestation) is an ordinary object-store entry, checked exactly
-//! like any other by the existing type-based object scan — §D6's "no new verification path" holds
-//! because there genuinely is none: this module only makes received tips *discoverable* by name.
+//! `verify_repository` reads this index in its `ReceivedRefs` stage, which replays the index and checks each
+//! pointer's RefState, target, attestations and previous state (`verify.rs`, the `ReceivedRefs` stage). Every
+//! object a received pointer leads to (RefState, Block, Patch, Blob, Attestation) is an ordinary object-store
+//! entry, also checked by the type-based object scan.
 //!
 //! RFC 102 Stage 5, design-v1.md §14/Step 0 item 2: backed by `received_index.rs`'s shared, append-
 //! only, last-entry-wins container (the refs container+pointer-index pattern, applied here because a
