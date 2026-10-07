@@ -700,3 +700,92 @@ fn the_rebuild_names_the_ref_logs_real_tail_offset() {
     let run_error = rebuild_pointer_index(&layout).unwrap_err().to_string();
     assert_eq!(plan_error, run_error);
 }
+
+/// 0.50.0 step 1, A6 item 5 (019 §5.4): the pointer index's own tail refuses the rebuild and names
+/// `--repair-tails`, the identical way a torn generation-log tail already does (mirrors
+/// `a_plan_refuses_over_a_torn_generation_log_tail_as_the_real_run_does`'s own technique, for the
+/// pointer index's own container instead). Before this fix, this specific tail went unchecked: the
+/// plan proceeded (exit 0) and the torn slot was abandoned, unsaved, on the next real run's own
+/// write.
+#[test]
+fn a_plan_refuses_over_a_torn_pointer_index_tail_as_the_real_run_does() {
+    let root = unique_temp_dir("a6-item5-torn-pointer-index-tail");
+    let layout = setup(&root);
+    let target = new_block(&layout, None, 1);
+    fully_publish(&layout, "heads/main", target, &original_signer(), None, 1);
+    let pointer_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let clean = std::fs::read(&pointer_path).expect("pointer index");
+    plan_pointer_index_rebuild(&layout).expect("control: a clean pointer index plans");
+
+    let mut torn = clean.clone();
+    torn.extend_from_slice(&[0u8; 100]);
+    std::fs::write(&pointer_path, &torn).expect("torn tail");
+    let plan_refusal = match plan_pointer_index_rebuild(&layout) {
+        Ok(plan) => panic!("the plan must refuse a torn pointer-index tail, got {plan:?}"),
+        Err(error) => error.to_string(),
+    };
+    let run_refusal = match rebuild_pointer_index(&layout) {
+        Ok(plan) => panic!("the real run must refuse a torn pointer-index tail, got {plan:?}"),
+        Err(error) => error.to_string(),
+    };
+    assert_eq!(plan_refusal, run_refusal);
+    assert!(plan_refusal.contains("--repair-tails"), "{plan_refusal}");
+    assert!(
+        plan_refusal.contains("the ref pointer index"),
+        "{plan_refusal}"
+    );
+    assert_eq!(
+        std::fs::read(&pointer_path).expect("pointer index"),
+        torn,
+        "the plan writes nothing"
+    );
+
+    std::fs::write(&pointer_path, &clean).expect("restore the clean pointer index");
+    plan_pointer_index_rebuild(&layout).expect("control: without the tail the plan is clean again");
+}
+
+/// 0.50.0 step 1, A6 item 5 (019 §5.4): when the pointer index already matches the log for every
+/// ref, a real run writes neither a new slot nor a new generation record -- `plan.wrote` is `false`,
+/// and the live slot, the other slot, and the generation log are all byte-for-byte unchanged. Before
+/// this fix, a real run wrote a new generation unconditionally, even over an already-healthy index.
+#[test]
+fn rebuild_writes_nothing_when_the_pointer_index_already_matches_the_log() {
+    let root = unique_temp_dir("a6-item5-already-matches-writes-nothing");
+    let layout = setup(&root);
+    let target = new_block(&layout, None, 1);
+    fully_publish(&layout, "heads/main", target, &original_signer(), None, 1);
+
+    let generation_log = layout.ref_pointer_index_generation_log_path();
+    let slot_a = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let slot_b = layout.ref_pointer_index_slot_path(ContainerSlot::B);
+    let generation_before = std::fs::read(&generation_log).unwrap_or_default();
+    let slot_a_before = std::fs::read(&slot_a).expect("slot A");
+    let slot_b_before = std::fs::read(&slot_b).unwrap_or_default();
+
+    let plan = plan_pointer_index_rebuild(&layout).expect("plan");
+    assert!(
+        !plan.wrote,
+        "a plan over an already-matching index must report nothing to write"
+    );
+    assert!(plan.per_ref.iter().all(|entry| entry.before == entry.after));
+    assert!(plan.dropped_leads.is_empty());
+    assert!(plan.restored.is_empty());
+
+    let real_plan = rebuild_pointer_index(&layout).expect("real run");
+    assert!(!real_plan.wrote);
+    assert_eq!(
+        std::fs::read(&generation_log).unwrap_or_default(),
+        generation_before,
+        "no new generation record"
+    );
+    assert_eq!(
+        std::fs::read(&slot_a).expect("slot A"),
+        slot_a_before,
+        "the live slot is untouched"
+    );
+    assert_eq!(
+        std::fs::read(&slot_b).unwrap_or_default(),
+        slot_b_before,
+        "the other slot is never written"
+    );
+}

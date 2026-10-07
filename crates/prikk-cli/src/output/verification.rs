@@ -559,7 +559,18 @@ pub(crate) fn print_verify_report(
         "trailing partial WAL bytes: {}",
         format_count(report.trailing_partial_wal_bytes)
     );
-    if report.has_trailing_partial_wal() {
+    // 0.50.0 step 1, A6 item 1 (N6, RFC 163 §4): rule 3's own tail classification is unchanged and
+    // correct (an acknowledged record's own bytes, damaged, with nothing sound after it, *is* a
+    // tail by that rule) -- what changes is only this warning sentence, suppressed when the commit
+    // witness already explains the identical bytes as acknowledged damage or loss: that finding
+    // (below) names the one command that actually resolves it, `--discard-damaged-commits`, and
+    // "an incomplete trailing record" would read as the ordinary, benign crash-tail case this same
+    // sentence means everywhere else -- misleading here, since the record was never merely queued.
+    let acknowledged_damage_or_loss = matches!(
+        report.commit_witness_verdict,
+        Some(Verdict::AcknowledgedDamage { .. } | Verdict::AcknowledgedLoss { .. })
+    );
+    if report.has_trailing_partial_wal() && !acknowledged_damage_or_loss {
         println!("warning: active WAL contains an incomplete trailing record");
     }
     println!(
@@ -618,9 +629,28 @@ pub(crate) fn print_verify_report(
             println!("acknowledged commits history: agrees");
         } else {
             println!("acknowledged commits history: disagrees");
+            // 0.50.0 step 1, A6 item 2 (019 §5.6, row 10 J): the old text named no copy and said
+            // nothing about the record this check itself already read as sound. Row 10 only ever
+            // fires on top of a `Healthy` D3 verdict (`witness.rs::verify_running_hash`'s own doc):
+            // the *last* acknowledged record's own frame hash still matches the witness, sequence
+            // `last_seq` here -- it is some *earlier* record in the chain that was substituted after
+            // the fact, which is why `last_seq`'s own soundness proves nothing about the sequence
+            // leading up to it. No repair rewrites a history that may have been tampered with; the
+            // way out is a copy of this repository's own `.prikk/` directory from a backup taken
+            // before the substitution, never a repair of the copy on disk now.
+            let last_seq = match &report.commit_witness_verdict {
+                Some(Verdict::Healthy { last_seq }) => Some(*last_seq),
+                _ => None,
+            };
+            let last_seq_clause = last_seq
+                .map(|seq| format!(" (sequence {seq}, whose own bytes are still sound)"))
+                .unwrap_or_default();
             println!(
-                "error: a record before the last acknowledged one does not match the queued \
-                 commit you were told had succeeded; a copy is the way out"
+                "error: a record before the last acknowledged one{last_seq_clause} does not \
+                 match the queued commit you were told had succeeded; this is not a crash shape, \
+                 and no repair rewrites history that may have been tampered with -- the way out \
+                 is a copy of this repository's own `.prikk/` directory from a backup taken \
+                 before the substitution, never a repair of the copy on disk now"
             );
         }
     }
@@ -721,7 +751,15 @@ fn print_active_wal_metadata_status(status: &ActiveWalMetadataStatus) {
 fn print_commit_witness_verdict(verdict: &Verdict) {
     match verdict {
         Verdict::NoWitness { .. } => {
-            println!("acknowledged commits: none recorded");
+            // 0.50.0 step 1, A6 item 3 (019 §5.11): by design (RFC 166 §9), this line reads
+            // identically whether no witness was ever written (a session from before 0.49.0) or one
+            // was removed afterward -- the two are not told apart, on purpose, and never worse than
+            // 0.48.0 either way (classification.rs's own C2). The parenthetical only names which
+            // rule is in force, so a reader does not mistake silence for "nothing to check."
+            println!(
+                "acknowledged commits: none recorded (the classification of a session written \
+                 before 0.49.0 applies)"
+            );
         }
         Verdict::Healthy { last_seq } => {
             println!("acknowledged commits: confirmed through sequence {last_seq}");

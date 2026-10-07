@@ -642,12 +642,14 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         && !rebuild_pointer_index
         && !discard_damaged_commits
         && !restore_queue_target
+        && !repair_tails
         && recovery_restore.is_none()
         && !recovery_clear
     {
         return Err(CliError::Usage(
             "--plan-only is only accepted alongside --rebuild-pointer-index, \
-             --discard-damaged-commits, --restore-queue-target, --recovery-restore or --recovery-clear"
+             --discard-damaged-commits, --restore-queue-target, --repair-tails, \
+             --recovery-restore or --recovery-clear"
                 .to_string(),
         ));
     }

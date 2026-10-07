@@ -322,9 +322,12 @@ structural and **never trust-filtered** — no signature is re-checked for a rec
 the log, only a *current* lead re-enters trust (the same R4 rule above, reused, not re-derived).
 
 **It refuses, writing nothing**, if the ref log itself has damage or a tail (repair that first — the
-rebuild's own source of truth must be trustworthy before anything is derived from it), or if **any**
-lead anywhere in the repository is completable: completing it is the correct fix, and a rebuild would
-otherwise drop an authorized transition, the one outcome this verb must never produce. A lead that
+rebuild's own source of truth must be trustworthy before anything is derived from it), if the *pointer
+index's own container* has a tail (0.50.0 step 1 A6 item 5: named `--repair-tails` the identical way the
+generation log's own tail already was, since `0db67cc4` — before this round the plan proceeded over it
+and the torn slot was abandoned, unsaved, on the next write), if the generation log itself has a tail, or
+if **any** lead anywhere in the repository is completable: completing it is the correct fix, and a
+rebuild would otherwise drop an authorized transition, the one outcome this verb must never produce. A lead that
 fails R4's rule is **dropped** and named — unless it fails only by depth, more than one transition
 ahead while every `RefState` in it still verifies and chains soundly back to the log: dropping that
 would discard every one of those transitions, not only the first, so it is **refused** instead,
@@ -337,7 +340,11 @@ ref — the identical plan a real run writes from.
 
 **The write:** truncates the ref-pointer index's other slot, writes the rebuilt records, then switches
 the generation log to it — atomic, as `compact` already does for the same container; the old slot
-survives until the next compaction.
+survives until the next compaction. **Only when every ref's state would actually change** (0.50.0 step
+1 A6 item 5): when the pointer index already matches the log for every ref, a real run writes neither a
+new slot nor a new generation record, and says so ("pointer index already matches the log; nothing
+written") — before this round it wrote a new generation unconditionally, even over an already-healthy
+index.
 
 ## A Write Never Buries a Crash State (RFC 163)
 

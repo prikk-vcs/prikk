@@ -26,7 +26,9 @@ mod restore_queue_target;
 pub use discard_damaged_commits::{
     DiscardDamagedCommitsPlan, discard_damaged_commits, plan_discard_damaged_commits,
 };
-pub use repair_tails::{RepairTailsFileOutcome, RepairTailsReport, repair_tails};
+pub use repair_tails::{
+    RepairTailsFileOutcome, RepairTailsReport, plan_repair_tails, repair_tails,
+};
 pub use restore_queue_target::{
     CommitSummary, RestoreQueueTargetPlan, plan_restore_queue_target, restore_queue_target,
 };
@@ -884,9 +886,20 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     );
                 }
             }
+            // 0.50.0 step 1, A6 item 1 (N6, RFC 163 §4): suppressed when the commit witness already
+            // explains these identical bytes as acknowledged damage or loss -- `--repair-wal-tail`
+            // would truncate the very record the discard verb exists to handle formally (saving it
+            // to the recovery log, not merely removing it), so recommending it here is a dead end,
+            // not a second valid way out. See `output/verification.rs`'s matching suppression of
+            // the equivalent `verify` warning sentence for the identical reasoning.
+            let acknowledged_damage_or_loss = matches!(
+                verification.commit_witness_verdict,
+                Some(Verdict::AcknowledgedDamage { .. } | Verdict::AcknowledgedLoss { .. })
+            );
             if verification
                 .trailing_partial_wal_bytes
                 .is_some_and(|n| n != 0)
+                && !acknowledged_damage_or_loss
             {
                 issues.push(
                     DoctorIssue::warning(

@@ -74,7 +74,7 @@ prikk doctor [path]
 prikk doctor [path] --repair-wal-tail
 prikk doctor [path] --repair-index
 prikk doctor [path] --repair-pointer-index-tail
-prikk doctor [path] --repair-tails
+prikk doctor [path] --repair-tails [--plan-only]
 prikk doctor [path] --repair-main-ref
 prikk doctor [path] --rebuild-pointer-index [--plan-only]
 prikk doctor [path] --discard-damaged-commits [--plan-only]

@@ -221,8 +221,10 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
 
 - `--repair-wal-tail`: truncates an incomplete final record from the default session's WAL and, for each
   non-default active session, that session's WAL (`doctor.rs:1258`).
-- `--repair-tails`: truncates the incomplete final bytes of the WAL, the pointer index, and the eight
-  appended files, ten files in all (`doctor/repair_tails.rs:76`). It refuses interior damage in any of them.
+- `--repair-tails [--plan-only]`: truncates the incomplete final bytes of the WAL, the pointer index, and
+  the eight appended files, ten files in all (`doctor/repair_tails.rs:76`). It refuses interior damage in
+  any of them, the identical way with or without `--plan-only` (0.50.0 step 1 A6 item 4) -- the one repair
+  that may cut across ten files in one run, and the last of the five recovery verbs to gain a preview.
 - `--repair-index`: rebuilds the object index from the containers.
 - `--repair-pointer-index-tail`: truncates an incomplete final pointer-index record.
 - `--rebuild-pointer-index [--plan-only]`: re-derives the ref-pointer index from the ref log (RFC 165 R5,

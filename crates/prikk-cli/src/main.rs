@@ -1255,10 +1255,15 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
                 dropped.ref_name, dropped.lead_ref_state_id, dropped.reason
             );
         }
+        // 0.50.0 step 1, A6 item 5 (019 §5.4): `plan.wrote` is mode-independent (the same check a
+        // real run itself gates its own write on), so a plan-only preview and a real run that
+        // changes nothing both say so, instead of a real run always claiming "rebuilt."
         if doctor_args.plan_only {
             println!("plan only -- nothing written");
-        } else {
+        } else if plan.wrote {
             println!("pointer index rebuilt");
+        } else {
+            println!("pointer index already matches the log; nothing written");
         }
         return Ok(());
     }
@@ -1363,6 +1368,16 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // RFC 164 Rule C: handled first and returns immediately -- args.rs already refuses to combine
     // it with any other repair flag, so nothing below this block runs when it is set.
     if doctor_args.repair_tails {
+        // 0.50.0 step 1, A6 item 4: `--plan-only` shares `repair_tails`'s own read-and-validate pass
+        // (`plan_repair_tails`/`repair_tails` both call the same private `run_repair_tails` under one
+        // lock), so the plan printed here is always the plan a real run would also act on.
+        if doctor_args.plan_only {
+            let report = prikk_store::plan_repair_tails(&layout).map_err(|err| err.to_string())?;
+            println!("doctor repository: {}", layout.prikk_dir().display());
+            print_repair_tails_report(&report);
+            println!("plan only -- nothing written");
+            return Ok(());
+        }
         let report = prikk_store::repair_tails(&layout).map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
         print_repair_tails_report(&report);

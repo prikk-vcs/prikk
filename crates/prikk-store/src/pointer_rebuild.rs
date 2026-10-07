@@ -113,6 +113,11 @@ pub struct RebuildPlan {
     pub dropped_leads: Vec<DroppedLead>,
     /// Every ref whose pointer read as stale (behind the log), restored rather than dropped.
     pub restored: Vec<RestoredRef>,
+    /// 0.50.0 step 1, A6 item 5 (019 §5.4): whether a real run would write anything at all. `false`
+    /// exactly when every ref's `before` already equals its `after` (so `dropped_leads` and
+    /// `restored` are both empty too) -- the pointer index already matches the log, and a real run
+    /// writes neither a new slot nor a new generation record rather than burning one on a no-op.
+    pub wrote: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +241,17 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     }
 
     let pointer_replay = replay_pointer_index(layout)?;
+    // 0.50.0 step 1, A6 item 5 (019 §5.4): the ref log's own tail (above) and the generation log's
+    // own tail (below) already refuse before this rebuild touches anything -- the pointer index's
+    // own tail did not, so the plan proceeded (exit 0) and the torn slot was silently abandoned,
+    // unsaved, the one tail among the three this function reads that this refusal did not cover.
+    // Same wording and way out as the generation-log case (`0db67cc4`).
+    require_no_unclean_tail(
+        "the ref pointer index",
+        pointer_replay.trailing_partial_bytes,
+        pointer_replay.tail_offset,
+        "run `prikk doctor --repair-tails`, then retry",
+    )?;
     let mut ref_names: BTreeSet<String> = log_derived.keys().cloned().collect();
     ref_names.extend(
         pointer_replay
@@ -362,7 +378,14 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         "run `prikk doctor --repair-tails`, then retry",
     )?;
 
-    if mode == RebuildMode::Execute {
+    // 0.50.0 step 1, A6 item 5 (019 §5.4): every ref's `before` already equals its `after` exactly
+    // when nothing was restored and no lead was dropped (both are only ever pushed from inside the
+    // `before != after` branch above) -- the pointer index already matches the log, so there is
+    // nothing a rebuild would change. Checked once here, in a mode-independent way, so a plan and a
+    // real run agree on whether anything would be written without duplicating the condition.
+    let wrote = !per_ref.iter().all(|entry| entry.before == entry.after);
+
+    if mode == RebuildMode::Execute && wrote {
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.ref_pointer_index_slot_path(target_slot))?;
@@ -390,6 +413,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         per_ref,
         dropped_leads,
         restored,
+        wrote,
     })
 }
 

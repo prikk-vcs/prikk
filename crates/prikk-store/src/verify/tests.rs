@@ -9,6 +9,7 @@ mod reachability;
 mod received_refs;
 mod ref_cluster;
 mod root_authority;
+mod row10_substituted_earlier_record;
 mod stage_containment;
 mod trust;
 mod wal_cluster;

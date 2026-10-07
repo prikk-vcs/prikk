@@ -74,7 +74,21 @@ pub struct RepairTailsReport {
 /// `prikk doctor --repair-tails`. See the module doc for the locking order and the all-or-nothing
 /// rule.
 pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
-    // RFC 168 A1, item 2: every file this run cuts or rewrites shares one run id.
+    run_repair_tails(layout, false)
+}
+
+/// `prikk doctor --repair-tails --plan-only` (0.50.0 step 1, A6 item 4): the same read-and-validate
+/// pass as [`repair_tails`] -- the identical refusal, over the identical damage, under the identical
+/// locks -- reported without writing anything. The last of this repository's five recovery verbs to
+/// gain a preview, and the one most worth seeing first: it may cut across ten files in one run.
+pub fn plan_repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
+    run_repair_tails(layout, true)
+}
+
+fn run_repair_tails(layout: &RepositoryLayout, plan_only: bool) -> Result<RepairTailsReport> {
+    // RFC 168 A1, item 2: every file this run cuts or rewrites shares one run id. A plan-only call
+    // still takes it (and every lock below) -- it writes nothing, but reads under the identical hold
+    // a real run would, so the plan it prints is provably the plan a real run would also act on.
     let _run = crate::recovery_log::begin_run();
     let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let _container_locks = acquire_container_locks(
@@ -184,6 +198,32 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     }
 
     let mut files = Vec::with_capacity(2 + appended.len());
+
+    if plan_only {
+        // Every truncation below removes exactly its own file's own already-read `trailing_partial_
+        // bytes` -- confirmed by `wal.truncate_trailing_partial()`/`truncate_pointer_index_trailing_
+        // partial()`/`truncate_one_tail()`'s own contracts, each named "truncate to `tail_offset`."
+        // Reporting the read-pass values directly, rather than running the real truncations and
+        // discarding their writes, is what keeps this a plan, not a run that happens to roll back.
+        files.push(RepairTailsFileOutcome {
+            label: "WAL",
+            truncated_bytes: wal_replay.trailing_partial_bytes,
+            recovery: None,
+        });
+        files.push(RepairTailsFileOutcome {
+            label: "pointer index",
+            truncated_bytes: pointer_replay.trailing_partial_bytes,
+            recovery: None,
+        });
+        for status in &appended {
+            files.push(RepairTailsFileOutcome {
+                label: status.label,
+                truncated_bytes: status.trailing_partial_bytes,
+                recovery: None,
+            });
+        }
+        return Ok(RepairTailsReport { files });
+    }
 
     let wal_repair = wal.truncate_trailing_partial()?;
     files.push(RepairTailsFileOutcome {
