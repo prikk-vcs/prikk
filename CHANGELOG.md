@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Security
+
+- **Resynchronising over crafted content was quadratic in 0.48.0 (RFC 167, M5).** Upgrade. No advisory.
+  The WAL, object containers, trust policy, the received index, the ref log container and the pointer index share
+  one scan that, on meeting a torn or invalid frame, checks the rest of the file for a sound frame hidden behind
+  it. A file packed with fake frame headers, each claiming a body reaching exactly to the end of the file, made
+  that scan quadratic: `verify` over a 2 MiB hostile WAL tail took 13.98 s (0.24 s at 256 KiB), extrapolating to
+  hours at 64 MiB; a received blob's bytes sit inside sound frames, so this was reachable from outside the
+  repository through `bundle import`/`sync accept` given one torn or damaged frame earlier in the same container.
+  **Affected: 0.48.0 only** (the quadratic path first shipped there). Each of the six readers now carries a work budget (bytes
+  hashed, at most 8x the input) shared across every candidate the scan visits; a scan the budget cuts short is
+  always damage, never a tail — never silently accepted, whatever the cost. Measured at 64 MiB: 0.25–0.29 s on
+  both hostile shapes, every affected reader. A second, independent decode of the same WAL that `verify` had
+  picked up since 0.49.0's own earlier rounds (RFC 164 Rule E's reachability walk, re-decoding `default`'s WAL a
+  second time) is also removed: honest `verify` cost is unchanged from 0.48.0.
+
+- **`bundle import` accepted a received ref whose earlier states or required attestations were not carried (0.20.0–0.48.0).** It now refuses such a bundle, and `verify` reports a received tip whose previous state is missing. Run `prikk verify` to find any ref imported before this release. No advisory.
+  An imported bundle's exported ref must carry, or already have, every earlier RefState on its chain
+  (`previous_ref_state_id`) and every attestation its RefStates require. Before this, the import checked the
+  exported target, blobs, parents and manifests, but not these, so a bundle with a cut chain imported a received
+  ref whose history was missing. Honest exports are unaffected: `bundle export` already carries the whole chain
+  and every required attestation. The refusal happens before any write, the same as the other closure checks.
+
 ### Upgrading
 
 - A repository from 0.48.0 gets `recovery/log` and the session witness at its first write, not when it is opened.
@@ -12,6 +35,187 @@
 - `doctor --repair-tails` covers ten files: the ref log is now one of them.
 - The refusal that names a damaged ref log now names `--repair-tails` instead of RFC 165 R5.
 - The new recovery and witness report types are `#[non_exhaustive]`; a consumer that matches them exhaustively needs a wildcard arm.
+- `bundle import` now refuses a bundle whose ref's earlier states are not carried; export it with its full history.
+
+### Output changes
+
+Repair output says `saved to recovery/log, run <id>` in place of `saved to .prikk/recovery/<name>.bytes`. `verify` prints one
+line when `recovery/log` has damage: `recovery log: N damaged region; a save there cannot be restored`. Its exit status and its
+JSON report are unchanged.
+
+`verify` reads the previous RefState of each received ref's tip and reports
+`received RefState <id> names missing previous RefState <id>` as that ref's failed item. This is one read per
+received ref, the tip's link only (a received ref has no RefUpdate log to check deeper links against).
+
+An object-container frame whose full claimed body is present and whose checksum fails is now an interrupted append only
+when a later, sound frame starts **inside the range its own header claims** -- a torn frame that a later write overran.
+Otherwise it is a failed object item, even when later commits follow it. Before this, any checksum failure with bytes
+after it was worded as an interrupted append (a tolerated warning), which is what an earlier object's bit rot, followed
+by ordinary later commits, looked like. The probe that decides is the same budgeted scan a short read uses; exhaustion
+counts as damage. **Also a budget correction:** a candidate's checksum hashes its 18-byte header as well as its body, and
+the budget now charges both (a zero-length candidate used to hash 18 bytes for nothing; a claimed-range file measured at
+12.5x the input, now 4.9x, under the one-decode bound of 9x).
+Every other framed reader (the WAL, trust keys and policy, pointer index, ref container, received index, author keys,
+generation files) now charges its candidates' headers too. Their bound held without it, since their sound-frame probe
+runs once per decode, so this is accounting, not a measured overshoot; no output changes.
+
+An object container frame whose checksum fails is reported as a failed object item (`verify`/`doctor` exit non-zero
+unconditionally) when nothing at all follows its claimed body in the container — previously it was worded and
+counted exactly like a crash-torn frame ("interrupted append... a harmless remnant, not damage"), tolerated as a
+warning and left for connectivity to judge. RFC 165 R5 (§9.2) already drew this line for the ref log container;
+this applies the same rule, narrowed, to object containers: a torn tail is a *prefix* of a frame, and a frame with
+nothing physically after it cannot be one. **Known gap, not fixed this round:** a checksum mismatch where later
+bytes *do* follow the claimed body is still worded as an interrupted append, even when those bytes turn out to
+belong to a later, unrelated frame rather than prove anything about this one — telling the two apart in general
+needs the same budgeted "sound frame hiding in the claimed range" scan the torn-tail path already runs, which is
+unscheduled.
+
+- `doctor`/`verify`, the WAL: `error [PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE]: WAL record at offset <N>
+  failed verification: the bytes after byte offset <N> look like many frame headers` — followed by "stopped
+  checking after 8x the file's size and treats this as damage, not a torn tail" — the repair
+  `--repair-wal-tail` refuses it (it truncates a torn tail only); run `prikk doctor` for diagnosis.
+- The pointer index, trust policy, and the received index report the identical "look like many frame headers
+  ... treats this as damage" text at their own offset; the repair
+  refuses it (the tail repairs truncate a torn tail only); run `prikk doctor` for diagnosis.
+- Object containers and the ref log container report the same text **without** "damage" (their own existing
+  wrapper already says "a harmless remnant, not damage" or "not a harmless remnant until repaired" /
+  "a damaged record ... the way out is a copy", and the inner text no longer contradicts it — RFC 167's own
+  design round found the prototype did, and the review rejected it).
+
+- `prikk verify`/`prikk doctor`: a new stage, `commit-witness` (`--format json`'s own `stages[].stage` value
+  `"commit-witness"`), and a new report line, `acknowledged commits: <state>` (`none recorded`, `confirmed through
+  sequence N`, `pending (confirmed through <N or "nothing yet">, WAL sound through N)`, `agree with the sound
+  prefix; the trailing bytes are an unacknowledged crash tail`, `sequence N is damaged`, `sequence N is no longer
+  present in the WAL`, `sequence N does not match the queued commit you were told had succeeded`, `unreadable, and
+  the WAL has an unexplained tail that cannot be classified`, `unreadable`, `no durable owner can be confirmed for
+  this session`, or `unknown (stage did not evaluate)`).
+- `prikk verify`: when the acknowledgment record reads healthy, one further line, `acknowledged commits history:
+  agrees` or `disagrees` (D4, row 10) — printed only in that one case.
+- `prikk verify --format json`: two new verdict condition ids, `commit-witness-integrity` and
+  `commit-witness-substituted-earlier-record`, each with its own `message`, following the existing
+  `verify-report-v1` shape (an additive key set, not a schema version bump).
+- `prikk doctor`: new codes `PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE`, `-ACKNOWLEDGED-LOSS`,
+  `-SUBSTITUTED-RECORD`, `-UNKNOWN`, `-DAMAGED` (warning), `-OWNERSHIP-MISSING`, and `-STALE` (info) for the
+  default active session, each with an `ACTIVE-SESSION-` counterpart (plus its own `-UNREADABLE`) for a
+  non-default one.
+- `prikk status`: a new line when the next `commit`/`seal` would refuse on the acknowledgment record
+  (`warning: the next commit or seal will refuse: <reason>`), and a new line when a queued commit was durably
+  written but not yet confirmed (`note: a queued commit was already written but not confirmed, either because a
+  previous command was interrupted after its own durable write or because an older prikk wrote it`) — silent in
+  every other case, including a stale (connectivity-confirmed drained) acknowledgment record, which only `doctor`
+  notes.
+- `commit`'s own "no node-addressed changes to commit" refusal now has a second shape: when the active WAL already
+  durably holds the exact commit being retried, the message instead says a queued commit was already written but
+  not confirmed (the same two indistinguishable causes `status`'s own new note names).
+- The refusal text for rows 4, 5, 7 and 9 (`commit`/`rollback-draft`/`seal`/`status`/`doctor`, and each of their
+  `PRIKK-DOCTOR-*` recommendation lines) now names the specific verb that is the way out
+  (`--discard-damaged-commits` for rows 4, 5 and 7; `--restore-queue-target --ref <ref>` for row 9), replacing
+  earlier text that only said a crash-tail repair would not help.
+- `prikk doctor --discard-damaged-commits`/`--plan-only`: new output lines — `acknowledged commit at sequence N
+  (patch <id>)` or `unexplained tail -- the witness itself could not be read`; `N bytes saved to <path> before
+  truncation` or `nothing to truncate -- the acknowledged commit is already gone from the WAL`; `this content may
+  still be in your working tree` (only when true — this note is now computed correctly; it previously never fired
+  at all); `plan only -- nothing written` or `damaged commit discarded`.
+- Row 9's own refusal text (`commit`/`rollback-draft`/`seal`/`status`) names a concrete, runnable
+  `--restore-queue-target` command rather than a placeholder `<ref>`: the session's own commit record's ref when
+  one is readable, else the caller's current branch, else a direction to supply `--ref` and `--not-current-branch`
+  explicitly. No internal words (`"durable, matching owner"`) remain in any of these four surfaces' own text.
+- `prikk doctor --restore-queue-target --ref <ref> [--not-current-branch]`/`--plan-only`: new output lines —
+  `restoring N queued commit(s) to <ref>:`, followed by one numbered line per queued commit (its own message, or
+  `(no message)`, and the paths it touches); `<ref> is currently at: <description>` or `<ref> has never been
+  published -- these would be its first commits`; the one-sentence uncertainty disclosure, "prikk cannot tell
+  which branch these commits were made on; your current branch is assumed. If you made them with `--ref`,
+  restore to that branch." (only when no commit record decided the ref and `--not-current-branch` was not
+  given); `plan only -- nothing written` or the next-step line, "the N queued commit(s) now belong to `<ref>`;
+  publish them with `prikk seal --allow-no-audit`". Replaces the original round-2 design's own `<ref>'s current
+  tip is block <id>` and ambiguity-list lines, both removed per RFC 166 §14 (a tip-matching check answered
+  nothing this verb actually needed, and let a queue be silently attached to the wrong branch).
+- `prikk doctor --restore-queue-target` gains `--not-current-branch`: required to restore to a ref other than
+  the caller's own current branch, or when the current branch cannot be resolved at all, whenever there is no
+  commit record to decide the ref instead (RFC 166 §14). Without it, the refusal names both the current branch
+  and the requested one, and never simply says to add the flag.
+
+- A completable pointer lead reports `PRIKK-VERIFY-REF-POINTER-LEADS-LOG` and `doctor` now names
+  `prikk ref complete <ref>` (RFC 165 R4) — the old, seal-specific "run signer-backed `prikk seal
+  --allow-no-audit`" recommendation was wrong for a `branch create`/`tag create`/`merge`-shaped lead,
+  which it could never actually apply to. A lead that fails R4's own rule stays
+  `PRIKK-VERIFY-REF-DIVERGENCE`.
+- `branch create`, `branch close`, `tag create`, and `sync adopt-tag` can now say `"branch <ref> has
+  an interrupted publication; run `prikk ref complete <ref>` to finish it"` (`"tag <ref> has an
+  interrupted publication…"` for the latter two) in place of the old, permanent-reading "already
+  exists"/"already closed", when their own ref's own pointer is a completable lead; `merge` says `"ref
+  <into-ref> has an interrupted publication; run `prikk ref complete <into-ref>` before merging into
+  it"`, refusing before gathering evidence rather than building on a pointer its own log has not
+  caught up to.
+- `prikk doctor --rebuild-pointer-index [--plan-only]` is new (RFC 165 R5): prints, per ref, its state
+  before and after, and every dropped lead or restored ref; refuses with `"<N> ref(s) have a
+  completable lead; run `prikk ref complete <ref>` first -- a rebuild would drop an authorized
+  transition: <ref list>"` over any completable lead anywhere, or with the ref log's own damage/tail
+  message (below) over ref-log damage.
+- `prikk compact --pointer-index`/`--received-index`/`--trust-policy` can now refuse with the live
+  slot's own tail/damage message (the same text `seal`/`branch create`/`tag create`/`merge` already
+  give for the pointer index specifically) before truncating or writing anything, when the slot
+  `compact` is about to read and reduce itself ends in a torn tail — carried from RFC 164 round 2,
+  landed here. `--plan-only` is unaffected.
+- `prikk rollback-draft --append-inverse` has refused while another ref's own publication is
+  incomplete (`ensure_no_incomplete_publication`, the same RFC 163 R3 refusal `commit` and six other
+  writers already have a line for above) since RFC 163 — carried from RFC 164 round 2's own release-prep
+  list; this is the first `CHANGELOG` mention it has had.
+- The three generation-log tail refusals (`"back it up, truncate it to the named offset, then run
+  `prikk verify`"`, from `compact`'s own precheck and from the rebuild above) now say `"run `prikk
+  doctor --repair-tails`, then retry"` instead — `--repair-tails` already covers all three generation
+  logs, and the old advice predated that coverage.
+- `seal`, `branch create`, `branch close`, `tag create`, `sync adopt-tag`, and `merge` can now refuse
+  with `"repository mutation is blocked by incomplete ref publication; run verify/doctor and use
+  signer-backed seal retry"` before writing anything, when a *different* ref's own publication is
+  incomplete (RFC 165 R3) — the same text `commit` already gave, now reachable from six more commands.
+- The same six commands can also now refuse with `"the ref log has an incomplete tail at byte offset
+  N (M byte(s) follow); a repair arrives with RFC 165 R5"` before writing anything, when the ref log
+  container has a tail with no pointer lead — zeros, random bytes, or a torn prefix left for a reason
+  unrelated to a pending write (RFC 165 Addendum 1 §1, RFC 164 Rule D). Distinct from the refusal
+  above on purpose: `commit` and every other non-publishing writer proceed over this shape instead of
+  refusing, since a lead-free tail is not an incomplete publication and naming a seal retry for it
+  would be misleading — only a writer that itself appends to the ref log must refuse over it.
+- `verify` gains an `unreferenced remnants: N` line, plus one warning line per remnant naming the
+  owner, the missing object, and its role (RFC 164 round 2 Rule E): `"object <owner> references
+  missing <role> <id> -- re-run the import if you still have the bundle; otherwise it is harmless"` —
+  the same canonical form (RFC 165 R6) the blocking version of this message below already used; the
+  warning's own first draft carried an owner/missing-object type prefix the blocking form never had
+  (`<role>` already names what kind of thing is missing — "parent block", "block patch", "snapshot
+  blob" — so the type names repeated it), corrected before release rather than shipped and fixed later.
+  `doctor` gains the matching `PRIKK-DOCTOR-UNREFERENCED-REMNANT` warning code. `verify --format
+  json`'s own `verify-report-v1` schema is unaffected: item-level findings are out of its v1 scope,
+  unchanged by this addition.
+- `object <owner> references missing <role> <id>` no longer fires for a Block that is not itself
+  reachable from committed state (RFC 164 round 2 Rule E) — it is the warning above instead.
+- `seal`, `tag create`, `merge`, and `sync seal` can now refuse with the pointer index's own tail/damage
+  message (`"the ref pointer index has an incomplete tail…"` / `"ref pointer index has a damaged
+  entry…"`) before writing any object at all, not only at the later compare-and-swap step (RFC 164 Rule
+  D); the message text is unchanged, only when it can fire moved earlier.
+- A new author's first `commit` can now refuse with the author-key container's own tail/damage message
+  before writing its blob, object-index entry, or updating the commit-index/lifecycle caches (RFC 164
+  Rule D); the message text is unchanged, only when it can fire moved earlier.
+- `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file, plus a warning line
+  naming the file, the offset, the byte count, and the repair when `N != 0`, plus a failure line on interior damage.
+  It also gains one `trailing partial <type> container bytes: N` line per persisted object type (N7, above).
+  `verify --format json`'s own `verify-report-v1` schema is unaffected by either: the new `AppendedFileTails` stage
+  participates in the existing per-stage `evaluated`/`failed` reporting like any other stage, with no new field, and
+  the object-container line lives under the pre-existing `Objects` stage the same way.
+- `doctor` gains three new diagnostic codes: `PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL` (warning) and
+  `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` (error), one per Rule A file with a finding, and
+  `PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL` (warning), one per object type with a finding (N7).
+- Refusals that end: `"<container> has a damaged entry; run doctor before reading"` and `"generation log has a
+  damaged record; run doctor before reading"` no longer fire for a plain trailing run of zero or random bytes at
+  the end of one of these seven files, nor for a single corrupted header field (magic, version, or length) in an
+  otherwise complete last record (§9.2) — only for genuine interior damage does, which now covers both shapes
+  (previously silently repaired into a rollback, or rolled back by a reader before any repair ran, not reported
+  at all).
+- `prikk doctor --repair-tails` on a repository whose pointer-index generation log has interior damage: **names the
+  file and says nothing was touched** (`"--repair-tails refuses: 1 file(s) have interior damage, not a tail --
+  nothing was touched: pointer index generation log: …"`), the same uniform shape every other covered file's own
+  damage already refused with; it used to print that generation log's own reader refusal verbatim (`"generation log
+  has a damaged record; run doctor before reading"`), telling the user to run the very command they were already
+  running.
 
 ### Changed — a repair is one recovery run, and a restore undoes the whole run (RFC 168 amendment A1)
 
@@ -40,82 +244,6 @@ never read as cleared. The four rebuildable caches and the worktree files keep t
 A branch switch or checkout appends its target to the worktree marker. A refusal over a torn current-branch pointer under a set
 marker, and the dirty-worktree refusals, now name the command that finishes the interrupted operation, such as
 `prikk branch switch heads/other`. A marker without a target keeps the general wording.
-
-### Output changes — repair messages name the recovery entry; `verify` prints a line for a damaged log
-
-Repair output says `saved to recovery/log, run <id>` in place of `saved to .prikk/recovery/<name>.bytes`. `verify` prints one
-line when `recovery/log` has damage: `recovery log: N damaged region; a save there cannot be restored`. Its exit status and its
-JSON report are unchanged.
-
-### Changed — `bundle import` refuses a bundle whose ref's chain or required attestations are not carried (0.49.0 step 5, round 2, item 1)
-
-An imported bundle's exported ref must carry, or already have, every earlier RefState on its chain
-(`previous_ref_state_id`) and every attestation its RefStates require. Before this, the import checked the
-exported target, blobs, parents and manifests, but not these, so a bundle with a cut chain imported a received
-ref whose history was missing. Honest exports are unaffected: `bundle export` already carries the whole chain
-and every required attestation. The refusal happens before any write, the same as the other closure checks.
-
-### Output changes — a received ref whose previous state is missing is a failed received-ref item (0.49.0 step 5, round 2, item 1)
-
-`verify` reads the previous RefState of each received ref's tip and reports
-`received RefState <id> names missing previous RefState <id>` as that ref's failed item. This is one read per
-received ref, the tip's link only (a received ref has no RefUpdate log to check deeper links against).
-
-### Fixed — resynchronising past a torn or invalid frame was quadratic on crafted content (RFC 167, M5)
-
-The WAL, object containers, trust policy, the received index, the ref log container and the pointer index share
-one scan that, on meeting a torn or invalid frame, checks the rest of the file for a sound frame hidden behind
-it. A file packed with fake frame headers, each claiming a body reaching exactly to the end of the file, made
-that scan quadratic: `verify` over a 2 MiB hostile WAL tail took 13.98 s (0.24 s at 256 KiB), extrapolating to
-hours at 64 MiB; a received blob's bytes sit inside sound frames, so this was reachable from outside the
-repository through `bundle import`/`sync accept` given one torn or damaged frame earlier in the same container.
-**Affected: every release since this scan existed.** Each of the six readers now carries a work budget (bytes
-hashed, at most 8x the input) shared across every candidate the scan visits; a scan the budget cuts short is
-always damage, never a tail — never silently accepted, whatever the cost. Measured at 64 MiB: 0.25–0.29 s on
-both hostile shapes, every affected reader. A second, independent decode of the same WAL that `verify` had
-picked up since 0.49.0's own earlier rounds (RFC 164 Rule E's reachability walk, re-decoding `default`'s WAL a
-second time) is also removed: honest `verify` cost is unchanged from 0.48.0.
-
-### Output changes — a rotted object-container frame that a later commit followed is a failed item (0.49.0 step 5 round 2, U2)
-
-An object-container frame whose full claimed body is present and whose checksum fails is now an interrupted append only
-when a later, sound frame starts **inside the range its own header claims** -- a torn frame that a later write overran.
-Otherwise it is a failed object item, even when later commits follow it. Before this, any checksum failure with bytes
-after it was worded as an interrupted append (a tolerated warning), which is what an earlier object's bit rot, followed
-by ordinary later commits, looked like. The probe that decides is the same budgeted scan a short read uses; exhaustion
-counts as damage. **Also a budget correction:** a candidate's checksum hashes its 18-byte header as well as its body, and
-the budget now charges both (a zero-length candidate used to hash 18 bytes for nothing; a claimed-range file measured at
-12.5x the input, now 4.9x, under the one-decode bound of 9x).
-Every other framed reader (the WAL, trust keys and policy, pointer index, ref container, received index, author keys,
-generation files) now charges its candidates' headers too. Their bound held without it, since their sound-frame probe
-runs once per decode, so this is accounting, not a measured overshoot; no output changes.
-
-### Output changes — a full-length object-container frame with a bad checksum is a damaged record, not an interrupted append (0.49.0 step 5, D11/U5)
-
-An object container frame whose checksum fails is reported as a failed object item (`verify`/`doctor` exit non-zero
-unconditionally) when nothing at all follows its claimed body in the container — previously it was worded and
-counted exactly like a crash-torn frame ("interrupted append... a harmless remnant, not damage"), tolerated as a
-warning and left for connectivity to judge. RFC 165 R5 (§9.2) already drew this line for the ref log container;
-this applies the same rule, narrowed, to object containers: a torn tail is a *prefix* of a frame, and a frame with
-nothing physically after it cannot be one. **Known gap, not fixed this round:** a checksum mismatch where later
-bytes *do* follow the claimed body is still worded as an interrupted append, even when those bytes turn out to
-belong to a later, unrelated frame rather than prove anything about this one — telling the two apart in general
-needs the same budgeted "sound frame hiding in the claimed range" scan the torn-tail path already runs, which is
-unscheduled.
-
-### Output changes — one coherent message when a resynchronisation scan is cut short (RFC 167 D2)
-
-- `doctor`/`verify`, the WAL: `error [PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE]: WAL record at offset <N>
-  failed verification: the bytes after byte offset <N> look like many frame headers` — followed by "stopped
-  checking after 8x the file's size and treats this as damage, not a torn tail" — the repair
-  `--repair-wal-tail` refuses it (it truncates a torn tail only); run `prikk doctor` for diagnosis.
-- The pointer index, trust policy, and the received index report the identical "look like many frame headers
-  ... treats this as damage" text at their own offset; the repair
-  refuses it (the tail repairs truncate a torn tail only); run `prikk doctor` for diagnosis.
-- Object containers and the ref log container report the same text **without** "damage" (their own existing
-  wrapper already says "a harmless remnant, not damage" or "not a harmless remnant until repaired" /
-  "a damaged record ... the way out is a copy", and the inner text no longer contradicts it — RFC 167's own
-  design round found the prototype did, and the review rejected it).
 
 ### Fixed — an acknowledged commit damaged after the fact could read, and be removed, as a crash leftover (RFC 166, N6)
 
@@ -173,61 +301,6 @@ before this change existed. `doctor --repair-tails` additionally rebuilds a dama
 queue's own sound records, when nothing else about the queue is at risk. Commit cost is unchanged on average (one
 durable operation removed, one added); `verify` additionally recomputes the witness's own running hash over the
 full acknowledged queue, catching a substituted *earlier* record a per-record check alone cannot see.
-
-### Output changes — RFC 166's own new codes and lines (stikk: these are new, not renamed; nothing below replaces an existing line)
-
-- `prikk verify`/`prikk doctor`: a new stage, `commit-witness` (`--format json`'s own `stages[].stage` value
-  `"commit-witness"`), and a new report line, `acknowledged commits: <state>` (`none recorded`, `confirmed through
-  sequence N`, `pending (confirmed through <N or "nothing yet">, WAL sound through N)`, `agree with the sound
-  prefix; the trailing bytes are an unacknowledged crash tail`, `sequence N is damaged`, `sequence N is no longer
-  present in the WAL`, `sequence N does not match the queued commit you were told had succeeded`, `unreadable, and
-  the WAL has an unexplained tail that cannot be classified`, `unreadable`, `no durable owner can be confirmed for
-  this session`, or `unknown (stage did not evaluate)`).
-- `prikk verify`: when the acknowledgment record reads healthy, one further line, `acknowledged commits history:
-  agrees` or `disagrees` (D4, row 10) — printed only in that one case.
-- `prikk verify --format json`: two new verdict condition ids, `commit-witness-integrity` and
-  `commit-witness-substituted-earlier-record`, each with its own `message`, following the existing
-  `verify-report-v1` shape (an additive key set, not a schema version bump).
-- `prikk doctor`: new codes `PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE`, `-ACKNOWLEDGED-LOSS`,
-  `-SUBSTITUTED-RECORD`, `-UNKNOWN`, `-DAMAGED` (warning), `-OWNERSHIP-MISSING`, and `-STALE` (info) for the
-  default active session, each with an `ACTIVE-SESSION-` counterpart (plus its own `-UNREADABLE`) for a
-  non-default one.
-- `prikk status`: a new line when the next `commit`/`seal` would refuse on the acknowledgment record
-  (`warning: the next commit or seal will refuse: <reason>`), and a new line when a queued commit was durably
-  written but not yet confirmed (`note: a queued commit was already written but not confirmed, either because a
-  previous command was interrupted after its own durable write or because an older prikk wrote it`) — silent in
-  every other case, including a stale (connectivity-confirmed drained) acknowledgment record, which only `doctor`
-  notes.
-- `commit`'s own "no node-addressed changes to commit" refusal now has a second shape: when the active WAL already
-  durably holds the exact commit being retried, the message instead says a queued commit was already written but
-  not confirmed (the same two indistinguishable causes `status`'s own new note names).
-- The refusal text for rows 4, 5, 7 and 9 (`commit`/`rollback-draft`/`seal`/`status`/`doctor`, and each of their
-  `PRIKK-DOCTOR-*` recommendation lines) now names the specific verb that is the way out
-  (`--discard-damaged-commits` for rows 4, 5 and 7; `--restore-queue-target --ref <ref>` for row 9), replacing
-  earlier text that only said a crash-tail repair would not help.
-- `prikk doctor --discard-damaged-commits`/`--plan-only`: new output lines — `acknowledged commit at sequence N
-  (patch <id>)` or `unexplained tail -- the witness itself could not be read`; `N bytes saved to <path> before
-  truncation` or `nothing to truncate -- the acknowledged commit is already gone from the WAL`; `this content may
-  still be in your working tree` (only when true — this note is now computed correctly; it previously never fired
-  at all); `plan only -- nothing written` or `damaged commit discarded`.
-- Row 9's own refusal text (`commit`/`rollback-draft`/`seal`/`status`) names a concrete, runnable
-  `--restore-queue-target` command rather than a placeholder `<ref>`: the session's own commit record's ref when
-  one is readable, else the caller's current branch, else a direction to supply `--ref` and `--not-current-branch`
-  explicitly. No internal words (`"durable, matching owner"`) remain in any of these four surfaces' own text.
-- `prikk doctor --restore-queue-target --ref <ref> [--not-current-branch]`/`--plan-only`: new output lines —
-  `restoring N queued commit(s) to <ref>:`, followed by one numbered line per queued commit (its own message, or
-  `(no message)`, and the paths it touches); `<ref> is currently at: <description>` or `<ref> has never been
-  published -- these would be its first commits`; the one-sentence uncertainty disclosure, "prikk cannot tell
-  which branch these commits were made on; your current branch is assumed. If you made them with `--ref`,
-  restore to that branch." (only when no commit record decided the ref and `--not-current-branch` was not
-  given); `plan only -- nothing written` or the next-step line, "the N queued commit(s) now belong to `<ref>`;
-  publish them with `prikk seal --allow-no-audit`". Replaces the original round-2 design's own `<ref>'s current
-  tip is block <id>` and ambiguity-list lines, both removed per RFC 166 §14 (a tip-matching check answered
-  nothing this verb actually needed, and let a queue be silently attached to the wrong branch).
-- `prikk doctor --restore-queue-target` gains `--not-current-branch`: required to restore to a ref other than
-  the caller's own current branch, or when the current branch cannot be resolved at all, whenever there is no
-  commit record to decide the ref instead (RFC 166 §14). Without it, the refusal names both the current branch
-  and the requested one, and never simply says to add the flag.
 
 ### Fixed — a killed `bundle import` or `sync accept` could leave a dangling forward reference no repair cleared
 
@@ -300,32 +373,6 @@ too, not only a torn prefix).
 types) — one row per file, reporting a tail (a warning, never failing `verify` alone) or interior damage (a failure)
 independently of whether some other check happens to touch the file first. `has_item_failure` now also considers a
 row's own interior damage. `RepositoryVerification` was already `#[non_exhaustive]`; this is additive.
-
-### Security — a corrupted (not torn) last record could silently revert trust or ref state
-
-**Code history (when the shape first shipped) and measurement (which released versions were actually tested) are
-kept apart below** — the code dates to 0.20.0 for all three files, but only 0.46.0, 0.47.0, and 0.48.0 were
-measured; earlier releases are not confirmed either way.
-
-**Measured with one reader per file** (`trust maintainer check` for the trust policy, `branch list` for the
-pointer index and its generation log) — not every reader; round 2's own exhaustive, all-reader sweep against the
-*fixed* 0.49.0 build is what the "every reader" claim is good for, not these historical releases.
-
-| released | trust policy, last snapshot | pointer index, last record | pointer-index generation log, last record |
-|---|---|---|---|
-| 0.46.0 | **length field flipped:** `trust maintainer check` reports the removed maintainer trusted again; `verify` exits **0** (0.46.0's `verify` does not read the trust files at all) | **length field flipped:** `branch list` shows the previous publication's tip; `verify` exits 1 | **length field flipped:** `branch list` resolves the previous (stale) slot; `verify` exits 1 |
-| 0.47.0 | the same | the same | the same |
-| 0.48.0 | **length field flipped:** the same, `verify` exits **0** | **every byte, header or body, flipped:** `branch list` shows the previous tip, with **no repair run at all**; separately, `doctor --repair-pointer-index-tail` on a **body**-flipped record removes it, reverting the tip itself | **refuses** (0.48.0's own one-byte-body rule rejects any length other than exactly one, so a length flip never resolves as a tail here) |
-
-A flipped **magic** or **version** byte is refused on every released version measured — that rollback shape existed
-only in this release's own, unreleased Rule A (RFC 164), never in a shipped version. **Code first shipped in 0.20.0**
-(trust policy: `2827fab7`; pointer index: `0550e340`; the three generation logs: `b33d1942`) — confirmed from
-history, not measured directly; the measurements above are 0.46.0 through 0.48.0 only. **Affected: 0.46.0 through
-0.48.0 (measured); the same code shipped from 0.20.0, not independently confirmed on 0.20.0–0.45.0. No advisory
-(disclosure only, per the owner's ruling). Action: upgrade; `verify` now detects and reports every shape above.**
-
-Fixed in this release by RFC 164 §9 and §9.2 (below): completeness is decided by the checksum, not by whether the
-header's own magic, version, or length happens to look valid.
 
 ### Fixed — RFC 164 §9 and §9.2: a complete record is never a tail, even when it is last, however it is corrupted
 
@@ -423,89 +470,32 @@ otherwise bury it further. A refusal here writes nothing. **`sync seal` is uncha
 existing, unscoped precondition calls stay as they are — it remains locked out of its own interrupted
 publication, a known, disclosed gap carried to the next round, not worked around here.
 
-### Output changes
+### Fixed — a corrupted (not torn) last record was read as a torn tail: trust policy or ref state could silently revert, for example a removed maintainer key coming back
 
-- A completable pointer lead reports `PRIKK-VERIFY-REF-POINTER-LEADS-LOG` and `doctor` now names
-  `prikk ref complete <ref>` (RFC 165 R4) — the old, seal-specific "run signer-backed `prikk seal
-  --allow-no-audit`" recommendation was wrong for a `branch create`/`tag create`/`merge`-shaped lead,
-  which it could never actually apply to. A lead that fails R4's own rule stays
-  `PRIKK-VERIFY-REF-DIVERGENCE`.
-- `branch create`, `branch close`, `tag create`, and `sync adopt-tag` can now say `"branch <ref> has
-  an interrupted publication; run `prikk ref complete <ref>` to finish it"` (`"tag <ref> has an
-  interrupted publication…"` for the latter two) in place of the old, permanent-reading "already
-  exists"/"already closed", when their own ref's own pointer is a completable lead; `merge` says `"ref
-  <into-ref> has an interrupted publication; run `prikk ref complete <into-ref>` before merging into
-  it"`, refusing before gathering evidence rather than building on a pointer its own log has not
-  caught up to.
-- `prikk doctor --rebuild-pointer-index [--plan-only]` is new (RFC 165 R5): prints, per ref, its state
-  before and after, and every dropped lead or restored ref; refuses with `"<N> ref(s) have a
-  completable lead; run `prikk ref complete <ref>` first -- a rebuild would drop an authorized
-  transition: <ref list>"` over any completable lead anywhere, or with the ref log's own damage/tail
-  message (below) over ref-log damage.
-- `prikk compact --pointer-index`/`--received-index`/`--trust-policy` can now refuse with the live
-  slot's own tail/damage message (the same text `seal`/`branch create`/`tag create`/`merge` already
-  give for the pointer index specifically) before truncating or writing anything, when the slot
-  `compact` is about to read and reduce itself ends in a torn tail — carried from RFC 164 round 2,
-  landed here. `--plan-only` is unaffected.
-- `prikk rollback-draft --append-inverse` has refused while another ref's own publication is
-  incomplete (`ensure_no_incomplete_publication`, the same RFC 163 R3 refusal `commit` and six other
-  writers already have a line for above) since RFC 163 — carried from RFC 164 round 2's own release-prep
-  list; this is the first `CHANGELOG` mention it has had.
-- The three generation-log tail refusals (`"back it up, truncate it to the named offset, then run
-  `prikk verify`"`, from `compact`'s own precheck and from the rebuild above) now say `"run `prikk
-  doctor --repair-tails`, then retry"` instead — `--repair-tails` already covers all three generation
-  logs, and the old advice predated that coverage.
-- `seal`, `branch create`, `branch close`, `tag create`, `sync adopt-tag`, and `merge` can now refuse
-  with `"repository mutation is blocked by incomplete ref publication; run verify/doctor and use
-  signer-backed seal retry"` before writing anything, when a *different* ref's own publication is
-  incomplete (RFC 165 R3) — the same text `commit` already gave, now reachable from six more commands.
-- The same six commands can also now refuse with `"the ref log has an incomplete tail at byte offset
-  N (M byte(s) follow); a repair arrives with RFC 165 R5"` before writing anything, when the ref log
-  container has a tail with no pointer lead — zeros, random bytes, or a torn prefix left for a reason
-  unrelated to a pending write (RFC 165 Addendum 1 §1, RFC 164 Rule D). Distinct from the refusal
-  above on purpose: `commit` and every other non-publishing writer proceed over this shape instead of
-  refusing, since a lead-free tail is not an incomplete publication and naming a seal retry for it
-  would be misleading — only a writer that itself appends to the ref log must refuse over it.
-- `verify` gains an `unreferenced remnants: N` line, plus one warning line per remnant naming the
-  owner, the missing object, and its role (RFC 164 round 2 Rule E): `"object <owner> references
-  missing <role> <id> -- re-run the import if you still have the bundle; otherwise it is harmless"` —
-  the same canonical form (RFC 165 R6) the blocking version of this message below already used; the
-  warning's own first draft carried an owner/missing-object type prefix the blocking form never had
-  (`<role>` already names what kind of thing is missing — "parent block", "block patch", "snapshot
-  blob" — so the type names repeated it), corrected before release rather than shipped and fixed later.
-  `doctor` gains the matching `PRIKK-DOCTOR-UNREFERENCED-REMNANT` warning code. `verify --format
-  json`'s own `verify-report-v1` schema is unaffected: item-level findings are out of its v1 scope,
-  unchanged by this addition.
-- `object <owner> references missing <role> <id>` no longer fires for a Block that is not itself
-  reachable from committed state (RFC 164 round 2 Rule E) — it is the warning above instead.
-- `seal`, `tag create`, `merge`, and `sync seal` can now refuse with the pointer index's own tail/damage
-  message (`"the ref pointer index has an incomplete tail…"` / `"ref pointer index has a damaged
-  entry…"`) before writing any object at all, not only at the later compare-and-swap step (RFC 164 Rule
-  D); the message text is unchanged, only when it can fire moved earlier.
-- A new author's first `commit` can now refuse with the author-key container's own tail/damage message
-  before writing its blob, object-index entry, or updating the commit-index/lifecycle caches (RFC 164
-  Rule D); the message text is unchanged, only when it can fire moved earlier.
-- `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file, plus a warning line
-  naming the file, the offset, the byte count, and the repair when `N != 0`, plus a failure line on interior damage.
-  It also gains one `trailing partial <type> container bytes: N` line per persisted object type (N7, above).
-  `verify --format json`'s own `verify-report-v1` schema is unaffected by either: the new `AppendedFileTails` stage
-  participates in the existing per-stage `evaluated`/`failed` reporting like any other stage, with no new field, and
-  the object-container line lives under the pre-existing `Objects` stage the same way.
-- `doctor` gains three new diagnostic codes: `PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL` (warning) and
-  `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` (error), one per Rule A file with a finding, and
-  `PRIKK-DOCTOR-OBJECT-CONTAINER-TRAILING-PARTIAL` (warning), one per object type with a finding (N7).
-- Refusals that end: `"<container> has a damaged entry; run doctor before reading"` and `"generation log has a
-  damaged record; run doctor before reading"` no longer fire for a plain trailing run of zero or random bytes at
-  the end of one of these seven files, nor for a single corrupted header field (magic, version, or length) in an
-  otherwise complete last record (§9.2) — only for genuine interior damage does, which now covers both shapes
-  (previously silently repaired into a rollback, or rolled back by a reader before any repair ran, not reported
-  at all).
-- `prikk doctor --repair-tails` on a repository whose pointer-index generation log has interior damage: **names the
-  file and says nothing was touched** (`"--repair-tails refuses: 1 file(s) have interior damage, not a tail --
-  nothing was touched: pointer index generation log: …"`), the same uniform shape every other covered file's own
-  damage already refused with; it used to print that generation log's own reader refusal verbatim (`"generation log
-  has a damaged record; run doctor before reading"`), telling the user to run the very command they were already
-  running.
+**Code history (when the shape first shipped) and measurement (which released versions were actually tested) are
+kept apart below** — the code dates to 0.20.0 for all three files, but only 0.46.0, 0.47.0, and 0.48.0 were
+measured; earlier releases are not confirmed either way.
+
+**Measured with one reader per file** (`trust maintainer check` for the trust policy, `branch list` for the
+pointer index and its generation log) — not every reader; round 2's own exhaustive, all-reader sweep against the
+*fixed* 0.49.0 build is what the "every reader" claim is good for, not these historical releases.
+
+| released | trust policy, last snapshot | pointer index, last record | pointer-index generation log, last record |
+|---|---|---|---|
+| 0.46.0 | **length field flipped:** `trust maintainer check` reports the removed maintainer trusted again; `verify` exits **0** (0.46.0's `verify` does not read the trust files at all) | **length field flipped:** `branch list` shows the previous publication's tip; `verify` exits 1 | **length field flipped:** `branch list` resolves the previous (stale) slot; `verify` exits 1 |
+| 0.47.0 | the same | the same | the same |
+| 0.48.0 | **length field flipped:** the same, `verify` exits **0** | **every byte, header or body, flipped:** `branch list` shows the previous tip, with **no repair run at all**; separately, `doctor --repair-pointer-index-tail` on a **body**-flipped record removes it, reverting the tip itself | **refuses** (0.48.0's own one-byte-body rule rejects any length other than exactly one, so a length flip never resolves as a tail here) |
+
+A flipped **magic** or **version** byte is refused on every released version measured — that rollback shape existed
+only in this release's own, unreleased Rule A (RFC 164), never in a shipped version. **Code first shipped in 0.20.0**
+(trust policy: `2827fab7`; pointer index: `0550e340`; the three generation logs: `b33d1942`) — confirmed from
+history, not measured directly; the measurements above are 0.46.0 through 0.48.0 only. **Affected: 0.46.0 through
+0.48.0 (measured); the same code shipped from 0.20.0, not independently confirmed on 0.20.0–0.45.0. No advisory
+(disclosure only, per the owner's ruling). Action: upgrade; `verify` now detects and reports every shape above.**
+
+Fixed in this release by RFC 164 §9 and §9.2 (below): completeness is decided by the checksum, not by whether the
+header's own magic, version, or length happens to look valid.
+
 
 ## 0.48.0 — 2026-09-30
 
