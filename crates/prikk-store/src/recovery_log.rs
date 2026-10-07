@@ -635,10 +635,20 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
         layout,
         &ref_pointer_index_generation_log_path,
     )?;
-    if source == relative(&layout.ref_pointer_index_slot_path(pointer_slot))? {
-        return Ok(vec![relative(
-            &layout.ref_log_container_slot_path(ContainerSlot::A),
-        )?]);
+    // Part F2 (the review): either slot, not only the one currently live. A rebuild's own undo
+    // entries (`pointer_rebuild.rs`) name first the retiring slot, then the newly live one, as its
+    // own run's two `Replace` entries -- liveness flips, by construction, between when each entry is
+    // written and when a restore is later attempted, and flips again on a second restore of the same
+    // run (A1 item 5). Conditioning this table's own answer on current liveness made a restore and a
+    // second restore of the identical entry disagree with each other, never only with the writer.
+    // Unconditional on either slot is also the more accurate rule: a slot's own claimed positions
+    // need the ref log's agreement regardless of which slot happens to be live when asked.
+    for slot in [ContainerSlot::A, ContainerSlot::B] {
+        if source == relative(&layout.ref_pointer_index_slot_path(slot))? {
+            return Ok(vec![relative(
+                &layout.ref_log_container_slot_path(ContainerSlot::A),
+            )?]);
+        }
     }
     if source == relative(&layout.ref_log_container_slot_path(ContainerSlot::A))?
         || source == relative(&layout.ref_log_container_slot_path(ContainerSlot::B))?

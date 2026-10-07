@@ -362,9 +362,10 @@ fn a_damaged_newest_pointer_record_falls_back_to_a_stale_one_and_is_restored_not
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Part F, Option B (the review): before the rebuild flips away from the live slot, it saves a full
-/// copy of it -- and of the generation log's own before/after bytes -- to the recovery log under
-/// its own run, so `--recovery-restore <run id>` can undo the whole switch, byte for byte.
+/// Part F/F2, Option B (the review): before the rebuild flips away from the live slot, it saves a
+/// full copy of it, of the target slot's own pre-rebuild bytes, and of the generation log's own
+/// before/after bytes, to the recovery log under one run, so `--recovery-restore <run id>` can undo
+/// the whole switch, byte for byte, across all three files.
 #[test]
 fn rebuild_then_restore_reproduces_the_pointer_index_and_generation_state_byte_for_byte() {
     let root = unique_temp_dir("rfc165-r5-rebuild-recovery-way-back");
@@ -393,6 +394,8 @@ fn rebuild_then_restore_reproduces_the_pointer_index_and_generation_state_byte_f
 
     let slot_a_before =
         std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A)).unwrap();
+    let slot_b_before =
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::B)).unwrap();
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
     let generation_before = std::fs::read(&generation_log_path).unwrap();
     let store = RefStore::new(layout.clone());
@@ -429,14 +432,17 @@ fn rebuild_then_restore_reproduces_the_pointer_index_and_generation_state_byte_f
     );
     assert!(restored.written, "the restore must have written");
 
-    // The rebuild's own target slot (B) is never touched by the restore -- Option B's own promise
-    // is the live slot and the generation record, not every physical slot's bytes; B's now-stale,
-    // unreferenced content is harmless, the same shape any retired slot's leftover bytes already
-    // are elsewhere in this design.
+    // Part F2: the restore puts back all three files -- slot A, slot B (the rebuild's own target,
+    // now reverted too), and the generation log -- byte for byte.
     assert_eq!(
         std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A)).unwrap(),
         slot_a_before,
         "slot A must be byte-identical to before the rebuild"
+    );
+    assert_eq!(
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::B)).unwrap(),
+        slot_b_before,
+        "slot B must be byte-identical to before the rebuild too"
     );
     assert_eq!(
         std::fs::read(&generation_log_path).unwrap(),
@@ -447,6 +453,102 @@ fn rebuild_then_restore_reproduces_the_pointer_index_and_generation_state_byte_f
         store.read_current_ref_state_id("heads/main").is_err(),
         "byte-identical means behaviorally identical too: the damaged state the rebuild fixed is \
          now back, refusing exactly as it did before"
+    );
+
+    // The case table's row 4: restoring an already-restored run is done, not re-applied or refused
+    // (A1 item 5) -- a restore interrupted part-way, or simply run twice, must not double-write.
+    let restored_again = crate::recovery_restore(&layout, &run_id, false).unwrap();
+    assert!(
+        restored_again.refusal.is_none(),
+        "a second restore of the same run must not refuse: {:?}",
+        restored_again.refusal
+    );
+    assert!(
+        restored_again.steps.iter().all(|step| step.done),
+        "every step must already hold what it would write: {:?}",
+        restored_again.steps
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Part F2, the case table's row 2 (the review): a restore must refuse once ordinary work has
+/// landed in the rebuild's own target slot since -- a new branch, created after the rebuild,
+/// appends only to the now-live slot B and the ref log; restoring slot B back to its pre-rebuild
+/// bytes would silently drop that branch. The target slot's own saved `new_hash` is what catches
+/// this: the write after the rebuild changes B's hash, so the condition fails and the whole run
+/// refuses, writing nothing.
+#[test]
+fn a_restore_refuses_once_an_ordinary_write_has_landed_in_the_rebuilt_slot() {
+    let root = unique_temp_dir("rfc165-r5-rebuild-recovery-refuses-after-later-write");
+    let layout = setup(&root);
+    let target1 = new_block(&layout, None, 1);
+    let seq1 = fully_publish(&layout, "heads/main", target1, &original_signer(), None, 1);
+    let target2 = new_block(&layout, Some(target1), 2);
+    fully_publish(
+        &layout,
+        "heads/main",
+        target2,
+        &original_signer(),
+        Some(seq1),
+        2,
+    );
+
+    let pointer_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let mut bytes = std::fs::read(&pointer_path).unwrap();
+    let first_record_len = bytes.len() / 2;
+    let flip_at = first_record_len + 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&pointer_path, bytes).unwrap();
+
+    let slot_a_before =
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A)).unwrap();
+    let generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let generation_before = std::fs::read(&generation_log_path).unwrap();
+
+    let plan = rebuild_pointer_index(&layout).unwrap();
+    assert!(plan.wrote, "fixture: the damaged record must force a write");
+
+    // Ordinary work continues on the now-live (rebuilt) slot: a new branch.
+    let target3 = new_block(&layout, Some(target2), 3);
+    let seq3 = fully_publish(&layout, "heads/topic", target3, &original_signer(), None, 1);
+
+    let listing = crate::recovery_list(&layout).unwrap();
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "pointer index rebuild")
+        .map(|entry| entry.id.clone())
+        .expect("the rebuild must save its own way back under a recognizable label");
+
+    let restored = crate::recovery_restore(&layout, &run_id, false).unwrap();
+    assert!(
+        restored.refusal.is_some() || !restored.written,
+        "a restore after a later write to the rebuilt slot must not silently succeed: {restored:?}"
+    );
+    assert!(
+        !restored.written,
+        "a refused restore must write nothing: {restored:?}"
+    );
+
+    // Nothing moved: slot A and the generation log are exactly as the rebuild (not the restore)
+    // left them, and the branch written after the rebuild still reads.
+    assert_eq!(
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A)).unwrap(),
+        slot_a_before,
+        "a refused restore must not touch slot A"
+    );
+    assert_ne!(
+        std::fs::read(&generation_log_path).unwrap(),
+        generation_before,
+        "a refused restore must not touch the generation log; it still names the rebuilt slot live"
+    );
+    let store = RefStore::new(layout.clone());
+    assert_eq!(
+        store.read_current_ref_state_id("heads/topic").unwrap(),
+        Some(seq3),
+        "the branch written after the rebuild must still read: a dropped restore attempt must not \
+         have lost it"
     );
 
     let _ = std::fs::remove_dir_all(&root);

@@ -431,52 +431,28 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     let wrote = !per_ref.iter().all(|entry| entry.before == entry.after);
 
     if mode == RebuildMode::Execute && wrote {
-        // Part F, Option B (the review): before flipping away from the live slot, save a full,
-        // untouched copy of it to the recovery log, under one run with the generation log's own
-        // before/after bytes below -- `--recovery-restore <run id>` undoes both in one step,
-        // reproducing the pre-rebuild state byte for byte, not just a functionally equivalent one.
+        // Part F, Option B (the review), corrected by Part F2: before flipping away from the live
+        // slot, capture every byte this rebuild is about to leave behind or overwrite, then save all
+        // three (slot A, slot B, the generation log) to the recovery log under one run. `meaning_
+        // paths_for`'s pointer-index row no longer conditions its answer on which slot happens to be
+        // live (fixed alongside this, in `recovery_log.rs`): a rebuild's own flip, by construction,
+        // changes which slot that is, between the write and any later restore, and again on a second
+        // restore of the same run (A1 item 5) -- a liveness-conditioned answer could never agree with
+        // itself across all three of those moments.
         let _run = crate::recovery_log::begin_run();
         let root = layout.repository_mutation_root();
-        let live_relative =
-            layout.repository_relative(&layout.ref_pointer_index_slot_path(live_slot))?;
         #[cfg(test)]
         let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare(
             "pointer-index-rebuild-recovery-save",
         );
+        let live_relative =
+            layout.repository_relative(&layout.ref_pointer_index_slot_path(live_slot))?;
         let live_bytes = read_file_if_exists(root, &live_relative)?.unwrap_or_default();
-        let live_source = live_relative.to_string_lossy().replace('\\', "/");
-        // The live slot's own bytes are never written by this rebuild -- `written` equals
-        // `previous` -- so the saved entry's own `new_hash` stays valid until something else
-        // (ordinarily, the next compaction) touches this slot, at which point a restore correctly
-        // refuses rather than overwrite what that later write left.
-        //
-        // Built directly, not through `save_replace` (which calls `meaning_paths_for` itself): that
-        // table's own pointer-index row names the ref log's live slot as the meaning file *because
-        // this source is currently live* -- true when this entry is written, false the moment the
-        // switch below lands, so a restore's own fresh call to the same function would read back a
-        // different answer than the one just saved and refuse every time, never a stale mismatch.
-        // The slot's own `new_hash` check already guards against a later write touching it; no
-        // second file's state decides this one's meaning.
-        crate::recovery_log::append(
-            root,
-            &crate::recovery_log::Entry {
-                kind: crate::recovery_log::Kind::Replace,
-                run: [0; 8],
-                source: live_source,
-                offset: 0,
-                label: "pointer index rebuild".to_string(),
-                binary_version: env!("CARGO_PKG_VERSION").to_string(),
-                prefix_hash: prikk_hash::sha256(&live_bytes),
-                meaning: Vec::new(),
-                removed: live_bytes.clone(),
-                new_hash: prikk_hash::sha256(&live_bytes),
-            },
-        )?;
 
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.ref_pointer_index_slot_path(target_slot))?;
-        truncate_file_empty_required(root, &target_relative)?;
+        let target_before_bytes = read_file_if_exists(root, &target_relative)?.unwrap_or_default();
         let mut buffer = Vec::new();
         for record in &discovery.records {
             let entry = PointerIndexEntry {
@@ -486,6 +462,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
             };
             buffer.extend_from_slice(&encode_pointer_index_record(&entry)?);
         }
+        truncate_file_empty_required(root, &target_relative)?;
         append_file_required(root, &target_relative, &buffer)?;
 
         let generation_log_relative =
@@ -501,6 +478,52 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         )?;
         let generation_log_after =
             read_file_if_exists(root, &generation_log_relative)?.unwrap_or_default();
+
+        // The live slot's own bytes are never written by this rebuild -- `written` equals
+        // `previous` -- so the saved entry's own `new_hash` stays valid until something else
+        // (ordinarily, the next compaction) touches this slot, at which point a restore correctly
+        // refuses rather than overwrite what that later write left. The target slot's `new_hash` is
+        // what makes row 2 of the review's case table refuse: any ordinary write landing there after
+        // the rebuild (a new branch, a publication) changes its hash, and a restore correctly
+        // refuses rather than silently drop it.
+        let live_source = live_relative.to_string_lossy().replace('\\', "/");
+        let target_source = target_relative.to_string_lossy().replace('\\', "/");
+        crate::recovery_log::append(
+            root,
+            &crate::recovery_log::Entry {
+                kind: crate::recovery_log::Kind::Replace,
+                run: [0; 8],
+                source: live_source.clone(),
+                offset: 0,
+                label: "pointer index rebuild".to_string(),
+                binary_version: env!("CARGO_PKG_VERSION").to_string(),
+                prefix_hash: prikk_hash::sha256(&live_bytes),
+                meaning: crate::recovery_log::meaning_now(
+                    root,
+                    &crate::recovery_log::meaning_paths_for(layout, &live_source)?,
+                )?,
+                removed: live_bytes.clone(),
+                new_hash: prikk_hash::sha256(&live_bytes),
+            },
+        )?;
+        crate::recovery_log::append(
+            root,
+            &crate::recovery_log::Entry {
+                kind: crate::recovery_log::Kind::Replace,
+                run: [0; 8],
+                source: target_source.clone(),
+                offset: 0,
+                label: "pointer index rebuild".to_string(),
+                binary_version: env!("CARGO_PKG_VERSION").to_string(),
+                prefix_hash: prikk_hash::sha256(&target_before_bytes),
+                meaning: crate::recovery_log::meaning_now(
+                    root,
+                    &crate::recovery_log::meaning_paths_for(layout, &target_source)?,
+                )?,
+                removed: target_before_bytes,
+                new_hash: prikk_hash::sha256(&buffer),
+            },
+        )?;
         let generation_log_source = generation_log_relative.to_string_lossy().replace('\\', "/");
         crate::recovery_log::save_replace(
             layout,

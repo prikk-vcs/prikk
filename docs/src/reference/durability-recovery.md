@@ -346,14 +346,13 @@ new slot nor a new generation record, and says so ("pointer index already matche
 written") — before this round it wrote a new generation unconditionally, even over an already-healthy
 index.
 
-**The way back (0.50.0 step 1 Part F):** before flipping away from the live slot, a real run saves a
-full copy of it, and the generation log's own before/after bytes, to the recovery log under one run --
-`prikk doctor --recovery-restore <id>` undoes the switch byte for byte, rewriting the retired slot and
-re-appending a generation record naming it live again. The rebuild's own new slot is never touched by
-the restore: its content stays on disk, unreferenced once the generation log points elsewhere again,
-the same shape any retired slot's own leftover bytes already take. A restore refuses if anything since
-has changed what it would overwrite — the slot's own saved hash, checked fresh, is what decides that,
-not a second file's state.
+**The way back (0.50.0 step 1 Parts F/F2):** before flipping away from the live slot, a real run
+saves a full copy of it, the rebuilt slot's own pre-rebuild bytes, and the generation log's own
+before/after bytes, to the recovery log under one run -- `prikk doctor --recovery-restore <id>` undoes
+the switch byte for byte, rewriting both slots and re-appending a generation record naming the old
+slot live again. A restore refuses, and writes nothing, if anything since has changed what it would
+overwrite — most notably an ordinary write landing in the rebuilt slot (a new branch, a publication):
+its own saved hash, checked fresh at restore time, is what catches that, not a second file's state.
 
 ## A Write Never Buries a Crash State (RFC 163)
 
