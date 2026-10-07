@@ -15,12 +15,13 @@
 //! no second list to forget.
 //!
 //! **Not exhaustive over every predicate `RepositoryVerification` exposes, deliberately.**
-//! `has_trailing_partial_wal`, `has_active_wal_metadata_warning`, and `has_commit_witness_warning`
-//! are excluded on purpose: all three are warning-severity findings, already surfaced as
-//! `println!("warning: ...")` lines in `print_verify_report` rather than contributing to its `Err`
-//! chain, matching the warning/error severity split `doctor`'s own report already draws
-//! (`DoctorSeverity::Warning` vs `Error`). A repository with only these findings verifies cleanly
-//! today, and this declaration does not change that.
+//! `has_trailing_partial_wal`, `has_active_wal_metadata_warning`, `has_commit_witness_warning`, and
+//! (0.50.0 step 1, A4) `has_current_branch_warning` are excluded on purpose: all four are
+//! warning-severity findings, already surfaced as `println!("warning: ...")` lines in
+//! `print_verify_report` rather than contributing to its `Err` chain, matching the warning/error
+//! severity split `doctor`'s own report already draws (`DoctorSeverity::Warning` vs `Error`). A
+//! repository with only these findings verifies cleanly today, and this declaration does not
+//! change that.
 
 use prikk_store::RepositoryVerification;
 

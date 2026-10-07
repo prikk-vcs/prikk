@@ -186,20 +186,27 @@ fn current_index_file_length(layout: &RepositoryLayout) -> Result<u64> {
 /// RFC 162 rule 1: the object index is a pure cache, and a reader never refuses while the containers
 /// are sound. Unlike `foundation::index::lookup_object_location` (kept as the foundation-layer
 /// primitive that still refuses on damage -- `foundation` must not depend on `crate::lock`, so it
-/// cannot rebuild itself), this is the object-store layer's own lookup: if the index is damaged, it
-/// scans the containers in memory (`rebuild_index_from_containers`, the same scan `doctor
-/// --repair-index` uses, but without installing anything) and searches the scanned entries -- this is
-/// the round's chosen half of rule 1's "a reader falls back to scanning the containers, or rebuilds
-/// under the lock." Scanning, not persisting, was chosen for every unlocked caller specifically
-/// because persisting from here would be a hidden write: this function's callers include `verify`
-/// (documented read-only end to end, RFC 111 §6.1) and `ObjectWriteSession`'s own pre-lock decision
-/// path, whose refusal (`import_bundle`'s own contract) must leave the repository exactly as it found
-/// it. The cost is measured in the round's report (X3): the common, sound case costs exactly what it
-/// always did (one index decode, no lock, no scan), and only the rare damaged case pays for a full
+/// cannot rebuild itself), this is the object-store layer's own lookup: if the index is damaged, **or
+/// has a trailing-partial tail (0.50.0 step 1, A5)**, it scans the containers in memory
+/// (`rebuild_index_from_containers`, the same scan `doctor --repair-index` uses, but without
+/// installing anything) and searches the scanned entries -- this is the round's chosen half of rule
+/// 1's "a reader falls back to scanning the containers, or rebuilds under the lock." A5's own defect:
+/// the most-recently-written object's index entry is exactly the one a crash leaves torn (the record
+/// is durable in its own container before the index is appended), and the tail-only branch used to
+/// search only `replay.entries`, which never contains that record -- reporting it `None` ("not
+/// found") though the object is fully sound, a false "missing object" indistinguishable here from a
+/// real one until the caller's own context (a ref's `verify` scan, say) turns it into one. The
+/// trailing-partial case must take the identical fallback the damaged case already does, not a
+/// narrower one. Scanning, not persisting, was chosen for every unlocked caller specifically because
+/// persisting from here would be a hidden write: this function's callers include `verify` (documented
+/// read-only end to end, RFC 111 §6.1) and `ObjectWriteSession`'s own pre-lock decision path, whose
+/// refusal (`import_bundle`'s own contract) must leave the repository exactly as it found it. The
+/// cost is measured in the round's report (X3): the common, sound case costs exactly what it always
+/// did (one index decode, no lock, no scan), and only the rare damaged-or-tailed case pays for a full
 /// container rescan.
 fn resolve_object_location(layout: &RepositoryLayout, id: ObjectId) -> Result<Option<IndexEntry>> {
     let replay = index::replay_index(layout)?;
-    let entries = if replay.has_item_failure() {
+    let entries = if replay.has_item_failure() || replay.trailing_partial_bytes != 0 {
         index::rebuild_index_from_containers(layout)?
     } else {
         replay.entries
@@ -339,17 +346,39 @@ impl IndexSnapshot {
     /// any write), and never persists anything on damage -- see `resolve_object_location`'s own doc for
     /// why an unlocked path must not have a hidden write side effect (`verify`'s read-only contract,
     /// `import_bundle`'s all-or-nothing refusal). Scans the containers in memory instead.
+    ///
+    /// 0.50.0 step 1, A5: a trailing-partial tail with no `Failed` item used to be read as "nothing
+    /// to rebuild for," the same oversight `resolve_object_location`'s own fix carries the full
+    /// account of. The most-recently-written object's index entry is exactly the one a crash leaves
+    /// torn, so `replay.entries` alone silently omits it -- `verify`'s own ref-publication scan,
+    /// built on this snapshot (`ObjectReadSnapshot`), read that object as a missing `RefState` though
+    /// its container record was fully sound, failing a stage that nothing had actually damaged.
+    ///
+    /// The tail case keeps `known_length` at the sound prefix's own extent (`replay_index_with_
+    /// extent`'s own `known_length`, excluding the torn bytes) rather than the raw stat size used
+    /// for interior damage below -- a first fix here used the raw stat size for both, which told a
+    /// later `ensure_current_locked` the tail was already accounted for, so a write appended behind
+    /// it instead of rebuilding the index on disk first (rule 1's writer half), exactly the
+    /// sandwiching rule 1 exists to prevent. This snapshot's own entries are still the full rescan,
+    /// correct for a read happening before any write; only the writer's own later re-check needed
+    /// the tail left visible.
     fn open(layout: &RepositoryLayout) -> Result<Self> {
         let (replay, known_length) = index::replay_index_with_extent(layout)?;
-        if !replay.has_item_failure() {
+        if replay.has_item_failure() {
             return Ok(Self {
-                entries: replay.entries,
+                entries: index::rebuild_index_from_containers(layout)?,
+                known_length: current_index_file_length(layout)?,
+            });
+        }
+        if replay.trailing_partial_bytes != 0 {
+            return Ok(Self {
+                entries: index::rebuild_index_from_containers(layout)?,
                 known_length,
             });
         }
         Ok(Self {
-            entries: index::rebuild_index_from_containers(layout)?,
-            known_length: current_index_file_length(layout)?,
+            entries: replay.entries,
+            known_length,
         })
     }
 

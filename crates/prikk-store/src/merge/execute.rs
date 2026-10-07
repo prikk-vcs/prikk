@@ -72,7 +72,19 @@ pub fn execute_merge(
     // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
     // `into_ref` excluded, since this merge is the thing that would resolve its own state, not
     // something blocked by it. A merge never writes `from_ref`, so it is never excluded.
-    crate::refs::ensure_may_publish(layout, &into_ref)?;
+    crate::refs::ensure_may_publish(layout, &into_ref).map_err(|error| {
+        // Part B review carry 2: name `ref complete` only when *another* ref's own refusal is a
+        // genuine N3 lead, matched by the error's own variant, never by its words.
+        if matches!(&error, PrikkError::IncompletePublication(_)) {
+            crate::ref_completion::incomplete_publication_refusal_naming_any_lead(
+                layout,
+                Some(&into_ref),
+            )
+            .unwrap_or(error)
+        } else {
+            error
+        }
+    })?;
     // RFC 165 R4 item 5: a completable lead on `into_ref` must not be silently built on top of --
     // its own log tip sits one transition behind its pointer, so evidence gathered against the
     // pointer and a publish computed from it would carry the wrong `expected_previous_ref_state_id`

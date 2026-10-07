@@ -162,8 +162,7 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
     if ref_log_has_tail {
         if let Err(error) = ensure_no_incomplete_publication(layout) {
             // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
-            let error = if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
-            {
+            let error = if matches!(&error, PrikkError::IncompletePublication(_)) {
                 crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
                     .unwrap_or(error)
             } else {

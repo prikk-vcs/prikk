@@ -111,8 +111,7 @@ pub fn seal_from_accepted_claim(
     let canonical_ref = validate_local_branch_ref(ref_name)?;
     crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
         // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
-        if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
-        {
+        if matches!(&error, PrikkError::IncompletePublication(_)) {
             crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
                 .unwrap_or(error)
         } else {
@@ -180,8 +179,7 @@ pub fn seal_from_accepted_claim(
     let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
         // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
-        if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
-        {
+        if matches!(&error, PrikkError::IncompletePublication(_)) {
             crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
                 .unwrap_or(error)
         } else {

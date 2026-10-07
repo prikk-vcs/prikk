@@ -1,8 +1,10 @@
 //! Repository verification tests.
 
 mod connectivity;
+mod current_branch_warning;
 mod every_signature;
 mod local_tag_trust;
+mod object_index_tail;
 mod reachability;
 mod received_refs;
 mod ref_cluster;

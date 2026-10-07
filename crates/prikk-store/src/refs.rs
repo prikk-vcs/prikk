@@ -419,7 +419,11 @@ pub(crate) fn incomplete_publication_refusal() -> PrikkError {
     // RFC 132 part 2: an incomplete publication is a caller precondition, not a lock -- nothing is
     // held and no other writer is racing this one; the fix is running verify/doctor and retrying
     // with the right signer, not waiting.
-    PrikkError::Precondition(
+    //
+    // Part B review carry 1: `IncompletePublication`, not the generic `Precondition`, so a caller
+    // that needs to tell this one condition apart -- to decide whether `prikk ref complete <ref>`
+    // is the way out -- matches the variant, never the message's own words.
+    PrikkError::IncompletePublication(
         "repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry"
             .to_string(),
     )

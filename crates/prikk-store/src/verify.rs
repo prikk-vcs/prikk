@@ -740,6 +740,14 @@ pub struct RepositoryVerification {
     /// index, and the three generation logs) this repository currently holds. Empty when the
     /// `AppendedFileTails` stage itself did not evaluate.
     pub appended_file_tails: Vec<AppendedFileTailStatus>,
+    /// RFC 151 §2.1, 0.50.0 step 1 A4: the error `refs::current_branch` raised reading
+    /// `.prikk/current-branch`, when it could not resolve -- malformed, missing, or naming a branch
+    /// that does not exist or is closed. A **warning**, never a failure (019 §5.8's condition for
+    /// accepting this at all): the repository is intact, and every command still works with `--ref`
+    /// given explicitly; only the default is unusable. `doctor`'s own
+    /// `PRIKK-DOCTOR-CURRENT-BRANCH` issue already reports this; this field lets `verify` say the
+    /// same thing, independently of whether a stage it depends on evaluated.
+    pub current_branch_issue: Option<String>,
 }
 
 /// RFC 164 Rule B: one Rule-A-covered file's own tail/damage status, from a direct, standalone read
@@ -1010,6 +1018,13 @@ impl RepositoryVerification {
     pub fn has_commit_witness_substituted_earlier_record(&self) -> bool {
         self.commit_witness_running_hash_agrees
             .is_some_and(|agrees| !agrees)
+    }
+
+    /// Return true when `.prikk/current-branch` could not be resolved (RFC 151 §2.1, A4). A
+    /// warning, never a failure — see `has_trailing_partial_wal`.
+    #[must_use]
+    pub fn has_current_branch_warning(&self) -> bool {
+        self.current_branch_issue.is_some()
     }
 
     /// Return true when the commit-index cache disagrees with the worktree for at least one path.
@@ -1778,6 +1793,13 @@ pub fn verify_repository_with_options(
         (objects_evaluated && ref_update_schema_trust_evaluated && local_tag_trust_evaluated)
             .then_some(trust_verifier.checked_records);
 
+    // RFC 151 §2.1, A4: no upstream stage dependency, the same footing as `doctor`'s own
+    // `push_current_branch_issue` -- reads `.prikk/current-branch` directly, unconditionally, and
+    // never fails `verify` over an unusable default while `--ref` given explicitly still works.
+    let current_branch_issue = crate::refs::current_branch(layout)
+        .err()
+        .map(|err| err.to_string());
+
     // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
     // the run found -- each such outcome is individually sound. Best-effort; never fails verify.
     crate::verified_blocks::record_verified_blocks(
@@ -1831,6 +1853,7 @@ pub fn verify_repository_with_options(
         object_index_interior_damage,
         trailing_partial_pointer_index_bytes,
         appended_file_tails,
+        current_branch_issue,
     })
 }
 

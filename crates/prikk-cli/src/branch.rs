@@ -213,7 +213,17 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     // RFC 165 R3 (C3) + Addendum 1 §1: refuse while another ref's publication is incomplete, or
     // while the ref log has a lead-free tail (Rule D), before any write -- `canonical` excluded,
     // since this create is the thing that would resolve its own state.
-    prikk_store::ensure_may_publish(&layout, &canonical).map_err(|err| err.to_string())?;
+    prikk_store::ensure_may_publish(&layout, &canonical).map_err(|err| {
+        // Part B review carry 2: name `ref complete` only when another ref's own refusal is a
+        // genuine N3 lead, matched by the error's own variant, never by its words.
+        if matches!(err, prikk_error::PrikkError::IncompletePublication(_)) {
+            prikk_store::incomplete_publication_refusal_naming_any_lead(&layout, Some(&canonical))
+                .map(|refined| refined.to_string())
+                .unwrap_or_else(|_| err.to_string())
+        } else {
+            err.to_string()
+        }
+    })?;
     let ref_store = RefStore::new(layout.clone());
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
 
@@ -395,7 +405,17 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
     // RFC 165 R3 (C3) + Addendum 1 §1: refuse while another ref's publication is incomplete, or
     // while the ref log has a lead-free tail (Rule D), before any write -- `canonical` excluded,
     // since this close is the thing that would resolve its own state.
-    prikk_store::ensure_may_publish(&layout, &canonical).map_err(|err| err.to_string())?;
+    prikk_store::ensure_may_publish(&layout, &canonical).map_err(|err| {
+        // Part B review carry 2: name `ref complete` only when another ref's own refusal is a
+        // genuine N3 lead, matched by the error's own variant, never by its words.
+        if matches!(err, prikk_error::PrikkError::IncompletePublication(_)) {
+            prikk_store::incomplete_publication_refusal_naming_any_lead(&layout, Some(&canonical))
+                .map(|refined| refined.to_string())
+                .unwrap_or_else(|_| err.to_string())
+        } else {
+            err.to_string()
+        }
+    })?;
     let ref_store = RefStore::new(layout.clone());
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     // RFC 132 refusal sweep, rule 1.

@@ -118,11 +118,28 @@ fn branch_create_entry_point_refuses_behind_another_refs_incomplete_publication(
         !output.status.success(),
         "branch create must refuse behind heads/broken's interrupted publication\n{text}"
     );
+    // Part B review carry 2: `heads/broken`'s own lead here is genuine, so the refusal names the
+    // way out instead of the old, generic "incomplete ref publication" text.
     assert!(
-        text.contains("incomplete ref publication"),
+        text.contains("run `prikk ref complete heads/broken`"),
         "unexpected refusal text: {text}"
     );
     assert_eq!(before, store_bytes(&repo), "a refusal must write nothing");
+
+    let complete = prikk(&repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args(["ref", "complete", "heads/broken"])
+        .output()
+        .unwrap();
+    ok(&complete, "the named command, ref complete heads/broken");
+    ok(
+        &branch_create(&repo, "heads/topic", "heads/main"),
+        "branch create after the completion",
+    );
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -145,10 +162,25 @@ fn branch_close_entry_point_refuses_behind_another_refs_incomplete_publication()
         "branch close must refuse behind heads/broken's interrupted publication\n{text}"
     );
     assert!(
-        text.contains("incomplete ref publication"),
+        text.contains("run `prikk ref complete heads/broken`"),
         "unexpected refusal text: {text}"
     );
     assert_eq!(before, store_bytes(&repo), "a refusal must write nothing");
+
+    let complete = prikk(&repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args(["ref", "complete", "heads/broken"])
+        .output()
+        .unwrap();
+    ok(&complete, "the named command, ref complete heads/broken");
+    ok(
+        &branch_close(&repo, "heads/topic"),
+        "branch close after the completion",
+    );
     let _ = std::fs::remove_dir_all(&repo);
 }
 

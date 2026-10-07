@@ -276,8 +276,7 @@ pub fn create_local_tag(
     // both `tag create` and `sync adopt-tag`, which reaches this function too).
     crate::refs::ensure_may_publish(layout, &canonical).map_err(|error| {
         // 019 §5.2: name `ref complete` only when *another* ref's own refusal is a genuine N3 lead.
-        if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
-        {
+        if matches!(&error, PrikkError::IncompletePublication(_)) {
             crate::ref_completion::incomplete_publication_refusal_naming_any_lead(
                 layout,
                 Some(&canonical),

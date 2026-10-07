@@ -669,6 +669,16 @@ pub(crate) fn print_verify_report(
             issue.index, issue.seq, issue.previous_seq
         );
     }
+    // RFC 151 §2.1, 0.50.0 step 1 A4: a warning, never a failure (019 §5.8) -- the same
+    // recommendation `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` issue gives, so the two reports
+    // never disagree about what to do next.
+    if let Some(issue) = &report.current_branch_issue {
+        println!(
+            "warning: current-branch pointer could not be resolved: {issue}; run `prikk branch \
+             switch heads/<name>` to a branch that exists and is open, or `prikk branch create` \
+             the branch the pointer names; `--ref` given explicitly still works meanwhile"
+        );
+    }
 }
 
 fn print_active_wal_metadata_status(status: &ActiveWalMetadataStatus) {

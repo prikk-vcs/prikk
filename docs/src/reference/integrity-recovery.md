@@ -49,7 +49,10 @@ verification covers:
 - active WAL ref metadata health;
 - active rollback-draft WAL record classification;
 - sealed rollback Block and sealed rollback Patch classification;
-- repository-local publication trust for Block, RefState, and RefUpdate envelopes.
+- repository-local publication trust for Block, RefState, and RefUpdate envelopes;
+- whether `.prikk/current-branch` resolves (0.50.0 step 1 A4) — a warning, never a failure: the
+  pointer is a default `--ref` given explicitly always overrides, not an authority anything above
+  checks.
 
 Object enumeration, Block/RefState reads, active-WAL replay, active metadata, ref pointers, and ref logs
 all use the same retained repository-root authority. Publication trust consumes the exact Block,
@@ -114,11 +117,15 @@ holds (`crates/prikk-cli/src/verify_verdict.rs`, `VERDICT_CONDITIONS`):
 A structural verification error before a report can be produced also fails the command.
 
 Trailing partial WAL bytes, trailing partial object-index bytes, object-index interior damage, trailing
-partial pointer-index bytes, object container tails, interrupted appends, unreferenced remnants, and
-object temp files are printed as warnings. None of them fails `verify` by itself; an appended file's
-interior damage does. The object and pointer indexes are caches or repairable tails, so their damage is
-never a failure, but it is never silent either. The recovery mechanics and safe truncation boundary are
-covered by the [durability and crash recovery](./durability-recovery.md) reference.
+partial pointer-index bytes, object container tails, interrupted appends, unreferenced remnants, object
+temp files, and an unresolved `current-branch` pointer are printed as warnings. None of them fails
+`verify` by itself; an appended file's interior damage does. The object and pointer indexes are caches or
+repairable tails, so their damage is never a failure — including when the torn entry is the one most
+recently written, which a reader now rescans the containers for rather than reporting as a missing
+object (0.50.0 step 1 A5) — but it is never silent either. `current-branch` is a default, never an
+authority (RFC 151 §2.1): nothing above reads it, and an explicit `--ref` always works regardless of
+whether it resolves. The recovery mechanics and safe truncation boundary are covered by the
+[durability and crash recovery](./durability-recovery.md) reference.
 
 ## Active WAL Metadata States
 

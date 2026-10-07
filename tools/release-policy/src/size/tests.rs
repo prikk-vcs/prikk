@@ -121,7 +121,9 @@ fn removing_a_declaration_names_its_file() {
         // import, 2,343 -> 2,347.
         // 0.49.0 step 5 round 2 item 1: verify reads each received tip's previous state, 2,347 -> 2361.
         // 0.49.0 Addendum 1 P5: the stale "one known instance" paragraph in verify's module doc removed (the received index is read), 2,361 -> 2,358.
-        detail.contains("2358"),
+        // 0.50.0 step 1, A4: the `current_branch_issue` field, `has_current_branch_warning`, and the
+        // unconditional `refs::current_branch` read feeding it, 2,358 -> 2,381.
+        detail.contains("2381"),
         "the line count is in the message: {detail}"
     );
     assert!(

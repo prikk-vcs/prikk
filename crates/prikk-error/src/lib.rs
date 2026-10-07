@@ -44,6 +44,14 @@ pub enum PrikkError {
     /// [`Self::LockConflict`], which means another writer may hold a lock: nothing here is
     /// transient and waiting does not help — the caller must change what they asked for.
     Precondition(String),
+    /// 019 §5.2/Part B review: repository mutation is blocked because a ref's own pointer and the
+    /// ref log disagree -- the one condition a writer's generic [`Self::Precondition`] used to
+    /// cover for this specific case, until classifying it by matching the message's own words (so
+    /// an edit to the text could silently drop the classification) was ruled out. Its own `Display`
+    /// text is unchanged from `Precondition`'s; only callers that need to tell this condition apart
+    /// from every other precondition -- to decide whether `prikk ref complete <ref>` is the way out
+    /// -- match the variant instead of the words.
+    IncompletePublication(String),
     /// The requested object type cannot be persisted in the requested store.
     UnsupportedObjectType(String),
     /// RFC 158 Stage A: an object frame inside an incoming artifact (a bundle or a patch-exchange
@@ -90,6 +98,7 @@ impl fmt::Display for PrikkError {
             Self::Integrity(msg) => write!(f, "integrity error: {msg}"),
             Self::LockConflict(msg) => write!(f, "lock conflict: {msg}"),
             Self::Precondition(msg) => write!(f, "precondition not met: {msg}"),
+            Self::IncompletePublication(msg) => write!(f, "precondition not met: {msg}"),
             Self::UnsupportedObjectType(msg) => write!(f, "unsupported object type: {msg}"),
             Self::ObjectOverBound {
                 declared_bytes,

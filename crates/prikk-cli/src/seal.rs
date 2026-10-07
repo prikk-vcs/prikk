@@ -91,14 +91,14 @@ fn seal_active_no_audit(
     // publication (the tip-already-matches path below, and an attributable torn tail) is never
     // blocked by the very state it is about to resolve.
     prikk_store::ensure_may_publish(&layout, &ref_name).map_err(|err| {
-        // 019 §5.2: name `ref complete` only when another ref's own refusal is a genuine N3 lead.
-        let text = err.to_string();
-        if text.contains("incomplete ref publication") {
+        // Part B review carry 1/2: name `ref complete` only when another ref's own refusal is a
+        // genuine N3 lead, matched by the error's own variant, never by its words.
+        if matches!(err, prikk_error::PrikkError::IncompletePublication(_)) {
             prikk_store::incomplete_publication_refusal_naming_any_lead(&layout, Some(&ref_name))
                 .map(|refined| refined.to_string())
-                .unwrap_or(text)
+                .unwrap_or_else(|_| err.to_string())
         } else {
-            text
+            err.to_string()
         }
     })?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.

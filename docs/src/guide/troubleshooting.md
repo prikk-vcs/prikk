@@ -875,10 +875,11 @@ patch ids by `prikk status --format json`, and `show` accepts both. Earlier rele
 A command whose `--ref` you did not give defaults to the current branch, and `.prikk/current-branch`
 names a branch that is not there. The same message says `which is closed` for a closed branch, and
 `.prikk/current-branch is malformed (…)` when the file does not hold exactly one `heads/<name>` line.
-Nothing is damaged, and `prikk doctor` reports it as the warning `PRIKK-DOCTOR-CURRENT-BRANCH`. Either
-run `prikk branch switch heads/<name>` to an existing, open branch — with an unusable pointer the switch
-writes only what is absent and deletes nothing — or `prikk branch create` the branch the file names.
-Any command still works with `--ref` given explicitly meanwhile.
+Nothing is damaged, and both `prikk doctor` (the warning `PRIKK-DOCTOR-CURRENT-BRANCH`) and `prikk
+verify` report it, as a warning that never changes either command's exit status. Either run `prikk
+branch switch heads/<name>` to an existing, open branch — with an unusable pointer the switch writes
+only what is absent and deletes nothing — or `prikk branch create` the branch the file names. Any
+command still works with `--ref` given explicitly meanwhile.
 
 ## `error: invalid name: backslashes are not allowed in repository paths`
 

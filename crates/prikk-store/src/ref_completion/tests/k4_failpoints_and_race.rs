@@ -222,7 +222,10 @@ fn ref_complete_races_a_commit() {
     // resolve -- a different refusal than the lock conflict above, not a silent success.
     let still_blocked = try_commit();
     assert!(
-        matches!(still_blocked, Err(prikk_error::PrikkError::Precondition(_))),
+        matches!(
+            still_blocked,
+            Err(prikk_error::PrikkError::IncompletePublication(_))
+        ),
         "a commit after the lock is free, but before the lead is completed, must still refuse \
          (incomplete ref publication), got {still_blocked:?}"
     );
