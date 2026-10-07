@@ -33,7 +33,6 @@
 - A session whose `ref-name` a crash tore in 0.20.0–0.48.0 is refused by `commit`, `seal` and `rollback-draft`. The way out is
   `prikk doctor --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]` (RFC 166 §1.6).
 - `doctor --repair-tails` covers ten files: the ref log is now one of them.
-- The refusal that names a damaged ref log now names `--repair-tails` instead of RFC 165 R5.
 - The new recovery and witness report types are `#[non_exhaustive]`; a consumer that matches them exhaustively needs a wildcard arm.
 - `bundle import` now refuses a bundle whose ref's earlier states are not carried; export it with its full history.
 
@@ -170,7 +169,7 @@ unscheduled.
   signer-backed seal retry"` before writing anything, when a *different* ref's own publication is
   incomplete (RFC 165 R3) — the same text `commit` already gave, now reachable from six more commands.
 - The same six commands can also now refuse with `"the ref log has an incomplete tail at byte offset
-  N (M byte(s) follow); a repair arrives with RFC 165 R5"` before writing anything, when the ref log
+  N (M byte(s) follow); `prikk doctor --repair-tails` truncates it"` before writing anything, when the ref log
   container has a tail with no pointer lead — zeros, random bytes, or a torn prefix left for a reason
   unrelated to a pending write (RFC 165 Addendum 1 §1, RFC 164 Rule D). Distinct from the refusal
   above on purpose: `commit` and every other non-publishing writer proceed over this shape instead of
@@ -195,7 +194,8 @@ unscheduled.
 - A new author's first `commit` can now refuse with the author-key container's own tail/damage message
   before writing its blob, object-index entry, or updating the commit-index/lifecycle caches (RFC 164
   Rule D); the message text is unchanged, only when it can fire moved earlier.
-- `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file, plus a warning line
+- `verify`'s prose report gains one `trailing partial <file> bytes: N` line per Rule A file (the ref log's is
+  `trailing partial ref log bytes: N`), plus a warning line
   naming the file, the offset, the byte count, and the repair when `N != 0`, plus a failure line on interior damage.
   It also gains one `trailing partial <type> container bytes: N` line per persisted object type (N7, above).
   `verify --format json`'s own `verify-report-v1` schema is unaffected by either: the new `AppendedFileTails` stage
