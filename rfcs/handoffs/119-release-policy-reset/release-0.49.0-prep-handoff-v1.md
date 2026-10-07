@@ -275,3 +275,36 @@ candidate:**
 
 **Report once:** `.git-exclude/review-request/release-0.49.0-prep-report-v3.md` (short: the commit, the gates, the two
 logs). The architect then re-gates, pushes, reads CI, and asks the owner about the external review.
+
+## Addendum 6 — 2026-10-07: one fix before the external review (review `release-0.49.0-candidate-matrix-review-v1`)
+
+**The external matrix**, run by the architect on the candidate's build, found one real defect. It was pre-existing, the
+same on 0.48.0's binary.
+- **The trigger:** an object index whose last record is cut.
+- **What happens:**
+  - `verify` exits 1 with *"repository verification found at least one failed object, block, or ref"*, while every
+    count says 0 failed;
+  - `doctor` exits 0 with the warning `PRIKK-DOCTOR-OBJECT-INDEX-TRAILING-PARTIAL`.
+- **Reproduction:** `.pgtmp/ext019/agree2.sh <binary>` (it copies the matrix base at `.pgtmp/ext019/keep-work/base` and
+  cuts one byte).
+
+1. **`verify` and `doctor` agree on a torn object-index tail.**
+   - The index is a pure cache (RFC 162): a warning, and exit 0, as `doctor` already does. The next write's rebuild or
+     `--repair-index` clears it.
+   - **Find from source what makes `verify` exit 1 here, and say it in the report.**
+2. **`verify`'s closing error line never names a failure kind that did not occur.** If it fails for another reason, that
+   reason is what it names.
+3. **Tests:**
+   - a torn index tail: `verify` and `doctor` both exit 0, with the warning, and the commit after it succeeds;
+   - a control: an index with a damaged complete record still fails as it does now.
+   - **Perturbation:** restore the old exit rule, and the test goes red.
+4. **One `### Output changes` line** in the 0.49.0 section (verify's exit status on a torn object-index tail).
+5. **Gates 14/14 on the commit.** That commit becomes the candidate.
+
+**Prohibited:** silencing the warning; changing `doctor`'s behaviour instead of `verify`'s without saying why.
+
+| unit | what | budget (stop at ×2) |
+|---|---|---:|
+| F1 | items 1–5 | 60 min |
+
+**Report:** `.git-exclude/review-request/release-0.49.0-prep-report-v3.md`.
