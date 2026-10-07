@@ -464,9 +464,10 @@ silently revert whichever slot it names to the previous one — measured, and cl
 corrupted header field did so even before any repair ran, until §9.2 closed that too).
 **On the ref pointer index's own generation log, this stops every command that resolves a ref**, since
 every one of them reads it; on the received-index and trust-policy generation logs, only `compact` is
-affected. `doctor` has nothing that repairs this — `--repair-tails` refuses on it, the same way every
-other covered file's own repair does, rather than guessing which bytes are safe to remove, or silently
-undoing the decision the damaged record carried. **This entry gives no truncation advice**: whether the
+affected. Trailing bytes that do not form a complete record (a torn tail) are truncated by `--repair-tails`,
+as for every covered file; the removed bytes are saved to `recovery/log` first. Damage in the middle of the file,
+or a complete but corrupt last record, has no repair: `--repair-tails` refuses it, rather than guessing which
+bytes are safe to remove, or silently undoing the decision the damaged record carried. **This entry gives no truncation advice**: whether the
 damage sits before a sound record or is the complete-but-corrupt last record itself, no offset here is
 one a repair can safely remove. Restore the repository from a backup or a clone instead.
 
