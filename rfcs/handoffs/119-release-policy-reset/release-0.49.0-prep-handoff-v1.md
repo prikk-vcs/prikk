@@ -308,3 +308,8 @@ same on 0.48.0's binary.
 | F1 | items 1–5 | 60 min |
 
 **Report:** `.git-exclude/review-request/release-0.49.0-prep-report-v3.md`.
+
+**2026-10-07: Addendum 6 is HELD — do not start it.** External review 019 cleared `ab27fc48` for the tag
+(*"nothing blocks the tag"*; CI `37579347601` 16/16). It grades the AGREE defect non-blocking. The owner decides
+whether to tag now or land the fix first (assessment `external-review-019-assessment-v1`). **Until the owner rules,
+nothing for the team here.**
