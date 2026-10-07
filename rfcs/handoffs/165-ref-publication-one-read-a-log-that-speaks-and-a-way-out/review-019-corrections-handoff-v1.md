@@ -147,3 +147,5 @@ request, which costs the owner a hand-off. **From now on:**
 **Part B ACCEPTED 2026-10-07** (`8c8b4a22`; review `review-019-corrections-B-review-v1`). Two items carried into Part C (in its row above).
 
 **Part C ACCEPTED 2026-10-07** (`199f0fb6`; review `review-019-corrections-C-review-v1`). **Next: Part D1, then Part D.**
+
+**Part D1 ACCEPTED 2026-10-07** (`1c4093c7`; review `review-019-corrections-D1-review-v1`). **Next: Part D (A6).**
