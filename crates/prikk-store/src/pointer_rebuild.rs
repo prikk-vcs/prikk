@@ -257,16 +257,20 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         )));
     }
 
+    // Refusal (2 of 2), in both modes: the generation log must be readable and whole, or the real run
+    // refuses here. A plan that ignored it would say "nothing written" and then refuse (review v1's rule:
+    // a plan exits as the real run would).
+    let generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
+        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+    require_no_unclean_tail(
+        "the ref pointer index's generation log",
+        generation_trailing_partial_bytes,
+        generation_tail_offset,
+        "run `prikk doctor --repair-tails`, then retry",
+    )?;
+
     if mode == RebuildMode::Execute {
-        let generation_log_path = layout.ref_pointer_index_generation_log_path();
-        let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
-            generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
-        require_no_unclean_tail(
-            "the ref pointer index's generation log",
-            generation_trailing_partial_bytes,
-            generation_tail_offset,
-            "run `prikk doctor --repair-tails`, then retry",
-        )?;
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.ref_pointer_index_slot_path(target_slot))?;

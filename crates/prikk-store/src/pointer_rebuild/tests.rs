@@ -535,3 +535,39 @@ fn k5_rebuild_is_never_run_implicitly() {
 }
 
 mod k4_failpoints_and_race;
+
+/// Review v1 (a plan exits as the real run would): a torn generation-log tail refuses the plan and the real
+/// run alike, with the same text, and the plan writes nothing. The control: the same log without its tail
+/// plans cleanly.
+#[test]
+fn a_plan_refuses_over_a_torn_generation_log_tail_as_the_real_run_does() {
+    let root = unique_temp_dir("rfc165-r5-plan-torn-generation-tail");
+    let layout = setup(&root);
+    let target = new_block(&layout, None, 1);
+    fully_publish(&layout, "heads/main", target, &original_signer(), None, 1);
+    let log = layout.ref_pointer_index_generation_log_path();
+    let clean = std::fs::read(&log).expect("generation log");
+    plan_pointer_index_rebuild(&layout).expect("control: a clean log plans");
+
+    let mut torn = clean.clone();
+    torn.extend_from_slice(&[0u8; 100]);
+    std::fs::write(&log, &torn).expect("torn tail");
+    let plan_refusal = match plan_pointer_index_rebuild(&layout) {
+        Ok(_) => panic!("the plan must refuse a torn generation-log tail"),
+        Err(error) => error.to_string(),
+    };
+    let run_refusal = match rebuild_pointer_index(&layout) {
+        Ok(_) => panic!("the real run must refuse a torn generation-log tail"),
+        Err(error) => error.to_string(),
+    };
+    assert_eq!(plan_refusal, run_refusal);
+    assert!(plan_refusal.contains("--repair-tails"), "{plan_refusal}");
+    assert_eq!(
+        std::fs::read(&log).expect("generation log"),
+        torn,
+        "the plan writes nothing"
+    );
+
+    std::fs::write(&log, &clean).expect("restore the clean log");
+    plan_pointer_index_rebuild(&layout).expect("control: without the tail the plan is clean again");
+}
