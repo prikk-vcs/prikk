@@ -212,3 +212,25 @@ troubleshooting copy.**
 `.git-exclude/review-request/release-0.49.0-prep-report-v2.md`.
 
 **Addendum 2 rulings ACCEPTED 2026-10-07** (`0db67cc4`, `afd26195`; 14/14 at `afd26195`). The rebuild plan's precondition now sits before the mode split, so a plan refuses exactly as the run does; the control was shown. **Continue with §1.1–§1.8, then §2.** The `### Security` list comes to the architect first. Report once: `release-0.49.0-prep-report-v2.md`.
+
+## Addendum 3 — 2026-10-07: §1 accepted; the CHANGELOG and smoke rulings; then §2 (review `release-0.49.0-prep-review-v2`)
+
+1. **`### Security`, first: two bullets.**
+   - **M5:** affected 0.48.0 only.
+   - **The incomplete-chain import plus its `verify` detection:** affected 0.20.0–0.48.0, *"run `prikk verify` to find any
+     imported before"*.
+   - Take the exact content from the review.
+2. **The corrupted-last-record entry moves to `### Fixed`,** keeping its trust-revert consequence in plain words.
+3. **No "breaking once" entry.** Add one `### Upgrading` line for the import refusal.
+4. **One consolidated `### Output changes` block,** keeping every line.
+5. **The date: `## 0.49.0 — 2026-10-07`.** Past midnight JST, stop and ask.
+6. **The smoke:** one 0.49.0 script that extends 0.48.0's. Update its changed assertions, add the eight new checks and
+   `--discard-damaged-commits` with its restore by run, and save it as `.git-exclude/review-request/smoke-0.49.0.sh`.
+7. **Then §2 as written:**
+   - the three-file release commit;
+   - the 14 gates;
+   - the RFC 162 matrix;
+   - `reproduce.sh` against the release build and 0.48.0's;
+   - the smoke and the row-14 `doctor` check on the **release** build.
+
+**Report once:** `.git-exclude/review-request/release-0.49.0-prep-report-v3.md`.
