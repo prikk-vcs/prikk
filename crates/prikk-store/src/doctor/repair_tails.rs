@@ -38,7 +38,9 @@ use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{len_to_u64, read_file_if_exists, truncate_existing_file_required};
 use crate::foundation::generation::resolve_live_slot;
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
+use crate::foundation::layout::{
+    ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout,
+};
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::refs::{
     ensure_no_incomplete_publication, replay_pointer_index, truncate_pointer_index_trailing_partial,
@@ -290,12 +292,26 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
     let path = match label {
         "trust keys" => layout.trust_key_container_path(),
         "trust policy" => {
-            let slot = resolve_live_slot(layout, &layout.trust_policy_generation_log_path())?;
+            let slot = resolve_live_slot(
+                layout,
+                &layout.trust_policy_generation_log_path(),
+                &layout.trust_policy_container_slot_path(ContainerSlot::B),
+                "the trust policy container",
+                "restore this container's own generation log from a backup taken before the loss; \
+                 no rebuild exists for it",
+            )?;
             layout.trust_policy_container_slot_path(slot)
         }
         "author keys" => layout.author_key_container_path(),
         "received index" => {
-            let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
+            let slot = resolve_live_slot(
+                layout,
+                &layout.received_index_generation_log_path(),
+                &layout.received_index_slot_path(ContainerSlot::B),
+                "the received index",
+                "restore this container's own generation log from a backup taken before the loss; \
+                 no rebuild exists for it",
+            )?;
             layout.received_index_slot_path(slot)
         }
         "pointer index generation log" => layout.ref_pointer_index_generation_log_path(),

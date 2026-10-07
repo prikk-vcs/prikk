@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — an emptied or removed generation log silently resolved to the wrong, stale slot for the ref pointer index, the received index, and the trust policy container
+
+**The consequence, in plain words:** any of the three compacting containers' generation logs — a small file
+recording which of two slots is currently authoritative — reading as empty or absent after a compaction had
+genuinely switched the live slot once made every reader fall back to the original slot, silently, as if
+nothing had ever compacted. For the ref pointer index this could make `branch list` (and, through the same
+resolver, `status`, `commit`'s default `--ref` resolution, and `tag list`) omit a branch written only after
+the switch, with no warning and exit `0`. For the trust policy container, the same shape could make a
+removed maintainer key read as trusted again — a policy from before a revocation, served silently. `verify`
+caught a *symptom* of the pointer-index case through an unrelated cross-check (a ref-log/pointer divergence);
+nothing caught the trust-policy case at all.
+
+**Found by the external architect's own reproduction** (0.50.0 step 1, review of Part D): seal, compact the
+pointer index, create a branch (landing only in the now-live slot), then empty the generation log.
+`branch list` printed the first branch only, exit 0.
+
+**Affected since the compactor first shipped: 0.20.0** (`e82bd8b6`, "RFC 102 Stage 6 Step 2 round 3 — the
+compactor, and route writers through the resolver"; the generation-log mechanism itself, `b33d1942`, same
+day). Not measured against historical released binaries directly — confirmed from source and from a
+reproduction against the current tree, the same evidentiary footing this project has used before for a
+defect whose triggering code is unchanged since 0.20.0. No advisory (disclosure only). **Action: upgrade;**
+every reader and writer of the three containers now refuses in this exact state instead of guessing.
+
+Fixed in this release (0.50.0 step 1 Part E): `resolve_live_slot`/`resolve_live_slot_with_tail`
+(`foundation/generation.rs`) now refuse — naming the container and its own way out — when the generation log
+names no live slot but the non-default slot holds data, the one shape only a since-lost record of a genuine
+compaction (or, for the pointer index, a genuine rebuild) can explain. The ref pointer index's own way out is
+`prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without reading either slot as
+live; the received index and the trust policy container have no rebuild, so their own way out is restoring
+the generation log from a backup. One pre-existing test's own expectation changed as a direct, intentional
+consequence: a crash between a compaction's new-slot write and its generation-record append — previously
+self-healing through a bare retry — now refuses the identical way, because that state is indistinguishable
+from a genuinely lost record by file content alone; `prikk doctor --rebuild-pointer-index` is the way out for
+it too, not a bare retry of `compact`.
+
 ## 0.49.0 — 2026-10-07
 
 ### Security

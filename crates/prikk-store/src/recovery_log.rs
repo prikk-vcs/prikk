@@ -614,7 +614,14 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
             )?,
         ]);
     }
-    let pointer_slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
+    let pointer_slot = resolve_live_slot(
+        layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+    )?;
     if source == relative(&layout.ref_pointer_index_slot_path(pointer_slot))? {
         return Ok(vec![relative(
             &layout.ref_log_container_slot_path(ContainerSlot::A),

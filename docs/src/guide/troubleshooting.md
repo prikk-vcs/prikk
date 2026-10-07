@@ -472,6 +472,27 @@ bytes are safe to remove, or silently undoing the decision the damaged record ca
 damage sits before a sound record or is the complete-but-corrupt last record itself, no offset here is
 one a repair can safely remove. Restore the repository from a backup or a clone instead.
 
+## `error: integrity error: <container>'s generation log names no live slot, but its other slot holds data; …`
+
+0.50.0 step 1 Part E (019 §5.7). Seen from the identical set of commands the previous entry lists, when a
+compacting container's generation log reads as empty or absent — not damaged, not a tail, genuinely
+nothing — while the *other* slot (`b`) holds real data. Slot `b` is never written except alongside the
+one generation record that names it live, so this shape can only mean a compaction (or, for the ref
+pointer index, `prikk doctor --rebuild-pointer-index`'s own rebuild) genuinely happened and the record
+of it was lost afterward — an accidental deletion, a partial restore from backup, or (for the ref
+pointer index specifically) a crash between the compaction's own new-slot write and its generation
+record, a window that used to self-heal through a bare retry and no longer does, because it leaves the
+identical on-disk shape a genuinely lost record leaves. Trusting slot `a` in this state, as every prior
+release did, served stale data silently: `branch list` (and, through the same resolver, `status`,
+`commit`'s default `--ref` resolution, and `tag list`) could omit a branch written only after a switch,
+exit `0`, no warning; for the trust policy container, the same shape could bring back a maintainer key
+read as trusted again after it was revoked.
+
+**The ref pointer index's own way out:** `prikk doctor --rebuild-pointer-index`. It re-derives the whole
+index from the ref log directly, without reading either slot as live, so it does not matter which slot
+this state's own confusion touches. **The received index and the trust policy container have no
+rebuild** — restore that container's own generation log from a backup taken before the loss.
+
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
 Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,

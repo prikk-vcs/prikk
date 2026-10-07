@@ -43,7 +43,7 @@ use crate::foundation::frame_resync::{
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
-use crate::foundation::layout::RepositoryLayout;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 const TRUST_KEY_MAGIC: &[u8; 8] = b"PTRUKEY1";
 const TRUST_KEY_VERSION: u16 = 1;
@@ -864,7 +864,14 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("trust-policy-replay");
-    let slot = resolve_live_slot(layout, &layout.trust_policy_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.trust_policy_generation_log_path(),
+        &layout.trust_policy_container_slot_path(ContainerSlot::B),
+        "the trust policy container",
+        "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+    )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(TrustPolicyReplay {
@@ -921,7 +928,14 @@ pub(crate) fn append_trust_policy_snapshot(
     // see `pointer_index::append_ref_pointer_entry`'s identical comment for why, and why the
     // container lock (held by `add_trusted_maintainer`/`remove_trusted_maintainer` for their whole
     // critical section) closes the resolve-then-append race against the compactor.
-    let slot = resolve_live_slot(layout, &layout.trust_policy_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.trust_policy_generation_log_path(),
+        &layout.trust_policy_container_slot_path(ContainerSlot::B),
+        "the trust policy container",
+        "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+    )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
 }

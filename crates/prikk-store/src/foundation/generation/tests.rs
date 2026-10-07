@@ -118,7 +118,13 @@ fn isolates_a_damaged_record_at_decode_level_and_reads_sound_records_around_it()
 fn an_empty_or_missing_generation_log_resolves_to_slot_a() -> Result<()> {
     let root = unique_temp_dir("generation-empty-resolves-a");
     let layout = RepositoryLayout::init(root.clone())?;
-    let resolved = resolve_live_slot(&layout, &layout.ref_pointer_index_generation_log_path())?;
+    let resolved = resolve_live_slot(
+        &layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`",
+    )?;
     assert_eq!(resolved, ContainerSlot::A);
     let _ = std::fs::remove_dir_all(root);
     Ok(())
@@ -139,7 +145,13 @@ fn resolver_takes_the_last_complete_record() -> Result<()> {
     }));
     std::fs::write(&path, bytes)?;
 
-    let resolved = resolve_live_slot(&layout, &path)?;
+    let resolved = resolve_live_slot(
+        &layout,
+        &path,
+        &layout.received_index_slot_path(ContainerSlot::B),
+        "the received index",
+        "restore this container's own generation log from a backup",
+    )?;
     assert_eq!(resolved, ContainerSlot::B);
     let _ = std::fs::remove_dir_all(root);
     Ok(())
@@ -166,7 +178,16 @@ fn a_damaged_generation_record_fails_closed_rather_than_resolving_silently() -> 
     }));
     std::fs::write(&path, bytes)?;
 
-    assert!(resolve_live_slot(&layout, &path).is_err());
+    assert!(
+        resolve_live_slot(
+            &layout,
+            &path,
+            &layout.trust_policy_container_slot_path(ContainerSlot::B),
+            "the trust policy container",
+            "restore this container's own generation log from a backup",
+        )
+        .is_err()
+    );
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

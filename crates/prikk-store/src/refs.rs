@@ -44,8 +44,8 @@ pub use pointer_index::PointerIndexRepair;
 #[cfg(test)]
 pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
-    PointerIndexEntry, encode_pointer_index_record, replay_pointer_index,
-    truncate_pointer_index_trailing_partial,
+    PointerIndexEntry, empty_pointer_index_replay, encode_pointer_index_record,
+    replay_pointer_index, truncate_pointer_index_trailing_partial,
 };
 
 use prikk_error::{PrikkError, Result};

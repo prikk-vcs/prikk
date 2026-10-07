@@ -26,7 +26,7 @@ use crate::foundation::frame_resync::{
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
 use crate::foundation::generation::resolve_live_slot;
-use crate::foundation::layout::RepositoryLayout;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 const RECEIVED_INDEX_MAGIC: &[u8; 8] = b"PRECVIX1";
 const RECEIVED_INDEX_VERSION: u16 = 1;
@@ -516,7 +516,14 @@ pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Re
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("received-index-replay");
-    let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.received_index_generation_log_path(),
+        &layout.received_index_slot_path(ContainerSlot::B),
+        "the received index",
+        "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+    )?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(());
@@ -546,7 +553,14 @@ pub(crate) fn replay_received_index(layout: &RepositoryLayout) -> Result<Receive
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("received-index-replay");
-    let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.received_index_generation_log_path(),
+        &layout.received_index_slot_path(ContainerSlot::B),
+        "the received index",
+        "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+    )?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(ReceivedIndexReplay {
@@ -629,7 +643,14 @@ pub(crate) fn append_received_index_entry(
     // safe against the compactor despite the resolve-then-append sequence not being atomic on its
     // own (the container lock, held by every caller for its whole critical section, is what closes
     // that gap).
-    let slot = resolve_live_slot(layout, &layout.received_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.received_index_generation_log_path(),
+        &layout.received_index_slot_path(ContainerSlot::B),
+        "the received index",
+        "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+    )?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
 }

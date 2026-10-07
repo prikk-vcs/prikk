@@ -36,7 +36,7 @@ use crate::foundation::fsutil::{
     append_file_required, len_to_u64, read_file_if_exists, truncate_existing_file_required,
 };
 use crate::foundation::generation::resolve_live_slot;
-use crate::foundation::layout::RepositoryLayout;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 const POINTER_INDEX_MAGIC: &[u8; 8] = b"PREFPTI1";
 const POINTER_INDEX_VERSION: u16 = 1;
@@ -457,6 +457,20 @@ pub(crate) fn decode_pointer_index_records(bytes: &[u8]) -> Result<PointerIndexR
     }
 }
 
+/// An empty replay, as if the container held no records at all. 0.50.0 step 1 Part E:
+/// `pointer_rebuild.rs`'s own way out of a lost generation log trusts neither slot as live, so it
+/// needs this shape directly rather than `replay_pointer_index`'s own resolver, which now refuses in
+/// that exact state. `record_outcomes` is `pub(in crate::refs)`, so a plain struct literal is not
+/// reachable from outside this module tree -- this is the constructor that stands in for one.
+pub(crate) fn empty_pointer_index_replay() -> PointerIndexReplay {
+    PointerIndexReplay {
+        entries: Vec::new(),
+        trailing_partial_bytes: 0,
+        tail_offset: 0,
+        record_outcomes: Vec::new(),
+    }
+}
+
 /// Read and replay the on-disk pointer index, off the durability path -- a missing file replays as
 /// empty, the same reader-equivalence rule Stage 1 established for the WAL. Generation-aware (RFC 102
 /// Stage 6 Step 1, design-v1.md §15.6): resolves to `A` today, since nothing has ever appended a
@@ -465,7 +479,14 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("pointer-index-replay");
-    let slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+    )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(PointerIndexReplay {
@@ -513,7 +534,14 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("pointer-index-replay");
-    let slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+    )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(PointerIndexRepair {
@@ -659,7 +687,14 @@ pub(in crate::refs) fn append_ref_pointer_entry(
     // resolve-then-append sequence only because every caller already holds this container's lock
     // (`acquire_container_locks`) for the whole critical section -- the compactor cannot run
     // concurrently, so "resolve, then write to what was just resolved" cannot go stale mid-sequence.
-    let slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+    )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
 }
@@ -684,7 +719,14 @@ pub(crate) fn remove_pointer_entries_for_test(
     // *retired* slot after a compaction, passing for the wrong reason (or failing confusingly) rather
     // than acting on the live slot every real reader resolves. Resolver-routed, matching every
     // production writer this stage just fixed for the identical reason.
-    let slot = resolve_live_slot(layout, &layout.ref_pointer_index_generation_log_path())?;
+    let slot = resolve_live_slot(
+        layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+    )?;
     let path = layout.ref_pointer_index_slot_path(slot);
     let bytes = std::fs::read(&path)?;
     let replay = decode_pointer_index_records(&bytes)?;

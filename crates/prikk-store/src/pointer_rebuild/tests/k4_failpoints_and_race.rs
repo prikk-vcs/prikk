@@ -7,7 +7,7 @@
 use super::super::{plan_pointer_index_rebuild, rebuild_pointer_index};
 use super::{fully_publish, live_pointer_index_bytes, new_block, original_signer, setup};
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
-use crate::foundation::layout::RepositoryLayout;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     Ed25519AuthorSigner, RefStore, WorktreePatchCommitOptions, clear_lock,
@@ -79,6 +79,9 @@ fn failpoints_at_every_write_ordinal_read_as_old_or_new_never_a_mix() {
                 crate::foundation::generation::resolve_live_slot_with_tail(
                     &layout,
                     &generation_log_path,
+                    &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+                    "the ref pointer index",
+                    "run `prikk doctor --rebuild-pointer-index`",
                 )
                 .unwrap_or_else(|err| {
                     panic!("{point:?} skip={skip}: generation log must stay readable, got {err}")

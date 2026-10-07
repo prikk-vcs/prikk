@@ -43,7 +43,7 @@ use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{append_file_required, truncate_file_empty_required};
 use crate::foundation::generation::{self, GenerationRecord};
-use crate::foundation::layout::{LockableContainer, RepositoryLayout};
+use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
 use crate::lock::acquire_container_locks;
 use crate::received::received_index::{
     ReceivedIndexEntry, encode_received_index_record, replay_received_index,
@@ -90,7 +90,14 @@ enum CompactionMode {
 pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -> Result<()> {
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
     let (_, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+        generation::resolve_live_slot_with_tail(
+            layout,
+            &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+            "the ref pointer index",
+            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+        )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the ref pointer index's generation log",
         generation_trailing_partial_bytes,
@@ -117,7 +124,14 @@ pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -
 pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> Result<()> {
     let generation_log_path = layout.received_index_generation_log_path();
     let (_, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+        generation::resolve_live_slot_with_tail(
+            layout,
+            &generation_log_path,
+            &layout.received_index_slot_path(ContainerSlot::B),
+            "the received index",
+            "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+        )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the received index's generation log",
         generation_trailing_partial_bytes,
@@ -144,7 +158,14 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
 pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Result<()> {
     let generation_log_path = layout.trust_policy_generation_log_path();
     let (_, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+        generation::resolve_live_slot_with_tail(
+            layout,
+            &generation_log_path,
+            &layout.trust_policy_container_slot_path(ContainerSlot::B),
+            "the trust policy container",
+            "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+        )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the trust policy container's generation log",
         generation_trailing_partial_bytes,
@@ -175,7 +196,14 @@ fn run_ref_pointer_index_compaction(
     let _lock = acquire_container_locks(layout, &[LockableContainer::RefPointerIndex])?;
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
     let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+        generation::resolve_live_slot_with_tail(
+            layout,
+            &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+            "the ref pointer index",
+            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
+         reading either slot as live",
+        )?;
 
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
@@ -264,7 +292,14 @@ fn run_received_index_compaction(
     let _lock = acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
     let generation_log_path = layout.received_index_generation_log_path();
     let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+        generation::resolve_live_slot_with_tail(
+            layout,
+            &generation_log_path,
+            &layout.received_index_slot_path(ContainerSlot::B),
+            "the received index",
+            "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+        )?;
 
     let replay = replay_received_index(layout)?;
     if replay.has_item_failure() {
@@ -345,7 +380,14 @@ fn run_trust_policy_compaction(
     let _lock = acquire_container_locks(layout, &[LockableContainer::TrustPolicy])?;
     let generation_log_path = layout.trust_policy_generation_log_path();
     let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
+        generation::resolve_live_slot_with_tail(
+            layout,
+            &generation_log_path,
+            &layout.trust_policy_container_slot_path(ContainerSlot::B),
+            "the trust policy container",
+            "restore this container's own generation log from a backup taken before the loss; no rebuild \
+         exists for it",
+        )?;
 
     let replay = replay_trust_policy(layout)?;
     if replay.has_item_failure() {

@@ -144,8 +144,14 @@ fn crash_publish(
 
 fn live_pointer_index_bytes(layout: &RepositoryLayout) -> Vec<u8> {
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
-    let (live_slot, _, _) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path).unwrap();
+    let (live_slot, _, _) = generation::resolve_live_slot_with_tail(
+        layout,
+        &generation_log_path,
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`",
+    )
+    .unwrap();
     std::fs::read(layout.ref_pointer_index_slot_path(live_slot)).unwrap()
 }
 
@@ -523,8 +529,14 @@ fn k5_rebuild_is_never_run_implicitly() {
     );
 
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
-    let (live_slot, _, _) =
-        generation::resolve_live_slot_with_tail(&layout, &generation_log_path).unwrap();
+    let (live_slot, _, _) = generation::resolve_live_slot_with_tail(
+        &layout,
+        &generation_log_path,
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "the ref pointer index",
+        "run `prikk doctor --rebuild-pointer-index`",
+    )
+    .unwrap();
     assert_eq!(
         live_slot,
         ContainerSlot::A,

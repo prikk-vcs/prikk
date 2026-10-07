@@ -404,11 +404,66 @@ pub(crate) fn replay_generation_log(
 /// log names (a publication, a trust-policy snapshot, a received-ref import) resolves its target slot
 /// through this function and must stay unaffected by a generation-log tail that has nothing to do with
 /// it.
+///
+/// **0.50.0 step 1 Part E (019 §5.7): an empty or absent log is trusted to mean slot A only while
+/// slot B itself holds no data.** Confirmed from source (`compact.rs` and `pointer_rebuild.rs` are
+/// this repository's only two writers of a generation-aware container's "other" slot, each paired
+/// with the one `append_generation_record` call that is this fact's own durable record): slot B is
+/// never written except alongside a generation record naming it live. So an empty log *and* a
+/// non-empty slot B can only mean one thing -- a compaction (or, for the pointer index, a rebuild)
+/// happened and its own record of that fact was lost afterward, not that one never happened. Trusting
+/// slot A in that state would silently serve stale data to every reader and let every writer append
+/// behind it. `slot_b_path`, `container_label`, and `way_out` let every one of this function's three
+/// callers (the pointer index, the received index, the trust policy) name itself and its own route
+/// out in the refusal, the same shape `require_no_unclean_tail` already uses.
+/// Whether this compacting container's generation log has lost the record of a compaction that
+/// genuinely happened: the log itself names no live slot (empty, absent, or a pure tail -- not
+/// interior damage, which [`resolve_live_slot`] already refuses on its own), yet slot B holds data
+/// no compaction-free history could have put there. Exposed separately from [`resolve_live_slot`]
+/// for `pointer_rebuild.rs`'s own use (0.50.0 step 1 Part E): the pointer-index rebuild's whole point
+/// is to re-derive it from the ref log without trusting either slot as live, so it must detect this
+/// state itself and deliberately bypass the resolver's own refusal, rather than propagate it the way
+/// every other reader and writer of this container must.
+pub(crate) fn generation_log_lost(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+) -> Result<bool> {
+    let replay = replay_generation_log(layout, generation_log_path)?;
+    if replay.has_item_failure() || !replay.records.is_empty() {
+        return Ok(false);
+    }
+    slot_b_has_data(layout, slot_b_path)
+}
+
+/// A stat, not a read: slot B is itself a store-growing file, and only its size -- not its content
+/// -- is needed to tell "never written" apart from "holds data" (RFC 102's append-length round;
+/// `whole_read_guard` catches exactly this class of read in tests, which is how this function's
+/// first version -- a whole read -- was actually caught).
+fn slot_b_has_data(layout: &RepositoryLayout, slot_b_path: &std::path::Path) -> Result<bool> {
+    let relative = layout.repository_relative(slot_b_path)?;
+    Ok(crate::foundation::fsutil::stat_file_state_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    .is_some_and(|stat| stat.size != 0))
+}
+
 pub(crate) fn resolve_live_slot(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+    container_label: &str,
+    way_out: &str,
 ) -> Result<ContainerSlot> {
-    Ok(resolve_live_slot_with_tail(layout, generation_log_path)?.0)
+    Ok(resolve_live_slot_with_tail(
+        layout,
+        generation_log_path,
+        slot_b_path,
+        container_label,
+        way_out,
+    )?
+    .0)
 }
 
 /// Like [`resolve_live_slot`], but also returns the log's own tail status from the same replay --
@@ -417,6 +472,9 @@ pub(crate) fn resolve_live_slot(
 pub(crate) fn resolve_live_slot_with_tail(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+    container_label: &str,
+    way_out: &str,
 ) -> Result<(ContainerSlot, usize, usize)> {
     let replay = replay_generation_log(layout, generation_log_path)?;
     if replay.has_item_failure() {
@@ -424,11 +482,27 @@ pub(crate) fn resolve_live_slot_with_tail(
             "generation log has a damaged record; run doctor before reading".to_string(),
         ));
     }
-    let slot = replay
-        .records
-        .last()
-        .map_or(ContainerSlot::A, |record| record.live_slot);
-    Ok((slot, replay.trailing_partial_bytes, replay.tail_offset))
+    if let Some(record) = replay.records.last() {
+        return Ok((
+            record.live_slot,
+            replay.trailing_partial_bytes,
+            replay.tail_offset,
+        ));
+    }
+    // 0.50.0 step 1 Part E: no record at all -- trust slot A unless slot B itself holds data, which
+    // only a since-lost generation record could explain.
+    if slot_b_has_data(layout, slot_b_path)? {
+        return Err(PrikkError::Integrity(format!(
+            "{container_label}'s generation log names no live slot, but its other slot holds data -- \
+             a compaction happened and the record of it is missing; prikk never guesses which slot is \
+             current. {way_out}"
+        )));
+    }
+    Ok((
+        ContainerSlot::A,
+        replay.trailing_partial_bytes,
+        replay.tail_offset,
+    ))
 }
 
 #[cfg(test)]

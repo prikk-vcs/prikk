@@ -41,14 +41,14 @@ use prikk_object::{ObjectId, ObjectType, RefStatePayload};
 
 use crate::foundation::fsutil::{append_file_required, truncate_file_empty_required};
 use crate::foundation::generation::{self, GenerationRecord};
-use crate::foundation::layout::{LockableContainer, RepositoryLayout};
+use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
 use crate::foundation::tail_guard::require_no_unclean_tail;
 use crate::lock::acquire_container_locks;
 use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::ref_completion::{CompletionRefusal, evaluate_known_lead};
 use crate::refs::{
-    PointerIndexEntry, decode_ref_log_for_rebuild, encode_pointer_index_record,
-    replay_pointer_index,
+    PointerIndexEntry, decode_ref_log_for_rebuild, empty_pointer_index_replay,
+    encode_pointer_index_record, replay_pointer_index,
 };
 use crate::trust::{load_maintainer_trust_policy, verify_trusted_publication_envelope};
 
@@ -240,18 +240,43 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         log_tip_seq.insert(record.ref_name.clone(), record.update_seq);
     }
 
-    let pointer_replay = replay_pointer_index(layout)?;
-    // 0.50.0 step 1, A6 item 5 (019 §5.4): the ref log's own tail (above) and the generation log's
-    // own tail (below) already refuse before this rebuild touches anything -- the pointer index's
-    // own tail did not, so the plan proceeded (exit 0) and the torn slot was silently abandoned,
-    // unsaved, the one tail among the three this function reads that this refusal did not cover.
-    // Same wording and way out as the generation-log case (`0db67cc4`).
-    require_no_unclean_tail(
-        "the ref pointer index",
-        pointer_replay.trailing_partial_bytes,
-        pointer_replay.tail_offset,
-        "run `prikk doctor --repair-tails`, then retry",
+    // 0.50.0 step 1 Part E (019 §5.7): this rebuild's own way out of a lost pointer-index generation
+    // log (the ref log is its one source of truth, never either slot) -- detected once, up front, so
+    // it can bypass `replay_pointer_index`'s own resolver, which now refuses in this exact state for
+    // every *other* reader. "Without reading either slot as live": treat the pointer index's current
+    // state as wholly untrusted (an empty replay, the same shape a reader sees for a container that
+    // has never been written at all), and target slot A deterministically for the write below --
+    // which physical slot gets overwritten does not matter, since neither was trusted to begin with
+    // and the write fully reconstructs every ref from the log alone. The generation-log tail check
+    // and the pointer-index tail check both assume a slot the generation log can actually name; in
+    // this state there is none to check, so both are skipped (not silently passed -- this branch's
+    // own `generation_lost` is a condition this rebuild is explicitly the way out for, named in the
+    // plan below).
+    let ref_pointer_generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let ref_pointer_slot_b_path = layout.ref_pointer_index_slot_path(ContainerSlot::B);
+    let generation_lost = generation::generation_log_lost(
+        layout,
+        &ref_pointer_generation_log_path,
+        &ref_pointer_slot_b_path,
     )?;
+    let pointer_replay = if generation_lost {
+        empty_pointer_index_replay()
+    } else {
+        let replay = replay_pointer_index(layout)?;
+        // 0.50.0 step 1, A6 item 5 (019 §5.4): the ref log's own tail (above) and the generation
+        // log's own tail (below) already refuse before this rebuild touches anything -- the pointer
+        // index's own tail did not, so the plan proceeded (exit 0) and the torn slot was silently
+        // abandoned, unsaved, the one tail among the three this function reads that this refusal did
+        // not cover. Same wording and way out as the generation-log case (`0db67cc4`). Skipped when
+        // `generation_lost`: there is no live slot to name a tail against in that state.
+        require_no_unclean_tail(
+            "the ref pointer index",
+            replay.trailing_partial_bytes,
+            replay.tail_offset,
+            "run `prikk doctor --repair-tails`, then retry",
+        )?;
+        replay
+    };
     let mut ref_names: BTreeSet<String> = log_derived.keys().cloned().collect();
     ref_names.extend(
         pointer_replay
@@ -367,16 +392,31 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
 
     // Refusal (2 of 2), in both modes: the generation log must be readable and whole, or the real run
     // refuses here. A plan that ignored it would say "nothing written" and then refuse (review v1's rule:
-    // a plan exits as the real run would).
-    let generation_log_path = layout.ref_pointer_index_generation_log_path();
-    let (live_slot, generation_trailing_partial_bytes, generation_tail_offset) =
-        generation::resolve_live_slot_with_tail(layout, &generation_log_path)?;
-    require_no_unclean_tail(
-        "the ref pointer index's generation log",
-        generation_trailing_partial_bytes,
-        generation_tail_offset,
-        "run `prikk doctor --repair-tails`, then retry",
-    )?;
+    // a plan exits as the real run would). Skipped when `generation_lost`: this rebuild is the named
+    // way out of exactly that state (Part E), so it must proceed rather than refuse over the very
+    // condition it exists to resolve. `live_slot` is arbitrary (`A`) in that branch -- deliberately
+    // "without reading either slot as live" (the ruling's own words): the write below targets
+    // `live_slot.other()`, and which physical slot that names does not matter, since neither was
+    // trusted and the write below fully reconstructs every ref from the log alone.
+    let (live_slot, _, _) = if generation_lost {
+        (ContainerSlot::A, 0, 0)
+    } else {
+        let (slot, trailing, tail_offset) = generation::resolve_live_slot_with_tail(
+            layout,
+            &ref_pointer_generation_log_path,
+            &ref_pointer_slot_b_path,
+            "the ref pointer index",
+            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log \
+             without reading either slot as live",
+        )?;
+        require_no_unclean_tail(
+            "the ref pointer index's generation log",
+            trailing,
+            tail_offset,
+            "run `prikk doctor --repair-tails`, then retry",
+        )?;
+        (slot, trailing, tail_offset)
+    };
 
     // 0.50.0 step 1, A6 item 5 (019 §5.4): every ref's `before` already equals its `after` exactly
     // when nothing was restored and no lead was dropped (both are only ever pushed from inside the
@@ -402,7 +442,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         append_file_required(layout.repository_mutation_root(), &target_relative, &buffer)?;
         generation::append_generation_record(
             layout,
-            &generation_log_path,
+            &ref_pointer_generation_log_path,
             &GenerationRecord {
                 live_slot: target_slot,
             },
