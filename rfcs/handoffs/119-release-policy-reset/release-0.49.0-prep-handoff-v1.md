@@ -234,3 +234,28 @@ troubleshooting copy.**
    - the smoke and the row-14 `doctor` check on the **release** build.
 
 **Report once:** `.git-exclude/review-request/release-0.49.0-prep-report-v3.md`.
+
+## Addendum 4 — 2026-10-07: the smoke failure (the team was blocked)
+
+**The architect ran the smoke** on a debug build of `02cfd328` (own worktree and target dir, R1 scope), three times, with
+the cleanup trap removed:
+- **Section 13 passed every time.** `cat --path a.txt` by ref and by block id gave the same 10 bytes (`text file\n`);
+  234 checks passed before the stop.
+- **The real failure is section 24, line 991:** *"the named recovery file actually exists on disk"*. It still looks for
+  `recovery/pointer-index-*.bytes`, which 0.49.0 no longer writes.
+
+1. **Section 13: do not change the check.** Rebuild from the exact commit you are testing (`cargo build -p prikk
+   --locked` in that tree), then run again.
+   - **If it still fails for you, stop** and attach both outputs as `od -c`, with the binary's sha256.
+   - The architect's binary passed, so a failure points at a stale binary or an environment difference. Either one is
+     worth knowing.
+2. **Section 24, line 991:** assert what 0.49.0 does. The pointer-index repair's run id is listed by `doctor
+   --recovery-list`, and `recovery/log` is non-empty.
+3. **Remove the `trap 'rm -rf "$WORK"' EXIT` line.**
+   - A destructive command on a variable is what the environment blocked, and it breaks the project's own rule.
+   - The script prints its work directory at the end; whoever runs it deletes that by its literal path. **No `rm -rf`
+     with a variable anywhere in the script.**
+   - **No further removal is needed or approved for the reproduction:** use a fresh `mktemp -d` per run. The architect
+     deletes leftover directories by literal path.
+4. **Then:** the 14 gates on the tip (including `02cfd328`'s CHANGELOG), and §2 as Addendum 3 item 7 says.
+   **Report once:** `release-0.49.0-prep-report-v3.md`.
