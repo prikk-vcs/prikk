@@ -362,6 +362,96 @@ fn a_damaged_newest_pointer_record_falls_back_to_a_stale_one_and_is_restored_not
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Part F, Option B (the review): before the rebuild flips away from the live slot, it saves a full
+/// copy of it -- and of the generation log's own before/after bytes -- to the recovery log under
+/// its own run, so `--recovery-restore <run id>` can undo the whole switch, byte for byte.
+#[test]
+fn rebuild_then_restore_reproduces_the_pointer_index_and_generation_state_byte_for_byte() {
+    let root = unique_temp_dir("rfc165-r5-rebuild-recovery-way-back");
+    let layout = setup(&root);
+    let target1 = new_block(&layout, None, 1);
+    let seq1 = fully_publish(&layout, "heads/main", target1, &original_signer(), None, 1);
+    let target2 = new_block(&layout, Some(target1), 2);
+    fully_publish(
+        &layout,
+        "heads/main",
+        target2,
+        &original_signer(),
+        Some(seq1),
+        2,
+    );
+
+    // Damage the newest pointer-index record, exactly as the stale-fallback test above does, so
+    // the rebuild actually restores a ref and writes something (`wrote` must be true for the
+    // recovery save to run at all).
+    let pointer_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let mut bytes = std::fs::read(&pointer_path).unwrap();
+    let first_record_len = bytes.len() / 2;
+    let flip_at = first_record_len + 5;
+    bytes[flip_at] ^= 0xFF;
+    std::fs::write(&pointer_path, bytes).unwrap();
+
+    let slot_a_before =
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A)).unwrap();
+    let generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let generation_before = std::fs::read(&generation_log_path).unwrap();
+    let store = RefStore::new(layout.clone());
+    assert!(
+        store.read_current_ref_state_id("heads/main").is_err(),
+        "fixture: the damaged record must make an ordinary read refuse before the rebuild"
+    );
+
+    let plan = rebuild_pointer_index(&layout).unwrap();
+    assert!(plan.wrote, "fixture: the damaged record must force a write");
+    assert_ne!(
+        std::fs::read(&generation_log_path).unwrap(),
+        generation_before,
+        "fixture: the rebuild must actually switch the generation"
+    );
+    assert!(
+        store.read_current_ref_state_id("heads/main").is_ok(),
+        "fixture: the rebuild itself must have fixed the read"
+    );
+
+    let listing = crate::recovery_list(&layout).unwrap();
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "pointer index rebuild")
+        .map(|entry| entry.id.clone())
+        .expect("the rebuild must save its own way back under a recognizable label");
+
+    let restored = crate::recovery_restore(&layout, &run_id, false).unwrap();
+    assert!(
+        restored.refusal.is_none(),
+        "the restore must be able to run: {:?}",
+        restored.refusal
+    );
+    assert!(restored.written, "the restore must have written");
+
+    // The rebuild's own target slot (B) is never touched by the restore -- Option B's own promise
+    // is the live slot and the generation record, not every physical slot's bytes; B's now-stale,
+    // unreferenced content is harmless, the same shape any retired slot's leftover bytes already
+    // are elsewhere in this design.
+    assert_eq!(
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A)).unwrap(),
+        slot_a_before,
+        "slot A must be byte-identical to before the rebuild"
+    );
+    assert_eq!(
+        std::fs::read(&generation_log_path).unwrap(),
+        generation_before,
+        "the generation log must be byte-identical to before the rebuild"
+    );
+    assert!(
+        store.read_current_ref_state_id("heads/main").is_err(),
+        "byte-identical means behaviorally identical too: the damaged state the rebuild fixed is \
+         now back, refusing exactly as it did before"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_completable_lead_refuses_the_whole_rebuild() {
     let root = unique_temp_dir("rfc165-r5-completable-lead-refuses");

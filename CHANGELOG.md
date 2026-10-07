@@ -58,6 +58,17 @@ until the next compaction, and comparing against the current default slot's cont
 non-default slot, the stale one, losing those writes or reinstating what they revoked. Part E4 compares
 against every prefix of the default slot's own history, not only the whole of it, closing that gap.
 
+### Added — `prikk doctor --rebuild-pointer-index` now has a way back (0.50.0 step 1 Part F)
+
+Before a real run flips away from the live slot, it saves a full copy of it — and of the generation
+log's own before/after bytes — to the recovery log, under one run. `prikk doctor --recovery-restore
+<id>` undoes the whole switch byte for byte: the retired slot and the generation record both go back
+to exactly what they were, naming the old slot live again. The rebuild's own new slot is never
+touched by the restore — its content stays on disk, unreferenced, the same shape any retired slot's
+own leftover bytes already take elsewhere in this design — and a restore refuses outright if anything
+has since changed what it would overwrite, the slot's own saved hash checked fresh at restore time
+rather than a second file's state deciding it.
+
 ## 0.49.0 — 2026-10-07
 
 ### Security

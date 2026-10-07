@@ -228,7 +228,10 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
 - `--repair-index`: rebuilds the object index from the containers.
 - `--repair-pointer-index-tail`: truncates an incomplete final pointer-index record.
 - `--rebuild-pointer-index [--plan-only]`: re-derives the ref-pointer index from the ref log (RFC 165 R5,
-  `pointer_rebuild.rs`).
+  `pointer_rebuild.rs`). Before flipping away from the live slot, a real run saves a full copy of it, and
+  of the generation log's own before/after bytes, to the recovery log under one run (0.50.0 step 1 Part F)
+  -- `--recovery-restore <id>` undoes the whole switch byte for byte: the retired slot and the generation
+  record both go back to what they were, naming the old slot live again.
 - `--discard-damaged-commits [--plan-only]`: removes an acknowledged queued commit that the commit witness
   names and the WAL no longer holds soundly (RFC 166 D5, `doctor/discard_damaged_commits.rs`).
 - `--restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]`: gives an active queue back its

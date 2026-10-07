@@ -120,6 +120,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reason: "`resolve_or_deduce` reads both of a compacting container's slots, whole, only in the rare state where the                  generation log names no slot and slot B holds data -- content is the only way left to decide between them",
         reference: "RFC 102 Stage 6 Step 2 (0.50.0 step 1 Part E2)",
     },
+    DeclaredScope {
+        id: "pointer-index-rebuild-recovery-save",
+        status: ScopeStatus::Intentional,
+        reason: "`run_pointer_index_rebuild` reads the whole live slot once, only on a real run that writes, to save it to the                  recovery log before flipping away from it -- the saved copy is the way back, so it must be the whole slot, not a range",
+        reference: "RFC 165 R5 (0.50.0 step 1 Part F)",
+    },
 ];
 
 /// Which family of store-growing file `relative` (relative to the repository's `.prikk/` directory) is in, if it is in one.

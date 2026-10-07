@@ -346,6 +346,15 @@ new slot nor a new generation record, and says so ("pointer index already matche
 written") — before this round it wrote a new generation unconditionally, even over an already-healthy
 index.
 
+**The way back (0.50.0 step 1 Part F):** before flipping away from the live slot, a real run saves a
+full copy of it, and the generation log's own before/after bytes, to the recovery log under one run --
+`prikk doctor --recovery-restore <id>` undoes the switch byte for byte, rewriting the retired slot and
+re-appending a generation record naming it live again. The rebuild's own new slot is never touched by
+the restore: its content stays on disk, unreferenced once the generation log points elsewhere again,
+the same shape any retired slot's own leftover bytes already take. A restore refuses if anything since
+has changed what it would overwrite — the slot's own saved hash, checked fresh, is what decides that,
+not a second file's state.
+
 ## A Write Never Buries a Crash State (RFC 163)
 
 **The rule, at six files: before an append, the writer confirms under its lock that the file ends at

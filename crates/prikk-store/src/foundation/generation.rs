@@ -517,7 +517,11 @@ pub(crate) struct DeducedFromContent {
 /// pass over A's entries, maintaining the running reduction `fold_entry` builds incrementally (the
 /// same step `compact`'s own reduction takes, exposed so the two can never drift) and testing B
 /// against it after every entry -- recomputing the whole reduction from scratch for each candidate
-/// `P` would make this quadratic, not linear. `decode_entries` and `fold_entry` are the two pieces
+/// `P` would add a second factor of `|A|` on top of this; folding one entry at a time keeps that
+/// part to `O(|A|)`. The per-step comparison against B is still `O(|B|)`, so the deduction as a
+/// whole costs `O(|A|*|B|)` entry comparisons, not linear in `|A|` alone (Part E4 review) -- run
+/// only in the ambiguous state, over these containers' own size, so this cost is acceptable.
+/// `decode_entries` and `fold_entry` are the two pieces
 /// only the caller can supply -- each compacting container's own entry type, decoder, and reduction
 /// step -- so this stays generic over them rather than this module importing three sibling modules'
 /// types.
