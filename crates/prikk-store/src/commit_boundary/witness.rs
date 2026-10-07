@@ -33,6 +33,7 @@ const WITNESS_VERSION: u16 = 1;
 
 /// One acknowledged commit's witness, as read back.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WitnessRecord {
     /// The ref this session's queue belongs to, as it was when this record was written.
     pub ref_name: String,
@@ -51,6 +52,7 @@ pub struct WitnessRecord {
 
 /// Outcome of reading the witness file.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WitnessState {
     /// No witness file, or an empty one (the cleared state, written at drain). A legacy session, or
     /// one whose witness was removed -- they cannot be told apart, and both fall back to rule 3 for

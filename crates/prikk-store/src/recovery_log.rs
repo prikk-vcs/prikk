@@ -80,6 +80,7 @@ pub(crate) struct Entry {
 
 /// What a repair reports about the entry it wrote: enough to name it on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RecoveryRef {
     /// The 16-hex-character run id: the id a user restores by. Empty for a plan-only preview, which writes nothing.
     pub id: String,
@@ -989,6 +990,7 @@ mod controls {
 
 /// One entry as `--recovery-list` prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RecoveryEntryView {
     /// The 16-hex-character id.
     pub id: String,
@@ -1006,6 +1008,7 @@ pub struct RecoveryEntryView {
 
 /// What `--recovery-list` prints: the sound entries, the damaged regions, and the older files listed by hand.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RecoveryListing {
     /// The sound entries, in log order.
     pub entries: Vec<RecoveryEntryView>,
@@ -1023,6 +1026,7 @@ pub struct RecoveryListing {
 
 /// One condition of a restore plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RestoreConditionView {
     /// What the condition checks, in the words the plan prints.
     pub text: String,
@@ -1032,6 +1036,7 @@ pub struct RestoreConditionView {
 
 /// What `--recovery-restore` prints first: each condition, what it would write, and whether it wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RestorePlanView {
     /// The run id the plan is for.
     pub id: String,
@@ -1064,6 +1069,7 @@ pub struct ClearedEntry {
 
 /// One step of a run's restore, as `--recovery-restore` prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RestoreStepView {
     /// The file the step writes.
     pub source: String,
@@ -1079,6 +1085,7 @@ pub struct RestoreStepView {
 
 /// What `--recovery-clear` removed, or would remove under `--plan-only`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RecoveryClearView {
     /// Each sound entry, listed.
     pub entries: Vec<ClearedEntry>,
