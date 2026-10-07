@@ -109,3 +109,15 @@ architect):
 | U1 | A1 and A2 | 120 min |
 | U2 | A3, A4, A5 | 90 min |
 | U3 | A6, including the 6.6 answer and the way-back options | 90 min |
+
+**Interim, seen 2026-10-07** (`67c66606`; report v1). Accepted on reading:
+- **A1:** the chain walk ends, because each step's `update_seq` strictly decreases, and a missing or unverifiable link
+  drops as before. The control was shown, and the revoked-link case still drops.
+- **A2's offset fix:** accepted.
+- **The `refs::rebuild_discovery` split:** accepted.
+
+**Continue with A2's remaining sites, A3–A6, and the docs grep.**
+- **For A2's generic refusal** (`incomplete_publication_refusal`), name `ref complete` only when the mismatch is a
+  genuine N3 lead (one coherent transition, per R4). Every other case keeps its text.
+- **Print `date` at each unit's start and end.** It has been asked for every round.
+- **Report once, at the end:** `review-019-corrections-report-v2.md`.
