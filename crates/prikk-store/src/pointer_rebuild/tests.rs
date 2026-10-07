@@ -571,3 +571,132 @@ fn a_plan_refuses_over_a_torn_generation_log_tail_as_the_real_run_does() {
     std::fs::write(&log, &clean).expect("restore the clean log");
     plan_pointer_index_rebuild(&layout).expect("control: without the tail the plan is clean again");
 }
+
+/// 019 §4.4 / RFC 165 R5 amendment (review v1 of this handoff): a pointer two transitions ahead of
+/// the log, both signed by a trusted key and chaining soundly back to the log's own tip (here, no
+/// log record at all), is refused -- not silently dropped, which would discard both transitions.
+#[test]
+fn a_two_deep_signed_chaining_lead_is_refused_not_dropped() {
+    let root = unique_temp_dir("rfc165-r5-deep-lead-refused");
+    let layout = setup(&root);
+    let target1 = new_block(&layout, None, 1);
+    let lead1 = fully_publish(&layout, "heads/main", target1, &original_signer(), None, 1);
+    let target2 = new_block(&layout, Some(target1), 2);
+    let _lead2 = fully_publish(
+        &layout,
+        "heads/main",
+        target2,
+        &original_signer(),
+        Some(lead1),
+        2,
+    );
+    // 019 §4.4's "emptied-log state": both transitions are sound and really published, pointer and
+    // log agreeing -- then the ref log itself is emptied (a restore from an earlier copy, say),
+    // leaving the pointer two transitions ahead of a log that now has nothing for this ref at all.
+    let log_path = layout.ref_log_container_slot_path(ContainerSlot::A);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&log_path)
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    let before = live_pointer_index_bytes(&layout);
+
+    let plan_error = plan_pointer_index_rebuild(&layout).unwrap_err().to_string();
+    assert!(plan_error.contains("heads/main"), "{plan_error}");
+    assert!(plan_error.contains("2 transitions deep"), "{plan_error}");
+    assert!(
+        plan_error.contains("restore the ref log from a copy"),
+        "{plan_error}"
+    );
+
+    let run_error = rebuild_pointer_index(&layout).unwrap_err().to_string();
+    assert_eq!(
+        plan_error, run_error,
+        "the plan must refuse exactly as the real run does"
+    );
+    assert_eq!(
+        live_pointer_index_bytes(&layout),
+        before,
+        "a refused rebuild must write nothing"
+    );
+}
+
+/// Known risk, named in the handoff: a lead that fails *both* (b) (more than one transition deep)
+/// and (a) (an untrusted signer, here on the second transition) must still be dropped, not refused --
+/// the chain does not verify, so there is nothing sound to protect.
+#[test]
+fn a_two_deep_lead_with_an_untrusted_link_is_still_dropped() {
+    let root = unique_temp_dir("rfc165-r5-deep-lead-untrusted-link");
+    let layout = setup(&root);
+    let target1 = new_block(&layout, None, 1);
+    let lead1 = fully_publish(&layout, "heads/main", target1, &original_signer(), None, 1);
+    // Revoke, then a second, otherwise-ordinary publish by the now-revoked key -- real, not
+    // crashed, the only way a second transition can land at all while the first is still sound.
+    assert!(remove_trusted_maintainer(&layout, revoked_signer().key_id()).unwrap());
+    let target2 = new_block(&layout, Some(target1), 2);
+    let _lead2 = fully_publish(
+        &layout,
+        "heads/main",
+        target2,
+        &revoked_signer(),
+        Some(lead1),
+        2,
+    );
+    // Then the log is emptied, the same way the first test's sound two-deep chain is built --
+    // leaving this ref two transitions ahead of the log, the leading one unsigned by any trusted key.
+    let log_path = layout.ref_log_container_slot_path(ContainerSlot::A);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&log_path)
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+
+    let plan = plan_pointer_index_rebuild(&layout).unwrap();
+    let entry = plan
+        .per_ref
+        .iter()
+        .find(|entry| entry.ref_name == "heads/main")
+        .unwrap();
+    assert_eq!(entry.after, None, "the log never confirmed this ref");
+    assert!(
+        plan.dropped_leads
+            .iter()
+            .any(|dropped| dropped.ref_name == "heads/main"),
+        "the two-deep, partly-unsigned lead must be dropped, not refused: {:?}",
+        plan.dropped_leads
+    );
+}
+
+/// 019 §5.2: the rebuild's own torn-ref-log-tail refusal must name the tail's real byte offset, not
+/// a placeholder zero -- 019 saw "byte offset 0" for a tail that was actually at 1615.
+#[test]
+fn the_rebuild_names_the_ref_logs_real_tail_offset() {
+    let root = unique_temp_dir("rfc165-r5-rebuild-names-real-tail-offset");
+    let layout = setup(&root);
+    let target = new_block(&layout, None, 1);
+    fully_publish(&layout, "heads/main", target, &original_signer(), None, 1);
+    let log_path = layout.ref_log_container_slot_path(ContainerSlot::A);
+    let sound_len = std::fs::metadata(&log_path).unwrap().len();
+    assert_ne!(
+        sound_len, 0,
+        "the sound record itself must not be at offset 0"
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, &[0u8; 20]).unwrap();
+    drop(file);
+
+    let plan_error = plan_pointer_index_rebuild(&layout).unwrap_err().to_string();
+    assert!(
+        plan_error.contains(&format!("byte offset {sound_len}")),
+        "expected the real offset {sound_len}, got: {plan_error}"
+    );
+    assert!(!plan_error.contains("byte offset 0"), "{plan_error}");
+
+    let run_error = rebuild_pointer_index(&layout).unwrap_err().to_string();
+    assert_eq!(plan_error, run_error);
+}

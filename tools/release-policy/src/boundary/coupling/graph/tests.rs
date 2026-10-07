@@ -146,7 +146,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 166 round 2 §2 added `doctor::restore_queue_target` (D5, `--restore-queue-target`): 155 -> 156.
     // RFC 168 §3.1 added `recovery_log`, the one recovery log and its restore: 156 -> 157.
     // RFC 168 A1 split the restore out of `recovery_log` into `recovery_log::restore`: 157 -> 158.
-    assert_eq!(modules.len(), 158, "modules: {modules:?}");
+    // 0.50.0 step 1 (019 §5.2) split the rebuild's ref-log discovery out of `refs` into
+    // `refs::rebuild_discovery`, the same size-check reason: 158 -> 159.
+    assert_eq!(modules.len(), 159, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

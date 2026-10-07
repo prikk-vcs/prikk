@@ -50,6 +50,7 @@ use crate::refs::{
     PointerIndexEntry, decode_ref_log_for_rebuild, encode_pointer_index_record,
     replay_pointer_index,
 };
+use crate::trust::{load_maintainer_trust_policy, verify_trusted_publication_envelope};
 
 /// One ref's own before/after state in a rebuild plan. `before` is the ref's current pointer, read
 /// tolerating damage elsewhere in the container (`None` when this ref has no pointer at all, *or*
@@ -135,6 +136,61 @@ fn current_pointer_tolerating_damage_elsewhere(
         .map(|entry| entry.ref_state_id)
 }
 
+/// RFC 165 R5 amendment (external review 019 §5.1, architect-ruled): a pointer that leads the log by
+/// more than one transition fails `evaluate_known_lead`'s condition (b) the same way an ordinary,
+/// unrelated pointer would -- [`CompletionRefusal::NotALead`] does not distinguish them. But dropping
+/// a pending chain that is otherwise sound -- every `RefState` in it signed by a trusted key, and each
+/// one chaining to the next by exactly one transition, all the way back to the log's own tip --
+/// discards every one of those authorized transitions, not only the first, which `evaluate_known_
+/// lead`'s single-step rule was never asked to protect against. This walks that chain, read-only, and
+/// returns its depth (`>= 2`) only when the whole thing verifies and chains; `None` for every other
+/// shape (a broken, forked, or unsigned chain), which `run_pointer_index_rebuild` still drops exactly
+/// as before.
+fn deep_verifying_lead_depth(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    leading_id: ObjectId,
+    log_tip: Option<ObjectId>,
+    log_tip_seq: Option<u64>,
+) -> Result<Option<u64>> {
+    let objects = FileObjectStore::new(layout.clone());
+    let policy = load_maintainer_trust_policy(layout)?;
+    let root_seq = log_tip_seq.map_or(1, |seq| seq + 1);
+    let mut current_id = leading_id;
+    let mut expected_seq: Option<u64> = None;
+    let mut depth: u64 = 0;
+    loop {
+        let Some(envelope) = objects.read_typed(current_id, ObjectType::RefState)? else {
+            return Ok(None);
+        };
+        if verify_trusted_publication_envelope(&policy, &envelope).is_err() {
+            return Ok(None);
+        }
+        let state = RefStatePayload::decode_canonical(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )?;
+        if state.ref_name != ref_name {
+            return Ok(None);
+        }
+        if expected_seq.is_some_and(|expected| state.update_seq != expected) {
+            return Ok(None);
+        }
+        depth += 1;
+        if state.previous_ref_state_id == log_tip {
+            return Ok((state.update_seq == root_seq && depth >= 2).then_some(depth));
+        }
+        let Some(previous_id) = state.previous_ref_state_id else {
+            return Ok(None);
+        };
+        let Some(previous_seq) = state.update_seq.checked_sub(1) else {
+            return Ok(None);
+        };
+        expected_seq = Some(previous_seq);
+        current_id = previous_id;
+    }
+}
+
 fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Result<RebuildPlan> {
     layout.require_current_format()?;
     let _lock = acquire_container_locks(
@@ -161,7 +217,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     require_no_unclean_tail(
         "the ref log",
         discovery.trailing_partial_bytes,
-        0,
+        discovery.tail_offset,
         "run `prikk doctor --repair-tails`, then retry",
     )?;
 
@@ -192,6 +248,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     // authorized transition. Collected across every ref before refusing, so one refusal names all of
     // them, not only the first found.
     let mut completable_leads: Vec<String> = Vec::new();
+    let mut refused_deep_leads: Vec<(String, u64)> = Vec::new();
     let mut dropped_leads: Vec<DroppedLead> = Vec::new();
     let mut restored: Vec<RestoredRef> = Vec::new();
     let mut per_ref: Vec<RefRebuildEntry> = Vec::new();
@@ -231,6 +288,26 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
                     // lead`, not `plan_ref_completion`.
                     match evaluate_known_lead(layout, ref_name, leading_id)? {
                         Ok(_plan) => completable_leads.push(ref_name.clone()),
+                        Err(CompletionRefusal::NotALead) => {
+                            // 019 §5.1 (RFC 165 R5 amendment): a chain this deep, fully signed and
+                            // chaining to the log's own tip, is refused, not dropped.
+                            match deep_verifying_lead_depth(
+                                layout,
+                                ref_name,
+                                leading_id,
+                                after,
+                                log_tip_seq.get(ref_name).copied(),
+                            )? {
+                                Some(depth) => {
+                                    refused_deep_leads.push((ref_name.clone(), depth));
+                                }
+                                None => dropped_leads.push(DroppedLead {
+                                    ref_name: ref_name.clone(),
+                                    lead_ref_state_id: leading_id,
+                                    reason: CompletionRefusal::NotALead,
+                                }),
+                            }
+                        }
                         Err(refusal) => dropped_leads.push(DroppedLead {
                             ref_name: ref_name.clone(),
                             lead_ref_state_id: leading_id,
@@ -254,6 +331,21 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
              would drop an authorized transition: {}",
             completable_leads.len(),
             completable_leads.join(", ")
+        )));
+    }
+
+    if !refused_deep_leads.is_empty() {
+        let detail = refused_deep_leads
+            .iter()
+            .map(|(ref_name, depth)| format!("{ref_name} ({depth} transitions deep)"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(PrikkError::Precondition(format!(
+            "{} ref(s) have a pointer more than one transition ahead of the ref log, every RefState \
+             signed and chaining soundly back to it; a rebuild would drop every one of those \
+             transitions, not only the first -- restore the ref log from a copy, then run the rebuild \
+             again: {detail}",
+            refused_deep_leads.len()
         )));
     }
 
