@@ -241,6 +241,8 @@ item is open.
 
 <!-- open-work-index:start -->
 
+- [`170-embedding-prikk-as-a-library.md`](rfcs/proposed/170-embedding-prikk-as-a-library.md) — investigation: embedding prikk as a library (a `prikk-core` facade, worktree-less commits, a caller-chosen storage path, a key API for embedders, a stability promise); proposed 2026-10-07 at the owner's request; unscheduled, after 0.52.0 at the earliest; RFC 112 first
+
 - [`169-when-the-release-key-is-lost-or-compromised.md`](rfcs/proposed/169-when-the-release-key-is-lost-or-compromised.md) — D7: a written procedure for a lost or compromised release key; accepted 2026-10-07, then parked by the owner the same day (deprioritized, not in 0.49.0); its factual verification docs stay published
 
 

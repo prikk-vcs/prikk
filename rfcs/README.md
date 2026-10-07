@@ -50,6 +50,7 @@ These records are under design review. All proposed RFCs must respect the depend
 
 | ID | Title | Milestone |
 |---|---|---|
+| 170 | [Embedding prikk as a library: an investigation](./proposed/170-embedding-prikk-as-a-library.md) | Proposed 2026-10-07 at the owner's request; investigation only, unscheduled (after 0.52.0 at the earliest) |
 | 169 | [When the release key is lost or compromised](./proposed/169-when-the-release-key-is-lost-or-compromised.md) | Proposed 2026-10-06; accepted 2026-10-07, then parked by the owner the same day (deprioritized, not in 0.49.0) |
 | 136 | [Block Aggregation Payoff](./done/136-block-aggregation-payoff.md) | **Done — shipped in 0.43.0 (2026-09-16)** as "sealed snapshots": checkpoints every 64 blocks, anchored checkouts, provisional worktrees behind a derivation gate. Increment 2c (baseline reconstruction) follows 0.43.0 |
 
