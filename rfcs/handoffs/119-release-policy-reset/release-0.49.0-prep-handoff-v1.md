@@ -210,3 +210,5 @@ troubleshooting copy.**
 
 **Then §1.1–§1.8 and §2.** The `### Security` list comes to the architect first (§1.2). **Report once:**
 `.git-exclude/review-request/release-0.49.0-prep-report-v2.md`.
+
+**Addendum 2 rulings ACCEPTED 2026-10-07** (`0db67cc4`, `afd26195`; 14/14 at `afd26195`). The rebuild plan's precondition now sits before the mode split, so a plan refuses exactly as the run does; the control was shown. **Continue with §1.1–§1.8, then §2.** The `### Security` list comes to the architect first. Report once: `release-0.49.0-prep-report-v2.md`.
