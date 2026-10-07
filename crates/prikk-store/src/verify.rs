@@ -748,6 +748,13 @@ pub struct RepositoryVerification {
     /// `PRIKK-DOCTOR-CURRENT-BRANCH` issue already reports this; this field lets `verify` say the
     /// same thing, independently of whether a stage it depends on evaluated.
     pub current_branch_issue: Option<String>,
+    /// 0.50.0 step 1, Part D1: whether `.prikk/current-branch` exists on disk at all. `true` for
+    /// every repository initialized before RFC 151 -- a normal, unaffected state, never a warning
+    /// (the external architect's condition kept from Part C: *"today its removal is silent," and it
+    /// stays silent, now as an explicit, informational line rather than true silence). Independent
+    /// of `current_branch_issue`: the two can never both describe the same pointer, since an absent
+    /// file always resolves (`current_branch`'s own unborn-default rule), never errors.
+    pub current_branch_absent: bool,
 }
 
 /// RFC 164 Rule B: one Rule-A-covered file's own tail/damage status, from a direct, standalone read
@@ -1799,6 +1806,11 @@ pub fn verify_repository_with_options(
     let current_branch_issue = crate::refs::current_branch(layout)
         .err()
         .map(|err| err.to_string());
+    // Part D1: an absent pointer is never a warning (A4's own `current_branch_issue` above is
+    // already `None` for it, since `current_branch` resolves rather than errors) -- this is the
+    // separate, informational fact `print_verify_report` needs to tell it apart from a pointer that
+    // exists and correctly names the unborn default, both of which resolve identically otherwise.
+    let current_branch_absent = !crate::refs::current_branch_pointer_exists(layout)?;
 
     // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
     // the run found -- each such outcome is individually sound. Best-effort; never fails verify.
@@ -1854,6 +1866,7 @@ pub fn verify_repository_with_options(
         trailing_partial_pointer_index_bytes,
         appended_file_tails,
         current_branch_issue,
+        current_branch_absent,
     })
 }
 

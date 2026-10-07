@@ -123,7 +123,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.49.0 Addendum 1 P5: the stale "one known instance" paragraph in verify's module doc removed (the received index is read), 2,361 -> 2,358.
         // 0.50.0 step 1, A4: the `current_branch_issue` field, `has_current_branch_warning`, and the
         // unconditional `refs::current_branch` read feeding it, 2,358 -> 2,381.
-        detail.contains("2381"),
+        // 0.50.0 step 1, Part D1: the `current_branch_absent` field and the `refs::current_branch_
+        // pointer_exists` read feeding it, 2,381 -> 2,394.
+        detail.contains("2394"),
         "the line count is in the message: {detail}"
     );
     assert!(

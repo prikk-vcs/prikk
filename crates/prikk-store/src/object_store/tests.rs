@@ -1,5 +1,7 @@
 //! Object store and layout tests.
 
+mod d1_lookup_memo;
+
 // DC-98 Stage 1: `mod immutable;` and `mod races;` (G5's own conformance and race tests) removed
 // along with `DurabilityContract::publish_immutable` -- zero production callers, and G5 retired as
 // a guarantee. DC-97 had deferred splitting `races.rs`'s helper rather than deciding it under time

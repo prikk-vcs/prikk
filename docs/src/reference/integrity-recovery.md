@@ -124,7 +124,11 @@ repairable tails, so their damage is never a failure — including when the torn
 recently written, which a reader now rescans the containers for rather than reporting as a missing
 object (0.50.0 step 1 A5) — but it is never silent either. `current-branch` is a default, never an
 authority (RFC 151 §2.1): nothing above reads it, and an explicit `--ref` always works regardless of
-whether it resolves. The recovery mechanics and safe truncation boundary are covered by the
+whether it resolves. **An absent pointer is not a warning** (every repository initialized before RFC
+151, and every one of this repository's own fresh `init`s before the file was first written) — a
+normal, unaffected state, reported as an informational line instead (0.50.0 step 1 Part D1):
+`current-branch: not set; commands without --ref use heads/main`. The recovery mechanics and safe
+truncation boundary are covered by the
 [durability and crash recovery](./durability-recovery.md) reference.
 
 ## Active WAL Metadata States

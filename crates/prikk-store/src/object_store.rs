@@ -4,6 +4,8 @@
 //! internals moved: reads and writes now go through `index.rs`'s lookup/write-protocol functions,
 //! which target `container.rs`'s per-type container files instead of one file per object.
 
+use std::cell::RefCell;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
@@ -51,17 +53,40 @@ pub trait ObjectWriter {
     fn write_object(&mut self, envelope: &ObjectEnvelope) -> Result<ObjectId>;
 }
 
+/// `resolve_object_location_entries`'s own decode-or-rebuild result, memoized against the index
+/// file's raw stat length (0.50.0 step 1 Part D1) -- see [`FileObjectStore`]'s own field doc for why.
+#[derive(Debug, Clone)]
+struct LookupCache {
+    /// The index file's raw stat length `entries` was computed against. A length match means
+    /// nothing has written to the index since, so `entries` is still exactly what a fresh decode
+    /// (or rebuild) would produce -- recomputing it would re-pay the same cost for the same answer.
+    index_file_length: u64,
+    entries: Vec<IndexEntry>,
+}
+
 /// File-backed object store.
 #[derive(Debug, Clone)]
 pub struct FileObjectStore {
     layout: RepositoryLayout,
+    /// 0.50.0 step 1 Part D1: `resolve_object_location_entries`'s fallback scan (`rebuild_index_from_
+    /// containers`, paid whenever the index has a tail or interior damage) used to run again on
+    /// *every* unlocked lookup this handle made, for as long as the tail or damage was on disk --
+    /// `log`/`cat`/`show`/`tree` over N objects each paid N full container rescans. Memoized here,
+    /// one `RefCell` per handle: a `Clone`d handle gets its own independent cache (a fresh memo, not
+    /// shared state), matching every other `Clone` of this type today. Invalidated purely by the
+    /// index file's own raw stat length changing -- the same signal `IndexSnapshot::ensure_current`
+    /// uses, chosen for the same reason: cheaper than re-deciding whether a rebuild is still needed.
+    lookup_cache: RefCell<Option<LookupCache>>,
 }
 
 impl FileObjectStore {
     /// Create a file object store for a repository layout.
     #[must_use]
     pub fn new(layout: RepositoryLayout) -> Self {
-        Self { layout }
+        Self {
+            layout,
+            lookup_cache: RefCell::new(None),
+        }
     }
 
     /// Return the repository layout.
@@ -77,15 +102,42 @@ impl FileObjectStore {
             return false;
         }
         matches!(
-            resolve_object_location(&self.layout, id),
+            self.resolve_cached(id),
             Ok(Some(entry)) if entry.object_type == object_type
         )
+    }
+
+    /// [`resolve_object_location_entries`], memoized per handle (0.50.0 step 1 Part D1) -- see
+    /// this type's own `lookup_cache` field doc for why and [`LookupCache`] for the invalidation rule.
+    fn resolve_cached(&self, id: ObjectId) -> Result<Option<IndexEntry>> {
+        let current_length = current_index_file_length(&self.layout)?;
+        if let Some(cache) = self.lookup_cache.borrow().as_ref() {
+            if cache.index_file_length == current_length {
+                return Ok(cache
+                    .entries
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.object_id == id)
+                    .copied());
+            }
+        }
+        let entries = resolve_object_location_entries(&self.layout)?;
+        let found = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.object_id == id)
+            .copied();
+        *self.lookup_cache.borrow_mut() = Some(LookupCache {
+            index_file_length: current_length,
+            entries,
+        });
+        Ok(found)
     }
 }
 
 impl ObjectReader for FileObjectStore {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
-        let Some(entry) = resolve_object_location(&self.layout, id)? else {
+        let Some(entry) = self.resolve_cached(id)? else {
             return Ok(None);
         };
         read_object_at_entry(&self.layout, &entry, id)
@@ -93,7 +145,7 @@ impl ObjectReader for FileObjectStore {
 
     fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
         Ok(matches!(
-            resolve_object_location(&self.layout, id)?,
+            self.resolve_cached(id)?,
             Some(entry) if entry.object_type == object_type
         ))
     }
@@ -189,35 +241,36 @@ fn current_index_file_length(layout: &RepositoryLayout) -> Result<u64> {
 /// cannot rebuild itself), this is the object-store layer's own lookup: if the index is damaged, **or
 /// has a trailing-partial tail (0.50.0 step 1, A5)**, it scans the containers in memory
 /// (`rebuild_index_from_containers`, the same scan `doctor --repair-index` uses, but without
-/// installing anything) and searches the scanned entries -- this is the round's chosen half of rule
-/// 1's "a reader falls back to scanning the containers, or rebuilds under the lock." A5's own defect:
-/// the most-recently-written object's index entry is exactly the one a crash leaves torn (the record
-/// is durable in its own container before the index is appended), and the tail-only branch used to
-/// search only `replay.entries`, which never contains that record -- reporting it `None` ("not
-/// found") though the object is fully sound, a false "missing object" indistinguishable here from a
-/// real one until the caller's own context (a ref's `verify` scan, say) turns it into one. The
-/// trailing-partial case must take the identical fallback the damaged case already does, not a
-/// narrower one. Scanning, not persisting, was chosen for every unlocked caller specifically because
-/// persisting from here would be a hidden write: this function's callers include `verify` (documented
-/// read-only end to end, RFC 111 §6.1) and `ObjectWriteSession`'s own pre-lock decision path, whose
-/// refusal (`import_bundle`'s own contract) must leave the repository exactly as it found it. The
-/// cost is measured in the round's report (X3): the common, sound case costs exactly what it always
-/// did (one index decode, no lock, no scan), and only the rare damaged-or-tailed case pays for a full
-/// container rescan.
-fn resolve_object_location(layout: &RepositoryLayout, id: ObjectId) -> Result<Option<IndexEntry>> {
+/// installing anything) -- this is the round's chosen half of rule 1's "a reader falls back to
+/// scanning the containers, or rebuilds under the lock." A5's own defect: the most-recently-written
+/// object's index entry is exactly the one a crash leaves torn (the record is durable in its own
+/// container before the index is appended), and the tail-only branch used to search only `replay.
+/// entries`, which never contains that record -- reporting it `None` ("not found") though the object
+/// is fully sound, a false "missing object" indistinguishable here from a real one until the
+/// caller's own context (a ref's `verify` scan, say) turns it into one. The trailing-partial case
+/// must take the identical fallback the damaged case already does, not a narrower one. Scanning, not
+/// persisting, was chosen for every caller specifically because persisting from here would be a
+/// hidden write: this function's only caller is `FileObjectStore::resolve_cached`, which `verify`
+/// (documented read-only end to end, RFC 111 §6.1) reaches through the ordinary `ObjectReader`
+/// interface.
+///
+/// **Returns every entry, not a single lookup** (0.50.0 step 1 Part D1): the common, sound case costs
+/// exactly what it always did (one index decode, no lock, no scan); the damaged-or-tailed case pays
+/// for one full container rescan, but `FileObjectStore::resolve_cached` -- this function's only
+/// caller -- now memoizes the result per handle instead of calling this again for every object the
+/// handle looks up, so that one rescan is paid at most once per handle per index-file state, not once
+/// per lookup. A handle that reads N objects while a tail or damage is on disk used to pay N full
+/// rescans for it; it now pays one.
+fn resolve_object_location_entries(layout: &RepositoryLayout) -> Result<Vec<IndexEntry>> {
     let replay = index::replay_index(layout)?;
-    let entries = if replay.has_item_failure() || replay.trailing_partial_bytes != 0 {
-        index::rebuild_index_from_containers(layout)?
+    if replay.has_item_failure() || replay.trailing_partial_bytes != 0 {
+        index::rebuild_index_from_containers(layout)
     } else {
-        replay.entries
-    };
-    Ok(entries
-        .into_iter()
-        .rev()
-        .find(|entry| entry.object_id == id))
+        Ok(replay.entries)
+    }
 }
 
-/// Like [`resolve_object_location`], but for use only from inside `append_object_under_lock`'s hold --
+/// Like [`resolve_object_location_entries`], but for use only from inside `append_object_under_lock`'s hold --
 /// this is rule 1's writer half: called before the write decision is made, so a writer that finds the
 /// index damaged rebuilds it **on disk** (the lock it already holds makes this safe to persist) and
 /// never appends behind damage.
@@ -343,13 +396,14 @@ struct IndexSnapshot {
 impl IndexSnapshot {
     /// RFC 162 rule 1: a reader never refuses while the containers are sound. Never called from inside
     /// `append_object_under_lock`'s hold (every production caller opens a snapshot before attempting
-    /// any write), and never persists anything on damage -- see `resolve_object_location`'s own doc for
-    /// why an unlocked path must not have a hidden write side effect (`verify`'s read-only contract,
-    /// `import_bundle`'s all-or-nothing refusal). Scans the containers in memory instead.
+    /// any write), and never persists anything on damage -- see `resolve_object_location_entries`'s
+    /// own doc for why an unlocked path must not have a hidden write side effect (`verify`'s
+    /// read-only contract, `import_bundle`'s all-or-nothing refusal). Scans the containers in memory
+    /// instead.
     ///
     /// 0.50.0 step 1, A5: a trailing-partial tail with no `Failed` item used to be read as "nothing
-    /// to rebuild for," the same oversight `resolve_object_location`'s own fix carries the full
-    /// account of. The most-recently-written object's index entry is exactly the one a crash leaves
+    /// to rebuild for," the same oversight `resolve_object_location_entries`'s own fix carries the
+    /// full account of. The most-recently-written object's index entry is exactly the one a crash leaves
     /// torn, so `replay.entries` alone silently omits it -- `verify`'s own ref-publication scan,
     /// built on this snapshot (`ObjectReadSnapshot`), read that object as a missing `RefState` though
     /// its container record was fully sound, failing a stage that nothing had actually damaged.

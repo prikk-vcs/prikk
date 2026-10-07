@@ -678,6 +678,12 @@ pub(crate) fn print_verify_report(
              switch heads/<name>` to a branch that exists and is open, or `prikk branch create` \
              the branch the pointer names; `--ref` given explicitly still works meanwhile"
         );
+    } else if report.current_branch_absent {
+        // Part D1: true of every repository initialized before RFC 151 -- a normal, unaffected
+        // state (the pointer resolves to `heads/main`, the unborn default, the same as a healthy
+        // repository whose file correctly names it). Informational, not a warning: nothing here is
+        // unusable or alarming, only unset.
+        println!("current-branch: not set; commands without `--ref` use heads/main");
     }
 }
 

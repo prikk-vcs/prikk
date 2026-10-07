@@ -439,6 +439,31 @@ pub(crate) fn replay_index_decode_count_for_test() -> usize {
     REPLAY_INDEX_DECODE_COUNT.with(|count| count.get())
 }
 
+// 0.50.0 step 1 Part D1: counts calls to `rebuild_index_from_containers` -- the full object-store
+// rescan A5's fix pays whenever the index has a tail or interior damage, and `FileObjectStore`'s own
+// per-handle memo (`object_store.rs`) exists to pay at most once per handle per index-file state
+// instead of once per lookup. Thread-local, the same reasoning `REPLAY_INDEX_DECODE_COUNT` already
+// gives.
+#[cfg(test)]
+std::thread_local! {
+    static REBUILD_INDEX_FROM_CONTAINERS_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_rebuild_index_from_containers_for_test() {
+    REBUILD_INDEX_FROM_CONTAINERS_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
+pub(crate) fn reset_rebuild_index_from_containers_count_for_test() {
+    REBUILD_INDEX_FROM_CONTAINERS_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn rebuild_index_from_containers_count_for_test() -> usize {
+    REBUILD_INDEX_FROM_CONTAINERS_COUNT.with(|count| count.get())
+}
+
 /// Look up one object's container location. Trusts the index for location (design §12/§10.3): one
 /// index read, then a linear search of its (already-decoded) entries -- no container scan. Refuses
 /// if the index itself has a damaged entry, rather than silently searching around it: an index this
@@ -739,6 +764,8 @@ fn frame_checksum(object_type: ObjectType, record_bytes: &[u8]) -> Result<[u8; 3
 pub(crate) fn rebuild_index_from_containers(layout: &RepositoryLayout) -> Result<Vec<IndexEntry>> {
     #[cfg(test)]
     let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("index-rebuild");
+    #[cfg(test)]
+    record_rebuild_index_from_containers_for_test();
     let mut entries = Vec::new();
     for object_type in persisted_object_types() {
         let relative = layout

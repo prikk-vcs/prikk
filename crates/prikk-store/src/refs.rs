@@ -1017,9 +1017,9 @@ fn malformed_pointer(layout: &RepositoryLayout, detail: String) -> PrikkError {
 /// RFC 151 §2.1: the branch `--ref` defaults to, read from `.prikk/current-branch`.
 ///
 /// **A default, never an authority.** Local, mutable and unsigned, so nothing that decides trust
-/// reads it: not `verify`, not trust or signing, not `bundle` or `sync`, not any object. Only the
-/// CLI's default resolution and `doctor` call this, and a test over both production trees holds
-/// that.
+/// reads it: not trust or signing, not `bundle` or `sync`, not any object. Only the CLI's default
+/// resolution, `doctor`, and (0.50.0 step 1, A4) `verify`'s own warning call this, and a test over
+/// both production trees holds that list closed.
 ///
 /// - no file: `heads/main` (a repository created before RFC 151);
 /// - not exactly one valid local branch ref name followed by a newline: `Precondition` naming the
@@ -1074,6 +1074,21 @@ pub fn current_branch(layout: &RepositoryLayout) -> Result<String> {
         )));
     }
     Ok(canonical)
+}
+
+/// Whether `.prikk/current-branch` exists on disk (0.50.0 step 1, Part D1). [`current_branch`]
+/// alone cannot tell "no file, a pre-RFC-151 repository" apart from "a file that correctly names
+/// the unborn default" -- both resolve to `Ok(UNBORN_DEFAULT_BRANCH)` -- and `verify` needs that
+/// distinction to print an **informational** line over the former (true for a normal, unaffected
+/// repository, so a warning would be alarming for nothing) while keeping its existing warning for
+/// every other unresolved case unchanged. Reads only, the same contract `current_branch` itself has.
+pub fn current_branch_pointer_exists(layout: &RepositoryLayout) -> Result<bool> {
+    let relative = layout.repository_relative(&layout.current_branch_path())?;
+    Ok(crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )?
+    .is_some())
 }
 
 /// Validate a local tag ref name and return its canonical identity string.
