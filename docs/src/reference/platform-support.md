@@ -108,11 +108,15 @@ the walk goes. A coincidental file-index collision on ReFS would need to land on
 already, independently, arrived at correctly — not redirect it. `FILE_ID_INFO` is not used here; if a
 future increment needs a stronger per-filesystem guarantee, that is its own design question.
 
-### The nine `DurabilityContract` guarantees on Windows
+### The `DurabilityContract` methods on Windows
+
+The trait has eleven methods (`crates/prikk-store/src/foundation/fsutil/contract.rs:89-172`); each has a row below.
 
 | Method | Windows guarantee |
 |---|---|
 | `durable_append` | **Held.** Content durability on an existing name is what Windows provides. |
+| `durable_append_reporting_offset` | **Held**, as `durable_append`: the same open, validated the same way. The offset is the length read from that handle (`windows.rs:327-346`). |
+| `durable_overwrite` | **Held.** An in-place write to an existing regular file, synced on the same handle (`windows.rs:348-364`); it renames nothing, so the `atomic_replace` row does not apply (RFC 168 §3.3). |
 | `durable_truncate` / `durable_truncate_to_empty` | **Held.** |
 | `create_exclusive` | **Held at `init` only.** The new directory entry it creates is not itself durably confirmed — see the `init`-time exemption below. |
 | `ensure_directory` | **Held at `init` only**, same caveat. |
@@ -132,7 +136,7 @@ weakened. `promote` (no named guarantee of its own, orphaned by RFC 102 Stage 4'
 rewire) and `publish_immutable` (G5, race-safe no-clobber publication) both had zero production
 callers left; the ruling that had kept `publish_immutable` (design-v1.md §12.3) named its own
 discharge condition — Stages 4-5 shipping and showing no loose-file use remained — which DC-98's
-RFC confirmed. `DurabilityContract` goes from eleven methods to nine.
+RFC confirmed. `DurabilityContract` has eleven methods today, all covered by the table above.
 
 **The `init`-time exemption.** `create_exclusive` and `ensure_directory` create names, and Windows
 cannot make a new directory entry durable. Both are reachable only during `init`. This is tolerated
@@ -198,11 +202,20 @@ tracing every command's call graph to `crates/prikk-store/src/fsutil`'s mutation
 
 | Command | Boundary |
 |---|---|
+| `key generate` | Writes a new seed file only with `--out`; needs no repository |
+| `key public` / `key status` | Read-only (`key status` signs nothing) |
+| `setup` | **Mutation** (`init`, key files, trust) |
 | `verify` | Read-only |
 | `log` | Read-only |
 | `status` | Read-only |
+| `diff` | Read-only (writes nothing) |
+| `cat` | Read-only; writes only the file named by `--output` |
+| `tree` | Read-only |
+| `show` | Read-only |
 | `doctor` (no repair flags) | Read-only |
-| `doctor --repair-wal-tail` / `--repair-main-ref` | **Mutation** |
+| `doctor --recovery-list` | Read-only |
+| `doctor --repair-wal-tail`, `--repair-index`, `--repair-pointer-index-tail`, `--repair-tails`, `--rebuild-pointer-index`, `--discard-damaged-commits`, `--restore-queue-target`, `--recovery-restore`, `--recovery-clear` | **Mutation**, except with `--plan-only`, which writes nothing |
+| `doctor --repair-main-ref` | Recognized and always refused; writes nothing |
 | `checkout --plan-only` | Read-only |
 | `checkout --snapshot-plan` | Read-only |
 | `checkout --snapshot-materialize` | **Mutation** (writes the worktree) |
@@ -212,24 +225,44 @@ tracing every command's call graph to `crates/prikk-store/src/fsutil`'s mutation
 | `checkout --patch-materialize-delete` | **Mutation** (writes and deletes worktree files) |
 | `merge-evidence` | Read-only |
 | `merge-plan` | Read-only |
+| `merge` | **Mutation** (seals the merge) |
 | `inverse-plan` | Read-only |
 | `rollback-preview` | Read-only |
 | `rollback-draft` | **Mutation** (appends to the active WAL) |
 | `rollback-draft-verify` | Read-only |
 | `worktree-status` | Read-only |
 | `branch` / `branch list` | Read-only |
-| `branch create` / `branch close` | **Mutation** |
+| `branch create` / `branch close` / `branch switch` | **Mutation** (`switch` writes the worktree) |
 | `tag` / `tag list` | Read-only |
 | `tag create` | **Mutation** |
-| `trust maintainer add` | **Mutation** |
+| `mv` | **Mutation** (moves the file and declares the rename) |
+| `config get` / `config list` | Read-only |
+| `config set` / `config unset` | **Mutation** (writes the repository's config file) |
+| `bundle preview` / `bundle verify` | Read-only (writes nothing) |
+| `bundle export` | Read-only for the repository; writes only the file named by `--output` |
+| `bundle import` | **Mutation** |
+| `trust maintainer add` / `remove` | **Mutation** |
+| `trust maintainer list` / `check` | Read-only |
+| `sync summary` / `sync have` / `sync build` | Read-only for the repository; writes only the file named by `--output` |
+| `sync compare` / `sync pending` / `sync tags` | Read-only |
+| `sync accept` / `sync seal` / `sync adopt-tag` | **Mutation** |
+| `unlock` (no arguments) | Read-only; lists held locks |
+| `unlock --lock <path>` | **Mutation** (clears one lock) |
+| `ref complete` | **Mutation**, except with `--plan-only` (writes nothing) |
+| `format upgrade` | **Mutation** (rewrites the repository format in place) |
+| `compact` | **Mutation**, except with `--plan-only` (writes nothing) |
 | `init` | **Mutation** (creates `.prikk/`) |
 | `commit` | **Mutation** |
 | `seal` | **Mutation** |
 
-Traced 2026-08-04 (DC-71) by following each command's implementation to whichever of the mutation
-functions above it does or does not reach, including transitively — `rollback-draft`, for instance,
-calls no mutation primitive directly in its own file, but reaches one through `Wal::append_patch`.
-A name suggesting "plan" or "preview" is a hint, not proof; every row above was traced, not assumed.
+The rows that were already here were traced 2026-08-04 (DC-71) by following each command's implementation to
+whichever of the mutation functions above it does or does not reach, including transitively —
+`rollback-draft`, for instance, calls no mutation primitive directly in its own file, but reaches one
+through `Wal::append_patch`. The rows added 2026-10-07 (the `doctor` repair rows, `key`, `setup`, `diff`,
+`cat`, `tree`, `show`, `merge`, `mv`, `config`, `bundle`, `branch switch`, `trust maintainer`, `sync`,
+`unlock`, `ref complete`, `format upgrade`, `compact`) are classified from each command's help text in
+`crates/prikk-cli/src/commands.rs` and its module doc, and were not traced through call graphs.
+A name suggesting "plan" or "preview" is a hint, not proof.
 
 ## Non-Linux CI conformance
 
@@ -250,7 +283,8 @@ count is smaller than `stable`'s. The gates that remain, by name:
   UTF-8 cannot be created on macOS (APFS rejects it, `EILSEQ`), and Windows names are UTF-16, so the byte sequence
   cannot be constructed there. Tests: `wal/tests.rs` (`wal_for_layout_produces_byte_exact_paths_for_a_non_utf8_session_name`),
   `lock/tests.rs` (`active_lock_acquires_a_byte_exact_path_for_a_non_utf8_session_name`), and
-  `commit_boundary/worktree_patch/tests.rs` (`non_utf8_worktree_path_fails_closed`).
+  `commit_boundary/worktree_patch/tests.rs` (`non_utf8_worktree_path_fails_closed`), and `unlock/tests.rs` at line 284
+  (`list_held_locks_reports_a_lock_under_a_non_utf8_session_name`).
 - **Linux only, as written: the `LinuxDurability` conformance suite** (`foundation/fsutil.rs`'s re-export, its
   `fsutil/tests.rs` and `fsutil/tests/conformance.rs` consumers). The suite names the Linux durability implementation.
   macOS and Windows have their own (`MacosDurability`, `WindowsDurability`), so the same suite could run on each.
@@ -264,6 +298,16 @@ count is smaller than `stable`'s. The gates that remain, by name:
 - **Linux only, not yet classified: the snapshot test that removes a file between stat and read**
   (`snapshot/tests.rs`, its use of `worktree::before_stat_for_test`, gated by a `cfg` form outside the round's
   gate list). Its reason is not recorded here; it is a named gap.
+- **Linux only, as written: individual tests gated `cfg(target_os = "linux")` inside suites that run elsewhere.**
+  `crates/prikk-cli/tests/rfc158_incoming_bound.rs` gates six `control1_*` tests (lines 96-227: bundle import,
+  preview and verify; sync compare, build and accept; each on a sparse 1 GiB file). In
+  `crates/prikk-cli/tests/rfc147_declaration_resolution.rs` the items at lines 514, 721, 746 and 762 are gated:
+  `a_rename_reports_a_mode_change` at 514, and the socket and FIFO fixture helpers at 721 and 746 (line 762 was
+  not checked by name). Neither file records the reason for the gate at the gate itself.
+- **Linux only, and `#[ignore]`d: measurement units, run by hand.** `crates/prikk-cli/tests/append_length_io.rs`
+  (file-level `#![cfg(target_os = "linux")]`, line 22; its three `#[ignore]` units are measurements) and the G2
+  table in `crates/prikk-cli/tests/hostile_lengths.rs` (`hostile_lengths_g2_table`, lines 371-383, `#[ignore]`).
+  They run only with `--ignored`, so they are not part of the platform gates above.
 
 Neither developer nor architect can run either platform locally as part of this project's own environment, so the
 CI job existing and being green *is* the verification for each backend, not a supplement to one done elsewhere.
@@ -279,11 +323,12 @@ one where a different platform checks Windows' output.
 
 ## What is not covered here
 
-- **Prebuilt non-Linux binaries** are not published. Building from source (`cargo build`/
-  `cargo install`) is the only non-Linux install path today; see the [README's install
-  section](https://github.com/prikk-vcs/prikk#install).
+- **Other platforms have no prebuilt binary.** Prebuilt archives cover four targets: Linux `x86_64` and
+  `aarch64`, macOS `aarch64` (`aarch64-apple-darwin`), and Windows `x86_64` (`x86_64-pc-windows-msvc`)
+  (`.github/workflows/release.yml:35-46`). Anywhere else, build from source (`cargo build`/`cargo install`);
+  see [install](../guide/install.md#build-from-source).
 - **DC-76's negative controls are only partly demonstrated on Windows, for the eight guarantees
-  that remain (G5 retired in DC-98)** — see "The nine `DurabilityContract` guarantees on Windows"
+  that remain (G5 retired in DC-98)** — see "The `DurabilityContract` methods on Windows"
   above for the per-guarantee table and reasons. G1, G2, G3, G4, G8, and G9 are demonstrated; only
   G6 and G7 are not, and both for the same reason — no Windows analogue exists to demonstrate at
   all (Windows named pipes live in a separate `\\.\pipe\` namespace, not reachable the way a FIFO

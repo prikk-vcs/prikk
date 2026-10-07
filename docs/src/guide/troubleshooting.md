@@ -198,7 +198,7 @@ bytes are durably queued), but nothing can tell which ref it belongs to, so the 
   names your current branch instead, as a plain assumption:
 
   ```
-  error: 1 queued commit has lost the record of which branch they belong to. Your current branch is
+  error: 1 queued commit has lost the record of which branch it belongs to. Your current branch is
   heads/main. Check with: `prikk doctor --restore-queue-target --ref heads/main --plan-only`
   ```
 
@@ -361,21 +361,20 @@ is at risk when the queue itself is sound. `doctor --repair-tails` rebuilds it f
 ## `error: integrity error: the ref pointer index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
 `seal`, `branch create`, `tag create` and `merge` each refuse **before appending to the pointer index
-itself** — the file this refusal protects is always untouched by it — but not necessarily before every
-byte the command as a whole would otherwise have written: the compare-and-swap check every one of them
-already runs immediately before its own pointer-index append now also refuses there when the pointer
-index ends in a torn tail from an interrupted publication, instead of appending behind it and leaving
-`verify` to fail for good afterward. **A publication may already have written its own new, ordinary
-content-addressed objects (a ref-state, a block, an index entry) before reaching this check** — ordinary
-writes that nothing yet references, since the pointer index was never updated to point at them; `verify`
-still exits 0, and a retry after the repair below reuses them rather than writing them again.
+itself** — the file this refusal protects is always untouched by it. From 0.49.0 (RFC 164 Rule D) they
+also refuse before writing any object of their own: `seal`, `tag create` and `merge` run this check at
+the start of the command, before their patch, block or tag object is written, and `branch create` writes
+no content object before its own pointer-index append. A refusal therefore leaves nothing new behind.
+(A refused attempt made by a binary older than 0.49.0 may have left ordinary, content-addressed objects
+that nothing references; `verify` still exits 0, and a retry after the repair below reuses them.)
 
 **`prikk compact --pointer-index` refuses the identical way**, before touching anything (RFC 164 round
 2, carried to 0.49.0 release prep): the live slot it is about to read and reduce ending in a torn tail
 is the same unclean-tail refusal, the same advice, just reached from a different writer — `--plan-only`
 is unaffected, since a plan-only run never writes behind the tail it would otherwise refuse over.
 
-Unlike the four entries below, this one already has a `doctor` repair verb:
+This file also has its own narrower `doctor` verb, which repairs only this file. The entries below use
+`prikk doctor --repair-tails`, which covers this file too (`args.rs:101`):
 
 ```sh
 prikk doctor --repair-pointer-index-tail
@@ -422,11 +421,11 @@ this repository has not recorded material for yet** — recording it would appen
 same shape as the two trust-store refusals above, for the file that records AUTHOR (not MAINTAINER) key
 material. **A commit (or import) by an author key id this repository has already recorded material for
 is unaffected**: it appends nothing to this file, so it succeeds regardless of the tail. **For a
-`commit` specifically, this file is the last thing checked, not the first**: the file's content itself
-(a blob, an index entry) is already written by the time this refusal fires, since the author-key check
-runs immediately before the WAL append that would queue the commit. Those objects are ordinary and
-content-addressed, referenced by nothing until the commit itself succeeds; `verify` still exits 0, and a
-retry after `prikk doctor --repair-tails` reuses them.
+`commit`, this check runs before any of the commit's own writes** (RFC 164 Rule D, 0.49.0): it sits
+ahead of the blob, object-index and commit-index writes, so a refused commit by a new author key leaves
+none of them behind. The check runs again immediately before the WAL append that would queue the commit.
+(A refusal made by a binary older than 0.49.0 may have left an unreferenced blob and index entry; they
+are ordinary content-addressed objects, and a retry after `prikk doctor --repair-tails` reuses them.)
 
 ## `error: integrity error: the received index has an incomplete tail at byte offset N (M byte(s) follow); …`
 
