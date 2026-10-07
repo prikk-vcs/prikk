@@ -149,3 +149,12 @@ request, which costs the owner a hand-off. **From now on:**
 **Part C ACCEPTED 2026-10-07** (`199f0fb6`; review `review-019-corrections-C-review-v1`). **Next: Part D1, then Part D.**
 
 **Part D1 ACCEPTED 2026-10-07** (`1c4093c7`; review `review-019-corrections-D1-review-v1`). **Next: Part D (A6).**
+
+**Part D ACCEPTED 2026-10-07** for items 1–5 (`0e64499e`; review `review-019-corrections-D-review-v1`). Item 6 is a real
+defect, reproduced by the architect. Two more one-sitting parts follow; the same stop rule applies.
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **E** | **Fail closed on a lost generation log.** (1) Confirm from source that only compaction writes slot B; if not, stop and report. (2) For all three compacting containers (the pointer index, the received index, the trust policy): when the generation log names no slot and slot B holds data, every reader and writer refuses, naming the container and its way out. (3) The pointer index's way out is `--rebuild-pointer-index` from the ref log, without reading either slot as live; test it from this state. The other two say to restore the generation log from a backup. (4) A test per container: the state, the refusal, and, for the pointer index, the rebuild, then `branch list` shows every branch. **Control:** restore the slot-A fallback, and each test goes red. (5) A `### Fixed` entry naming the consequence, and the first affected version from history. (6) The docs grep | 90 min | `review-019-corrections-E-report.md` |
+| **F** | **The rebuild's way back, Option B** (the review): before the rebuild flips away from the live slot, save a full copy of it to the recovery log under the rebuild's run. `--recovery-restore <run id>` writes it into the then-retired slot and records a generation pointing at it. Test: rebuild, restore, then the pointer index and generation state are byte-identical to before; control shown red | 60 min | `review-019-corrections-F-report.md` |
+
