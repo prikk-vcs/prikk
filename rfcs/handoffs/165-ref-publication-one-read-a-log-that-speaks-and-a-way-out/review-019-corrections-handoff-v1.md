@@ -174,3 +174,11 @@ defect, reproduced by the architect. Two more one-sitting parts follow; the same
 
 **Then Part F.**
 
+**Part E3: Corrections Required 2026-10-08** (`8e75e613`; review `review-019-corrections-E3-review-v1`). The implementation was right; the architect's rule missed row 4 of the case table: a compaction crash, then ordinary writes to A.
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **E4** | **B is derived from A if B equals `compaction(P)`, or a prefix of it, for some prefix P of A** (resolve to A); otherwise B; damage refuses. Computed in one pass with the running reduction (linear). **Test every row of the review's case table (rows 1–8),** for the pointer index and the trust policy at least (and the received index where it applies), each asserting the live slot and the user-visible result (branches listed; a revoked key untrusted). **Controls:** E3's rule turns row 4 red; E2's membership rule turns row 7 red; "always A" turns row 6 red | 60 min | `review-019-corrections-E4-report.md` |
+
+**Then Part F.**
+
