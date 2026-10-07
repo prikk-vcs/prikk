@@ -160,11 +160,12 @@ could not rule one out, and ambiguity always resolves to damage, never silently 
 this needs a file deliberately packed with fake frame headers; an honest crash does not produce it
 (random bytes following an accidental magic match almost never also claim a plausible length).
 
-The way out matches whichever file this names, exactly as any other damage there:
+A scan this long is damage, not a torn tail, and the tail repairs refuse damage. Run `prikk doctor` for the
+diagnosis of the file this names:
 
-- the WAL: `prikk doctor --repair-wal-tail`;
-- the pointer index: `prikk doctor --repair-pointer-index-tail`;
-- trust policy or the received index: `prikk doctor --repair-tails`;
+- the WAL: diagnose with `prikk doctor`; `--repair-wal-tail` refuses damage;
+- the pointer index: diagnose with `prikk doctor`; `--repair-pointer-index-tail` refuses damage;
+- trust policy or the received index: diagnose with `prikk doctor`; `--repair-tails` refuses damage;
 - an object container or the ref log container: **no automated repair.** If `doctor` also reports it as an
   unreferenced remnant, nothing needs the frame and no action is required; otherwise the way out is a copy
   of a sound repository, the same as any other damaged record in these two files.
