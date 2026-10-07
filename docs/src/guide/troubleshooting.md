@@ -472,26 +472,30 @@ bytes are safe to remove, or silently undoing the decision the damaged record ca
 damage sits before a sound record or is the complete-but-corrupt last record itself, no offset here is
 one a repair can safely remove. Restore the repository from a backup or a clone instead.
 
-## `error: integrity error: <container>'s generation log names no live slot, but its other slot holds data; …`
+## `warning: <container>'s generation log names no live slot; slot <X> was deduced from the entries (…)`
 
-0.50.0 step 1 Part E (019 §5.7). Seen from the identical set of commands the previous entry lists, when a
-compacting container's generation log reads as empty or absent — not damaged, not a tail, genuinely
-nothing — while the *other* slot (`b`) holds real data. Slot `b` is never written except alongside the
-one generation record that names it live, so this shape can only mean a compaction (or, for the ref
+0.50.0 step 1 Part E2 (019 §5.7). Seen from `prikk verify` or `prikk doctor`, when a compacting
+container's generation log reads as empty or absent — not damaged, not a tail, genuinely nothing —
+while the *other* slot (`b`) holds real data. Slot `b` is never written except alongside the one
+generation record that names it live, so this shape can only mean a compaction (or, for the ref
 pointer index, `prikk doctor --rebuild-pointer-index`'s own rebuild) genuinely happened and the record
-of it was lost afterward — an accidental deletion, a partial restore from backup, or (for the ref
-pointer index specifically) a crash between the compaction's own new-slot write and its generation
-record, a window that used to self-heal through a bare retry and no longer does, because it leaves the
-identical on-disk shape a genuinely lost record leaves. Trusting slot `a` in this state, as every prior
-release did, served stale data silently: `branch list` (and, through the same resolver, `status`,
-`commit`'s default `--ref` resolution, and `tag list`) could omit a branch written only after a switch,
-exit `0`, no warning; for the trust policy container, the same shape could bring back a maintainer key
-read as trusted again after it was revoked.
+of it was lost afterward — an accidental deletion, or a partial restore from backup.
 
-**The ref pointer index's own way out:** `prikk doctor --rebuild-pointer-index`. It re-derives the whole
-index from the ref log directly, without reading either slot as live, so it does not matter which slot
-this state's own confusion touches. **The received index and the trust policy container have no
-rebuild** — restore that container's own generation log from a backup taken before the loss.
+**This is a warning, not a refusal: every ordinary command already resolves it correctly.** Content
+decides which slot is live, rather than every reader and writer being made to guess or to refuse:
+every entry the other slot holds that this one already has means nothing changed since the switch
+(this slot stays live — the same shape a crash between a compaction's own new-slot write and its
+generation record leaves, which a bare retry of `compact` still heals exactly as always); an entry
+this slot never had means the other slot took a real write after becoming live, and it becomes live
+instead, so that write still reads correctly rather than silently disappearing. Only when the
+deduction itself cannot be made (one of the two slots is damaged) does a read refuse, naming the
+container's own damage directly (see the next entry).
+
+**The way out, named in the warning itself:** run `prikk compact` for the named container. It resolves
+the identical way and then writes a fresh generation record, ending the ambiguous state for good.
+`prikk doctor --rebuild-pointer-index` also remains available for the ref pointer index specifically —
+it re-derives the whole index from the ref log directly, without reading either slot as live — though
+nothing requires it just to clear this warning.
 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 

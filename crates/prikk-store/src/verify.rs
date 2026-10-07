@@ -307,16 +307,23 @@ use crate::author::author_key_index::{AuthorKeyRecordStatus, replay_author_keys}
 use crate::block_state::{BlockStateOutcome, BlockStateStatus};
 use crate::commit_boundary::active::ActiveRefMetadata;
 use crate::commit_index::{CommitIndexDivergence, verify_divergence};
-use crate::foundation::generation::{GenerationRecordStatus, replay_generation_log};
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
+use crate::foundation::generation::{
+    GenerationRecordStatus, replay_generation_log, resolve_live_slot_with_deduction_note,
+};
+use crate::foundation::layout::{
+    ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout,
+};
 use crate::lifecycle_cache::incremental::{
     LifecycleCacheDivergence, verify_divergence as verify_lifecycle_cache_divergence,
 };
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::received::list_received_pointers;
-use crate::received::received_index::{ReceivedIndexRecordStatus, replay_received_index};
+use crate::received::received_index::{
+    ReceivedIndexRecordStatus, decode_received_index_entries_for_resolver, replay_received_index,
+};
 use crate::refs::{
-    DecodedRefLog, RefItemOutcome, RefItemStatus, RefStore, ensure_ref_target_valid,
+    DecodedRefLog, RefItemOutcome, RefItemStatus, RefStore,
+    decode_pointer_index_entries_for_resolver, ensure_ref_target_valid,
     ensure_required_attestations_present, read_and_decode_ref_log, ref_log_tail_status_of,
     verify_refs_with,
 };
@@ -326,7 +333,8 @@ use crate::signature_diagnostics::{
 };
 use crate::trust::PublicationTrustIssue;
 use crate::trust_index::{
-    TrustKeyRecordStatus, TrustPolicyRecordStatus, replay_trust_keys, replay_trust_policy,
+    TrustKeyRecordStatus, TrustPolicyRecordStatus, decode_trust_policy_entries_for_resolver,
+    replay_trust_keys, replay_trust_policy,
 };
 use crate::wal::{Wal, WalReplay};
 
@@ -755,6 +763,75 @@ pub struct RepositoryVerification {
     /// of `current_branch_issue`: the two can never both describe the same pointer, since an absent
     /// file always resolves (`current_branch`'s own unborn-default rule), never errors.
     pub current_branch_absent: bool,
+    /// 0.50.0 step 1 Part E2: one entry per compacting container whose generation log names no live
+    /// slot right now, with content deducing it instead of a refusal -- every ordinary reader and
+    /// writer already resolve this silently, so `verify`/`doctor` are what keep it visible. Empty in
+    /// the overwhelmingly common case (the log names a slot, or slot B is genuinely empty).
+    pub generation_log_deductions: Vec<GenerationLogDeductionNote>,
+}
+
+/// One compacting container's own Part E2 warning: its generation log named no live slot, but its
+/// two slots' own entries decided it anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GenerationLogDeductionNote {
+    /// A stable, human-readable label naming the container -- matches [`AppendedFileTailStatus::label`].
+    pub container_label: &'static str,
+    /// The deduced slot's own code (`"a"` or `"b"`), via [`ContainerSlot::as_str`].
+    pub deduced_slot: &'static str,
+    /// Which of Part E2's two rules decided it, in the warning's own words.
+    pub reason: &'static str,
+}
+
+/// Part E2: checks all three compacting containers for the "log names no slot, content decides it"
+/// state, read directly (never through whichever reader happens to touch each one first) so `verify`
+/// reports it even when nothing else this run touches the affected container.
+pub(crate) fn check_generation_log_deductions(
+    layout: &RepositoryLayout,
+) -> Vec<GenerationLogDeductionNote> {
+    let mut notes = Vec::new();
+    if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
+        layout,
+        &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        "ref pointer index has a damaged entry; run doctor before reading",
+        decode_pointer_index_entries_for_resolver,
+    ) {
+        notes.push(deduction_note("the ref pointer index", &deduced));
+    }
+    if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
+        layout,
+        &layout.received_index_generation_log_path(),
+        &layout.received_index_slot_path(ContainerSlot::A),
+        &layout.received_index_slot_path(ContainerSlot::B),
+        "received-ref index has a damaged entry; run doctor before reading",
+        decode_received_index_entries_for_resolver,
+    ) {
+        notes.push(deduction_note("the received index", &deduced));
+    }
+    if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
+        layout,
+        &layout.trust_policy_generation_log_path(),
+        &layout.trust_policy_container_slot_path(ContainerSlot::A),
+        &layout.trust_policy_container_slot_path(ContainerSlot::B),
+        "trust policy container has a damaged snapshot; run doctor before reading",
+        decode_trust_policy_entries_for_resolver,
+    ) {
+        notes.push(deduction_note("the trust policy container", &deduced));
+    }
+    notes
+}
+
+fn deduction_note(
+    container_label: &'static str,
+    deduced: &crate::foundation::generation::DeducedFromContent,
+) -> GenerationLogDeductionNote {
+    GenerationLogDeductionNote {
+        container_label,
+        deduced_slot: deduced.slot.as_str(),
+        reason: deduced.reason.explain(),
+    }
 }
 
 /// RFC 164 Rule B: one Rule-A-covered file's own tail/damage status, from a direct, standalone read
@@ -1811,6 +1888,9 @@ pub fn verify_repository_with_options(
     // separate, informational fact `print_verify_report` needs to tell it apart from a pointer that
     // exists and correctly names the unborn default, both of which resolve identically otherwise.
     let current_branch_absent = !crate::refs::current_branch_pointer_exists(layout)?;
+    // Part E2: no upstream stage dependency -- reads all three compacting containers' own generation
+    // logs directly, unconditionally, the same footing as `AppendedFileTails` above.
+    let generation_log_deductions = check_generation_log_deductions(layout);
 
     // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
     // the run found -- each such outcome is individually sound. Best-effort; never fails verify.
@@ -1867,6 +1947,7 @@ pub fn verify_repository_with_options(
         appended_file_tails,
         current_branch_issue,
         current_branch_absent,
+        generation_log_deductions,
     })
 }
 

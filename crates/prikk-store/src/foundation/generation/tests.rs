@@ -3,11 +3,24 @@
 use prikk_error::Result;
 
 use super::{
-    GenerationRecord, GenerationRecordStatus, decode_generation_records, encode_generation_record,
-    resolve_live_slot,
+    DecodedEntries, GenerationRecord, GenerationRecordStatus, decode_generation_records,
+    encode_generation_record, resolve_live_slot,
 };
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::test_gates::test_support::unique_temp_dir;
+
+/// A placeholder decoder for tests in this file that never reach Part E2's deduction branch (slot B
+/// stays empty throughout) -- real per-container decoders live beside their own entry types.
+fn trivial_decode(bytes: &[u8]) -> Result<DecodedEntries<Vec<u8>>> {
+    Ok(DecodedEntries {
+        entries: if bytes.is_empty() {
+            Vec::new()
+        } else {
+            vec![bytes.to_vec()]
+        },
+        damaged: false,
+    })
+}
 
 #[test]
 fn a_single_record_round_trips_through_decode() -> Result<()> {
@@ -121,9 +134,10 @@ fn an_empty_or_missing_generation_log_resolves_to_slot_a() -> Result<()> {
     let resolved = resolve_live_slot(
         &layout,
         &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`",
+        "ref pointer index has a damaged entry",
+        trivial_decode,
     )?;
     assert_eq!(resolved, ContainerSlot::A);
     let _ = std::fs::remove_dir_all(root);
@@ -148,9 +162,10 @@ fn resolver_takes_the_last_complete_record() -> Result<()> {
     let resolved = resolve_live_slot(
         &layout,
         &path,
+        &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
-        "the received index",
-        "restore this container's own generation log from a backup",
+        "received-ref index has a damaged entry",
+        trivial_decode,
     )?;
     assert_eq!(resolved, ContainerSlot::B);
     let _ = std::fs::remove_dir_all(root);
@@ -182,9 +197,10 @@ fn a_damaged_generation_record_fails_closed_rather_than_resolving_silently() -> 
         resolve_live_slot(
             &layout,
             &path,
+            &layout.trust_policy_container_slot_path(ContainerSlot::A),
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
-            "the trust policy container",
-            "restore this container's own generation log from a backup",
+            "trust policy container has a damaged snapshot",
+            trivial_decode,
         )
         .is_err()
     );

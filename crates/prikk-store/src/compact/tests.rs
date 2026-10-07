@@ -12,8 +12,7 @@ use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{ContainerSlot, LockableContainer};
 use crate::lock::acquire_container_locks;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::rebuild_pointer_index;
+use crate::refs::decode_pointer_index_entries_for_resolver;
 use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, unique_temp_dir,
 };
@@ -75,10 +74,10 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
     let live_before = resolve_live_slot(
         &layout,
         &generation_log_path,
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+        "ref pointer index has a damaged entry",
+        decode_pointer_index_entries_for_resolver,
     )?;
     assert_eq!(live_before, ContainerSlot::A);
 
@@ -89,10 +88,10 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
     let live_after = resolve_live_slot(
         &layout,
         &generation_log_path,
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+        "ref pointer index has a damaged entry",
+        decode_pointer_index_entries_for_resolver,
     )?;
     assert_eq!(live_after, ContainerSlot::B);
 
@@ -149,10 +148,10 @@ fn plan_compact_reports_the_same_counts_as_a_real_run_and_touches_nothing() -> R
         resolve_live_slot(
             &layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::A
     );
@@ -190,19 +189,17 @@ fn plan_compact_refuses_while_its_own_container_lock_is_externally_held() -> Res
 /// and the generation record being appended must leave the *old* generation authoritative -- the
 /// retry must be safe, and nothing observes the half-published state in between. Failpoint-gated to
 /// Linux/macOS, matching `TestFailPoint`'s own availability (`fsutil.rs`).
-/// 0.50.0 step 1 Part E (019 §5.7): before this round, this exact crash window self-healed through a
-/// bare retry -- slot B's bytes were durable, nothing had appended a generation record yet, so the
-/// resolver still (and only ever) had `A` to return, and reads kept working. **That silent trust is
-/// now gone on purpose**: a crash here leaves the identical on-disk shape ("the log names no slot,
-/// slot B holds data") that a genuinely lost generation record leaves after a compaction that *did*
-/// complete -- the two are indistinguishable from file state alone, and the ruling (Part D's review)
-/// is that both refuse, naming the pointer index's own way out, rather than trust *either* shape
-/// silently. The way out proven here is exactly that one, `--rebuild-pointer-index`, not a bare
-/// retry of `compact` -- the rebuild derives from the ref log alone and does not care what either
-/// slot already held.
+/// 0.50.0 step 1 Part E briefly made this refuse (the log names no slot, slot B holds data -- file-
+/// identical to a genuinely lost generation record): the team flagged that this exact crash window
+/// is indistinguishable from a lost record *by file shape alone*, but not by content -- slot B here
+/// is nothing but a re-encoding of the same entries slot A already has (compaction only ever copies
+/// the live slot's own entries into the other one). Part E2's corrected ruling deduces exactly that:
+/// every entry slot B holds is already in slot A, so A is live, and a bare retry heals it, restoring
+/// this test to its original meaning.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn a_crash_before_the_generation_record_lands_now_refuses_until_the_rebuild_runs() -> Result<()> {
+fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authoritative() -> Result<()>
+{
     let root = unique_temp_dir("compact-pointer-index-crash-before-publish");
     let layout = RepositoryLayout::init(root.clone())?;
     let mut objects = FileObjectStore::new(layout.clone());
@@ -211,9 +208,6 @@ fn a_crash_before_the_generation_record_lands_now_refuses_until_the_rebuild_runs
     let second = publish_update(&store, &mut objects, "heads/main", Some(first), 2)?;
 
     let generation_log_path = layout.ref_pointer_index_generation_log_path();
-    let slot_b_path = layout.ref_pointer_index_slot_path(ContainerSlot::B);
-    let way_out = "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref \
-                   log without reading either slot as live";
 
     // Two `AppendWrite`s happen inside a successful run: the compacted slot's own bytes, then the
     // generation record. Skip 1 to fail on the second -- the generation record's own append -- so
@@ -221,46 +215,33 @@ fn a_crash_before_the_generation_record_lands_now_refuses_until_the_rebuild_runs
     fail_after_for_test(TestFailPoint::AppendWrite, 1);
     assert!(compact_ref_pointer_index(&layout).is_err());
 
-    // Every reader and writer now refuses: the log names no slot, but slot B holds data, and prikk
-    // never guesses which shape produced that -- a lost generation record, or this exact crash.
-    let resolve_result = resolve_live_slot(
-        &layout,
-        &generation_log_path,
-        &slot_b_path,
-        "the ref pointer index",
-        way_out,
-    );
-    let Err(resolve_error) = resolve_result else {
-        panic!("expected a lost-generation-log refusal, got {resolve_result:?}");
-    };
-    let resolve_error = resolve_error.to_string();
-    assert!(
-        resolve_error.contains("names no live slot"),
-        "{resolve_error}"
-    );
-    assert!(
-        resolve_error.contains("--rebuild-pointer-index"),
-        "{resolve_error}"
-    );
-    assert!(
-        store.read_current_ref_state_id("heads/main").is_err(),
-        "an ordinary read must refuse too, not silently resolve to the stale slot"
-    );
-
-    // A bare retry of `compact` refuses the identical way -- it is not the named way out.
-    assert!(compact_ref_pointer_index(&layout).is_err());
-
-    // `--rebuild-pointer-index` is: it does not care what either slot already held, deriving the
-    // correct content from the ref log alone and declaring a slot live again.
-    let plan = rebuild_pointer_index(&layout)?;
-    assert!(plan.wrote);
+    // The log names no slot, but slot B holds data that deduces back to A (every entry it holds is
+    // already in A) -- so A stays live, silently, and every ordinary read keeps working.
     assert_eq!(
         resolve_live_slot(
             &layout,
             &generation_log_path,
-            &slot_b_path,
-            "the ref pointer index",
-            way_out
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
+        )?,
+        ContainerSlot::A
+    );
+    assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(second));
+
+    // A bare retry heals it exactly as in 0.49.0: the half-finished attempt left nothing for this
+    // one to trip over.
+    let report = compact_ref_pointer_index(&layout)?;
+    assert_eq!(report.entries_after, 1);
+    assert_eq!(
+        resolve_live_slot(
+            &layout,
+            &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::B
     );
@@ -298,10 +279,10 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
         resolve_live_slot(
             &layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::A
     );
@@ -313,10 +294,10 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
         resolve_live_slot(
             &layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::B
     );
@@ -349,10 +330,10 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
         resolve_live_slot(
             &layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::B
     );
@@ -370,10 +351,10 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
         resolve_live_slot(
             &layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::B
     );
@@ -385,10 +366,10 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
         resolve_live_slot(
             &layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::A
     );
@@ -484,10 +465,10 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
         resolve_live_slot(
             &layout,
             &layout.ref_pointer_index_generation_log_path(),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::A
     );
@@ -532,10 +513,10 @@ fn compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
         resolve_live_slot(
             &layout,
             &layout.ref_pointer_index_generation_log_path(),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
         )?,
         ContainerSlot::A
     );
@@ -683,15 +664,13 @@ fn trust_policy_compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> 
     Ok(())
 }
 
-/// 0.50.0 step 1 Part E (019 §5.7): the received index's own way out, for the identical lost-
-/// generation-log state the pointer index's own test above reproduces end to end -- no rebuild
-/// exists for the received index (confirmed by a grep over `crates/prikk-store/src`: the only
-/// production callers of `append_generation_record` are `compact.rs` and `pointer_rebuild.rs`, and
-/// the latter names only the pointer index), so the refusal's own way out is a restore from backup,
-/// not a verb this round invents.
+/// Part E2, rule 1 ("no write since"): the received index's generation log is lost right after a
+/// compaction, with nothing written to the new slot afterward -- every entry slot B holds is exactly
+/// what slot A already had, so the deduction resolves to A (equivalent content either way) and reads
+/// keep working silently, rather than refuse a state content already decides.
 #[test]
-fn received_index_refuses_a_lost_generation_log_and_names_the_restore_way_out() -> Result<()> {
-    let root = unique_temp_dir("part-e-received-index-lost-generation-log");
+fn received_index_lost_generation_log_with_no_write_since_resolves_silently() -> Result<()> {
+    let root = unique_temp_dir("part-e2-received-index-lost-generation-log-no-write-since");
     let layout = RepositoryLayout::init(root.clone())?;
     let target = objects_target(&layout)?;
     let state = signed_ref_state_envelope("heads/main", None, target, 1);
@@ -705,36 +684,76 @@ fn received_index_refuses_a_lost_generation_log_and_names_the_restore_way_out() 
         "fixture: the compacted slot must hold real data"
     );
 
-    // Lose the record of the switch.
+    // Lose the record of the switch -- nothing written to B since.
     std::fs::write(layout.received_index_generation_log_path(), b"")?;
 
-    let read_result = crate::received::read_received_pointer(&layout, "remotes/heads/main");
-    let Err(read_error) = read_result else {
-        panic!("expected a lost-generation-log refusal, got {read_result:?}");
-    };
-    let read_error = read_error.to_string();
-    assert!(read_error.contains("the received index"), "{read_error}");
-    assert!(
-        read_error.contains("restore this container's own generation log from a backup"),
-        "{read_error}"
+    let pointer = crate::received::read_received_pointer(&layout, "remotes/heads/main")?;
+    assert_eq!(
+        pointer.map(|entry| entry.ref_state_id),
+        Some(state.object_id()),
+        "the deduction must resolve silently -- A and B agree, so there is nothing to refuse"
     );
     assert!(
         crate::received::write_received_pointer(&layout, "remotes/heads/topic", state.object_id())
-            .is_err(),
-        "a writer must refuse too, not silently append behind the slot it cannot confirm is live"
+            .is_ok(),
+        "a writer must keep working too, appending behind whichever slot the deduction resolved"
     );
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
 
-/// 0.50.0 step 1 Part E (019 §5.7): the trust policy container's own way out, the identical shape as
-/// the received index's test above -- no rebuild exists for it either (security-relevant: an
-/// unrecoverable older slot read silently here could bring back a policy from before a revocation,
-/// the review's own finding).
+/// Part E2, rule 2 ("writes after the switch"): the received index's generation log is lost *after*
+/// the new slot took a real write the old slot never had -- the deduction must resolve to the new
+/// slot, reading the newer entry rather than silently falling back to the stale one.
 #[test]
-fn trust_policy_refuses_a_lost_generation_log_and_names_the_restore_way_out() -> Result<()> {
-    let root = unique_temp_dir("part-e-trust-policy-lost-generation-log");
+fn received_index_lost_generation_log_after_a_write_resolves_to_the_newer_slot() -> Result<()> {
+    let root = unique_temp_dir("part-e2-received-index-lost-generation-log-after-write");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let target = objects_target(&layout)?;
+    let first_state = signed_ref_state_envelope("heads/main", None, target, 1);
+    crate::received::write_received_pointer(
+        &layout,
+        "remotes/heads/main",
+        first_state.object_id(),
+    )?;
+
+    compact_received_index(&layout)?;
+
+    // A real write after the switch, landing only in the now-live slot.
+    let second_state = signed_ref_state_envelope("heads/topic", None, target, 1);
+    crate::received::write_received_pointer(
+        &layout,
+        "remotes/heads/topic",
+        second_state.object_id(),
+    )?;
+
+    // Lose the record of the switch.
+    std::fs::write(layout.received_index_generation_log_path(), b"")?;
+
+    assert_eq!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/main")?
+            .map(|entry| entry.ref_state_id),
+        Some(first_state.object_id()),
+        "the entry carried over by compaction must still read"
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/topic")?
+            .map(|entry| entry.ref_state_id),
+        Some(second_state.object_id()),
+        "the entry written after the switch must read too -- only the new slot ever had it, so \
+         resolving to the old one would silently lose it"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E2, rule 1 for the trust policy container: the identical "no write since" shape as the
+/// received index's own test above.
+#[test]
+fn trust_policy_lost_generation_log_with_no_write_since_resolves_silently() -> Result<()> {
+    let root = unique_temp_dir("part-e2-trust-policy-lost-generation-log-no-write-since");
     let layout = RepositoryLayout::init(root.clone())?;
     let key = public_key_hex(&[11_u8; 32]);
     add_trusted_maintainer(&layout, "only", &key)?;
@@ -747,27 +766,77 @@ fn trust_policy_refuses_a_lost_generation_log_and_names_the_restore_way_out() ->
         "fixture: the compacted slot must hold real data"
     );
 
+    // Lose the record of the switch -- nothing written to B since.
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    let policy = load_maintainer_trust_policy(&layout)?;
+    assert_eq!(policy.keys.len(), 1);
+    assert_eq!(policy.keys[0].key_id, "only");
+    assert!(
+        add_trusted_maintainer(&layout, "second", &public_key_hex(&[12_u8; 32])).is_ok(),
+        "a writer must keep working too, appending behind whichever slot the deduction resolved"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E2, rule 2 for the trust policy container -- security-relevant (the review's own finding):
+/// resolving to the stale slot here could silently bring back a policy from before a revocation. The
+/// deduction must resolve to the slot holding the *newer* snapshot instead.
+#[test]
+fn trust_policy_lost_generation_log_after_a_write_resolves_to_the_newer_slot() -> Result<()> {
+    let root = unique_temp_dir("part-e2-trust-policy-lost-generation-log-after-write");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let first_key = public_key_hex(&[11_u8; 32]);
+    let second_key = public_key_hex(&[12_u8; 32]);
+    add_trusted_maintainer(&layout, "first", &first_key)?;
+    add_trusted_maintainer(&layout, "second", &second_key)?;
+
+    compact_trust_policy(&layout)?;
+
+    // A real write after the switch -- revoking a maintainer the old slot still names as trusted.
+    remove_trusted_maintainer(&layout, "first")?;
+
     // Lose the record of the switch.
     std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
 
-    let read_result = load_maintainer_trust_policy(&layout);
-    let Err(read_error) = read_result else {
-        panic!("expected a lost-generation-log refusal, got {read_result:?}");
-    };
-    let read_error = read_error.to_string();
-    assert!(
-        read_error.contains("the trust policy container"),
-        "{read_error}"
+    let policy = load_maintainer_trust_policy(&layout)?;
+    assert_eq!(
+        policy.keys.len(),
+        1,
+        "the revocation written after the switch must be visible -- resolving to the stale slot \
+         would silently bring the revoked maintainer back"
     );
+    assert_eq!(policy.keys[0].key_id, "second");
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E2, rule 3: when the deduction itself cannot be made -- one of the two slots is damaged --
+/// it refuses rather than guessing, naming the container's own existing damage text.
+#[test]
+fn a_damaged_slot_refuses_the_deduction_rather_than_guessing() -> Result<()> {
+    let root = unique_temp_dir("part-e2-pointer-index-lost-generation-log-damaged-slot");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+
+    // Lose the record of the switch, then damage the now-stale slot A -- the deduction needs to read
+    // it too, and must refuse rather than guess once it cannot.
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+    let slot_a_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
+    let mut damaged = std::fs::read(&slot_a_path)?;
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0x01;
+    std::fs::write(&slot_a_path, &damaged)?;
+
     assert!(
-        read_error.contains("restore this container's own generation log from a backup"),
-        "{read_error}"
-    );
-    assert!(
-        add_trusted_maintainer(&layout, "second", &public_key_hex(&[12_u8; 32])).is_err(),
-        "a writer must refuse too, not silently append behind the slot it cannot confirm is live \
-         -- security-relevant: an unrecoverable older slot read silently here could bring back a \
-         policy from before a revocation"
+        store.read_current_ref_state_id("heads/main").is_err(),
+        "a damaged slot must refuse the deduction, not silently prefer the other one"
     );
 
     let _ = std::fs::remove_dir_all(root);

@@ -79,9 +79,10 @@ fn failpoints_at_every_write_ordinal_read_as_old_or_new_never_a_mix() {
                 crate::foundation::generation::resolve_live_slot_with_tail(
                     &layout,
                     &generation_log_path,
+                    &layout.ref_pointer_index_slot_path(ContainerSlot::A),
                     &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-                    "the ref pointer index",
-                    "run `prikk doctor --rebuild-pointer-index`",
+                    "ref pointer index has a damaged entry",
+                    crate::refs::decode_pointer_index_entries_for_resolver,
                 )
                 .unwrap_or_else(|err| {
                     panic!("{point:?} skip={skip}: generation log must stay readable, got {err}")

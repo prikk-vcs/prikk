@@ -114,6 +114,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reason: "`replay_trust_policy` decodes the whole live trust-policy slot: the same reasoning `index-whole-decode` has for                  the object index, for the trust-policy container",
         reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1",
     },
+    DeclaredScope {
+        id: "generation-resolver-deduction",
+        status: ScopeStatus::Intentional,
+        reason: "`resolve_or_deduce` reads both of a compacting container's slots, whole, only in the rare state where the                  generation log names no slot and slot B holds data -- content is the only way left to decide between them",
+        reference: "RFC 102 Stage 6 Step 2 (0.50.0 step 1 Part E2)",
+    },
 ];
 
 /// Which family of store-growing file `relative` (relative to the repository's `.prikk/` directory) is in, if it is in one.

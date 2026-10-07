@@ -615,6 +615,15 @@ pub(crate) fn print_verify_report(
             println!("{}: failed: {message}", status.label);
         }
     }
+    // 0.50.0 step 1 Part E2: content deduced a compacting container's live slot because its
+    // generation log named none -- a warning, never a failure, naming the way to end it.
+    for note in &report.generation_log_deductions {
+        println!(
+            "warning: {}'s generation log names no live slot; slot {} was deduced from the \
+             entries ({}); run `prikk compact` for this container to record it",
+            note.container_label, note.deduced_slot, note.reason
+        );
+    }
     match &report.active_wal_metadata_status {
         Some(status) => print_active_wal_metadata_status(status),
         None => println!("active WAL metadata: unknown (stage did not evaluate)"),

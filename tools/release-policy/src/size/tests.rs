@@ -125,7 +125,10 @@ fn removing_a_declaration_names_its_file() {
         // unconditional `refs::current_branch` read feeding it, 2,358 -> 2,381.
         // 0.50.0 step 1, Part D1: the `current_branch_absent` field and the `refs::current_branch_
         // pointer_exists` read feeding it, 2,381 -> 2,394.
-        detail.contains("2394"),
+        // 0.50.0 step 1, Part E2: the `generation_log_deductions` field, `GenerationLogDeductionNote`,
+        // and `check_generation_log_deductions` reading all three compacting containers' generation
+        // logs directly, 2,394 -> 2,475.
+        detail.contains("2475"),
         "the line count is in the message: {detail}"
     );
     assert!(

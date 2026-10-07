@@ -27,7 +27,7 @@ use crate::foundation::fsutil::{
     read_file_if_exists, read_file_range_if_exists, stat_file_state_if_exists,
     truncate_existing_file_required,
 };
-use crate::foundation::generation::resolve_live_slot;
+use crate::foundation::generation::resolve_live_slot_trusting_default_on_ambiguity;
 use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryLayout};
 
 const MAGIC: &[u8; 8] = b"PRECLOG1";
@@ -614,13 +614,9 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
             )?,
         ]);
     }
-    let pointer_slot = resolve_live_slot(
+    let pointer_slot = resolve_live_slot_trusting_default_on_ambiguity(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
-        &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
     )?;
     if source == relative(&layout.ref_pointer_index_slot_path(pointer_slot))? {
         return Ok(vec![relative(

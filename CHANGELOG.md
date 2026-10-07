@@ -23,19 +23,27 @@ compactor, and route writers through the resolver"; the generation-log mechanism
 day). Not measured against historical released binaries directly — confirmed from source and from a
 reproduction against the current tree, the same evidentiary footing this project has used before for a
 defect whose triggering code is unchanged since 0.20.0. No advisory (disclosure only). **Action: upgrade;**
-every reader and writer of the three containers now refuses in this exact state instead of guessing.
+every reader and writer of the three containers now deduces the live slot from its own content in this
+exact state, rather than silently trusting the original slot.
 
-Fixed in this release (0.50.0 step 1 Part E): `resolve_live_slot`/`resolve_live_slot_with_tail`
-(`foundation/generation.rs`) now refuse — naming the container and its own way out — when the generation log
-names no live slot but the non-default slot holds data, the one shape only a since-lost record of a genuine
-compaction (or, for the pointer index, a genuine rebuild) can explain. The ref pointer index's own way out is
-`prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without reading either slot as
-live; the received index and the trust policy container have no rebuild, so their own way out is restoring
-the generation log from a backup. One pre-existing test's own expectation changed as a direct, intentional
-consequence: a crash between a compaction's new-slot write and its generation-record append — previously
-self-healing through a bare retry — now refuses the identical way, because that state is indistinguishable
-from a genuinely lost record by file content alone; `prikk doctor --rebuild-pointer-index` is the way out for
-it too, not a bare retry of `compact`.
+Fixed in this release (0.50.0 step 1 Parts E/E2): `resolve_live_slot`/`resolve_live_slot_with_tail`
+(`foundation/generation.rs`) now **deduce** the live slot from the two slots' own entries, compared by value
+(compaction only ever re-encodes the live slot's entries into the other one, never copies raw bytes), when
+the generation log names no live slot but the non-default slot holds data. Every entry the non-default slot
+holds that the default slot already has means nothing was written since the switch (or the switch itself
+never completed) — the default slot stays live. An entry the default slot never had means the non-default
+slot took real writes after becoming live — it becomes live instead, and the entry reads correctly rather
+than silently disappearing. Only when the deduction itself cannot be made (either slot is damaged) does this
+refuse, naming the container's own existing damage text. `prikk verify` and `prikk doctor` now warn when this
+state is found — naming the container, the deduced slot, and `prikk compact` as the way to record it and end
+the state for good — since every ordinary reader and writer already resolve it silently. `prikk doctor
+--rebuild-pointer-index` remains a way out for the pointer index specifically, reaching the same state through
+an independent path (re-deriving from the ref log without reading either slot as live), though the ordinary
+deduction above no longer requires it. An earlier version of this fix (Part E) made every reader and writer
+refuse unconditionally in this state; review found that refusal was itself wrong for a crash between a
+compaction's new-slot write and its generation-record append — file-identical to a genuinely lost record, but
+content-equivalent to the slot already live — so Part E2 corrects it to deduce rather than refuse, restoring
+the pre-existing crash-recovery test (a bare retry heals it) to its original behavior.
 
 ## 0.49.0 — 2026-10-07
 

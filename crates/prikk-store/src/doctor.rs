@@ -1069,6 +1069,21 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     ));
                 }
             }
+            // 0.50.0 step 1 Part E2: a compacting container's generation log names no live slot, but
+            // content deduced it anyway -- every ordinary reader and writer already resolve this
+            // silently, so this is the only place it stays visible until `compact` records it.
+            for note in &verification.generation_log_deductions {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-GENERATION-LOG-DEDUCED",
+                    format!(
+                        "{}'s generation log names no live slot; slot {} was deduced from the \
+                         entries ({})",
+                        note.container_label, note.deduced_slot, note.reason
+                    ),
+                    "run `prikk compact` for this container to record the deduced slot and end the \
+                     state for good",
+                ));
+            }
             // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never
             // repaired -- Rule B only makes these report, per the review's ruling).
             for status in &verification.object_container_tails {

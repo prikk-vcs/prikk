@@ -21,6 +21,10 @@
 //! and building one without a real caller would have been exactly the "orphan `pub(crate)`, no real
 //! caller before merge" shape Stage 5 round 1's review flagged. Step 2's compactor (`compact.rs`) is
 //! that caller now.
+//!
+//! **When the log itself names no live slot but the non-default slot holds data, content decides it
+//! (0.50.0 step 1 Part E2), never a refusal.** `resolve_or_deduce`'s own doc has the two rules; a
+//! refusal fires only when the deduction itself cannot be made (either slot is damaged).
 
 use prikk_error::{PrikkError, Result};
 
@@ -449,33 +453,64 @@ fn slot_b_has_data(layout: &RepositoryLayout, slot_b_path: &std::path::Path) -> 
     .is_some_and(|stat| stat.size != 0))
 }
 
-pub(crate) fn resolve_live_slot(
-    layout: &RepositoryLayout,
-    generation_log_path: &std::path::Path,
-    slot_b_path: &std::path::Path,
-    container_label: &str,
-    way_out: &str,
-) -> Result<ContainerSlot> {
-    Ok(resolve_live_slot_with_tail(
-        layout,
-        generation_log_path,
-        slot_b_path,
-        container_label,
-        way_out,
-    )?
-    .0)
+/// What one slot decoded to, for Part E2's content-based deduction: the entries themselves (compared
+/// by value, never by raw bytes -- compaction re-encodes from scratch, so two logically identical
+/// entries need not be byte-identical), and whether the decode itself hit a damaged record.
+pub(crate) struct DecodedEntries<T> {
+    pub(crate) entries: Vec<T>,
+    pub(crate) damaged: bool,
 }
 
-/// Like [`resolve_live_slot`], but also returns the log's own tail status from the same replay --
-/// RFC 163 §9's write-side guard (`compact.rs`, its only caller) is built on this call so it never
-/// pays for a second whole read just to learn what `resolve_live_slot` already decoded.
-pub(crate) fn resolve_live_slot_with_tail(
+/// Which of the two content-deciding rules resolved the slot, named for `verify`/`doctor`'s own
+/// warning text -- never for an ordinary reader or writer, which get the deduced slot silently.
+pub(crate) enum DeductionReason {
+    /// Every entry slot B holds is already in slot A: a crash before the generation record landed,
+    /// or a lost log with nothing written since -- either way the two slots agree, and A is live.
+    EveryEntryInTheOtherSlotIsAlreadyHere,
+    /// Slot B holds an entry slot A never had: it took writes after becoming live, so only the record
+    /// of that switch is missing.
+    TheOtherSlotHoldsAnEntryThisOneNeverHad,
+}
+
+impl DeductionReason {
+    pub(crate) fn explain(&self) -> &'static str {
+        match self {
+            Self::EveryEntryInTheOtherSlotIsAlreadyHere => {
+                "every entry in the other slot already appears here, so a crash happened before the \
+                 switch was recorded, or nothing was written since"
+            }
+            Self::TheOtherSlotHoldsAnEntryThisOneNeverHad => {
+                "the other slot holds an entry this one never had, so it took writes after becoming \
+                 live"
+            }
+        }
+    }
+}
+
+/// The outcome of deducing a live slot from content rather than reading it off the log (Part E2):
+/// which slot, and why.
+pub(crate) struct DeducedFromContent {
+    pub(crate) slot: ContainerSlot,
+    pub(crate) reason: DeductionReason,
+}
+
+/// Resolve the live slot, or -- when the log names none but slot B holds data -- deduce it from the
+/// two slots' own entries rather than refuse (Part E2, correcting Part E's own ruling: the refusal was
+/// file-identical to an ordinary compaction crash, and blocked every reader and writer on it, with no
+/// way out for the received index or the trust policy beyond a backup). The fact this rests on:
+/// `compact.rs` only ever *copies* entries from the live slot into the other one, so slot B's entries
+/// are never anything slot A did not already have, unless B took writes after becoming live and the
+/// record of that switch was then lost. `decode_entries` is the one piece only the caller can supply
+/// -- each compacting container's own entry type and decoder -- so this stays generic over it rather
+/// than this module importing three sibling modules' types.
+fn resolve_or_deduce<T: PartialEq>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
+    slot_a_path: &std::path::Path,
     slot_b_path: &std::path::Path,
-    container_label: &str,
-    way_out: &str,
-) -> Result<(ContainerSlot, usize, usize)> {
+    damage_text: &str,
+    decode_entries: &impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
+) -> Result<(ContainerSlot, usize, usize, Option<DeducedFromContent>)> {
     let replay = replay_generation_log(layout, generation_log_path)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
@@ -487,22 +522,147 @@ pub(crate) fn resolve_live_slot_with_tail(
             record.live_slot,
             replay.trailing_partial_bytes,
             replay.tail_offset,
+            None,
         ));
     }
-    // 0.50.0 step 1 Part E: no record at all -- trust slot A unless slot B itself holds data, which
-    // only a since-lost generation record could explain.
-    if slot_b_has_data(layout, slot_b_path)? {
-        return Err(PrikkError::Integrity(format!(
-            "{container_label}'s generation log names no live slot, but its other slot holds data -- \
-             a compaction happened and the record of it is missing; prikk never guesses which slot is \
-             current. {way_out}"
-        )));
+    // 0.50.0 step 1 Part E/E2: no record at all -- trust slot A unless slot B itself holds data,
+    // which only a since-lost generation record could explain.
+    if !slot_b_has_data(layout, slot_b_path)? {
+        return Ok((
+            ContainerSlot::A,
+            replay.trailing_partial_bytes,
+            replay.tail_offset,
+            None,
+        ));
     }
+    // Ambiguous: deduce from the slots' own entries (Part E2) rather than refuse a state content can
+    // decide. A whole read of each slot, declared: rare (only this ambiguous state reaches it), and
+    // there is no cheaper way to compare entries by value.
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("generation-resolver-deduction");
+    let slot_a_relative = layout.repository_relative(slot_a_path)?;
+    let slot_a_bytes = read_file_if_exists(layout.repository_mutation_root(), &slot_a_relative)?
+        .unwrap_or_default();
+    let slot_b_relative = layout.repository_relative(slot_b_path)?;
+    let slot_b_bytes = read_file_if_exists(layout.repository_mutation_root(), &slot_b_relative)?
+        .unwrap_or_default();
+    let decoded_a = decode_entries(&slot_a_bytes)?;
+    let decoded_b = decode_entries(&slot_b_bytes)?;
+    if decoded_a.damaged || decoded_b.damaged {
+        // Rule 3: either slot is damaged, so the deduction itself cannot be made -- refuse, naming
+        // the container's own existing damage text rather than inventing a new one.
+        return Err(PrikkError::Integrity(damage_text.to_string()));
+    }
+    let (slot, reason) = if decoded_b
+        .entries
+        .iter()
+        .all(|entry| decoded_a.entries.contains(entry))
+    {
+        // Rule 1.
+        (
+            ContainerSlot::A,
+            DeductionReason::EveryEntryInTheOtherSlotIsAlreadyHere,
+        )
+    } else {
+        // Rule 2.
+        (
+            ContainerSlot::B,
+            DeductionReason::TheOtherSlotHoldsAnEntryThisOneNeverHad,
+        )
+    };
     Ok((
-        ContainerSlot::A,
+        slot,
         replay.trailing_partial_bytes,
         replay.tail_offset,
+        Some(DeducedFromContent { slot, reason }),
     ))
+}
+
+/// Like [`resolve_live_slot`], but never deduces or refuses on an ambiguous state -- trusts slot `A`
+/// unconditionally when the log names none, matching every release before Part E. The one caller
+/// this exists for, `recovery_log::meaning_paths_for` (RFC 168 §3.2), is a best-effort naming lookup
+/// for an already-deliberate recovery operation, not an ordinary read or write -- and the module-
+/// coupling boundary forbids `recovery_log` depending upward on a container module (`refs`,
+/// `received`, `trust_index`) just to supply a decoder this one caller does not otherwise need.
+pub(crate) fn resolve_live_slot_trusting_default_on_ambiguity(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+) -> Result<ContainerSlot> {
+    let replay = replay_generation_log(layout, generation_log_path)?;
+    if replay.has_item_failure() {
+        return Err(PrikkError::Integrity(
+            "generation log has a damaged record; run doctor before reading".to_string(),
+        ));
+    }
+    Ok(replay
+        .records
+        .last()
+        .map_or(ContainerSlot::A, |record| record.live_slot))
+}
+
+pub(crate) fn resolve_live_slot<T: PartialEq>(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+    slot_a_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+    damage_text: &str,
+    decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
+) -> Result<ContainerSlot> {
+    Ok(resolve_or_deduce(
+        layout,
+        generation_log_path,
+        slot_a_path,
+        slot_b_path,
+        damage_text,
+        &decode_entries,
+    )?
+    .0)
+}
+
+/// Like [`resolve_live_slot`], but also returns the log's own tail status from the same replay --
+/// RFC 163 §9's write-side guard (`compact.rs`, its only caller) is built on this call so it never
+/// pays for a second whole read just to learn what `resolve_live_slot` already decoded.
+pub(crate) fn resolve_live_slot_with_tail<T: PartialEq>(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+    slot_a_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+    damage_text: &str,
+    decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
+) -> Result<(ContainerSlot, usize, usize)> {
+    let (slot, trailing_partial_bytes, tail_offset, _) = resolve_or_deduce(
+        layout,
+        generation_log_path,
+        slot_a_path,
+        slot_b_path,
+        damage_text,
+        &decode_entries,
+    )?;
+    Ok((slot, trailing_partial_bytes, tail_offset))
+}
+
+/// `verify`/`doctor`'s own warning (Part E2): the identical deduction every reader and writer now
+/// makes silently, surfaced explicitly so the ambiguous state stays visible and nameable, rather than
+/// going unremarked once it stops being a refusal. `None` when the log names a slot outright, or slot
+/// B is genuinely empty -- nothing to warn about.
+pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq>(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+    slot_a_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+    damage_text: &str,
+    decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
+) -> Result<Option<DeducedFromContent>> {
+    Ok(resolve_or_deduce(
+        layout,
+        generation_log_path,
+        slot_a_path,
+        slot_b_path,
+        damage_text,
+        &decode_entries,
+    )?
+    .3)
 }
 
 #[cfg(test)]

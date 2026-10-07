@@ -10,6 +10,7 @@ use super::{plan_pointer_index_rebuild, rebuild_pointer_index};
 use crate::foundation::generation;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner};
+use crate::refs::decode_pointer_index_entries_for_resolver;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     FileObjectStore, ObjectWriter, RefPublication, RefStore, add_trusted_maintainer,
@@ -147,9 +148,10 @@ fn live_pointer_index_bytes(layout: &RepositoryLayout) -> Vec<u8> {
     let (live_slot, _, _) = generation::resolve_live_slot_with_tail(
         layout,
         &generation_log_path,
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`",
+        "ref pointer index has a damaged entry",
+        decode_pointer_index_entries_for_resolver,
     )
     .unwrap();
     std::fs::read(layout.ref_pointer_index_slot_path(live_slot)).unwrap()
@@ -532,9 +534,10 @@ fn k5_rebuild_is_never_run_implicitly() {
     let (live_slot, _, _) = generation::resolve_live_slot_with_tail(
         &layout,
         &generation_log_path,
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`",
+        "ref pointer index has a damaged entry",
+        decode_pointer_index_entries_for_resolver,
     )
     .unwrap();
     assert_eq!(

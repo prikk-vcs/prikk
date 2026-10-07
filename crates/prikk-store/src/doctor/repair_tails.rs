@@ -42,9 +42,11 @@ use crate::foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout,
 };
 use crate::lock::{ActiveLock, acquire_container_locks};
+use crate::received::received_index::decode_received_index_entries_for_resolver;
 use crate::refs::{
     ensure_no_incomplete_publication, replay_pointer_index, truncate_pointer_index_trailing_partial,
 };
+use crate::trust_index::decode_trust_policy_entries_for_resolver;
 use crate::verify::check_appended_file_tails;
 use crate::wal::Wal;
 
@@ -295,10 +297,10 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
             let slot = resolve_live_slot(
                 layout,
                 &layout.trust_policy_generation_log_path(),
+                &layout.trust_policy_container_slot_path(ContainerSlot::A),
                 &layout.trust_policy_container_slot_path(ContainerSlot::B),
-                "the trust policy container",
-                "restore this container's own generation log from a backup taken before the loss; \
-                 no rebuild exists for it",
+                "trust policy container has a damaged snapshot; run doctor before reading",
+                decode_trust_policy_entries_for_resolver,
             )?;
             layout.trust_policy_container_slot_path(slot)
         }
@@ -307,10 +309,10 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
             let slot = resolve_live_slot(
                 layout,
                 &layout.received_index_generation_log_path(),
+                &layout.received_index_slot_path(ContainerSlot::A),
                 &layout.received_index_slot_path(ContainerSlot::B),
-                "the received index",
-                "restore this container's own generation log from a backup taken before the loss; \
-                 no rebuild exists for it",
+                "received-ref index has a damaged entry; run doctor before reading",
+                decode_received_index_entries_for_resolver,
             )?;
             layout.received_index_slot_path(slot)
         }

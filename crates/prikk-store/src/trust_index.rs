@@ -42,7 +42,24 @@ use crate::foundation::frame_resync::{
     sound_frame_after_partial, sound_frame_after_partial_budgeted, tallied_sha256,
 };
 use crate::foundation::fsutil::{append_file_required, len_to_u64, read_file_if_exists};
-use crate::foundation::generation::resolve_live_slot;
+use crate::foundation::generation::{self, resolve_live_slot};
+
+/// The trust policy container's own existing damage text, reused verbatim by Part E2's deduction
+/// (rule 3) when the entries needed to deduce a live slot cannot themselves be read.
+const TRUST_POLICY_DAMAGE_TEXT: &str =
+    "trust policy container has a damaged snapshot; run doctor before reading";
+
+/// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
+/// whether the decode hit a damaged record.
+pub(crate) fn decode_trust_policy_entries_for_resolver(
+    bytes: &[u8],
+) -> Result<generation::DecodedEntries<TrustPolicySnapshotEntry>> {
+    let replay = decode_trust_policy_records(bytes)?;
+    Ok(generation::DecodedEntries {
+        damaged: replay.has_item_failure(),
+        entries: replay.entries,
+    })
+}
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 const TRUST_KEY_MAGIC: &[u8; 8] = b"PTRUKEY1";
@@ -867,10 +884,10 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
     let slot = resolve_live_slot(
         layout,
         &layout.trust_policy_generation_log_path(),
+        &layout.trust_policy_container_slot_path(ContainerSlot::A),
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
-        "the trust policy container",
-        "restore this container's own generation log from a backup taken before the loss; no rebuild \
-         exists for it",
+        TRUST_POLICY_DAMAGE_TEXT,
+        decode_trust_policy_entries_for_resolver,
     )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -931,10 +948,10 @@ pub(crate) fn append_trust_policy_snapshot(
     let slot = resolve_live_slot(
         layout,
         &layout.trust_policy_generation_log_path(),
+        &layout.trust_policy_container_slot_path(ContainerSlot::A),
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
-        "the trust policy container",
-        "restore this container's own generation log from a backup taken before the loss; no rebuild \
-         exists for it",
+        TRUST_POLICY_DAMAGE_TEXT,
+        decode_trust_policy_entries_for_resolver,
     )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)

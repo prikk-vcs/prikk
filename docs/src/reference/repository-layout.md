@@ -311,15 +311,23 @@ live. A reader resolves the live slot by reading the last complete record in the
 by assuming `a`.
 
 **An empty (or absent) generation log is trusted to mean "no compaction has ever run" only while slot
-`b` itself holds no data** (0.50.0 step 1 Part E, 019 §5.7). Slot `b` is never written except
+`b` itself holds no data** (0.50.0 step 1 Part E2, 019 §5.7). Slot `b` is never written except
 alongside the one generation record that names it live (`compact.rs`, and, for the pointer index
 only, `prikk doctor --rebuild-pointer-index`'s own rebuild), so an empty log over a non-empty slot `b`
 can only mean a compaction (or rebuild) genuinely happened and its own record of that fact was lost
-afterward — not that one never happened. Every reader and writer refuses in that state, naming the
-container and its own way out, rather than guess which slot is current: `prikk doctor --rebuild-
-pointer-index` for the pointer index (it re-derives from the ref log without reading either slot as
-live); restoring the generation log from a backup for the received index and the trust policy
-container, which have no rebuild.
+afterward — not that one never happened. Rather than refuse that state, every reader and writer
+**deduces** the live slot from the two slots' own entries, compared by value: compaction only ever
+copies the live slot's entries into the other one, so every entry slot `b` holds that slot `a`
+already has means nothing changed since the switch (slot `a` stays live — this also covers a crash
+between the switch's own slot write and its generation record, which a bare retry still heals exactly
+as before); an entry slot `a` never had means slot `b` took a real write after becoming live (slot `b`
+becomes live instead, so that write is not silently lost). Only when the deduction itself cannot be
+made — either slot is damaged — does this refuse, naming the container and its own existing damage
+text. `prikk verify` and `prikk doctor` warn whenever this state is found, naming the container, the
+deduced slot, and `prikk compact` as the way to record it and end the state for good. `prikk doctor
+--rebuild-pointer-index` remains a separate, always-available way out for the pointer index (it
+re-derives from the ref log without reading either slot as live), though the deduction above no
+longer requires it.
 
 `prikk compact --pointer-index|--received-index|--trust-policy|--all` reclaims the dead entries for
 one or all three: it reads the currently-live slot, keeps only what is still current (the last entry
@@ -396,7 +404,7 @@ full cross-platform filesystem validation.
 | Verification checks object placement, ref pointer/log consistency, active WAL state, and publication trust within current limits. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [integrity and recovery diagnostics](./integrity-recovery.md), [trust and threat model](./trust-threat-model.md) |
 | `cache/` is initialized but not a root of trust; `quarantine/` is retired and no longer initialized, and `gc/` is not an initialized directory. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-31](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-31-REPOSITORY-LAYOUT-AUTHORITY-REFERENCE.md) |
 | The received-ref index is a shared, append-only, last-entry-wins container for imported `remotes/<name>` pointers, kept separate from `refs/by-id/` because an imported RefState's own embedded ref name can never agree with a locally renamed pointer. | [`received.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received.rs), [`received_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received/received_index.rs) |
-| Three containers (ref-pointer index, received-ref index, trust policy) each have a generation log naming which slot is live, defaulting to `a` when empty *and slot `b` itself holds no data* -- an empty log over a non-empty slot `b` refuses instead (0.50.0 step 1 Part E), naming the container and its own way out, since that shape only a since-lost record of a genuine compaction can explain; `prikk compact` reads the live slot, writes the reduced set to the other slot durably, then appends a generation record naming it live; `--plan-only` performs the same read with no write. Object containers and the ref log allocate an unused `b` slot and never compact; the trust key container has no slot pair at all. | [`generation.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/generation.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
+| Three containers (ref-pointer index, received-ref index, trust policy) each have a generation log naming which slot is live, defaulting to `a` when empty *and slot `b` itself holds no data* -- an empty log over a non-empty slot `b` deduces the live slot from the two slots' own entries instead (0.50.0 step 1 Part E2), warning (`verify`/`doctor`) rather than refusing, since that shape only a since-lost record of a genuine compaction can explain and content already decides it; `prikk compact` reads the live slot, writes the reduced set to the other slot durably, then appends a generation record naming it live; `--plan-only` performs the same read with no write. Object containers and the ref log allocate an unused `b` slot and never compact; the trust key container has no slot pair at all. | [`generation.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/generation.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
 
 ## Provenance
 

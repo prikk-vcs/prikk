@@ -35,8 +35,25 @@ use crate::foundation::frame_resync::{
 use crate::foundation::fsutil::{
     append_file_required, len_to_u64, read_file_if_exists, truncate_existing_file_required,
 };
-use crate::foundation::generation::resolve_live_slot;
+use crate::foundation::generation::{self, resolve_live_slot};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
+
+/// The ref pointer index's own existing damage text, reused verbatim by Part E2's deduction (rule 3)
+/// when the entries needed to deduce a live slot cannot themselves be read.
+const POINTER_INDEX_DAMAGE_TEXT: &str =
+    "ref pointer index has a damaged entry; run doctor before reading";
+
+/// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
+/// whether the decode hit a damaged record.
+pub(crate) fn decode_pointer_index_entries_for_resolver(
+    bytes: &[u8],
+) -> Result<generation::DecodedEntries<PointerIndexEntry>> {
+    let replay = decode_pointer_index_records(bytes)?;
+    Ok(generation::DecodedEntries {
+        damaged: replay.has_item_failure(),
+        entries: replay.entries,
+    })
+}
 
 const POINTER_INDEX_MAGIC: &[u8; 8] = b"PREFPTI1";
 const POINTER_INDEX_VERSION: u16 = 1;
@@ -482,10 +499,10 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
     let slot = resolve_live_slot(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+        POINTER_INDEX_DAMAGE_TEXT,
+        decode_pointer_index_entries_for_resolver,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -537,10 +554,10 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
     let slot = resolve_live_slot(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+        POINTER_INDEX_DAMAGE_TEXT,
+        decode_pointer_index_entries_for_resolver,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -690,10 +707,10 @@ pub(in crate::refs) fn append_ref_pointer_entry(
     let slot = resolve_live_slot(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+        POINTER_INDEX_DAMAGE_TEXT,
+        decode_pointer_index_entries_for_resolver,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
@@ -722,10 +739,10 @@ pub(crate) fn remove_pointer_entries_for_test(
     let slot = resolve_live_slot(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
+        &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "the ref pointer index",
-        "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+        POINTER_INDEX_DAMAGE_TEXT,
+        decode_pointer_index_entries_for_resolver,
     )?;
     let path = layout.ref_pointer_index_slot_path(slot);
     let bytes = std::fs::read(&path)?;

@@ -47,8 +47,8 @@ use crate::lock::acquire_container_locks;
 use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::ref_completion::{CompletionRefusal, evaluate_known_lead};
 use crate::refs::{
-    PointerIndexEntry, decode_ref_log_for_rebuild, empty_pointer_index_replay,
-    encode_pointer_index_record, replay_pointer_index,
+    PointerIndexEntry, decode_pointer_index_entries_for_resolver, decode_ref_log_for_rebuild,
+    empty_pointer_index_replay, encode_pointer_index_record, replay_pointer_index,
 };
 use crate::trust::{load_maintainer_trust_policy, verify_trusted_publication_envelope};
 
@@ -253,6 +253,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     // own `generation_lost` is a condition this rebuild is explicitly the way out for, named in the
     // plan below).
     let ref_pointer_generation_log_path = layout.ref_pointer_index_generation_log_path();
+    let ref_pointer_slot_a_path = layout.ref_pointer_index_slot_path(ContainerSlot::A);
     let ref_pointer_slot_b_path = layout.ref_pointer_index_slot_path(ContainerSlot::B);
     let generation_lost = generation::generation_log_lost(
         layout,
@@ -404,10 +405,10 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
         let (slot, trailing, tail_offset) = generation::resolve_live_slot_with_tail(
             layout,
             &ref_pointer_generation_log_path,
+            &ref_pointer_slot_a_path,
             &ref_pointer_slot_b_path,
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log \
-             without reading either slot as live",
+            "ref pointer index has a damaged entry; run doctor before reading",
+            decode_pointer_index_entries_for_resolver,
         )?;
         require_no_unclean_tail(
             "the ref pointer index's generation log",

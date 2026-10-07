@@ -46,10 +46,16 @@ use crate::foundation::generation::{self, GenerationRecord};
 use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
 use crate::lock::acquire_container_locks;
 use crate::received::received_index::{
-    ReceivedIndexEntry, encode_received_index_record, replay_received_index,
+    ReceivedIndexEntry, decode_received_index_entries_for_resolver, encode_received_index_record,
+    replay_received_index,
 };
-use crate::refs::{PointerIndexEntry, encode_pointer_index_record, replay_pointer_index};
-use crate::trust_index::{encode_trust_policy_record, replay_trust_policy};
+use crate::refs::{
+    PointerIndexEntry, decode_pointer_index_entries_for_resolver, encode_pointer_index_record,
+    replay_pointer_index,
+};
+use crate::trust_index::{
+    decode_trust_policy_entries_for_resolver, encode_trust_policy_record, replay_trust_policy,
+};
 
 /// Outcome of one compaction run: how many live records existed before and after reduction. This is
 /// the deduplication compaction performs on index/pointer *records*, not object deletion -- nothing
@@ -93,10 +99,10 @@ pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -
         generation::resolve_live_slot_with_tail(
             layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry; run doctor before reading",
+            decode_pointer_index_entries_for_resolver,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the ref pointer index's generation log",
@@ -127,10 +133,10 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
         generation::resolve_live_slot_with_tail(
             layout,
             &generation_log_path,
+            &layout.received_index_slot_path(ContainerSlot::A),
             &layout.received_index_slot_path(ContainerSlot::B),
-            "the received index",
-            "restore this container's own generation log from a backup taken before the loss; no rebuild \
-         exists for it",
+            "received-ref index has a damaged entry; run doctor before reading",
+            decode_received_index_entries_for_resolver,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the received index's generation log",
@@ -161,10 +167,10 @@ pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Res
         generation::resolve_live_slot_with_tail(
             layout,
             &generation_log_path,
+            &layout.trust_policy_container_slot_path(ContainerSlot::A),
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
-            "the trust policy container",
-            "restore this container's own generation log from a backup taken before the loss; no rebuild \
-         exists for it",
+            "trust policy container has a damaged snapshot; run doctor before reading",
+            decode_trust_policy_entries_for_resolver,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the trust policy container's generation log",
@@ -199,10 +205,10 @@ fn run_ref_pointer_index_compaction(
         generation::resolve_live_slot_with_tail(
             layout,
             &generation_log_path,
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "the ref pointer index",
-            "run `prikk doctor --rebuild-pointer-index`, which re-derives it from the ref log without \
-         reading either slot as live",
+            "ref pointer index has a damaged entry; run doctor before reading",
+            decode_pointer_index_entries_for_resolver,
         )?;
 
     let replay = replay_pointer_index(layout)?;
@@ -295,10 +301,10 @@ fn run_received_index_compaction(
         generation::resolve_live_slot_with_tail(
             layout,
             &generation_log_path,
+            &layout.received_index_slot_path(ContainerSlot::A),
             &layout.received_index_slot_path(ContainerSlot::B),
-            "the received index",
-            "restore this container's own generation log from a backup taken before the loss; no rebuild \
-         exists for it",
+            "received-ref index has a damaged entry; run doctor before reading",
+            decode_received_index_entries_for_resolver,
         )?;
 
     let replay = replay_received_index(layout)?;
@@ -383,10 +389,10 @@ fn run_trust_policy_compaction(
         generation::resolve_live_slot_with_tail(
             layout,
             &generation_log_path,
+            &layout.trust_policy_container_slot_path(ContainerSlot::A),
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
-            "the trust policy container",
-            "restore this container's own generation log from a backup taken before the loss; no rebuild \
-         exists for it",
+            "trust policy container has a damaged snapshot; run doctor before reading",
+            decode_trust_policy_entries_for_resolver,
         )?;
 
     let replay = replay_trust_policy(layout)?;
