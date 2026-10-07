@@ -192,3 +192,5 @@ defect, reproduced by the architect. Two more one-sitting parts follow; the same
 
 **After F2, step 1 closes.**
 
+**Part F2 ACCEPTED 2026-10-08** (`1a026258`; review `review-019-corrections-F2-review-v1`). **0.50.0 step 1 is CLOSED:** every review 019 finding is graded 0.50.0, and item 6, the lost generation log (Parts E–E4), is corrected. This handoff is closed.
+
