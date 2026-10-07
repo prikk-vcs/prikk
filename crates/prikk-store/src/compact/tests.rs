@@ -12,7 +12,7 @@ use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{ContainerSlot, LockableContainer};
 use crate::lock::acquire_container_locks;
-use crate::refs::{decode_pointer_index_entries_for_resolver, reduce_pointer_index_entries};
+use crate::refs::{decode_pointer_index_entries_for_resolver, fold_one_pointer_index_entry};
 use crate::test_gates::test_support::{
     signed_empty_block_envelope, signed_ref_state_envelope, unique_temp_dir,
 };
@@ -78,7 +78,7 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )?;
     assert_eq!(live_before, ContainerSlot::A);
 
@@ -93,7 +93,7 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )?;
     assert_eq!(live_after, ContainerSlot::B);
 
@@ -154,7 +154,7 @@ fn plan_compact_reports_the_same_counts_as_a_real_run_and_touches_nothing() -> R
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A
     );
@@ -228,7 +228,7 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A
     );
@@ -246,11 +246,91 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::B
     );
     assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(second));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E4, the case table's row 4 (the review): a compaction crash leaves A live, but A is not
+/// frozen there -- it keeps taking ordinary writes (a new branch) until something records the
+/// switch. `compaction(A_now)` then differs from B, which was made from an earlier A; Part E3's own
+/// rule compared against the current A only and would wrongly resolve to B, losing the branch
+/// written after the crash. The sound rule finds `P` = A as it stood at the crash among A's own
+/// prefixes and still resolves to A.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_crash_then_ordinary_writes_to_a_still_resolve_to_a() -> Result<()> {
+    let root = unique_temp_dir("part-e4-pointer-index-crash-then-writes-to-a");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    let first = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+
+    // The crash window: B becomes a sound copy of A as it stands now (one entry), but no record
+    // lands.
+    fail_after_for_test(TestFailPoint::AppendWrite, 1);
+    assert!(compact_ref_pointer_index(&layout).is_err());
+
+    // Ordinary work continues on A (the ambiguous state's own deduction already resolves reads and
+    // writes to A) -- a second update to the *same* ref, landing only in A. This is the shape that
+    // actually defeats a "compare against the full, current A" rule: the duplicate key makes
+    // `compaction(A_now)` a single, newer entry that is no longer a prefix match for B at all,
+    // even though B is still soundly derived from an earlier state of A.
+    let second = publish_update(&store, &mut objects, "heads/main", Some(first), 2)?;
+
+    assert_eq!(
+        resolve_live_slot(
+            &layout,
+            &layout.ref_pointer_index_generation_log_path(),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
+            fold_one_pointer_index_entry,
+        )?,
+        ContainerSlot::A,
+        "A must stay live -- B was made from an earlier A, and the update written since must not \
+         be lost to a stale read"
+    );
+    assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(second));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Part E4, the case table's row 4 for the trust policy container -- security-relevant, mirroring
+/// the review's own framing: a crash leaves A live, a maintainer is revoked afterward (an ordinary
+/// write to A), and the rule must not read that revocation away by resolving to the stale B.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn trust_policy_crash_then_an_ordinary_revocation_still_resolves_to_a() -> Result<()> {
+    let root = unique_temp_dir("part-e4-trust-policy-crash-then-writes-to-a");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let first_key = public_key_hex(&[31_u8; 32]);
+    let second_key = public_key_hex(&[32_u8; 32]);
+    add_trusted_maintainer(&layout, "first", &first_key)?;
+    add_trusted_maintainer(&layout, "second", &second_key)?;
+
+    // The crash window: B becomes a sound copy of A's last snapshot as it stands now ({first,
+    // second}), but no record lands.
+    fail_after_for_test(TestFailPoint::AppendWrite, 1);
+    assert!(compact_trust_policy(&layout).is_err());
+
+    // Ordinary work continues on A: a revocation, landing only in A, which B was never made from.
+    remove_trusted_maintainer(&layout, "first")?;
+
+    let policy = load_maintainer_trust_policy(&layout)?;
+    assert_eq!(
+        policy.keys.len(),
+        1,
+        "the revocation written to A after the crash must not be lost to a stale read of B"
+    );
+    assert_eq!(policy.keys[0].key_id, "second");
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
@@ -288,7 +368,7 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A
     );
@@ -304,7 +384,7 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::B
     );
@@ -341,7 +421,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::B
     );
@@ -363,7 +443,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::B
     );
@@ -379,7 +459,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A
     );
@@ -479,7 +559,7 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A
     );
@@ -528,7 +608,7 @@ fn compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A
     );
@@ -892,7 +972,7 @@ fn a_partly_written_slot_b_resolves_to_the_old_generation() -> Result<()> {
             &slot_b_path,
             "ref pointer index has a damaged entry",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?,
         ContainerSlot::A,
         "a sound prefix of C must still resolve to A, the same as an interrupted write would"

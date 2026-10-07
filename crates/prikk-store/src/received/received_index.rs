@@ -41,10 +41,19 @@ pub(crate) fn reduce_received_index_entries(
 ) -> Vec<ReceivedIndexEntry> {
     let mut reduced: Vec<ReceivedIndexEntry> = Vec::new();
     for entry in entries {
-        reduced.retain(|existing: &ReceivedIndexEntry| existing.ref_name_key != entry.ref_name_key);
-        reduced.push(entry);
+        fold_one_received_index_entry(&mut reduced, entry);
     }
     reduced
+}
+
+/// One step of the same reduction, exposed so Part E4's deduction can maintain the running
+/// `compaction(P)` for every prefix `P` of A's entries in one pass.
+pub(crate) fn fold_one_received_index_entry(
+    running: &mut Vec<ReceivedIndexEntry>,
+    entry: ReceivedIndexEntry,
+) {
+    running.retain(|existing: &ReceivedIndexEntry| existing.ref_name_key != entry.ref_name_key);
+    running.push(entry);
 }
 
 /// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
@@ -554,7 +563,7 @@ pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Re
         &layout.received_index_slot_path(ContainerSlot::B),
         RECEIVED_INDEX_DAMAGE_TEXT,
         decode_received_index_entries_for_resolver,
-        reduce_received_index_entries,
+        fold_one_received_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -592,7 +601,7 @@ pub(crate) fn replay_received_index(layout: &RepositoryLayout) -> Result<Receive
         &layout.received_index_slot_path(ContainerSlot::B),
         RECEIVED_INDEX_DAMAGE_TEXT,
         decode_received_index_entries_for_resolver,
-        reduce_received_index_entries,
+        fold_one_received_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -683,7 +692,7 @@ pub(crate) fn append_received_index_entry(
         &layout.received_index_slot_path(ContainerSlot::B),
         RECEIVED_INDEX_DAMAGE_TEXT,
         decode_received_index_entries_for_resolver,
-        reduce_received_index_entries,
+        fold_one_received_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.received_index_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)

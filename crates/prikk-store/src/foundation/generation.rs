@@ -464,26 +464,29 @@ pub(crate) struct DecodedEntries<T> {
 /// Which of the two content-deciding rules resolved the slot, named for `verify`/`doctor`'s own
 /// warning text -- never for an ordinary reader or writer, which get the deduced slot silently.
 pub(crate) enum DeductionReason {
-    /// Slot B's own decoded entries equal `C` (the reduction `compact` would write from slot A), or a
-    /// prefix of it: a crash before the generation record landed, a partly written B, or a lost log
-    /// with nothing written since -- either way B is derived from A, and A is live.
-    BIsTheCompactionOfAOrAPrefixOfIt,
-    /// Slot B's own decoded entries are neither `C` nor a prefix of it: B took writes after becoming
-    /// live, so only the record of that switch is missing.
+    /// Slot B's own decoded entries equal `compaction(P)`, or a prefix of it, for some prefix `P` of
+    /// slot A's own entries: a crash before the generation record landed (`P` = all of A at that
+    /// point), a partly written B, a lost log with nothing written since, or a crash followed by
+    /// ordinary writes to A (`P` = A as it stood at the crash) -- either way B is derived from A, and
+    /// A is live.
+    BIsDerivedFromSomePrefixOfA,
+    /// Slot B's own decoded entries match no prefix of A this way: B took writes after becoming live,
+    /// so only the record of that switch is missing.
     BTookWritesAfterBecomingLive,
 }
 
 impl DeductionReason {
     pub(crate) fn explain(&self) -> &'static str {
         match self {
-            Self::BIsTheCompactionOfAOrAPrefixOfIt => {
-                "the other slot's entries equal, or are a prefix of, what compaction would write from \
-                 this one, so a crash happened before the switch was recorded, the write was \
-                 interrupted, or nothing was written since"
+            Self::BIsDerivedFromSomePrefixOfA => {
+                "the other slot's entries equal, or are a prefix of, what compaction would have \
+                 written at some earlier point in this one's own history, so a crash happened before \
+                 the switch was recorded, the write was interrupted, or nothing live-affecting was \
+                 written since"
             }
             Self::BTookWritesAfterBecomingLive => {
-                "the other slot's entries are neither equal to, nor a prefix of, what compaction \
-                 would write from this one, so it took writes after becoming live"
+                "the other slot's entries match no earlier point in this one's own history, so it \
+                 took writes after becoming live"
             }
         }
     }
@@ -501,18 +504,23 @@ pub(crate) struct DeducedFromContent {
 /// file-identical to an ordinary compaction crash, and blocked every reader and writer on it, with no
 /// way out for the received index or the trust policy beyond a backup).
 ///
-/// **Part E3 corrected the deduction itself**: a membership test ("every entry B holds is somewhere
-/// in A's history") is unsound when entries can repeat -- the trust policy's snapshot entries are a
-/// full `{key_ids}` set with no sequence, so an earlier-then-reinstated set can reappear, and
-/// membership alone cannot tell a genuine later write from history repeating itself (the review's own
-/// un-revocation sequence). The sound test compares against `C`, the *exact* reduction `compact`
-/// itself would write from A's entries (`reduce_entries`, the real compactor's own logic, never a
-/// second implementation of it): slot B's decoded entries equal `C`, or are a prefix of it (a crash
-/// before the record, or a partly written B), mean B is derived from A, so A is live; anything else
-/// means B took a real write after becoming live. `decode_entries` and `reduce_entries` are the two
-/// pieces only the caller can supply -- each compacting container's own entry type, decoder, and
-/// compaction logic -- so this stays generic over them rather than this module importing three
-/// sibling modules' types.
+/// **Part E3 corrected the deduction once**: a membership test ("every entry B holds is somewhere in
+/// A's history") is unsound when entries can repeat -- the trust policy's snapshot entries are a full
+/// `{key_ids}` set with no sequence, so an earlier-then-reinstated set can reappear (the review's own
+/// un-revocation sequence). Comparing against `C = compaction(A)` positionally fixed that.
+///
+/// **Part E4 corrects it again**: `compaction(A)`, A *as it is now*, is still wrong after a crash
+/// that leaves A live and taking further ordinary writes (a new branch, a revocation) -- B was made
+/// from an *earlier* A, and comparing against the current one can resolve to B, the stale slot,
+/// losing those writes. The sound test: **B is derived from A if B equals `compaction(P)`, or a
+/// prefix of it, for some prefix `P` of A's own entries** -- not only the full A. Computed in one
+/// pass over A's entries, maintaining the running reduction `fold_entry` builds incrementally (the
+/// same step `compact`'s own reduction takes, exposed so the two can never drift) and testing B
+/// against it after every entry -- recomputing the whole reduction from scratch for each candidate
+/// `P` would make this quadratic, not linear. `decode_entries` and `fold_entry` are the two pieces
+/// only the caller can supply -- each compacting container's own entry type, decoder, and reduction
+/// step -- so this stays generic over them rather than this module importing three sibling modules'
+/// types.
 fn resolve_or_deduce<T: PartialEq>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
@@ -520,7 +528,7 @@ fn resolve_or_deduce<T: PartialEq>(
     slot_b_path: &std::path::Path,
     damage_text: &str,
     decode_entries: &impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
-    reduce_entries: &impl Fn(Vec<T>) -> Vec<T>,
+    fold_entry: &impl Fn(&mut Vec<T>, T),
 ) -> Result<(ContainerSlot, usize, usize, Option<DeducedFromContent>)> {
     let replay = replay_generation_log(layout, generation_log_path)?;
     if replay.has_item_failure() {
@@ -565,17 +573,27 @@ fn resolve_or_deduce<T: PartialEq>(
         // the container's own existing damage text rather than inventing a new one.
         return Err(PrikkError::Integrity(damage_text.to_string()));
     }
-    // Part E3: compare against `C`, the exact reduction `compact` would write from A -- not bare
-    // membership, which a repeated snapshot can fool (the review's own un-revocation sequence).
-    let compaction_of_a = reduce_entries(decoded_a.entries);
-    let is_prefix_or_equal = compaction_of_a
-        .get(..decoded_b.entries.len())
-        .is_some_and(|prefix| decoded_b.entries.as_slice() == prefix);
-    let (slot, reason) = if is_prefix_or_equal {
+    // Part E4: B is derived from A if B equals `compaction(P)`, or a prefix of it, for *some* prefix
+    // `P` of A's own entries -- not only the full A (Part E3's own gap: a crash leaving A live and
+    // taking further writes makes `compaction(A_now)` diverge from a B made from an earlier A).
+    // One pass: fold A's entries into a running reduction, testing B against it after every step.
+    let mut running = Vec::with_capacity(decoded_a.entries.len());
+    let mut derived_from_a = decoded_b.entries.is_empty();
+    for entry in decoded_a.entries {
+        fold_entry(&mut running, entry);
+        if running
+            .get(..decoded_b.entries.len())
+            .is_some_and(|prefix| decoded_b.entries.as_slice() == prefix)
+        {
+            derived_from_a = true;
+            break;
+        }
+    }
+    let (slot, reason) = if derived_from_a {
         // Rule 1.
         (
             ContainerSlot::A,
-            DeductionReason::BIsTheCompactionOfAOrAPrefixOfIt,
+            DeductionReason::BIsDerivedFromSomePrefixOfA,
         )
     } else {
         // Rule 2.
@@ -621,7 +639,7 @@ pub(crate) fn resolve_live_slot<T: PartialEq>(
     slot_b_path: &std::path::Path,
     damage_text: &str,
     decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
-    reduce_entries: impl Fn(Vec<T>) -> Vec<T>,
+    fold_entry: impl Fn(&mut Vec<T>, T),
 ) -> Result<ContainerSlot> {
     Ok(resolve_or_deduce(
         layout,
@@ -630,7 +648,7 @@ pub(crate) fn resolve_live_slot<T: PartialEq>(
         slot_b_path,
         damage_text,
         &decode_entries,
-        &reduce_entries,
+        &fold_entry,
     )?
     .0)
 }
@@ -645,7 +663,7 @@ pub(crate) fn resolve_live_slot_with_tail<T: PartialEq>(
     slot_b_path: &std::path::Path,
     damage_text: &str,
     decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
-    reduce_entries: impl Fn(Vec<T>) -> Vec<T>,
+    fold_entry: impl Fn(&mut Vec<T>, T),
 ) -> Result<(ContainerSlot, usize, usize)> {
     let (slot, trailing_partial_bytes, tail_offset, _) = resolve_or_deduce(
         layout,
@@ -654,7 +672,7 @@ pub(crate) fn resolve_live_slot_with_tail<T: PartialEq>(
         slot_b_path,
         damage_text,
         &decode_entries,
-        &reduce_entries,
+        &fold_entry,
     )?;
     Ok((slot, trailing_partial_bytes, tail_offset))
 }
@@ -670,7 +688,7 @@ pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq>(
     slot_b_path: &std::path::Path,
     damage_text: &str,
     decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
-    reduce_entries: impl Fn(Vec<T>) -> Vec<T>,
+    fold_entry: impl Fn(&mut Vec<T>, T),
 ) -> Result<Option<DeducedFromContent>> {
     Ok(resolve_or_deduce(
         layout,
@@ -679,7 +697,7 @@ pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq>(
         slot_b_path,
         damage_text,
         &decode_entries,
-        &reduce_entries,
+        &fold_entry,
     )?
     .3)
 }

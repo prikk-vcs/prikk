@@ -48,7 +48,7 @@ use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::ref_completion::{CompletionRefusal, evaluate_known_lead};
 use crate::refs::{
     PointerIndexEntry, decode_pointer_index_entries_for_resolver, decode_ref_log_for_rebuild,
-    empty_pointer_index_replay, encode_pointer_index_record, reduce_pointer_index_entries,
+    empty_pointer_index_replay, encode_pointer_index_record, fold_one_pointer_index_entry,
     replay_pointer_index,
 };
 use crate::trust::{load_maintainer_trust_policy, verify_trusted_publication_envelope};
@@ -410,7 +410,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
             &ref_pointer_slot_b_path,
             "ref pointer index has a damaged entry; run doctor before reading",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?;
         require_no_unclean_tail(
             "the ref pointer index's generation log",

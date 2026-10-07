@@ -10,7 +10,7 @@ use super::{plan_pointer_index_rebuild, rebuild_pointer_index};
 use crate::foundation::generation;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner};
-use crate::refs::{decode_pointer_index_entries_for_resolver, reduce_pointer_index_entries};
+use crate::refs::{decode_pointer_index_entries_for_resolver, fold_one_pointer_index_entry};
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     FileObjectStore, ObjectWriter, RefPublication, RefStore, add_trusted_maintainer,
@@ -152,7 +152,7 @@ fn live_pointer_index_bytes(layout: &RepositoryLayout) -> Vec<u8> {
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )
     .unwrap();
     std::fs::read(layout.ref_pointer_index_slot_path(live_slot)).unwrap()
@@ -539,7 +539,7 @@ fn k5_rebuild_is_never_run_implicitly() {
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )
     .unwrap();
     assert_eq!(

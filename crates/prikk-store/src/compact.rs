@@ -46,16 +46,16 @@ use crate::foundation::generation::{self, GenerationRecord};
 use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
 use crate::lock::acquire_container_locks;
 use crate::received::received_index::{
-    ReceivedIndexEntry, decode_received_index_entries_for_resolver, encode_received_index_record,
-    reduce_received_index_entries, replay_received_index,
+    decode_received_index_entries_for_resolver, encode_received_index_record,
+    fold_one_received_index_entry, reduce_received_index_entries, replay_received_index,
 };
 use crate::refs::{
-    PointerIndexEntry, decode_pointer_index_entries_for_resolver, encode_pointer_index_record,
-    reduce_pointer_index_entries, replay_pointer_index,
+    decode_pointer_index_entries_for_resolver, encode_pointer_index_record,
+    fold_one_pointer_index_entry, reduce_pointer_index_entries, replay_pointer_index,
 };
 use crate::trust_index::{
     decode_trust_policy_entries_for_resolver, encode_trust_policy_record,
-    reduce_trust_policy_entries, replay_trust_policy,
+    fold_one_trust_policy_entry, reduce_trust_policy_entries, replay_trust_policy,
 };
 
 /// Outcome of one compaction run: how many live records existed before and after reduction. This is
@@ -104,7 +104,7 @@ pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry; run doctor before reading",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the ref pointer index's generation log",
@@ -139,7 +139,7 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
             &layout.received_index_slot_path(ContainerSlot::B),
             "received-ref index has a damaged entry; run doctor before reading",
             decode_received_index_entries_for_resolver,
-            reduce_received_index_entries,
+            fold_one_received_index_entry,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the received index's generation log",
@@ -174,7 +174,7 @@ pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Res
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
             "trust policy container has a damaged snapshot; run doctor before reading",
             decode_trust_policy_entries_for_resolver,
-            reduce_trust_policy_entries,
+            fold_one_trust_policy_entry,
         )?;
     crate::foundation::tail_guard::require_no_unclean_tail(
         "the trust policy container's generation log",
@@ -213,7 +213,7 @@ fn run_ref_pointer_index_compaction(
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry; run doctor before reading",
             decode_pointer_index_entries_for_resolver,
-            reduce_pointer_index_entries,
+            fold_one_pointer_index_entry,
         )?;
 
     let replay = replay_pointer_index(layout)?;
@@ -227,12 +227,7 @@ fn run_ref_pointer_index_compaction(
     let entries_before = replay.entries.len();
     let (replay_trailing_partial_bytes, replay_tail_offset) =
         (replay.trailing_partial_bytes, replay.tail_offset);
-    let mut compacted: Vec<PointerIndexEntry> = Vec::new();
-    for entry in replay.entries {
-        compacted
-            .retain(|existing: &PointerIndexEntry| existing.ref_name_key != entry.ref_name_key);
-        compacted.push(entry);
-    }
+    let compacted = reduce_pointer_index_entries(replay.entries);
     let entries_after = compacted.len();
 
     if mode == CompactionMode::Execute {
@@ -310,7 +305,7 @@ fn run_received_index_compaction(
             &layout.received_index_slot_path(ContainerSlot::B),
             "received-ref index has a damaged entry; run doctor before reading",
             decode_received_index_entries_for_resolver,
-            reduce_received_index_entries,
+            fold_one_received_index_entry,
         )?;
 
     let replay = replay_received_index(layout)?;
@@ -324,12 +319,7 @@ fn run_received_index_compaction(
     let entries_before = replay.entries.len();
     let (replay_trailing_partial_bytes, replay_tail_offset) =
         (replay.trailing_partial_bytes, replay.tail_offset);
-    let mut compacted: Vec<ReceivedIndexEntry> = Vec::new();
-    for entry in replay.entries {
-        compacted
-            .retain(|existing: &ReceivedIndexEntry| existing.ref_name_key != entry.ref_name_key);
-        compacted.push(entry);
-    }
+    let compacted = reduce_received_index_entries(replay.entries);
     let entries_after = compacted.len();
 
     if mode == CompactionMode::Execute {
@@ -399,7 +389,7 @@ fn run_trust_policy_compaction(
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
             "trust policy container has a damaged snapshot; run doctor before reading",
             decode_trust_policy_entries_for_resolver,
-            reduce_trust_policy_entries,
+            fold_one_trust_policy_entry,
         )?;
 
     let replay = replay_trust_policy(layout)?;
@@ -413,8 +403,8 @@ fn run_trust_policy_compaction(
     let entries_before = replay.entries.len();
     let (replay_trailing_partial_bytes, replay_tail_offset) =
         (replay.trailing_partial_bytes, replay.tail_offset);
-    let last_snapshot = replay.entries.into_iter().next_back();
-    let entries_after = usize::from(last_snapshot.is_some());
+    let compacted = reduce_trust_policy_entries(replay.entries);
+    let entries_after = compacted.len();
 
     if mode == CompactionMode::Execute {
         // RFC 163 §9: see the identical guard in `run_ref_pointer_index_compaction` above.
@@ -436,7 +426,7 @@ fn run_trust_policy_compaction(
         let target_relative =
             layout.repository_relative(&layout.trust_policy_container_slot_path(target_slot))?;
         truncate_file_empty_required(layout.repository_mutation_root(), &target_relative)?;
-        if let Some(entry) = &last_snapshot {
+        if let Some(entry) = compacted.first() {
             let record = encode_trust_policy_record(entry)?;
             append_file_required(layout.repository_mutation_root(), &target_relative, &record)?;
         }

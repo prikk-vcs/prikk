@@ -474,7 +474,7 @@ one a repair can safely remove. Restore the repository from a backup or a clone 
 
 ## `warning: <container>'s generation log names no live slot; slot <X> was deduced from the entries (…)`
 
-0.50.0 step 1 Part E3 (019 §5.7). Seen from `prikk verify` or `prikk doctor`, when a compacting
+0.50.0 step 1 Part E4 (019 §5.7). Seen from `prikk verify` or `prikk doctor`, when a compacting
 container's generation log reads as empty or absent — not damaged, not a tail, genuinely nothing —
 while the *other* slot (`b`) holds real data. Slot `b` is never written except alongside the one
 generation record that names it live, so this shape can only mean a compaction (or, for the ref
@@ -483,18 +483,22 @@ of it was lost afterward — an accidental deletion, or a partial restore from b
 
 **This is a warning, not a refusal: every ordinary command already resolves it correctly.** Content
 decides which slot is live, rather than every reader and writer being made to guess or to refuse: slot
-`b`'s own decoded entries are compared, positionally, against `C` — the exact reduction `compact`
-itself would write from this slot's entries. Equal to `C`, or a prefix of it, means nothing changed
-since the switch (this slot stays live — the same shape a crash between a compaction's own new-slot
-write and its generation record leaves, which a bare retry of `compact` still heals exactly as
-always, and the same shape a partly written slot `b` leaves); anything else means the other slot took
-a real write after becoming live, and it becomes live instead, so that write still reads correctly
-rather than silently disappearing (bare membership — "does this entry occur anywhere in the other
-slot's history" — was tried and rejected: a maintainer revoked and later re-trusted can recur, fooling
-a membership test into picking the wrong slot). Only when the deduction itself cannot be made (one of
-the two slots is damaged) does a read refuse, naming the container's own damage directly (see the next
-entry). A restore from the recovery log refuses outright in this state instead of deducing, since it
-is a deliberate writer and a stale meaning file could otherwise compare unchanged and pass.
+`b`'s own decoded entries are compared, positionally, against `compaction(P)` for *some* earlier prefix
+`P` of this slot's own history, not only the whole of it as it stands now. Equal to `compaction(P)`, or
+a prefix of it, for any such `P` means this slot stays live — covering a crash between a compaction's
+own new-slot write and its generation record (`P` = all of this slot at that moment, a bare retry of
+`compact` still heals it exactly as always), a partly written slot `b`, and a crash that leaves this
+slot live but still taking ordinary writes afterward (a new branch, a revocation: `P` = this slot as it
+stood at the crash, not as it stands now — comparing only against the *current* content, as an earlier
+version of this rule did, can resolve to the stale slot in exactly this case and lose those writes or
+reinstate what they revoked). No match anywhere means the other slot took a real write after becoming
+live, and it becomes live instead, so that write still reads correctly rather than silently
+disappearing (bare membership — "does this entry occur anywhere in the other slot's history" — was
+tried and rejected too: a maintainer revoked and later re-trusted can recur, fooling a membership test
+into picking the wrong slot). Only when the deduction itself cannot be made (one of the two slots is
+damaged) does a read refuse, naming the container's own damage directly (see the next entry). A
+restore from the recovery log refuses outright in this state instead of deducing, since it is a
+deliberate writer and a stale meaning file could otherwise compare unchanged and pass.
 
 **The way out, named in the warning itself:** run `prikk compact` for the named container. It resolves
 the identical way and then writes a fresh generation record, ending the ambiguous state for good.
@@ -504,7 +508,7 @@ nothing requires it just to clear this warning.
 
 ## `error: integrity error: the ref pointer index's live slot is not recorded; run \`prikk compact --pointer-index\` first`
 
-0.50.0 step 1 Part E3 (019 §5.7). Seen from `prikk doctor --recovery-restore` (plan or run), when the entry being
+0.50.0 step 1 Part E3/E4 (019 §5.7). Seen from `prikk doctor --recovery-restore` (plan or run), when the entry being
 restored names a meaning file in the ref pointer index or the ref log, and the pointer index's own
 generation log is in the ambiguous state the previous entry describes. Unlike an ordinary read, a
 restore does not deduce here: it is a deliberate writer, checking that a meaning file's state still

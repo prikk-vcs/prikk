@@ -52,10 +52,21 @@ pub(crate) fn reduce_pointer_index_entries(
 ) -> Vec<PointerIndexEntry> {
     let mut reduced: Vec<PointerIndexEntry> = Vec::new();
     for entry in entries {
-        reduced.retain(|existing: &PointerIndexEntry| existing.ref_name_key != entry.ref_name_key);
-        reduced.push(entry);
+        fold_one_pointer_index_entry(&mut reduced, entry);
     }
     reduced
+}
+
+/// One step of the same reduction, exposed so Part E4's deduction can maintain the running
+/// `compaction(P)` for every prefix `P` of A's entries in one pass -- recomputing the whole
+/// reduction from scratch for each candidate `P` would make the deduction quadratic in the number
+/// of entries, not linear.
+pub(crate) fn fold_one_pointer_index_entry(
+    running: &mut Vec<PointerIndexEntry>,
+    entry: PointerIndexEntry,
+) {
+    running.retain(|existing: &PointerIndexEntry| existing.ref_name_key != entry.ref_name_key);
+    running.push(entry);
 }
 
 /// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
@@ -518,7 +529,7 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -574,7 +585,7 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -728,7 +739,7 @@ pub(in crate::refs) fn append_ref_pointer_entry(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
@@ -761,7 +772,7 @@ pub(crate) fn remove_pointer_entries_for_test(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     )?;
     let path = layout.ref_pointer_index_slot_path(slot);
     let bytes = std::fs::read(&path)?;

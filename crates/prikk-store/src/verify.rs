@@ -320,12 +320,12 @@ use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::received::list_received_pointers;
 use crate::received::received_index::{
     ReceivedIndexRecordStatus, decode_received_index_entries_for_resolver,
-    reduce_received_index_entries, replay_received_index,
+    fold_one_received_index_entry, replay_received_index,
 };
 use crate::refs::{
     DecodedRefLog, RefItemOutcome, RefItemStatus, RefStore,
     decode_pointer_index_entries_for_resolver, ensure_ref_target_valid,
-    ensure_required_attestations_present, read_and_decode_ref_log, reduce_pointer_index_entries,
+    ensure_required_attestations_present, fold_one_pointer_index_entry, read_and_decode_ref_log,
     ref_log_tail_status_of, verify_refs_with,
 };
 use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
@@ -335,7 +335,7 @@ use crate::signature_diagnostics::{
 use crate::trust::PublicationTrustIssue;
 use crate::trust_index::{
     TrustKeyRecordStatus, TrustPolicyRecordStatus, decode_trust_policy_entries_for_resolver,
-    reduce_trust_policy_entries, replay_trust_keys, replay_trust_policy,
+    fold_one_trust_policy_entry, replay_trust_keys, replay_trust_policy,
 };
 use crate::wal::{Wal, WalReplay};
 
@@ -798,7 +798,7 @@ pub(crate) fn check_generation_log_deductions(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry; run doctor before reading",
         decode_pointer_index_entries_for_resolver,
-        reduce_pointer_index_entries,
+        fold_one_pointer_index_entry,
     ) {
         notes.push(deduction_note("the ref pointer index", &deduced));
     }
@@ -809,7 +809,7 @@ pub(crate) fn check_generation_log_deductions(
         &layout.received_index_slot_path(ContainerSlot::B),
         "received-ref index has a damaged entry; run doctor before reading",
         decode_received_index_entries_for_resolver,
-        reduce_received_index_entries,
+        fold_one_received_index_entry,
     ) {
         notes.push(deduction_note("the received index", &deduced));
     }
@@ -820,7 +820,7 @@ pub(crate) fn check_generation_log_deductions(
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         "trust policy container has a damaged snapshot; run doctor before reading",
         decode_trust_policy_entries_for_resolver,
-        reduce_trust_policy_entries,
+        fold_one_trust_policy_entry,
     ) {
         notes.push(deduction_note("the trust policy container", &deduced));
     }

@@ -311,25 +311,32 @@ live. A reader resolves the live slot by reading the last complete record in the
 by assuming `a`.
 
 **An empty (or absent) generation log is trusted to mean "no compaction has ever run" only while slot
-`b` itself holds no data** (0.50.0 step 1 Part E3, 019 §5.7). Slot `b` is never written except
+`b` itself holds no data** (0.50.0 step 1 Part E4, 019 §5.7). Slot `b` is never written except
 alongside the one generation record that names it live (`compact.rs`, and, for the pointer index
 only, `prikk doctor --rebuild-pointer-index`'s own rebuild), so an empty log over a non-empty slot `b`
 can only mean a compaction (or rebuild) genuinely happened and its own record of that fact was lost
 afterward — not that one never happened. Rather than refuse that state, every reader and writer
-**deduces** the live slot by comparing slot `b`'s own decoded entries, positionally, against `C` — the
-exact reduction `compact` itself would write from slot `a`'s entries (never a second, independently
-re-implemented copy of that logic, and never a raw byte comparison: compaction re-encodes). Slot `b`'s
-entries equal `C`, or are a prefix of it (a crash between the switch's own slot write and its
-generation record, which a bare retry still heals exactly as before, or a partly written slot `b`),
-mean slot `a` stays live; anything else means slot `b` took a real write after becoming live, and it
-becomes live instead, so that write is not silently lost -- comparing by bare membership instead of
-position was tried and rejected (Part E2): a repeated value, such as a maintainer revoked and later
-re-trusted, can appear in slot `a`'s own history and fool a membership test into resolving to the
-wrong slot. Only when the deduction itself cannot be made — either slot is damaged — does this
-refuse, naming the container and its own existing damage text. `prikk verify` and `prikk doctor` warn
-whenever this state is found, naming the container, the deduced slot, and `prikk compact` as the way
-to record it and end the state for good. A restore from the recovery log refuses outright instead,
-rather than deduce: it is a deliberate writer, and a stale meaning file in this exact state could
+**deduces** the live slot: slot `b` is derived from slot `a` if slot `b`'s own decoded entries equal
+`compaction(P)`, or are a prefix of it, for *some* earlier prefix `P` of slot `a`'s own entries, not
+only the whole of slot `a` as it stands now — computed in one pass over slot `a`'s entries,
+maintaining the running reduction the real compactor's own reduction step builds incrementally
+(never a second, independently re-implemented copy of that logic, and never a raw byte comparison:
+compaction re-encodes), and testing slot `b` against it after every step. A match at any point means
+slot `a` stays live — this covers a crash between the switch's own slot write and its generation
+record (`P` = all of slot `a` at that point, a bare retry still heals it exactly as before), a partly
+written slot `b`, and a crash that leaves slot `a` live but still taking ordinary writes afterward (a
+new branch, a revocation: `P` = slot `a` as it stood at the crash, not as it stands now). No match
+anywhere means slot `b` took a real write after becoming live, and it becomes live instead, so that
+write is not silently lost. Two narrower rules were tried and rejected along the way: bare membership
+(Part E2) lets a repeated value, such as a maintainer revoked and later re-trusted, fool the test into
+resolving to the wrong slot; comparing only against slot `a` as it is now (Part E3) is wrong once a
+crash lets slot `a` keep taking writes afterward, since `compaction` of the *current* slot `a` can
+diverge from a slot `b` made from an *earlier* one. Only when the deduction itself cannot be made —
+either slot is damaged — does this refuse, naming the container and its own existing damage text.
+`prikk verify` and `prikk doctor` warn whenever this state is found, naming the container, the
+deduced slot, and `prikk compact` as the way to record it and end the state for good. A restore from
+the recovery log refuses outright instead, rather than deduce: it is a deliberate writer, and a stale
+meaning file in this exact state could
 otherwise compare unchanged and pass a restore that should not proceed. `prikk doctor
 --rebuild-pointer-index` remains a separate, always-available way out for the pointer index (it
 re-derives from the ref log without reading either slot as live), though the deduction above no
@@ -410,7 +417,7 @@ full cross-platform filesystem validation.
 | Verification checks object placement, ref pointer/log consistency, active WAL state, and publication trust within current limits. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [integrity and recovery diagnostics](./integrity-recovery.md), [trust and threat model](./trust-threat-model.md) |
 | `cache/` is initialized but not a root of trust; `quarantine/` is retired and no longer initialized, and `gc/` is not an initialized directory. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-31](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-31-REPOSITORY-LAYOUT-AUTHORITY-REFERENCE.md) |
 | The received-ref index is a shared, append-only, last-entry-wins container for imported `remotes/<name>` pointers, kept separate from `refs/by-id/` because an imported RefState's own embedded ref name can never agree with a locally renamed pointer. | [`received.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received.rs), [`received_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received/received_index.rs) |
-| Three containers (ref-pointer index, received-ref index, trust policy) each have a generation log naming which slot is live, defaulting to `a` when empty *and slot `b` itself holds no data* -- an empty log over a non-empty slot `b` deduces the live slot from slot `b`'s own entries compared positionally against `C`, the exact reduction `compact` would write from `a` (0.50.0 step 1 Part E3), warning (`verify`/`doctor`) rather than refusing, since that shape only a since-lost record of a genuine compaction can explain and content already decides it; a restore refuses instead, being a deliberate writer; `prikk compact` reads the live slot, writes the reduced set to the other slot durably, then appends a generation record naming it live; `--plan-only` performs the same read with no write. Object containers and the ref log allocate an unused `b` slot and never compact; the trust key container has no slot pair at all. | [`generation.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/generation.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
+| Three containers (ref-pointer index, received-ref index, trust policy) each have a generation log naming which slot is live, defaulting to `a` when empty *and slot `b` itself holds no data* -- an empty log over a non-empty slot `b` deduces the live slot from slot `b`'s own entries compared positionally against `compaction(P)` for some prefix `P` of `a`'s own history, not only the whole of `a` as it stands now (0.50.0 step 1 Part E4), warning (`verify`/`doctor`) rather than refusing, since that shape only a since-lost record of a genuine compaction can explain and content already decides it; a restore refuses instead, being a deliberate writer; `prikk compact` reads the live slot, writes the reduced set to the other slot durably, then appends a generation record naming it live; `--plan-only` performs the same read with no write. Object containers and the ref log allocate an unused `b` slot and never compact; the trust key container has no slot pair at all. | [`generation.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/generation.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
 
 ## Provenance
 

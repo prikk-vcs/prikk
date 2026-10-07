@@ -55,7 +55,22 @@ const TRUST_POLICY_DAMAGE_TEXT: &str =
 pub(crate) fn reduce_trust_policy_entries(
     entries: Vec<TrustPolicySnapshotEntry>,
 ) -> Vec<TrustPolicySnapshotEntry> {
-    entries.into_iter().next_back().into_iter().collect()
+    let mut reduced: Vec<TrustPolicySnapshotEntry> = Vec::new();
+    for entry in entries {
+        fold_one_trust_policy_entry(&mut reduced, entry);
+    }
+    reduced
+}
+
+/// One step of the same reduction, exposed so Part E4's deduction can maintain the running
+/// `compaction(P)` for every prefix `P` of A's entries in one pass: only the last snapshot
+/// survives, so folding one more entry in simply replaces whatever was running.
+pub(crate) fn fold_one_trust_policy_entry(
+    running: &mut Vec<TrustPolicySnapshotEntry>,
+    entry: TrustPolicySnapshotEntry,
+) {
+    running.clear();
+    running.push(entry);
 }
 
 /// Part E2's decoder for content-based deduction: the entries themselves, compared by value, plus
@@ -897,7 +912,7 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         TRUST_POLICY_DAMAGE_TEXT,
         decode_trust_policy_entries_for_resolver,
-        reduce_trust_policy_entries,
+        fold_one_trust_policy_entry,
     )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
@@ -962,7 +977,7 @@ pub(crate) fn append_trust_policy_snapshot(
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         TRUST_POLICY_DAMAGE_TEXT,
         decode_trust_policy_entries_for_resolver,
-        reduce_trust_policy_entries,
+        fold_one_trust_policy_entry,
     )?;
     let relative = layout.repository_relative(&layout.trust_policy_container_slot_path(slot))?;
     append_file_required(layout.repository_mutation_root(), &relative, &record)
