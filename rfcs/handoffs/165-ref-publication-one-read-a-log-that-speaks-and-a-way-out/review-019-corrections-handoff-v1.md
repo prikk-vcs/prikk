@@ -184,3 +184,11 @@ defect, reproduced by the architect. Two more one-sitting parts follow; the same
 
 **Part E4 ACCEPTED 2026-10-08** (`940b88fd`; review `review-019-corrections-E4-review-v1`). **Review 019 item 6 is closed.** Next: **Part F** as written, plus one wording fix: wherever a comment or doc calls the deduction "linear", say O(|A|·|B|) entry comparisons, run only in the ambiguous state.
 
+**Part F: Corrections Required 2026-10-08** (`b0ea8cc6`; review `review-019-corrections-F-review-v1`).
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **F2** | (1) **Save the rebuild's target slot B** too, under the same run, before the rebuild writes it (`Kind::Replace`, previous = B's pre-rebuild bytes, `new_hash` = the bytes the rebuild leaves). A restore then puts back slot A, slot B and the generation log byte for byte; drop the "B is not reverted" non-promise from the notes and docs. (2) **Tests, the review's case table:** row 1 compares all three files; row 2 (rebuild, then a branch create, then restore) refuses and writes nothing, and the branch stays; row 3 holds; row 4 (a second restore) is done. **Control:** drop the slot-B entry, and row 2 goes red | 45 min | `review-019-corrections-F2-report.md` |
+
+**After F2, step 1 closes.**
+
