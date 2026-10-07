@@ -228,6 +228,11 @@ planned for.
 - **The object index's own lookup is a linear scan**, and the whole index is held resident in memory for
   the duration of a write session. Not yet fixed.
 
+- **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
+  reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes
+  the damage, so the way out is a backup or a clone. (Recorded from the doctor's own recommendation in source;
+  not yet reproduced with a live damaged WAL.)
+
 - **Three Windows residuals of the recovery log (RFC 168 §6, accepted).** Each is a new-name or rename case
   that Windows has no primitive for, so none is closed in 0.49.0:
   - **(a)** worktree files after a completed `branch switch` or `checkout` may not be durable after a power loss.

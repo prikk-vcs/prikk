@@ -160,10 +160,11 @@ could not rule one out, and ambiguity always resolves to damage, never silently 
 this needs a file deliberately packed with fake frame headers; an honest crash does not produce it
 (random bytes following an accidental magic match almost never also claim a plausible length).
 
-A scan this long is damage, not a torn tail, and the tail repairs refuse damage. Run `prikk doctor` for the
-diagnosis of the file this names:
+A scan this long is damage, not a torn tail, and the tail repairs refuse damage. For a WAL, `prikk doctor` reports
+a failed record and recommends "preserve the repository and inspect the failing WAL record before attempting repair"
+(`doctor.rs`, `PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE`). No command repairs this in 0.49.0, so restore the
+repository from a backup or a clone. For the other files, the diagnosis is again `prikk doctor`:
 
-- the WAL: diagnose with `prikk doctor`; `--repair-wal-tail` refuses damage;
 - the pointer index: diagnose with `prikk doctor`; `--repair-pointer-index-tail` refuses damage;
 - trust policy or the received index: diagnose with `prikk doctor`; `--repair-tails` refuses damage;
 - an object container or the ref log container: **no automated repair.** If `doctor` also reports it as an
