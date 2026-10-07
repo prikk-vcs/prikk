@@ -347,3 +347,65 @@ fn a_fully_published_ref_is_not_completable() {
 
 mod k4_failpoints_and_race;
 mod negative_conditions;
+
+/// 019 §5.2: the generic incomplete-publication refusal names `prikk ref complete <ref>` when
+/// another ref's own mismatch is a genuine lead -- one coherent, trusted transition, every RFC 165
+/// R4 condition holding for it -- and the command it names then succeeds.
+#[test]
+fn the_generic_refusal_names_ref_complete_for_another_refs_genuine_lead() {
+    let root = unique_temp_dir("rfc165-r4-019-5-2-generic-refusal-names-ref-complete");
+    let layout = setup(&root);
+    let target = root_block(&layout);
+    let leading_state_id = crash_branch_create(&layout, "heads/other", target, &original_signer());
+
+    let before = super::incomplete_publication_refusal_naming_any_lead(&layout, None)
+        .unwrap()
+        .to_string();
+    assert!(before.contains("ref complete heads/other"), "{before}");
+
+    let plan = plan_ref_completion(&layout, "heads/other")
+        .unwrap()
+        .expect("heads/other must be a completable lead");
+    let active_lock = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).unwrap();
+    let mut object_store = ObjectWriteSession::open(&layout).unwrap();
+    let completed_id = complete_ref_publication(
+        &layout,
+        &mut object_store,
+        &active_lock,
+        &plan,
+        &completing_signer(),
+    )
+    .unwrap();
+    drop(object_store);
+    drop(active_lock);
+    assert_eq!(completed_id, leading_state_id);
+
+    // The command it named succeeded; the generic path now sees no mismatch at all.
+    let after = super::incomplete_publication_refusal_naming_any_lead(&layout, None)
+        .unwrap()
+        .to_string();
+    assert!(
+        !after.contains("ref complete"),
+        "nothing should be left to complete: {after}"
+    );
+}
+
+/// Known risk (A2): an ordinary, non-lead mismatch -- here, a lead signed by a key this repository
+/// never adopted, so condition (a) fails -- keeps the plain text, never naming `ref complete` for a
+/// ref that command cannot actually fix.
+#[test]
+fn the_generic_refusal_keeps_its_plain_text_for_an_untrusted_leads_mismatch() {
+    let root = unique_temp_dir("rfc165-r4-019-5-2-generic-refusal-keeps-plain-text");
+    let layout = setup(&root);
+    let target = root_block(&layout);
+    crash_branch_create(&layout, "heads/other", target, &untrusted_signer());
+
+    let text = super::incomplete_publication_refusal_naming_any_lead(&layout, None)
+        .unwrap()
+        .to_string();
+    assert!(!text.contains("ref complete"), "{text}");
+    assert!(
+        text.contains("incomplete ref publication"),
+        "the plain text must still say what is wrong: {text}"
+    );
+}

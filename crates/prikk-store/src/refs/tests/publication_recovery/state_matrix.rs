@@ -278,3 +278,29 @@ fn every_state_has_explicit_representative_command_mutation_outcome() -> prikk_e
     }
     Ok(())
 }
+
+/// 019 §5.2: `verify`'s own message, not only `doctor`'s recommendation, names `prikk ref complete
+/// <ref>` for a genuine N3 lead -- `verify`'s report prints only `issue.code` and `issue.message`
+/// (`output/verification.rs`), never a separate recommendation, so the command has to be in the
+/// message itself. Reuses the matrix's own `PointerLeading` fixture.
+#[test]
+fn verifys_own_pointer_leads_log_message_names_ref_complete() -> prikk_error::Result<()> {
+    let fixture = Fixture::new(PersistedState::PointerLeading)?;
+    let report = verify_repository(&fixture.layout)?;
+    let Some(issue) = report
+        .ref_publication_issues
+        .iter()
+        .find(|issue| issue.code == "PRIKK-VERIFY-REF-POINTER-LEADS-LOG")
+    else {
+        panic!("the PointerLeading fixture must produce this issue");
+    };
+    assert!(
+        issue
+            .message
+            .contains("run `prikk ref complete heads/main`"),
+        "{}",
+        issue.message
+    );
+    fixture.remove();
+    Ok(())
+}

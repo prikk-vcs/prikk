@@ -173,7 +173,20 @@ fn run_commit(args: Vec<String>) -> std::result::Result<(), CliError> {
     let signer = author_signer_from_env()?;
     let report =
         commit_worktree_changes_signed(&layout, &ref_name, &args.message, options, &signer)
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| {
+                // 019 §5.2: `commit`'s own precondition lives in `commit_boundary::active`, a
+                // lower-layer module that cannot call `ref_completion` (RFC 149's layer rule). Only
+                // the CLI, outside that boundary, can ask whether the generic refusal is actually a
+                // genuine N3 lead and name `ref complete` for it.
+                let text = err.to_string();
+                if text.contains("incomplete ref publication") {
+                    prikk_store::incomplete_publication_refusal_naming_any_lead(&layout, None)
+                        .map(|refined| refined.to_string())
+                        .unwrap_or(text)
+                } else {
+                    text
+                }
+            })?;
     println!("recorded worktree patch in active WAL");
     println!("baseline ref: {}", report.ref_name);
     println!("patch id: {}", report.patch_id);

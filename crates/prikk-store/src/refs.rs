@@ -413,9 +413,9 @@ pub(crate) fn ref_log_tail_status_of(
     Ok((0, 0, interior_damage))
 }
 
-pub(crate) use rebuild_discovery::decode_ref_log_for_rebuild;
+pub(crate) use rebuild_discovery::{decode_ref_log_for_rebuild, mismatched_lead_candidate};
 
-fn incomplete_publication_refusal() -> PrikkError {
+pub(crate) fn incomplete_publication_refusal() -> PrikkError {
     // RFC 132 part 2: an incomplete publication is a caller precondition, not a lock -- nothing is
     // held and no other writer is racing this one; the fix is running verify/doctor and retrying
     // with the right signer, not waiting.

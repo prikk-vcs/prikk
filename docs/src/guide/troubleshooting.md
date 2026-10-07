@@ -553,15 +553,16 @@ and they mean different things.
 **`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`** — the lead is **completable** (RFC 165 R4): the leading
 `RefState` verifies under the current trust policy, chains cleanly to the log's own tip, names a
 target that exists, and, if the interrupted publication consumed the active WAL (`seal`/`sync seal`),
-the retained WAL evidence still matches it. `verify`'s own detail line, with and without a tail on the
-ref log container itself:
+the retained WAL evidence still matches it. `verify`'s own detail line names the way out directly
+(019 §5.2: `verify` prints only its own message, never a separate recommendation the way `doctor`'s
+issues do), with and without a tail on the ref log container itself:
 
 ```text
-ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads committed ref log by one transition
-ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads ref log by one transition with <N> incomplete trailing byte(s)
+ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads committed ref log by one transition; run `prikk ref complete <ref>`
+ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads ref log by one transition with <N> incomplete trailing byte(s); run `prikk ref complete <ref>`
 ```
 
-`doctor` recommends `prikk ref complete <ref>`. Retrying the same command does not finish it:
+`doctor` recommends the same thing, `prikk ref complete <ref>`. Retrying the same command does not finish it:
 `branch create`/`tag create` still answer "already exists" (the ref *was* durably created — unless
 the pointer itself also reports a completable lead, in which case the refusal itself now names
 `ref complete`), and `merge` refuses before gathering evidence rather than building on a pointer its

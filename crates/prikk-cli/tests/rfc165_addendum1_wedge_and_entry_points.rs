@@ -81,11 +81,26 @@ fn seal_entry_point_refuses_behind_another_refs_incomplete_publication() {
         !output.status.success(),
         "seal of heads/main must refuse behind heads/broken's interrupted publication\n{text}"
     );
+    // 019 §5.2: `heads/broken`'s own lead here is genuine -- signed by the already-adopted
+    // maintainer key `setup_with_main`'s own seal adopted, one coherent transition -- so the
+    // refusal names the way out instead of the old, generic "incomplete ref publication" text.
     assert!(
-        text.contains("incomplete ref publication"),
+        text.contains("run `prikk ref complete heads/broken`"),
         "unexpected refusal text: {text}"
     );
     assert_eq!(before, store_bytes(&repo), "a refusal must write nothing");
+
+    let complete = prikk(&repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args(["ref", "complete", "heads/broken"])
+        .output()
+        .unwrap();
+    ok(&complete, "the named command, ref complete heads/broken");
+    ok(&seal(&repo, "heads/main"), "seal main after the completion");
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -278,6 +293,48 @@ fn a_lead_free_tail_still_refuses_branch_close_through_the_real_binary() {
 // exercises `incomplete_tail_matches`'s own (pre-existing, unchanged) rejection of a tail that does
 // not match the expected next write, not this round's own exclusion -- a different, already-settled
 // question, not this file's to re-prove.
+
+// ---------------------------------------------------------------------------------------------
+// 019 §5.2: `commit`'s own refusal, the one named via the CLI (`commit_boundary::active` is a
+// lower-layer module that cannot call `ref_completion` itself -- RFC 149), names `prikk ref
+// complete <ref>` when another ref's refusal is a genuine N3 lead, and that command then succeeds.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn commit_entry_point_names_ref_complete_for_another_refs_genuine_lead() {
+    let repo = unique_repo("rfc165-019-5-2-commit-names-ref-complete");
+    std::fs::create_dir_all(&repo).unwrap();
+    setup_with_main(&repo);
+    crash_branch_create(&repo, "heads/broken", "heads/main");
+    std::fs::write(repo.join("b.txt"), "two\n").unwrap();
+
+    let output = commit(&repo, "heads/main", "two");
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "commit on heads/main must refuse behind heads/broken's interrupted publication\n{text}"
+    );
+    assert!(
+        text.contains("run `prikk ref complete heads/broken`"),
+        "unexpected refusal text: {text}"
+    );
+
+    let complete = prikk(&repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args(["ref", "complete", "heads/broken"])
+        .output()
+        .unwrap();
+    ok(&complete, "the named command, ref complete heads/broken");
+    ok(
+        &commit(&repo, "heads/main", "two"),
+        "commit on heads/main after the completion",
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
 
 // ---------------------------------------------------------------------------------------------
 // Manual control (not an automated toggle, matching the round-1 report's own established practice

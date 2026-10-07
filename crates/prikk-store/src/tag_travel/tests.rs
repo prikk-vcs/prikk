@@ -420,3 +420,113 @@ fn list_received_tags_reports_resolved_state() -> Result<()> {
     let _ = std::fs::remove_dir_all(receiver.root());
     Ok(())
 }
+
+/// 019 §5.2: `create_local_tag` (also reached by `sync adopt-tag`) names `prikk ref complete <ref>`
+/// when *another* ref's own refusal is a genuine N3 lead, and that command then succeeds, after
+/// which the original tag create succeeds too.
+#[test]
+fn create_local_tag_names_ref_complete_for_another_refs_genuine_lead() -> Result<()> {
+    use prikk_object::PatchSetDigest;
+
+    let root = crate::test_gates::test_support::unique_temp_dir("tag-travel-019-5-2-ref-complete");
+    let layout = RepositoryLayout::init(root)?;
+    let maintainer = signer(0x70)?;
+    add_trusted_maintainer(&layout, maintainer.key_id(), &public_key_hex(&maintainer))?;
+    let mut store = FileObjectStore::new(layout.clone());
+    let target = write_block(&mut store, BlockKind::Root, Vec::new(), Vec::new())?;
+
+    use crate::maintainer_signing::maintainer_signature as sign_maintainer;
+    use prikk_object::{
+        CanonicalEncode, ObjectEnvelope, ObjectType, RefKind, RefStatePayload, RefUpdatePayload,
+    };
+
+    let ref_store = RefStore::new(layout.clone());
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let before_len = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+    let state = RefStatePayload {
+        ref_name: "heads/other".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: target,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let mut state_env =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, state.to_canonical_bytes().unwrap());
+    let lead_id = state_env.object_id();
+    state_env.add_signature(sign_maintainer(&maintainer, ObjectType::RefState, lead_id)?)?;
+    let update = RefUpdatePayload {
+        ref_name: "heads/other".to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: lead_id,
+        new_target_object_id: target,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: maintainer.key_id().to_string(),
+    };
+    let mut update_env = ObjectEnvelope::unsigned(
+        ObjectType::RefUpdate,
+        1,
+        update.to_canonical_bytes().unwrap(),
+    );
+    let update_id = update_env.object_id();
+    update_env.add_signature(sign_maintainer(
+        &maintainer,
+        ObjectType::RefUpdate,
+        update_id,
+    )?)?;
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/other".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state: state_env,
+        ref_update: update_env,
+    })?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&log_path)?
+        .set_len(before_len)?;
+
+    let mut write_session = ObjectWriteSession::open(&layout)?;
+    let error = super::create_local_tag(
+        &layout,
+        &mut write_session,
+        "tags/t1",
+        target,
+        None,
+        PatchSetDigest([0u8; 32]),
+        0,
+        &maintainer,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("ref complete heads/other"), "{error}");
+
+    let plan = crate::ref_completion::plan_ref_completion(&layout, "heads/other")?
+        .expect("heads/other must be a completable lead");
+    let active_lock = crate::lock::ActiveLock::acquire(&layout, crate::DEFAULT_ACTIVE_NAME)?;
+    let mut object_store = ObjectWriteSession::open(&layout)?;
+    let completed = crate::ref_completion::complete_ref_publication(
+        &layout,
+        &mut object_store,
+        &active_lock,
+        &plan,
+        &maintainer,
+    )?;
+    assert_eq!(completed, lead_id);
+    drop(object_store);
+    drop(active_lock);
+
+    let mut write_session = ObjectWriteSession::open(&layout)?;
+    super::create_local_tag(
+        &layout,
+        &mut write_session,
+        "tags/t1",
+        target,
+        None,
+        PatchSetDigest([0u8; 32]),
+        0,
+        &maintainer,
+    )?;
+    Ok(())
+}

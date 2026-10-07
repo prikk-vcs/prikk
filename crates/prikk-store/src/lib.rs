@@ -267,7 +267,8 @@ pub use recovery_log::{
     recovery_verify_line,
 };
 pub use ref_completion::{
-    CompletionPlan, CompletionRefusal, complete_ref_publication, plan_ref_completion,
+    CompletionPlan, CompletionRefusal, complete_ref_publication,
+    incomplete_publication_refusal_naming_any_lead, plan_ref_completion,
 };
 pub use ref_resolution::{
     ReceivedRefs, is_unpublished_local_branch, require_existing_ref, resolve_point,

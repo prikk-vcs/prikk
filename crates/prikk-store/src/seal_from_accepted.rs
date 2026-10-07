@@ -109,7 +109,16 @@ pub fn seal_from_accepted_claim(
 ) -> Result<SealFromAcceptedOutcome> {
     layout.require_current_format()?;
     let canonical_ref = validate_local_branch_ref(ref_name)?;
-    crate::refs::ensure_no_incomplete_publication(layout)?;
+    crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
+        // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
+        if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
+        {
+            crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
+                .unwrap_or(error)
+        } else {
+            error
+        }
+    })?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
 
@@ -169,7 +178,16 @@ pub fn seal_from_accepted_claim(
     let claim_signature_outcome = verify_claim_signature(&claim_envelope, &trust_policy)?;
 
     let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
-    crate::refs::ensure_no_incomplete_publication(layout)?;
+    crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
+        // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
+        if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
+        {
+            crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
+                .unwrap_or(error)
+        } else {
+            error
+        }
+    })?;
 
     // §5: the active WAL must be empty. Sealing accepted patches advances the branch tip; locally
     // queued WAL patches were composed against the *old* tip, and since DC-66 a queue chains

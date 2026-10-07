@@ -90,7 +90,17 @@ fn seal_active_no_audit(
     // write -- `ref_name` excluded from both, so this seal's own DC-38 retry of its own interrupted
     // publication (the tip-already-matches path below, and an attributable torn tail) is never
     // blocked by the very state it is about to resolve.
-    prikk_store::ensure_may_publish(&layout, &ref_name).map_err(|err| err.to_string())?;
+    prikk_store::ensure_may_publish(&layout, &ref_name).map_err(|err| {
+        // 019 §5.2: name `ref complete` only when another ref's own refusal is a genuine N3 lead.
+        let text = err.to_string();
+        if text.contains("incomplete ref publication") {
+            prikk_store::incomplete_publication_refusal_naming_any_lead(&layout, Some(&ref_name))
+                .map(|refined| refined.to_string())
+                .unwrap_or(text)
+        } else {
+            text
+        }
+    })?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     prikk_store::ensure_worktree_replay_verified(&layout).map_err(|err| err.to_string())?;
     let active_lock =

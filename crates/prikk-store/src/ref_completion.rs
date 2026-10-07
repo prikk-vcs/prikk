@@ -160,6 +160,32 @@ pub fn plan_ref_completion(
     evaluate_known_lead(layout, ref_name, leading_id)
 }
 
+/// 019 §5.2: the message a caller gives when [`crate::refs::ensure_may_publish`] or
+/// [`crate::refs::ensure_no_incomplete_publication_except`] refuses -- names `prikk ref complete
+/// <ref>` only when the refusal is a genuine N3 lead (one coherent transition, every RFC 165 R4
+/// condition holding for it), never for an ordinary lead-free tail or any of the other reasons that
+/// function refuses (damage, a missing object, candidate debris, pending cleanup), which keep their
+/// existing text. `refs` itself cannot make this call (`ref_completion` is upper, `refs` is lower --
+/// RFC 149's layer rule), so this replays the same read `crate::refs::mismatched_lead_candidate`
+/// made and asks whether it is completable.
+pub fn incomplete_publication_refusal_naming_any_lead(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+) -> Result<PrikkError> {
+    let Some((ref_name, leading_id)) =
+        crate::refs::mismatched_lead_candidate(layout, exclude_ref_name)?
+    else {
+        return Ok(crate::refs::incomplete_publication_refusal());
+    };
+    match evaluate_known_lead(layout, &ref_name, leading_id)? {
+        Ok(_plan) => Ok(PrikkError::Precondition(format!(
+            "repository mutation is blocked by an interrupted publication for {ref_name}: its \
+             pointer leads the ref log by one sound transition; run `prikk ref complete {ref_name}`"
+        ))),
+        Err(_) => Ok(crate::refs::incomplete_publication_refusal()),
+    }
+}
+
 /// RFC 165 R4's own rule, conditions (b)-(e)'s ref-log half plus (a)/(c)/(d), given a `leading_id`
 /// the caller has already resolved (by whatever means -- [`plan_ref_completion`]'s own damage-gated
 /// pointer lookup, or RFC 165 R5's rebuild, which tolerates pointer-index damage elsewhere). Shared

@@ -525,9 +525,12 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
     let replay = decode_pointer_index_records(&bytes)?;
     if replay.has_item_failure() {
         // A damaged entry is not a torn tail, and this repair truncates only a torn tail: it refuses,
-        // and the file is left byte for byte as it was.
+        // and the file is left byte for byte as it was. 019 §5.3 (A3): name the way out that re-
+        // derives the whole container, since this one cannot modify it.
         return Err(PrikkError::Integrity(
-            "pointer index has a damaged entry; repair does not modify it".to_string(),
+            "pointer index has a damaged entry; this repair does not modify it -- run `prikk \
+             doctor --rebuild-pointer-index` instead"
+                .to_string(),
         ));
     }
     if replay.trailing_partial_bytes == 0 {

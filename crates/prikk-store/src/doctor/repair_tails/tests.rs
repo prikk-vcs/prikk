@@ -762,3 +762,155 @@ fn row_eight_keeps_the_damaged_witness_it_rewrites() {
     );
     let _ = std::fs::remove_dir_all(layout.root());
 }
+
+/// 019 §5.2: `--repair-tails`'s own ref-log-tail refusal names `prikk ref complete <ref>` when the
+/// blocking lead is genuine (signed by an adopted key, chaining soundly) -- distinct from
+/// `a_tail_while_a_ref_leads_is_not_repaired` above, whose pointer candidate has no real signed
+/// RefState behind it at all and so is never completable. The command it names then succeeds, and
+/// the ref log's own tail is then repairable.
+#[test]
+fn a_tail_while_a_ref_genuinely_leads_names_ref_complete() {
+    use prikk_object::{
+        CanonicalEncode, ObjectEnvelope, ObjectType, RefKind, RefStatePayload, RefUpdatePayload,
+    };
+    use std::io::Write;
+
+    let layout = repo_with_published_main("rfc165-r5-019-repair-tails-names-ref-complete");
+    let maintainer =
+        Ed25519MaintainerSigner::from_seed("rfc165-r5-019-repair-tails-maintainer", &[0x86; 32])
+            .expect("signer");
+    add_trusted_maintainer(
+        &layout,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )
+    .expect("adopt maintainer");
+
+    let mut objects = FileObjectStore::new(layout.clone());
+    let target = objects
+        .write_object(&signed_empty_block_envelope())
+        .expect("write target block");
+    let state = RefStatePayload {
+        ref_name: "heads/topic".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: target,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let mut state_env =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, state.to_canonical_bytes().unwrap());
+    let lead_id = state_env.object_id();
+    state_env
+        .add_signature(
+            crate::maintainer_signature(&maintainer, ObjectType::RefState, lead_id).unwrap(),
+        )
+        .unwrap();
+    let update = RefUpdatePayload {
+        ref_name: "heads/topic".to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: lead_id,
+        new_target_object_id: target,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: maintainer.key_id().to_string(),
+    };
+    let mut update_env = ObjectEnvelope::unsigned(
+        ObjectType::RefUpdate,
+        1,
+        update.to_canonical_bytes().unwrap(),
+    );
+    let update_id = update_env.object_id();
+    update_env
+        .add_signature(
+            crate::maintainer_signature(&maintainer, ObjectType::RefUpdate, update_id).unwrap(),
+        )
+        .unwrap();
+
+    let path = layout.ref_log_container_slot_path(crate::ContainerSlot::A);
+    let before_len = std::fs::metadata(&path).unwrap().len();
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/topic".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: state_env,
+            ref_update: update_env,
+        })
+        .expect("publish heads/topic");
+    // Crash mid-append: truncate the full record just written back out, then leave a few torn
+    // bytes in its place -- a genuine lead (the pointer) and a physical tail in the same file.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(before_len)
+        .unwrap();
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+    }
+
+    let error = repair_tails(&layout).unwrap_err().to_string();
+    assert!(error.contains("ref complete heads/topic"), "{error}");
+
+    let plan = crate::ref_completion::plan_ref_completion(&layout, "heads/topic")
+        .unwrap()
+        .expect("heads/topic must be a completable lead");
+    let active_lock =
+        crate::lock::ActiveLock::acquire(&layout, crate::DEFAULT_ACTIVE_NAME).unwrap();
+    let mut object_store = crate::object_store::ObjectWriteSession::open(&layout).unwrap();
+    let completed = crate::ref_completion::complete_ref_publication(
+        &layout,
+        &mut object_store,
+        &active_lock,
+        &plan,
+        &maintainer,
+    )
+    .unwrap();
+    assert_eq!(completed, lead_id);
+    drop(object_store);
+    drop(active_lock);
+
+    let store = RefStore::new(layout.clone());
+    assert_eq!(
+        store.read_current_ref_state_id("heads/topic").unwrap(),
+        Some(lead_id),
+        "the completion landed"
+    );
+    let _ = std::fs::remove_dir_all(layout.root());
+}
+
+/// 019 §5.3 (A3): `--repair-tails`'s own pointer-index row names `prikk doctor
+/// --rebuild-pointer-index` over a complete damaged entry, since this repair cannot modify it.
+#[test]
+fn interior_damage_on_the_pointer_index_names_rebuild_pointer_index() {
+    let layout = repo_with_trust_content("rfc164-019-5-3-pointer-index-names-rebuild");
+    let path = layout.ref_pointer_index_slot_path(crate::ContainerSlot::A);
+    let mut damaged = crate::refs::encode_pointer_index_record(&crate::refs::PointerIndexEntry {
+        ref_name_key: [0x44; 32],
+        ref_name: "heads/rfc164-019-5-3-damaged".to_string(),
+        ref_state_id: prikk_object::ObjectId::from_bytes([0x55; 32]),
+    })
+    .expect("encode");
+    *damaged.last_mut().expect("a record has bytes") ^= 0x01;
+    damaged.extend(
+        crate::refs::encode_pointer_index_record(&crate::refs::PointerIndexEntry {
+            ref_name_key: [0x66; 32],
+            ref_name: "heads/rfc164-019-5-3-sound".to_string(),
+            ref_state_id: prikk_object::ObjectId::from_bytes([0x77; 32]),
+        })
+        .expect("encode"),
+    );
+    std::fs::write(&path, &damaged).unwrap();
+
+    let message = repair_tails(&layout).unwrap_err().to_string();
+    assert!(
+        message.contains("run `prikk doctor --rebuild-pointer-index` instead"),
+        "{message}"
+    );
+    let _ = std::fs::remove_dir_all(layout.root());
+}

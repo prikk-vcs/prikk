@@ -533,6 +533,17 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   to persist an index, not reach that crept outward on its own",
     },
     DeclaredHub {
+        module: "ref_completion",
+        reason: "019 §5.2 (RFC 165 R4): `incomplete_publication_refusal_naming_any_lead` names `prikk \
+                  ref complete <ref>` only when a writer's own generic incomplete-publication refusal \
+                  is a genuine N3 lead, sharing `evaluate_known_lead`'s rule rather than letting each \
+                  caller re-derive it. Two new callers cross the threshold: `doctor::repair_tails` \
+                  (the ref log's own tail row) and `seal_from_accepted` (its two unexcluded \
+                  preconditions). `tag_travel`, `pointer_rebuild`, `merge::execute` and `verify::ref_\
+                  publication` were already callers, through `plan_ref_completion`/`evaluate_known_\
+                  lead` -- one more shared function on the same edges, not reach that crept outward",
+    },
+    DeclaredHub {
         module: "refs",
         reason: "RFC 163's write-side tail guard added the one new fan-out edge, into \
                   `foundation::tail_guard`: `ensure_current_matches` (the pointer index's own \

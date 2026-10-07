@@ -48,7 +48,12 @@ pub(super) fn require_retained_evidence(
             continue;
         }
         match crate::ref_completion::plan_ref_completion(layout, ref_name)? {
-            Ok(_plan) => {}
+            // 019 §5.2: name the way out directly in `verify`'s own message -- `verify`'s report
+            // prints only `issue.code` and `issue.message`, never a separate recommendation the way
+            // `doctor`'s own issues do, so the command has to be in the message itself.
+            Ok(_plan) => {
+                issue.message = format!("{}; run `prikk ref complete {ref_name}`", issue.message)
+            }
             Err(_refusal) => mark_unproved(issue),
         }
     }

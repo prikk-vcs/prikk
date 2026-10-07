@@ -328,7 +328,16 @@ fn truncate_pointer_index_trailing_partial_refuses_on_interior_damage() -> Resul
     })?);
     std::fs::write(&path, &bytes)?;
 
-    assert!(truncate_pointer_index_trailing_partial(&layout).is_err());
+    let Err(error) = truncate_pointer_index_trailing_partial(&layout) else {
+        panic!("interior damage must refuse");
+    };
+    let error = error.to_string();
+    // 019 §5.3 (A3): names the way out that re-derives the whole container, since this repair
+    // cannot modify a damaged entry.
+    assert!(
+        error.contains("run `prikk doctor --rebuild-pointer-index` instead"),
+        "{error}"
+    );
     assert_eq!(
         std::fs::read(&path)?,
         bytes,

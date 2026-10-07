@@ -325,8 +325,12 @@ the log, only a *current* lead re-enters trust (the same R4 rule above, reused, 
 rebuild's own source of truth must be trustworthy before anything is derived from it), or if **any**
 lead anywhere in the repository is completable: completing it is the correct fix, and a rebuild would
 otherwise drop an authorized transition, the one outcome this verb must never produce. A lead that
-fails R4's rule is **dropped** and named; a merely stale pointer (behind the log) is **restored**, a
-distinct outcome from a dropped lead — nothing authorized is discarded restoring one.
+fails R4's rule is **dropped** and named — unless it fails only by depth, more than one transition
+ahead while every `RefState` in it still verifies and chains soundly back to the log: dropping that
+would discard every one of those transitions, not only the first, so it is **refused** instead,
+naming the ref and the depth, with the way back (restore the ref log from a copy, then run the
+rebuild again). A merely stale pointer (behind the log) is **restored**, a distinct outcome from
+either — nothing authorized is discarded restoring one.
 
 **K1:** `--plan-only` prints, per ref, its state before and after, and every dropped lead or restored
 ref — the identical plan a real run writes from.

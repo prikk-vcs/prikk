@@ -138,7 +138,11 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
         ));
     }
     if pointer_replay.has_item_failure() {
-        damaged.push("pointer index: an entry failed to decode".to_string());
+        damaged.push(
+            "pointer index: an entry failed to decode -- run `prikk doctor --rebuild-pointer-index` \
+             instead"
+                .to_string(),
+        );
     }
     for status in &appended {
         if let Some(message) = &status.interior_damage {
@@ -157,6 +161,14 @@ pub fn repair_tails(layout: &RepositoryLayout) -> Result<RepairTailsReport> {
         .any(|status| status.label == "ref log" && status.trailing_partial_bytes != 0);
     if ref_log_has_tail {
         if let Err(error) = ensure_no_incomplete_publication(layout) {
+            // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
+            let error = if matches!(&error, PrikkError::Precondition(text) if text.contains("incomplete ref publication"))
+            {
+                crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
+                    .unwrap_or(error)
+            } else {
+                error
+            };
             damaged.push(format!(
                 "ref log: the ref publication precondition does not hold ({error}), so its trailing \
                  bytes cannot be confirmed lead-free -- not a repairable tail until that is resolved"
