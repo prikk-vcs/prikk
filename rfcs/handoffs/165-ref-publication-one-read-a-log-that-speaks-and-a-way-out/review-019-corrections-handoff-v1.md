@@ -166,3 +166,11 @@ defect, reproduced by the architect. Two more one-sitting parts follow; the same
 
 **Then Part F** as written.
 
+**Part E2: Corrections Required 2026-10-07** (`d5380986`; review `review-019-corrections-E2-review-v1`).
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **E3** | (1) **The exact deduction rule:** `C = compaction(A)` by `compact`'s own keep-live logic; B's decoded entries equal to `C` or a prefix of it resolve to A; anything else resolves to B; damage refuses. It replaces the membership rule for all three containers. Tests: the trust-policy un-revocation sequence (the review) resolves to B and L is not trusted; the crash window and a partly written B resolve to A. **Control:** restore the membership rule, and the un-revocation test goes red. (2) **`meaning_paths_for` fails closed:** a restore whose meaning file's container is ambiguous refuses, plan and run, naming `prikk compact --<container>`. A test and its control | 60 min | `review-019-corrections-E3-report.md` |
+
+**Then Part F.**
+
