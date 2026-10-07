@@ -45,7 +45,7 @@ Prikk is not yet the right tool if you need:
 ## Known limitations, measured
 
 Disclosed here rather than left implicit, each with the figure it was measured at and the release it is
-planned for. None of these blocks 0.48.0.
+planned for.
 
 - **Trust keys, trust policy, author keys, the received index, and the three generation logs now have
   a tail defined by position, a `verify`/`doctor` line, and a repair (fixed in 0.49.0, RFC 164 Rules
@@ -133,8 +133,8 @@ planned for. None of these blocks 0.48.0.
   attestation a RefState's `required_attestation_ids` names to be present as an Attestation object (a typed read).
   No producer in this repository writes a non-empty list, so an honest repository cannot fail it. **Not checked, and
   disclosed as gaps:** `Attestation.target_block_id` (there is no `AttestationPayload` decoder, and no producer, so
-  this is a format decision, not debt); and a received ref's `previous_ref_state_id`, which `bundle import` does not
-  require to be present (the owner rules on it before any check lands).
+  this is a format decision, not debt); and a received ref's `previous_ref_state_id` is not required by `bundle import`. `verify` does
+  check a received tip's previous state (one read), and `bundle import` refuses a bundle whose ref chain is not carried.
 - **A crash inside `branch create` or `tag create` now has a command that completes it (N3, fixed in
   0.49.0).** Before this round: the ref
   log's last record is torn; `verify` fails with `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends
@@ -206,13 +206,13 @@ planned for. None of these blocks 0.48.0.
   (chain continuity, signature-envelope structure, missing-object detection) this precondition never
   needed.
 - **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.
-  Planned for 0.49.0.
+  Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule).
 - **A one-file `commit` reads every stored blob to learn its kind**: 1 MiB of stored content read 1.1 MB,
-  16 MiB read 16.8 MB, 64 MiB read 67.1 MB. Not yet fixed; a design round is next.
-- **`verify` is silent over garbage bytes in the ref log.** 100 zero bytes appended to the ref log
+  16 MiB read 16.8 MB, 64 MiB read 67.1 MB. Not yet fixed; deferred to 0.50.0 or later (ROADMAP.md).
+- **Fixed in 0.49.0 (RFC 165, M4): `verify` reports garbage bytes in the ref log.** Before 0.49.0, 100 zero bytes appended to the ref log
   container: `verify` and `doctor` exit 0 with no warning, a `seal` appends behind them, and `verify`
-  stays 0 with the garbage in the middle of the file. The state is harmless (ref-log records are signed
-  and chained), but nothing reports the bytes. Planned for 0.49.0, alongside the ref publication fix above.
+  stayed 0 with the garbage in the middle of the file. The state was harmless (ref-log records are signed
+  and chained), but nothing reported the bytes. The ref log is now a reported file, and `--repair-tails` covers it.
 - **Fixed in 0.49.0 (RFC 167): resynchronisation over hostile content is linear, not quadratic.** `verify`
   over a WAL torn tail packed with fake frame headers used to grow from 0.24 s at 256 KiB to 13.98 s at
   2 MiB, extrapolating to hours at 64 MiB (a plain, unpacked tail stayed 0.01–0.02 s at every size, so the
@@ -223,15 +223,21 @@ planned for. None of these blocks 0.48.0.
   64 MiB: 0.25–0.29 s, down from a projected 2.8–4.6 hours. **Not a self-vouching header** (a header-only
   checksum, which would remove the re-parse entirely): that is a format change, format-8 input, still
   planned for a future increment, not this one.
-- **A `commit`'s cost follows the number of refs, roughly squared.** Branches created from `heads/main`,
-  one tiny commit timed at each point: 1 ref 1.4 ms, 50 refs 3.0 ms, 100 refs 7.2 ms, 200 refs 21.4 ms,
-  400 refs 72.1 ms. `status` stays flat (0.6–1.4 ms) at every point, which shows the cost is the write
-  path's own precondition check, not a read. Disclosed here in 0.48.0; the fix (the ref publication
-  replay above) is planned for 0.49.0.
 - **A `commit` holds all new file content in memory at once.** 64 files of 4 MiB each peaks at about
   284 MiB. Streaming and chunking (large objects, Stages B–D) are not yet built.
 - **The object index's own lookup is a linear scan**, and the whole index is held resident in memory for
   the duration of a write session. Not yet fixed.
+
+- **Three Windows residuals of the recovery log (RFC 168 §6, accepted).** Each is a new-name or rename case
+  that Windows has no primitive for, so none is closed in 0.49.0:
+  - **(a)** worktree files after a completed `branch switch` or `checkout` may not be durable after a power loss.
+    The route: move the files `prikk worktree-status` lists as modified out of the way, then
+    `prikk checkout --patch-materialize --ref <current branch>`. Missing files are written by that checkout; a
+    file the user deleted and the checkout writes back is removed by the user.
+  - **(b)** a repair's save in the same Windows boot as the log's creation, in a repository created before 0.49.0.
+    The log is created by the first write command, so this is rare.
+  - **(c)** the witness's first creation, in a repository created before 0.49.0. A lost creation falls back to the
+    older classification (RFC 166 rule 3), the one a session written by an older binary gets today.
 
 ## What scale to expect
 
