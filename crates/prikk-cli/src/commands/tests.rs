@@ -618,8 +618,14 @@ fn document_text_returns_nothing_for_the_landing_page() {
 /// that `--recovery-clear` removes entries permanently.
 #[test]
 fn doctor_help_names_the_recovery_commands_and_the_ref_log() {
-    let help = find("doctor").map(|command| command.help_lines.join("\n")).unwrap_or_default();
-    for flag in ["--recovery-list", "--recovery-restore <run id>", "--recovery-clear"] {
+    let help = find("doctor")
+        .map(|command| command.help_lines.join("\n"))
+        .unwrap_or_default();
+    for flag in [
+        "--recovery-list",
+        "--recovery-restore <run id>",
+        "--recovery-clear",
+    ] {
         assert!(help.contains(flag), "doctor help must name {flag}");
     }
     assert!(
