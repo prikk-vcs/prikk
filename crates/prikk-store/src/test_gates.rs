@@ -44,3 +44,5 @@ pub(crate) mod test_support;
 pub(crate) mod test_support_gating;
 #[cfg(test)]
 pub(crate) mod trust_gated_operations_binding_gate;
+#[cfg(test)]
+pub(crate) mod whole_file_cache_fuzz;

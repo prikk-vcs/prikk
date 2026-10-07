@@ -39,8 +39,11 @@ const DEFAULT_CASES: u32 = 256;
 /// The long run: `#[ignore]`d, run deliberately with `cargo test -- --ignored framed_decoders_long_run`.
 const LONG_RUN_CASES: u32 = 20_000;
 
+/// One mutation of a valid file -- shared with [`super::whole_file_cache_fuzz`], the sibling target
+/// for the three whole-file/text caches `Format`'s own resync-scan shape does not fit (0.50.0 step 2
+/// Part A).
 #[derive(Debug, Clone)]
-enum Mutation {
+pub(crate) enum Mutation {
     Flip { at: usize, mask: u8 },
     FlipLast { mask: u8 },
     Truncate { keep: usize },
@@ -49,7 +52,7 @@ enum Mutation {
     Random(Vec<u8>),
 }
 
-fn mutation() -> impl Strategy<Value = Mutation> {
+pub(crate) fn mutation() -> impl Strategy<Value = Mutation> {
     prop_oneof![
         (any::<usize>(), 1_u8..=255).prop_map(|(at, mask)| Mutation::Flip { at, mask }),
         (1_u8..=255).prop_map(|mask| Mutation::FlipLast { mask }),
@@ -61,7 +64,7 @@ fn mutation() -> impl Strategy<Value = Mutation> {
     ]
 }
 
-fn apply(valid: &[u8], mutation: &Mutation) -> Vec<u8> {
+pub(crate) fn apply(valid: &[u8], mutation: &Mutation) -> Vec<u8> {
     let mut bytes = valid.to_vec();
     match mutation {
         Mutation::Flip { at, mask } => {
