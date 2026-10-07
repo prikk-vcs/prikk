@@ -96,8 +96,9 @@ the recovery log (`recovery/log`, durably, under the same lock), and only then t
 shows the entries by run, and `prikk doctor --recovery-restore <run id>` undoes the run, under the conditions in
 [Recovery log](./repository-layout.md) (the file is unchanged since the repair, its prefix is unchanged, and the files that give the bytes their meaning are unchanged). The
 entry holds the raw WAL bytes, so a record that was removed by mistake can also be read from it: the removed region starts at the recorded offset of the
-old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` ignores it, and it can be
-deleted once it is not needed. It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage.
+old WAL, with the same framing. If saving the file fails, nothing is truncated. The file is never authority: `verify` reads it only to print one
+line about its damaged regions, and that line never changes its exit status (`main.rs:964`). Once the log is not
+needed, `prikk doctor --recovery-clear` empties it in place (`--plan-only` previews this). It also means a repair can be wrong about what it removed without anything being lost, torn tail or damage.
 **What counts as a tail is not one rule for every framed file** (RFC 162):
 
 - **The WAL and the pointer index** end at their last sound record — the position rule above — because the
@@ -107,12 +108,14 @@ deleted once it is not needed. It also means a repair can be wrong about what it
 - **The object containers** are classified by connectivity, not by position (rule 2, above): an unparseable
   frame is a harmless remnant unless something still committed — a sealed block's state, a queued patch, a
   ref tip — still needs the object it might have held.
-- **The ref log** keeps its own positive rule, unchanged: it truncates only a suffix that is a prefix of the
-  record it expected to write next.
+- **The ref log** keeps its own positive rule (RFC 164 Rule A): it truncates only a suffix that is a prefix of
+  the record it expected to write next (`refs/container.rs:917-947`). A torn tail is a prefix of one
+  well-formed frame, and nothing else. Two repairs reach it: `ref complete` (RFC 165 R4) for a tail belonging to
+  one ref's own pending publication, and `--repair-tails` (RFC 165 R5) for a tail that no ref's pointer leads (`doctor/repair_tails.rs:10-14`).
 - **The rest** — the received, author-key and trust-key indexes, the trust-policy container, and the
-  generation file — still use the shape rule this section described before 0.48.0: a torn tail is a prefix
-  of one well-formed frame, and nothing else; a complete record that fails its own checksum there is damage,
-  refused, not truncated.
+  generation files — use RFC 164 Rule A's position rule: the tail is everything after the last sound record,
+  when no sound record follows, whatever its shape. A complete record whose checksum or envelope fails is damage,
+  even when last (RFC 164 §9, §9.2), and is refused, not truncated.
 
 **The WAL repair, the pointer index's own `--repair-pointer-index-tail`** (mirroring the WAL exactly),
 **the object index's own rebuild** (its lost ids, when it cannot re-derive an entry), **and
@@ -157,7 +160,10 @@ and merge lineage). A Block with a dangling reference is damage, exactly as befo
 **unreferenced remnant** — a warning naming the object and what it lacks ("re-run the import if you still have the bundle; otherwise it is harmless"),
 and `verify` exits `0` over it, same as the frame-level case above. No command removes a remnant in 0.49.0. A remnant made reachable afterward (a new
 branch created over it, say) is reclassified as damage on the very next run, since reachability is never cached. **Scope, this round**: only a Block's
-own three reference fields get this treatment — `RefState`'s and `Tag`'s own reference fields are not existence-checked at all today, independent of
+own three reference fields get this treatment — `RefState`'s and `Tag`'s reference fields are existence-checked only where a ref reaches them: a ref tip's
+target (a Block, or a Tag and then its Block) must exist when `verify` reads the ref (`refs/verify/scan.rs:180`,
+via `ensure_ref_target_valid`, `refs/verify/scan.rs:443`), and a received tip's previous RefState must exist
+(`verify.rs:1951`). A RefState or Tag that no ref tip points at is not checked, independent of
 Rule E, and extending that is separate, larger scope this round does not cover; `RecognitionClaim`'s own references stay untouched by design (never
 trust-conferring, never existence-checked).
 
@@ -218,12 +224,12 @@ The implementation is designed so interruption recovery lands on a checkable pre
 checkable new published state. That statement is bounded by the current evidence: unit/integration
 tests, no completed crash-matrix or fuzzing campaign, and gates exercised on Linux, macOS, and Windows
 (the `macOS mutation test suite` and `Windows mutation test suite` CI jobs run the suite that compiles
-there natively on `macos-latest`/`windows-latest` — 2,211 and 2,152 tests respectively in CI on
-`914f959d`, the last commit before 0.48.0's release commit, against 2,445 on Linux's `stable` job,
-since some tests are Linux-only) — with the caveat
-that DC-76's negative controls (eight remain; G5 retired in DC-98) are only partly demonstrated on
-Windows: G1, G2, G4, and G9 are, but G3 and G8 still rely on a failpoint injection mechanism that
-exists only on Linux/macOS, and G6/G7 have no Windows analogue at all. See
+there natively on `macos-latest`/`windows-latest`; their per-platform test counts are refilled from the
+candidate's CI run and are not stated here) — with the caveat
+that DC-76's negative controls (eight remain; G5 retired in DC-98) are demonstrated on Windows for six of them:
+G1, G2, G3, G4, G8, and G9 (as a documented no-op). G3 and G8 use the same failpoint injection mechanism as
+Linux/macOS, wired into `foundation/fsutil/anchored/windows.rs` by DC-98 (`failpoints.rs` is compiled for Windows).
+G6 and G7 have no Windows analogue at all. See
 [platform support](./platform-support.md) for the per-guarantee table.
 
 If the active WAL's Patch IDs already match the current published tip, seal reconstructs the expected
@@ -244,9 +250,14 @@ check-then-mutate workflow to a different tree. Append retries classify an exact
 record without duplicating it and re-sync the file and parent; required removal re-syncs its retained
 parent even when the final entry is already absent.
 
-Mutable metadata publication uses a unique same-directory exclusive temp, complete file sync, atomic
-replace rename, and required parent sync. An error after rename leaves the final name in place and
-returns failure for verification or retry; it does not blindly roll back visible state.
+State that cannot be rebuilt is written in place and flushed, not renamed (RFC 168 §3.3; the list is in
+*What is written in place* above). The write sites are `overwrite_in_place_required` callers: `FORMAT`
+(`format_upgrade.rs:83`), the commit witness (`commit_boundary/witness.rs:214`), and a recovery restore
+(`recovery_log/restore.rs:336`). Only the four caches (commit index, verified blocks, lifecycle cache, object
+index) and worktree files still use the atomic replace (`write_file_atomically`, `write_worktree_file_atomically`):
+a unique same-directory exclusive temp, complete file sync, atomic replace rename, and required parent sync
+(`foundation/fsutil/anchored/linux.rs:30`). An error after rename leaves the final name in place and returns
+failure for verification or retry; it does not blindly roll back visible state.
 
 Immutable object publication uses a separate no-clobber operation. It syncs a unique same-shard temp,
 installs the final name without replacement, syncs the shard, removes only its invocation-owned temp,
@@ -350,8 +361,8 @@ record header at all (no magic, or an unknown version), when nothing sound follo
 zeros, or garbage all count, the same rule RFC 162 rule 3 already gave the WAL and the pointer index --
 and readers tolerate it. `verify`/`doctor` report a tail (a warning, naming the file, the offset, the
 byte count, and the repair) and interior damage (a sound record following bad bytes) separately, and
-`prikk doctor --repair-tails` truncates every tail across all nine covered files (these six, the three
-generation logs, the WAL, and the pointer index) in one run, saving what it removes first, refusing
+`prikk doctor --repair-tails` truncates every tail across all ten covered files (the seven RFC 164 Rule A files, the WAL, the pointer
+index, and the ref log) in one run, saving what it removes first, refusing
 before touching anything if any covered file has interior damage -- see "Doctor Repair Boundary" below
 for the full mechanism. The bullets immediately following describe the write-side refusal RFC 163
 already gave each file, which RFC 164 does not change.
@@ -372,12 +383,14 @@ fails is damage, even when last. `verify` fails and names it; `--repair-tails` a
 on any other interior damage, never silently resolving to an older, undamaged state. The cost, accepted
 knowingly: a single corrupted byte in the last complete record of one of these files now stops the
 commands that read that file (for the pointer index's own generation log, that is nearly every
-command), where before it was quietly repaired into a rollback. The way out is restoring the file from
-a copy, until the F1 round (0.49.0 step 2) can rebuild the pointer index from the ref log. **The WAL is
+command), where before it was quietly repaired into a rollback. The way out is `prikk doctor --rebuild-pointer-index`
+(RFC 165 R5; see *Ref Pointer and Ref Log Recovery* above), which re-derives the pointer index from the ref log and
+refuses while the ref log itself is damaged or has a tail, or while any lead is completable. Restoring the file
+from a copy is the other way out. **The WAL is
 deliberately not part of this correction**: removing its own damaged last record loses a queued commit,
-which is saved to `.prikk/recovery/` and disclosed (N6) -- a loss of work in progress, not a rollback of
-already-committed trust or ref state, and N6's own witness (0.49.0 step 3) will let a genuine crash be
-told apart from later damage there without this trade-off at all.
+which is saved to `recovery/log` (under `.prikk/`) and disclosed (N6) -- a loss of work in progress, not a rollback of
+already-committed trust or ref state. The commit witness (N6, above) tells a genuine crash apart from later damage
+there, so an acknowledged record is never removed as a tail.
 
 **RFC 164 §9.2 (Addendum 2, 0.49.0): the checksum decides whether a record is complete, not its header.**
 §9 decided completeness from the header's own magic, version, and length fields -- but any one of those
@@ -496,10 +509,12 @@ now also report an aggregate tail count per persisted object type (RFC 164 Adden
 object types, 0 for a clean container) — reporting only, no repair; a frame that does not parse is
 still classified as before (a warning if its own checksum never verified, connectivity-checked damage
 otherwise), unchanged. The ref log keeps its own positive truncation rule (it truncates only a suffix
-that is a prefix of the record it expected to write next) — **the ref log is not in this round's
-scope**: a crash inside `branch create`/`tag create` leaving its own ref-log record torn, and a later
-`seal` of a *different* ref appending behind it, is disclosed, not fixed, in `current-state.md`'s known
-limitations (N3), alongside F1 in 0.49.0.
+that is a prefix of the record it expected to write next) — **the ref log was not in this round's
+scope**. Its own interrupted publications (N3: a crash inside `branch create`/`tag create` leaving its ref-log
+record torn, and a later `seal` of a *different* ref appending behind it) are settled by RFC 165: R3 makes every
+publication refuse while another is incomplete (`refs.rs:212`, `ensure_no_incomplete_publication`), and R4's
+`prikk ref complete <ref>` finishes the interrupted one (`main.rs:301`; see *Ref Pointer and Ref Log Recovery*
+above).
 
 ## Doctor Repair Boundary
 
@@ -508,33 +523,39 @@ after an under-lock publication guard and verification have accepted the precedi
 `doctor --repair-index` rebuilds the object index from the containers under the object-store lock — the
 index is a pure cache, never touched by any other repair. `doctor --repair-pointer-index-tail` truncates
 an incomplete trailing pointer-index record under the pointer-index lock, mirroring `--repair-wal-tail`
-exactly. **`doctor --repair-tails` (RFC 164 Rule C, 0.49.0)** truncates every tail across all nine
-covered files (the WAL, the pointer index, and the seven RFC 164 Rule A files) in one run: `ActiveLock`
+exactly. **`doctor --repair-tails` (RFC 164 Rule C, 0.49.0)** truncates every tail across all ten
+covered files (the WAL, the pointer index, the seven RFC 164 Rule A files, and the ref log) in one run: `ActiveLock`
 first (covering the WAL, trust keys, and author keys, none of which has its own dedicated container
 lock), then the pointer-index, received-index, and trust-policy container locks together (each also
 covering its own generation log) — reusing `--repair-wal-tail`'s and `--repair-pointer-index-tail`'s
-own repair functions for the WAL and the pointer index, unchanged. It reads all nine files once, before
+own repair functions for the WAL and the pointer index, unchanged. It reads all ten files once, before
 touching any of them: if any one has interior damage, it refuses immediately, naming every such file,
 and truncates nothing anywhere. Otherwise each file with a tail is truncated under its own lock, saving
-the removed bytes to `.prikk/recovery/` first; a file with no tail is reported clean. Mutually exclusive
-with the other four repair flags in one invocation (it already covers the WAL and the pointer index).
-**None of the four repair verbs ever removes a sound record**: each truncates or rebuilds only what a
-true torn tail or a pure-cache rebuild covers (see above), and on genuine damage each refuses and changes
-nothing. **This held exactly to the letter of "whatever its shape" until RFC 164 §9** (Addendum 1,
+the removed bytes to `recovery/log` (under `.prikk/`) first; a file with no tail is reported clean. It is
+mutually exclusive with every other repair flag in one invocation (`args.rs:544-556`).
+**None of the seven repair flags that change repository state ever removes a sound record**: the tail repairs
+truncate only what a true torn tail covers, `--repair-index` rebuilds only the cache, and
+`--discard-damaged-commits`, `--restore-queue-target` and `--rebuild-pointer-index` act only on the rows their own
+plans name; on genuine damage each refuses and changes nothing. **This held exactly to the letter of "whatever its shape" until RFC 164 §9** (Addendum 1,
 0.49.0): a complete record whose checksum failed used to satisfy "whatever its shape" too, and both
 `--repair-tails` and `--repair-pointer-index-tail` would truncate it -- removing a record that was, in
 fact, sound in every way except its own checksum, and rolling back the decision it carried. §9 closed
 that for a corrupted body byte; **§9.2 (Addendum 2) closed the matching gap for a corrupted header
 field** -- a flipped magic, version, or length byte rolled readers back *before either repair verb even
 ran*, so completeness is now decided by the checksum (above), not by the header. Doctor diagnoses
-ref-publication states but does not sign, append, promote, or reconstruct ref authority.
+ref-publication states but does not sign, promote, or reconstruct ref authority. Its only append is to the
+recovery log (`recovery/log`), made before a repair removes or rewrites bytes (`doctor/repair_tails.rs:300-301`,
+`doctor/restore_queue_target.rs:29`).
 
 The [integrity and recovery diagnostics](./integrity-recovery.md) reference owns the full diagnostic
 catalog: verification checks, `DoctorIssue` codes, severities, and diagnostic interpretation. This
 page intentionally does not duplicate that catalog.
 
-Doctor repair refuses to modify the repository when verification has error-severity issues. It also
-does not auto-trust keys, repair signatures, repair checksum mismatches, rebuild missing objects,
+Repairs are not gated on the whole-repository verification result, and a repository-wide error does not by itself
+stop one. Each repair checks its own preconditions and writes nothing when they fail: `--repair-tails` refuses on
+interior damage in any covered file, `--rebuild-pointer-index` refuses on ref-log damage or a tail or any
+completable lead, and `--discard-damaged-commits` and `--restore-queue-target` refuse on their own plan conditions.
+Those three act on the very errors `verify` reports for their own rows. Repairs also do not auto-trust keys, repair signatures, repair checksum mismatches, rebuild missing objects,
 recover missing key material, or clear unsafe active sessions.
 
 ## Stale Locks and Manual Repair
@@ -546,9 +567,11 @@ automatic stale-lock repair. The current lock and compare-and-swap behavior is c
 
 ## Deferred Work
 
-Still deferred: the broad crash-matrix campaign, fuzzing for WAL/ref-log recovery,
-macOS and Windows filesystem validation, stale-lock policy, broad active-session recovery, ref-log
-repair, missing-object recovery, object quarantine or garbage collection, multi-ref backup export,
+Still deferred: the broad crash-matrix campaign, a fuzzing campaign for WAL/ref-log recovery (the
+proptest decoder property tests in `crates/prikk-store/src/test_gates/framed_decoder_fuzz.rs` are a first fuzz
+target, not that campaign), macOS and Windows filesystem validation, stale-lock policy, broad active-session
+recovery, ref-log repair beyond `ref complete` and `--repair-tails` (a complete damaged ref-log record still needs
+a copy, RFC 165), missing-object recovery, object quarantine or garbage collection, multi-ref backup export,
 a rehearsed repository-format-migration restore, stable repository-format migration, and
 production-readiness claims. Single-ref backup/restore tooling is no longer deferred —
 `prikk bundle export`/`verify`/`import`, see [Backup and Restore](../guide/backup-restore.md).
@@ -567,7 +590,7 @@ production-readiness claims. Single-ref backup/restore tooling is no longer defe
 | Seal verifies the configured MAINTAINER signer against repository-local trust before publication. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs), [DC-11](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-11-MAINTAINER-TRUST-STORE.md) |
 | Ref publication uses ref-specific locking, compare-and-swap checks, signed RefState/RefUpdate envelopes, pointer-first commit, and an idempotent exact log append. | [`refs/publication.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/publication.rs), [`refs/pointer_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/pointer_index.rs), [`refs/container.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/container.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
 | Immutable object publication never replaces an existing final name; existing or concurrent winners require valid identity/type and exact persisted-byte equality, while recognized crash-left temps remain warning-only debris. | [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs), [DC-36](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-36-EXISTING-OBJECT-PUBLICATION-INTEGRITY.md) |
-| Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; `prikk doctor` itself signs and appends nothing. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
+| Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; `prikk doctor` itself signs nothing and appends to no repository container; its only append is the recovery log (`recovery/log`), before a repair removes or rewrites bytes. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
 | Interrupted ref publication completion (`prikk ref complete <ref>`) requires an adopted maintainer signer — any adopted key, not only the one that started the publication — and, only for a WAL-consuming publication (`seal`, `sync seal`), matching retained WAL evidence. | [`ref_completion.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/ref_completion.rs), [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [RFC 165](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) |
 | The ref-pointer index rebuild (`prikk doctor --rebuild-pointer-index`) re-derives it from the ref log alone, structural and never trust-filtered; it signs nothing. | [`pointer_rebuild.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/pointer_rebuild.rs), [RFC 165](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) |
 | Doctor began as read-only diagnostics, and current mutating repairs remain opt-in and narrow. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [PR-011](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-011-DOCTOR-HANDOFF.md), [PR-012](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-012-DOCTOR-REPAIR-HANDOFF.md), [PR-013](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-013-REF-RECOVERY-HANDOFF.md) |
