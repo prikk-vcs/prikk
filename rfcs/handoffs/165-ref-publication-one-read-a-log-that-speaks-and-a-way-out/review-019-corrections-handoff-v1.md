@@ -121,3 +121,24 @@ architect):
   genuine N3 lead (one coherent transition, per R4). Every other case keeps its text.
 - **Print `date` at each unit's start and end.** It has been asked for every round.
 - **Report once, at the end:** `review-019-corrections-report-v2.md`.
+
+## Addendum 1 — 2026-10-07: the rest of step 1, in three parts, each finished in one sitting
+
+**Why:** this handoff was budgeted at about five hours, more than one sitting. Each stop became an interim review
+request, which costs the owner a hand-off. **From now on:**
+- **A review request is written only when a part below is complete.**
+- **If you must stop before a part is complete, write nothing in `.git-exclude/review-request/`.** End your turn with
+  *"Continuing — not ready for review"*. The owner then replies "continue" to you, not to the architect.
+- **Do the parts in order.** Each part's report is final for that part, and ends with *"From dev team: <path>"*.
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **B** | A2's remaining sites (name `ref complete` only for a genuine N3 lead, one coherent transition per R4; every other case keeps its text), A3, and the docs grep for every message changed so far | 90 min | `review-019-corrections-B-report.md` |
+| **C** | A4 (`current-branch` warning) and A5 (`verify`/`doctor` agree on a torn index tail), with their Output-changes lines | 60 min | `review-019-corrections-C-report.md` |
+| **D** | A6, including the answer to 6.6 and the rebuild way-back options | 90 min | `review-019-corrections-D-report.md` |
+
+**Each report holds:**
+- the items with their before/after messages and the named command run;
+- the controls, each shown red;
+- `scripts/gates.py`'s summary on the part's last commit;
+- `date` at the part's start and end.
