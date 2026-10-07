@@ -259,3 +259,19 @@ the cleanup trap removed:
      deletes leftover directories by literal path.
 4. **Then:** the 14 gates on the tip (including `02cfd328`'s CHANGELOG), and §2 as Addendum 3 item 7 says.
    **Report once:** `release-0.49.0-prep-report-v3.md`.
+
+## Addendum 5 — 2026-10-07: the candidate (review `release-0.49.0-prep-review-v3`)
+
+**The release commit `7acd3ab6` is accepted** (three files). **One CHANGELOG commit on top; that commit is the
+candidate:**
+1. **0.49.0 `### Output changes`, lines 170–171:**
+   - quote the shipped ref-log refusal, *"… (M byte(s) follow); `prikk doctor --repair-tails` truncates it"*, not
+     *"a repair arrives with RFC 165 R5"*;
+   - fold line 34 into it.
+2. **Line 196:** name the ref log among the files that get a `trailing partial … bytes: N` line and its warning.
+3. **The smoke (outside the repository):** remove the `trap 'rm -rf "$WORK"' EXIT` at line 44; print the work directory
+   instead.
+4. **The 14 gates on the candidate.** Copy `repro-049.log` and `repro-048.log` into `.git-exclude/review-request/`.
+
+**Report once:** `.git-exclude/review-request/release-0.49.0-prep-report-v3.md` (short: the commit, the gates, the two
+logs). The architect then re-gates, pushes, reads CI, and asks the owner about the external review.
