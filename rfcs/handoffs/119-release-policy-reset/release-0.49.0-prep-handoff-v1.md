@@ -185,3 +185,8 @@ CHANGELOG and `troubleshooting.md`):
 - **Run `doctor` on a WAL whose damage exhausts the budget** (RFC 167's shape A or B), and quote what it recommends.
 - **If it names an actionable command, say that command.** If none exists, say so plainly and list it in current-state's
   limitations. A user must never be sent to a command that only describes the problem.
+
+**Working rule for the rest of this round (2026-10-07): no interim check-ins.** Each one costs the owner a hand-off.
+**Report once, in `release-0.49.0-prep-report-v1.md`, when the round is done or when you are blocked.** Interim seen:
+`b298457b` (the size pin follows P5's line count; fine). **Row 14's condition above (`fbdc1ace`) still applies to the
+troubleshooting copy.**
