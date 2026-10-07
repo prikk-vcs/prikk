@@ -264,7 +264,7 @@ confirm that; otherwise restore to heads/main instead
 ```
 
 Nothing about the queued commits' own content is at risk at any point in this sequence — only the small
-metadata file naming which ref owns it, replaced by one atomic write. 0.49.0 also writes this file once
+metadata file naming which ref owns it, rewritten in place (truncated, then appended). 0.49.0 also writes this file once
 per session instead of once per commit, closing the window for every commit going forward; see [current
 limitations](../reference/current-state.md) for the status of that fix.
 

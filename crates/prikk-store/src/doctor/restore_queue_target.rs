@@ -26,10 +26,11 @@
 //!   refuses (unchanged) -- a wrong restore is undone by `prikk doctor --recovery-restore <run id>`, the run its output names, not by a second call that would make
 //!   this a general "change owner" command.
 //!
-//! **The write, last:** `ref-name`, by atomic replace -- never the truncate-then-append
-//! [`crate::write_active_ref_metadata`] uses, because that sequence is safe only when D1 guarantees
-//! the WAL is empty at the time of the write. Here the WAL is, by construction, non-empty: a tear
-//! between truncate and append would recreate the exact stranding this verb exists to repair.
+//! **The write, last:** `ref-name`'s previous bytes are saved to `recovery/log` first (RFC 168 A1), then the
+//! file is rewritten in place, truncate then append, as [`crate::write_active_ref_metadata`] does. That
+//! sequence is safe only when D1 guarantees the WAL is empty at the time of the write. Here the WAL is, by
+//! construction, non-empty, so a tear between the truncate and the append can leave the file empty; the saved
+//! bytes are what undoes this verb's own write.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload};
