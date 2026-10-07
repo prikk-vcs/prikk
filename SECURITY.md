@@ -41,8 +41,7 @@ Fetch the key, then check a tag from a clone of the repository:
     git verify-tag --raw 0.48.0 2>&1 | grep VALIDSIG
 
 `git verify-tag --raw <version>` prints a `VALIDSIG` line, on stderr (hence `2>&1`). Its **last field** must equal the
-fingerprint above. That is the check; it holds whether the primary key or a signing subkey made the signature, and `git tag -v <version>` shows a
-subkey's own id once one signs, so compare the `VALIDSIG` line rather than that output. The warning *"This key is not
+fingerprint above. That is the check. The warning *"This key is not
 certified with a trusted signature"* is expected unless you have certified the key yourself (`gpg --lsign-key`). What
 matters is the fingerprint match.
 
@@ -54,15 +53,7 @@ matters is the fingerprint match.
 - **The `.sha256` beside each asset** is made in the same job as the asset. It detects a damaged download, not a
   substituted one: whoever can replace an asset can replace its checksum too.
 
-**If the release key is lost or compromised:**
-
-- **A key that may be in someone else's hands** is revoked. After that, `git verify-tag` fails on the old tags it
-  signed. The announcement comes as a GitHub Security Advisory, which lists each confirmed release by its commit id, so
-  you can check a checkout by commit id. A new key is introduced by a `SECURITY.md` commit naming its fingerprint and by
-  an advisory.
-- **A key that is simply gone** is retired without revocation, so old tags keep verifying. A new key is introduced the
-  same way.
-- **Tags are never moved or re-signed.**
+**Tags are never moved or re-signed.**
 
 There is
 **no second signer**, **no support window** (only the latest release gets fixes) and **no stability

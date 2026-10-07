@@ -123,14 +123,13 @@ git verify-tag --raw 0.48.0 2>&1 | grep VALIDSIG
 ```
 
 `git verify-tag --raw` prints the `VALIDSIG` line on stderr, hence `2>&1`. Its **last field** must equal the fingerprint
-above; that is the check, and it holds
-whether the primary key or a signing subkey made the signature. The warning *"This key is not certified with a trusted
+above; that is the check. The warning *"This key is not certified with a trusted
 signature"* is expected unless you have certified the key yourself (`gpg --lsign-key`). What matters is the fingerprint
 match.
 
 What the tag covers: **the source at the tagged commit.** The release binaries are built from that tag by the release
 workflow and are **not signed**, so the tag does not cover them. A checksum (above) detects a damaged download, not a
-substituted one. If the release key is ever lost or compromised, see [Verifying a release in SECURITY.md](https://github.com/prikk-vcs/prikk/blob/main/SECURITY.md).
+substituted one.
 
 ## Build from source
 
