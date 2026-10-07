@@ -313,3 +313,17 @@ same on 0.48.0's binary.
 (*"nothing blocks the tag"*; CI `37579347601` 16/16). It grades the AGREE defect non-blocking. The owner decides
 whether to tag now or land the fix first (assessment `external-review-019-assessment-v1`). **Until the owner rules,
 nothing for the team here.**
+
+**0.49.0 RELEASED 2026-10-07.**
+- **The cut:** the owner authorized it (*"The release cut is authorized."*) after external review 019 cleared `ab27fc48`
+  (*"nothing blocks the tag"*).
+- **The tag:** signed on `ab27fc48`; `VALIDSIG` names `25757DA6…`; the message is the Release-page link only.
+- **The release:** run `37585000595`, every job green (the CI gate, four builds, publish).
+- **The assets, verified by the architect:**
+  - checksums 6/6;
+  - build-info 4/4, naming `ab27fc48` and `0.49.0`;
+  - `prikk 0.49.0`;
+  - `smoke-0.49.0.sh` on the published Linux binary: 263/263;
+  - the Release notes carry the tagged CHANGELOG section byte for byte, followed by the generated appendix.
+- **Addendum 6 (the AGREE defect) moves to 0.50.0,** with review 019's findings.
+- **This handoff is closed.**
