@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Upgrading
+
+- A repository from 0.48.0 gets `recovery/log` and the session witness at its first write, not when it is opened.
+- `recovery/*.bytes` files left by 0.20.0–0.48.0 repairs are listed by `doctor --recovery-list` as the older format. They are
+  never restored and never deleted; `doctor --recovery-clear` does not touch them.
+- A session whose `ref-name` a crash tore in 0.20.0–0.48.0 is refused by `commit`, `seal` and `rollback-draft`. The way out is
+  `prikk doctor --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]` (RFC 166 §1.6).
+- `doctor --repair-tails` covers ten files: the ref log is now one of them.
+- The refusal that names a damaged ref log now names `--repair-tails` instead of RFC 165 R5.
+- The new recovery and witness report types are `#[non_exhaustive]`; a consumer that matches them exhaustively needs a wildcard arm.
+
 ### Changed — a repair is one recovery run, and a restore undoes the whole run (RFC 168 amendment A1)
 
 Each repair the user runs has one run id, printed as `recovery/log, run <id>`, and its entries are grouped under it in `--recovery-list`. `--recovery-restore <run id>` undoes every step of the run in reverse order, after checking every condition, so a discard (its WAL cut and its commit witness rewrite) comes back byte-for-byte. The commit witness and `ref-name` are saved before a repair rewrites them, so their previous bytes are kept too. An interrupted restore finishes when it is run again, and a run that a later repair overlaps names that run to restore first. The log is unreleased in 0.49.0, so no earlier entry format is read.
