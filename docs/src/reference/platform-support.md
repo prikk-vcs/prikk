@@ -200,6 +200,9 @@ tracing every command's call graph to `crates/prikk-store/src/fsutil`'s mutation
 
 ## The command set
 
+This table is derived from each command's help text and module documentation. It is not traced through the call
+graph, and it is not an authoritative list until a test checks it.
+
 | Command | Boundary |
 |---|---|
 | `key generate` | Writes a new seed file only with `--out`; needs no repository |

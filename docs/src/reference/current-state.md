@@ -230,8 +230,17 @@ planned for.
 
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes
-  the damage, so the way out is a backup or a clone. (Recorded from the doctor's own recommendation in source;
-  not yet reproduced with a live damaged WAL.)
+  the damage, so the way out is a backup or a clone. (Reproduced with the hostile M5 repository at 256 KiB: `doctor` exits 1 with this
+  recommendation.)
+
+- **Every commit replays the whole queued WAL (M6).** `append_patch` calls `replay()`, which reads and hashes every
+  queued record (`wal.rs`). The external review measured a commit at 6.2 ms with 800 small commits queued, against
+  4.0 ms at 100, on the 0.48.0 candidate. Small at this scale. Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0
+  schedule). Source: external review 014, `014-review.md:175-179`.
+- **One damaged blob makes every file at that point unreadable (M7).** The replay is whole-tree, so `prikk cat
+  --path` fails for the intact files as well, and there is no salvage read that returns the sound files and names
+  the damaged one. Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule). Source: external review 014,
+  `014-review.md:208-213`.
 
 - **Three Windows residuals of the recovery log (RFC 168 §6, accepted).** Each is a new-name or rename case
   that Windows has no primitive for, so none is closed in 0.49.0:
