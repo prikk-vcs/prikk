@@ -135,6 +135,7 @@ request, which costs the owner a hand-off. **From now on:**
 |---|---|---:|---|
 | **B** | A2's remaining sites (name `ref complete` only for a genuine N3 lead, one coherent transition per R4; every other case keeps its text), A3, and the docs grep for every message changed so far | 90 min | `review-019-corrections-B-report.md` |
 | **C** | A4 (`current-branch` warning) and A5 (`verify`/`doctor` agree on a torn index tail), with their Output-changes lines; **plus Part B's two carried items** (review `review-019-corrections-B-review-v1`): the incomplete-publication refusal becomes a typed error the CLI matches by type, not by text; and `branch create`, `branch close`, `merge` and `sync adopt-tag` go through the same one mapping, each tested by running the command it names | 90 min | `review-019-corrections-C-report.md` |
+| **D1** | **Part C's two carried items** (review `review-019-corrections-C-review-v1`): the object-index fallback scan memoized once per store handle, with a scan-counting command test, its control, and a `log` measurement at two sizes; an absent `current-branch` prints an informational line in `verify` | 60 min | `review-019-corrections-D1-report.md` |
 | **D** | A6, including the answer to 6.6 and the rebuild way-back options | 90 min | `review-019-corrections-D-report.md` |
 
 **Each report holds:**
@@ -144,3 +145,5 @@ request, which costs the owner a hand-off. **From now on:**
 - `date` at the part's start and end.
 
 **Part B ACCEPTED 2026-10-07** (`8c8b4a22`; review `review-019-corrections-B-review-v1`). Two items carried into Part C (in its row above).
+
+**Part C ACCEPTED 2026-10-07** (`199f0fb6`; review `review-019-corrections-C-review-v1`). **Next: Part D1, then Part D.**
