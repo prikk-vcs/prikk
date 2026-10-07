@@ -114,7 +114,7 @@ and there is no read-only fallback for any superseded format.
 **Format 6 stays openable, and upgrades in place.** A format-6 repository opens and works as before,
 holding one record per id: a second signer's copy of a stored object is refused, naming the upgrade.
 `prikk format upgrade` moves it to format 7 in place: it takes the writer lock, refuses — changing
-nothing — unless `prikk verify` would pass, and then rewrites only the `FORMAT` marker, atomically.
+nothing — unless `prikk verify` would pass, and then overwrites only the one byte of the `FORMAT` marker, in place and flushed (RFC 168 §3.3; no rename).
 Nothing stored is rewritten, because every format-6 repository is already a valid format-7 one. The
 upgrade is explicit, never automatic, idempotent, and one-way: **prikk 0.44.0 and earlier refuse a
 format-7 repository at open**, so upgrade only once every prikk that opens the repository is newer.

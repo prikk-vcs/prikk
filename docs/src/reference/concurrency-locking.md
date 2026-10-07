@@ -101,9 +101,10 @@ The active WAL is paired with active ref metadata. A non-empty active WAL must h
 identifying the local branch ref that owns those pending records. Missing, malformed, or mismatched
 metadata fails closed; seal does not guess the publication target.
 
-Current worktree authoring is single active-commit-before-seal for the default active WAL. A second
-commit before seal either loses the active lock or, after the first commit releases the lock, sees the
-non-empty WAL and fails with guidance to seal first.
+Current worktree authoring queues commits on the default active WAL. Each `commit` appends one Patch and
+its witness under the active lock, and a second `commit` before `seal` queues behind the first for the
+same ref, up to the `PRIKK_ACTIVE_PATCH_LIMIT` bound. A commit for a different ref is refused while the
+queue is non-empty (`crates/prikk-store/src/commit_boundary/active.rs:118-131`, `:301-314`).
 
 ## Ref Publication Locking and CAS
 
@@ -144,13 +145,16 @@ code does not acquire those locks in the reverse order.
 ## Interrupted Publication Locking
 
 The pointer-index append is the publication commit point. If interruption leaves the pointer exactly
-one transition ahead of the log, only signer-backed `seal` retry may finish publication. It takes the
-active lock and the same ref-specific lock, revalidates retained WAL, RefState, Block, sequence,
-old/new ids, and maintainer trust, then appends the exact deterministic RefUpdate. A structurally
-incomplete final log frame may be truncated only by that path after the complete prefix verifies; the
-shared log container has no pre-append refusal on an existing incomplete tail (unlike the pointer-first
-check above), since a torn tail belonging to one ref never enters any other ref's own filtered
-subsequence and so cannot block a different ref's publish.
+one transition ahead of the log, the publication is finished by `seal`'s retry or by `prikk ref complete <ref>`
+(RFC 165 R4). Both take the active lock and the same ref-specific lock, check the completing key against
+the local maintainer trust policy, revalidate the retained WAL, RefState, Block, sequence, and old/new
+ids, then append the exact deterministic RefUpdate. `ref complete` does not need the original signer. A
+structurally incomplete final log frame may be truncated only by those paths after the complete prefix
+verifies. A publishing command (`seal`, `branch create`, `branch close`, `tag create`) also refuses before it
+appends when the ref log has an incomplete tail, unless the tail is its own ref's interrupted publication
+(`ensure_may_publish`, `crates/prikk-store/src/refs.rs:337-343`); `commit` does not check the ref log, so a
+torn tail does not block a commit, but it blocks every publish except the pending retry of the ref that
+leads, until it is repaired.
 
 Doctor diagnoses interrupted publication but does not sign, append, promote, or reconstruct a
 missing pointer. `--repair-main-ref` is a recognized input for this and performs no repair — it is
@@ -291,7 +295,7 @@ every lock it clears.
 | Ref publication uses a per-ref lock, expected-current checks, signed RefState persistence, a durable pointer-index append as the commit point, then exactly one signed RefUpdate append to the shared log container. | [`refs/publication.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/publication.rs), [`refs/pointer_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/pointer_index.rs), [`refs/container.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/container.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
 | Ref CAS mismatch returns `LockConflict` and is distinct from an existing lock-file conflict. | [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
 | Unborn ref publication is allowed only when the pointer is absent and the ref log is empty with no trailing partial bytes. | [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs), [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [DC-13](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-13-NONDEFAULT-REF-GENESIS.md) |
-| Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; exact interrupted publication completion requires signer-backed seal under the active and ref locks. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
+| Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; exact interrupted publication completion is done by `seal`'s retry or by `prikk ref complete` under the active and ref locks. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
 | Doctor repairs are opt-in and do not clear unsafe active sessions or define stale-lock cleanup. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [integrity and recovery diagnostics](./integrity-recovery.md), [DC-29](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-29-VERIFY-DOCTOR-INTEGRITY-RECOVERY-REFERENCE.md) |
 | Four container locks (ref-pointer index, ref log, received-ref index, trust policy) are acquired by writers and `prikk compact` alike, sorted into one fixed order by a single acquisition helper before any lock is taken. | [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs) |
 | `prikk unlock` lists every held lock with an advisory (not authoritative) liveness check of its recorded process id, and clears one named lock only after explicit confirmation or `--yes`. | [`unlock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/unlock.rs), [`prikk-cli/src/unlock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/unlock.rs) |

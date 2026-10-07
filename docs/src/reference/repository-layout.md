@@ -25,8 +25,9 @@ For format stability, migration limits, and release identity, see
   completed crash-matrix or fuzzing campaign.
 - Repository *mutation* is exercised by project gates on Linux, macOS, and Windows (DC-87 Stage 2).
   Windows' anchoring guarantee is weaker than Linux/macOS in one stated way — see
-  [platform support](./platform-support.md) for the exact gap and which of the nine durability
-  guarantees are held, weaker, or documented no-ops there. Read-only commands are CI-gated on macOS
+  [platform support](./platform-support.md) for the exact gap and which of the eight live durability
+  guarantees (G1–G4 and G6–G9 in `crates/prikk-store/src/foundation/fsutil/contract.rs`; G5 was retired
+  in DC-98) are held, weaker, or documented no-ops there. Read-only commands are CI-gated on macOS
   and Windows too — see [platform support](./platform-support.md).
 - Stable repository-format migration, garbage collection, quarantine enforcement, cache rebuilding,
   hosted forge trust, and remote-tracking remain deferred. `prikk sync` (RFC 116, RFC 117) and
@@ -35,17 +36,24 @@ For format stability, migration limits, and release identity, see
 
 ## Initialized Layout
 
-A fresh `prikk init` creates the repository directory, the initialized directories below, and the
-format marker file. It does not create runtime leaf files such as the active WAL or active ref
-metadata. Ref, received-ref, and trust storage are the exception: the ref-pointer index, ref-log,
-received-ref index, and trust containers are all fixed, named files allocated by `init` itself, empty
-until first use — there is no per-ref, per-received-ref, or per-key-id file or directory created
-later, since none of those names exist at `init` time and a per-name file would have to be.
+A fresh `prikk init` creates the repository directory, the initialized directories below, the format
+marker file, and the leaf files the default session and the write state need before their first write:
+`worktree.marker`, `worktree.provisional`, `current-branch` (`heads/main`), `active/default/queue.wal`,
+`active/default/ref-name`, `active/default/declarations`, `active/default/witness`, and `recovery/log`
+(`crates/prikk-store/src/foundation/layout.rs:280-305`, and `ensure_write_state` at `layout.rs:740-751`).
+The active WAL and active ref metadata are therefore empty when `init` returns. Ref, received-ref, and
+trust storage are fixed, named container files allocated by `init` itself, empty until first use —
+there is no per-ref, per-received-ref, or per-key-id file or directory created later, since none of
+those names exist at `init` time and a per-name file would have to be.
 
 ```text
 .prikk/
   FORMAT
+  current-branch
   worktree.marker
+  worktree.provisional
+  recovery/
+    log
   containers/
     patch/{a,b}.container
     block/{a,b}.container
@@ -59,6 +67,8 @@ later, since none of those names exist at `init` time and a per-name file would 
     default/
       queue.wal
       ref-name
+      declarations
+      witness
   refs/
     containers/
       log-{a,b}.container
@@ -74,10 +84,14 @@ later, since none of those names exist at `init` time and a per-name file would 
   cache/
 ```
 
-Every file above is created by `init` and is empty until first use. **No name under `.prikk/` is created
-after `init`** — that is a design invariant, not an implementation detail, and it is what makes the
-repository durable on filesystems that cannot make a new directory entry durable. **The one exception is `recovery/`**
-(next paragraph), which is never authority. `init` creates its log; a repository created before 0.49.0 gets the log at its first write.
+Every file above is created by `init`. Each is empty until first use, except `FORMAT` (its version) and
+`current-branch` (`heads/main`). **No name under `.prikk/` is created after `init`** — that is a design
+invariant, not an implementation detail, and it is what makes the repository durable on filesystems that
+cannot make a new directory entry durable. **The exceptions are the write-state files a repository
+created before they existed lacks**: `recovery/log` and the default `witness`, which the first write
+creates exclusively (`layout.rs:740-751`), and the declarations file, which a write also self-heals
+(`layout.rs`, the RFC 144 §4o.2 comment in `init`). `recovery/` is never authority (next paragraph);
+`init` creates its log, and a repository created before 0.49.0 gets the log and the witness at its first write.
 
 `recovery/log` holds the bytes a repair removed, appended and flushed **before** the repair truncates. Each repair is one run, and each file it changes is one entry in that run. Every repair writes
 here and nowhere else. Each entry records its source file, the offset it was cut at, the removed bytes, a hash of the file before that offset, and the
@@ -88,7 +102,7 @@ except by `prikk doctor --recovery-clear`, which removes the saved content for g
 
 The three commands:
 
-- `prikk doctor --recovery-list` prints each entry's id, source, offset, length and repair. It does not judge whether an entry can be restored.
+- `prikk doctor --recovery-list` prints the saved entries grouped by the repair run that wrote them: a line per run with its id and entry count, then each entry's source, the offset it was cut at, its length in bytes, and its label (`crates/prikk-cli/src/main.rs:1036-1062`). It does not judge whether an entry can be restored.
 - `prikk doctor --recovery-restore <run id> [--plan-only]` undoes the whole run, in reverse order: it prints its plan first (each step, and its conditions), then writes only when every condition holds. A step that already holds its result is skipped, so an interrupted restore finishes when it is run again. A later run that changed the same files is named, and the restore waits for it.
   It writes only when the source is exactly as long as the recorded offset, its bytes before that offset hash to the recorded hash, and the files that give the
   bytes their meaning are unchanged.
@@ -367,7 +381,7 @@ full cross-platform filesystem validation.
 | Ref storage keys are SHA-256 hex digests of human-readable ref names, shared by the pointer index, the log container, and per-ref lock files. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs) |
 | The ref-pointer index is a shared, append-only, last-entry-wins container holding every ref's own current-pointer entry (name, RefState id, storage key). | [`refs/pointer_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/pointer_index.rs), [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs), [data model](./data-model.md) |
 | The ref-log container is a shared, append-only sequence holding every ref's own signed RefUpdate envelopes, interleaved, with frame magic, checksums, and per-ref replay semantics. | [`refs/container.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/container.rs), [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs), [durability and crash recovery](./durability-recovery.md) |
-| Active WAL and active ref metadata are runtime active-session state, not fresh-init files. | [`active.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/active.rs), [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [durability and crash recovery](./durability-recovery.md) |
+| `init` creates the default active WAL (`queue.wal`) and active ref metadata (`ref-name`) empty; their contents are runtime active-session state. | [`active.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/active.rs), [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [durability and crash recovery](./durability-recovery.md) |
 | Trust policy and maintainer public-key files are written by the trust command and define current repository-local MAINTAINER trust. | [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs), [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [security and signing setup](../guide/security-setup.md) |
 | Verification checks object placement, ref pointer/log consistency, active WAL state, and publication trust within current limits. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [integrity and recovery diagnostics](./integrity-recovery.md), [trust and threat model](./trust-threat-model.md) |
 | `cache/` is initialized but not a root of trust; `quarantine/` is retired and no longer initialized, and `gc/` is not an initialized directory. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-31](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-31-REPOSITORY-LAYOUT-AUTHORITY-REFERENCE.md) |

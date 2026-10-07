@@ -31,9 +31,10 @@ Authoring compares the worktree against a baseline node lifecycle state:
 `commit --ref heads/topic` on an unborn ref creates an independent Root history from the current
 worktree. It does not copy/fork `heads/main`, switch the checkout branch, or create a merge base.
 
-The active WAL is single-commit for this stage. A second commit before seal fails closed, and the active
-WAL records the target ref so `seal --ref heads/main` cannot publish a patch authored for
-`heads/topic`.
+The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
+active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
+non-empty, so `seal --ref heads/main` cannot publish a patch authored for `heads/topic`
+(`crates/prikk-store/src/commit_boundary/active.rs:301-314`).
 
 ## Operation mapping
 

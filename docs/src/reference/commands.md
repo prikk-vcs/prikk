@@ -73,11 +73,15 @@ prikk verify [path] [--stop-on-first-error] [--format json]
 prikk doctor [path]
 prikk doctor [path] --repair-wal-tail
 prikk doctor [path] --repair-index
+prikk doctor [path] --repair-pointer-index-tail
 prikk doctor [path] --repair-tails
 prikk doctor [path] --repair-main-ref
 prikk doctor [path] --rebuild-pointer-index [--plan-only]
 prikk doctor [path] --discard-damaged-commits [--plan-only]
 prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]
+prikk doctor [path] --recovery-list
+prikk doctor [path] --recovery-restore <run id> [--plan-only]
+prikk doctor [path] --recovery-clear [--plan-only]
 prikk ref complete <ref> [--plan-only]
 prikk format upgrade [path]
 prikk unlock
@@ -106,8 +110,8 @@ that tag's own block indistinguishable in history. The refusal names both accept
 **`format upgrade` is explicit, verified and one-way.** A repository created by 0.44.0 or earlier is
 format 6; new repositories are format 7, which is format 6 plus "an object id may hold several records,
 the last authoritative". `prikk format upgrade` takes the writer lock, runs the same verification as
-`prikk verify` and refuses — changing nothing — unless it would exit 0, then rewrites the one-line
-`.prikk/FORMAT` marker atomically. Nothing stored is rewritten. It is idempotent on a format-7
+`prikk verify` and refuses — changing nothing — unless it would exit 0, then overwrites the one byte
+of the `.prikk/FORMAT` marker in place and flushes it (no rename; RFC 168 §3.3, `crates/prikk-store/src/format_upgrade.rs:81-88`). Nothing stored is rewritten. It is idempotent on a format-7
 repository, never runs by itself, and has no inverse: prikk 0.44.0 and earlier refuse a format-7
 repository at open. See [Release Compatibility](release-compatibility.md).
 

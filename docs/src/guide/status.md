@@ -27,6 +27,11 @@ For each invocation, the CLI reports:
 - a warning once the queued-patch count reaches the recommended threshold or the configured hard
   limit (`PRIKK_ACTIVE_PATCH_WARN`/`PRIKK_ACTIVE_PATCH_LIMIT`; see NFR-PERF-02), the same thresholds
   [`prikk commit`](patches/worktree-patch.md) enforces on the write path.
+- when the next `commit` or `seal` would refuse, `warning: the next commit or seal will refuse: <reason>`,
+  where the reason is the one that write would give;
+- otherwise, when a queued commit was written durably but never confirmed (a previous command was
+  interrupted after its own write, or an older prikk wrote it), `note: a queued commit was already written
+  but not confirmed`; the two cases cannot be told apart (`crates/prikk-cli/src/main.rs:624-641`).
 
 `status` does not run [`verify`](../reference/integrity-recovery.md)'s integrity checks, and does not
 report the worktree's own divergence from the replay baseline — that is

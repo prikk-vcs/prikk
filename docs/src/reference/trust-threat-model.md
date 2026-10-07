@@ -24,8 +24,9 @@ status records listed in the anchor table at the foot of the page.
   completed crash-matrix or fuzzing campaign.
 - Repository *mutation* is exercised by project gates on Linux, macOS, and Windows (DC-87 Stage 2).
   Windows' anchoring guarantee is weaker than Linux/macOS in one stated way — see
-  [platform support](./platform-support.md) for the exact gap and which of the nine durability
-  guarantees are held, weaker, or documented no-ops there. Read-only commands are CI-gated on macOS
+  [platform support](./platform-support.md) for the exact gap and which of the eight live durability
+  guarantees (G1–G4 and G6–G9 in `crates/prikk-store/src/foundation/fsutil/contract.rs`; G5 was retired
+  in DC-98) are held, weaker, or documented no-ops there. Read-only commands are CI-gated on macOS
   and Windows too — see [platform support](./platform-support.md).
 
 Changes that alter trust, threat, verification, signature, key-management, durability,
@@ -192,8 +193,10 @@ Seal requires `--allow-no-audit`, a valid local branch ref, a non-empty active W
 metadata matching the requested ref, and no trailing partial WAL bytes. It verifies that the configured
 MAINTAINER signer matches the repository-local trust policy before publication. It then persists Patch
 objects, signs and writes the Block and RefState, durably appends the ref pointer as the commit point, appends
-exactly one signed RefUpdate, confirms pointer/log agreement, and clears active state. Signer-backed
-retry is also the only authority that may finish an exact interrupted publication.
+exactly one signed RefUpdate, confirms pointer/log agreement, and clears active state. An exact
+interrupted publication is finished by `seal`'s retry or by `prikk ref complete <ref>` (RFC 165 R4); the
+completing key must be an adopted maintainer key, and the original signer is not needed (see the gated
+operations list above, which names `prikk ref complete`).
 
 **How seal derives the state it signs.** It starts from the nearest checkpoint snapshot on the derivation line
 and folds the blocks after it, comparing each folded block's state root with the root that block signed. A

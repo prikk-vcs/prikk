@@ -15,8 +15,9 @@ the foot of the page.
   completed crash-matrix or fuzzing campaign.
 - Repository *mutation* is exercised by project gates on Linux, macOS, and Windows (DC-87 Stage 2).
   Windows' anchoring guarantee is weaker than Linux/macOS in one stated way — see
-  [platform support](./platform-support.md) for the exact gap and which of the nine durability
-  guarantees are held, weaker, or documented no-ops there. Read-only commands are CI-gated on macOS
+  [platform support](./platform-support.md) for the exact gap and which of the eight live durability
+  guarantees (G1–G4 and G6–G9 in `crates/prikk-store/src/foundation/fsutil/contract.rs`; G5 was retired
+  in DC-98) are held, weaker, or documented no-ops there. Read-only commands are CI-gated on macOS
   and Windows too — see [platform support](./platform-support.md).
 - Stable repository-format migration, complete branch management, remote-tracking, hosted forge
   trust, and plugin execution remain deferred. `prikk sync` (RFC 116) and tag travel/adoption (RFC
@@ -235,14 +236,20 @@ failures.
 The detailed persistence, seal-publication, and recovery framing lives in the
 [durability and crash recovery](./durability-recovery.md) reference.
 
-The current active-session model is single-commit-per-active-WAL. Active ref metadata records which
-branch ref owns a non-empty active WAL. Missing or malformed active ref metadata on a non-empty WAL is
-an integrity issue; stale metadata on an empty WAL is local debris.
+The active session is a queue: each `commit` appends one Patch and its witness to the default active WAL
+(RFC 166), and the queue holds up to the `PRIKK_ACTIVE_PATCH_LIMIT` bound described in the
+[FAQ](../guide/faq.md). Active ref metadata records which branch ref owns a non-empty active WAL, and a
+commit for a different ref is refused while the queue is non-empty (`crates/prikk-store/src/commit_boundary/active.rs:118-131`,
+`:301-314`). Missing or malformed active ref metadata on a non-empty WAL is an integrity issue; stale
+metadata on an empty WAL is local debris.
 
-Doctor repair is intentionally narrow. It can truncate an incomplete trailing active-WAL record after
-the preceding records verify. It does not reconstruct missing ref pointers, sign or append RefUpdates,
-synthesize missing objects, repair malformed logs, or prove crash behavior beyond current test
-evidence. Exact interrupted ref publication completion belongs to signer-backed `seal` retry.
+Doctor's repairs are opt-in, one flag each, and the full list is in the [command reference](./commands.md).
+They truncate damaged tails, rebuild the ref-pointer index from the ref log (`--rebuild-pointer-index`,
+RFC 165 R5), and remove or declare lost a queued commit the queue no longer holds soundly, or give its
+ref back (`--discard-damaged-commits`, `--restore-queue-target`, RFC 166 D5). The `--recovery-*` commands
+undo or clear the saved repair log (RFC 168). Doctor holds no signer, so it does not sign or append
+RefUpdates. An interrupted ref publication is completed by `prikk ref complete <ref>` (RFC 165 R4) or by
+`seal`'s retry, and each checks the completing key against the local maintainer trust policy.
 
 ## Replay, Checkout, Verify, and Doctor
 
@@ -253,7 +260,7 @@ verification, doctor, and worktree integration. `prikk-replay` is not a stable e
 Repository verification is read-only. It checks object placement, envelope decoding, object identity,
 Block references, ref pointer and log consistency, active WAL checksums, active WAL metadata health,
 sealed rollback Patch classification, and publication trust for publication envelopes. Doctor converts
-verification results into actionable diagnostics and exposes only the narrow repairs described above.
+verification results into actionable diagnostics and offers the repairs listed in the [command reference](./commands.md).
 The diagnostic catalog lives in the
 [integrity and recovery diagnostics](./integrity-recovery.md) reference.
 
@@ -282,7 +289,7 @@ multi-maintainer publication policy, and full cross-platform filesystem validati
 | Received refs are stored under `remotes/<name>` in their own index, never read by `verify_repository`; import never advances a local ref. | [`received.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received.rs), [`received_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received/received_index.rs), [DC-78](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-78-HISTORY-EXCHANGE.md) §D4 |
 | `PSYNCSU1`/`PSYNCHV1` negotiate; `PEXCH002` (formerly `PEXCH001`) carries patches, blobs, author keys, claims, and tags — representational, not frozen. | [`sync_negotiation/summary.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/sync_negotiation/summary.rs), [`sync_negotiation/have_list.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/sync_negotiation/have_list.rs), [`patch_exchange/artifact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_exchange/artifact.rs), [RFC 116](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/116-sync-negotiation-and-transport.md), [RFC 117](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/117-tag-sync.md) stage 3 |
 | Active WAL records exact signed Patch envelopes and detects trailing partial bytes. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [DC-15](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-15-ACTIVE-SESSION-INTEGRITY-HARDENING.md) |
-| `prikk compact` reclaims dead records from the ref-pointer, received, and trust-key containers only; never the ref log or sealed objects. | [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [RFC 102](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/102-container-based-durability.md) Stage 6 Step 2 |
+| `prikk compact` reclaims dead records from the ref-pointer, received, and trust-policy containers only; never the ref log, the trust-key container, or sealed objects. | [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [RFC 102](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/102-container-based-durability.md) Stage 6 Step 2 |
 | Verification is read-only and bounded to structural, WAL, ref, rollback, and publication-trust checks. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [implementation status](https://github.com/prikk-vcs/prikk/blob/main/rfcs/IMPLEMENTATION-STATUS.md) |
 | `prikk-replay` is internally scoped and not a stable external API. | [DC-19](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-19-REPLAY-LIFECYCLE-CRATE-BOUNDARY.md), [DC-20](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-20-REPLAY-BOUNDARY-STABILIZATION.md), [implementation status](https://github.com/prikk-vcs/prikk/blob/main/rfcs/IMPLEMENTATION-STATUS.md) |
 | Durability and platform claims remain limited by current test evidence. | [DC-24 baseline recap](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-24-data-model-trust-threat-docs/baseline-recap.md), [DC-24](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-24-DATA-MODEL-TRUST-THREAT-DOCS.md) |
