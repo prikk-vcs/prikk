@@ -182,3 +182,5 @@ defect, reproduced by the architect. Two more one-sitting parts follow; the same
 
 **Then Part F.**
 
+**Part E4 ACCEPTED 2026-10-08** (`940b88fd`; review `review-019-corrections-E4-review-v1`). **Review 019 item 6 is closed.** Next: **Part F** as written, plus one wording fix: wherever a comment or doc calls the deduction "linear", say O(|A|·|B|) entry comparisons, run only in the ambiguous state.
+
