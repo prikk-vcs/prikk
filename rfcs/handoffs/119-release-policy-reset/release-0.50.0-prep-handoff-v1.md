@@ -110,3 +110,7 @@ as a question.**
 | **P3d: four findings from the P3c review** | **G1:** while a container's interior damage is set, every `VERIFY-STAGE-INCOMPLETE` recommendation says to resolve that damage issue first. Decided by the typed field; *"inspect"* stays otherwise. **G2:** the container-damage issues are printed first. **G3:** every *"no repair exists"* text says to restore **`.prikk/` as a whole**, from a backup taken before the damage, never single files; the trust-policy text adds *"then re-apply every trust change made since that backup"*. State from source whether `pointer_rebuild.rs:413` is reachable. **G4:** exact commands, no *"the message names the way out:"* prefix. Tests with a control per branch; smoke 27e; CHANGELOG; docs grep; the 14 gates. **The report lists every item with its status** | 40 min | `release-0.50.0-prep-P3d-report.md` |
 
 **Next: P3d.**
+
+**P3d ACCEPTED 2026-10-09** (`b3b1c891`; review `release-0.50.0-prep-P3d-review-v1`). **The dev team's part is complete.**
+The architect pushes. The external re-run follows (the owner's *"Proceed"* of 2026-10-08, read as yes to the re-run).
+The CHANGELOG date is the owner's question: the commit slipped past midnight, and the tag waits for the review.
