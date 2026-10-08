@@ -43,3 +43,9 @@ Follow `release-prep-handoff-template.md`; this file fills in the blanks, and sp
 - RFC 165's move to `done/` at the cut (the architect's records);
 - crates.io;
 - consumer letters (only if `### Output changes` reaches stikk or planeter).
+
+**P1 ACCEPTED 2026-10-08** (`8c382e08`; review `release-0.50.0-prep-P1-review-v1`). **Security ruling: no `### Security`
+block in 0.50.0**; the generation-log fix stays under Fixed (local trigger, as 0.49.0's corrupted-last-record entry) and
+the Attestation check under Added. **Carried into P3:** the generation-log heading names its trust consequence; the
+`--plan-only` sentence names the verbs that have it (three repair verbs do not); the long `Added` paragraph becomes
+bullets; the Output-changes and Upgrading lines listed in the review. **Next: P2.**
