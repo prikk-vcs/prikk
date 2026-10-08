@@ -179,6 +179,9 @@ Current doctor severities are `info`, `warning`, and `error`.
 | `PRIKK-DOCTOR-POINTER-INDEX-TRAILING-PARTIAL` | `warning` | The pointer index has trailing bytes that look like an incomplete final record. `--repair-pointer-index-tail` truncates exactly these; unlike the object index, a *damaged* pointer-index entry (not merely a trailing partial) already fails the `Refs` stage outright rather than reaching this code. |
 | `PRIKK-DOCTOR-APPENDED-FILE-TRAILING-PARTIAL` | `warning` | One of the eight appended files (the ref log is one of them) has an incomplete final record. `--repair-tails` truncates exactly these bytes. |
 | `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` | `error` | One of those appended files has a record that fails to decode. `--repair-tails` refuses it rather than guessing which bytes are safe to remove. |
+| `PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE` | `error` | 0.50.0 P3c: the ref pointer index has a damaged entry, read directly rather than only through the `Refs` stage failure above. The message names `prikk doctor --rebuild-pointer-index --plan-only` directly. |
+| `PRIKK-DOCTOR-RECEIVED-INDEX-INTERIOR-DAMAGE` | `error` | 0.50.0 P3c: the received index has a damaged entry, read directly. No repair exists; the message names the file to restore from a backup. |
+| `PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE` | `error` | 0.50.0 P3c: the trust policy container has a damaged snapshot, read directly. No repair exists; the message names the file to restore from a backup. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING` | `error` | Default session's WAL has records but its ref metadata is missing. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED` | `error` | Default session's WAL has records but its ref metadata is malformed. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS` | `warning` | Default session's WAL is empty but stale valid ref metadata remains. |

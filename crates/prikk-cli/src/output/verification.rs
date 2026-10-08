@@ -718,15 +718,22 @@ pub(crate) fn print_verify_report(
             issue.index, issue.seq, issue.previous_seq
         );
     }
-    // RFC 151 §2.1, 0.50.0 step 1 A4: a warning, never a failure (019 §5.8) -- the same
-    // recommendation `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` issue gives, so the two reports
-    // never disagree about what to do next.
+    // RFC 151 §2.1, 0.50.0 step 1 A4: a warning, never a failure -- the same recommendation
+    // `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` issue gives, so the two reports never disagree
+    // about what to do next. 0.50.0 P3c: "run branch switch" is wrong when the pointer index
+    // itself is what is broken -- decided by the same direct, independent check
+    // `container_interior_damage` already made, never by matching this issue's own text.
     if let Some(issue) = &report.current_branch_issue {
-        println!(
-            "warning: current-branch pointer could not be resolved: {issue}; run `prikk branch \
-             switch heads/<name>` to a branch that exists and is open, or `prikk branch create` \
-             the branch the pointer names; `--ref` given explicitly still works meanwhile"
-        );
+        if report.container_interior_damage.pointer_index.is_some() {
+            println!("warning: current-branch pointer could not be resolved: {issue}");
+        } else {
+            println!(
+                "warning: current-branch pointer could not be resolved: {issue}; run `prikk \
+                 branch switch heads/<name>` to a branch that exists and is open, or `prikk \
+                 branch create` the branch the pointer names; `--ref` given explicitly still \
+                 works meanwhile"
+            );
+        }
     } else if report.current_branch_absent {
         // Part D1: true of every repository initialized before RFC 151 -- a normal, unaffected
         // state (the pointer resolves to `heads/main`, the unborn default, the same as a healthy

@@ -410,7 +410,9 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
             &ref_pointer_generation_log_path,
             &ref_pointer_slot_a_path,
             &ref_pointer_slot_b_path,
-            "ref pointer index has a damaged entry; run doctor before reading",
+            "ref pointer index has a damaged entry that the rebuild cannot read past either; \
+             preserve the repository and restore `.prikk/refs/containers/pointer-index-a.\
+             container`/`-b.container` from a backup taken before the damage",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?;

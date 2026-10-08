@@ -132,7 +132,9 @@ fn removing_a_declaration_names_its_file() {
         // a `reduce_*_entries` argument, 2,475 -> 2,479.
         // 0.50.0 P2b, F2: `GenerationLogDeductionNote` gains `compact_flag`, and each of the three
         // `deduction_note` call sites names its own container's flag, 2,479 -> 2,497.
-        detail.contains("2497"),
+        // 0.50.0 P3c: `ContainerInteriorDamage` and the direct `replay_*().has_item_failure()` check
+        // `check_generation_log_deductions` now also makes for all three containers, 2,497 -> 2,575.
+        detail.contains("2575"),
         "the line count is in the message: {detail}"
     );
     assert!(

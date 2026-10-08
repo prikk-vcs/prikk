@@ -301,7 +301,9 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
                 &layout.trust_policy_generation_log_path(),
                 &layout.trust_policy_container_slot_path(ContainerSlot::A),
                 &layout.trust_policy_container_slot_path(ContainerSlot::B),
-                "trust policy container has a damaged snapshot; run doctor before reading",
+                "trust policy container has a damaged snapshot; no repair exists -- preserve the \
+                 repository and restore `.prikk/trust/policy-a.container`/`-b.container` from a \
+                 backup taken before the damage",
                 decode_trust_policy_entries_for_resolver,
                 fold_one_trust_policy_entry,
             )?;
@@ -314,7 +316,9 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
                 &layout.received_index_generation_log_path(),
                 &layout.received_index_slot_path(ContainerSlot::A),
                 &layout.received_index_slot_path(ContainerSlot::B),
-                "received-ref index has a damaged entry; run doctor before reading",
+                "received-ref index has a damaged entry; no repair exists -- preserve the \
+                 repository and restore `.prikk/refs/containers/received-index-a.container`/\
+                 `-b.container` from a backup taken before the damage",
                 decode_received_index_entries_for_resolver,
                 fold_one_received_index_entry,
             )?;

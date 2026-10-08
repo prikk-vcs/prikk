@@ -105,8 +105,8 @@ pub(super) fn read_pointers(
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
-            "ref pointer index has a damaged entry; run doctor before verify can classify \
-             publication state"
+            "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+             --plan-only`, then the rebuild"
                 .to_string(),
         ));
     }

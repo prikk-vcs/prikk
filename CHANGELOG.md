@@ -7,8 +7,8 @@
 - A repository found with a lost generation log is now read correctly, and `verify`/`doctor` warn
   rather than stay silent about it. Running the exact `prikk compact` command the warning names
   (`--pointer-index`, `--received-index`, or `--trust-policy`) records the slot and ends the warning.
-- Library users: `GenerationLogDeductionNote` and `AppendedFileTailStatus` are now exported from
-  `prikk-store`'s own crate root; both are `#[non_exhaustive]`.
+- Library users: `GenerationLogDeductionNote`, `AppendedFileTailStatus`, and `ContainerInteriorDamage`
+  are now exported from `prikk-store`'s own crate root; all three are `#[non_exhaustive]`.
 
 ### Output changes
 
@@ -38,6 +38,14 @@
   for each file it would repair. No "before": the flag itself is new in 0.50.0.
 - `bundle import`: a new refusal when a carried or locally-held attestation's own target block is
   absent, before any write.
+- `verify`/`doctor`: a complete, corrupted record in the ref pointer index now names `prikk doctor
+  --rebuild-pointer-index --plan-only` directly, in place of the same generic failure text that sent
+  the user back to `doctor`.
+- `verify`/`doctor`: the identical shape in the received index or the trust policy container now
+  says plainly that no repair exists and names the file to restore from a backup, in place of the
+  same circular text.
+- `verify`/`doctor`: the current-branch warning no longer recommends `prikk branch switch` when the
+  real cause is one of those three containers' own damage.
 
 **No JSON output changes.** `verify --format json` prints the same fields as before; `doctor` and
 `bundle import` have no JSON output at all.
@@ -96,9 +104,9 @@ left pending behind whatever made the rebuild necessary, could be discarded in a
 only the first of them. Separately, the rebuild refused on a torn tail in the ref log and in the
 generation log before touching anything, but not on one in the pointer index itself — the one file of
 the three it reads that this up-front refusal did not cover — so a torn pointer-index slot was
-silently abandoned, unsaved, while the rebuild proceeded and exited `0`. The external crash-and-
-corruption matrix independently found the most severe shape of the first defect: a ref log emptied
-outright. On 0.49.0, every way out *succeeded* — `ref complete`, then `--rebuild-pointer-index` — but
+silently abandoned, unsaved, while the rebuild proceeded and exited `0`. Found by review 019 (§2.2,
+§4.4): the most severe shape of the first defect is a ref log emptied outright. On 0.49.0, every way
+out *succeeded* — `ref complete`, then `--rebuild-pointer-index` — but
 the rebuild re-derived the pointers from the now-empty log and silently dropped every published
 state; reads afterward answered as if nothing had ever been published, while `verify` exited `0`.
 
@@ -119,6 +127,34 @@ generation log already were, before anything else runs, with the same wording an
 rebuilt"` when nothing actually changed — every ref's `before` already equalling its `after` now
 prints `"pointer index already matches the log; nothing written"` instead, and writes neither a new
 slot nor a new generation record for a no-op.
+
+### Fixed — a damaged ref pointer index, received index, or trust policy record sent the user in a circle, and the current-branch warning recommended the wrong fix
+
+**The consequence, in plain words:** a complete, corrupted record in any of these three containers
+(never a tail — those are already covered) made every `verify`/`doctor` stage that reads the
+container fail with "ref pointer index has a damaged entry; run doctor before reading" — but running
+`doctor` reads the identical container the identical way, so it answered with the same failure again,
+naming no way out. Separately, when the same damage also broke `current-branch` resolution, `verify`
+and `doctor` both recommended `prikk branch switch`, which does nothing: the pointer file itself was
+fine, and nothing about this damage is a bad branch name.
+
+**Found while reading what `doctor` prints for a complete damaged pointer-index record, following up
+on review 019's own grading of the rebuild's way out** (019 §2.2, §4.4; the pointer-index rebuild
+itself only gained its way-out routing for the deep-lead and torn-tail shapes above — this round
+found the plain interior-damage shape still untouched). No advisory (disclosure only — a local
+diagnostics gap, not reachable by untrusted input, and never a false pass: every one of these
+failures already correctly refused; only the recommendation was unhelpful or wrong).
+
+**Action: upgrade.** For the ref pointer index, `verify` and `doctor` now name `prikk doctor
+--rebuild-pointer-index --plan-only` directly, instead of sending the user back to `doctor`; running
+it clears the damage, since the rebuild re-derives the index from the ref log rather than reading the
+damaged slot. For the received index and the trust policy container, no repair exists for interior
+damage (neither is re-derivable from anything else this repository holds) — `verify` and `doctor` now
+say so plainly, and name the exact file to restore from a backup, instead of sending the user back to
+`doctor` for an answer it cannot give. The current-branch warning, in both `verify` and `doctor`, no
+longer recommends `branch switch` when the real cause is one of these three containers' own damage —
+decided by the same direct, independent check that drives the dedicated issues above, never by
+matching the error's own text.
 
 ### Fixed — a torn object-index tail with no decode failure could make a sound, just-written object read as missing, failing `verify`'s ref-publication scan
 

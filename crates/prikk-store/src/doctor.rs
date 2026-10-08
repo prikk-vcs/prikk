@@ -682,12 +682,24 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
 /// every command still works with `--ref` given explicitly; only the default is unusable.
 fn push_current_branch_issue(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue>) {
     if let Err(err) = crate::refs::current_branch(layout) {
+        // 0.50.0 P3c: when the pointer index itself is what is broken, "run branch switch" is
+        // wrong -- the pointer file is fine, and switching or creating a branch does not touch the
+        // index. Decided by a direct, independent check (the same one `PRIKK-DOCTOR-POINTER-INDEX-
+        // INTERIOR-DAMAGE` below uses), never by matching this error's own text.
+        let recommendation = if crate::refs::pointer_index_interior_damage(layout).is_some() {
+            "the error already names the way out: run `prikk doctor --rebuild-pointer-index \
+                 --plan-only`, then the rebuild"
+                .to_string()
+        } else {
+            "run `prikk branch switch heads/<name>` to a branch that exists and is open, or \
+                 `prikk branch create` the branch the pointer names; `--ref` given explicitly \
+                 still works meanwhile"
+                .to_string()
+        };
         issues.push(DoctorIssue::warning(
             "PRIKK-DOCTOR-CURRENT-BRANCH",
             err.to_string(),
-            "run `prikk branch switch heads/<name>` to a branch that exists and is open, or \
-             `prikk branch create` the branch the pointer names; `--ref` given explicitly still \
-             works meanwhile",
+            recommendation,
         ));
     }
 }
@@ -1087,6 +1099,36 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     ),
                 ));
             }
+            // 0.50.0 P3c: a compacting container's own interior damage (a complete, corrupted
+            // record), read directly -- the error text already names the real way out (the
+            // pointer-index rebuild, or, for the other two, that no repair exists), so the
+            // recommendation here just repeats it rather than the generic "inspect the failing
+            // stage" every other stage failure gets. This is the one place the user is told
+            // directly, instead of reaching it only through whichever stage happened to fail first.
+            if let Some(message) = &verification.container_interior_damage.pointer_index {
+                issues.push(DoctorIssue::error(
+                    "PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE",
+                    message.clone(),
+                    "the message names the way out: run `prikk doctor --rebuild-pointer-index \
+                     --plan-only`, then the rebuild",
+                ));
+            }
+            if let Some(message) = &verification.container_interior_damage.received_index {
+                issues.push(DoctorIssue::error(
+                    "PRIKK-DOCTOR-RECEIVED-INDEX-INTERIOR-DAMAGE",
+                    message.clone(),
+                    "no repair exists; preserve the repository and restore the received index \
+                     from a backup taken before the damage",
+                ));
+            }
+            if let Some(message) = &verification.container_interior_damage.trust_policy {
+                issues.push(DoctorIssue::error(
+                    "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE",
+                    message.clone(),
+                    "no repair exists; preserve the repository and restore the trust policy \
+                     container from a backup taken before the damage",
+                ));
+            }
             // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never
             // repaired -- Rule B only makes these report, per the review's ruling).
             for status in &verification.object_container_tails {
@@ -1139,9 +1181,10 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 // same table" the handoff requires. `LEGACY-LOG-LEADS` is confirmed dead (format-1
                 // only, never pushed by `classify_ref_state`) and stays grouped with the unrelated
                 // `ACTIVE-CLEANUP-PENDING` rather than being reworked for a case that cannot occur.
-                // `DIVERGENCE`'s own text still does not name the rebuild (R5, `prikk doctor
-                // --rebuild-pointer-index`): that command does not exist yet (round 2 U4); naming it
-                // here would promise a flag doctor cannot run.
+                // `DIVERGENCE`'s own text still does not name the rebuild (`prikk doctor
+                // --rebuild-pointer-index`): the rebuild re-derives the pointer index from the ref
+                // log, and a divergence is a conflict in the ref log itself -- the rebuild would
+                // only reproduce it, not resolve it.
                 let recommendation = match issue.code {
                     "PRIKK-VERIFY-REF-POINTER-LEADS-LOG" => match issue.ref_name.as_deref() {
                         Some(ref_name) => format!(

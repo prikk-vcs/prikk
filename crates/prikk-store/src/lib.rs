@@ -329,7 +329,7 @@ pub use trust::{
 pub use unlock::{HeldLock, PidLiveness, clear_lock, find_held_lock, list_held_locks};
 pub use verify::{
     ActiveWalMetadataStatus, ActiveWalOrderingIssue, AppendedFileTailStatus,
-    AuthorSignatureVerification, BlockSealVerification, ConnectivityIssue,
+    AuthorSignatureVerification, BlockSealVerification, ConnectivityIssue, ContainerInteriorDamage,
     GenerationLogDeductionNote, InterruptedAppend, ObjectItemOutcome, ObjectItemStatus,
     ObjectVerification, RepositoryVerification, StageOutcome, StageStatus, VerificationStage,
     VerifyOptions, verify_repository, verify_repository_with_options,

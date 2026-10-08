@@ -769,6 +769,11 @@ pub struct RepositoryVerification {
     /// writer already resolve this silently, so `verify`/`doctor` are what keep it visible. Empty in
     /// the overwhelmingly common case (the log names a slot, or slot B is genuinely empty).
     pub generation_log_deductions: Vec<GenerationLogDeductionNote>,
+    /// 0.50.0 P3c: each compacting container's own interior damage, read directly alongside
+    /// `generation_log_deductions` above -- lets a caller name the real way out (the pointer-index
+    /// rebuild, or "no repair, restore from a backup") instead of whichever stage happened to fail
+    /// first over the same damage.
+    pub container_interior_damage: ContainerInteriorDamage,
 }
 
 /// One compacting container's own Part E2 warning: its generation log named no live slot, but its
@@ -788,59 +793,128 @@ pub struct GenerationLogDeductionNote {
     pub compact_flag: &'static str,
 }
 
+/// 0.50.0 P3c: a compacting container's own interior damage (a complete, corrupted record -- never
+/// a tail, which `--repair-tails` already covers), read directly so a caller does not have to infer
+/// it from which stage happened to fail first, or match the damage text itself. `None` means this
+/// container's generation log and both slots read cleanly, or were already explained by a
+/// [`GenerationLogDeductionNote`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ContainerInteriorDamage {
+    /// Set when the ref pointer index itself cannot be read past damage. `prikk doctor
+    /// --rebuild-pointer-index` re-derives it from the ref log, which this damage does not touch.
+    pub pointer_index: Option<String>,
+    /// Set when the received index cannot be read past damage. No repair exists for it: it is an
+    /// append-only record of what was received, not re-derivable from anything else this
+    /// repository holds.
+    pub received_index: Option<String>,
+    /// Set when the trust policy container cannot be read past damage. No repair exists for it,
+    /// for the same reason as the received index.
+    pub trust_policy: Option<String>,
+}
+
 /// Part E2: checks all three compacting containers for the "log names no slot, content decides it"
 /// state, read directly (never through whichever reader happens to touch each one first) so `verify`
-/// reports it even when nothing else this run touches the affected container.
+/// reports it even when nothing else this run touches the affected container. 0.50.0 P3c: the same
+/// three reads also catch each container's own interior damage directly, in
+/// [`ContainerInteriorDamage`] -- the one case `resolve_live_slot_with_deduction_note` cannot deduce
+/// past, which it reports as `Err`.
 pub(crate) fn check_generation_log_deductions(
     layout: &RepositoryLayout,
-) -> Vec<GenerationLogDeductionNote> {
+) -> (Vec<GenerationLogDeductionNote>, ContainerInteriorDamage) {
     let mut notes = Vec::new();
-    if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
+    let mut damage = ContainerInteriorDamage::default();
+    // 0.50.0 P3c: checked first, directly, the same two-part way `refs::pointer_index_interior_
+    // damage` does -- the live slot's own content failing to decode is the common shape (no
+    // compaction has ever run, so the generation log names no ambiguity for the deduction below to
+    // even attempt); the deduction's own `Err` arm only catches the rarer, post-compaction shape
+    // where deduction itself cannot be made.
+    if crate::refs::replay_pointer_index(layout).is_ok_and(|replay| replay.has_item_failure()) {
+        damage.pointer_index = Some(
+            "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+             --plan-only`, then the rebuild"
+                .to_string(),
+        );
+    }
+    if replay_received_index(layout).is_ok_and(|replay| replay.has_item_failure()) {
+        damage.received_index = Some(
+            "received-ref index has a damaged entry; no repair exists -- preserve the repository \
+             and restore `.prikk/refs/containers/received-index-a.container`/`-b.container` from \
+             a backup taken before the damage"
+                .to_string(),
+        );
+    }
+    if replay_trust_policy(layout).is_ok_and(|replay| replay.has_item_failure()) {
+        damage.trust_policy = Some(
+            "trust policy container has a damaged snapshot; no repair exists -- preserve the \
+             repository and restore `.prikk/trust/policy-a.container`/`-b.container` from a \
+             backup taken before the damage"
+                .to_string(),
+        );
+    }
+    match resolve_live_slot_with_deduction_note(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        "ref pointer index has a damaged entry; run doctor before reading",
+        "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+         --plan-only`, then the rebuild",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     ) {
-        notes.push(deduction_note(
+        Ok(Some(deduced)) => notes.push(deduction_note(
             "the ref pointer index",
             "--pointer-index",
             &deduced,
-        ));
-    }
-    if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
+        )),
+        Ok(None) => {}
+        Err(err) => {
+            damage.pointer_index.get_or_insert(err.to_string());
+        }
+    };
+    match resolve_live_slot_with_deduction_note(
         layout,
         &layout.received_index_generation_log_path(),
         &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
-        "received-ref index has a damaged entry; run doctor before reading",
+        "received-ref index has a damaged entry; no repair exists -- preserve the repository and \
+         restore `.prikk/refs/containers/received-index-a.container`/`-b.container` from a backup \
+         taken before the damage",
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     ) {
-        notes.push(deduction_note(
+        Ok(Some(deduced)) => notes.push(deduction_note(
             "the received index",
             "--received-index",
             &deduced,
-        ));
-    }
-    if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
+        )),
+        Ok(None) => {}
+        Err(err) => {
+            damage.received_index.get_or_insert(err.to_string());
+        }
+    };
+    match resolve_live_slot_with_deduction_note(
         layout,
         &layout.trust_policy_generation_log_path(),
         &layout.trust_policy_container_slot_path(ContainerSlot::A),
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
-        "trust policy container has a damaged snapshot; run doctor before reading",
+        "trust policy container has a damaged snapshot; no repair exists -- preserve the repository \
+         and restore `.prikk/trust/policy-a.container`/`-b.container` from a backup taken before the \
+         damage",
         decode_trust_policy_entries_for_resolver,
         fold_one_trust_policy_entry,
     ) {
-        notes.push(deduction_note(
+        Ok(Some(deduced)) => notes.push(deduction_note(
             "the trust policy container",
             "--trust-policy",
             &deduced,
-        ));
-    }
-    notes
+        )),
+        Ok(None) => {}
+        Err(err) => {
+            damage.trust_policy.get_or_insert(err.to_string());
+        }
+    };
+    (notes, damage)
 }
 
 fn deduction_note(
@@ -1911,8 +1985,11 @@ pub fn verify_repository_with_options(
     // exists and correctly names the unborn default, both of which resolve identically otherwise.
     let current_branch_absent = !crate::refs::current_branch_pointer_exists(layout)?;
     // Part E2: no upstream stage dependency -- reads all three compacting containers' own generation
-    // logs directly, unconditionally, the same footing as `AppendedFileTails` above.
-    let generation_log_deductions = check_generation_log_deductions(layout);
+    // logs directly, unconditionally, the same footing as `AppendedFileTails` above. 0.50.0 P3c: the
+    // same reads also catch each container's own interior damage directly (`container_interior_
+    // damage`), independent of which stage a caller happens to find failing over it.
+    let (generation_log_deductions, container_interior_damage) =
+        check_generation_log_deductions(layout);
 
     // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
     // the run found -- each such outcome is individually sound. Best-effort; never fails verify.
@@ -1970,6 +2047,7 @@ pub fn verify_repository_with_options(
         current_branch_issue,
         current_branch_absent,
         generation_log_deductions,
+        container_interior_damage,
     })
 }
 

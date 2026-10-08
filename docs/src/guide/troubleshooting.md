@@ -520,22 +520,43 @@ compare unchanged and let a restore through that should not proceed. Run `prikk 
 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 
-Seen from `trust maintainer add`, a commit, or `bundle import`, naming the trust-key, trust-policy,
-author-key or received-index container, for either of two reasons (RFC 164 Rule A, §9 and §9.2): a
-**sound** record follows damaged bytes further into the file, or the **last** record is itself *complete*
-(its checksum verifies against this format's own real magic and version, whatever its own stored header
-fields say) but its envelope or checksum still fails. Neither is a tail — see
-the generation-log entry above for why a complete record is never one, whatever its position; a genuine
-tail (trailing zeros, garbage, or a torn prefix at the *end* of the file, with nothing sound after it, and
-not itself a complete record) reads as one of the four "incomplete tail" entries above instead, repaired
-by `prikk doctor --repair-tails`. **`doctor` has nothing that repairs interior damage** —
-`--repair-tails` refuses on it, the same way every other covered file's own repair does, rather than
-guessing which bytes are safe to remove, or silently reverting the decision (a trust adoption, a
-revocation) the damaged record carried. This entry gives no truncation advice: there is no offset here
-promised to be safe to remove. If you believe the bytes after some offset really are nothing but trailing
-garbage from an interrupted append (not a complete, corrupted record), run `prikk verify` first and read
-its own report carefully before deciding to truncate anything by hand; when in doubt, back the file up
-and ask before changing it.
+Seen from `trust maintainer add` or a commit, naming the trust-key or author-key container, for
+either of two reasons (RFC 164 Rule A, §9 and §9.2): a **sound** record follows damaged bytes further
+into the file, or the **last** record is itself *complete* (its checksum verifies against this
+format's own real magic and version, whatever its own stored header fields say) but its envelope or
+checksum still fails. Neither is a tail — see the generation-log entry above for why a complete
+record is never one, whatever its position; a genuine tail (trailing zeros, garbage, or a torn prefix
+at the *end* of the file, with nothing sound after it, and not itself a complete record) reads as one
+of the four "incomplete tail" entries above instead, repaired by `prikk doctor --repair-tails`.
+**`doctor` has nothing that repairs interior damage in either container** — `--repair-tails` refuses
+on it, the same way every other covered file's own repair does, rather than guessing which bytes are
+safe to remove, or silently reverting the decision (a trust adoption, a revocation) the damaged
+record carried. This entry gives no truncation advice: there is no offset here promised to be safe to
+remove. If you believe the bytes after some offset really are nothing but trailing garbage from an
+interrupted append (not a complete, corrupted record), run `prikk verify` first and read its own
+report carefully before deciding to truncate anything by hand; when in doubt, back the file up and
+ask before changing it.
+
+## `error: integrity error: ref pointer index has a damaged entry; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then the rebuild`
+
+0.50.0 P3c (019 §2.2, §4.4). Seen from `verify`, `doctor`, `branch list`, or anything that resolves
+the current branch, for the identical two reasons the entry above names, but for the ref pointer
+index specifically — which, unlike the trust-key and author-key containers, *does* have a way out:
+`prikk doctor --rebuild-pointer-index --plan-only`, then the rebuild for real, re-derives the index
+from the ref log directly, never reading the damaged slot at all. Before this round the message said
+only "run doctor before reading," which reads this exact container the exact same way and so answers
+with the identical failure again — the rebuild is what actually clears it.
+
+## `error: integrity error: received-ref index has a damaged entry; no repair exists -- preserve the repository and restore ... from a backup taken before the damage` (or the identical shape for the trust policy container)
+
+0.50.0 P3c (019 §2.2, §4.4). Seen from a `bundle import`, `sync accept`, or `trust maintainer
+add`/`remove`, for the identical two reasons as the entry above. Unlike the ref pointer index, there
+is no rebuild for either of these: neither container is re-derivable from anything else this
+repository holds (the received index is the only record of what was received; the trust policy
+container's own history is not reconstructable from the keys alone). The message says this plainly
+and names the exact file (`.prikk/refs/containers/received-index-a.container`/`-b.container`, or
+`.prikk/trust/policy-a.container`/`-b.container`) to restore from a backup taken before the damage,
+in place of the same circular "run doctor before reading" the pointer index used to share with it.
 
 ## `error: integrity error: object <id> references missing <role> <id>`
 

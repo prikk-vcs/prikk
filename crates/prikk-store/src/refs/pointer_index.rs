@@ -40,8 +40,13 @@ use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 /// The ref pointer index's own existing damage text, reused verbatim by Part E2's deduction (rule 3)
 /// when the entries needed to deduce a live slot cannot themselves be read.
-const POINTER_INDEX_DAMAGE_TEXT: &str =
-    "ref pointer index has a damaged entry; run doctor before reading";
+///
+/// 0.50.0 P3c: names the rebuild directly, not `doctor` -- `doctor` itself reads the pointer index
+/// to report on it, and reading it is exactly what fails here, so "run doctor" sent the user in a
+/// circle. `--rebuild-pointer-index` re-derives the index from the ref log, which this damage does
+/// not touch.
+const POINTER_INDEX_DAMAGE_TEXT: &str = "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+     --plan-only`, then the rebuild";
 
 /// The exact reduction `compact_ref_pointer_index` performs: last entry per `ref_name_key` survives,
 /// in the order each key's own last occurrence appears in `entries`. Factored out so Part E3's
@@ -79,6 +84,20 @@ pub(crate) fn decode_pointer_index_entries_for_resolver(
         damaged: replay.has_item_failure(),
         entries: replay.entries,
     })
+}
+
+/// 0.50.0 P3c: whether the pointer index itself cannot be read past damage right now -- read
+/// directly, the same two ways `lookup_ref_pointer` already combines (the live slot's own content
+/// fails to decode, or -- the rarer case -- the generation log is ambiguous and deduction itself
+/// cannot be made), so `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` issue (pushed before the main
+/// verification pass runs) can tell "the pointer names a bad branch" apart from "the index needed
+/// to resolve any branch is broken" without matching either case's message text.
+pub(crate) fn pointer_index_interior_damage(layout: &RepositoryLayout) -> Option<String> {
+    match replay_pointer_index(layout) {
+        Ok(replay) if replay.has_item_failure() => Some(POINTER_INDEX_DAMAGE_TEXT.to_string()),
+        Ok(_) => None,
+        Err(err) => Some(err.to_string()),
+    }
 }
 
 const POINTER_INDEX_MAGIC: &[u8; 8] = b"PREFPTI1";
@@ -647,7 +666,9 @@ pub(in crate::refs) fn lookup_ref_pointer(
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
-            "ref pointer index has a damaged entry; run doctor before reading".to_string(),
+            "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+             --plan-only`, then the rebuild"
+                .to_string(),
         ));
     }
     let tail = PointerIndexTailStatus {

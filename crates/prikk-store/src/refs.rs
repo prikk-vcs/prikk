@@ -45,8 +45,8 @@ pub use pointer_index::PointerIndexRepair;
 pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
     PointerIndexEntry, decode_pointer_index_entries_for_resolver, empty_pointer_index_replay,
-    encode_pointer_index_record, fold_one_pointer_index_entry, reduce_pointer_index_entries,
-    replay_pointer_index, truncate_pointer_index_trailing_partial,
+    encode_pointer_index_record, fold_one_pointer_index_entry, pointer_index_interior_damage,
+    reduce_pointer_index_entries, replay_pointer_index, truncate_pointer_index_trailing_partial,
 };
 
 use prikk_error::{PrikkError, Result};
@@ -733,7 +733,9 @@ impl RefStore {
         let replay = pointer_index::replay_pointer_index(&self.layout)?;
         if replay.has_item_failure() {
             return Err(PrikkError::Integrity(
-                "ref pointer index has a damaged entry; run doctor before listing".to_string(),
+                "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+                 --plan-only`, then the rebuild"
+                    .to_string(),
             ));
         }
         let mut latest: std::collections::BTreeMap<[u8; 32], pointer_index::PointerIndexEntry> =

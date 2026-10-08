@@ -1,5 +1,7 @@
 //! Doctor tests.
 
+mod interior_damage_routing;
+
 use std::io::Write;
 
 use prikk_object::{
