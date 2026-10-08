@@ -58,6 +58,84 @@ until the next compaction, and comparing against the current default slot's cont
 non-default slot, the stale one, losing those writes or reinstating what they revoked. Part E4 compares
 against every prefix of the default slot's own history, not only the whole of it, closing that gap.
 
+### Fixed — a pointer-index rebuild had two ways to lose data silently: a deep, signed lead dropped, and a torn pointer-index slot abandoned unsaved
+
+**The consequence, in plain words:** `prikk doctor --rebuild-pointer-index` treated any pointer more
+than one transition ahead of the ref log the same as an unrelated or damaged one, and dropped it —
+even when every `RefState` in the chain was signed by a trusted key and each one chained back,
+transition by transition, to the ref log's own tip. A run of several already-authorized publications,
+left pending behind whatever made the rebuild necessary, could be discarded in a single rebuild, not
+only the first of them. Separately, the rebuild refused on a torn tail in the ref log and in the
+generation log before touching anything, but not on one in the pointer index itself — the one file of
+the three it reads that this up-front refusal did not cover — so a torn pointer-index slot was
+silently abandoned, unsaved, while the rebuild proceeded and exited `0`.
+
+**Found by the external architect's own review** (019 §5.1 and §5.4, RFC 165 R5 amendment). **Affected
+since `--rebuild-pointer-index` first shipped: 0.49.0** (`09b41895`). No advisory (disclosure only — the
+rebuild is a local, operator-run command, not reachable by a peer's bundle or an exchange artifact).
+**Action: upgrade;** a rebuild that finds either shape now refuses instead of proceeding over it.
+
+Fixed in this release (0.50.0 step 1, A1 and A6 item 5): before dropping a pointer `evaluate_known_
+lead` does not recognize, the rebuild walks the whole candidate chain read-only, requiring every
+`RefState` in it to verify against the trust policy, chain to the next by exactly one transition, and
+reach the ref log's own tip. Only a chain that fails one of those checks (broken, forked, or unsigned)
+is still dropped as before; a chain that passes refuses the rebuild, naming every affected ref and how
+many transitions deep its chain runs, and recommends restoring the ref log from a copy before trying
+again. The pointer index's own trailing-partial bytes are now checked the same way the ref log and
+generation log already were, before anything else runs, with the same wording and way out
+(`prikk doctor --repair-tails`, then retry). A real run also no longer claims `"pointer index
+rebuilt"` when nothing actually changed — every ref's `before` already equalling its `after` now
+prints `"pointer index already matches the log; nothing written"` instead, and writes neither a new
+slot nor a new generation record for a no-op.
+
+### Fixed — a torn object-index tail with no decode failure could make a sound, just-written object read as missing, failing `verify`'s ref-publication scan
+
+**The consequence, in plain words:** after an ordinary crash that left the object index's own trailing
+bytes torn (not corrupt — simply incomplete, the normal shape of a crash mid-append), the most
+recently written object's own index entry is exactly the one the torn tail omits. A reader that
+checked only for a decode failure, not for a trailing-partial tail, read that object as missing even
+though its underlying container record was fully sound — `verify`'s own ref-publication scan, built on
+this same lookup, could fail a stage over an object that was never actually lost.
+
+**Found by the architect's own review** (0.50.0 step 1, A5). **Affected since the object index became
+a non-refusing cache: 0.48.0** (RFC 162 rules 1-2, `9bff75e4`). No advisory (disclosure only — a false
+failure, never a false pass; an ordinary crash recovery path, not reachable by untrusted input).
+**Action: upgrade;** a trailing-partial tail now takes the identical in-memory container rescan the
+damaged case already did, instead of a narrower fallback that never saw the torn entry.
+
+Fixed in this release: `object_store.rs`'s `resolve_object_location` and `IndexSnapshot::open` both
+fall back to `rebuild_index_from_containers` on a trailing-partial tail, not only on a decode failure;
+`IndexSnapshot::open`'s own `known_length` keeps the sound prefix's extent in the tail case rather than
+the raw file size, so a write that follows rebuilds the on-disk index first instead of appending behind
+an index that looks already caught up.
+
+### Added — `doctor --repair-tails` gains `--plan-only`, more specific guidance at a publication-blocked refusal, and three new or clarified lines from `verify` and `doctor` (0.50.0 step 1 Parts B, C, D1, and A6 items 1-4)
+
+**One new flag:** `doctor --repair-tails` now accepts `--plan-only`, previewing every file it would
+truncate without writing anything — the same preview every other repair verb already offers.
+
+**Otherwise no new flags or commands**, only more specific text. `commit`, `seal`, `tag create`,
+`branch create`, `branch close`, `merge`, and `doctor --repair-tails` each refuse exactly as before
+when another ref's publication is left incomplete, but when that refusal is a genuine, one-transition
+lead — the case `prikk ref complete <ref>` resolves — the message now says so and names the command,
+instead of the same generic refusal every other incomplete-publication reason still gives. `doctor
+--repair-tails` also now names `prikk doctor --rebuild-pointer-index` as the way out when the pointer
+index itself has a damaged entry, rather than stopping at "this repair does not modify it." `prikk
+verify` gains two new lines, both informational or warning, never failures: a warning when the
+current-branch pointer exists but cannot be resolved (mirroring `doctor`'s own
+`PRIKK-DOCTOR-CURRENT-BRANCH` recommendation, so the two reports never disagree about what to do
+next), and an informational line — `current-branch: not set; commands without --ref use heads/main` —
+when the pointer file is simply absent (true of every repository initialized before RFC 151, a
+normal, unaffected state). `verify`'s own "active WAL contains an incomplete trailing record" warning
+is now suppressed when the commit witness already explains those identical bytes as acknowledged
+damage or loss (`doctor`'s matching issue is suppressed the same way) — recommending
+`--repair-wal-tail` there was a dead end, since that record is exactly the one `--discard-damaged-
+commits` exists to handle formally. `verify`'s "a record before the last acknowledged one does not
+match" error now names the still-sound sequence it compares against and says plainly that this is not
+a crash shape and no repair rewrites possibly-tampered history; its "acknowledged commits: none
+recorded" line now adds "(the classification of a session written before 0.49.0 applies)", so silence
+is not mistaken for nothing having been checked.
+
 ### Added — `prikk doctor --rebuild-pointer-index` now has a way back (0.50.0 step 1 Parts F/F2)
 
 Before a real run flips away from the live slot, it saves a full copy of it, the rebuilt slot's own
