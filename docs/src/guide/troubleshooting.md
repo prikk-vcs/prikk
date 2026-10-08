@@ -502,10 +502,8 @@ deliberate writer and a stale meaning file could otherwise compare unchanged and
 
 **The way out, named in the warning itself:** run the exact command it names —
 `prikk compact --pointer-index`, `--received-index`, or `--trust-policy`, whichever container the
-warning is about (0.50.0 P2b: `prikk compact` alone takes no container and is not by itself a runnable
-command, so the warning names the flag directly rather than leaving the reader to work out which).
-It resolves the identical way and then writes a fresh generation record, ending the ambiguous state
-for good.
+warning is about. It resolves the identical way and then writes a fresh generation record, ending
+the ambiguous state for good.
 `prikk doctor --rebuild-pointer-index` also remains available for the ref pointer index specifically —
 it re-derives the whole index from the ref log directly, without reading either slot as live — though
 nothing requires it just to clear this warning.

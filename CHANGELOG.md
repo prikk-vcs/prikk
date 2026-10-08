@@ -2,7 +2,51 @@
 
 ## Unreleased
 
-### Fixed — an emptied or removed generation log silently resolved to the wrong, stale slot for the ref pointer index, the received index, and the trust policy container
+### Upgrading
+
+- A repository found with a lost generation log is now read correctly, and `verify`/`doctor` warn
+  rather than stay silent about it. Running the exact `prikk compact` command the warning names
+  (`--pointer-index`, `--received-index`, or `--trust-policy`) records the slot and ends the warning.
+- Library users: `GenerationLogDeductionNote` and `AppendedFileTailStatus` are now exported from
+  `prikk-store`'s own crate root; both are `#[non_exhaustive]`.
+
+### Output changes
+
+- `verify`: a new warning when the current-branch pointer exists but cannot be resolved.
+- `verify`: a new informational line, `current-branch: not set; commands without --ref use
+  heads/main`, when the pointer file is simply absent. Every repository initialized before RFC 151
+  now prints it.
+- `verify` on a torn object-index tail: now a warning, exit `0` — before this round, exit `1`.
+- `verify`/`doctor`: the WAL-trailing-partial warning no longer appears when the commit witness
+  already explains those identical bytes as acknowledged damage or loss.
+- `verify`: "a record before the last acknowledged one does not match" now names the still-sound
+  sequence it compares against and states plainly that this is not a crash shape; "acknowledged
+  commits: none recorded" now adds "(the classification of a session written before 0.49.0
+  applies)".
+- `verify`/`doctor`: a new warning when a compacting container's generation log names no live slot,
+  naming the container, the deduced slot, and the exact `prikk compact` command to end it.
+- `commit`, `seal`, `tag create`, `branch create`, `branch close`, `merge`, `doctor
+  --repair-tails`: a genuine one-transition lead's refusal now names `prikk ref complete <ref>`,
+  where it previously gave the same generic refusal every other incomplete-publication reason still
+  gives.
+- `doctor --repair-tails`: a damaged pointer-index entry's refusal now names `prikk doctor
+  --rebuild-pointer-index`.
+- `doctor --rebuild-pointer-index`: now refuses, rather than silently dropping or abandoning, a
+  deep, fully-signed lead and a torn pointer-index tail; a real run that changes nothing now prints
+  "pointer index already matches the log; nothing written" in place of "pointer index rebuilt".
+- `doctor --repair-tails --plan-only`: new flag. Prints `<file>: would truncate N trailing byte(s)`
+  for each file it would repair. No "before": the flag itself is new in 0.50.0.
+- `bundle import`: a new refusal when a carried or locally-held attestation's own target block is
+  absent, before any write.
+
+None of the above appears in any command's `--format json` output: `verify --format json` emits only
+`schema_version`, `verdict` (derived from `all_true_conditions`, which these warnings are
+deliberately excluded from, matching every other warning-severity finding), `active_sessions`, and
+`stages`; `doctor` and `bundle import` have no JSON output mode at all. Checked by reading
+`print_verify_report_json` (`crates/prikk-cli/src/output/verification.rs`) and `parse_doctor_args`/
+`bundle`'s own argument parsing (`crates/prikk-cli/src/args.rs`) directly, not assumed.
+
+### Fixed — an emptied or removed generation log read the wrong slot: a removed maintainer key could read as trusted again, and a new branch could disappear from `branch list`
 
 **The consequence, in plain words:** any of the three compacting containers' generation logs — a small file
 recording which of two slots is currently authoritative — reading as empty or absent after a compaction had
@@ -37,8 +81,7 @@ rather than silently disappearing or an earlier, repeated state silently winning
 itself cannot be made (either slot is damaged) does this refuse, naming the container's own existing damage
 text. `prikk verify` and `prikk doctor` now warn when this state is found — naming the container, the
 deduced slot, and the exact command to end it (`prikk compact --pointer-index`, `--received-index`, or
-`--trust-policy`, whichever container is affected — `prikk compact` alone takes no container and is not
-by itself a runnable command) — since every ordinary
+`--trust-policy`, whichever container is affected) — since every ordinary
 reader and writer already resolve it silently. A restore from the recovery log is the one exception: it is
 a deliberate writer, so it refuses outright when a meaning file's own container is in this ambiguous state,
 rather than risk comparing against a meaning file that is itself stale. `prikk doctor --rebuild-pointer-index`
@@ -114,29 +157,34 @@ an index that looks already caught up.
 ### Added — `doctor --repair-tails` gains `--plan-only`, more specific guidance at a publication-blocked refusal, and three new or clarified lines from `verify` and `doctor` (0.50.0 step 1 Parts B, C, D1, and A6 items 1-4)
 
 **One new flag:** `doctor --repair-tails` now accepts `--plan-only`, previewing every file it would
-truncate without writing anything — the same preview every other repair verb already offers.
+truncate without writing anything — as `--rebuild-pointer-index`, `--discard-damaged-commits`,
+`--restore-queue-target` and the recovery verbs already do.
 
-**Otherwise no new flags or commands**, only more specific text. `commit`, `seal`, `tag create`,
-`branch create`, `branch close`, `merge`, and `doctor --repair-tails` each refuse exactly as before
-when another ref's publication is left incomplete, but when that refusal is a genuine, one-transition
-lead — the case `prikk ref complete <ref>` resolves — the message now says so and names the command,
-instead of the same generic refusal every other incomplete-publication reason still gives. `doctor
---repair-tails` also now names `prikk doctor --rebuild-pointer-index` as the way out when the pointer
-index itself has a damaged entry, rather than stopping at "this repair does not modify it." `prikk
-verify` gains two new lines, both informational or warning, never failures: a warning when the
-current-branch pointer exists but cannot be resolved (mirroring `doctor`'s own
-`PRIKK-DOCTOR-CURRENT-BRANCH` recommendation, so the two reports never disagree about what to do
-next), and an informational line — `current-branch: not set; commands without --ref use heads/main` —
-when the pointer file is simply absent (true of every repository initialized before RFC 151, a
-normal, unaffected state). `verify`'s own "active WAL contains an incomplete trailing record" warning
-is now suppressed when the commit witness already explains those identical bytes as acknowledged
-damage or loss (`doctor`'s matching issue is suppressed the same way) — recommending
-`--repair-wal-tail` there was a dead end, since that record is exactly the one `--discard-damaged-
-commits` exists to handle formally. `verify`'s "a record before the last acknowledged one does not
-match" error now names the still-sound sequence it compares against and says plainly that this is not
-a crash shape and no repair rewrites possibly-tampered history; its "acknowledged commits: none
-recorded" line now adds "(the classification of a session written before 0.49.0 applies)", so silence
-is not mistaken for nothing having been checked.
+**Otherwise no new flags or commands**, only more specific text:
+
+- `commit`, `seal`, `tag create`, `branch create`, `branch close`, `merge`, and `doctor
+  --repair-tails` each refuse exactly as before when another ref's publication is left incomplete,
+  but when that refusal is a genuine, one-transition lead — the case `prikk ref complete <ref>`
+  resolves — the message now says so and names the command, instead of the same generic refusal
+  every other incomplete-publication reason still gives.
+- `doctor --repair-tails` now names `prikk doctor --rebuild-pointer-index` as the way out when the
+  pointer index itself has a damaged entry, rather than stopping at "this repair does not modify it."
+- `prikk verify` gains a warning when the current-branch pointer exists but cannot be resolved
+  (mirroring `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` recommendation, so the two reports never
+  disagree about what to do next).
+- `prikk verify` gains an informational line — `current-branch: not set; commands without --ref use
+  heads/main` — when the pointer file is simply absent (true of every repository initialized before
+  RFC 151, a normal, unaffected state).
+- `verify`'s own "active WAL contains an incomplete trailing record" warning is now suppressed when
+  the commit witness already explains those identical bytes as acknowledged damage or loss
+  (`doctor`'s matching issue is suppressed the same way) — recommending `--repair-wal-tail` there was
+  a dead end, since that record is exactly the one `--discard-damaged-commits` exists to handle
+  formally.
+- `verify`'s "a record before the last acknowledged one does not match" error now names the
+  still-sound sequence it compares against and says plainly that this is not a crash shape and no
+  repair rewrites possibly-tampered history.
+- `verify`'s "acknowledged commits: none recorded" line now adds "(the classification of a session
+  written before 0.49.0 applies)", so silence is not mistaken for nothing having been checked.
 
 ### Added — `prikk doctor --rebuild-pointer-index` now has a way back (0.50.0 step 1 Parts F/F2)
 
