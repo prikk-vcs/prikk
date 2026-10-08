@@ -114,3 +114,9 @@ as a question.**
 **P3d ACCEPTED 2026-10-09** (`b3b1c891`; review `release-0.50.0-prep-P3d-review-v1`). **The dev team's part is complete.**
 The architect pushes. The external re-run follows (the owner's *"Proceed"* of 2026-10-08, read as yes to the re-run).
 The CHANGELOG date is the owner's question: the commit slipped past midnight, and the tag waits for the review.
+
+**Candidate `b345a864` pushed 2026-10-09** (14/14; CI `37858112537`, 16/16, Windows 37m53s). The external letter 020 is
+drafted and ready for the owner to send (`.git-exclude/upstream/external-architect/send/draft/020-…`). It was run on
+this build and on 0.49.0: matrix 282/289 clean (10 better, none worse); `reproduce.sh` unchanged apart from N3's text.
+**The tag waits for the external answer and the owner's word.** The CHANGELOG date is set to the tag day in the last
+commit before the tag (owner to confirm).
