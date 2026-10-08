@@ -63,3 +63,13 @@ bullets; the Output-changes and Upgrading lines listed in the review. **Next: P2
 `release-0.50.0-prep-P2b-review-v1`). **Carried into P3, beside the P1 review's corrections:** remove the round-name note
 from `troubleshooting.md:505`; drop the CHANGELOG's "not by itself a runnable command" parenthetical; add the
 `would truncate` Output-changes line. **Next: P3.**
+
+**P3's code ACCEPTED 2026-10-08** (`d88db979`, `7977d566`; review `release-0.50.0-prep-P3-review-v1`). The external matrix's
+one unaccounted row (the ref log emptied) is A1 working: 0.49.0's rebuild dropped every published state, 0.50.0 refuses.
+**One part before the push:**
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **P3b: the release notes** | CHANGELOG only, one commit on top of `7977d566`: the generation-log attribution (019 §5.7 asked; the architect reproduced); quote `` `--ref` `` byte for byte; "before this round" and "RFC 151" become release numbers; the A1 entry names the emptied-ref-log shape; internal round names leave headings and body (RFC numbers stay); the "three corrections along the way" paragraph goes; the JSON paragraph is cut to one sentence. Then the 14 gates on that commit, and `git diff 7977d566 HEAD --stat` shows `CHANGELOG.md` only. Details in the review | 20 min | `release-0.50.0-prep-P3b-report.md` |
+
+**Next: P3b.** The tag goes on P3b's commit.
