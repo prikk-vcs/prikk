@@ -102,3 +102,11 @@ running `doctor` in that state.
 as a question.**
 
 **Next: P3c.** The tag goes on P3c's pushed commit.
+
+**P3c approved in part 2026-10-08** (`b0185230`; review `release-0.50.0-prep-P3c-review-v1`).
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **P3d: four findings from the P3c review** | **G1:** while a container's interior damage is set, every `VERIFY-STAGE-INCOMPLETE` recommendation says to resolve that damage issue first. Decided by the typed field; *"inspect"* stays otherwise. **G2:** the container-damage issues are printed first. **G3:** every *"no repair exists"* text says to restore **`.prikk/` as a whole**, from a backup taken before the damage, never single files; the trust-policy text adds *"then re-apply every trust change made since that backup"*. State from source whether `pointer_rebuild.rs:413` is reachable. **G4:** exact commands, no *"the message names the way out:"* prefix. Tests with a control per branch; smoke 27e; CHANGELOG; docs grep; the 14 gates. **The report lists every item with its status** | 40 min | `release-0.50.0-prep-P3d-report.md` |
+
+**Next: P3d.**
