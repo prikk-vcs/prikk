@@ -8,7 +8,7 @@
 Take them one at a time, each reported and reviewed before the next. **This round starts after `tree` and `cat` are
 reviewed**, and uses the shared resolver and `tree`'s entry code.
 
-**Live 2026-09-17.** RFC 153 (`rfcs/accepted/153-content-diff.md`) is the specification **as amended by its §7**. §7
+**Live 2026-09-17.** RFC 153 (`rfcs/done/153-content-diff.md`) is the specification **as amended by its §7**. §7
 overrides §2–§6 where they differ:
 - no `untracked` section, since a new worktree file is `added` with content;
 - the fresh-repository rule;

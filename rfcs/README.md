@@ -124,22 +124,14 @@ These reviewed designs may govern downstream work but have not yet released.
 | 141 | [Publishing through CI](./accepted/141-publication-through-ci.md) | Accepted 2026-09-06 |
 | 150 | [Signing readiness: `prikk key status`](./accepted/150-signing-readiness.md) | Accepted 2026-09-12 |
 | 152 | [How prikk releases](./accepted/152-how-prikk-releases.md) | Accepted 2026-09-13 |
-| 153 | [`prikk diff`](./accepted/153-content-diff.md) | Accepted 2026-09-17 |
 | 154 | [A branch several maintainers advance](./accepted/154-shared-branch-adoption.md) | Accepted 2026-09-16; unimplemented, after RFC 155 |
 | 155 | [The repository-complete artifact](./accepted/155-repository-complete-artifact.md) | Accepted 2026-09-16; unimplemented |
-| 156 | [One object, several signers](./accepted/156-one-object-several-signers.md) | Accepted 2026-09-16; delivered in 0.45.0 |
-| 157 | [Reading a point of history: `tree` and `cat`](./accepted/157-reading-a-point.md) | Accepted 2026-09-17; delivered |
 | 158 | [Large objects](./accepted/158-large-objects.md) | Accepted 2026-09-21; Stage A delivered, Stages B–D open |
 | 159 | [Sealing without re-walking the lineage](./accepted/159-sealing-without-rewalking-the-lineage.md) | Accepted 2026-09-26; stack A delivered, stack B open |
 | 160 | [Guards against costs that follow the store, and lengths read from disk](./accepted/160-costs-that-follow-the-store-and-lengths-read-from-disk.md) | Accepted 2026-09-26; 0.49.0 step 5 under it |
 | 161 | [Release notes a reader and a consumer can use](./accepted/161-release-notes-a-reader-and-a-consumer-can-use.md) | Accepted 2026-09-26 |
-| 162 | [The recovery model](./accepted/162-the-recovery-model-caches-never-refuse-logs-end-positively.md) | Accepted 2026-09-27; delivered in 0.48.0 |
 | 163 | [A write never buries a crash state](./accepted/163-a-write-never-buries-a-crash-state.md) | Accepted 2026-09-29 |
-| 164 | [Every appended file has a way out](./accepted/164-every-appended-file-has-a-way-out.md) | Accepted 2026-09-30; delivered in 0.49.0 |
 | 165 | [Ref publication](./accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md) | Accepted 2026-10-01; delivered in 0.49.0 |
-| 166 | [A queued commit has a witness](./accepted/166-a-queued-commit-has-a-witness.md) | Accepted 2026-10-03; delivered in 0.49.0 |
-| 167 | [Resynchronisation is linear](./accepted/167-resynchronisation-is-linear.md) | Accepted 2026-10-05; delivered in 0.49.0 |
-| 168 | [A way back from every repair](./accepted/168-a-way-back-from-every-repair.md) | Accepted 2026-10-06; delivered in 0.49.0 |
 | DC-96 | [Windows anchor identity](./accepted/DC-96-WINDOWS-ANCHOR-IDENTITY.md) | Accepted 2026-08-16 |
 | DC-97 | [Windows durability evidence](./accepted/DC-97-WINDOWS-DURABILITY-EVIDENCE.md) | Accepted 2026-08-16 |
 | DC-98 | [Windows crash injection](./accepted/DC-98-WINDOWS-CRASH-INJECTION.md) | Accepted 2026-08-17 |
@@ -194,6 +186,14 @@ These records currently live under `done/`.
 
 | ID | Title | Status |
 |---|---|---|
+| 168 | [A way back from every repair](./done/168-a-way-back-from-every-repair.md) | **Done.** Accepted 2026-10-06; delivered in 0.49.0 |
+| 167 | [Resynchronisation is linear](./done/167-resynchronisation-is-linear.md) | **Done.** Accepted 2026-10-05; delivered in 0.49.0 |
+| 166 | [A queued commit has a witness](./done/166-a-queued-commit-has-a-witness.md) | **Done.** Accepted 2026-10-03; delivered in 0.49.0 |
+| 164 | [Every appended file has a way out](./done/164-every-appended-file-has-a-way-out.md) | **Done.** Accepted 2026-09-30; delivered in 0.49.0 |
+| 162 | [The recovery model](./done/162-the-recovery-model-caches-never-refuse-logs-end-positively.md) | **Done.** Accepted 2026-09-27; delivered in 0.48.0 |
+| 157 | [Reading a point of history: `tree` and `cat`](./done/157-reading-a-point.md) | **Done.** Accepted 2026-09-17; delivered in 0.46.0 |
+| 156 | [One object, several signers](./done/156-one-object-several-signers.md) | **Done.** Accepted 2026-09-16; delivered in 0.45.0 |
+| 153 | [`prikk diff`](./done/153-content-diff.md) | **Done.** Accepted 2026-09-17; delivered in 0.46.0 |
 | 133 | [Performance Cost and Its Evidence](./done/133-performance-cost-and-its-evidence.md) | Unscheduled. Extracted from RFC 126 on the owner's instruction 2026-09-03. **Owner ruling required** — whether peak RSS gets standing protection. Carries the measured commit-memory shape: O(nodes), not O(bytes) |
 | 145 | [Serving a Repository for Reading](./done/145-serving-a-repository-for-reading.md) | Unscheduled, ranked second. Opened 2026-09-10 on the owner's 2026-09-06 direction. Rules the shape of a read-only browse view — static export, a separate server project, or a serving subcommand. **Owner rulings required** (§9). **Decides no build** |
 | 149 | [Layering prikk-store](./done/149-layering-prikk-store.md) | Unscheduled. Opened 2026-09-12. A measured one-directional cut above the six-module cyclic core; the 26 surface modules — where recent growth landed — move to a crate the owner names. Supersedes RFC 130 §6's scope, not its ruling. **Owner rulings required** |

@@ -1,6 +1,6 @@
 # One object, several signers — handoff v1
 
-**Live 2026-09-16.** RFC 156 (`rfcs/accepted/156-one-object-several-signers.md`), accepted with its §7.3 bound and the
+**Live 2026-09-16.** RFC 156 (`rfcs/done/156-one-object-several-signers.md`), accepted with its §7.3 bound and the
 architect's reading of rule 1 (in its Status). **0.45.0 item 0**, before the key-id collision fix. Read the RFC first;
 this handoff orders the work and names what the RFC leaves to implementation.
 

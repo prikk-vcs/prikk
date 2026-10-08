@@ -1,7 +1,7 @@
 # RFC 166 round 1 — `ref-name` once per session, the commit witness, one classification (D1–D4, D6)
 
 **Live 2026-10-03, and it is next.** RFC 166 is ACCEPTED by the owner. **Read all of it first:**
-`rfcs/accepted/166-a-queued-commit-has-a-witness.md`, and above all §4 (the design), §5 (the verdict table) and §13
+`rfcs/done/166-a-queued-commit-has-a-witness.md`, and above all §4 (the design), §5 (the verdict table) and §13
 (the seventeen items that amend it).
 - **K1–K7 bind this RFC,** as they bound RFC 165.
 - **Round 1 carries D1–D4, D6, and §13 items 1–9, 11–13, 16 and 17.** D5 (the two ways out) and §13 items 10, 14 and

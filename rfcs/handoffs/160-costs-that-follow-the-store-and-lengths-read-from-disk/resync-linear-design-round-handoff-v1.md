@@ -7,7 +7,7 @@
 - **This is a design round: measure, prototype, report, then stop. No product code lands.**
 
 **Read first:**
-- `rfcs/accepted/167-resynchronisation-is-linear.md`, all of it;
+- `rfcs/done/167-resynchronisation-is-linear.md`, all of it;
 - RFC 160 F3 and its M5 notes;
 - `.git-exclude/reviewed/runaway-guards-review-v1.md` and `-v2.md` (the budget sketch, the two shapes);
 - external review 014's M5 section, with its generator:

@@ -7,8 +7,8 @@
 
 Take them one at a time, each reported and reviewed before the next.
 
-**Live 2026-09-17.** RFC 153 (`rfcs/accepted/153-content-diff.md`, §2 and §7.1) and RFC 157
-(`rfcs/accepted/157-reading-a-point.md`, §2) both name a point as a ref or a bare block id, through **one** function.
+**Live 2026-09-17.** RFC 153 (`rfcs/done/153-content-diff.md`, §2 and §7.1) and RFC 157
+(`rfcs/done/157-reading-a-point.md`, §2) both name a point as a ref or a bare block id, through **one** function.
 This round builds that function and wires it into `checkout`, which closes RFC 144 §4t, stikk's named dependency.
 Nothing of `diff`, `tree` or `cat` is built here.
 

@@ -2,7 +2,7 @@
 
 **Live 2026-10-01, and it is next.** Round 1 (Rules A, B, C, with §9 and §9.2) is ACCEPTED: review
 `.git-exclude/reviewed/rfc164-round-1-review-v4.md`. **Read RFC 164 §5 first**
-(`rfcs/accepted/164-every-appended-file-has-a-way-out.md`), and §9 to §9.2 for what a tail is now.
+(`rfcs/done/164-every-appended-file-has-a-way-out.md`), and §9 to §9.2 for what a tail is now.
 
 **Three rules carried from round 1, for every item below:**
 - **A cut is a question to the architect before delivery**, in a review request. It is not a disclosure afterwards. A

@@ -1,7 +1,7 @@
 # RFC 167 implementation — one work budget per decode, exhaustion is damage, `verify` back to its cost
 
 **Live 2026-10-05, and it is next.** RFC 167 is ACCEPTED by the owner. **Read all of it first:**
-`rfcs/accepted/167-resynchronisation-is-linear.md`, above all §4 (D1–D6) and §6 (the self-review, whose guards bind).
+`rfcs/done/167-resynchronisation-is-linear.md`, above all §4 (D1–D6) and §6 (the self-review, whose guards bind).
 - Also read the design-round review, `.git-exclude/reviewed/rfc167-design-round-review-v1.md`: what it corrected,
   and the doubled-`verify` table.
 - The prototype in `/home/nabbisen/Desktop/prikk/scratch-167/proto` is a reference, not a patch to copy. **D1 differs

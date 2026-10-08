@@ -4,7 +4,7 @@
 
 ## Task title and purpose
 
-Implement `rfcs/accepted/168-a-way-back-from-every-repair.md`: §3.1–§3.4 as revised in §8, with §7 as the required
+Implement `rfcs/done/168-a-way-back-from-every-repair.md`: §3.1–§3.4 as revised in §8, with §7 as the required
 evidence.
 - **D6:** every repair's removed bytes can be listed and restored, under exact conditions.
 - **D5:** repository state that cannot be rebuilt no longer depends on a Windows rename for durability.

@@ -2,7 +2,7 @@
 
 **Live 2026-09-30, and it is next.** RFC 164 is ACCEPTED by the owner (*"Yes. RFC 164 is accepted."*), with both §6
 decisions ruled: one `--repair-tails` verb, and Rule E classification only. **Read the whole RFC first**,
-`rfcs/accepted/164-every-appended-file-has-a-way-out.md`, including the architect's reading in its Status. This round is
+`rfcs/done/164-every-appended-file-has-a-way-out.md`, including the architect's reading in its Status. This round is
 Rules A, B and C. **Rules D and E are round 2. Do not start them here.**
 
 ## 1. Rule A — a tail by position, for seven more files

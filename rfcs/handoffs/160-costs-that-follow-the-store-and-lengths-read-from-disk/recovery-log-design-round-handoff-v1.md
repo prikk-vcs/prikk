@@ -9,7 +9,7 @@ as a design for the owner. **Measure, prototype, report, stop. No product code l
 
 ## Background and governing RFC
 
-- `rfcs/accepted/168-a-way-back-from-every-repair.md`: read it all. It covers D6 (no reader of recovery files) and
+- `rfcs/done/168-a-way-back-from-every-repair.md`: read it all. It covers D6 (no reader of recovery files) and
   D5 (their save is not durable on Windows), from external review 014.
 - It is filed here because the recovery file is RFC 162 rule 3's, under RFC 160's guards. A proposed RFC carries no
   handoffs.

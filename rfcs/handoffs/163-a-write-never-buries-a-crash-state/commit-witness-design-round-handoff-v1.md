@@ -7,7 +7,7 @@
 - **This is a design round: measure, prototype, report, then stop. No product code lands.**
 
 **Read first:**
-- `rfcs/accepted/166-a-queued-commit-has-a-witness.md`, all of it, and above all C1–C6;
+- `rfcs/done/166-a-queued-commit-has-a-witness.md`, all of it, and above all C1–C6;
 - RFC 162 rule 3;
 - RFC 163 §5;
 - RFC 164 §9 to §9.2, the WAL's exception;

@@ -8,7 +8,7 @@
 Take them one at a time, each reported and reviewed before the next. **This round starts after the resolver round is
 reviewed**, and uses that resolver: no second one.
 
-**Live 2026-09-17.** RFC 157 (`rfcs/accepted/157-reading-a-point.md`) is the specification: §3 `tree`, §4 `cat`, §5
+**Live 2026-09-17.** RFC 157 (`rfcs/done/157-reading-a-point.md`) is the specification: §3 `tree`, §4 `cat`, §5
 failures, §6 security, §7 controls. Read it first. This handoff orders the work and names what the RFC leaves to
 implementation.
 

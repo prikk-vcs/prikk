@@ -6,7 +6,7 @@ accepted."*). **Next after this:** 0.48.0 prep, then the candidate, which the ex
 cut without the word "stable".
 
 **Read first:**
-- `rfcs/accepted/162-the-recovery-model-caches-never-refuse-logs-end-positively.md`, all of it;
+- `rfcs/done/162-the-recovery-model-caches-never-refuse-logs-end-positively.md`, all of it;
 - the external review, `.git-exclude/upstream/external-architect/receive/014-review-before-0-48-0-findings-and-answers/014-review.md`,
   §2 (M1–M3) and §5, question 3;
 - its `reproduce/reproduce.sh`: your acceptance must include a clean run of it.
