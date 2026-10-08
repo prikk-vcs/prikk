@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    ObjectEnvelope, ObjectId, RefKind, RefStatePayload, RefUpdatePayload, TagPayload,
+    AttestationPayload, ObjectEnvelope, ObjectId, RefKind, RefStatePayload, RefUpdatePayload,
+    TagPayload,
 };
 
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, ref_name_key_bytes};
@@ -420,20 +421,33 @@ fn verified_ref_state_payload(
 /// callers don't need it in.
 /// 0.49.0 step 5, round 2 U3 (ruled): each attestation a RefState requires must be present as an Attestation
 /// object, by a typed read. No honest producer writes a non-empty list today (`seal.rs`, `branch.rs`,
-/// `seal_from_accepted.rs` write `Vec::new()`), so an honest repository cannot fail this. The
-/// Attestation's own target block is not checked: there is no `AttestationPayload` decoder yet.
+/// `seal_from_accepted.rs` write `Vec::new()`), so an honest repository cannot fail this.
+/// 0.50.0 step 2 Part B: the Attestation's own `target_block_id` is now checked too, the decoder step
+/// 5 round 2 found missing now built (`AttestationPayload::decode_canonical`). A present attestation
+/// that fails to decode is damage, the same as a present but undecodable Tag already is in
+/// `ensure_ref_target_valid` below -- propagated, not silently skipped.
 pub(crate) fn ensure_required_attestations_present(
     objects: &impl ObjectReader,
     state: &RefStatePayload,
     owner: ObjectId,
 ) -> Result<()> {
     for attestation_id in &state.required_attestation_ids {
-        if objects
+        let envelope = objects
             .read_typed(*attestation_id, ObjectType::Attestation)?
+            .ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "ref object {owner} requires missing attestation {attestation_id}"
+                ))
+            })?;
+        let payload = AttestationPayload::decode_canonical(&envelope.canonical_payload)?;
+        if objects
+            .read_typed(payload.target_block_id, ObjectType::Block)?
             .is_none()
         {
             return Err(PrikkError::Integrity(format!(
-                "ref object {owner} requires missing attestation {attestation_id}"
+                "ref object {owner} requires attestation {attestation_id}, whose target block \
+                 {} is missing",
+                payload.target_block_id
             )));
         }
     }

@@ -129,12 +129,16 @@ planned for.
   above; unreachable, it is an **unreferenced remnant** -- a warning, naming the object and what it
   lacks, and `verify` exits `0`. No command removes a remnant in 0.49.0; re-running the same `bundle
   import` is still the only way to make a still-needed one whole, exactly as before this round.
-- **Existence checks on RefState and Tag references (0.49.0 step 5, round 2).** `verify` now requires each
-  attestation a RefState's `required_attestation_ids` names to be present as an Attestation object (a typed read).
-  No producer in this repository writes a non-empty list, so an honest repository cannot fail it. **Not checked, and
-  disclosed as gaps:** `Attestation.target_block_id` (there is no `AttestationPayload` decoder, and no producer, so
-  this is a format decision, not debt); and a received ref's `previous_ref_state_id` is not required by `bundle import`. `verify` does
-  check a received tip's previous state (one read), and `bundle import` refuses a bundle whose ref chain is not carried.
+- **Existence checks on RefState, Tag and Attestation references (0.49.0 step 5, round 2; the
+  Attestation half 0.50.0 step 2 Part B).** `verify` requires each attestation a RefState's
+  `required_attestation_ids` names to be present as an Attestation object (a typed read), and now
+  also decodes it (`AttestationPayload::decode_canonical`, added this round) and requires its own
+  `target_block_id` to be present too. `bundle import` refuses before any write on either gap: an
+  absent attestation, or one present but naming an absent target block. No producer in this
+  repository writes a non-empty `required_attestation_ids` list, so an honest repository cannot fail
+  either check. **Still disclosed as a gap:** a received ref's `previous_ref_state_id` is not
+  required by `bundle import`. `verify` does check a received tip's previous state (one read), and
+  `bundle import` refuses a bundle whose ref chain is not carried.
 - **A crash inside `branch create` or `tag create` now has a command that completes it (N3, fixed in
   0.49.0).** Before this round: the ref
   log's last record is torn; `verify` fails with `PRIKK-VERIFY-REF-DIVERGENCE` and `doctor` recommends

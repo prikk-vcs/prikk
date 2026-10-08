@@ -68,6 +68,19 @@ writes nothing, if anything has since changed what it would overwrite — most n
 write landing in the rebuilt slot (a new branch, a publication): its own saved hash, checked fresh at
 restore time, is what catches that, so a restore can never silently drop work done after the rebuild.
 
+### Added — an Attestation's own `target_block_id` is now checked too (0.50.0 step 2 Part B)
+
+`prikk-object` gains `AttestationPayload::decode_canonical` — the decoder 0.49.0 step 5 round 2
+disclosed as missing, which kept this one field unchecked even though `verify` already required the
+attestation object itself to be present. No format change: this reads the same wire bytes
+`AttestationPayload`'s own `encode_canonical` has always written. `verify` now decodes each required
+attestation and requires its own `target_block_id` to be present as a Block too, naming the
+attestation and the missing block; `bundle import` carries the identical check before any write, so
+an attestation that arrives without its own target (whether the target is missing entirely, or simply
+not carried by the same bundle) refuses the import rather than leave a gap `verify` would otherwise
+find later. No producer in this repository writes a non-empty `required_attestation_ids` today, so
+this is a defensive closing of the gap, not a change an honest repository can observe.
+
 ## 0.49.0 — 2026-10-07
 
 ### Security

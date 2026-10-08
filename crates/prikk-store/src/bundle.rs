@@ -75,7 +75,8 @@ mod preview;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload, Signature, SignerRole,
+    AttestationPayload, BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload,
+    Signature, SignerRole,
 };
 
 use crate::author::author_key_index::{
@@ -1348,6 +1349,32 @@ fn validate_bundle_contents(
             if !present(ObjectType::Attestation, *attestation_id) {
                 return Err(PrikkError::Integrity(format!(
                     "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
+                )));
+            }
+            // 0.50.0 step 2 Part B: an attestation's own `target_block_id` must be present too --
+            // carried by this bundle, or already local -- the same "before any write" check as the
+            // attestation's own presence above, reusing the identical bundle-or-local `present`
+            // closure and the identical refusal wording. Read from whichever side carries the
+            // attestation: the bundle may ship an attestation whose target arrives in the same
+            // import (the case table's "an attestation arriving by bundle before its block" row --
+            // the block still has to be present somewhere in this same check, bundle or local, for
+            // the import to proceed; nothing here assumes a particular order between the two).
+            let attestation_envelope = match bundle_objects_by_id.get(attestation_id) {
+                Some(envelope) => envelope.clone(),
+                None => local
+                    .and_then(|snapshot| snapshot.read_object(*attestation_id).ok().flatten())
+                    .ok_or_else(|| {
+                        PrikkError::Integrity(format!(
+                            "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
+                        ))
+                    })?,
+            };
+            let attestation_payload =
+                AttestationPayload::decode_canonical(&attestation_envelope.canonical_payload)?;
+            if !present(ObjectType::Block, attestation_payload.target_block_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "attestation {attestation_id} targets block {}, which is {missing_clause}",
+                    attestation_payload.target_block_id
                 )));
             }
         }

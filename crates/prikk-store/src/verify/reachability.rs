@@ -15,17 +15,19 @@
 //!
 //! **Scope, narrower than the general principle**: only `Block`'s own existing missing-reference
 //! check (`parent_block_ids`, `patch_ids`, `snapshot_blob_ref` -- `verify_block_payload`) is made
-//! reachability-aware. The RefState and Tag references are existence-checked by `verify` today, but
-//! not through this walk: `RefState.target_object_id` and a Tag's `target_block_id` by
-//! `ensure_ref_target_valid` (`refs/verify/scan.rs`), and `required_attestation_ids` by
-//! `ensure_required_attestations_present` (0.49.0 step 5, round 2). **Disclosed gaps:** a received ref's
-//! `previous_ref_state_id` is not checked (`import_bundle` does not require it; pending the owner's ruling),
-//! and `Attestation.target_block_id` is not checked (no `AttestationPayload` decoder, no producer). A `Patch`'s
-//! own referenced blobs are not re-derived here either, by the same reasoning: no existing check makes a
-//! *sealed* patch's blob references reachability-aware (only a *queued* one's, via the root case above, matching
-//! `verify_queued_patch_connectivity`'s own narrow walk). `RecognitionClaim`'s own references are never touched:
-//! they are "never trust-conferring and never existence-checked" by standing design (the `ObjectType`
-//! doc), and reachability classification must not contradict that.
+//! reachability-aware. The RefState, Tag and Attestation references are existence-checked by
+//! `verify` today, but not through this walk: `RefState.target_object_id` and a Tag's
+//! `target_block_id` by `ensure_ref_target_valid` (`refs/verify/scan.rs`), and
+//! `required_attestation_ids` *and*, once present, each required attestation's own
+//! `target_block_id` by `ensure_required_attestations_present` (0.49.0 step 5, round 2;
+//! `AttestationPayload::decode_canonical` and the target-block check added 0.50.0 step 2 Part B).
+//! **Disclosed gap:** a received ref's `previous_ref_state_id` is not checked (`import_bundle` does
+//! not require it; pending the owner's ruling). A `Patch`'s own referenced blobs are not re-derived
+//! here either, by the same reasoning: no existing check makes a *sealed* patch's blob references
+//! reachability-aware (only a *queued* one's, via the root case above, matching
+//! `verify_queued_patch_connectivity`'s own narrow walk). `RecognitionClaim`'s own references are
+//! never touched: they are "never trust-conferring and never existence-checked" by standing design
+//! (the `ObjectType` doc), and reachability classification must not contradict that.
 //!
 //! **A reference this walk cannot read is never expanded past.** A missing or undecodable object is
 //! simply not added to the reachable set and nothing is pushed from it -- the walk only ever trusts

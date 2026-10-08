@@ -3311,8 +3311,14 @@ fn a_bundle_whose_chain_lacks_a_previous_ref_state_is_refused() -> prikk_error::
 }
 
 /// **Item 1, refusal B: a required attestation the bundle does not carry is refused.** The tip is re-encoded with a
-/// required attestation id that no object carries. **Control:** the same tip with that attestation carried is not
-/// refused on this rule. **Perturb:** remove the attestation presence check and the refusal goes away.
+/// required attestation id that no object carries. **Control:** the same tip with that attestation carried, and its
+/// own target block also carried, is not refused on this rule. **Perturb:** remove the attestation presence check
+/// and the refusal goes away.
+///
+/// 0.50.0 step 2 Part B: the attestation is now a genuinely canonical `AttestationPayload` (it has to decode for
+/// the new target-block check, below, to run at all), naming a block the "carried" case also carries -- the case
+/// table's "an attestation arriving by bundle before its block" row: nothing in `import_bundle`'s own object
+/// ordering requires the block to arrive first, only that it is present somewhere in the same import.
 #[test]
 #[allow(clippy::expect_used, clippy::indexing_slicing)]
 fn a_bundle_requiring_an_absent_attestation_is_refused_and_a_carried_one_is_not()
@@ -3321,8 +3327,22 @@ fn a_bundle_requiring_an_absent_attestation_is_refused_and_a_carried_one_is_not(
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
 
-    let attestation =
-        ObjectEnvelope::unsigned(ObjectType::Attestation, 1, b"an attestation body".to_vec());
+    let attestation_target_block = crate::test_gates::test_support::signed_empty_block_envelope();
+    let attestation_target_block_id = attestation_target_block.object_id();
+    let attestation_payload = prikk_object::AttestationPayload {
+        target_block_id: attestation_target_block_id,
+        policy_version: "v1".to_string(),
+        plugin_set_hash: vec![1, 2, 3],
+        results: Vec::new(),
+        status: prikk_object::AttestationStatus::Pass,
+        created_at: 0,
+        is_reproducible_offline: true,
+    };
+    let mut writer = prikk_object::CanonicalWriter::new();
+    attestation_payload
+        .encode_canonical(&mut writer)
+        .expect("encode");
+    let attestation = ObjectEnvelope::unsigned(ObjectType::Attestation, 1, writer.finish());
     let attestation_id = attestation.object_id();
     let requiring = |objects: &mut Vec<ObjectEnvelope>| {
         let mut tip = RefStatePayload::decode_canonical(
@@ -3353,6 +3373,7 @@ fn a_bundle_requiring_an_absent_attestation_is_refused_and_a_carried_one_is_not(
     let carried = forged_bundle(&source, |objects| {
         requiring(objects);
         objects.push(attestation.clone());
+        objects.push(attestation_target_block.clone());
     })?;
     let carried_root = unique_temp_dir("item1-attest-carried-target");
     let carried_target = RepositoryLayout::init(carried_root.clone())?;
@@ -3364,12 +3385,72 @@ fn a_bundle_requiring_an_absent_attestation_is_refused_and_a_carried_one_is_not(
     .err()
     .map(|error| error.to_string())
     .unwrap_or_default();
-    assert!(
-        !carried_error.contains("requires attestation"),
-        "a carried attestation is not refused on the presence rule: {carried_error}"
+    assert_eq!(
+        carried_error, "",
+        "a carried attestation whose own target block is also carried must import cleanly"
     );
 
     for root in [source_root, refused_root, carried_root] {
+        let _ = std::fs::remove_dir_all(root);
+    }
+    Ok(())
+}
+
+/// **Part B's own new row: a required attestation is carried, but its own `target_block_id` is
+/// not** -- carried by the bundle, nor already local. Refused before any write, naming the block.
+/// **Control:** the identical bundle with that block also carried is not refused on this rule
+/// (the test above). **Perturb:** remove the target-block check in the import loop and this import
+/// would otherwise proceed (the attestation's own presence still holds, masking the gap).
+#[test]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+fn a_carried_attestation_whose_target_block_is_absent_is_refused() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("item1-attest-target-missing-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+
+    let missing_target_block_id = ObjectId::from_bytes([0x42; 32]);
+    let attestation_payload = prikk_object::AttestationPayload {
+        target_block_id: missing_target_block_id,
+        policy_version: "v1".to_string(),
+        plugin_set_hash: vec![1, 2, 3],
+        results: Vec::new(),
+        status: prikk_object::AttestationStatus::Pass,
+        created_at: 0,
+        is_reproducible_offline: true,
+    };
+    let mut writer = prikk_object::CanonicalWriter::new();
+    attestation_payload
+        .encode_canonical(&mut writer)
+        .expect("encode");
+    let attestation = ObjectEnvelope::unsigned(ObjectType::Attestation, 1, writer.finish());
+    let attestation_id = attestation.object_id();
+
+    let bundle = forged_bundle(&source, |objects| {
+        let mut tip = RefStatePayload::decode_canonical(
+            &objects[0].canonical_payload,
+            objects[0].schema_version,
+        )
+        .expect("the exported tip decodes");
+        tip.required_attestation_ids.push(attestation_id);
+        objects[0] = ObjectEnvelope::unsigned(
+            ObjectType::RefState,
+            objects[0].schema_version,
+            tip.to_canonical_bytes().expect("the edited tip encodes"),
+        );
+        objects.push(attestation.clone());
+    })?;
+    let target_root = unique_temp_dir("item1-attest-target-missing-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    let error = import_bundle(&target, &bundle, &BundleImportOptions::default_limits())
+        .expect_err("a carried attestation naming an absent target block is refused");
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("targets block {missing_target_block_id}")),
+        "{error}"
+    );
+
+    for root in [source_root, target_root] {
         let _ = std::fs::remove_dir_all(root);
     }
     Ok(())
