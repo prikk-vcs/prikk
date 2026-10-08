@@ -73,3 +73,7 @@ one unaccounted row (the ref log emptied) is A1 working: 0.49.0's rebuild droppe
 | **P3b: the release notes** | CHANGELOG only, one commit on top of `7977d566`: the generation-log attribution (019 §5.7 asked; the architect reproduced); quote `` `--ref` `` byte for byte; "before this round" and "RFC 151" become release numbers; the A1 entry names the emptied-ref-log shape; internal round names leave headings and body (RFC numbers stay); the "three corrections along the way" paragraph goes; the JSON paragraph is cut to one sentence. Then the 14 gates on that commit, and `git diff 7977d566 HEAD --stat` shows `CHANGELOG.md` only. Details in the review | 20 min | `release-0.50.0-prep-P3b-report.md` |
 
 **Next: P3b.** The tag goes on P3b's commit.
+
+**P3b ACCEPTED 2026-10-08** (`71fde661`; review `release-0.50.0-prep-P3b-review-v1`; the new A1 sentence was confirmed
+by a probe on both binaries). **The dev team's part of 0.50.0 prep is complete.** The architect pushes; the tag waits
+for the owner.
