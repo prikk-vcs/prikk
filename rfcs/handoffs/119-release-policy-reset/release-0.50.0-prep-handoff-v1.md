@@ -58,3 +58,8 @@ bullets; the Output-changes and Upgrading lines listed in the review. **Next: P2
 | **P2b: two messages and three smoke checks** | **F1:** `--repair-tails --plan-only` prints `would truncate`, not `truncated`. **F2:** the lost-generation-log warning and `doctor`'s recommendation name the exact `prikk compact --<container>` command; the test runs the command the message names. Smoke 27a (a torn tail), 27b (`verify` after the rebuild), 27d (compact, *then* branch, then empty the log; `branch list`; run the named command). The CHANGELOG quotes the command. Details in the review | 45 min | `release-0.50.0-prep-P2b-report.md` |
 
 **Next: P2b, then P3.**
+
+**P2b ACCEPTED 2026-10-08** (`cb578e87`; smoke re-run by the architect, exit 0; review
+`release-0.50.0-prep-P2b-review-v1`). **Carried into P3, beside the P1 review's corrections:** remove the round-name note
+from `troubleshooting.md:505`; drop the CHANGELOG's "not by itself a runnable command" parenthetical; add the
+`would truncate` Output-changes line. **Next: P3.**
