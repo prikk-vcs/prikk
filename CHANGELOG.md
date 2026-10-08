@@ -36,7 +36,9 @@ slot took a real write after becoming live, and it becomes live instead, so that
 rather than silently disappearing or an earlier, repeated state silently winning. Only when the deduction
 itself cannot be made (either slot is damaged) does this refuse, naming the container's own existing damage
 text. `prikk verify` and `prikk doctor` now warn when this state is found — naming the container, the
-deduced slot, and `prikk compact` as the way to record it and end the state for good — since every ordinary
+deduced slot, and the exact command to end it (`prikk compact --pointer-index`, `--received-index`, or
+`--trust-policy`, whichever container is affected — `prikk compact` alone takes no container and is not
+by itself a runnable command) — since every ordinary
 reader and writer already resolve it silently. A restore from the recovery log is the one exception: it is
 a deliberate writer, so it refuses outright when a meaning file's own container is in this ambiguous state,
 rather than risk comparing against a meaning file that is itself stale. `prikk doctor --rebuild-pointer-index`

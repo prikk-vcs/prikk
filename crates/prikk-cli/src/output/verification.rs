@@ -22,10 +22,20 @@ pub(crate) fn remnant_warning(
 
 /// `prikk doctor --repair-tails` (RFC 164 Rule C): one line per covered file, always -- clean or
 /// repaired, so a run's own report names every file it read, never only the ones it changed.
-pub(crate) fn print_repair_tails_report(report: &RepairTailsReport) {
+///
+/// 0.50.0 P2b, F1: `plan_only` decides the verb's tense. The same `RepairTailsReport` is printed by
+/// both `--plan-only` (a preview, nothing written yet) and a real run (already done) -- before this,
+/// both said "truncated", so a plan read as a claim that the file had already been cut, with the
+/// correction ("plan only -- nothing written") arriving only afterward.
+pub(crate) fn print_repair_tails_report(report: &RepairTailsReport, plan_only: bool) {
     for file in &report.files {
         if file.truncated_bytes == 0 {
             println!("{}: nothing to repair", file.label);
+        } else if plan_only {
+            println!(
+                "{}: would truncate {} trailing byte(s)",
+                file.label, file.truncated_bytes
+            );
         } else {
             println!(
                 "{}: truncated {} trailing byte(s)",
@@ -620,8 +630,8 @@ pub(crate) fn print_verify_report(
     for note in &report.generation_log_deductions {
         println!(
             "warning: {}'s generation log names no live slot; slot {} was deduced from the \
-             entries ({}); run `prikk compact` for this container to record it",
-            note.container_label, note.deduced_slot, note.reason
+             entries ({}); run `prikk compact {}` to record it",
+            note.container_label, note.deduced_slot, note.reason, note.compact_flag
         );
     }
     match &report.active_wal_metadata_status {

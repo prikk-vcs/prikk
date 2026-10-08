@@ -1374,13 +1374,13 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
         if doctor_args.plan_only {
             let report = prikk_store::plan_repair_tails(&layout).map_err(|err| err.to_string())?;
             println!("doctor repository: {}", layout.prikk_dir().display());
-            print_repair_tails_report(&report);
+            print_repair_tails_report(&report, true);
             println!("plan only -- nothing written");
             return Ok(());
         }
         let report = prikk_store::repair_tails(&layout).map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
-        print_repair_tails_report(&report);
+        print_repair_tails_report(&report, false);
         let after = doctor_repository(&layout);
         print_doctor_report(&layout, &after);
         return if after.is_healthy() {

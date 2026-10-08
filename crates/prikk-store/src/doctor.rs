@@ -1080,8 +1080,11 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          entries ({})",
                         note.container_label, note.deduced_slot, note.reason
                     ),
-                    "run `prikk compact` for this container to record the deduced slot and end the \
-                     state for good",
+                    format!(
+                        "run `prikk compact {}` to record the deduced slot and end the state for \
+                         good",
+                        note.compact_flag
+                    ),
                 ));
             }
             // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never

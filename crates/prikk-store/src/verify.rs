@@ -782,6 +782,10 @@ pub struct GenerationLogDeductionNote {
     pub deduced_slot: &'static str,
     /// Which of Part E2's two rules decided it, in the warning's own words.
     pub reason: &'static str,
+    /// 0.50.0 P2b, F2: `prikk compact`'s own flag for this container (`--pointer-index`,
+    /// `--received-index`, or `--trust-policy`) -- `prikk compact` alone is not a command, it
+    /// requires one of these, and the warning's own words are the one place a reader is told which.
+    pub compact_flag: &'static str,
 }
 
 /// Part E2: checks all three compacting containers for the "log names no slot, content decides it"
@@ -800,7 +804,11 @@ pub(crate) fn check_generation_log_deductions(
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     ) {
-        notes.push(deduction_note("the ref pointer index", &deduced));
+        notes.push(deduction_note(
+            "the ref pointer index",
+            "--pointer-index",
+            &deduced,
+        ));
     }
     if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
         layout,
@@ -811,7 +819,11 @@ pub(crate) fn check_generation_log_deductions(
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     ) {
-        notes.push(deduction_note("the received index", &deduced));
+        notes.push(deduction_note(
+            "the received index",
+            "--received-index",
+            &deduced,
+        ));
     }
     if let Ok(Some(deduced)) = resolve_live_slot_with_deduction_note(
         layout,
@@ -822,19 +834,25 @@ pub(crate) fn check_generation_log_deductions(
         decode_trust_policy_entries_for_resolver,
         fold_one_trust_policy_entry,
     ) {
-        notes.push(deduction_note("the trust policy container", &deduced));
+        notes.push(deduction_note(
+            "the trust policy container",
+            "--trust-policy",
+            &deduced,
+        ));
     }
     notes
 }
 
 fn deduction_note(
     container_label: &'static str,
+    compact_flag: &'static str,
     deduced: &crate::foundation::generation::DeducedFromContent,
 ) -> GenerationLogDeductionNote {
     GenerationLogDeductionNote {
         container_label,
         deduced_slot: deduced.slot.as_str(),
         reason: deduced.reason.explain(),
+        compact_flag,
     }
 }
 

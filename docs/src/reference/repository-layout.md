@@ -334,7 +334,8 @@ crash lets slot `a` keep taking writes afterward, since `compaction` of the *cur
 diverge from a slot `b` made from an *earlier* one. Only when the deduction itself cannot be made —
 either slot is damaged — does this refuse, naming the container and its own existing damage text.
 `prikk verify` and `prikk doctor` warn whenever this state is found, naming the container, the
-deduced slot, and `prikk compact` as the way to record it and end the state for good. A restore from
+deduced slot, and the exact command to end it (`prikk compact --pointer-index`, `--received-index`,
+or `--trust-policy`, whichever container is affected). A restore from
 the recovery log refuses outright instead, rather than deduce: it is a deliberate writer, and a stale
 meaning file in this exact state could
 otherwise compare unchanged and pass a restore that should not proceed. `prikk doctor

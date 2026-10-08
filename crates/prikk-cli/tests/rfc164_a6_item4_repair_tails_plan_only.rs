@@ -27,9 +27,16 @@ fn plan_only_writes_nothing_and_matches_the_real_runs_own_report() {
         .unwrap();
     assert!(plan_output.status.success(), "{plan_output:?}");
     let plan_text = String::from_utf8_lossy(&plan_output.stdout).to_string();
+    // 0.50.0 P2b, F1: a plan has not truncated anything yet -- "WAL: truncated ..." in plan mode
+    // read as a claim the file was already cut, with the correction ("plan only -- nothing
+    // written") arriving only afterward. The plan must say "would truncate" instead.
     assert!(
-        plan_text.contains("WAL: truncated 12 trailing byte(s)"),
+        plan_text.contains("WAL: would truncate 12 trailing byte(s)"),
         "{plan_text}"
+    );
+    assert!(
+        !plan_text.contains("WAL: truncated"),
+        "the plan must never say the past tense: {plan_text}"
     );
     assert!(
         plan_text.contains("plan only -- nothing written"),
