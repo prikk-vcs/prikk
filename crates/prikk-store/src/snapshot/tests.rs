@@ -217,7 +217,13 @@ fn snapshot_materialization_is_idempotent_without_an_observable_mode() {
 /// DC-87: a file that disappears between its bytes being read and its mode being stat'd is the
 /// changed-during-the-checkout case, not "this platform has no mode". Both arrive as a `None`, and
 /// only the inner one may be read as unchanged.
-#[cfg(target_os = "linux")]
+///
+/// 0.50.0 step 2 Part C: this used `before_stat_for_test`, a plain thread-local closure, and
+/// `std::fs::remove_file` -- neither needs Linux specifically (unlike `patch_checkout`'s own
+/// Linux-only tests, DC-71, which this was apparently gated to match without its own reason being
+/// recorded, per `platform-support.md`'s prior "not yet classified" entry). Widened to the same
+/// tri-platform gate `fsutil`'s conformance suite already uses.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
 fn a_file_removed_mid_entry_is_refused_not_reported_unchanged() {
     let root = unique_temp_dir("snapshot-materialize-vanished");

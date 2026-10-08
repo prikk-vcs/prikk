@@ -182,8 +182,11 @@ fn materialize_replay_entry(
                 dirty_marker_route(layout)?
             )));
         }
-        // Gated like the seam above, and for the same reason: its only callers are Linux-only tests.
-        #[cfg(all(test, target_os = "linux"))]
+        // Gated like the seam above (0.50.0 step 2 Part C: widened, nothing here needs Linux).
+        #[cfg(all(
+            test,
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
         if let Some(change) = BEFORE_STAT.with(|slot| slot.borrow_mut().take()) {
             change();
         }
@@ -349,7 +352,14 @@ pub(crate) fn between_plan_and_write_for_test(change: impl FnOnce() + 'static) {
     BETWEEN_PLAN_AND_WRITE.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
-#[cfg(all(test, target_os = "linux"))]
+// 0.50.0 step 2 Part C: this seam is a plain thread-local closure and `std::fs::remove_file` --
+// nothing unix-only, unlike `between_plan_and_write_for_test` above (gated to match
+// `patch_checkout`'s own Linux-only tests, DC-71). Widened to match `fsutil::tests`' own
+// tri-platform gate (`fsutil.rs`'s `mod tests` comment): nothing here needs narrowing further.
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 thread_local! {
     static BEFORE_STAT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
@@ -358,7 +368,10 @@ thread_local! {
 /// Test seam, unreachable from production: run `change` once, after an existing file's bytes are read
 /// and before it is stat'd — the window in which the file can disappear, which is the *outer* `None`
 /// the mode check must not confuse with a platform that has no POSIX mode (DC-87).
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 pub(crate) fn before_stat_for_test(change: impl FnOnce() + 'static) {
     BEFORE_STAT.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }

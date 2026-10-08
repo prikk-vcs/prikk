@@ -288,19 +288,31 @@ count is smaller than `stable`'s. The gates that remain, by name:
   `lock/tests.rs` (`active_lock_acquires_a_byte_exact_path_for_a_non_utf8_session_name`), and
   `commit_boundary/worktree_patch/tests.rs` (`non_utf8_worktree_path_fails_closed`), and `unlock/tests.rs` at line 284
   (`list_held_locks_reports_a_lock_under_a_non_utf8_session_name`).
-- **Linux only, as written: the `LinuxDurability` conformance suite** (`foundation/fsutil.rs`'s re-export, its
-  `fsutil/tests.rs` and `fsutil/tests/conformance.rs` consumers). The suite names the Linux durability implementation.
-  macOS and Windows have their own (`MacosDurability`, `WindowsDurability`), so the same suite could run on each.
-  Porting it is a separate step; it is not yet done.
+- **Corrected (0.50.0 step 2 Part C): the `fsutil/tests/conformance.rs` suite is not Linux-only.** DC-81 (macOS) and
+  DC-97 (Windows) already ported it: of the four conformance assertions, three (`create_exclusive_refuses_an_
+  already_occupied_path`, `durable_directory_entry_accepts_the_named_files_own_path`, and the pre-existing
+  guarantees G1/G2/G5/G8) run on all three platforms, and the macOS/Windows mutation CI jobs already run the full
+  workspace suite (`cargo test --workspace --locked --no-fail-fast`), not a narrowed one — this has been true since
+  those two rounds landed; the entry above was stale. **G9 is the one genuine exception**
+  (`set_permission_bits_masks_file_type_bits_out_of_a_recorded_mode`, Linux and macOS only): it reads back POSIX
+  mode bits (`PermissionsExt::mode`), which do not exist on Windows, so it cannot be reused unchanged there —
+  Windows' own no-op shape is covered separately (`windows::tests::set_permission_bits_is_a_documented_noop`),
+  documented in `conformance.rs`'s own coverage-map comment. G6/G7 (`append_and_truncate_reject_fifo_without_
+  blocking`, `read_rejects_fifo_content_despite_the_os_permitting_the_open`) are Linux-and-macOS by necessity too
+  (FIFOs are POSIX-specified, DC-81), already covered by the directory-sync bullet's own reasoning below.
 - **Not windows (macOS and Linux), by necessity: a directory-sync injection point.** A directory fsync is a
   failpoint only where a directory can be synced (Linux, macOS), and Windows has no such operation. The tests that
   inject one are gated `not(windows)` and run on macOS: among them the WAL, lock, trust, refs, active-metadata and
   patch-checkout retry tests.
 - **Unix (macOS and Linux), by necessity: symlink creation.** `a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does`
   creates a symlink, which macOS allows and Windows allows only with a privilege.
-- **Linux only, not yet classified: the snapshot test that removes a file between stat and read**
-  (`snapshot/tests.rs`, its use of `worktree::before_stat_for_test`, gated by a `cfg` form outside the round's
-  gate list). Its reason is not recorded here; it is a named gap.
+- **Resolved (0.50.0 step 2 Part C): the snapshot test that removes a file between stat and read**
+  (`snapshot/tests.rs`'s `a_file_removed_mid_entry_is_refused_not_reported_unchanged`, using `worktree::
+  before_stat_for_test`). Named from source: both the seam and the test are a plain thread-local closure and
+  `std::fs::remove_file` — nothing unix-only, unlike the seam above it in the same file
+  (`between_plan_and_write_for_test`, genuinely gated to match `patch_checkout`'s own Linux-only tests, DC-71),
+  which this one had apparently been gated to match by copying rather than its own reason. Widened to run on all
+  three platforms; no longer a gap.
 - **Linux only, as written: individual tests gated `cfg(target_os = "linux")` inside suites that run elsewhere.**
   `crates/prikk-cli/tests/rfc158_incoming_bound.rs` gates six `control1_*` tests (lines 96-227: bundle import,
   preview and verify; sync compare, build and accept; each on a sparse 1 GiB file). In
