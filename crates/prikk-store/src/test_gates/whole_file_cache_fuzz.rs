@@ -44,10 +44,12 @@ const DEFAULT_CASES: u32 = 256;
 const LONG_RUN_CASES: u32 = 20_000;
 /// How long one decode of a small, mutated input may take before the bounded-work property is
 /// considered broken. Ordinary decodes of inputs this size finish in well under a millisecond; this
-/// is generous by two orders of magnitude so the property is not flaky, while still being far too
-/// tight for a decode that allocates or loops proportional to an unchecked claim (which would run to
-/// seconds, not fractions of a millisecond, for a claim near `u32::MAX` or `u64::MAX`).
-const DECODE_TIME_CEILING: Duration = Duration::from_millis(50);
+/// is generous by well over two orders of magnitude -- loaded machines and slow CI runners can push
+/// an ordinary decode well past 50ms with no defect present (0.50.0 step 2, Part A review v1) -- while
+/// still being far too tight for a decode that allocates or loops proportional to an unchecked claim
+/// (which would run to seconds, not fractions of a millisecond, for a claim near `u32::MAX` or
+/// `u64::MAX`).
+const DECODE_TIME_CEILING: Duration = Duration::from_secs(1);
 
 struct WholeFileFormat {
     name: &'static str,
