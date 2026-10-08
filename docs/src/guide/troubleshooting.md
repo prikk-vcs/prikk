@@ -537,26 +537,33 @@ interrupted append (not a complete, corrupted record), run `prikk verify` first 
 report carefully before deciding to truncate anything by hand; when in doubt, back the file up and
 ask before changing it.
 
-## `error: integrity error: ref pointer index has a damaged entry; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then the rebuild`
+## `error: integrity error: ref pointer index has a damaged entry; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then \`prikk doctor --rebuild-pointer-index\``
 
 0.50.0 P3c (019 §2.2, §4.4). Seen from `verify`, `doctor`, `branch list`, or anything that resolves
 the current branch, for the identical two reasons the entry above names, but for the ref pointer
 index specifically — which, unlike the trust-key and author-key containers, *does* have a way out:
-`prikk doctor --rebuild-pointer-index --plan-only`, then the rebuild for real, re-derives the index
-from the ref log directly, never reading the damaged slot at all. Before this round the message said
-only "run doctor before reading," which reads this exact container the exact same way and so answers
-with the identical failure again — the rebuild is what actually clears it.
+the plan, then the rebuild for real, re-derives the index from the ref log directly, never reading
+the damaged slot at all. Before this round the message said only "run doctor before reading," which
+reads this exact container the exact same way and so answers with the identical failure again — the
+rebuild is what actually clears it. `doctor`'s own `PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE`
+issue prints first, before the current-branch warning and any `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE`
+error the identical damage also causes — each of those now names this issue instead of the generic
+"inspect the failing stage."
 
-## `error: integrity error: received-ref index has a damaged entry; no repair exists -- preserve the repository and restore ... from a backup taken before the damage` (or the identical shape for the trust policy container)
+## `error: integrity error: received-ref index has a damaged entry; no repair exists -- preserve the repository; the way out is a copy of this repository's own \`.prikk/\` directory from a backup taken before the damage` (or the identical shape for the trust policy container, which adds re-applying every trust change made since)
 
 0.50.0 P3c (019 §2.2, §4.4). Seen from a `bundle import`, `sync accept`, or `trust maintainer
 add`/`remove`, for the identical two reasons as the entry above. Unlike the ref pointer index, there
 is no rebuild for either of these: neither container is re-derivable from anything else this
 repository holds (the received index is the only record of what was received; the trust policy
 container's own history is not reconstructable from the keys alone). The message says this plainly
-and names the exact file (`.prikk/refs/containers/received-index-a.container`/`-b.container`, or
-`.prikk/trust/policy-a.container`/`-b.container`) to restore from a backup taken before the damage,
-in place of the same circular "run doctor before reading" the pointer index used to share with it.
+and names a copy of the **whole** `.prikk/` directory, never a single file, as the way out: the two
+slots and the generation log are one set, and restoring the slots alone could leave a log naming a
+slot the restored copy disagrees with. For the trust policy container specifically, an older copy
+could re-trust a key that was revoked since — the message also says to re-apply every trust change
+made since that backup. Both replace the same circular "run doctor before reading" the pointer index
+used to share with them, and `doctor`'s own dedicated issue for each prints first, the same as the
+pointer index's own.
 
 ## `error: integrity error: object <id> references missing <role> <id>`
 

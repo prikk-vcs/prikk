@@ -134,7 +134,9 @@ fn removing_a_declaration_names_its_file() {
         // `deduction_note` call sites names its own container's flag, 2,479 -> 2,497.
         // 0.50.0 P3c: `ContainerInteriorDamage` and the direct `replay_*().has_item_failure()` check
         // `check_generation_log_deductions` now also makes for all three containers, 2,497 -> 2,575.
-        detail.contains("2575"),
+        // 0.50.0 P3d: G3's whole-`.prikk/` wording and G4's exact-command text rewrote four damage_text
+        // strings in place, net 2,575 -> 2,576.
+        detail.contains("2576"),
         "the line count is in the message: {detail}"
     );
     assert!(

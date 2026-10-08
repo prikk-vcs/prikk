@@ -46,7 +46,7 @@ use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 /// circle. `--rebuild-pointer-index` re-derives the index from the ref log, which this damage does
 /// not touch.
 const POINTER_INDEX_DAMAGE_TEXT: &str = "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
-     --plan-only`, then the rebuild";
+     --plan-only`, then `prikk doctor --rebuild-pointer-index`";
 
 /// The exact reduction `compact_ref_pointer_index` performs: last entry per `ref_name_key` survives,
 /// in the order each key's own last occurrence appears in `entries`. Factored out so Part E3's
@@ -667,7 +667,7 @@ pub(in crate::refs) fn lookup_ref_pointer(
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
-             --plan-only`, then the rebuild"
+             --plan-only`, then `prikk doctor --rebuild-pointer-index`"
                 .to_string(),
         ));
     }

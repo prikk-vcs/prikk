@@ -832,23 +832,24 @@ pub(crate) fn check_generation_log_deductions(
     if crate::refs::replay_pointer_index(layout).is_ok_and(|replay| replay.has_item_failure()) {
         damage.pointer_index = Some(
             "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
-             --plan-only`, then the rebuild"
+             --plan-only`, then `prikk doctor --rebuild-pointer-index`"
                 .to_string(),
         );
     }
     if replay_received_index(layout).is_ok_and(|replay| replay.has_item_failure()) {
         damage.received_index = Some(
-            "received-ref index has a damaged entry; no repair exists -- preserve the repository \
-             and restore `.prikk/refs/containers/received-index-a.container`/`-b.container` from \
-             a backup taken before the damage"
+            "received-ref index has a damaged entry; no repair exists -- preserve the repository; \
+             the way out is a copy of this repository's own `.prikk/` directory from a backup \
+             taken before the damage"
                 .to_string(),
         );
     }
     if replay_trust_policy(layout).is_ok_and(|replay| replay.has_item_failure()) {
         damage.trust_policy = Some(
             "trust policy container has a damaged snapshot; no repair exists -- preserve the \
-             repository and restore `.prikk/trust/policy-a.container`/`-b.container` from a \
-             backup taken before the damage"
+             repository; the way out is a copy of this repository's own `.prikk/` directory from \
+             a backup taken before the damage, then re-apply every trust change made since that \
+             backup"
                 .to_string(),
         );
     }
@@ -858,7 +859,7 @@ pub(crate) fn check_generation_log_deductions(
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
-         --plan-only`, then the rebuild",
+         --plan-only`, then `prikk doctor --rebuild-pointer-index`",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     ) {
@@ -877,9 +878,9 @@ pub(crate) fn check_generation_log_deductions(
         &layout.received_index_generation_log_path(),
         &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
-        "received-ref index has a damaged entry; no repair exists -- preserve the repository and \
-         restore `.prikk/refs/containers/received-index-a.container`/`-b.container` from a backup \
-         taken before the damage",
+        "received-ref index has a damaged entry; no repair exists -- preserve the repository; the \
+         way out is a copy of this repository's own `.prikk/` directory from a backup taken \
+         before the damage",
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     ) {
@@ -898,9 +899,9 @@ pub(crate) fn check_generation_log_deductions(
         &layout.trust_policy_generation_log_path(),
         &layout.trust_policy_container_slot_path(ContainerSlot::A),
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
-        "trust policy container has a damaged snapshot; no repair exists -- preserve the repository \
-         and restore `.prikk/trust/policy-a.container`/`-b.container` from a backup taken before the \
-         damage",
+        "trust policy container has a damaged snapshot; no repair exists -- preserve the \
+         repository; the way out is a copy of this repository's own `.prikk/` directory from a \
+         backup taken before the damage, then re-apply every trust change made since that backup",
         decode_trust_policy_entries_for_resolver,
         fold_one_trust_policy_entry,
     ) {

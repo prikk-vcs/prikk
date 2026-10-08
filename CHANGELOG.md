@@ -39,11 +39,16 @@
 - `bundle import`: a new refusal when a carried or locally-held attestation's own target block is
   absent, before any write.
 - `verify`/`doctor`: a complete, corrupted record in the ref pointer index now names `prikk doctor
-  --rebuild-pointer-index --plan-only` directly, in place of the same generic failure text that sent
-  the user back to `doctor`.
+  --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`, directly, in
+  place of the same generic failure text that sent the user back to `doctor`.
 - `verify`/`doctor`: the identical shape in the received index or the trust policy container now
-  says plainly that no repair exists and names the file to restore from a backup, in place of the
-  same circular text.
+  says plainly that no repair exists, naming a copy of the whole `.prikk/` directory from a backup
+  as the way out (the trust policy text also says to re-apply every trust change made since that
+  backup), in place of the same circular text.
+- `doctor`: a `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE` error caused by one of these three containers'
+  own damage now names that damage issue's own code instead of the generic "inspect the failing
+  stage," and that damage issue now prints first, before the current-branch warning and these
+  stage errors.
 - `verify`/`doctor`: the current-branch warning no longer recommends `prikk branch switch` when the
   real cause is one of those three containers' own damage.
 
@@ -146,15 +151,25 @@ diagnostics gap, not reachable by untrusted input, and never a false pass: every
 failures already correctly refused; only the recommendation was unhelpful or wrong).
 
 **Action: upgrade.** For the ref pointer index, `verify` and `doctor` now name `prikk doctor
---rebuild-pointer-index --plan-only` directly, instead of sending the user back to `doctor`; running
-it clears the damage, since the rebuild re-derives the index from the ref log rather than reading the
-damaged slot. For the received index and the trust policy container, no repair exists for interior
-damage (neither is re-derivable from anything else this repository holds) — `verify` and `doctor` now
-say so plainly, and name the exact file to restore from a backup, instead of sending the user back to
-`doctor` for an answer it cannot give. The current-branch warning, in both `verify` and `doctor`, no
-longer recommends `branch switch` when the real cause is one of these three containers' own damage —
-decided by the same direct, independent check that drives the dedicated issues above, never by
-matching the error's own text.
+--rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`, directly, instead
+of sending the user back to `doctor`; running it clears the damage, since the rebuild re-derives the
+index from the ref log rather than reading the damaged slot. For the received index and the trust
+policy container, no repair exists for interior damage (neither is re-derivable from anything else
+this repository holds) — `verify` and `doctor` now say so plainly, naming a copy of the whole
+`.prikk/` directory from a backup taken before the damage as the way out (never a single file: the
+two slots and the generation log are one set, and restoring the slots alone could leave a log naming
+a slot the restored copy disagrees with — for the trust policy container specifically, an older copy
+could re-trust a key revoked since, so the message also says to re-apply every trust change made
+since that backup). `doctor`'s own generic "a verification stage is incomplete" error, which the
+identical damage also causes (as many as five at once, for the pointer index: `Objects`, `Refs`,
+`LocalTagTrust` directly, `RefUpdateSchemaTrust` and `PublicationReclassification` blocked by `Refs`),
+now names the one dedicated issue that explains it instead of the bare "inspect the failing stage" —
+and that dedicated issue prints first, before the current-branch warning and these stage errors, so
+the one message that names the real way out is the first thing printed, not the last of several that
+used to disagree. The current-branch warning, in both `verify` and `doctor`, no longer recommends
+`branch switch` when the real cause is one of these three containers' own damage — decided by the
+same direct, independent check that drives the dedicated issues above, never by matching the error's
+own text.
 
 ### Fixed — a torn object-index tail with no decode failure could make a sound, just-written object read as missing, failing `verify`'s ref-publication scan
 

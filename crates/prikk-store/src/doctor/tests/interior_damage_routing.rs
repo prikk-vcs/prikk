@@ -115,12 +115,17 @@ fn received_index_interior_damage_says_no_repair_exists() -> Result<()> {
     crate::received::write_received_pointer(&layout, "remotes/heads/main", state.object_id())?;
     flip_a_body_byte(&layout.received_index_slot_path(ContainerSlot::A))?;
 
+    // G3 (review v1): the way out names the whole `.prikk/` directory, never a single file --
+    // restoring the slots alone can leave a generation log naming a slot the restored copy
+    // disagrees with.
     let recommendation =
         issue_recommendation(&layout, "PRIKK-DOCTOR-RECEIVED-INDEX-INTERIOR-DAMAGE");
     assert!(
-        recommendation
-            .as_deref()
-            .is_some_and(|text| text.contains("no repair exists") && text.contains("backup")),
+        recommendation.as_deref().is_some_and(|text| {
+            text.contains("copy of this repository's own `.prikk/` directory")
+                && text.contains("backup")
+                && !text.contains("container`")
+        }),
         "{recommendation:?}"
     );
     let _ = std::fs::remove_dir_all(root);
@@ -134,11 +139,16 @@ fn trust_policy_interior_damage_says_no_repair_exists() -> Result<()> {
     add_trusted_maintainer(&layout, "only", &"11".repeat(32))?;
     flip_a_body_byte(&layout.trust_policy_container_slot_path(ContainerSlot::A))?;
 
+    // G3: the whole `.prikk/` directory, and trust policy additionally says to re-apply every
+    // trust change made since the backup (restoring the policy container alone could re-trust a
+    // key that was revoked after the backup).
     let recommendation = issue_recommendation(&layout, "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE");
     assert!(
-        recommendation
-            .as_deref()
-            .is_some_and(|text| text.contains("no repair exists") && text.contains("backup")),
+        recommendation.as_deref().is_some_and(|text| {
+            text.contains("copy of this repository's own `.prikk/` directory")
+                && text.contains("backup")
+                && text.contains("re-apply every trust change")
+        }),
         "{recommendation:?}"
     );
     let _ = std::fs::remove_dir_all(root);
@@ -175,6 +185,85 @@ fn an_unrelated_stage_failure_still_says_inspect() -> Result<()> {
             || issue.code == "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE"),
         "an unrelated container's damage must not raise any of these three issues: {report:?}"
     );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// G1 (review v1): when the pointer index's own interior damage is already known, every
+/// `VERIFY-STAGE-INCOMPLETE` recommendation names the damage issue's own code instead of the bare
+/// "inspect the failing stage" -- so the two no longer disagree.
+#[test]
+fn stage_incomplete_recommendations_name_the_damage_issue_when_one_is_set() -> Result<()> {
+    let root = unique_temp_dir("p3d-g1-stage-incomplete-names-damage-issue");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    flip_a_body_byte(&layout.ref_pointer_index_slot_path(ContainerSlot::A))?;
+
+    let report = doctor_repository(&layout);
+    let stage_incomplete: Vec<_> = report
+        .issues
+        .iter()
+        .filter(|issue| issue.code == "PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE")
+        .collect();
+    assert!(!stage_incomplete.is_empty(), "{report:?}");
+    for issue in &stage_incomplete {
+        assert!(
+            issue
+                .recommendation
+                .contains("PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE"),
+            "{issue:?}"
+        );
+        assert!(
+            !issue.recommendation.contains("inspect the failing stage"),
+            "a recommendation that names the damage issue must not also say the bare \
+             'inspect' text: {issue:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// G2 (review v1): the one issue that names the real way out is printed first in that state --
+/// before the current-branch warning and the stage errors that follow from the identical damage.
+#[test]
+fn the_damage_issue_is_printed_before_current_branch_and_stage_incomplete() -> Result<()> {
+    let root = unique_temp_dir("p3d-g2-damage-issue-printed-first");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    flip_a_body_byte(&layout.ref_pointer_index_slot_path(ContainerSlot::A))?;
+
+    let report = doctor_repository(&layout);
+    let damage_index = report
+        .issues
+        .iter()
+        .position(|issue| issue.code == "PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE")
+        .expect("the damage issue must be present");
+    let current_branch_index = report
+        .issues
+        .iter()
+        .position(|issue| issue.code == "PRIKK-DOCTOR-CURRENT-BRANCH");
+    let stage_incomplete_index = report
+        .issues
+        .iter()
+        .position(|issue| issue.code == "PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE");
+    if let Some(current_branch_index) = current_branch_index {
+        assert!(
+            damage_index < current_branch_index,
+            "the damage issue ({damage_index}) must print before current-branch \
+             ({current_branch_index})"
+        );
+    }
+    if let Some(stage_incomplete_index) = stage_incomplete_index {
+        assert!(
+            damage_index < stage_incomplete_index,
+            "the damage issue ({damage_index}) must print before the first stage-incomplete \
+             error ({stage_incomplete_index})"
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

@@ -402,6 +402,16 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     // "without reading either slot as live" (the ruling's own words): the write below targets
     // `live_slot.other()`, and which physical slot that names does not matter, since neither was
     // trusted and the write below fully reconstructs every ref from the log alone.
+    // 0.50.0 P3c (review v1, G3): this call's own damage text is, by construction, unreachable.
+    // `generation_lost` (checked above) is `generation::generation_log_lost`'s own predicate --
+    // "the log has no record and slot B has data," exactly `resolve_or_deduce`'s own condition for
+    // entering the ambiguous-deduction branch that is the *only* place this `damage_text` parameter
+    // is ever returned as an `Err` (every other outcome of that function returns `Ok` without
+    // reading either slot's content at all). Since this call only runs in the `!generation_lost`
+    // branch, that ambiguous branch can never be entered here. Left in place, not removed -- a
+    // genuinely dead `Err` arm the type signature still requires, not a repair this round claims
+    // to exercise -- and its own text still follows the same rule regardless, in case a future
+    // change to `resolve_or_deduce` ever makes it reachable.
     let (live_slot, _, _) = if generation_lost {
         (ContainerSlot::A, 0, 0)
     } else {
@@ -410,9 +420,9 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
             &ref_pointer_generation_log_path,
             &ref_pointer_slot_a_path,
             &ref_pointer_slot_b_path,
-            "ref pointer index has a damaged entry that the rebuild cannot read past either; \
-             preserve the repository and restore `.prikk/refs/containers/pointer-index-a.\
-             container`/`-b.container` from a backup taken before the damage",
+            "ref pointer index has a damaged entry that the rebuild cannot read past either; no \
+             repair exists -- preserve the repository; the way out is a copy of this \
+             repository's own `.prikk/` directory from a backup taken before the damage",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?;

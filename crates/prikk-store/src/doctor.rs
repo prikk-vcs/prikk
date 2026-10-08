@@ -14,9 +14,9 @@ use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, Reposito
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::refs::{RefFileStatus, RefItemStatus};
 use crate::verify::{
-    ActiveWalMetadataStatus, ObjectItemStatus, RepositoryVerification, StageOutcome, StageStatus,
-    VerificationStage, active_ref_metadata_from_wal_metadata_status, classify_active_wal_metadata,
-    verify_repository,
+    ActiveWalMetadataStatus, ContainerInteriorDamage, ObjectItemStatus, RepositoryVerification,
+    StageOutcome, StageStatus, VerificationStage, active_ref_metadata_from_wal_metadata_status,
+    check_generation_log_deductions, classify_active_wal_metadata, verify_repository,
 };
 use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
@@ -677,6 +677,47 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
     }
 }
 
+/// 0.50.0 P3c (review v1, G1/G2): a compacting container's own interior damage, read directly and
+/// pushed **first** -- before the current-branch warning and the generic per-stage errors the
+/// identical damage also causes -- so the one message that names the real way out is the first
+/// thing printed, not the last of several that used to disagree. Reuses `verify`'s own direct read
+/// (`check_generation_log_deductions`, already independent of which stage touches the container
+/// first) rather than a second copy of the same text. Returns the computed damage so the stage
+/// loop below can name these same issue codes instead of a bare "inspect" when they are the reason
+/// a stage failed -- decided by this typed value, never by matching the stage's own text.
+fn push_container_interior_damage_issues(
+    layout: &RepositoryLayout,
+    issues: &mut Vec<DoctorIssue>,
+) -> ContainerInteriorDamage {
+    let (_, damage) = check_generation_log_deductions(layout);
+    if let Some(message) = &damage.pointer_index {
+        issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE",
+            message.clone(),
+            "run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+             --rebuild-pointer-index`",
+        ));
+    }
+    if let Some(message) = &damage.received_index {
+        issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-RECEIVED-INDEX-INTERIOR-DAMAGE",
+            message.clone(),
+            "preserve the repository; the way out is a copy of this repository's own `.prikk/` \
+             directory from a backup taken before the damage",
+        ));
+    }
+    if let Some(message) = &damage.trust_policy {
+        issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE",
+            message.clone(),
+            "preserve the repository; the way out is a copy of this repository's own `.prikk/` \
+             directory from a backup taken before the damage, then re-apply every trust change \
+             made since that backup",
+        ));
+    }
+    damage
+}
+
 /// RFC 151 §2.1: a current-branch pointer no default can resolve -- malformed, or naming a branch
 /// that does not exist or is closed. A **warning**, not an error: the repository is intact and
 /// every command still works with `--ref` given explicitly; only the default is unusable.
@@ -687,8 +728,8 @@ fn push_current_branch_issue(layout: &RepositoryLayout, issues: &mut Vec<DoctorI
         // index. Decided by a direct, independent check (the same one `PRIKK-DOCTOR-POINTER-INDEX-
         // INTERIOR-DAMAGE` below uses), never by matching this error's own text.
         let recommendation = if crate::refs::pointer_index_interior_damage(layout).is_some() {
-            "the error already names the way out: run `prikk doctor --rebuild-pointer-index \
-                 --plan-only`, then the rebuild"
+            "run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+             --rebuild-pointer-index`"
                 .to_string()
         } else {
             "run `prikk branch switch heads/<name>` to a branch that exists and is open, or \
@@ -763,6 +804,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     let mut issues = Vec::new();
     push_missing_required_directory_issues(layout, &mut issues);
     push_non_default_active_session_wal_issues(layout, &mut issues);
+    let container_interior_damage = push_container_interior_damage_issues(layout, &mut issues);
     push_current_branch_issue(layout, &mut issues);
     push_provisional_worktree_issue(layout, &mut issues);
     push_interrupted_materialization_issue(layout, &mut issues);
@@ -777,6 +819,40 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // construction (severity derives from the stage outcome itself, not a per-field decision
             // here) -- this is what preserves `repair_repository`'s refusal gate now that
             // `verify_repository` no longer aborts on the first hard error.
+            //
+            // 0.50.0 P3c (review v1, G1): when a compacting container's own interior damage is
+            // already known (`container_interior_damage`, pushed above, before this loop runs),
+            // every stage-incomplete recommendation names its issue code instead of the bare
+            // "inspect the failing stage" -- decided by that typed value alone, never by matching
+            // this stage's own message text, so an unrelated stage failure (none of these three
+            // containers) keeps the plain text unchanged.
+            let damaged_container_codes: Vec<&str> = [
+                (
+                    container_interior_damage.pointer_index.is_some(),
+                    "PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE",
+                ),
+                (
+                    container_interior_damage.received_index.is_some(),
+                    "PRIKK-DOCTOR-RECEIVED-INDEX-INTERIOR-DAMAGE",
+                ),
+                (
+                    container_interior_damage.trust_policy.is_some(),
+                    "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(present, code)| present.then_some(code))
+            .collect();
+            let stage_incomplete_recommendation = if damaged_container_codes.is_empty() {
+                "preserve the repository and inspect the failing stage before attempting repair"
+                    .to_string()
+            } else {
+                format!(
+                    "first resolve {} (above), then run `prikk doctor` again; if this stage \
+                     still fails, preserve the repository and inspect it",
+                    damaged_container_codes.join(" and ")
+                )
+            };
             for outcome in &verification.stage_outcomes {
                 let message = match &outcome.status {
                     StageStatus::Evaluated => continue,
@@ -799,7 +875,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 let issue = DoctorIssue::error(
                     "PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE",
                     message,
-                    "preserve the repository and inspect the failing stage before attempting repair",
+                    stage_incomplete_recommendation.clone(),
                 );
                 issues.push(match active_session_owning_stage_outcome(outcome) {
                     Some(name) => issue.for_active_session(name),
@@ -1097,36 +1173,6 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          good",
                         note.compact_flag
                     ),
-                ));
-            }
-            // 0.50.0 P3c: a compacting container's own interior damage (a complete, corrupted
-            // record), read directly -- the error text already names the real way out (the
-            // pointer-index rebuild, or, for the other two, that no repair exists), so the
-            // recommendation here just repeats it rather than the generic "inspect the failing
-            // stage" every other stage failure gets. This is the one place the user is told
-            // directly, instead of reaching it only through whichever stage happened to fail first.
-            if let Some(message) = &verification.container_interior_damage.pointer_index {
-                issues.push(DoctorIssue::error(
-                    "PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE",
-                    message.clone(),
-                    "the message names the way out: run `prikk doctor --rebuild-pointer-index \
-                     --plan-only`, then the rebuild",
-                ));
-            }
-            if let Some(message) = &verification.container_interior_damage.received_index {
-                issues.push(DoctorIssue::error(
-                    "PRIKK-DOCTOR-RECEIVED-INDEX-INTERIOR-DAMAGE",
-                    message.clone(),
-                    "no repair exists; preserve the repository and restore the received index \
-                     from a backup taken before the damage",
-                ));
-            }
-            if let Some(message) = &verification.container_interior_damage.trust_policy {
-                issues.push(DoctorIssue::error(
-                    "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE",
-                    message.clone(),
-                    "no repair exists; preserve the repository and restore the trust policy \
-                     container from a backup taken before the damage",
                 ));
             }
             // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never
