@@ -77,3 +77,28 @@ one unaccounted row (the ref log emptied) is A1 working: 0.49.0's rebuild droppe
 **P3b ACCEPTED 2026-10-08** (`71fde661`; review `release-0.50.0-prep-P3b-review-v1`; the new A1 sentence was confirmed
 by a probe on both binaries). **The dev team's part of 0.50.0 prep is complete.** The architect pushes; the tag waits
 for the owner.
+
+**Candidate pushed 2026-10-08** (`8deb0be2`, 14/14). **Before the tag, one more part. The architect found it while
+checking 019's grades for the external letter.**
+
+Over a **complete damaged pointer-index record** (019 §5.3, graded 0.50.0; corrections handoff A3), `prikk doctor` on
+`8deb0be2` still does not name `--rebuild-pointer-index`:
+- **three `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE` errors** recommend *"preserve the repository and inspect the failing
+  stage"*;
+- **the current-branch warning** recommends `branch switch`, which is wrong here: the pointer file is fine, and the
+  index is what is damaged;
+- **the stage errors themselves** say *"run doctor before listing"*, so the user goes round in a circle.
+
+`--repair-tails` names the rebuild; nothing else does. The rebuild is the right way out: its plan is correct, its
+real run fixes the index, and `verify` 0 and `doctor` are clean afterwards (the architect's probe on the release build).
+A3 said *"`doctor` and the tail repairs"*; Part B fixed the tail repairs, and the architect accepted it without
+running `doctor` in that state.
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **P3c: every message over a damaged container points to its way out** | **1. Facts from source first:** every text that says *"run doctor before …"* (`compact.rs`, `refs.rs:736`, `verify.rs:803/818`); what `doctor` then prints for each of the three containers (the pointer index, the received index, the trust policy); why `verify`'s pointer-index tail line reads *"unknown (stage did not evaluate)"* here; and what typed signal exists for the damage. **2. The pointer index:** `doctor` raises one issue naming `prikk doctor --rebuild-pointer-index --plan-only`, then the rebuild. Stage errors caused by that damage point to it, not to *"inspect"*. The current-branch warning does not recommend `branch switch` when the cause is the damaged index. The texts that sent the user to `doctor` name the rebuild directly. **Decided by a typed or structural signal, never by matching text.** The stale comment at `doctor.rs:1142` goes (the rebuild exists now). **3. The received index and the trust policy:** if a way out exists, name it; if none does, say what to copy, as row 10 does. Never *"run doctor"* when `doctor` answers nothing. **4. Tests that follow the message:** damage a complete record, then `doctor`'s recommendation, then that exact command, then `verify` 0. Controls: a stage failure from another cause still says *"inspect"*; each routing site, removed, goes red. **5.** Smoke 27e (the same flow on the release build). **6. The CHANGELOG:** the entry, Output-changes lines, and one correction to the A1 entry: *"independently found"* → *"found by review 019 (§2.2, §4.4)"*. **7.** The docs-debt grep; the 14 gates; `matrix.py` v5 on the release build (no new finding, every changed row accounted for) | 75 min | `release-0.50.0-prep-P3c-report.md` |
+
+**If item 1 shows that a fix needs a format change, a new command, or a change to a recovery rule, stop and report it
+as a question.**
+
+**Next: P3c.** The tag goes on P3c's pushed commit.
