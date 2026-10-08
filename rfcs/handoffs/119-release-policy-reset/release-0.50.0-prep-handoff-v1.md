@@ -49,3 +49,12 @@ block in 0.50.0**; the generation-log fix stays under Fixed (local trigger, as 0
 the Attestation check under Added. **Carried into P3:** the generation-log heading names its trust consequence; the
 `--plan-only` sentence names the verbs that have it (three repair verbs do not); the long `Added` paragraph becomes
 bullets; the Output-changes and Upgrading lines listed in the review. **Next: P2.**
+
+**P2 ACCEPTED as run 2026-10-08** (ratio 1.854×; smoke 27/27, re-run by the architect; review
+`release-0.50.0-prep-P2-review-v1`). **One part added before P3:**
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **P2b: two messages and three smoke checks** | **F1:** `--repair-tails --plan-only` prints `would truncate`, not `truncated`. **F2:** the lost-generation-log warning and `doctor`'s recommendation name the exact `prikk compact --<container>` command; the test runs the command the message names. Smoke 27a (a torn tail), 27b (`verify` after the rebuild), 27d (compact, *then* branch, then empty the log; `branch list`; run the named command). The CHANGELOG quotes the command. Details in the review | 45 min | `release-0.50.0-prep-P2b-report.md` |
+
+**Next: P2b, then P3.**
