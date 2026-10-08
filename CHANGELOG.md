@@ -13,10 +13,10 @@
 ### Output changes
 
 - `verify`: a new warning when the current-branch pointer exists but cannot be resolved.
-- `verify`: a new informational line, `current-branch: not set; commands without --ref use
-  heads/main`, when the pointer file is simply absent. Every repository initialized before RFC 151
+- `verify`: a new informational line, ``current-branch: not set; commands without `--ref` use
+  heads/main``, when the pointer file is simply absent. Every repository initialized before 0.42.0
   now prints it.
-- `verify` on a torn object-index tail: now a warning, exit `0` — before this round, exit `1`.
+- `verify` on a torn object-index tail: now a warning, exit `0` — 0.49.0 exited `1`.
 - `verify`/`doctor`: the WAL-trailing-partial warning no longer appears when the commit witness
   already explains those identical bytes as acknowledged damage or loss.
 - `verify`: "a record before the last acknowledged one does not match" now names the still-sound
@@ -39,12 +39,8 @@
 - `bundle import`: a new refusal when a carried or locally-held attestation's own target block is
   absent, before any write.
 
-None of the above appears in any command's `--format json` output: `verify --format json` emits only
-`schema_version`, `verdict` (derived from `all_true_conditions`, which these warnings are
-deliberately excluded from, matching every other warning-severity finding), `active_sessions`, and
-`stages`; `doctor` and `bundle import` have no JSON output mode at all. Checked by reading
-`print_verify_report_json` (`crates/prikk-cli/src/output/verification.rs`) and `parse_doctor_args`/
-`bundle`'s own argument parsing (`crates/prikk-cli/src/args.rs`) directly, not assumed.
+**No JSON output changes.** `verify --format json` prints the same fields as before; `doctor` and
+`bundle import` have no JSON output at all.
 
 ### Fixed — an emptied or removed generation log read the wrong slot: a removed maintainer key could read as trusted again, and a new branch could disappear from `branch list`
 
@@ -58,9 +54,10 @@ removed maintainer key read as trusted again — a policy from before a revocati
 caught a *symptom* of the pointer-index case through an unrelated cross-check (a ref-log/pointer divergence);
 nothing caught the trust-policy case at all.
 
-**Found by the external architect's own reproduction** (0.50.0 step 1, review of Part D): seal, compact the
-pointer index, create a branch (landing only in the now-live slot), then empty the generation log.
-`branch list` printed the first branch only, exit 0.
+**Raised by the external review of the 0.49.0 candidate** (019 §5.7: which slot is read once a
+generation log is emptied?), **and reproduced by the architect:** seal, compact the pointer index,
+create a branch (landing only in the now-live slot), then empty the generation log. `branch list`
+printed the first branch only, exit 0.
 
 **Affected since the compactor first shipped: 0.20.0** (`e82bd8b6`, "RFC 102 Stage 6 Step 2 round 3 — the
 compactor, and route writers through the resolver"; the generation-log mechanism itself, `b33d1942`, same
@@ -70,7 +67,7 @@ defect whose triggering code is unchanged since 0.20.0. No advisory (disclosure 
 every reader and writer of the three containers now deduces the live slot from its own content in this
 exact state, rather than silently trusting the original slot.
 
-Fixed in this release (0.50.0 step 1 Parts E through E4): `resolve_live_slot`/`resolve_live_slot_with_tail`
+Fixed in this release: `resolve_live_slot`/`resolve_live_slot_with_tail`
 (`foundation/generation.rs`) now **deduce** the live slot from the two slots' own entries when the
 generation log names no live slot but the non-default slot holds data. The non-default slot's own decoded
 entries equal `compaction(P)`, or are a prefix of it, for *some* prefix `P` of the default slot's own
@@ -89,20 +86,6 @@ remains a way out for the pointer index specifically, reaching the same state th
 (re-deriving from the ref log without reading either slot as live), though the ordinary deduction above no
 longer requires it.
 
-Three corrections along the way, all from review, none reaching a release: Part E made every reader and
-writer refuse unconditionally in this state, which was itself wrong for a crash between a compaction's
-new-slot write and its generation-record append — file-identical to a genuinely lost record, but
-content-equivalent to the slot already live — so Part E2 corrected it to deduce rather than refuse. Part E2's
-own deduction compared by bare membership ("does the non-default slot's entry appear anywhere in the
-default slot's history"), which a repeated value can defeat: the trust policy's snapshot entries carry no
-sequence, only a full `{key_ids}` set, so a maintainer revoked, then re-trusted, then revoked again could
-read as still trusted if the generation log were lost at exactly the wrong moment. Part E3 compared against
-`compaction(A)` positionally instead, fixing that, but only for A *as it is now* — a crash that leaves the
-default slot live does not freeze it there; it keeps taking ordinary writes (a new branch, a revocation)
-until the next compaction, and comparing against the current default slot's content can then resolve to the
-non-default slot, the stale one, losing those writes or reinstating what they revoked. Part E4 compares
-against every prefix of the default slot's own history, not only the whole of it, closing that gap.
-
 ### Fixed — a pointer-index rebuild had two ways to lose data silently: a deep, signed lead dropped, and a torn pointer-index slot abandoned unsaved
 
 **The consequence, in plain words:** `prikk doctor --rebuild-pointer-index` treated any pointer more
@@ -113,14 +96,18 @@ left pending behind whatever made the rebuild necessary, could be discarded in a
 only the first of them. Separately, the rebuild refused on a torn tail in the ref log and in the
 generation log before touching anything, but not on one in the pointer index itself — the one file of
 the three it reads that this up-front refusal did not cover — so a torn pointer-index slot was
-silently abandoned, unsaved, while the rebuild proceeded and exited `0`.
+silently abandoned, unsaved, while the rebuild proceeded and exited `0`. The external crash-and-
+corruption matrix independently found the most severe shape of the first defect: a ref log emptied
+outright. On 0.49.0, every way out *succeeded* — `ref complete`, then `--rebuild-pointer-index` — but
+the rebuild re-derived the pointers from the now-empty log and silently dropped every published
+state; reads afterward answered as if nothing had ever been published, while `verify` exited `0`.
 
 **Found by the external architect's own review** (019 §5.1 and §5.4, RFC 165 R5 amendment). **Affected
 since `--rebuild-pointer-index` first shipped: 0.49.0** (`09b41895`). No advisory (disclosure only — the
 rebuild is a local, operator-run command, not reachable by a peer's bundle or an exchange artifact).
 **Action: upgrade;** a rebuild that finds either shape now refuses instead of proceeding over it.
 
-Fixed in this release (0.50.0 step 1, A1 and A6 item 5): before dropping a pointer `evaluate_known_
+Fixed in this release: before dropping a pointer `evaluate_known_
 lead` does not recognize, the rebuild walks the whole candidate chain read-only, requiring every
 `RefState` in it to verify against the trust policy, chain to the next by exactly one transition, and
 reach the ref log's own tip. Only a chain that fails one of those checks (broken, forked, or unsigned)
@@ -142,7 +129,7 @@ checked only for a decode failure, not for a trailing-partial tail, read that ob
 though its underlying container record was fully sound — `verify`'s own ref-publication scan, built on
 this same lookup, could fail a stage over an object that was never actually lost.
 
-**Found by the architect's own review** (0.50.0 step 1, A5). **Affected since the object index became
+**Found by the architect's own review.** **Affected since the object index became
 a non-refusing cache: 0.48.0** (RFC 162 rules 1-2, `9bff75e4`). No advisory (disclosure only — a false
 failure, never a false pass; an ordinary crash recovery path, not reachable by untrusted input).
 **Action: upgrade;** a trailing-partial tail now takes the identical in-memory container rescan the
@@ -154,7 +141,7 @@ fall back to `rebuild_index_from_containers` on a trailing-partial tail, not onl
 the raw file size, so a write that follows rebuilds the on-disk index first instead of appending behind
 an index that looks already caught up.
 
-### Added — `doctor --repair-tails` gains `--plan-only`, more specific guidance at a publication-blocked refusal, and three new or clarified lines from `verify` and `doctor` (0.50.0 step 1 Parts B, C, D1, and A6 items 1-4)
+### Added — `doctor --repair-tails` gains `--plan-only`, more specific guidance at a publication-blocked refusal, and three new or clarified lines from `verify` and `doctor`
 
 **One new flag:** `doctor --repair-tails` now accepts `--plan-only`, previewing every file it would
 truncate without writing anything — as `--rebuild-pointer-index`, `--discard-damaged-commits`,
@@ -172,9 +159,9 @@ truncate without writing anything — as `--rebuild-pointer-index`, `--discard-d
 - `prikk verify` gains a warning when the current-branch pointer exists but cannot be resolved
   (mirroring `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` recommendation, so the two reports never
   disagree about what to do next).
-- `prikk verify` gains an informational line — `current-branch: not set; commands without --ref use
-  heads/main` — when the pointer file is simply absent (true of every repository initialized before
-  RFC 151, a normal, unaffected state).
+- `prikk verify` gains an informational line — ``current-branch: not set; commands without `--ref`
+  use heads/main`` — when the pointer file is simply absent (true of every repository initialized
+  before 0.42.0, a normal, unaffected state).
 - `verify`'s own "active WAL contains an incomplete trailing record" warning is now suppressed when
   the commit witness already explains those identical bytes as acknowledged damage or loss
   (`doctor`'s matching issue is suppressed the same way) — recommending `--repair-wal-tail` there was
@@ -186,7 +173,7 @@ truncate without writing anything — as `--rebuild-pointer-index`, `--discard-d
 - `verify`'s "acknowledged commits: none recorded" line now adds "(the classification of a session
   written before 0.49.0 applies)", so silence is not mistaken for nothing having been checked.
 
-### Added — `prikk doctor --rebuild-pointer-index` now has a way back (0.50.0 step 1 Parts F/F2)
+### Added — `prikk doctor --rebuild-pointer-index` now has a way back
 
 Before a real run flips away from the live slot, it saves a full copy of it, the rebuilt slot's own
 pre-rebuild bytes, and the generation log's own before/after bytes — to the recovery log, under one
@@ -196,10 +183,10 @@ writes nothing, if anything has since changed what it would overwrite — most n
 write landing in the rebuilt slot (a new branch, a publication): its own saved hash, checked fresh at
 restore time, is what catches that, so a restore can never silently drop work done after the rebuild.
 
-### Added — an Attestation's own `target_block_id` is now checked too (0.50.0 step 2 Part B)
+### Added — an Attestation's own `target_block_id` is now checked too
 
-`prikk-object` gains `AttestationPayload::decode_canonical` — the decoder 0.49.0 step 5 round 2
-disclosed as missing, which kept this one field unchecked even though `verify` already required the
+`prikk-object` gains `AttestationPayload::decode_canonical` — a previously missing decoder, which kept
+this one field unchecked even though `verify` already required the
 attestation object itself to be present. No format change: this reads the same wire bytes
 `AttestationPayload`'s own `encode_canonical` has always written. `verify` now decodes each required
 attestation and requires its own `target_block_id` to be present as a Block too, naming the
