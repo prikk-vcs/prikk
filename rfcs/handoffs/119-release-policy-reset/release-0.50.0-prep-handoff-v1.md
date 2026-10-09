@@ -152,3 +152,7 @@ included;** each still needs its own word. **Next: P4.**
 release run `37940038344`, green). The architect verified the assets: checksums 6/6, build info 4/4, smoke 297/297 on
 the published Linux binary, and the notes byte-identical to the CHANGELOG section. **Still owed:** crates.io (the
 owner's word), note 022, RFC 165 to `done/`, and the consumer letters.
+
+**crates.io: PUBLISHED 2026-10-09** (the owner: *"Yes."*). All eight crates at 0.50.0, in dependency order from the tag's
+worktree, each confirmed on the crates.io index API. **Note 022:** the owner sends it. **The consumer letters:** the owner
+sends them, possibly after 0.51.0.
