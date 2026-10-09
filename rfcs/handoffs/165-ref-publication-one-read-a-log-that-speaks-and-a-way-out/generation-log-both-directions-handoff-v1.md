@@ -123,3 +123,13 @@ the same.
 - **Per part:** the change; the tests, with every row named; the controls shown red; the docs grep; and
   `scripts/gates.py`'s summary on the last commit.
 - **The report lists every item with its status.**
+
+**Q1 ACCEPTED 2026-10-09** (`69015e45`; review `generation-log-both-directions-Q1-review-v1`). **Row 14's answer is
+"refuse".** Two command histories leave byte-identical slots with opposite answers on a revoked key (the architect's
+probe), so content cannot decide.
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **Q1b: the ambiguous refusal, and the readers' texts** | a typed ambiguous refusal, distinct from damage, with its own text per container (the pointer index names the rebuild; the others name a whole-`.prikk/` backup, plus the trust clause); `verify` reports it; `doctor`'s `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` comes first. Row 14 → refuse, with row 14b, the twin (H1, then copy both slots, then compact and re-add, then byte-identical slots and opposite answers). From source: whether a value can recur in the pointer index or the received index (if yes, a twin by commands; if no, the invariant). The readers' own *"run doctor before reading"* constants (`trust_index.rs:50/950`, `received_index.rs:34/578/631/651`) take P3d's wording. For the other such texts, state what `doctor` answers, and never send the user to a `doctor` that names no action. Tests that follow each message; controls; docs grep; 14 gates | 60 min | `generation-log-both-directions-Q1b-report.md` |
+
+**Next: Q1b, then Q2.**
