@@ -52,6 +52,13 @@ pub enum PrikkError {
     /// from every other precondition -- to decide whether `prikk ref complete <ref>` is the way out
     /// -- match the variant instead of the words.
     IncompletePublication(String),
+    /// Handoff 165 Q1b: a compacting container's generation log is lost, and its two slots fit two
+    /// genuinely different, equally honest histories -- not damage, and not a state content can
+    /// decide (Q1's own proof: two command sequences that disagree on a revoked key's trust leave
+    /// byte-identical slots). Distinct from [`Self::Integrity`] so a caller can tell "guessing would
+    /// be wrong either way" apart from "a record is corrupt" by matching the variant, the same
+    /// reason [`Self::IncompletePublication`] exists apart from [`Self::Precondition`].
+    AmbiguousGenerationLog(String),
     /// The requested object type cannot be persisted in the requested store.
     UnsupportedObjectType(String),
     /// RFC 158 Stage A: an object frame inside an incoming artifact (a bundle or a patch-exchange
@@ -99,6 +106,7 @@ impl fmt::Display for PrikkError {
             Self::LockConflict(msg) => write!(f, "lock conflict: {msg}"),
             Self::Precondition(msg) => write!(f, "precondition not met: {msg}"),
             Self::IncompletePublication(msg) => write!(f, "precondition not met: {msg}"),
+            Self::AmbiguousGenerationLog(msg) => write!(f, "ambiguous generation log: {msg}"),
             Self::UnsupportedObjectType(msg) => write!(f, "unsupported object type: {msg}"),
             Self::ObjectOverBound {
                 declared_bytes,

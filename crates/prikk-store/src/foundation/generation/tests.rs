@@ -142,6 +142,7 @@ fn an_empty_or_missing_generation_log_resolves_to_slot_a() -> Result<()> {
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
+        "ref pointer index generation log is ambiguous",
         trivial_decode,
         trivial_fold,
     )?;
@@ -171,6 +172,7 @@ fn resolver_takes_the_last_complete_record() -> Result<()> {
         &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
         "received-ref index has a damaged entry",
+        "received index generation log is ambiguous",
         trivial_decode,
         trivial_fold,
     )?;
@@ -207,6 +209,7 @@ fn a_damaged_generation_record_fails_closed_rather_than_resolving_silently() -> 
             &layout.trust_policy_container_slot_path(ContainerSlot::A),
             &layout.trust_policy_container_slot_path(ContainerSlot::B),
             "trust policy container has a damaged snapshot",
+            "trust policy generation log is ambiguous",
             trivial_decode,
             trivial_fold,
         )

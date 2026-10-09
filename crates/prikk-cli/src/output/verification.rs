@@ -724,7 +724,12 @@ pub(crate) fn print_verify_report(
     // itself is what is broken -- decided by the same direct, independent check
     // `container_interior_damage` already made, never by matching this issue's own text.
     if let Some(issue) = &report.current_branch_issue {
-        if report.container_interior_damage.pointer_index.is_some() {
+        if report.container_interior_damage.pointer_index.is_some()
+            || report
+                .container_generation_ambiguity
+                .pointer_index
+                .is_some()
+        {
             println!("warning: current-branch pointer could not be resolved: {issue}");
         } else {
             println!(

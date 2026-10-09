@@ -453,8 +453,14 @@ fn lookup_author_key_entries_with_tail(
 ) -> Result<(Vec<AuthorKeyEntry>, usize, usize)> {
     let replay = replay_author_keys(layout)?;
     if replay.has_item_failure() {
+        // Q1b item 4: `doctor`'s own generic `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` names no
+        // specific action for this file; this container is TOFU history too, never compacted, so
+        // no repair exists -- P3d's wording, not "run doctor before reading."
         return Err(PrikkError::Integrity(
-            "author key container has a damaged entry; run doctor before reading".to_string(),
+            "author key container has a damaged entry; no repair exists -- preserve the \
+             repository; the way out is a copy of this repository's own `.prikk/` directory \
+             from a backup taken before the damage"
+                .to_string(),
         ));
     }
     let entries = replay

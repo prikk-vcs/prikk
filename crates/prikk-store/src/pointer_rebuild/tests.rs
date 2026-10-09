@@ -151,6 +151,7 @@ fn live_pointer_index_bytes(layout: &RepositoryLayout) -> Vec<u8> {
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
+        "ref pointer index generation log is ambiguous",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )
@@ -730,6 +731,7 @@ fn k5_rebuild_is_never_run_implicitly() {
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
+        "ref pointer index generation log is ambiguous",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )

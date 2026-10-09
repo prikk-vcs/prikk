@@ -774,6 +774,10 @@ pub struct RepositoryVerification {
     /// rebuild, or "no repair, restore from a backup") instead of whichever stage happened to fail
     /// first over the same damage.
     pub container_interior_damage: ContainerInteriorDamage,
+    /// Handoff 165 Q1b: each compacting container's own generation-log ambiguity, read directly
+    /// alongside `container_interior_damage` above -- typed separately from it (the Q1 review's
+    /// H1/H2 proof: this is not damage, and no rule reading only the slots can be right either).
+    pub container_generation_ambiguity: ContainerGenerationAmbiguity,
 }
 
 /// One compacting container's own Part E2 warning: its generation log named no live slot, but its
@@ -813,17 +817,48 @@ pub struct ContainerInteriorDamage {
     pub trust_policy: Option<String>,
 }
 
+/// Handoff 165 Q1b: a compacting container's generation log is lost, and its two slots fit two
+/// genuinely different, equally honest histories -- the Q1 review's own H1/H2 proof that no rule
+/// reading only the slots can be right in both. Distinct from [`ContainerInteriorDamage`]: nothing
+/// here is corrupt, and no repair makes this go away short of a backup (or, for the pointer index,
+/// the rebuild, which never reads either slot). `None` means this container's generation log and
+/// both slots either read cleanly, or the ambiguity was a damage case instead
+/// ([`ContainerInteriorDamage`]), or there was no ambiguity to report.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ContainerGenerationAmbiguity {
+    /// Set when the ref pointer index's generation log is lost and its two slots fit two
+    /// different histories. `prikk doctor --rebuild-pointer-index` sidesteps the ambiguity
+    /// entirely, re-deriving the index from the ref log rather than choosing between the slots.
+    pub pointer_index: Option<String>,
+    /// Set when the received index's generation log is lost and its two slots fit two different
+    /// histories. No way out short of a backup: there is no ref log to re-derive this container
+    /// from.
+    pub received_index: Option<String>,
+    /// Set when the trust policy container's generation log is lost and its two slots fit two
+    /// different histories that disagree on which keys are trusted. No way out short of a backup,
+    /// for the same reason as the received index.
+    pub trust_policy: Option<String>,
+}
+
 /// Part E2: checks all three compacting containers for the "log names no slot, content decides it"
 /// state, read directly (never through whichever reader happens to touch each one first) so `verify`
 /// reports it even when nothing else this run touches the affected container. 0.50.0 P3c: the same
 /// three reads also catch each container's own interior damage directly, in
 /// [`ContainerInteriorDamage`] -- the one case `resolve_live_slot_with_deduction_note` cannot deduce
-/// past, which it reports as `Err`.
+/// past, which it reports as `Err`. Handoff 165 Q1b: a third outcome, [`ContainerGenerationAmbiguity`]
+/// -- the deduction's own `Err` is typed (`PrikkError::AmbiguousGenerationLog`, distinct from
+/// `Integrity`) precisely so this can tell the two refusals apart without matching text.
 pub(crate) fn check_generation_log_deductions(
     layout: &RepositoryLayout,
-) -> (Vec<GenerationLogDeductionNote>, ContainerInteriorDamage) {
+) -> (
+    Vec<GenerationLogDeductionNote>,
+    ContainerInteriorDamage,
+    ContainerGenerationAmbiguity,
+) {
     let mut notes = Vec::new();
     let mut damage = ContainerInteriorDamage::default();
+    let mut ambiguity = ContainerGenerationAmbiguity::default();
     // 0.50.0 P3c: checked first, directly, the same two-part way `refs::pointer_index_interior_
     // damage` does -- the live slot's own content failing to decode is the common shape (no
     // compaction has ever run, so the generation log names no ambiguity for the deduction below to
@@ -860,6 +895,9 @@ pub(crate) fn check_generation_log_deductions(
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
          --plan-only`, then `prikk doctor --rebuild-pointer-index`",
+        "ref pointer index's generation log is lost, and its two slots fit two different \
+         histories; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+         --rebuild-pointer-index` -- the ref log decides, not either slot",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     ) {
@@ -869,6 +907,9 @@ pub(crate) fn check_generation_log_deductions(
             &deduced,
         )),
         Ok(None) => {}
+        Err(PrikkError::AmbiguousGenerationLog(message)) => {
+            ambiguity.pointer_index.get_or_insert(message);
+        }
         Err(err) => {
             damage.pointer_index.get_or_insert(err.to_string());
         }
@@ -881,6 +922,9 @@ pub(crate) fn check_generation_log_deductions(
         "received-ref index has a damaged entry; no repair exists -- preserve the repository; the \
          way out is a copy of this repository's own `.prikk/` directory from a backup taken \
          before the damage",
+        "the received index's generation log is lost, and its two slots fit two different \
+         histories; prikk will not guess. Restore the repository's whole `.prikk/` from a backup \
+         taken before the log was lost",
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     ) {
@@ -890,6 +934,9 @@ pub(crate) fn check_generation_log_deductions(
             &deduced,
         )),
         Ok(None) => {}
+        Err(PrikkError::AmbiguousGenerationLog(message)) => {
+            ambiguity.received_index.get_or_insert(message);
+        }
         Err(err) => {
             damage.received_index.get_or_insert(err.to_string());
         }
@@ -902,6 +949,10 @@ pub(crate) fn check_generation_log_deductions(
         "trust policy container has a damaged snapshot; no repair exists -- preserve the \
          repository; the way out is a copy of this repository's own `.prikk/` directory from a \
          backup taken before the damage, then re-apply every trust change made since that backup",
+        "the trust policy's generation log is lost, and its two slots fit two different \
+         histories (one trusts a key the other has revoked); prikk will not guess. Restore the \
+         repository's whole `.prikk/` from a backup taken before the log was lost, then re-apply \
+         every trust change made since that backup",
         decode_trust_policy_entries_for_resolver,
         fold_one_trust_policy_entry,
     ) {
@@ -911,11 +962,14 @@ pub(crate) fn check_generation_log_deductions(
             &deduced,
         )),
         Ok(None) => {}
+        Err(PrikkError::AmbiguousGenerationLog(message)) => {
+            ambiguity.trust_policy.get_or_insert(message);
+        }
         Err(err) => {
             damage.trust_policy.get_or_insert(err.to_string());
         }
     };
-    (notes, damage)
+    (notes, damage, ambiguity)
 }
 
 fn deduction_note(
@@ -1989,7 +2043,7 @@ pub fn verify_repository_with_options(
     // logs directly, unconditionally, the same footing as `AppendedFileTails` above. 0.50.0 P3c: the
     // same reads also catch each container's own interior damage directly (`container_interior_
     // damage`), independent of which stage a caller happens to find failing over it.
-    let (generation_log_deductions, container_interior_damage) =
+    let (generation_log_deductions, container_interior_damage, container_generation_ambiguity) =
         check_generation_log_deductions(layout);
 
     // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
@@ -2049,6 +2103,7 @@ pub fn verify_repository_with_options(
         current_branch_absent,
         generation_log_deductions,
         container_interior_damage,
+        container_generation_ambiguity,
     })
 }
 

@@ -423,6 +423,9 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
             "ref pointer index has a damaged entry that the rebuild cannot read past either; no \
              repair exists -- preserve the repository; the way out is a copy of this \
              repository's own `.prikk/` directory from a backup taken before the damage",
+            "ref pointer index's generation log is lost, and its two slots fit two different \
+             histories; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk \
+             doctor --rebuild-pointer-index` -- the ref log decides, not either slot",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?;

@@ -14,9 +14,10 @@ use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, Reposito
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::refs::{RefFileStatus, RefItemStatus};
 use crate::verify::{
-    ActiveWalMetadataStatus, ContainerInteriorDamage, ObjectItemStatus, RepositoryVerification,
-    StageOutcome, StageStatus, VerificationStage, active_ref_metadata_from_wal_metadata_status,
-    check_generation_log_deductions, classify_active_wal_metadata, verify_repository,
+    ActiveWalMetadataStatus, ContainerGenerationAmbiguity, ContainerInteriorDamage,
+    ObjectItemStatus, RepositoryVerification, StageOutcome, StageStatus, VerificationStage,
+    active_ref_metadata_from_wal_metadata_status, check_generation_log_deductions,
+    classify_active_wal_metadata, verify_repository,
 };
 use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
@@ -688,8 +689,35 @@ fn active_session_owning_stage_outcome(outcome: &StageOutcome) -> Option<&'stati
 fn push_container_interior_damage_issues(
     layout: &RepositoryLayout,
     issues: &mut Vec<DoctorIssue>,
-) -> ContainerInteriorDamage {
-    let (_, damage) = check_generation_log_deductions(layout);
+) -> (ContainerInteriorDamage, ContainerGenerationAmbiguity) {
+    let (_, damage, ambiguity) = check_generation_log_deductions(layout);
+    // Handoff 165 Q1b: the ambiguous-refusal issues print first, same as G2 already does for
+    // damage -- the one message that explains the state comes before the current-branch warning
+    // and the stage errors the same ambiguity also causes.
+    if let Some(message) = &ambiguity.pointer_index {
+        issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS",
+            message.clone(),
+            "run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+             --rebuild-pointer-index` -- the ref log decides, not either slot",
+        ));
+    }
+    if let Some(message) = &ambiguity.received_index {
+        issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS",
+            message.clone(),
+            "prikk will not guess; restore the repository's whole `.prikk/` from a backup taken \
+             before the log was lost",
+        ));
+    }
+    if let Some(message) = &ambiguity.trust_policy {
+        issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS",
+            message.clone(),
+            "prikk will not guess; restore the repository's whole `.prikk/` from a backup taken \
+             before the log was lost, then re-apply every trust change made since that backup",
+        ));
+    }
     if let Some(message) = &damage.pointer_index {
         issues.push(DoctorIssue::error(
             "PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE",
@@ -715,7 +743,7 @@ fn push_container_interior_damage_issues(
              made since that backup",
         ));
     }
-    damage
+    (damage, ambiguity)
 }
 
 /// RFC 151 §2.1: a current-branch pointer no default can resolve -- malformed, or naming a branch
@@ -804,7 +832,8 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     let mut issues = Vec::new();
     push_missing_required_directory_issues(layout, &mut issues);
     push_non_default_active_session_wal_issues(layout, &mut issues);
-    let container_interior_damage = push_container_interior_damage_issues(layout, &mut issues);
+    let (container_interior_damage, container_generation_ambiguity) =
+        push_container_interior_damage_issues(layout, &mut issues);
     push_current_branch_issue(layout, &mut issues);
     push_provisional_worktree_issue(layout, &mut issues);
     push_interrupted_materialization_issue(layout, &mut issues);
@@ -838,6 +867,12 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 (
                     container_interior_damage.trust_policy.is_some(),
                     "PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE",
+                ),
+                (
+                    container_generation_ambiguity.pointer_index.is_some()
+                        || container_generation_ambiguity.received_index.is_some()
+                        || container_generation_ambiguity.trust_policy.is_some(),
+                    "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS",
                 ),
             ]
             .into_iter()

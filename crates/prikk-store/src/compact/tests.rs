@@ -77,6 +77,7 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
+        "ref pointer index generation log is ambiguous",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )?;
@@ -92,6 +93,7 @@ fn compacting_the_ref_pointer_index_reclaims_stale_entries_and_preserves_current
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         "ref pointer index has a damaged entry",
+        "ref pointer index generation log is ambiguous",
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )?;
@@ -153,6 +155,7 @@ fn plan_compact_reports_the_same_counts_as_a_real_run_and_touches_nothing() -> R
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -227,6 +230,7 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -245,6 +249,7 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -290,6 +295,7 @@ fn a_crash_then_ordinary_writes_to_a_still_resolve_to_a() -> Result<()> {
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -367,6 +373,7 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -383,6 +390,7 @@ fn a_crash_while_writing_the_new_slots_own_bytes_leaves_the_old_generation_autho
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -420,6 +428,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -442,6 +451,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -458,6 +468,7 @@ fn a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_auth
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -558,6 +569,7 @@ fn compaction_refuses_on_a_corrupt_container_and_touches_nothing() -> Result<()>
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -607,6 +619,7 @@ fn compaction_refuses_on_a_live_slot_tail_and_touches_nothing() -> Result<()> {
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -971,6 +984,7 @@ fn a_partly_written_slot_b_resolves_to_the_old_generation() -> Result<()> {
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &slot_b_path,
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -1024,9 +1038,13 @@ fn trust_policy_un_revocation_sequence_refuses_rather_than_pick_a_side() -> Resu
     std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
 
     assert!(
-        load_maintainer_trust_policy(&layout).is_err(),
+        matches!(
+            load_maintainer_trust_policy(&layout),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
         "both relations hold here (this test's own doc comment); L must never silently read as \
-         trusted, and refusing is what keeps that true when the evidence itself disagrees"
+         trusted, and refusing -- typed as ambiguous, not damage, per the Q1 review -- is what \
+         keeps that true when the evidence itself disagrees"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -1396,18 +1414,11 @@ fn handoff_165_row_13_a_cut_short_compaction_output_then_writes_to_the_live_slot
 /// re-trusted, then revoked again, straddling two compactions, with the write after the second switch
 /// repeating a snapshot the stale slot already holds.
 ///
-/// **Finding, flagged for the architect rather than silently papered over:** this exact construction
-/// -- built verbatim from the row's own prose -- makes `F(live)`'s own revoke-again value equal the
-/// stale slot's *first* raw entry (both are "no l", the row's own "W repeats a snapshot the stale
-/// slot holds"), which is unavoidable once two revocations of the same key produce the same set. That
-/// satisfies relation 1 ("stale beside") in *both* directions at once (each slot's first entry equals
-/// the other's fold), and the two folds themselves disagree on whether `l` is trusted (live: no;
-/// stale: yes) -- exactly the "yes/yes, folds differ" row, which the rule refuses rather than guess.
-/// The row's own table names "the live slot" as the answer, not a refusal; this test instead asserts
-/// the refusal, since that is what the stated rule actually computes here, and a refusal still keeps
-/// the named security property (`l` never silently reads as trusted) -- open question for Q1's
-/// review: should "yes/yes, folds differ" prefer the slot whose match came through relation 1, or is
-/// refusing here the intended, merely under-described, answer?
+/// **Q1 review ruled on this: row 14's answer is "refuse," not "the live slot."** The architect
+/// proved it by commands (H1/H2, see [`row_14b_h1_and_h2_leave_byte_identical_slots_with_opposite_
+/// answers`] below): two equally honest histories leave the identical two slot files with opposite
+/// answers on whether `l` is trusted. Once the log is lost, no rule reading only the slots can be
+/// right in both, so refusing is the only honest answer -- not a tie-breaker waiting to be found.
 #[test]
 fn handoff_165_row_14_trust_policy_revoke_retrust_revoke_across_two_compactions() -> Result<()> {
     let root = unique_temp_dir("handoff-165-row14-trust-policy");
@@ -1428,9 +1439,82 @@ fn handoff_165_row_14_trust_policy_revoke_retrust_revoke_across_two_compactions(
     std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
 
     assert!(
-        load_maintainer_trust_policy(&layout).is_err(),
+        matches!(
+            load_maintainer_trust_policy(&layout),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
         "both relations hold here (see this test's own doc comment) with disagreeing folds -- l \
-         must never silently read as trusted, and refusing, not guessing, is what keeps that true"
+         must never silently read as trusted, and refusing (typed as ambiguous, not damage) is \
+         what keeps that true"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 Q1b item 2, row 14's twin: the architect's own proof that row 14 is genuinely
+/// ambiguous, not merely unresolved (Q1 review, "the question: row 14 and the E3 test refuse. Is
+/// that right?"). The base: setup, then one compaction -- B live. **H1**: add K2, compact (live
+/// switches to A), remove K2 -- A live, K2 revoked; both slots saved aside here. **H2 continues H1**
+/// from that exact point: compact again (live switches back to B), then add K2 back -- B live, K2
+/// trusted. Two equally honest histories, continued from the same repository, yet slot a is
+/// byte-identical between H1 and H2, and so is slot b -- only the generation log differs. Once that
+/// log is lost, nothing in either slot can tell the two histories apart, so the deduction must
+/// refuse, the architect's own point: no tie-breaker (length, raw order, anything else) can be right,
+/// because H1 and H2 are the same bytes.
+#[test]
+fn row_14b_h1_and_h2_leave_byte_identical_slots_with_opposite_answers() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row14b-h1-h2");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let k2_key = public_key_hex(&[53_u8; 32]);
+
+    add_trusted_maintainer(&layout, "base", &public_key_hex(&[54_u8; 32]))?;
+    compact_trust_policy(&layout)?; // the base: one compaction, B live
+
+    // H1: add K2, compact (live -> A), remove K2 -- A live, K2 revoked.
+    add_trusted_maintainer(&layout, "k2", &k2_key)?;
+    compact_trust_policy(&layout)?;
+    remove_trusted_maintainer(&layout, "k2")?;
+    let h1_policy = load_maintainer_trust_policy(&layout)?;
+    assert!(
+        !h1_policy.keys.iter().any(|key| key.key_id == "k2"),
+        "fixture: H1 must end with K2 revoked"
+    );
+    let h1_slot_a = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))?;
+    let h1_slot_b = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::B))?;
+
+    // H2 continues H1, in the same repository: compact again (live -> B), then add K2 back -- B
+    // live, K2 trusted.
+    compact_trust_policy(&layout)?;
+    add_trusted_maintainer(&layout, "k2", &k2_key)?;
+    let h2_policy = load_maintainer_trust_policy(&layout)?;
+    assert!(
+        h2_policy.keys.iter().any(|key| key.key_id == "k2"),
+        "fixture: H2 must end with K2 trusted"
+    );
+    let h2_slot_a = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))?;
+    let h2_slot_b = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::B))?;
+
+    assert_eq!(
+        h1_slot_a, h2_slot_a,
+        "H1 and H2 must leave byte-identical slot a -- the architect's own proof"
+    );
+    assert_eq!(
+        h1_slot_b, h2_slot_b,
+        "H1 and H2 must leave byte-identical slot b -- the architect's own proof"
+    );
+
+    // Lose the log and confirm the ambiguous refusal: the same bytes that just answered "K2
+    // trusted" under H2's own intact log answer nothing at all once it is lost, because H1's own
+    // intact log, over the identical bytes, would have answered the opposite.
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+    assert!(
+        matches!(
+            load_maintainer_trust_policy(&layout),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
+        "byte-identical slots with opposite answers must refuse once the log that disambiguates \
+         them is lost"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -1463,6 +1547,7 @@ fn handoff_165_row_15_the_slot_the_log_would_have_named_is_empty() -> Result<()>
             &layout.ref_pointer_index_slot_path(ContainerSlot::A),
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry",
+            "ref pointer index generation log is ambiguous",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?,
@@ -1524,8 +1609,12 @@ fn handoff_165_row_17_neither_relation_holds_refuses() -> Result<()> {
     )?;
 
     assert!(
-        store.read_current_ref_state_id("heads/main").is_err(),
-        "neither slot is a compaction of the other -- this must refuse, not guess"
+        matches!(
+            store.read_current_ref_state_id("heads/main"),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
+        "neither slot is a compaction of the other -- this must refuse, not guess, typed as \
+         ambiguous rather than damage"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -1572,9 +1661,58 @@ fn handoff_165_row_18_both_relations_hold_with_differing_folds_refuses() -> Resu
     )?;
 
     assert!(
-        load_maintainer_trust_policy(&layout).is_err(),
+        matches!(
+            load_maintainer_trust_policy(&layout),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
         "both relations hold (each slot's own fold is a prefix of the other's raw history) but the \
-         folds themselves disagree on which snapshot is current -- this must refuse, not guess"
+         folds themselves disagree on which snapshot is current -- this must refuse, not guess, \
+         typed as ambiguous rather than damage"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 Q1b item 3: can a received tip return to an earlier value through any command? **Yes
+/// -- `write_received_pointer`/`bundle import` enforce no fast-forward invariant** (`received.rs`'s
+/// own `write_received_pointer`, and `bundle.rs`'s call to it, unconditionally record whatever tip
+/// the bundle names; the comment above that call, "import records material, verify decides," is the
+/// deliberate absence of a monotonicity check). Re-importing an earlier tip after a later one was
+/// already received reproduces row 14's exact mechanism: two compactions plus a write that repeats a
+/// value the stale slot already holds, with both `stale_beside` directions holding and the folds
+/// disagreeing on which tip is current.
+///
+/// (The pointer index has no equivalent: `refs/publication.rs::log_position`'s own `expected_sequence
+/// == index + 1` ties every `RefState`'s signed `update_seq` to its position in that ref's own,
+/// permanent ref-log chain -- `compact.rs`'s module doc confirms the ref log is never pruned or
+/// compacted -- so no two publications for the same ref can ever carry the same `update_seq`, and a
+/// `RefState`'s object id is derived from its full signed payload, `update_seq` included. A pointer
+/// value cannot recur.)
+#[test]
+fn handoff_165_q1b_item_3_a_received_tip_can_recur_and_the_ambiguity_follows() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-q1b3-received-index-recurs");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let target = objects_target(&layout)?;
+    let tip1 = signed_ref_state_envelope("heads/main", None, target, 1).object_id();
+    let tip2 = signed_ref_state_envelope("heads/main", None, target, 2).object_id();
+
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip1)?;
+    compact_received_index(&layout)?; // k=1: live holds [tip1]
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip2)?; // a real, newer import
+    compact_received_index(&layout)?; // k=2: retired slot holds [tip1, tip2]; live holds [tip2]
+    // The tip "returns" to an earlier value -- re-receiving tip1 after tip2 was already current.
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip1)?;
+    std::fs::write(layout.received_index_generation_log_path(), b"")?;
+
+    assert!(
+        matches!(
+            crate::received::read_received_pointer(&layout, "remotes/heads/main"),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
+        "both relations hold (the live slot's fold is tip1, the retired slot's first entry is \
+         tip1; the retired slot's fold is tip2, the live slot's first entry is tip2) -- this must \
+         refuse, not silently pick either tip"
     );
 
     let _ = std::fs::remove_dir_all(root);

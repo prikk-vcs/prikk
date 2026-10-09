@@ -136,7 +136,10 @@ fn removing_a_declaration_names_its_file() {
         // `check_generation_log_deductions` now also makes for all three containers, 2,497 -> 2,575.
         // 0.50.0 P3d: G3's whole-`.prikk/` wording and G4's exact-command text rewrote four damage_text
         // strings in place, net 2,575 -> 2,576.
-        detail.contains("2576"),
+        // Handoff 165 Q1b: `ContainerGenerationAmbiguity`, the ambiguous_text argument threaded
+        // through the three deduction calls, and the typed `AmbiguousGenerationLog` arm each call
+        // site now matches, 2,576 -> 2,631.
+        detail.contains("2631"),
         "the line count is in the message: {detail}"
     );
     assert!(

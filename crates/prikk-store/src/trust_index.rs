@@ -46,8 +46,23 @@ use crate::foundation::generation::{self, resolve_live_slot};
 
 /// The trust policy container's own existing damage text, reused verbatim by Part E2's deduction
 /// (rule 3) when the entries needed to deduce a live slot cannot themselves be read.
-const TRUST_POLICY_DAMAGE_TEXT: &str =
-    "trust policy container has a damaged snapshot; run doctor before reading";
+///
+/// Q1 review (P3c's report claimed this already carried P3d's wording; it did not -- only the
+/// copies in `verify.rs`, `compact.rs` and `repair_tails.rs` were ever changed): no repair exists
+/// for interior damage here, so this names the whole-`.prikk/`-backup way out directly, the same
+/// wording those other three copies already carry.
+const TRUST_POLICY_DAMAGE_TEXT: &str = "trust policy container has a damaged snapshot; no repair exists -- preserve the \
+     repository; the way out is a copy of this repository's own `.prikk/` directory from a \
+     backup taken before the damage, then re-apply every trust change made since that backup";
+
+/// Handoff 165 Q1b: the generation log is lost and the two slots fit two different, equally
+/// honest histories that disagree on which keys are trusted -- not damage, and Q1's own proof
+/// (H1/H2) rules out any rule that reads only the slots. The backup is the only way out; unlike
+/// the pointer index, there is no ref log to re-derive this container from.
+const TRUST_POLICY_AMBIGUOUS_TEXT: &str = "the trust policy's generation log is lost, and its two slots fit two different \
+     histories (one trusts a key the other has revoked); prikk will not guess. Restore the \
+     repository's whole `.prikk/` from a backup taken before the log was lost, then re-apply \
+     every trust change made since that backup";
 
 /// The exact reduction `compact_trust_policy` performs: only the last snapshot survives (0 or 1
 /// entries). Factored out so Part E3's deduction (`C = compaction(A)`) uses the identical logic the
@@ -474,8 +489,15 @@ pub(crate) fn lookup_trust_key_entry_with_tail(
 ) -> Result<(Option<TrustKeyEntry>, usize, usize)> {
     let replay = replay_trust_keys(layout)?;
     if replay.has_item_failure() {
+        // Q1b item 4: `doctor`'s own generic `PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE` names no
+        // specific action for this file ("preserve... for manual recovery"); this container is
+        // TOFU history, never compacted or pruned (`compact.rs`'s own module doc), so no repair
+        // exists either -- P3d's wording, not "run doctor before reading."
         return Err(PrikkError::Integrity(
-            "trust key container has a damaged entry; run doctor before reading".to_string(),
+            "trust key container has a damaged entry; no repair exists -- preserve the \
+             repository; the way out is a copy of this repository's own `.prikk/` directory \
+             from a backup taken before the damage"
+                .to_string(),
         ));
     }
     let entry = replay
@@ -911,6 +933,7 @@ pub(crate) fn replay_trust_policy(layout: &RepositoryLayout) -> Result<TrustPoli
         &layout.trust_policy_container_slot_path(ContainerSlot::A),
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         TRUST_POLICY_DAMAGE_TEXT,
+        TRUST_POLICY_AMBIGUOUS_TEXT,
         decode_trust_policy_entries_for_resolver,
         fold_one_trust_policy_entry,
     )?;
@@ -946,9 +969,7 @@ pub(crate) fn read_current_trust_policy_snapshot_with_tail(
 ) -> Result<(Option<Vec<String>>, usize, usize)> {
     let replay = replay_trust_policy(layout)?;
     if replay.has_item_failure() {
-        return Err(PrikkError::Integrity(
-            "trust policy container has a damaged snapshot; run doctor before reading".to_string(),
-        ));
+        return Err(PrikkError::Integrity(TRUST_POLICY_DAMAGE_TEXT.to_string()));
     }
     let snapshot = replay
         .entries
@@ -976,6 +997,7 @@ pub(crate) fn append_trust_policy_snapshot(
         &layout.trust_policy_container_slot_path(ContainerSlot::A),
         &layout.trust_policy_container_slot_path(ContainerSlot::B),
         TRUST_POLICY_DAMAGE_TEXT,
+        TRUST_POLICY_AMBIGUOUS_TEXT,
         decode_trust_policy_entries_for_resolver,
         fold_one_trust_policy_entry,
     )?;

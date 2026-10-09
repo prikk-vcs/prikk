@@ -305,6 +305,10 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
                  repository; the way out is a copy of this repository's own `.prikk/` directory \
                  from a backup taken before the damage, then re-apply every trust change made \
                  since that backup",
+                "the trust policy's generation log is lost, and its two slots fit two different \
+                 histories (one trusts a key the other has revoked); prikk will not guess. \
+                 Restore the repository's whole `.prikk/` from a backup taken before the log was \
+                 lost, then re-apply every trust change made since that backup",
                 decode_trust_policy_entries_for_resolver,
                 fold_one_trust_policy_entry,
             )?;
@@ -320,6 +324,9 @@ fn appended_file_relative_path(layout: &RepositoryLayout, label: &'static str) -
                 "received-ref index has a damaged entry; no repair exists -- preserve the \
                  repository; the way out is a copy of this repository's own `.prikk/` directory \
                  from a backup taken before the damage",
+                "the received index's generation log is lost, and its two slots fit two different \
+                 histories; prikk will not guess. Restore the repository's whole `.prikk/` from a \
+                 backup taken before the log was lost",
                 decode_received_index_entries_for_resolver,
                 fold_one_received_index_entry,
             )?;

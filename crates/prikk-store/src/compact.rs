@@ -104,6 +104,9 @@ pub fn precheck_ref_pointer_index_before_compaction(layout: &RepositoryLayout) -
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
              --plan-only`, then `prikk doctor --rebuild-pointer-index`",
+            "ref pointer index's generation log is lost, and its two slots fit two different \
+             histories; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk \
+             doctor --rebuild-pointer-index` -- the ref log decides, not either slot",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?;
@@ -141,6 +144,9 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
             "received-ref index has a damaged entry; no repair exists -- preserve the repository; \
              the way out is a copy of this repository's own `.prikk/` directory from a backup \
              taken before the damage",
+            "the received index's generation log is lost, and its two slots fit two different \
+             histories; prikk will not guess. Restore the repository's whole `.prikk/` from a \
+             backup taken before the log was lost",
             decode_received_index_entries_for_resolver,
             fold_one_received_index_entry,
         )?;
@@ -179,6 +185,10 @@ pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Res
              repository; the way out is a copy of this repository's own `.prikk/` directory from \
              a backup taken before the damage, then re-apply every trust change made since that \
              backup",
+            "the trust policy's generation log is lost, and its two slots fit two different \
+             histories (one trusts a key the other has revoked); prikk will not guess. Restore \
+             the repository's whole `.prikk/` from a backup taken before the log was lost, then \
+             re-apply every trust change made since that backup",
             decode_trust_policy_entries_for_resolver,
             fold_one_trust_policy_entry,
         )?;
@@ -219,6 +229,9 @@ fn run_ref_pointer_index_compaction(
             &layout.ref_pointer_index_slot_path(ContainerSlot::B),
             "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
              --plan-only`, then `prikk doctor --rebuild-pointer-index`",
+            "ref pointer index's generation log is lost, and its two slots fit two different \
+             histories; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk \
+             doctor --rebuild-pointer-index` -- the ref log decides, not either slot",
             decode_pointer_index_entries_for_resolver,
             fold_one_pointer_index_entry,
         )?;
@@ -313,6 +326,9 @@ fn run_received_index_compaction(
             "received-ref index has a damaged entry; no repair exists -- preserve the repository; \
              the way out is a copy of this repository's own `.prikk/` directory from a backup \
              taken before the damage",
+            "the received index's generation log is lost, and its two slots fit two different \
+             histories; prikk will not guess. Restore the repository's whole `.prikk/` from a \
+             backup taken before the log was lost",
             decode_received_index_entries_for_resolver,
             fold_one_received_index_entry,
         )?;
@@ -400,6 +416,10 @@ fn run_trust_policy_compaction(
              repository; the way out is a copy of this repository's own `.prikk/` directory from \
              a backup taken before the damage, then re-apply every trust change made since that \
              backup",
+            "the trust policy's generation log is lost, and its two slots fit two different \
+             histories (one trusts a key the other has revoked); prikk will not guess. Restore \
+             the repository's whole `.prikk/` from a backup taken before the log was lost, then \
+             re-apply every trust change made since that backup",
             decode_trust_policy_entries_for_resolver,
             fold_one_trust_policy_entry,
         )?;

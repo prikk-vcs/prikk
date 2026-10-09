@@ -30,8 +30,20 @@ use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 /// The received index's own existing damage text, reused verbatim by Part E2's deduction (rule 3)
 /// when the entries needed to deduce a live slot cannot themselves be read.
-const RECEIVED_INDEX_DAMAGE_TEXT: &str =
-    "received-ref index has a damaged entry; run doctor before reading";
+///
+/// Q1 review (P3c's report claimed this already carried P3d's wording; it did not): no repair
+/// exists for interior damage here either, so this names the whole-`.prikk/`-backup way out
+/// directly.
+const RECEIVED_INDEX_DAMAGE_TEXT: &str = "received-ref index has a damaged entry; no repair exists -- preserve the repository; \
+     the way out is a copy of this repository's own `.prikk/` directory from a backup taken \
+     before the damage";
+
+/// Handoff 165 Q1b: the generation log is lost and the two slots fit two different histories --
+/// not damage, and Q1's own proof rules out any rule that reads only the slots. No ref log exists
+/// to re-derive this container from, so the backup is the only way out.
+const RECEIVED_INDEX_AMBIGUOUS_TEXT: &str = "the received index's generation log is lost, and its two slots fit two different \
+     histories; prikk will not guess. Restore the repository's whole `.prikk/` from a backup \
+     taken before the log was lost";
 
 /// The exact reduction `compact_received_index` performs: last entry per `ref_name_key` survives, in
 /// the order each key's own last occurrence appears in `entries`. Factored out so Part E3's
@@ -562,6 +574,7 @@ pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Re
         &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
         RECEIVED_INDEX_DAMAGE_TEXT,
+        RECEIVED_INDEX_AMBIGUOUS_TEXT,
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     )?;
@@ -575,7 +588,7 @@ pub(crate) fn require_received_index_clean_tail(layout: &RepositoryLayout) -> Re
     // any damaged entry, via their own `has_item_failure()`. Same message, same "run doctor" advice.
     if damaged {
         return Err(PrikkError::Integrity(
-            "received-ref index has a damaged entry; run doctor before reading".to_string(),
+            RECEIVED_INDEX_DAMAGE_TEXT.to_string(),
         ));
     }
     crate::foundation::tail_guard::require_no_unclean_tail(
@@ -600,6 +613,7 @@ pub(crate) fn replay_received_index(layout: &RepositoryLayout) -> Result<Receive
         &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
         RECEIVED_INDEX_DAMAGE_TEXT,
+        RECEIVED_INDEX_AMBIGUOUS_TEXT,
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     )?;
@@ -628,7 +642,7 @@ pub(crate) fn lookup_received_index_entry(
     let replay = replay_received_index(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
-            "received-ref index has a damaged entry; run doctor before reading".to_string(),
+            RECEIVED_INDEX_DAMAGE_TEXT.to_string(),
         ));
     }
     Ok(replay
@@ -648,7 +662,7 @@ pub(crate) fn list_resolved_received_entries(
     let replay = replay_received_index(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
-            "received-ref index has a damaged entry; run doctor before reading".to_string(),
+            RECEIVED_INDEX_DAMAGE_TEXT.to_string(),
         ));
     }
     let mut resolved: Vec<ReceivedIndexEntry> = Vec::new();
@@ -691,6 +705,7 @@ pub(crate) fn append_received_index_entry(
         &layout.received_index_slot_path(ContainerSlot::A),
         &layout.received_index_slot_path(ContainerSlot::B),
         RECEIVED_INDEX_DAMAGE_TEXT,
+        RECEIVED_INDEX_AMBIGUOUS_TEXT,
         decode_received_index_entries_for_resolver,
         fold_one_received_index_entry,
     )?;

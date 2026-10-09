@@ -448,7 +448,7 @@ same read rather than performing a new one. **`compact --plan-only` is unaffecte
 writes nothing, so it never refuses over a tail it would never write behind. Run `prikk doctor
 --repair-tails`, then retry `compact`.
 
-## `error: integrity error: generation log has a damaged record; run doctor before reading`
+## `error: integrity error: <container> has a damaged entry; …` (seen for a damaged generation-log *record*, not a slot)
 
 Seen from any command that reads a generation log's live slot — `status`, `log`, `branch list`, `seal`,
 `commit`, `verify`, `doctor`, and `compact` itself for that container — for either of two reasons (RFC
@@ -470,35 +470,43 @@ as for every covered file; the removed bytes are saved to `recovery/log` first. 
 or a complete but corrupt last record, has no repair: `--repair-tails` refuses it, rather than guessing which
 bytes are safe to remove, or silently undoing the decision the damaged record carried. **This entry gives no truncation advice**: whether the
 damage sits before a sound record or is the complete-but-corrupt last record itself, no offset here is
-one a repair can safely remove. Restore the repository from a backup or a clone instead.
+one a repair can safely remove.
+
+**Handoff 165 Q1b:** `doctor` has nothing of its own for a damaged generation-log *record* (unlike a
+damaged slot, generation logs are not among the files `check_appended_file_tails` reports), so the
+message names the way out directly instead of sending you to `doctor`: the ref pointer index names the
+rebuild (`prikk doctor --rebuild-pointer-index --plan-only`, then the real run — the remedy is the same
+as a damaged slot's, since the rebuild reads neither); the received index and the trust policy
+container name a copy of this repository's whole `.prikk/` directory from a backup taken before the
+damage (the trust policy text also says to re-apply every trust change made since).
 
 ## `warning: <container>'s generation log names no live slot; slot <X> was deduced from the entries (…)`
 
-0.50.0 step 1 Part E4 (019 §5.7). Seen from `prikk verify` or `prikk doctor`, when a compacting
-container's generation log reads as empty or absent — not damaged, not a tail, genuinely nothing —
-while the *other* slot (`b`) holds real data. Slot `b` is never written except alongside the one
-generation record that names it live, so this shape can only mean a compaction (or, for the ref
-pointer index, `prikk doctor --rebuild-pointer-index`'s own rebuild) genuinely happened and the record
-of it was lost afterward — an accidental deletion, or a partial restore from backup.
+0.50.0 step 1 Part E4, corrected by handoff 165 (019 §5.7; 020 §3.1). Seen from `prikk verify` or
+`prikk doctor`, when a compacting container's generation log reads as empty or absent — not damaged,
+not a tail, genuinely nothing — while the *other* slot (`b`) holds real data. Slot `b` is never
+written except alongside the one generation record that names it live, so this shape can only mean a
+compaction (or, for the ref pointer index, `prikk doctor --rebuild-pointer-index`'s own rebuild)
+genuinely happened and the record of it was lost afterward — an accidental deletion, or a partial
+restore from backup.
 
-**This is a warning, not a refusal: every ordinary command already resolves it correctly.** Content
-decides which slot is live, rather than every reader and writer being made to guess or to refuse: slot
-`b`'s own decoded entries are compared, positionally, against `compaction(P)` for *some* earlier prefix
-`P` of this slot's own history, not only the whole of it as it stands now. Equal to `compaction(P)`, or
-a prefix of it, for any such `P` means this slot stays live — covering a crash between a compaction's
-own new-slot write and its generation record (`P` = all of this slot at that moment, a bare retry of
-`compact` still heals it exactly as always), a partly written slot `b`, and a crash that leaves this
-slot live but still taking ordinary writes afterward (a new branch, a revocation: `P` = this slot as it
-stood at the crash, not as it stands now — comparing only against the *current* content, as an earlier
-version of this rule did, can resolve to the stale slot in exactly this case and lose those writes or
-reinstate what they revoked). No match anywhere means the other slot took a real write after becoming
-live, and it becomes live instead, so that write still reads correctly rather than silently
-disappearing (bare membership — "does this entry occur anywhere in the other slot's history" — was
-tried and rejected too: a maintainer revoked and later re-trusted can recur, fooling a membership test
-into picking the wrong slot). Only when the deduction itself cannot be made (one of the two slots is
-damaged) does a read refuse, naming the container's own damage directly (see the next entry). A
-restore from the recovery log refuses outright in this state instead of deducing, since it is a
-deliberate writer and a stale meaning file could otherwise compare unchanged and pass.
+**This is a warning, not a refusal, when content *can* decide: every ordinary command already
+resolves it correctly.** Content is tested in **both directions** (handoff 165 corrected Part E4's
+own rule, which tested only one): slot `a` is stale beside `b` — or `b` stale beside `a` — when
+either slot equals, or is a prefix of, a compaction of some earlier prefix of the other's own history
+(a crash before a switch was recorded, or a write cut short), or when the other slot starts with a
+full compaction of it and simply kept taking writes after. Whichever one direction holds names the
+live slot — covering a crash between a compaction's own new-slot write and its generation record, a
+partly written slot, and a crash that leaves a slot live but still taking ordinary writes afterward (a
+new branch, a revocation), without losing those writes or reinstating what they revoked the way
+comparing only against the stale slot's *current* content (an earlier version of this rule) could.
+Both directions holding and the two slots folding to the *same* entries means either reading is
+correct (reported as "both slots agree"). Only when **neither** direction holds, or both hold while the
+folds **disagree**, does the deduction genuinely fail — see the next entry; this is distinct from one
+of the two slots being damaged, which refuses too but for an unrelated reason (the container's own
+damage text, not this one). A restore from the recovery log refuses outright in this ambiguous-or-
+damaged state instead of deducing, since it is a deliberate writer and a stale meaning file could
+otherwise compare unchanged and pass.
 
 **The way out, named in the warning itself:** run the exact command it names —
 `prikk compact --pointer-index`, `--received-index`, or `--trust-policy`, whichever container the
@@ -507,6 +515,27 @@ the ambiguous state for good.
 `prikk doctor --rebuild-pointer-index` also remains available for the ref pointer index specifically —
 it re-derives the whole index from the ref log directly, without reading either slot as live — though
 nothing requires it just to clear this warning.
+
+## `error: ambiguous generation log: <container>'s generation log is lost, and its two slots fit two different histories; …`
+
+Handoff 165 Q1b (020 §3.1, Q1 review). Seen from the same commands as the warning above, when
+content genuinely **cannot** decide: either neither of the two slots relates to the other at all (not
+a shape any real compaction sequence produces), or both relate and their folds disagree. The Q1
+review proved this is not a gap in the rule but a real property of the state: two equally honest
+command histories — add a key, compact, remove it; or compact again, then add the key back — can
+leave *byte-identical* slot files with opposite answers on whether that key is trusted. Once the
+generation log that would have told them apart is lost, no rule that reads only the slots can be
+right in both histories, so refusing is the only honest answer. This is a distinct, typed error
+(`PrikkError::AmbiguousGenerationLog`, not `Integrity`) — nothing here is corrupt. `doctor` raises
+`PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS`, printed first, before the current-branch warning and any
+`PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE` error the same ambiguity also causes.
+
+**The way out, named in the message itself:** for the ref pointer index, run `prikk doctor
+--rebuild-pointer-index --plan-only`, then the real run — it re-derives the index from the ref log,
+never reading either slot, so the ambiguity does not touch it. For the received index and the trust
+policy container, no rebuild exists; restore this repository's whole `.prikk/` directory from a
+backup taken before the generation log was lost (the trust policy text also says to re-apply every
+trust change made since that backup).
 
 ## `error: integrity error: the ref pointer index's live slot is not recorded; run \`prikk compact --pointer-index\` first`
 

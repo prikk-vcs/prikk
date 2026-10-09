@@ -48,6 +48,15 @@ use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 const POINTER_INDEX_DAMAGE_TEXT: &str = "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
      --plan-only`, then `prikk doctor --rebuild-pointer-index`";
 
+/// Handoff 165 Q1b: the generation log is lost and the two slots fit two different histories --
+/// not damage (both decode cleanly), and not a state either slot's content can decide. Unlike the
+/// received index or the trust policy container, the pointer index has a real way out regardless:
+/// the rebuild never reads either slot, so it is unaffected by which one the ambiguity would have
+/// picked.
+const POINTER_INDEX_AMBIGUOUS_TEXT: &str = "ref pointer index's generation log is lost, and its two slots fit two different \
+     histories; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+     --rebuild-pointer-index` -- the ref log decides, not either slot";
+
 /// The exact reduction `compact_ref_pointer_index` performs: last entry per `ref_name_key` survives,
 /// in the order each key's own last occurrence appears in `entries`. Factored out so Part E3's
 /// deduction (`C = compaction(A)`) uses the identical logic the real compactor uses, rather than a
@@ -547,6 +556,7 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
+        POINTER_INDEX_AMBIGUOUS_TEXT,
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )?;
@@ -603,6 +613,7 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
+        POINTER_INDEX_AMBIGUOUS_TEXT,
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )?;
@@ -759,6 +770,7 @@ pub(in crate::refs) fn append_ref_pointer_entry(
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
+        POINTER_INDEX_AMBIGUOUS_TEXT,
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )?;
@@ -792,6 +804,7 @@ pub(crate) fn remove_pointer_entries_for_test(
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
         &layout.ref_pointer_index_slot_path(ContainerSlot::B),
         POINTER_INDEX_DAMAGE_TEXT,
+        POINTER_INDEX_AMBIGUOUS_TEXT,
         decode_pointer_index_entries_for_resolver,
         fold_one_pointer_index_entry,
     )?;

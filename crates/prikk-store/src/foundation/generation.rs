@@ -583,20 +583,26 @@ pub(crate) struct DeducedFromContent {
 /// `decode_entries` and `fold_entry` are the two pieces only the caller can supply -- each compacting
 /// container's own entry type, decoder, and reduction step -- so this stays generic over them rather
 /// than this module importing three sibling modules' types.
+// Handoff 165 Q1b: `ambiguous_text`, alongside `damage_text`, pushed this to 8 -- each names a container's own text for a distinct, already-typed refusal; bundling them would hide which is which at every call site.
+#[allow(clippy::too_many_arguments)]
 fn resolve_or_deduce<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
     slot_b_path: &std::path::Path,
     damage_text: &str,
+    ambiguous_text: &str,
     decode_entries: &impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
     fold_entry: &impl Fn(&mut Vec<T>, T),
 ) -> Result<(ContainerSlot, usize, usize, Option<DeducedFromContent>)> {
     let replay = replay_generation_log(layout, generation_log_path)?;
     if replay.has_item_failure() {
-        return Err(PrikkError::Integrity(
-            "generation log has a damaged record; run doctor before reading".to_string(),
-        ));
+        // Q1b item 4: `doctor` names no action for a damaged generation-log *record* -- generation
+        // logs are not among the Rule-A files `check_appended_file_tails` reports, so "run doctor
+        // before reading" sent the user to a tool that shows nothing. The remedy is the same as a
+        // damaged slot's (we cannot tell which slot the log would have named either way), so this
+        // reuses the container's own `damage_text`.
+        return Err(PrikkError::Integrity(damage_text.to_string()));
     }
     if let Some(record) = replay.records.last() {
         return Ok((
@@ -647,13 +653,22 @@ fn resolve_or_deduce<T: PartialEq + Clone>(
             if fold_a == fold_b {
                 (ContainerSlot::A, DeductionReason::BothSlotsAgree)
             } else {
-                // Row 18: both relations hold, but the folds differ -- no compaction sequence
-                // produces this (only a synthetic test can), and there is no sound way to pick.
-                return Err(PrikkError::Integrity(damage_text.to_string()));
+                // Row 18/row 14 (handoff 165, Q1 review): both relations hold, but the folds
+                // differ. Q1's own proof (H1/H2, two command sequences that disagree on a revoked
+                // key's trust and leave byte-identical slots) rules out every tie-breaker -- this is
+                // not damage, and no rule that reads only the slots can be right in both histories.
+                return Err(PrikkError::AmbiguousGenerationLog(
+                    ambiguous_text.to_string(),
+                ));
             }
         }
-        // Row 17: neither relation holds -- not a shape any compaction sequence produces.
-        (false, false) => return Err(PrikkError::Integrity(damage_text.to_string())),
+        // Row 17: neither relation holds. Same genuinely-ambiguous family as row 18 -- content
+        // does not decide, and nothing here is corrupt.
+        (false, false) => {
+            return Err(PrikkError::AmbiguousGenerationLog(
+                ambiguous_text.to_string(),
+            ));
+        }
     };
     Ok((
         slot,
@@ -675,8 +690,13 @@ pub(crate) fn resolve_live_slot_trusting_default_on_ambiguity(
 ) -> Result<ContainerSlot> {
     let replay = replay_generation_log(layout, generation_log_path)?;
     if replay.has_item_failure() {
+        // Q1b item 4: the one real caller is the pointer index's own recovery-log lookup; `doctor`
+        // names no action for a damaged generation-log record (not a Rule-A file), so this names
+        // the rebuild directly rather than sending the user to `doctor`.
         return Err(PrikkError::Integrity(
-            "generation log has a damaged record; run doctor before reading".to_string(),
+            "ref pointer index's generation log has a damaged record; run `prikk doctor \
+             --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`"
+                .to_string(),
         ));
     }
     Ok(replay
@@ -685,12 +705,15 @@ pub(crate) fn resolve_live_slot_trusting_default_on_ambiguity(
         .map_or(ContainerSlot::A, |record| record.live_slot))
 }
 
+// Handoff 165 Q1b: `ambiguous_text`, alongside `damage_text`, pushed this to 8 -- each names a container's own text for a distinct, already-typed refusal; bundling them would hide which is which at every call site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_live_slot<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
     slot_b_path: &std::path::Path,
     damage_text: &str,
+    ambiguous_text: &str,
     decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
     fold_entry: impl Fn(&mut Vec<T>, T),
 ) -> Result<ContainerSlot> {
@@ -700,6 +723,7 @@ pub(crate) fn resolve_live_slot<T: PartialEq + Clone>(
         slot_a_path,
         slot_b_path,
         damage_text,
+        ambiguous_text,
         &decode_entries,
         &fold_entry,
     )?
@@ -709,12 +733,15 @@ pub(crate) fn resolve_live_slot<T: PartialEq + Clone>(
 /// Like [`resolve_live_slot`], but also returns the log's own tail status from the same replay --
 /// RFC 163 §9's write-side guard (`compact.rs`, its only caller) is built on this call so it never
 /// pays for a second whole read just to learn what `resolve_live_slot` already decoded.
+// Handoff 165 Q1b: `ambiguous_text`, alongside `damage_text`, pushed this to 8 -- each names a container's own text for a distinct, already-typed refusal; bundling them would hide which is which at every call site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_live_slot_with_tail<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
     slot_b_path: &std::path::Path,
     damage_text: &str,
+    ambiguous_text: &str,
     decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
     fold_entry: impl Fn(&mut Vec<T>, T),
 ) -> Result<(ContainerSlot, usize, usize)> {
@@ -724,6 +751,7 @@ pub(crate) fn resolve_live_slot_with_tail<T: PartialEq + Clone>(
         slot_a_path,
         slot_b_path,
         damage_text,
+        ambiguous_text,
         &decode_entries,
         &fold_entry,
     )?;
@@ -734,12 +762,15 @@ pub(crate) fn resolve_live_slot_with_tail<T: PartialEq + Clone>(
 /// makes silently, surfaced explicitly so the ambiguous state stays visible and nameable, rather than
 /// going unremarked once it stops being a refusal. `None` when the log names a slot outright, or slot
 /// B is genuinely empty -- nothing to warn about.
+// Handoff 165 Q1b: `ambiguous_text`, alongside `damage_text`, pushed this to 8 -- each names a container's own text for a distinct, already-typed refusal; bundling them would hide which is which at every call site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
     slot_b_path: &std::path::Path,
     damage_text: &str,
+    ambiguous_text: &str,
     decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
     fold_entry: impl Fn(&mut Vec<T>, T),
 ) -> Result<Option<DeducedFromContent>> {
@@ -749,6 +780,7 @@ pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq + Clone>(
         slot_a_path,
         slot_b_path,
         damage_text,
+        ambiguous_text,
         &decode_entries,
         &fold_entry,
     )?

@@ -482,8 +482,17 @@ pub(crate) fn lookup_object_location(
 ) -> Result<Option<IndexEntry>> {
     let replay = replay_index(layout)?;
     if replay.has_item_failure() {
+        // Q1b item 4: this function is test-only (see its own doc) -- production never surfaces
+        // this text, since `object_store.rs::resolve_object_location` composes this refusal with a
+        // transparent rebuild-and-retry instead. `doctor` itself treats the index as a pure cache
+        // (`PRIKK-DOCTOR-OBJECT-INDEX-INTERIOR-DAMAGE`'s own recommendation: "no repair is
+        // required ... run `prikk doctor --repair-index` to rebuild it on disk if desired"), so
+        // this names that command rather than the circular "run doctor before reading."
         return Err(PrikkError::Integrity(
-            "object index has a damaged entry; run doctor before reading".to_string(),
+            "object index has a damaged entry; no repair is required (readers rescan the \
+             containers in memory): run `prikk doctor --repair-index` to rebuild it on disk if \
+             desired"
+                .to_string(),
         ));
     }
     Ok(replay
