@@ -627,12 +627,23 @@ pub(crate) fn print_verify_report(
     }
     // 0.50.0 step 1 Part E2: content deduced a compacting container's live slot because its
     // generation log named none -- a warning, never a failure, naming the way to end it.
+    // Handoff 165 Q2: for the received index and the trust policy container, that compaction now
+    // saves the other slot and the generation log first, so the line says so.
     for note in &report.generation_log_deductions {
-        println!(
-            "warning: {}'s generation log names no live slot; slot {} was deduced from the \
-             entries ({}); run `prikk compact {}` to record it",
-            note.container_label, note.deduced_slot, note.reason, note.compact_flag
-        );
+        if note.compact_flag == "--pointer-index" {
+            println!(
+                "warning: {}'s generation log names no live slot; slot {} was deduced from the \
+                 entries ({}); run `prikk compact {}` to record it",
+                note.container_label, note.deduced_slot, note.reason, note.compact_flag
+            );
+        } else {
+            println!(
+                "warning: {}'s generation log names no live slot; slot {} was deduced from the \
+                 entries ({}); run `prikk compact {}` to record it -- this run saves the other \
+                 slot, and the generation log, first",
+                note.container_label, note.deduced_slot, note.reason, note.compact_flag
+            );
+        }
     }
     match &report.active_wal_metadata_status {
         Some(status) => print_active_wal_metadata_status(status),

@@ -4,11 +4,19 @@
 
 ### Upgrading
 
-- A repository found with a lost generation log is now read correctly, and `verify`/`doctor` warn
-  rather than stay silent about it. Running the exact `prikk compact` command the warning names
-  (`--pointer-index`, `--received-index`, or `--trust-policy`) records the slot and ends the warning.
-- Library users: `GenerationLogDeductionNote`, `AppendedFileTailStatus`, and `ContainerInteriorDamage`
-  are now exported from `prikk-store`'s own crate root; all three are `#[non_exhaustive]`.
+- A repository found with a lost generation log is now read correctly when content decides it, and
+  `verify`/`doctor` warn rather than stay silent about it. Running the exact `prikk compact` command
+  the warning names (`--pointer-index`, `--received-index`, or `--trust-policy`) records the slot and
+  ends the warning; for the received index and the trust policy container, that same run also saves
+  the slot it is about to overwrite, so it is byte-identically restorable until a later write.
+- A lost generation log beside a re-imported older received tip, or beside a key revoked and
+  re-trusted, now refuses rather than guess: two equally honest histories can leave byte-identical
+  slot files with opposite answers, and no rule that reads only the slots can be right in both.
+- Library users: `GenerationLogDeductionNote`, `AppendedFileTailStatus`, `ContainerInteriorDamage`,
+  and `ContainerGenerationAmbiguity` are now exported from `prikk-store`'s own crate root; all four
+  are `#[non_exhaustive]`. `prikk_error::PrikkError` gained a new variant, `AmbiguousGenerationLog`
+  (the enum is itself `#[non_exhaustive]`, so this is additive, not breaking, for any exhaustive
+  match — none exists in this workspace).
 
 ### Output changes
 
@@ -23,8 +31,16 @@
   sequence it compares against and states plainly that this is not a crash shape; "acknowledged
   commits: none recorded" now adds "(the classification of a session written before 0.49.0
   applies)".
-- `verify`/`doctor`: a new warning when a compacting container's generation log names no live slot,
-  naming the container, the deduced slot, and the exact `prikk compact` command to end it.
+- `verify`/`doctor`: a new warning when a compacting container's generation log names no live slot
+  but content decides it, naming the container, the deduced slot, and the exact `prikk compact`
+  command to end it — for the received index and the trust policy container, that command now also
+  says it saves the other slot first.
+- `verify`/`doctor`: a new, distinctly typed error when a compacting container's generation log is
+  lost and the two slots genuinely disagree (not damage) — naming a whole-`.prikk/` backup, or, for
+  the ref pointer index, the rebuild.
+- `doctor`: `PRIKK-TRUST-POLICY-INVALID`'s own recommendation, when the trust policy container's
+  state is the cause, now names `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` or `-TRUST-POLICY-INTERIOR-
+  DAMAGE` instead of "configure trusted MAINTAINER keys," which does nothing to end either state.
 - `commit`, `seal`, `tag create`, `branch create`, `branch close`, `merge`, `doctor
   --repair-tails`: a genuine one-transition lead's refusal now names `prikk ref complete <ref>`,
   where it previously gave the same generic refusal every other incomplete-publication reason still
@@ -70,7 +86,11 @@ nothing caught the trust-policy case at all.
 **Raised by the external review of the 0.49.0 candidate** (019 §5.7: which slot is read once a
 generation log is emptied?), **and reproduced by the architect:** seal, compact the pointer index,
 create a branch (landing only in the now-live slot), then empty the generation log. `branch list`
-printed the first branch only, exit 0.
+printed the first branch only, exit 0. **The fix's own first version was itself found wrong by a
+second external review of the 0.50.0 candidate** (020 §3.1): after an even number of compactions,
+the one-directional test it used could still answer with a stale, superseded slot. Corrected, and
+proven exhaustively by command-built cases rather than reasoned about in the abstract (the case table
+behind the first fix covered only one parity).
 
 **Affected since the compactor first shipped: 0.20.0** (`e82bd8b6`, "RFC 102 Stage 6 Step 2 round 3 — the
 compactor, and route writers through the resolver"; the generation-log mechanism itself, `b33d1942`, same
@@ -78,26 +98,38 @@ day). Not measured against historical released binaries directly — confirmed f
 reproduction against the current tree, the same evidentiary footing this project has used before for a
 defect whose triggering code is unchanged since 0.20.0. No advisory (disclosure only). **Action: upgrade;**
 every reader and writer of the three containers now deduces the live slot from its own content in this
-exact state, rather than silently trusting the original slot.
+exact state when content can decide it, and refuses, distinctly from damage, when it genuinely cannot.
 
 Fixed in this release: `resolve_live_slot`/`resolve_live_slot_with_tail`
 (`foundation/generation.rs`) now **deduce** the live slot from the two slots' own entries when the
-generation log names no live slot but the non-default slot holds data. The non-default slot's own decoded
-entries equal `compaction(P)`, or are a prefix of it, for *some* prefix `P` of the default slot's own
-entries (computed in one pass, never a raw byte comparison: compaction re-encodes) — means it is derived
-from the default slot at some point in its history, which stays live; anything else means the non-default
-slot took a real write after becoming live, and it becomes live instead, so that write reads correctly
-rather than silently disappearing or an earlier, repeated state silently winning. Only when the deduction
-itself cannot be made (either slot is damaged) does this refuse, naming the container's own existing damage
-text. `prikk verify` and `prikk doctor` now warn when this state is found — naming the container, the
-deduced slot, and the exact command to end it (`prikk compact --pointer-index`, `--received-index`, or
-`--trust-policy`, whichever container is affected) — since every ordinary
-reader and writer already resolve it silently. A restore from the recovery log is the one exception: it is
-a deliberate writer, so it refuses outright when a meaning file's own container is in this ambiguous state,
-rather than risk comparing against a meaning file that is itself stale. `prikk doctor --rebuild-pointer-index`
-remains a way out for the pointer index specifically, reaching the same state through an independent path
-(re-deriving from the ref log without reading either slot as live), though the ordinary deduction above no
-longer requires it.
+generation log names no live slot but the non-default slot holds data. The first version of this fix
+tested only one direction — whether the non-default slot is derived from the default one — and an
+external review of the candidate (020 §3.1) found that after an *even* number of compactions, where
+the default slot is actually the newer one, a superseded entry left in the non-default slot could
+defeat that one-directional test and answer with the stale slot anyway, losing every write made
+since (for the trust policy container, this could read a revoked key as trusted again). The corrected
+rule tests **both** directions — whether either slot is a compaction of some earlier point in the
+other's own history, or the other took real writes after a full compaction of it — and decides from
+whichever direction holds. When both hold and the two slots fold to the same entries, either reading
+is correct. **When neither direction holds, or both hold and the slots disagree, the state is
+genuinely ambiguous, not merely undecided — proven, not assumed:** two equally honest command
+histories (add a key, compact, remove it; or compact again, then add the key back) can leave
+byte-identical slot files with opposite answers on whether that key is trusted, so no rule that reads
+only the slots can be right in both. This now refuses with its own distinct, typed error
+(`PrikkError::AmbiguousGenerationLog`, never confused with a damaged record), naming the way out:
+restoring this repository's whole `.prikk/` directory from a backup taken before the generation log
+was lost (the trust policy text also says to re-apply every trust change made since), or, for the ref
+pointer index specifically, `prikk doctor --rebuild-pointer-index`, which never reads either slot in
+the first place. `prikk verify` and `prikk doctor` now warn when the state is merely deduced (not
+ambiguous) — naming the container, the deduced slot, and the exact command to end it (`prikk compact
+--pointer-index`, `--received-index`, or `--trust-policy`, whichever container is affected) — since
+every ordinary reader and writer already resolve it silently; for the received index and the trust
+policy container, that compaction now **saves the slot it is about to overwrite, and the generation
+log, as one recovery run first**, restorable byte-identically by `prikk doctor --recovery-restore`
+until a later write touches either file, the same way the pointer-index rebuild's own save already
+works. A restore from the recovery log is the one exception to the silent deduction: it is a
+deliberate writer, so it refuses outright when a meaning file's own container is in the ambiguous
+state, rather than risk comparing against a meaning file that is itself stale.
 
 ### Fixed — a pointer-index rebuild had two ways to lose data silently: a deep, signed lead dropped, and a torn pointer-index slot abandoned unsaved
 

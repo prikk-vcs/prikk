@@ -585,7 +585,7 @@ pub(crate) struct DeducedFromContent {
 /// than this module importing three sibling modules' types.
 // Handoff 165 Q1b: `ambiguous_text`, alongside `damage_text`, pushed this to 8 -- each names a container's own text for a distinct, already-typed refusal; bundling them would hide which is which at every call site.
 #[allow(clippy::too_many_arguments)]
-fn resolve_or_deduce<T: PartialEq + Clone>(
+pub(crate) fn resolve_or_deduce<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,

@@ -18,7 +18,8 @@ use crate::test_gates::test_support::{
 };
 use crate::{
     FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
-    add_trusted_maintainer, doctor_repository, rebuild_pointer_index, verify_repository,
+    add_trusted_maintainer, compact_trust_policy, doctor_repository, rebuild_pointer_index,
+    remove_trusted_maintainer, verify_repository,
 };
 
 fn publish_update(
@@ -264,6 +265,60 @@ fn the_damage_issue_is_printed_before_current_branch_and_stage_incomplete() -> R
              error ({stage_incomplete_index})"
         );
     }
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 Q1b review, the one item for Q2: `PRIKK-TRUST-POLICY-INVALID` is always and only
+/// `load_maintainer_trust_policy` failing. When that failure is the trust policy container's own
+/// generation-log ambiguity (already known, pushed before this issue), the recommendation must name
+/// `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` instead of the generic "configure trusted MAINTAINER
+/// keys," which does nothing to end an ambiguity no key configuration can resolve.
+#[test]
+fn publication_trust_invalid_names_the_ambiguous_issue_when_that_is_the_cause() -> Result<()> {
+    let root = unique_temp_dir("q2-publication-trust-invalid-names-ambiguous");
+    let layout = RepositoryLayout::init(root.clone())?;
+    // A real committed Block, so `PublicationTrustVerifier` is actually invoked (verify's own
+    // Objects stage calls it per checked record) -- without one, the trust-policy read this test
+    // is about never runs at all, and `Objects` simply fails on its own for an unrelated reason.
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+
+    add_trusted_maintainer(&layout, "k", "11".repeat(32).as_str())?;
+    add_trusted_maintainer(&layout, "l", "22".repeat(32).as_str())?;
+    remove_trusted_maintainer(&layout, "l")?;
+    compact_trust_policy(&layout)?;
+    add_trusted_maintainer(&layout, "l", "22".repeat(32).as_str())?;
+    compact_trust_policy(&layout)?;
+    remove_trusted_maintainer(&layout, "l")?;
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    let report = doctor_repository(&layout);
+    let invalid = report
+        .issues
+        .iter()
+        .find(|issue| issue.code == "PRIKK-TRUST-POLICY-INVALID")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected PRIKK-TRUST-POLICY-INVALID, got: {:?}",
+                report.issues
+            )
+        });
+    assert!(
+        invalid
+            .recommendation
+            .contains("PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS"),
+        "{invalid:?}"
+    );
+    assert!(
+        !invalid
+            .recommendation
+            .contains("configure trusted MAINTAINER keys"),
+        "a recommendation that names the ambiguous issue must not also say the generic \
+         configure-keys text: {invalid:?}"
+    );
+
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

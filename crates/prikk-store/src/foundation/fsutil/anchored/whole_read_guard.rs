@@ -126,6 +126,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reason: "`run_pointer_index_rebuild` reads the whole live slot once, only on a real run that writes, to save it to the                  recovery log before flipping away from it -- the saved copy is the way back, so it must be the whole slot, not a range",
         reference: "RFC 165 R5 (0.50.0 step 1 Part F)",
     },
+    DeclaredScope {
+        id: "compaction-over-deduced-live-slot-recovery-save",
+        status: ScopeStatus::Intentional,
+        reason: "a compaction whose own live slot was deduced, not read off a recorded generation entry, reads the whole target                  slot and generation log once, only on a real run, to save both to the recovery log before overwriting them -- the                  saved copy is the way back, so it must be the whole file, not a range",
+        reference: "RFC 165 Q2 (0.50.0)",
+    },
 ];
 
 /// Which family of store-growing file `relative` (relative to the repository's `.prikk/` directory) is in, if it is in one.

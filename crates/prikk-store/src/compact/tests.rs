@@ -1719,6 +1719,85 @@ fn handoff_165_q1b_item_3_a_received_tip_can_recur_and_the_ambiguity_follows() -
     Ok(())
 }
 
+/// Handoff 165 Q2: a compaction that resolves its own live slot by deduction, not by reading a
+/// recorded generation entry, is the first durable record of which slot was live -- so it saves the
+/// slot it is about to overwrite, and the generation log, as one recovery run before writing (the
+/// same `Replace` entries the pointer-index rebuild's own F2 save already uses). An *ordinary*
+/// compaction (the log already named a slot) saves nothing, exactly as before this round.
+#[test]
+fn compaction_over_a_deduced_live_slot_saves_what_it_overwrites() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-q2-compaction-saves-deduced-state");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let k_key = public_key_hex(&[71_u8; 32]);
+    let l_key = public_key_hex(&[72_u8; 32]);
+
+    add_trusted_maintainer(&layout, "k", &k_key)?;
+    compact_trust_policy(&layout)?; // ordinary: the log records live = B here
+    assert!(
+        crate::recovery_list(&layout)?.entries.is_empty(),
+        "fixture: an ordinary compaction (the log recorded) must save nothing"
+    );
+    add_trusted_maintainer(&layout, "l", &l_key)?; // a write to the now-live slot
+    // Lose the record of the switch -- the *next* compaction must deduce, not read, its own live
+    // slot.
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    let target_slot_path =
+        layout.trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let generation_log_path = layout.trust_policy_generation_log_path();
+    let target_before = std::fs::read(&target_slot_path)?;
+    let generation_log_before = std::fs::read(&generation_log_path)?; // empty, just wiped
+
+    compact_trust_policy(&layout)?; // deduced: this compaction is the first durable record
+
+    let target_after = std::fs::read(&target_slot_path)?;
+    assert_ne!(
+        target_before, target_after,
+        "fixture: the deduced compaction must actually overwrite the target slot"
+    );
+
+    let listing = crate::recovery_list(&layout)?;
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "trust policy compaction over a deduced live slot")
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| {
+            panic!("the deduced compaction must save its own way back under a recognizable label: {listing:?}")
+        });
+
+    let restored = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
+    assert!(restored.written);
+    assert_eq!(
+        std::fs::read(&target_slot_path)?,
+        target_before,
+        "the overwritten slot must come back byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(&generation_log_path)?,
+        generation_log_before,
+        "the generation log must come back byte-identical too (empty, as it was when lost)"
+    );
+
+    // A later write to the same file this run saved must make the run unrestorable -- the same
+    // hash-mismatch refusal every other recovery run already gives (A1/F2). The restore above put
+    // the generation log back to empty, so this repeats the deduced compaction, overwriting the
+    // target slot this run's own entry names.
+    add_trusted_maintainer(&layout, "m", &public_key_hex(&[73_u8; 32]))?;
+    std::fs::write(&generation_log_path, b"")?;
+    compact_trust_policy(&layout)?;
+    let after_later_write = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(
+        after_later_write.refusal.is_some(),
+        "a restore must refuse once a later write has touched what it would overwrite: {:?}",
+        after_later_write
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
 // Handoff 165 row 19 (either slot damaged) needs no new test: it is exactly
 // `a_damaged_slot_refuses_the_deduction_rather_than_guessing`, above in this file, which already
 // covers it under Part E2's own numbering.

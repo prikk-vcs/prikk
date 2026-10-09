@@ -1040,12 +1040,34 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     .for_active_session(DEFAULT_ACTIVE_NAME),
                 );
             }
+            // Handoff 165 Q1b review, the one item for Q2: `PRIKK-TRUST-POLICY-INVALID` is always
+            // and only `load_maintainer_trust_policy` failing (`verify/trust.rs`'s own `Publication
+            // TrustVerifier`), so when that failure is the trust policy's own ambiguity or damage --
+            // already known, pushed above, before this loop runs -- the recommendation names that
+            // issue's code instead of "configure trusted MAINTAINER keys," the same G1 pattern
+            // `VERIFY-STAGE-INCOMPLETE` already follows. Decided by the typed field, never by
+            // matching this issue's own text.
+            let trust_policy_cause_code = if container_generation_ambiguity.trust_policy.is_some() {
+                Some("PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS")
+            } else if container_interior_damage.trust_policy.is_some() {
+                Some("PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE")
+            } else {
+                None
+            };
             for issue in &verification.publication_trust_issues {
+                let recommendation = match trust_policy_cause_code {
+                    Some(code) => format!(
+                        "first resolve {code} (above), then re-run verification; doctor will not \
+                         auto-trust keys or repair signatures"
+                    ),
+                    None => "configure trusted MAINTAINER keys and re-run verification; doctor \
+                             will not auto-trust keys or repair signatures"
+                        .to_string(),
+                };
                 issues.push(DoctorIssue::error(
                     issue.code,
                     issue.message.clone(),
-                    "configure trusted MAINTAINER keys and re-run verification; doctor will not \
-                     auto-trust keys or repair signatures",
+                    recommendation,
                 ));
             }
             for issue in &verification.signature_envelope_issues {
@@ -1196,6 +1218,25 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // content deduced it anyway -- every ordinary reader and writer already resolve this
             // silently, so this is the only place it stays visible until `compact` records it.
             for note in &verification.generation_log_deductions {
+                // Handoff 165 Q2: the received index and the trust policy container now save the
+                // slot the compaction is about to overwrite, plus the generation log, as one
+                // recovery run first -- the recommendation says so, so running it reads as safe
+                // rather than as one more guess (the pointer index names no such save: it has
+                // nothing to overwrite that this state did not already deduce correctly, and the
+                // rebuild is its own way out regardless).
+                let recommendation = if note.compact_flag == "--pointer-index" {
+                    format!(
+                        "run `prikk compact {}` to record the deduced slot and end the state for \
+                         good",
+                        note.compact_flag
+                    )
+                } else {
+                    format!(
+                        "run `prikk compact {}` to record the deduced slot and end the state for \
+                         good -- this run saves the other slot, and the generation log, first",
+                        note.compact_flag
+                    )
+                };
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-GENERATION-LOG-DEDUCED",
                     format!(
@@ -1203,11 +1244,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          entries ({})",
                         note.container_label, note.deduced_slot, note.reason
                     ),
-                    format!(
-                        "run `prikk compact {}` to record the deduced slot and end the state for \
-                         good",
-                        note.compact_flag
-                    ),
+                    recommendation,
                 ));
             }
             // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never
