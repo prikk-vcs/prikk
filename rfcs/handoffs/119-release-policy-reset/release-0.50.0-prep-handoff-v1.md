@@ -133,3 +133,13 @@ heading is set to the day of the tag, in the last commit before it.
 (handoff 165 Q1–Q2b). Letter 021 is ready for the owner to send. The matrix gives 289/289 the same as 020's run of
 `b345a864`; `reproduce.sh` has the same outcomes. **The tag waits for the external re-run and the owner's word.** The
 heading's date is set to the tag day in the last commit before it.
+
+**External review 021 (2026-10-09): nothing blocks the tag** (assessment `external-review-021-assessment-v1`).
+
+| part | items | budget | report |
+|---|---|---:|---|
+| **P4: the date commit** | `CHANGELOG.md` only: `## 0.50.0 — 2026-10-08` → `## 0.50.0 — <today>`, with an em dash (U+2014). **Run `date` first; if it is past midnight JST, use the new day.** One-line message `Release 0.50.0: date the release`. `scripts/gates.py`, all 14, on that commit; `git show --stat` shows `CHANGELOG.md`, one line changed. **Do not push or tag** | 15 min | `release-0.50.0-prep-P4-report.md` |
+
+**After P4,** on the owner's authorization: the architect pushes, reads CI, and tags the pushed commit (signed;
+message `prikk 0.50.0`, a blank line, and the Release-notes link). Then the artifacts are verified, RFC 165 moves to
+`done/`, crates.io is published on the owner's word, and the consumer letters are written.
