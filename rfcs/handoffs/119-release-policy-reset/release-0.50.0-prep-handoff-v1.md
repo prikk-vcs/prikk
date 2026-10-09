@@ -128,3 +128,8 @@ commit before the tag (owner to confirm).
 
 **The release day, the owner, 2026-10-09:** *"The actual day to release it."* The architect's reading: the CHANGELOG
 heading is set to the day of the tag, in the last commit before it.
+
+**Candidate `fdbead68` pushed 2026-10-09** (14/14; CI `37911865712`, 16/16). It carries the generation-log fix
+(handoff 165 Q1–Q2b). Letter 021 is ready for the owner to send. The matrix gives 289/289 the same as 020's run of
+`b345a864`; `reproduce.sh` has the same outcomes. **The tag waits for the external re-run and the owner's word.** The
+heading's date is set to the tag day in the last commit before it.
