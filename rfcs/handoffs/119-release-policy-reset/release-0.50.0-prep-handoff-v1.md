@@ -143,3 +143,7 @@ heading's date is set to the tag day in the last commit before it.
 **After P4,** on the owner's authorization: the architect pushes, reads CI, and tags the pushed commit (signed;
 message `prikk 0.50.0`, a blank line, and the Release-notes link). Then the artifacts are verified, RFC 165 moves to
 `done/`, crates.io is published on the owner's word, and the consumer letters are written.
+
+**The owner, 2026-10-09: *"Authorized."*** The architect's reading: the cut of 0.50.0 is authorized, meaning P4's date
+commit, then push, CI and the signed tag on the pushed commit. **crates.io and the consumer letters are not
+included;** each still needs its own word. **Next: P4.**
