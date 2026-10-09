@@ -69,15 +69,16 @@ the same.
 | 1 | never compacted, B empty | A (no deduction) |
 | 2 | k=1, `W` empty, A compact | either (both agree) |
 | 3 | k=1, `W` empty, A superseded | either (both agree) |
-| 4 | k=1, `W` not empty | B |
+| 4 | k=1, A superseded, `W` not empty | B |
+| 4b | k=1, A compact, `W` not empty | B |
 | 5 | k=1 uncommitted (crash after the slot write, before the log append), no writes after | either |
-| 6 | k=1 uncommitted, then writes to A | A |
+| 6 | k=1 uncommitted, A superseded at the compaction, then writes to A | A |
 | 7 | **k=2, B superseded, `W` not empty** (020's P, T, R) | **A** |
 | 8 | k=2, B superseded, `W` empty | either |
 | 9 | k=2, B compact, `W` not empty | A |
-| 10 | k=2 uncommitted (A written, crash), then writes to B | B |
+| 10 | k=2 uncommitted (A written, crash), B superseded at the compaction, then writes to B | B |
 | 11 | k=3, A superseded, `W` not empty | B |
-| 12 | k=3 uncommitted, then writes to A | A |
+| 12 | k=3 uncommitted, A superseded at the compaction, then writes to A | A |
 | 13 | the last compaction's output cut short at a record boundary, then writes to the live slot | the live slot |
 | 14 | **trust policy:** a key revoked, re-trusted and revoked again, across k=1 and k=2, with `W` repeating a snapshot the stale slot holds | the live slot; a revoked key never reads as trusted |
 | 15 | A empty, B with data | B |
@@ -87,16 +88,19 @@ the same.
 | 19 | either slot damaged | refuse |
 
 **Controls,** each run, shown red, and reverted:
-- **E4's one-directional rule:** rows 7, 9 and 14 at k=2 go red.
-- **Relation 2 only (crash), in both directions:** row 4 and row 11 go red (neither holds, so it refuses).
-- **Relation 1 only (committed), in both directions:** rows 6, 10 and 12 go red.
+- **E4's one-directional rule:** rows 7 and 14 (k=2) go red. Row 9 passes under E4, because a compact B is literally
+  a prefix of A. That is why 020's first probes passed.
+- **Relation 2 only (crash), in both directions:** rows 4 and 11 go red: the stale slot is superseded, so neither
+  relation holds and it refuses. Rows 4b and 9 pass.
+- **Relation 1 only (committed), in both directions:** rows 6, 10 and 12 go red: the compacted slot was superseded, so
+  no slot starts with the other's fold.
 - **Without the both-agree check:** row 18 goes red.
 
 ## Parts
 
 | part | items | budget (stop at ×2) | report |
 |---|---|---:|---|
-| **Q1: the rule and its table** | the rule above in `resolve_or_deduce`; `DeductionReason` gains the cases (A stale beside B, B stale beside A, both agree); the 19 rows as tests (`foundation/generation` tests, plus CLI-level rows 7 and 14 through real commands); the four controls; **020's `probe3b.sh` on a release build: all three containers read the right slot** | 90 min | `generation-log-both-directions-Q1-report.md` |
+| **Q1: the rule and its table** | the rule above in `resolve_or_deduce`; `DeductionReason` gains the cases (A stale beside B, B stale beside A, both agree); the 20 rows as tests (`foundation/generation` tests, plus CLI-level rows 7 and 14 through real commands); the four controls; **020's `probe3b.sh` on a release build: all three containers read the right slot** | 90 min | `generation-log-both-directions-Q1-report.md` |
 | **Q2: the save, the recommendations, the notes** | the compaction save in the deduced state (one run; restore byte-identical; refuses after a later write); the recommendations and refusal texts above; smoke 27d gains row 7 on the trust policy (020's T shape), runs the named command, and checks that `--recovery-list` shows the save; the CHANGELOG's lost-generation-log entry restated with the two-direction rule, and its Output-changes line; the docs-debt grep (`repository-layout.md`, `troubleshooting.md`, every quote of the old rule); `matrix.py` v5 and `reproduce.sh` on the release build; the 14 gates | 75 min | `generation-log-both-directions-Q2-report.md` |
 
 ## Explicit non-change scope
