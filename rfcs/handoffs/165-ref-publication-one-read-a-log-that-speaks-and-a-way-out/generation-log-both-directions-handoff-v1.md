@@ -150,3 +150,6 @@ items:**
 | **Q2b: save before the write; one way out for the pointer index** | **H1:** for the received index and the trust policy, both recovery saves happen **before any write** (the slot first, then the generation log, with its after bytes computed as `before ++ record`), as `save_replace`'s contract says. In the deduced state, `compact --pointer-index` **refuses** and names the rebuild. Tests: a failpoint crash after the truncate for each container (the run is in the recovery log, and the restore is byte-identical); the control (the save after the write) is red; the pointer-index refusal, then the rebuild. **H2:** smoke 27d gains row 7 on the trust policy at even parity (base, add K2, compact, **add K3**, empty the log; K3 trusted; run the named compact; the save is listed; the warning ends). Docs grep, the CHANGELOG line, 14 gates | 45 min | `generation-log-both-directions-Q2b-report.md` |
 
 **Next: Q2b.**
+
+**Q2b ACCEPTED 2026-10-09** (`be9efac9`; review `generation-log-both-directions-Q2b-review-v1`). **This handoff is
+complete.** The architect pushes; letter 021 goes to the external architect for the re-run they offered.
