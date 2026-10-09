@@ -2,7 +2,7 @@
 
 **Live 2026-10-02, and it is next.** Round 1 (R1–R3) is ACCEPTED and pushed (`522f8c0f`, review
 `.git-exclude/reviewed/rfc165-round-1-review-v2.md`).
-- **Read all of RFC 165 first**, `rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md`, and
+- **Read all of RFC 165 first**, `rfcs/done/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md`, and
   above all **K1–K7 in its Status.** The owner accepted this design with *"we had better be careful around such
   design"*.
 - **This round changes what a ref means.** Every item below names the K-rule it serves, and an item without its K-tests

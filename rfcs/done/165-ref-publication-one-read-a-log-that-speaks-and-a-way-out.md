@@ -1,6 +1,8 @@
 # RFC 165 — Ref publication: one read per publication, a ref log that speaks, and a way out of an interrupted publication
 
-**Status.** **ACCEPTED by the owner 2026-10-01**, after reading. The owner said: *"Accepted. However, we had better be
+**Status.** **DONE 2026-10-10:** delivered in 0.49.0. The R5 amendment below, and the lost-generation-log rule (decided in
+both directions; `handoffs/165-…/generation-log-both-directions-handoff-v1.md`), were completed in 0.50.0.
+**ACCEPTED by the owner 2026-10-01**, after reading. The owner said: *"Accepted. However, we had better be
 careful around such design."* **§6 decision 2, who may complete:** *"Your recommendation is accepted."*: any adopted
 maintainer key.
 - *History:* proposed 2026-10-01 as questions (0.49.0 step 2, owner-approved schedule). It was answered by a design round

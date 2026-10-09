@@ -8,7 +8,7 @@
 - **This is a design round: measure, prototype, report, then stop. No product code lands.**
 
 **Read first:**
-- `rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md`, all of it;
+- `rfcs/done/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out.md`, all of it;
 - RFC 163 §5;
 - RFC 164 §9 to §9.2 (what a tail is now);
 - RFC 160's F1 entry.

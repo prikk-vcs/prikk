@@ -1,7 +1,7 @@
 # RFC 165 round 1 — one read per publication, a one-pass precondition, every publication refusing first (R1, R2, R3)
 
 **Live 2026-10-01, and it is next.** RFC 165 is ACCEPTED by the owner: *"Accepted. However, we had better be careful
-around such design."* **Read the whole RFC first,** `rfcs/accepted/165-ref-publication-one-read-a-log-that-speaks-and-a-
+around such design."* **Read the whole RFC first,** `rfcs/done/165-ref-publication-one-read-a-log-that-speaks-and-a-
 way-out.md`, **including K1–K7 in its Status.** They are how "be careful" binds this work.
 - This round is **R1, R2 and R3**, which change cost and ordering, not meaning. **R4–R6 are round 2. Do not start them.**
 - The prototypes in `scratch-165/proto` are the starting point. Review v2's three corrections apply: keep
