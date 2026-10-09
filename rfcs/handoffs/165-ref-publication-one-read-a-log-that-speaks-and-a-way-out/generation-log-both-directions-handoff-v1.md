@@ -133,3 +133,12 @@ probe), so content cannot decide.
 | **Q1b: the ambiguous refusal, and the readers' texts** | a typed ambiguous refusal, distinct from damage, with its own text per container (the pointer index names the rebuild; the others name a whole-`.prikk/` backup, plus the trust clause); `verify` reports it; `doctor`'s `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` comes first. Row 14 → refuse, with row 14b, the twin (H1, then copy both slots, then compact and re-add, then byte-identical slots and opposite answers). From source: whether a value can recur in the pointer index or the received index (if yes, a twin by commands; if no, the invariant). The readers' own *"run doctor before reading"* constants (`trust_index.rs:50/950`, `received_index.rs:34/578/631/651`) take P3d's wording. For the other such texts, state what `doctor` answers, and never send the user to a `doctor` that names no action. Tests that follow each message; controls; docs grep; 14 gates | 60 min | `generation-log-both-directions-Q1b-report.md` |
 
 **Next: Q1b, then Q2.**
+
+**Q1b ACCEPTED 2026-10-09** (`396f05ba`; review `generation-log-both-directions-Q1b-review-v1`). **Q2 gains three
+items:**
+- `PRIKK-TRUST-POLICY-INVALID`, and every other `doctor` issue whose cause can be the trust policy's state, defers to
+  the ambiguity or damage issue, decided by the typed field. The report lists each.
+- The CHANGELOG's Upgrading line for `PrikkError::AmbiguousGenerationLog`.
+- One sentence saying that a re-imported older received tip, or a key revoked and re-trusted, makes a lost log refuse.
+
+**Next: Q2.**
