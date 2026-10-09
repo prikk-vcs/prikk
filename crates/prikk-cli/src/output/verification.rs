@@ -631,10 +631,13 @@ pub(crate) fn print_verify_report(
     // saves the other slot and the generation log first, so the line says so.
     for note in &report.generation_log_deductions {
         if note.compact_flag == "--pointer-index" {
+            // Q2b (H1 ruling item 2): `compact --pointer-index` refuses in this state now.
             println!(
                 "warning: {}'s generation log names no live slot; slot {} was deduced from the \
-                 entries ({}); run `prikk compact {}` to record it",
-                note.container_label, note.deduced_slot, note.reason, note.compact_flag
+                 entries ({}); run `prikk doctor --rebuild-pointer-index --plan-only`, then \
+                 `prikk doctor --rebuild-pointer-index` -- `prikk compact --pointer-index` \
+                 refuses in this state",
+                note.container_label, note.deduced_slot, note.reason
             );
         } else {
             println!(

@@ -5,10 +5,12 @@
 ### Upgrading
 
 - A repository found with a lost generation log is now read correctly when content decides it, and
-  `verify`/`doctor` warn rather than stay silent about it. Running the exact `prikk compact` command
-  the warning names (`--pointer-index`, `--received-index`, or `--trust-policy`) records the slot and
-  ends the warning; for the received index and the trust policy container, that same run also saves
-  the slot it is about to overwrite, so it is byte-identically restorable until a later write.
+  `verify`/`doctor` warn rather than stay silent about it. For the received index and the trust
+  policy container, running the exact `prikk compact` command the warning names records the slot
+  and ends the warning; that same run also saves the slot it is about to overwrite, before writing
+  anything, so it is byte-identically restorable until a later write. For the ref pointer index,
+  `compact --pointer-index` instead refuses in this state, and the warning names `prikk doctor
+  --rebuild-pointer-index --plan-only`, then the rebuild, which needs no such save at all.
 - A lost generation log beside a re-imported older received tip, or beside a key revoked and
   re-trusted, now refuses rather than guess: two equally honest histories can leave byte-identical
   slot files with opposite answers, and no rule that reads only the slots can be right in both.
@@ -32,9 +34,14 @@
   commits: none recorded" now adds "(the classification of a session written before 0.49.0
   applies)".
 - `verify`/`doctor`: a new warning when a compacting container's generation log names no live slot
-  but content decides it, naming the container, the deduced slot, and the exact `prikk compact`
-  command to end it — for the received index and the trust policy container, that command now also
-  says it saves the other slot first.
+  but content decides it, naming the container and the deduced slot. For the received index and the
+  trust policy container, it names the exact `prikk compact` command to end it, which now also says
+  it saves the other slot, and the generation log, first. For the ref pointer index, `compact
+  --pointer-index` refuses in this state instead, so the warning names `prikk doctor
+  --rebuild-pointer-index --plan-only`, then the rebuild.
+- `doctor --recovery-restore`: when the entry names a ref-pointer-index meaning file and the
+  pointer index's own generation log names no live slot, the refusal now names the rebuild —
+  it used to name `prikk compact --pointer-index`, which refuses in this exact state too.
 - `verify`/`doctor`: a new, distinctly typed error when a compacting container's generation log is
   lost and the two slots genuinely disagree (not damage) — naming a whole-`.prikk/` backup, or, for
   the ref pointer index, the rebuild.
@@ -121,15 +128,22 @@ restoring this repository's whole `.prikk/` directory from a backup taken before
 was lost (the trust policy text also says to re-apply every trust change made since), or, for the ref
 pointer index specifically, `prikk doctor --rebuild-pointer-index`, which never reads either slot in
 the first place. `prikk verify` and `prikk doctor` now warn when the state is merely deduced (not
-ambiguous) — naming the container, the deduced slot, and the exact command to end it (`prikk compact
---pointer-index`, `--received-index`, or `--trust-policy`, whichever container is affected) — since
-every ordinary reader and writer already resolve it silently; for the received index and the trust
-policy container, that compaction now **saves the slot it is about to overwrite, and the generation
-log, as one recovery run first**, restorable byte-identically by `prikk doctor --recovery-restore`
-until a later write touches either file, the same way the pointer-index rebuild's own save already
-works. A restore from the recovery log is the one exception to the silent deduction: it is a
-deliberate writer, so it refuses outright when a meaning file's own container is in the ambiguous
-state, rather than risk comparing against a meaning file that is itself stale.
+ambiguous) — naming the container, the deduced slot, and the exact command to end it. For the
+received index and the trust policy container, that command is `prikk compact --received-index`/
+`--trust-policy`, and it now **saves the slot it is about to overwrite, and the generation log, as
+one recovery run first, before writing either** (a slot's own meaning file, for these two
+containers, is its generation log — saving the slot first, while the log still holds its own
+before bytes, and computing the log's own after-bytes without yet writing them, keeps a crash
+between the saves and the real writes from losing anything: the run is already durable by then),
+restorable byte-identically by `prikk doctor --recovery-restore` until a later write touches either
+file. **For the ref pointer index, `compact --pointer-index` instead refuses outright in the
+deduced state**, naming the rebuild: the rebuild already saves correctly (re-deriving from the ref
+log, reading neither slot as live), so there is nothing a compaction's own save would protect that
+the rebuild does not already handle, and naming one way out avoids a second, narrower path. A
+restore from the recovery log is the one exception to the silent deduction, for every container:
+it is a deliberate writer, so it refuses outright when a meaning file's own container is in the
+ambiguous *or* deduced state, rather than risk comparing against a meaning file that is itself
+stale.
 
 ### Fixed — a pointer-index rebuild had two ways to lose data silently: a deep, signed lead dropped, and a torn pointer-index slot abandoned unsaved
 

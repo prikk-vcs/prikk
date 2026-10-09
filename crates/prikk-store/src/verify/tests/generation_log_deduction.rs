@@ -5,7 +5,9 @@
 //! used -- compact, then a real write landing only in the newly-live slot, then the generation log
 //! lost -- and then **runs the command the note's own `compact_flag` names** (dispatched by the flag
 //! string itself, not hardcoded per fixture, so a drifted mapping fails here) and confirms the
-//! deduction warning for that container is gone afterward.
+//! deduction warning for that container is gone afterward. Q2b (H1 ruling item 2): for the ref
+//! pointer index specifically, that named command now refuses outright in this state -- its own
+//! test confirms the refusal, then ends the warning with the rebuild instead.
 
 use prikk_error::Result;
 
@@ -89,12 +91,15 @@ fn ref_pointer_index_lost_generation_log_after_a_write_names_pointer_index_flag(
         .unwrap_or_else(|| panic!("expected a deduction note for the ref pointer index, got none"));
     assert_eq!(note.compact_flag, "--pointer-index");
 
-    run_named_compact(&layout, note.compact_flag)?;
+    // Q2b (H1 ruling item 2): `compact --pointer-index` now refuses outright in this state --
+    // naming the rebuild, not a `prikk compact` run, is the one way out.
+    assert!(run_named_compact(&layout, note.compact_flag).is_err());
+    assert!(crate::rebuild_pointer_index(&layout)?.wrote);
 
     let after = verify_repository(&layout)?;
     assert!(
         deduction_for(&after, "the ref pointer index").is_none(),
-        "running the named compact flag must end the deduction warning"
+        "the rebuild must end the deduction warning"
     );
     let _ = std::fs::remove_dir_all(root);
     Ok(())

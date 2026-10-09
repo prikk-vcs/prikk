@@ -302,6 +302,22 @@ fn run_ref_pointer_index_compaction(
             &fold_one_pointer_index_entry,
         )?;
 
+    if live_slot_deduced.is_some() {
+        // Q2 review (H1 ruling item 2): unlike the received index and the trust policy container,
+        // the pointer index has a real way out of the deduced state that does not need a save at
+        // all -- the rebuild re-derives the index from the ref log directly, reading neither slot
+        // as live, so it is unaffected by which one a deduction would have picked. Refusing here
+        // removes the meaning-lookup hazard H1 found (this container's own slot meaning is the ref
+        // log, not the generation log, but there is still only one way out worth naming) and keeps
+        // a single answer rather than two.
+        return Err(PrikkError::Integrity(
+            "ref pointer index's generation log names no live slot; compaction refuses to act on \
+             a deduced slot -- run `prikk doctor --rebuild-pointer-index --plan-only`, then \
+             `prikk doctor --rebuild-pointer-index` instead, which re-derives the index from the \
+             ref log directly, never reading either slot as live"
+                .to_string(),
+        ));
+    }
     let replay = replay_pointer_index(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
@@ -342,12 +358,6 @@ fn run_ref_pointer_index_compaction(
         let target_slot = live_slot.other();
         let target_relative =
             layout.repository_relative(&layout.ref_pointer_index_slot_path(target_slot))?;
-        let generation_log_relative = layout.repository_relative(&generation_log_path)?;
-        let deduced = live_slot_deduced.is_some();
-        let _run = deduced.then(crate::recovery_log::begin_run);
-        let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, deduced)?;
-        let generation_log_before =
-            read_before_bytes_if_deduced(layout, &generation_log_relative, deduced)?;
         let root = layout.repository_mutation_root();
         truncate_file_empty_required(root, &target_relative)?;
         let mut buffer = Vec::new();
@@ -362,30 +372,8 @@ fn run_ref_pointer_index_compaction(
                 live_slot: target_slot,
             },
         )?;
-        if deduced {
-            // Unlike the received index and the trust policy container, the pointer index's own
-            // slot save must come *after* the generation log is switched: `meaning_paths_for`'s
-            // own ambiguity check (Part E3, `generation_log_lost`) refuses a pointer-index slot's
-            // meaning lookup for as long as the log still names no slot, which is exactly the
-            // window before this append -- and the pointer index's own meaning is the ref log, not
-            // the generation log, so there is no self-reference reason to save it earlier anyway.
-            save_deduced_target_slot_recovery(
-                layout,
-                &target_relative,
-                &target_before_bytes,
-                &buffer,
-                "pointer index compaction over a deduced live slot",
-            )?;
-            let generation_log_after =
-                read_file_if_exists(root, &generation_log_relative)?.unwrap_or_default();
-            save_deduced_generation_log_recovery(
-                layout,
-                &generation_log_relative,
-                &generation_log_before,
-                &generation_log_after,
-                "pointer index compaction over a deduced live slot",
-            )?;
-        }
+        // Q2 review (H1 ruling item 2): the deduced state is refused above, before this point is
+        // ever reached -- `live_slot_deduced` is always `None` here, so there is nothing to save.
     }
 
     Ok(CompactionReport {
@@ -465,19 +453,19 @@ fn run_received_index_compaction(
             layout.repository_relative(&layout.received_index_slot_path(target_slot))?;
         let generation_log_relative = layout.repository_relative(&generation_log_path)?;
         let deduced = live_slot_deduced.is_some();
-        let _run = deduced.then(crate::recovery_log::begin_run);
-        let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, deduced)?;
-        let generation_log_before =
-            read_before_bytes_if_deduced(layout, &generation_log_relative, deduced)?;
         let root = layout.repository_mutation_root();
-        truncate_file_empty_required(root, &target_relative)?;
         let mut buffer = Vec::new();
         for entry in &compacted {
             buffer.extend_from_slice(&encode_received_index_record(entry)?);
         }
-        append_file_required(root, &target_relative, &buffer)?;
+        // Q2 review (H1 ruling item 1): both saves happen *before* either write -- `save_replace`'s
+        // own contract. The slot first, while the generation log still holds its before bytes (its
+        // own meaning file); the generation log's own save computes the bytes the append below
+        // will produce without performing it yet, so a crash between the saves and the real writes
+        // leaves the recovery run already durable and nothing yet overwritten.
+        let _run = deduced.then(crate::recovery_log::begin_run);
         if deduced {
-            // Before the generation log changes -- see this function's own doc for why.
+            let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, true)?;
             save_deduced_target_slot_recovery(
                 layout,
                 &target_relative,
@@ -485,17 +473,14 @@ fn run_received_index_compaction(
                 &buffer,
                 "received index compaction over a deduced live slot",
             )?;
-        }
-        generation::append_generation_record(
-            layout,
-            &generation_log_path,
-            &GenerationRecord {
-                live_slot: target_slot,
-            },
-        )?;
-        if deduced {
-            let generation_log_after =
-                read_file_if_exists(root, &generation_log_relative)?.unwrap_or_default();
+            let generation_log_before =
+                read_before_bytes_if_deduced(layout, &generation_log_relative, true)?;
+            let mut generation_log_after = generation_log_before.clone();
+            generation_log_after.extend_from_slice(&generation::encode_generation_record(
+                &GenerationRecord {
+                    live_slot: target_slot,
+                },
+            ));
             save_deduced_generation_log_recovery(
                 layout,
                 &generation_log_relative,
@@ -504,6 +489,15 @@ fn run_received_index_compaction(
                 "received index compaction over a deduced live slot",
             )?;
         }
+        truncate_file_empty_required(root, &target_relative)?;
+        append_file_required(root, &target_relative, &buffer)?;
+        generation::append_generation_record(
+            layout,
+            &generation_log_path,
+            &GenerationRecord {
+                live_slot: target_slot,
+            },
+        )?;
     }
 
     Ok(CompactionReport {
@@ -584,21 +578,16 @@ fn run_trust_policy_compaction(
             layout.repository_relative(&layout.trust_policy_container_slot_path(target_slot))?;
         let generation_log_relative = layout.repository_relative(&generation_log_path)?;
         let deduced = live_slot_deduced.is_some();
-        let _run = deduced.then(crate::recovery_log::begin_run);
-        let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, deduced)?;
-        let generation_log_before =
-            read_before_bytes_if_deduced(layout, &generation_log_relative, deduced)?;
         let root = layout.repository_mutation_root();
-        truncate_file_empty_required(root, &target_relative)?;
         let buffer = match compacted.first() {
             Some(entry) => encode_trust_policy_record(entry)?,
             None => Vec::new(),
         };
-        if !buffer.is_empty() {
-            append_file_required(root, &target_relative, &buffer)?;
-        }
+        // Q2 review (H1 ruling item 1): both saves happen *before* either write -- see the
+        // identical ordering (and its own comment) in `run_received_index_compaction` above.
+        let _run = deduced.then(crate::recovery_log::begin_run);
         if deduced {
-            // Before the generation log changes -- see this function's own doc for why.
+            let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, true)?;
             save_deduced_target_slot_recovery(
                 layout,
                 &target_relative,
@@ -606,17 +595,14 @@ fn run_trust_policy_compaction(
                 &buffer,
                 "trust policy compaction over a deduced live slot",
             )?;
-        }
-        generation::append_generation_record(
-            layout,
-            &generation_log_path,
-            &GenerationRecord {
-                live_slot: target_slot,
-            },
-        )?;
-        if deduced {
-            let generation_log_after =
-                read_file_if_exists(root, &generation_log_relative)?.unwrap_or_default();
+            let generation_log_before =
+                read_before_bytes_if_deduced(layout, &generation_log_relative, true)?;
+            let mut generation_log_after = generation_log_before.clone();
+            generation_log_after.extend_from_slice(&generation::encode_generation_record(
+                &GenerationRecord {
+                    live_slot: target_slot,
+                },
+            ));
             save_deduced_generation_log_recovery(
                 layout,
                 &generation_log_relative,
@@ -625,6 +611,17 @@ fn run_trust_policy_compaction(
                 "trust policy compaction over a deduced live slot",
             )?;
         }
+        truncate_file_empty_required(root, &target_relative)?;
+        if !buffer.is_empty() {
+            append_file_required(root, &target_relative, &buffer)?;
+        }
+        generation::append_generation_record(
+            layout,
+            &generation_log_path,
+            &GenerationRecord {
+                live_slot: target_slot,
+            },
+        )?;
     }
 
     Ok(CompactionReport {

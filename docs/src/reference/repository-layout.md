@@ -337,15 +337,21 @@ lets a repeated value, such as a maintainer revoked and later re-trusted, fool t
 resolving to the wrong slot; comparing only against the current content of one slot (Part E3) is
 wrong once a crash lets that slot keep taking writes afterward. `prikk verify` and `prikk doctor`
 warn whenever the state is merely deduced (not ambiguous), naming the container, the deduced slot,
-and the exact command to end it (`prikk compact --pointer-index`, `--received-index`, or
-`--trust-policy`, whichever container is affected) — for the received index and the trust policy
-container, that compaction now also saves the slot it is about to overwrite, and the generation log,
-as one recovery run first, restorable byte-identically until a later write touches either file. A
-restore from the recovery log refuses outright instead of deducing, in either the deduced or the
-ambiguous state: it is a deliberate writer, and a stale meaning file could otherwise compare
-unchanged and pass a restore that should not proceed. `prikk doctor --rebuild-pointer-index` remains
-a separate, always-available way out for the pointer index (it re-derives from the ref log without
-reading either slot as live), unaffected by either state.
+and the exact command to end it. For the received index and the trust policy container, that
+command is `prikk compact --received-index`/`--trust-policy`, and that compaction now also saves
+the slot it is about to overwrite, and the generation log, as one recovery run first — both saves
+land *before* either file is written, since a slot's own meaning file (for these two containers) is
+its generation log, read while it still holds its own before bytes — restorable byte-identically
+until a later write touches either file. **For the ref pointer index, `compact --pointer-index`
+instead refuses outright in the deduced state**, naming `prikk doctor --rebuild-pointer-index
+--plan-only`, then the rebuild: the rebuild already saves correctly (re-deriving from the ref log,
+reading neither slot as live), so there is nothing a compaction's own save would protect that the
+rebuild does not already handle, and naming one way out rather than two avoids a second, narrower
+save path entirely. A restore from the recovery log refuses outright instead of deducing, in either
+the deduced or the ambiguous state: it is a deliberate writer, and a stale meaning file could
+otherwise compare unchanged and pass a restore that should not proceed. For the ambiguous state too,
+`prikk doctor --rebuild-pointer-index` is the pointer index's own way out, for the identical reason:
+it re-derives from the ref log without reading either slot as live, unaffected by the ambiguity.
 
 `prikk compact --pointer-index|--received-index|--trust-policy|--all` reclaims the dead entries for
 one or all three: it reads the currently-live slot, keeps only what is still current (the last entry
@@ -422,7 +428,7 @@ full cross-platform filesystem validation.
 | Verification checks object placement, ref pointer/log consistency, active WAL state, and publication trust within current limits. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [integrity and recovery diagnostics](./integrity-recovery.md), [trust and threat model](./trust-threat-model.md) |
 | `cache/` is initialized but not a root of trust; `quarantine/` is retired and no longer initialized, and `gc/` is not an initialized directory. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-31](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-31-REPOSITORY-LAYOUT-AUTHORITY-REFERENCE.md) |
 | The received-ref index is a shared, append-only, last-entry-wins container for imported `remotes/<name>` pointers, kept separate from `refs/by-id/` because an imported RefState's own embedded ref name can never agree with a locally renamed pointer. | [`received.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received.rs), [`received_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/received/received_index.rs) |
-| Three containers (ref-pointer index, received-ref index, trust policy) each have a generation log naming which slot is live, defaulting to `a` when empty *and slot `b` itself holds no data* -- an empty log over a non-empty slot `b` deduces the live slot by testing both directions (is either slot a compaction of some earlier point in the other's own history, or did the other take real writes after a full compaction of it; handoff 165, correcting 0.50.0 step 1 Part E4's one-directional test), warning (`verify`/`doctor`) rather than refusing when one direction decides it; when neither or both directions hold with disagreeing folds, the state is genuinely ambiguous (proven by command-built cases with byte-identical slots and opposite answers) and refuses with its own typed error, naming a whole-`.prikk/` backup or, for the pointer index, the rebuild; a restore refuses outright in either state, being a deliberate writer; `prikk compact` reads the live slot, writes the reduced set to the other slot durably, then appends a generation record naming it live -- when the live slot it read was itself deduced, it first saves the slot it is about to overwrite, and the generation log, as one recovery run; `--plan-only` performs the same read with no write. Object containers and the ref log allocate an unused `b` slot and never compact; the trust key container has no slot pair at all. | [`generation.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/generation.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
+| Three containers (ref-pointer index, received-ref index, trust policy) each have a generation log naming which slot is live, defaulting to `a` when empty *and slot `b` itself holds no data* -- an empty log over a non-empty slot `b` deduces the live slot by testing both directions (is either slot a compaction of some earlier point in the other's own history, or did the other take real writes after a full compaction of it; handoff 165, correcting 0.50.0 step 1 Part E4's one-directional test), warning (`verify`/`doctor`) rather than refusing when one direction decides it; when neither or both directions hold with disagreeing folds, the state is genuinely ambiguous (proven by command-built cases with byte-identical slots and opposite answers) and refuses with its own typed error, naming a whole-`.prikk/` backup or, for the pointer index, the rebuild; a restore refuses outright in either state, being a deliberate writer; `prikk compact` reads the live slot, writes the reduced set to the other slot durably, then appends a generation record naming it live -- for the received index and the trust policy container, when the live slot it read was itself deduced, it first saves the slot it is about to overwrite, and the generation log, as one recovery run, both saves landing before either file is written; for the ref pointer index, `compact --pointer-index` instead refuses outright in the deduced state and names the rebuild, which needs no such save at all; `--plan-only` performs the same read with no write. Object containers and the ref log allocate an unused `b` slot and never compact; the trust key container has no slot pair at all. | [`generation.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/generation.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs), [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs) |
 
 ## Provenance
 

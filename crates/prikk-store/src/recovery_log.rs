@@ -625,9 +625,13 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
         &ref_pointer_index_generation_log_path,
         &ref_pointer_index_slot_b_path,
     )? {
+        // Q2b (H1 ruling item 2): `compact --pointer-index` itself now refuses in this exact
+        // state (deduced or ambiguous alike), so naming it as the way out would just hand the
+        // caller a second refusal -- the rebuild is the one way out, for either sub-case.
         return Err(PrikkError::Integrity(
-            "the ref pointer index's live slot is not recorded; run `prikk compact \
-             --pointer-index` first"
+            "the ref pointer index's live slot is not recorded; run `prikk doctor \
+             --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index` \
+             first"
                 .to_string(),
         ));
     }
@@ -915,7 +919,7 @@ mod tests {
         };
         let error = error.to_string();
         assert!(error.contains("ref pointer index"), "{error}");
-        assert!(error.contains("prikk compact --pointer-index"), "{error}");
+        assert!(error.contains("--rebuild-pointer-index"), "{error}");
 
         let _ = std::fs::remove_dir_all(root);
     }

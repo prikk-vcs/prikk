@@ -508,13 +508,15 @@ damage text, not this one). A restore from the recovery log refuses outright in 
 damaged state instead of deducing, since it is a deliberate writer and a stale meaning file could
 otherwise compare unchanged and pass.
 
-**The way out, named in the warning itself:** run the exact command it names —
-`prikk compact --pointer-index`, `--received-index`, or `--trust-policy`, whichever container the
-warning is about. It resolves the identical way and then writes a fresh generation record, ending
-the ambiguous state for good.
-`prikk doctor --rebuild-pointer-index` also remains available for the ref pointer index specifically —
-it re-derives the whole index from the ref log directly, without reading either slot as live — though
-nothing requires it just to clear this warning.
+**The way out, named in the warning itself.** For the received index and the trust policy container:
+run the exact command it names — `prikk compact --received-index` or `--trust-policy`. It resolves
+the identical way, saves the slot it is about to overwrite and the generation log as one recovery
+run first (both saves landing before either file is written), then writes a fresh generation
+record, ending the deduced state for good. **For the ref pointer index, `compact --pointer-index`
+instead refuses outright here** (Q2 review): the warning names `prikk doctor
+--rebuild-pointer-index --plan-only`, then the real run, which re-derives the whole index from the
+ref log directly, without reading either slot as live — this is the pointer index's only way out of
+this state now, not merely one option among others.
 
 ## `error: ambiguous generation log: <container>'s generation log is lost, and its two slots fit two different histories; …`
 
@@ -537,15 +539,18 @@ policy container, no rebuild exists; restore this repository's whole `.prikk/` d
 backup taken before the generation log was lost (the trust policy text also says to re-apply every
 trust change made since that backup).
 
-## `error: integrity error: the ref pointer index's live slot is not recorded; run \`prikk compact --pointer-index\` first`
+## `error: integrity error: the ref pointer index's live slot is not recorded; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then \`prikk doctor --rebuild-pointer-index\` first`
 
-0.50.0 step 1 Part E3/E4 (019 §5.7). Seen from `prikk doctor --recovery-restore` (plan or run), when the entry being
-restored names a meaning file in the ref pointer index or the ref log, and the pointer index's own
-generation log is in the ambiguous state the previous entry describes. Unlike an ordinary read, a
-restore does not deduce here: it is a deliberate writer, checking that a meaning file's state still
-matches what the entry recorded before trusting it, and a stale meaning file in this exact state could
-compare unchanged and let a restore through that should not proceed. Run `prikk compact
---pointer-index` first, as the message says, then retry the restore.
+0.50.0 step 1 Part E3/E4 (019 §5.7), corrected by Q2b (H1 ruling item 2). Seen from `prikk doctor
+--recovery-restore` (plan or run), when the entry being restored names a meaning file in the ref
+pointer index or the ref log, and the pointer index's own generation log names no live slot
+(deduced or ambiguous alike). Unlike an ordinary read, a restore does not deduce here: it is a
+deliberate writer, checking that a meaning file's state still matches what the entry recorded
+before trusting it, and a stale meaning file in this exact state could compare unchanged and let a
+restore through that should not proceed. The message used to name `prikk compact --pointer-index`
+as the way out; that command now refuses outright in this exact state, so it would just hand back a
+second refusal — the rebuild is named instead, for either sub-case. Run it, as the message says,
+then retry the restore.
 
 ## `error: integrity error: <container> has a damaged entry; run doctor before reading`
 

@@ -1218,18 +1218,18 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // content deduced it anyway -- every ordinary reader and writer already resolve this
             // silently, so this is the only place it stays visible until `compact` records it.
             for note in &verification.generation_log_deductions {
-                // Handoff 165 Q2: the received index and the trust policy container now save the
-                // slot the compaction is about to overwrite, plus the generation log, as one
-                // recovery run first -- the recommendation says so, so running it reads as safe
-                // rather than as one more guess (the pointer index names no such save: it has
-                // nothing to overwrite that this state did not already deduce correctly, and the
-                // rebuild is its own way out regardless).
+                // Handoff 165 Q2b (H1 ruling item 2): `compact --pointer-index` refuses outright
+                // in this state now (it has a real way out that needs no save at all), so this
+                // names the rebuild instead of a command that would just refuse. The received
+                // index and the trust policy container now save the slot the compaction is about
+                // to overwrite, plus the generation log, as one recovery run first -- the
+                // recommendation says so, so running it reads as safe rather than as one more
+                // guess.
                 let recommendation = if note.compact_flag == "--pointer-index" {
-                    format!(
-                        "run `prikk compact {}` to record the deduced slot and end the state for \
-                         good",
-                        note.compact_flag
-                    )
+                    "run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+                     --rebuild-pointer-index` -- `prikk compact --pointer-index` refuses in this \
+                     state"
+                        .to_string()
                 } else {
                     format!(
                         "run `prikk compact {}` to record the deduced slot and end the state for \

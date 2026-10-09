@@ -238,23 +238,13 @@ fn a_crash_before_the_generation_record_lands_leaves_the_old_generation_authorit
     );
     assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(second));
 
-    // A bare retry heals it exactly as in 0.49.0: the half-finished attempt left nothing for this
-    // one to trip over.
-    let report = compact_ref_pointer_index(&layout)?;
-    assert_eq!(report.entries_after, 1);
-    assert_eq!(
-        resolve_live_slot(
-            &layout,
-            &generation_log_path,
-            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
-            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-            "ref pointer index has a damaged entry",
-            "ref pointer index generation log is ambiguous",
-            decode_pointer_index_entries_for_resolver,
-            fold_one_pointer_index_entry,
-        )?,
-        ContainerSlot::B
-    );
+    // Q2 review (H1 ruling item 2): a bare retry no longer heals it -- `compact --pointer-index`
+    // now refuses outright in the deduced state and names the rebuild instead, which does.
+    let Err(err) = compact_ref_pointer_index(&layout) else {
+        panic!("compact --pointer-index must refuse in the deduced state");
+    };
+    assert!(err.to_string().contains("--rebuild-pointer-index"), "{err}");
+    assert!(crate::rebuild_pointer_index(&layout)?.wrote);
     assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(second));
 
     let _ = std::fs::remove_dir_all(root);
@@ -1793,6 +1783,145 @@ fn compaction_over_a_deduced_live_slot_saves_what_it_overwrites() -> Result<()> 
         "a restore must refuse once a later write has touched what it would overwrite: {:?}",
         after_later_write
     );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Q2 review (H1 finding): the save must land *before* the truncate, not after -- a crash between
+/// them must not lose the overwritten slot with no recovery entry, which is exactly the deduced
+/// state the save exists to protect. Fails at the truncate itself (the earliest destructive point),
+/// so this is also the strongest check: if the save still happened after it in some other order,
+/// nothing would be on disk to restore when this fires.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_crash_at_the_truncate_still_restores_the_deduced_compactions_save_received_index() -> Result<()>
+{
+    let root = unique_temp_dir("handoff-165-q2b-h1-crash-at-truncate-received-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let target = objects_target(&layout)?;
+    let tip1 = signed_ref_state_envelope("heads/main", None, target, 1).object_id();
+    let tip2 = signed_ref_state_envelope("heads/topic", None, target, 1).object_id();
+
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip1)?;
+    compact_received_index(&layout)?; // ordinary: A -> live B, log records it
+    crate::received::write_received_pointer(&layout, "remotes/heads/topic", tip2)?; // a write to the now-live slot (B)
+    std::fs::write(layout.received_index_generation_log_path(), b"")?; // lose the record
+
+    // The next compaction deduces live = B (it took the write above) and targets A, the slot it
+    // is about to overwrite.
+    let target_slot_path = layout.received_index_slot_path(ContainerSlot::A);
+    let generation_log_path = layout.received_index_generation_log_path();
+    let target_before = std::fs::read(&target_slot_path)?;
+    let generation_log_before = std::fs::read(&generation_log_path)?;
+
+    fail_after_for_test(TestFailPoint::Truncate, 0);
+    assert!(
+        compact_received_index(&layout).is_err(),
+        "fixture: the compaction must actually crash at the truncate"
+    );
+    assert_eq!(
+        std::fs::read(&target_slot_path)?,
+        target_before,
+        "fixture: the crash must land before the truncate changes anything"
+    );
+
+    let listing = crate::recovery_list(&layout)?;
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "received index compaction over a deduced live slot")
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| {
+            panic!(
+                "the save must already be durable when the crash lands at the truncate: {listing:?}"
+            )
+        });
+    let restored = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
+    assert!(restored.written);
+    assert_eq!(std::fs::read(&target_slot_path)?, target_before);
+    assert_eq!(std::fs::read(&generation_log_path)?, generation_log_before);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// See the received-index version of this test, above, for the full rationale.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_crash_at_the_truncate_still_restores_the_deduced_compactions_save_trust_policy() -> Result<()>
+{
+    let root = unique_temp_dir("handoff-165-q2b-h1-crash-at-truncate-trust-policy");
+    let layout = RepositoryLayout::init(root.clone())?;
+
+    add_trusted_maintainer(&layout, "k", &public_key_hex(&[74_u8; 32]))?;
+    compact_trust_policy(&layout)?; // ordinary: the log records live here
+    add_trusted_maintainer(&layout, "l", &public_key_hex(&[75_u8; 32]))?; // a write to the now-live slot
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?; // lose the record
+
+    let target_slot_path =
+        layout.trust_policy_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let generation_log_path = layout.trust_policy_generation_log_path();
+    let target_before = std::fs::read(&target_slot_path)?;
+    let generation_log_before = std::fs::read(&generation_log_path)?;
+
+    fail_after_for_test(TestFailPoint::Truncate, 0);
+    assert!(
+        compact_trust_policy(&layout).is_err(),
+        "fixture: the compaction must actually crash at the truncate"
+    );
+    assert_eq!(std::fs::read(&target_slot_path)?, target_before);
+
+    let listing = crate::recovery_list(&layout)?;
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "trust policy compaction over a deduced live slot")
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| {
+            panic!(
+                "the save must already be durable when the crash lands at the truncate: {listing:?}"
+            )
+        });
+    let restored = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
+    assert!(restored.written);
+    assert_eq!(std::fs::read(&target_slot_path)?, target_before);
+    assert_eq!(std::fs::read(&generation_log_path)?, generation_log_before);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Q2 review (H1 ruling item 2): in the deduced state, `compact --pointer-index` refuses outright
+/// and names the rebuild -- there is nothing to save, because there is nothing for this container
+/// to do that the rebuild does not already do better (it never reads either slot as live).
+#[test]
+fn compact_pointer_index_refuses_in_the_deduced_state_and_names_the_rebuild() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-q2b-h1-pointer-index-deduced-refuses");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?; // ordinary: the log records live here
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?; // a write to the now-live slot
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?; // lose the record
+
+    let Err(err) = compact_ref_pointer_index(&layout) else {
+        panic!("compact --pointer-index must refuse in the deduced state");
+    };
+    assert!(err.to_string().contains("--rebuild-pointer-index"), "{err}");
+    assert!(
+        crate::recovery_list(&layout)?.entries.is_empty(),
+        "a refused compaction must save nothing"
+    );
+
+    // The rebuild remains the one way out, and it still succeeds.
+    assert!(crate::rebuild_pointer_index(&layout)?.wrote);
+    assert!(store.read_current_ref_state_id("heads/main")?.is_some());
+    assert!(store.read_current_ref_state_id("heads/topic")?.is_some());
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
