@@ -987,17 +987,28 @@ fn a_partly_written_slot_b_resolves_to_the_old_generation() -> Result<()> {
 }
 
 /// Part E3's own un-revocation sequence (the review): a repeated snapshot defeats bare membership,
-/// since `TrustPolicySnapshotEntry` carries no sequence, only a full `{key_ids}` set. The corrected
-/// rule compares against `C` positionally, which repetition cannot fool.
+/// since `TrustPolicySnapshotEntry` carries no sequence, only a full `{key_ids}` set.
+///
+/// **Handoff 165 changes this test's own expectation, deliberately, not as a regression:** slot A's
+/// *full* raw history is four snapshots, not three -- `{k}` (the very first add, before `l` ever
+/// existed), `{k,l}`, `{k}` (revoked), `{k,l}` (re-trusted) -- and that first `{k}` happens to equal
+/// `F(B)` after the post-compaction revoke (both are "no l"), the same coincidental-repeat shape row
+/// 14 names. Under the one-directional E4/E3 rule this was never tested (only "is B derived from A"
+/// was checked, and it held, resolving to B). Handoff 165's own rule also tests "is A derived from
+/// B," which now ALSO holds here (`A` starts with `F(B) = [{k}]`, its own first entry) -- both
+/// relations hold, and the folds disagree (`F(A) = [{k,l}]`, `F(B) = [{k}]`) on whether `l` is
+/// trusted, so the rule now refuses rather than pick a side. This is a stricter, fail-safe answer to
+/// the same security question Part E3 was already protecting (`l` must never silently read as
+/// trusted) -- flagged for the architect in the Q1 report as a deliberate behavior change, not
+/// discovered and silently absorbed.
 #[test]
-fn trust_policy_un_revocation_sequence_resolves_to_the_newer_slot_and_the_key_stays_revoked()
--> Result<()> {
+fn trust_policy_un_revocation_sequence_refuses_rather_than_pick_a_side() -> Result<()> {
     let root = unique_temp_dir("part-e3-trust-policy-un-revocation");
     let layout = RepositoryLayout::init(root.clone())?;
     let k_key = public_key_hex(&[21_u8; 32]);
     let l_key = public_key_hex(&[22_u8; 32]);
 
-    // Slot A's history: {K,L}, then {K} (L revoked), then {K,L} (L re-trusted) -- three snapshots.
+    // Slot A's full history: {K} (the very first add), {K,L}, {K} (L revoked), {K,L} (re-trusted).
     add_trusted_maintainer(&layout, "k", &k_key)?;
     add_trusted_maintainer(&layout, "l", &l_key)?;
     remove_trusted_maintainer(&layout, "l")?;
@@ -1009,17 +1020,14 @@ fn trust_policy_un_revocation_sequence_resolves_to_the_newer_slot_and_the_key_st
     // A real write after the switch: L revoked again, in the now-live slot B -- B = [{K,L}, {K}].
     remove_trusted_maintainer(&layout, "l")?;
 
-    // Lose the record of the switch. Bare membership would find both of B's entries somewhere in
-    // A's history ({K,L} and {K} both occurred) and wrongly resolve to A, un-revoking L.
+    // Lose the record of the switch.
     std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
 
-    let policy = load_maintainer_trust_policy(&layout)?;
-    assert_eq!(
-        policy.keys.len(),
-        1,
-        "L must stay revoked -- the sequence resolves to B, not back to A's own history"
+    assert!(
+        load_maintainer_trust_policy(&layout).is_err(),
+        "both relations hold here (this test's own doc comment); L must never silently read as \
+         trusted, and refusing is what keeps that true when the evidence itself disagrees"
     );
-    assert_eq!(policy.keys[0].key_id, "k");
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
@@ -1028,3 +1036,551 @@ fn trust_policy_un_revocation_sequence_resolves_to_the_newer_slot_and_the_key_st
 fn objects_target(layout: &RepositoryLayout) -> Result<prikk_object::ObjectId> {
     FileObjectStore::new(layout.clone()).write_object(&signed_empty_block_envelope())
 }
+
+/// Handoff 165 row 7 (020's own reproduction, P/T/R): after **two** compactions, the slot retired by
+/// the second holds a superseded entry from the first -- E4's one-directional rule tested only
+/// whether the stale slot derives from the live one, never the other way around, and a superseded
+/// entry defeats that test, so E4's `else` branch answered the *stale* slot, losing every write made
+/// since. The pointer-index shape: compact once (`main` alone), publish a second update to the same
+/// ref (superseding it in the now-live slot), compact again (the retired slot now holds that
+/// superseded first-generation entry), then a real write (`topic`) lands in the new live slot before
+/// the switch is lost.
+#[test]
+fn handoff_165_row_7_two_compactions_with_a_superseded_retired_slot_loses_nothing_pointer_index()
+-> Result<()> {
+    let root = unique_temp_dir("handoff-165-row7-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let first = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+    // Superseded in the now-live slot.
+    let second = publish_update(&store, &mut objects, "heads/main", Some(first), 2)?;
+    compact_ref_pointer_index(&layout)?;
+    // A real write after the second switch, landing only in the new live slot.
+    let third = publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    assert_eq!(
+        store.read_current_ref_state_id("heads/main")?,
+        Some(second),
+        "the superseded first generation must not come back"
+    );
+    assert_eq!(
+        store.read_current_ref_state_id("heads/topic")?,
+        Some(third),
+        "the write made after the second switch must not be lost to the stale slot"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 7, the received-index shape (020's own reproduction): the same two-compactions-
+/// then-a-write pattern, so a received tip does not silently go back to an earlier import.
+#[test]
+fn handoff_165_row_7_two_compactions_with_a_superseded_retired_slot_loses_nothing_received_index()
+-> Result<()> {
+    let root = unique_temp_dir("handoff-165-row7-received-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let target = objects_target(&layout)?;
+    let first_state = signed_ref_state_envelope("heads/main", None, target, 1);
+    crate::received::write_received_pointer(
+        &layout,
+        "remotes/heads/main",
+        first_state.object_id(),
+    )?;
+    compact_received_index(&layout)?;
+    let second_state = signed_ref_state_envelope("heads/main", None, target, 2);
+    crate::received::write_received_pointer(
+        &layout,
+        "remotes/heads/main",
+        second_state.object_id(),
+    )?;
+    compact_received_index(&layout)?;
+    let third_state = signed_ref_state_envelope("heads/topic", None, target, 1);
+    crate::received::write_received_pointer(
+        &layout,
+        "remotes/heads/topic",
+        third_state.object_id(),
+    )?;
+    std::fs::write(layout.received_index_generation_log_path(), b"")?;
+
+    assert_eq!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/main")?
+            .map(|entry| entry.ref_state_id),
+        Some(second_state.object_id()),
+        "a received tip must not go back to an earlier import"
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/topic")?
+            .map(|entry| entry.ref_state_id),
+        Some(third_state.object_id()),
+        "the import made after the second switch must not be lost"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 7, the trust-policy shape (020's own reproduction): a revoked maintainer must not
+/// read as trusted again after two compactions and a write.
+#[test]
+fn handoff_165_row_7_two_compactions_with_a_superseded_retired_slot_loses_nothing_trust_policy()
+-> Result<()> {
+    let root = unique_temp_dir("handoff-165-row7-trust-policy");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let first_key = public_key_hex(&[41_u8; 32]);
+    let second_key = public_key_hex(&[42_u8; 32]);
+    add_trusted_maintainer(&layout, "first", &first_key)?;
+    compact_trust_policy(&layout)?;
+    // Superseded in the now-live slot: a second snapshot, adding a second maintainer.
+    add_trusted_maintainer(&layout, "second", &second_key)?;
+    compact_trust_policy(&layout)?;
+    // A real write after the second switch: revoke the first maintainer.
+    remove_trusted_maintainer(&layout, "first")?;
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    let policy = load_maintainer_trust_policy(&layout)?;
+    assert_eq!(
+        policy.keys.len(),
+        1,
+        "the revocation made after the second switch must not be lost to the stale slot, and the \
+         revoked key must never come back from an earlier generation"
+    );
+    assert_eq!(policy.keys[0].key_id, "second");
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 8: the same two-compactions shape as row 7, but with nothing written after the
+/// second switch -- both slots fold to the same entries, so either reading is correct; this checks
+/// that the real read keeps working (never refuses) and sees the right content.
+#[test]
+fn handoff_165_row_8_two_compactions_no_write_since_both_slots_agree() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row8-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let first = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+    let second = publish_update(&store, &mut objects, "heads/main", Some(first), 2)?;
+    compact_ref_pointer_index(&layout)?;
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    assert_eq!(
+        store.read_current_ref_state_id("heads/main")?,
+        Some(second),
+        "with nothing written since the second switch, either slot must read the current pointer"
+    );
+    assert!(
+        publish_update(&store, &mut objects, "heads/topic", None, 1).is_ok(),
+        "a writer must keep working too"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 6: one compaction, with the retired slot superseded *at* the compaction (two
+/// raw entries for the same ref, before anything is compacted), then a write continuing into the
+/// live slot. The write's own encoded bytes are appended directly to the slot the correct rule
+/// resolves to -- `--repair-tails`'s own device for a cut-short write, not a live `publish` call --
+/// because control 3 (relation 1 only) resolves this exact intermediate state to the *other* slot,
+/// and a live write would land there instead, building a different row than the one under test.
+#[test]
+fn handoff_165_row_6_one_compaction_with_a_superseded_retired_slot_then_a_write() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row6-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let first = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    let second = publish_update(&store, &mut objects, "heads/main", Some(first), 2)?;
+    compact_ref_pointer_index(&layout)?;
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    // The write after this point: appended directly to slot A, the slot the correct rule's "both
+    // agree" case names here (A's own superseded raw history and B's clean compaction fold to the
+    // same entries, with nothing written since).
+    let third_target = objects.write_object(&signed_empty_block_envelope())?;
+    let third_state = signed_ref_state_envelope("heads/topic", None, third_target, 1);
+    let third = third_state.object_id();
+    let entry = crate::refs::PointerIndexEntry {
+        ref_name_key: crate::foundation::layout::ref_name_key_bytes("heads/topic"),
+        ref_name: "heads/topic".to_string(),
+        ref_state_id: third,
+    };
+    let mut slot_a = std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A))?;
+    slot_a.extend(crate::refs::encode_pointer_index_record(&entry)?);
+    std::fs::write(layout.ref_pointer_index_slot_path(ContainerSlot::A), slot_a)?;
+
+    assert_eq!(
+        store.read_current_ref_state_id("heads/main")?,
+        Some(second),
+        "the superseded first generation must not come back"
+    );
+    assert_eq!(
+        store.read_current_ref_state_id("heads/topic")?,
+        Some(third),
+        "the write made after the (uncommitted) switch must not be lost"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 9: two compactions where the slot retired by the second holds no supersession of
+/// its own (it is a clean compaction, "B compact"), then a write after the second switch. Passes
+/// under E4 too (the review's own note: a compact retired slot is literally a prefix of the live
+/// one) -- kept as a non-regression alongside row 7's fix.
+#[test]
+fn handoff_165_row_9_two_compactions_clean_retired_slot_then_a_write() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row9-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+    // A distinct ref -- no supersession, so the retired slot after the second compaction is clean.
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+    let third = publish_update(&store, &mut objects, "heads/extra", None, 1)?;
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    assert_eq!(store.read_current_ref_state_id("heads/extra")?, Some(third));
+    assert!(store.read_current_ref_state_id("heads/main")?.is_some());
+    assert!(store.read_current_ref_state_id("heads/topic")?.is_some());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 10: the second compaction's own switch is lost before it is ever observed (a
+/// crash or an immediate loss -- the two are byte-identical, see `resolve_or_deduce`'s own doc), and
+/// only afterward does a real write land -- proving the ambiguous window itself resolves correctly
+/// enough for ordinary work to keep going and for the write landing in it to still be read back.
+#[test]
+fn handoff_165_row_10_second_switch_lost_immediately_then_a_write_is_not_lost() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row10-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let first = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+    publish_update(&store, &mut objects, "heads/main", Some(first), 2)?;
+    compact_ref_pointer_index(&layout)?;
+    // The second switch is lost before any further write observes it.
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+    // Only now does a real write land -- wherever the ambiguous-state deduction above resolves it.
+    let fourth = publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+
+    assert_eq!(
+        store.read_current_ref_state_id("heads/topic")?,
+        Some(fourth),
+        "the write made into the ambiguous window must still read back"
+    );
+    assert!(
+        store.read_current_ref_state_id("heads/main")?.is_some(),
+        "the second compaction's own reduction must not have been lost either"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 11: the row-4 shape (a superseded retired slot, write after) one compaction
+/// deeper -- three compactions instead of one, confirming the rule does not depend on which parity
+/// the compaction count happens to land on.
+#[test]
+fn handoff_165_row_11_three_compactions_with_a_superseded_retired_slot_then_a_write() -> Result<()>
+{
+    let root = unique_temp_dir("handoff-165-row11-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let first = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?; // k=1
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+    compact_ref_pointer_index(&layout)?; // k=2
+    let third = publish_update(&store, &mut objects, "heads/main", Some(first), 3)?;
+    compact_ref_pointer_index(&layout)?; // k=3, retires a slot that now supersedes the old "main" entry
+    let fourth = publish_update(&store, &mut objects, "heads/extra", None, 1)?;
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(third));
+    assert_eq!(
+        store.read_current_ref_state_id("heads/extra")?,
+        Some(fourth)
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 12: three compactions, the last switch lost immediately, then ordinary writes
+/// continue into whichever slot that ambiguous state resolves to -- the same shape as row 10, one
+/// compaction deeper.
+#[test]
+fn handoff_165_row_12_third_switch_lost_immediately_then_writes_are_not_lost() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row12-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?; // k=1
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+    compact_ref_pointer_index(&layout)?; // k=2
+    compact_ref_pointer_index(&layout)?; // k=3, nothing new since k=2 -- a clean third switch
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+    let fourth = publish_update(&store, &mut objects, "heads/extra", None, 1)?;
+
+    assert_eq!(
+        store.read_current_ref_state_id("heads/extra")?,
+        Some(fourth)
+    );
+    assert!(store.read_current_ref_state_id("heads/main")?.is_some());
+    assert!(store.read_current_ref_state_id("heads/topic")?.is_some());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 13: the last compaction's own write to the retired slot is cut short at a record
+/// boundary (an interrupted multi-record write, mirroring `a_partly_written_slot_b_resolves_to_the_
+/// old_generation`'s own fixture one compaction deeper), then ordinary writes continue into the live
+/// slot the deduction correctly keeps naming.
+#[test]
+fn handoff_165_row_13_a_cut_short_compaction_output_then_writes_to_the_live_slot() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row13-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let main_target = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    publish_update(&store, &mut objects, "heads/topic", None, 1)?;
+    compact_ref_pointer_index(&layout)?; // k=1: B holds two distinct, compact entries
+
+    let slot_b_path = layout.ref_pointer_index_slot_path(ContainerSlot::B);
+    let bytes = std::fs::read(&slot_b_path)?;
+    let replay = crate::refs::decode_pointer_index_records(&bytes)?;
+    assert_eq!(
+        replay.entries.len(),
+        2,
+        "fixture: two distinct refs compact to two entries"
+    );
+    let first_record_len = crate::refs::encode_pointer_index_record(&replay.entries[0])?.len();
+    std::fs::write(&slot_b_path, &bytes[..first_record_len])?;
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    // The cut-short retired slot must not win -- the live slot (A) keeps taking writes.
+    let extra = publish_update(&store, &mut objects, "heads/extra", None, 1)?;
+    assert_eq!(
+        store.read_current_ref_state_id("heads/main")?,
+        Some(main_target)
+    );
+    assert_eq!(store.read_current_ref_state_id("heads/extra")?, Some(extra));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 14 (the trust-policy shape the review names explicitly): a key revoked, then
+/// re-trusted, then revoked again, straddling two compactions, with the write after the second switch
+/// repeating a snapshot the stale slot already holds.
+///
+/// **Finding, flagged for the architect rather than silently papered over:** this exact construction
+/// -- built verbatim from the row's own prose -- makes `F(live)`'s own revoke-again value equal the
+/// stale slot's *first* raw entry (both are "no l", the row's own "W repeats a snapshot the stale
+/// slot holds"), which is unavoidable once two revocations of the same key produce the same set. That
+/// satisfies relation 1 ("stale beside") in *both* directions at once (each slot's first entry equals
+/// the other's fold), and the two folds themselves disagree on whether `l` is trusted (live: no;
+/// stale: yes) -- exactly the "yes/yes, folds differ" row, which the rule refuses rather than guess.
+/// The row's own table names "the live slot" as the answer, not a refusal; this test instead asserts
+/// the refusal, since that is what the stated rule actually computes here, and a refusal still keeps
+/// the named security property (`l` never silently reads as trusted) -- open question for Q1's
+/// review: should "yes/yes, folds differ" prefer the slot whose match came through relation 1, or is
+/// refusing here the intended, merely under-described, answer?
+#[test]
+fn handoff_165_row_14_trust_policy_revoke_retrust_revoke_across_two_compactions() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row14-trust-policy");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let k_key = public_key_hex(&[51_u8; 32]);
+    let l_key = public_key_hex(&[52_u8; 32]);
+
+    add_trusted_maintainer(&layout, "k", &k_key)?;
+    add_trusted_maintainer(&layout, "l", &l_key)?;
+    remove_trusted_maintainer(&layout, "l")?; // revoked
+    compact_trust_policy(&layout)?; // k=1: live snapshot {k}
+
+    add_trusted_maintainer(&layout, "l", &l_key)?; // re-trusted, landing in the now-live slot
+    compact_trust_policy(&layout)?; // k=2: live snapshot {k,l}, retired slot holds the {k} snapshot
+
+    // The write after the second switch repeats the {k} snapshot the retired slot already holds.
+    remove_trusted_maintainer(&layout, "l")?; // revoked again
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    assert!(
+        load_maintainer_trust_policy(&layout).is_err(),
+        "both relations hold here (see this test's own doc comment) with disagreeing folds -- l \
+         must never silently read as trusted, and refusing, not guessing, is what keeps that true"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 15: the degenerate shape where the live slot (as the log would have named it, had
+/// it survived) is empty and the other slot holds the real data -- a structural edge the case table
+/// marks as command-buildable only incidentally, exercised directly at the resolver (foundation
+/// `generation` has its own synthetic coverage for rows 17-19; this one uses the real pointer-index
+/// entry type and encoder, matching every other row in this file, just without a realistic compaction
+/// history producing it).
+#[test]
+fn handoff_165_row_15_the_slot_the_log_would_have_named_is_empty() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row15-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    // Slot B holds real data; slot A (the default the log would otherwise name) stays empty.
+    let only = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    let bytes = std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A))?;
+    std::fs::write(layout.ref_pointer_index_slot_path(ContainerSlot::B), &bytes)?;
+    std::fs::write(layout.ref_pointer_index_slot_path(ContainerSlot::A), b"")?;
+
+    assert_eq!(
+        resolve_live_slot(
+            &layout,
+            &layout.ref_pointer_index_generation_log_path(),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
+            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
+            "ref pointer index has a damaged entry",
+            decode_pointer_index_entries_for_resolver,
+            fold_one_pointer_index_entry,
+        )?,
+        ContainerSlot::B,
+        "the only slot holding real data must be the one read, regardless of which letter it is"
+    );
+    assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(only));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 16: the two slots are byte-identical (both agree trivially). Built by commands
+/// alone: a single, non-superseded entry compacts to bytes identical to its own original encoding
+/// (the same entry, the same deterministic encoder, on both sides), so a bare compaction with nothing
+/// written since naturally leaves this shape -- no raw copy needed. Must read silently either way.
+#[test]
+fn handoff_165_row_16_byte_identical_slots_agree_trivially() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row16-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    let only = publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    compact_ref_pointer_index(&layout)?;
+    assert_eq!(
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::A))?,
+        std::fs::read(layout.ref_pointer_index_slot_path(ContainerSlot::B))?,
+        "fixture: a single, non-superseded entry compacts to identical bytes on both sides"
+    );
+    std::fs::write(layout.ref_pointer_index_generation_log_path(), b"")?;
+
+    assert_eq!(store.read_current_ref_state_id("heads/main")?, Some(only));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 17: neither relation holds -- slot B holds an entry sharing no compaction lineage
+/// with slot A at all (another repository's own container, in the row's own framing). No command
+/// sequence builds two genuinely unrelated slots; this uses the real encoder on a deliberately
+/// unrelated entry, the same device row 18 uses.
+#[test]
+fn handoff_165_row_17_neither_relation_holds_refuses() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row17-pointer-index");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let store = RefStore::new(layout.clone());
+
+    publish_update(&store, &mut objects, "heads/main", None, 1)?;
+    let foreign = crate::refs::PointerIndexEntry {
+        ref_name_key: crate::foundation::layout::ref_name_key_bytes("heads/foreign"),
+        ref_name: "heads/foreign".to_string(),
+        ref_state_id: crate::test_gates::test_support::sample_object_id("row17-foreign"),
+    };
+    std::fs::write(
+        layout.ref_pointer_index_slot_path(ContainerSlot::B),
+        crate::refs::encode_pointer_index_record(&foreign)?,
+    )?;
+
+    assert!(
+        store.read_current_ref_state_id("heads/main").is_err(),
+        "neither slot is a compaction of the other -- this must refuse, not guess"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Handoff 165 row 18: both relations hold, but the two slots' folds differ -- not a shape any real
+/// compaction sequence produces, built directly to prove it. The trust policy's own fold keeps only
+/// the *last* entry (`fold_one_trust_policy_entry`: `running.clear(); running.push(entry)`), so with
+/// `A = [s1, s2]` and `B = [s2, s1]`: `B` starts with `F(A) = [s2]` (relation 1, A stale beside B) and
+/// `A` starts with `F(B) = [s1]` (relation 1, B stale beside A) -- both hold -- yet `F(A) = [s2] !=
+/// [s1] = F(B)`. No real compaction produces this: a retired slot is never appended to again (only
+/// truncated and rewritten by a later compaction), so a slot cannot read "the old live content,
+/// followed by a fresh write" the way `B`'s own `[s2, s1]` would require once `s2` was the live
+/// content.
+#[test]
+fn handoff_165_row_18_both_relations_hold_with_differing_folds_refuses() -> Result<()> {
+    let root = unique_temp_dir("handoff-165-row18-trust-policy");
+    let layout = RepositoryLayout::init(root.clone())?;
+    // Real key material for both "k" and "l", so the only possible refusal is the deduction's own
+    // -- not a missing-key-material error masking it. `add_trusted_maintainer` would also append a
+    // policy snapshot; this test overwrites both slots wholesale right after, so that extra snapshot
+    // never survives to be read.
+    add_trusted_maintainer(&layout, "k", &public_key_hex(&[61_u8; 32]))?;
+    add_trusted_maintainer(&layout, "l", &public_key_hex(&[62_u8; 32]))?;
+
+    let snapshot_1 = crate::trust_index::TrustPolicySnapshotEntry {
+        key_ids: vec!["k".to_string()],
+    };
+    let snapshot_2 = crate::trust_index::TrustPolicySnapshotEntry {
+        key_ids: vec!["k".to_string(), "l".to_string()],
+    };
+    let mut slot_a = crate::trust_index::encode_trust_policy_record(&snapshot_1)?;
+    slot_a.extend(crate::trust_index::encode_trust_policy_record(&snapshot_2)?);
+    let mut slot_b = crate::trust_index::encode_trust_policy_record(&snapshot_2)?;
+    slot_b.extend(crate::trust_index::encode_trust_policy_record(&snapshot_1)?);
+    std::fs::write(
+        layout.trust_policy_container_slot_path(ContainerSlot::A),
+        slot_a,
+    )?;
+    std::fs::write(
+        layout.trust_policy_container_slot_path(ContainerSlot::B),
+        slot_b,
+    )?;
+
+    assert!(
+        load_maintainer_trust_policy(&layout).is_err(),
+        "both relations hold (each slot's own fold is a prefix of the other's raw history) but the \
+         folds themselves disagree on which snapshot is current -- this must refuse, not guess"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+// Handoff 165 row 19 (either slot damaged) needs no new test: it is exactly
+// `a_damaged_slot_refuses_the_deduction_rather_than_guessing`, above in this file, which already
+// covers it under Part E2's own numbering.

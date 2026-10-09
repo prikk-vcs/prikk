@@ -461,35 +461,89 @@ pub(crate) struct DecodedEntries<T> {
     pub(crate) damaged: bool,
 }
 
-/// Which of the two content-deciding rules resolved the slot, named for `verify`/`doctor`'s own
-/// warning text -- never for an ordinary reader or writer, which get the deduced slot silently.
+/// Which of handoff 165's two-direction rule cases resolved the slot, named for `verify`/`doctor`'s
+/// own warning text -- never for an ordinary reader or writer, which get the deduced slot silently.
+/// Replaces Part E4's one-directional rule: E4 tested only whether `B` is stale beside `A`, so after
+/// an even number of compactions -- where `A` is the newer slot and `B` the stale one -- a superseded
+/// entry in `B` made the rule pick `B` (020 reproduced this on all three containers).
 pub(crate) enum DeductionReason {
-    /// Slot B's own decoded entries equal `compaction(P)`, or a prefix of it, for some prefix `P` of
-    /// slot A's own entries: a crash before the generation record landed (`P` = all of A at that
-    /// point), a partly written B, a lost log with nothing written since, or a crash followed by
-    /// ordinary writes to A (`P` = A as it stood at the crash) -- either way B is derived from A, and
-    /// A is live.
-    BIsDerivedFromSomePrefixOfA,
-    /// Slot B's own decoded entries match no prefix of A this way: B took writes after becoming live,
-    /// so only the record of that switch is missing.
-    BTookWritesAfterBecomingLive,
+    /// `B` is stale beside `A` (and `A` is not also stale beside `B`): either `A` starts with a full
+    /// compaction of `B` and kept taking writes after (a committed compaction), or `B` equals, or is
+    /// a prefix of, a compaction of some prefix of `A`'s own history (a crash before the switch to
+    /// `B` was recorded, `B`'s own write cut short, or nothing written to `A` since). `A` is live.
+    BStaleBesideA,
+    /// The mirror of [`Self::BStaleBesideA`], with the two slots' roles reversed: `A` is stale beside
+    /// `B`, and `B` is live.
+    AStaleBesideB,
+    /// Both relations hold, and the two slots fold to the same entries: either slot reads the same.
+    /// `A` is returned, by convention.
+    BothSlotsAgree,
 }
 
 impl DeductionReason {
     pub(crate) fn explain(&self) -> &'static str {
         match self {
-            Self::BIsDerivedFromSomePrefixOfA => {
-                "the other slot's entries equal, or are a prefix of, what compaction would have \
-                 written at some earlier point in this one's own history, so a crash happened before \
-                 the switch was recorded, the write was interrupted, or nothing live-affecting was \
-                 written since"
+            Self::BStaleBesideA | Self::AStaleBesideB => {
+                "the other slot is stale beside this one -- a complete or partial compaction of an \
+                 earlier point in this slot's own history, with nothing written against it since, or \
+                 this slot itself continues a full compaction of the other slot's own entries"
             }
-            Self::BTookWritesAfterBecomingLive => {
-                "the other slot's entries match no earlier point in this one's own history, so it \
-                 took writes after becoming live"
-            }
+            Self::BothSlotsAgree => "both slots agree",
         }
     }
+}
+
+/// The full fold of one slot's own decoded entries -- what a compaction of exactly this slot, right
+/// now, would write. `T: Clone` only here and in [`stale_beside`]: `fold_entry` consumes its entry by
+/// value (matching every real container's own reduction step), and the two-direction rule needs each
+/// slot's entries intact for more than one comparison.
+fn fold_all<T: Clone>(entries: &[T], fold_entry: &impl Fn(&mut Vec<T>, T)) -> Vec<T> {
+    let mut running = Vec::with_capacity(entries.len());
+    for entry in entries {
+        fold_entry(&mut running, entry.clone());
+    }
+    running
+}
+
+/// Handoff 165: "`X` is stale beside `Y`" holds when **either**:
+/// 1. **Committed compaction:** `Y` starts with the full fold of `X` -- `Y` was compacted from all of
+///    `X`, then took writes (the rest of `Y`, if any, is exactly those writes).
+/// 2. **Crash before the log append:** `X` equals, or is a prefix of, the fold of some prefix `P` of
+///    `Y` -- `X` is a compaction of an earlier `Y`, maybe cut short, and `Y` kept taking writes. This
+///    is Part E4's own loop, with the two roles as parameters rather than fixed to `B` and `A`.
+///
+/// Computed in one pass over `Y`'s entries for relation 2 (folding one entry at a time, as E4 already
+/// did), plus one full fold of `X` for relation 1 -- `O(|X|)` once, plus `O(|Y|)` steps each compared
+/// against `X` in `O(|X|)`, so `O(|X|*|Y|)` entry comparisons overall, the same order E4 already paid.
+fn stale_beside<T: PartialEq + Clone>(
+    x_entries: &[T],
+    y_entries: &[T],
+    fold_entry: &impl Fn(&mut Vec<T>, T),
+) -> bool {
+    // Relation 1 (committed compaction).
+    let x_fold = fold_all(x_entries, fold_entry);
+    if y_entries
+        .get(..x_fold.len())
+        .is_some_and(|prefix| prefix == x_fold.as_slice())
+    {
+        return true;
+    }
+    // Relation 2 (crash before the log append): X equals, or is a prefix of, F(P) for some prefix P
+    // of Y, including the empty prefix (F(empty) = [], which the empty X is trivially a prefix of).
+    if x_entries.is_empty() {
+        return true;
+    }
+    let mut running: Vec<T> = Vec::with_capacity(y_entries.len());
+    for entry in y_entries {
+        fold_entry(&mut running, entry.clone());
+        if running
+            .get(..x_entries.len())
+            .is_some_and(|prefix| prefix == x_entries)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The outcome of deducing a live slot from content rather than reading it off the log (Part E2):
@@ -509,23 +563,27 @@ pub(crate) struct DeducedFromContent {
 /// `{key_ids}` set with no sequence, so an earlier-then-reinstated set can reappear (the review's own
 /// un-revocation sequence). Comparing against `C = compaction(A)` positionally fixed that.
 ///
-/// **Part E4 corrects it again**: `compaction(A)`, A *as it is now*, is still wrong after a crash
+/// **Part E4 corrected it again**: `compaction(A)`, A *as it is now*, is still wrong after a crash
 /// that leaves A live and taking further ordinary writes (a new branch, a revocation) -- B was made
 /// from an *earlier* A, and comparing against the current one can resolve to B, the stale slot,
-/// losing those writes. The sound test: **B is derived from A if B equals `compaction(P)`, or a
-/// prefix of it, for some prefix `P` of A's own entries** -- not only the full A. Computed in one
-/// pass over A's entries, maintaining the running reduction `fold_entry` builds incrementally (the
-/// same step `compact`'s own reduction takes, exposed so the two can never drift) and testing B
-/// against it after every entry -- recomputing the whole reduction from scratch for each candidate
-/// `P` would add a second factor of `|A|` on top of this; folding one entry at a time keeps that
-/// part to `O(|A|)`. The per-step comparison against B is still `O(|B|)`, so the deduction as a
-/// whole costs `O(|A|*|B|)` entry comparisons, not linear in `|A|` alone (Part E4 review) -- run
-/// only in the ambiguous state, over these containers' own size, so this cost is acceptable.
-/// `decode_entries` and `fold_entry` are the two pieces
-/// only the caller can supply -- each compacting container's own entry type, decoder, and reduction
-/// step -- so this stays generic over them rather than this module importing three sibling modules'
-/// types.
-fn resolve_or_deduce<T: PartialEq>(
+/// losing those writes. E4's own test: B is derived from A if B equals `compaction(P)`, or a prefix
+/// of it, for some prefix `P` of A's own entries -- not only the full A.
+///
+/// **Handoff 165 corrects E4 once more: the rule is symmetric, and E4 tested only one direction.**
+/// After an even number of compactions, A is the newer slot and B the stale one; when B holds a
+/// superseded entry, E4's one-directional test fails to show B derived from A (a superseded entry is
+/// not a prefix of A's *current* fold), and the `else` branch then wrongly answers B. 020 reproduced
+/// this on all three containers: a revoked maintainer key read as trusted, a branch disappeared, and
+/// a received tip went back. The sound test, [`stale_beside`]: test **both** "B stale beside A" (E4's
+/// own test, parameterized) and "A stale beside B" (its mirror); the one that holds alone names the
+/// live slot; both holding means the slots fold to the same entries (return A, report "both slots
+/// agree"); neither holding, or both holding with differing folds, is not a shape any compaction
+/// sequence produces -- refuse, the same as either slot being damaged.
+///
+/// `decode_entries` and `fold_entry` are the two pieces only the caller can supply -- each compacting
+/// container's own entry type, decoder, and reduction step -- so this stays generic over them rather
+/// than this module importing three sibling modules' types.
+fn resolve_or_deduce<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
@@ -577,34 +635,25 @@ fn resolve_or_deduce<T: PartialEq>(
         // the container's own existing damage text rather than inventing a new one.
         return Err(PrikkError::Integrity(damage_text.to_string()));
     }
-    // Part E4: B is derived from A if B equals `compaction(P)`, or a prefix of it, for *some* prefix
-    // `P` of A's own entries -- not only the full A (Part E3's own gap: a crash leaving A live and
-    // taking further writes makes `compaction(A_now)` diverge from a B made from an earlier A).
-    // One pass: fold A's entries into a running reduction, testing B against it after every step.
-    let mut running = Vec::with_capacity(decoded_a.entries.len());
-    let mut derived_from_a = decoded_b.entries.is_empty();
-    for entry in decoded_a.entries {
-        fold_entry(&mut running, entry);
-        if running
-            .get(..decoded_b.entries.len())
-            .is_some_and(|prefix| decoded_b.entries.as_slice() == prefix)
-        {
-            derived_from_a = true;
-            break;
+    // Handoff 165: test both directions -- E4 tested only "B stale beside A."
+    let b_stale_beside_a = stale_beside(&decoded_b.entries, &decoded_a.entries, fold_entry);
+    let a_stale_beside_b = stale_beside(&decoded_a.entries, &decoded_b.entries, fold_entry);
+    let (slot, reason) = match (a_stale_beside_b, b_stale_beside_a) {
+        (false, true) => (ContainerSlot::A, DeductionReason::BStaleBesideA),
+        (true, false) => (ContainerSlot::B, DeductionReason::AStaleBesideB),
+        (true, true) => {
+            let fold_a = fold_all(&decoded_a.entries, fold_entry);
+            let fold_b = fold_all(&decoded_b.entries, fold_entry);
+            if fold_a == fold_b {
+                (ContainerSlot::A, DeductionReason::BothSlotsAgree)
+            } else {
+                // Row 18: both relations hold, but the folds differ -- no compaction sequence
+                // produces this (only a synthetic test can), and there is no sound way to pick.
+                return Err(PrikkError::Integrity(damage_text.to_string()));
+            }
         }
-    }
-    let (slot, reason) = if derived_from_a {
-        // Rule 1.
-        (
-            ContainerSlot::A,
-            DeductionReason::BIsDerivedFromSomePrefixOfA,
-        )
-    } else {
-        // Rule 2.
-        (
-            ContainerSlot::B,
-            DeductionReason::BTookWritesAfterBecomingLive,
-        )
+        // Row 17: neither relation holds -- not a shape any compaction sequence produces.
+        (false, false) => return Err(PrikkError::Integrity(damage_text.to_string())),
     };
     Ok((
         slot,
@@ -636,7 +685,7 @@ pub(crate) fn resolve_live_slot_trusting_default_on_ambiguity(
         .map_or(ContainerSlot::A, |record| record.live_slot))
 }
 
-pub(crate) fn resolve_live_slot<T: PartialEq>(
+pub(crate) fn resolve_live_slot<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
@@ -660,7 +709,7 @@ pub(crate) fn resolve_live_slot<T: PartialEq>(
 /// Like [`resolve_live_slot`], but also returns the log's own tail status from the same replay --
 /// RFC 163 §9's write-side guard (`compact.rs`, its only caller) is built on this call so it never
 /// pays for a second whole read just to learn what `resolve_live_slot` already decoded.
-pub(crate) fn resolve_live_slot_with_tail<T: PartialEq>(
+pub(crate) fn resolve_live_slot_with_tail<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
@@ -685,7 +734,7 @@ pub(crate) fn resolve_live_slot_with_tail<T: PartialEq>(
 /// makes silently, surfaced explicitly so the ambiguous state stays visible and nameable, rather than
 /// going unremarked once it stops being a refusal. `None` when the log names a slot outright, or slot
 /// B is genuinely empty -- nothing to warn about.
-pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq>(
+pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq + Clone>(
     layout: &RepositoryLayout,
     generation_log_path: &std::path::Path,
     slot_a_path: &std::path::Path,
