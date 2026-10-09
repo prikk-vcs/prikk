@@ -147,3 +147,8 @@ message `prikk 0.50.0`, a blank line, and the Release-notes link). Then the arti
 **The owner, 2026-10-09: *"Authorized."*** The architect's reading: the cut of 0.50.0 is authorized, meaning P4's date
 commit, then push, CI and the signed tag on the pushed commit. **crates.io and the consumer letters are not
 included;** each still needs its own word. **Next: P4.**
+
+**P4 ACCEPTED, and 0.50.0 RELEASED 2026-10-09.** The tag `0.50.0` is signed, on `7551c3aa` (CI `37936285139`, 16/16;
+release run `37940038344`, green). The architect verified the assets: checksums 6/6, build info 4/4, smoke 297/297 on
+the published Linux binary, and the notes byte-identical to the CHANGELOG section. **Still owed:** crates.io (the
+owner's word), note 022, RFC 165 to `done/`, and the consumer letters.
