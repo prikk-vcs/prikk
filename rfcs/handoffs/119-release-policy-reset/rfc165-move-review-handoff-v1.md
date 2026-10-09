@@ -23,3 +23,5 @@ development team reviews it before it is pushed, as in 0.50.0 step 3.
 
 The architect ran `boundary-check` and `reference-check`: both exit 0, no errors. **Do not push.** Report OK, or each
 finding.
+
+**Reviewed OK by the development team 2026-10-10** (report `rfc165-move-review-report.md`: five checks pass, 14/14 on `ef8a7faf`). The architect pushes.
