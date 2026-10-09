@@ -120,3 +120,11 @@ drafted and ready for the owner to send (`.git-exclude/upstream/external-archite
 this build and on 0.49.0: matrix 282/289 clean (10 better, none worse); `reproduce.sh` unchanged apart from N3's text.
 **The tag waits for the external answer and the owner's word.** The CHANGELOG date is set to the tag day in the last
 commit before the tag (owner to confirm).
+
+**External review 020 (2026-10-09): one finding blocks the tag.** The lost-generation-log rule is one-directional
+(020 §3.1; assessment `external-review-020-assessment-v1`). It is fixed in
+`rfcs/handoffs/165-ref-publication-one-read-a-log-that-speaks-and-a-way-out/generation-log-both-directions-handoff-v1.md`
+(Q1, Q2). The external architect re-runs on the commit that follows.
+
+**The release day, the owner, 2026-10-09:** *"The actual day to release it."* The architect's reading: the CHANGELOG
+heading is set to the day of the tag, in the last commit before it.
