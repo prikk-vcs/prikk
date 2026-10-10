@@ -141,7 +141,9 @@ test. The layout's retired-format refusal messages then point at it.
 
 ## 9. Design, 2026-10-10 — for the owner's reading (design round D1–D4)
 
-**Status of this section: PROPOSED by the architect, for the owner's reading, then acceptance.** It answers *how*
+**Status of this section: ACCEPTED by the owner 2026-10-10** (*"Both accepted."*). The architect's reading: §9 is
+accepted as written, including the strict reading of R4 (§9.5), and the command noun is `archive` (§9.8). Proposed the
+same day by the architect, after reading. It answers *how*
 for §3–§8. It came from a four-part design round: reports `rfc155-design-round-D1…D4-report.md` and reviews `…-review-v1`.
 Author-review independence: the architect set the questions and rules here. The external review at the cut
 compensates.
