@@ -156,3 +156,5 @@ then a resume from each; a cancel from each; a full disk.
 - Looping `bundle import` per ref.
 - A second copy of verify's checks inside import.
 - Building a test state by writing container bytes, when commands can build it.
+
+**Part E ACCEPTED 2026-10-10** (`c61e6d4c`; review `rfc155-impl-E-review-v1`). **Part V gains one item:** export's report names objects by type and refs (local, received, tags), in text and JSON, rather than "sections: 13". **Next: Part V.**
