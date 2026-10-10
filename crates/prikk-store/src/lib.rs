@@ -18,6 +18,9 @@
 // RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
 mod anchor_fallback;
 mod anchor_trust;
+// RFC 155 §9: `prikk archive export|verify|import`, the whole-repository artifact. Implemented
+// across four parts (export, verify, import A, import B); only export exists so far.
+mod archive;
 mod author;
 mod blob_access;
 mod block_state;
@@ -114,6 +117,7 @@ mod test_gates;
 pub use anchor_fallback::take_anchor_fallbacks;
 #[cfg(feature = "test-support")]
 pub use anchor_trust::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
+pub use archive::{ArchiveExportReport, ArchiveSectionKind, export_archive};
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 #[cfg(feature = "test-support")]

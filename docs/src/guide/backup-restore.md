@@ -156,6 +156,11 @@ because `../backup.bundle` already existed from the first export.
 branch — nothing collects them for you, and the manifest's own printed note above says so in every
 bundle you make, not only here.
 
+For every ref, every object, and the trust material in one file, see
+[The Archive Format](../reference/archive-format.md) instead: `prikk archive export <file>` carries
+the whole repository, verbatim. Reading one back (`archive verify`/`archive import`) is a separate,
+not-yet-built part of the same RFC.
+
 ## Check a backup later, without restoring it
 
 `bundle verify` reads a bundle file and reports whether it is structurally sound and internally
@@ -264,8 +269,10 @@ it is; import's own report is not a substitute for running it.
   is not itself a backup source.
 
 A restore is therefore an intact, checkable copy of the history, not a repository you continue working
-in. A whole-repository artifact that lands as working branches is accepted as RFC 155 and not yet
-implemented.
+in. `prikk archive export <file>` now writes a whole repository, verbatim, into one file (RFC 155) —
+see [The Archive Format](../reference/archive-format.md) — but reading one back is not yet built:
+`archive verify`/`archive import`, and the landing step that turns a received branch into a working
+one, remain later parts of the same RFC.
 
 ## What this proves, stated precisely
 

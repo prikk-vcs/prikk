@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — `prikk archive export <file> [--format json]` writes a whole repository, verbatim, into one file
+
+- RFC 155: every object container, the ref log, and the resolved content of the ref pointer index,
+  the received index, and the trust policy, plus the adopted maintainer keys and the author key
+  material — streamed into a new `PREPO001` file, memory bounded independently of repository size
+  (measured flat at the release-gate node counts and at 1 GiB of blob content). Holds every
+  container lock for the whole run, so an export taken during a concurrent `seal` is the repository
+  strictly before or after it, never a mix. Refuses before writing anything if an active session
+  holds queued, unsealed commits (naming `prikk seal`), or a slotted container's generation log
+  cannot be resolved (the existing `doctor`/`verify` texts). See
+  [The Archive Format](docs/src/reference/archive-format.md).
+- This is the first of four implementation parts (export, verify, import A, import B); only export
+  exists so far. `archive verify`/`archive import` are separate, later parts of the same RFC.
+
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 
 - For the received index and the trust policy container, a lost generation log can leave two slots

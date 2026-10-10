@@ -20,6 +20,7 @@ use std::process::ExitCode;
 // `stdout.rs` -- see that module's own doc comment.
 use stdout::println;
 
+mod archive;
 mod arg_scan;
 mod args;
 mod bounded_read;
@@ -300,6 +301,12 @@ fn run_tag(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_bundle(args: Vec<String>) -> std::result::Result<(), CliError> {
     let root = current_dir()?;
     bundle::run_bundle(root, args)?;
+    Ok(())
+}
+
+fn run_archive(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let root = current_dir()?;
+    archive::run_archive(root, args)?;
     Ok(())
 }
 

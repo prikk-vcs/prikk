@@ -46,6 +46,7 @@
 - [Platform Support](reference/platform-support.md)
 - [System Architecture](reference/architecture.md)
 - [Repository Layout and Authority](reference/repository-layout.md)
+- [The Archive Format (`PREPO001`)](reference/archive-format.md)
 - [Concurrency and Locking](reference/concurrency-locking.md)
 - [Path and Worktree Safety](reference/path-safety.md)
 - [Data Model](reference/data-model.md)

@@ -63,7 +63,11 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 27] = [
+const UPPER_LAYER: [&str; 28] = [
+    // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
+    // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
+    // nothing lower reaches it, and it reaches nothing that reaches back into it.
+    "archive",
     "branch_switch",
     "bundle",
     "compact",
@@ -585,6 +589,22 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   one callback `foundation::index` takes, so the foundation layer itself names no recovery \
                   type. That is one new edge from the store's own façade, not a second route into the \
                   index: every object read and write still enters the object layer here",
+    },
+    DeclaredHub {
+        module: "received::received_index",
+        reason: "RFC 155 implementation Part E: `archive export` resolves the received index's \
+                  live slot through the same `decode_received_index_entries_for_resolver`/ \
+                  `fold_one_received_index_entry`/`replay_received_index` triple `verify` and \
+                  `compact` already call -- a fourth consumer of the one per-container resolver \
+                  this module exists to hold, not a second resolution mechanism",
+    },
+    DeclaredHub {
+        module: "trust_index",
+        reason: "RFC 155 implementation Part E: `archive export` resolves the trust policy \
+                  container's live slot through the same `decode_trust_policy_entries_for_resolver`/ \
+                  `fold_one_trust_policy_entry`/`replay_trust_policy` triple `verify` and `compact` \
+                  already call -- the same consolidation as `received::received_index` above, for \
+                  this container's own resolver",
     },
 ];
 

@@ -39,6 +39,38 @@ pub fn sha256_parts(parts: &[&[u8]]) -> Sha256Digest {
     hasher.finalize().into()
 }
 
+/// An incremental SHA-256 computation, fed one chunk at a time. The same digest as [`sha256`] of
+/// the concatenation of every chunk [`Self::update`] was called with -- for a caller streaming a
+/// body too large to hold whole in memory (RFC 155's archive export/verify: a body is one
+/// repository container file, read in fixed-size chunks), never buffering more than one chunk at
+/// once. `sha256`/`sha256_parts` stay the right choice for anything already in memory; this is for
+/// anything that must not be.
+#[derive(Debug, Default)]
+pub struct IncrementalSha256 {
+    hasher: Sha256,
+}
+
+impl IncrementalSha256 {
+    /// Start a new incremental digest.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            hasher: Sha256::new(),
+        }
+    }
+
+    /// Feed the next chunk, in order. Chunk boundaries never affect the result.
+    pub fn update(&mut self, chunk: &[u8]) {
+        self.hasher.update(chunk);
+    }
+
+    /// Finish and return the digest of every chunk fed so far, in order.
+    #[must_use]
+    pub fn finalize(self) -> Sha256Digest {
+        self.hasher.finalize().into()
+    }
+}
+
 /// Convert bytes to lowercase hex.
 #[must_use]
 pub fn to_hex(bytes: &[u8]) -> String {

@@ -97,6 +97,50 @@ pub(crate) fn write_new_file_durably(destination: &Path, bytes: &[u8]) -> Result
     sync_parent_directory(destination)
 }
 
+/// As [`write_new_file_durably`], but for a caller that streams its content rather than holding it
+/// all in one `&[u8]` (RFC 155's `archive export`: a whole repository, never buffered whole). `write`
+/// receives the open temp file and returns whatever report value the caller's own writer produces;
+/// this function's own job is unchanged -- the temp file, the sync, the atomic rename, the same
+/// untouched-on-failure guarantee -- just with the content supplied by `write` instead of one
+/// `write_all(bytes)` call.
+pub(crate) fn write_new_file_durably_streaming<T>(
+    destination: &Path,
+    write: impl FnOnce(&mut File) -> Result<T, String>,
+) -> Result<T, String> {
+    let temp_path = temporary_sibling_path(destination)?;
+    let result: Result<T, String> = (|| {
+        let mut file = File::create_new(&temp_path).map_err(|err| {
+            format!(
+                "failed to create a temporary file beside the destination at {}: {err}",
+                temp_path.display()
+            )
+        })?;
+        let value = write(&mut file)?;
+        file.sync_all().map_err(|err| {
+            format!(
+                "failed to sync the temporary file at {} before moving it into place: {err}",
+                temp_path.display()
+            )
+        })?;
+        Ok(value)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    let value = result?;
+
+    std::fs::rename(&temp_path, destination).map_err(|err| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!(
+            "failed to move the completed write into place at {}: {err}",
+            destination.display()
+        )
+    })?;
+
+    sync_parent_directory(destination)?;
+    Ok(value)
+}
+
 fn write_and_sync_temp_file(temp_path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = File::create_new(temp_path).map_err(|err| {
         format!(
