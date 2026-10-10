@@ -130,3 +130,15 @@ The design goes to the owner after D3.
   - **10.** The command surface, without overloading `prikk verify [path]`. Two or three namings; choose none.
 
 **Next: D3, then D4.**
+
+**Part D3 ACCEPTED 2026-10-10** (review `rfc155-design-round-D3-review-v1`). **D4 gains item 11** and grows to 90 min,
+still one sitting:
+- **11. Verify and import's first phase: streaming or staged?** Staging costs a full copy in `$TMPDIR` (tmpfs here, so
+  memory), a double write on import, and deletions in a shared temp directory. Streaming reuses
+  `verify_author_signatures_with` (`author_key_index.rs:680`, a lookup closure, no layout) against the carried
+  material held in memory. Give the costs at 1 and 10 GiB, what each reuses, and what each leaves behind on a kill.
+  Choose none.
+
+D3's item 6 (live slot `b`) becomes a required implementation test: export, round-trip, and an identical `branch list`.
+
+**Next: D4.**
