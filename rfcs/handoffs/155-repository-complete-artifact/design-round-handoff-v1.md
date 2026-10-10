@@ -142,3 +142,7 @@ still one sitting:
 D3's item 6 (live slot `b`) becomes a required implementation test: export, round-trip, and an identical `branch list`.
 
 **Next: D4.**
+
+**Part D4 ACCEPTED, and the design round is CLOSED, 2026-10-10** (review `rfc155-design-round-D4-review-v1`). The
+architect's rulings are in RFC 155 §9, *"Design, 2026-10-10"*, **for the owner's reading**. The implementation handoff
+(four parts, §9.9) follows the owner's acceptance.

@@ -138,3 +138,144 @@ test. The layout's retired-format refusal messages then point at it.
 - A ref signed by a non-adopted key lands in `remotes/`, never as a branch.
 - Round trip: export, import into a fresh repository, `verify`, and the ref set and object ids are
   identical.
+
+## 9. Design, 2026-10-10 — for the owner's reading (design round D1–D4)
+
+**Status of this section: PROPOSED by the architect, for the owner's reading, then acceptance.** It answers *how*
+for §3–§8. It came from a four-part design round: reports `rfc155-design-round-D1…D4-report.md` and reviews `…-review-v1`.
+Author-review independence: the architect set the questions and rules here. The external review at the cut
+compensates.
+
+### 9.1 What the artifact carries
+
+| content | in the artifact | on import |
+|---|---|---|
+| object containers (every type) | verbatim, the live slot's bytes | each object written through the ordinary path, in dependency order |
+| the ref pointer index, the ref log, the received index | their **resolved** content (no slot letters, no generation log) | written as a fresh slot `a`, as `init` lays out |
+| **author keys** | carried | **recorded** through DC-78's path (`check_author_key_conflict`, then `record_author_key_material`). A conflict refuses the whole import before any write |
+| **maintainer keys and policy** | carried as an inert record | **never written.** The artifact's verify lists them as *"carried, not adopted"*; the operator adopts with `trust maintainer add` |
+| caches, the object index, `FORMAT` | not carried | derived by the importer |
+| the active WAL and witness, the recovery log, markers, locks | not carried | the importer's own, fresh |
+
+**Export refuses before writing anything** when:
+- **a session holds queued, unsealed commits.** The message names the session, the count, and `prikk seal`. A queued
+  patch lives only in the WAL until `seal`, so an archive taken without it would silently lose signed work. No
+  override; seal first;
+- **a slotted container cannot be resolved:** an ambiguous lost generation log, or a damaged slot. It uses the
+  existing texts and their ways out.
+
+**Damage in an object container travels verbatim.** The archive's verify names it, and import refuses such an archive,
+naming the object (§8). An archive is a faithful copy, damage included.
+
+### 9.2 The format, `PREPO001`
+
+- **Sections:** one per carried file, in the container frame (magic, length, body, checksum).
+- **A trailing manifest and a fixed 24-byte end trailer,** so a reader finds the manifest without scanning.
+- **Streamed on both ends,** with memory independent of the archive's size. The prototype's RSS stayed flat (2.7 MiB)
+  across a 600× size range.
+- **Reference closure in two passes, with an id set:** memory bounded by object count, 32 bytes an id.
+- **Carry-forward:** a later `PREPO` version keeps the old magic's reader forever, with a fixture from the old encoder
+  (`decode_bundle`'s precedent).
+
+### 9.3 Export: one consistent view
+
+Export holds **every container lock for its whole run** (`acquire_container_locks`, all five), so an export taken
+during a `seal` is the repository before or after it, never a mix.
+- **Measured:** 1.2 GiB in 775 ms (warm cache), RSS flat.
+- **Writers fail fast** while it runs (`LockConflict`).
+- **A killed export leaves its lock files.** `prikk unlock` clears them, as for any killed writer.
+- **Rejected alternative:** a brief lock, then an unlocked stream to recorded lengths. It reads torn data once RFC 158's
+  reclaim rewrites containers in place.
+
+### 9.4 Verify: streaming, no scratch copy
+
+The archive's verify checks:
+- structure (the manifest);
+- closure (two passes);
+- every signature against the **archive's own carried** author and maintainer material, held in memory, through
+  `verify_author_signatures_with`'s lookup closure.
+
+It writes nothing anywhere, on any exit path. It reports *"internally consistent"*, never *"trusted"*, and names
+every signature it cannot check.
+- **Rejected alternative:** staging into `$TMPDIR` plus `verify_repository`. That costs a full copy (memory, on a tmpfs
+  `/tmp`), a double write on import, and deletions in a shared temp directory.
+
+### 9.5 Import: untouched or complete, literally (R4 as written)
+
+- **Stage 0, checks:** the archive's verify, the author-key conflict check, the landing plan. A refusal writes nothing.
+- **The journal, the first write:** the archive's identity, the landing plan, and each object container's length.
+  Taken under the object lock, which import holds **from the journal to the end of the objects**.
+- **Stage 1, objects:** in dependency order through the ordinary write path. Content-addressed and idempotent.
+- **Stage 2, author keys:** recorded.
+- **Stage 3, refs:** each landing written, idempotently, under the control-plane locks.
+- **The commit point:** the journal is emptied. Its name is kept, the conservative choice on Windows (RFC 168 §6).
+
+| state `doctor` sees | what it means | the way out |
+|---|---|---|
+| no journal | nothing started, or finished | none needed |
+| journal, *N* of *M* refs landed (0 ≤ *N* ≤ *M*) | interrupted: `PRIKK-DOCTOR-INTERRUPTED-IMPORT` | run the same import again (it resumes), **or** `prikk doctor --cancel-import <id>` |
+
+- **Cancel restores "untouched".** For each object container, it saves the bytes past the journaled length (one
+  RFC 168 run), truncates back, then removes any landed refs the journal names and empties the journal.
+  `--recovery-restore` can undo the cancel.
+- **While a journal is present, every writer that appends objects refuses,** naming *"run the same import again, or
+  `prikk doctor --cancel-import <id>`"*. Nothing may be appended behind an unfinished import, because that would make
+  the cut-back unsafe. This is RFC 163's rule: a write never buries a crash state.
+- **The cost:** writers refuse for the import's duration. Today's `bundle import` writes 1.15 GiB in 8.2 s, an upper
+  bound, because it buffers. On §5's carry-forward target, a fresh repository, that costs nothing.
+
+### 9.6 Landing (§5), and the narrowed `--adopt`
+
+- **The default:** every ref under `remotes/`.
+- **`--adopt`** lands a ref as a local ref only when four conditions all hold:
+  1. it does not yet exist locally;
+  2. its chain is signed by a key in **this** repository's adopted set;
+  3. it is verified;
+  4. its compare-and-swap against *"absent"* holds.
+
+  Every other ref lands under `remotes/`, and the outcome names why. One reason is *"exists locally; adopting onto an
+  existing ref is RFC 154's"*.
+- **This is RFC 114 §5.2's carry-forward case, exactly:** `init`; adopt the maintainer keys listed by the archive's
+  verify; `import --adopt`. RFC 154's general rule replaces this narrowed one when it ships, and must re-check against
+  it.
+
+### 9.7 Identity (R6, as RFC 156 superseded it)
+
+- **The same id with identical bytes:** a no-op, counted as *"already present"*.
+- **The same id with different signatures:** RFC 156 §4's merge, through `admit_carried_signatures`, as `bundle import`
+  and `sync accept` do. Signatures that do not qualify are **dropped and named**.
+- **§8's control *"refused and named"*** is read as *"merged under RFC 156 §4; a dropped signature named"*.
+- **Re-importing the same archive** reports *"already imported"*.
+
+### 9.8 The commands
+
+A new noun parallel to `bundle`, the one-ref artifact. **Proposed: `archive`.**
+
+```
+prikk archive export <file> [--format json]
+prikk archive verify <file> [--format json]          lists carried maintainer keys as "carried, not adopted"
+prikk archive import <file> [--adopt] [--format json]
+prikk doctor --cancel-import <id> [--plan-only]
+```
+
+- **Rejected:** `prikk verify <file>`. `verify [path]` already takes a repository path.
+- **Rejected:** a mode of `bundle`. A user who knows `bundle export <ref>` would expect a ref argument.
+- **JSON** follows `verify-report-v1`: a schema name; `ok` split into structure, closure and signatures, so
+  *"internally consistent"* never reads as *"trusted"*.
+
+### 9.9 Implementation (0.51.0 step 3): four one-sitting parts
+
+1. **Export:** the format writer, the refusals, the full lock. Tests:
+   - §8's concurrent-`seal` control;
+   - a repository whose live slot is `b`;
+   - the queued-work refusal.
+2. **Verify:** streaming. Tests: §8's flipped-byte control, which names the object; carried maintainer keys listed;
+   nothing written.
+3. **Import A:** stage 0, the journal, objects under the lock, author keys, `doctor`'s state, the cancel, and writers
+   refusing behind a journal. Tests: a kill at each point, each row above; §8's *"adopted set unchanged"*.
+4. **Import B:** landing, `--adopt`, identity, re-import. Tests:
+   - §8's remaining controls;
+   - the round trip, where `branch list` and the object ids are identical.
+
+**One finding outside this RFC:** today's `bundle import` peaks at about 4.6 times the bundle's size in memory
+(5.26 GiB for 1.15 GiB), from whole-file and whole-object buffering. It is a candidate for a later release.
