@@ -148,7 +148,10 @@ fn branch_create_names_ref_complete_directly_over_a_torn_lead_tail() {
 
     let output = branch_create(&repo, "heads/topic", "heads/main");
     let text = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "branch create must refuse\n{text}");
+    assert!(
+        !output.status.success(),
+        "branch create must refuse\n{text}"
+    );
     assert!(
         !text.contains("--repair-tails"),
         "branch create must not answer --repair-tails over a lead's own torn tail: {text}"
