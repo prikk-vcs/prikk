@@ -87,6 +87,7 @@ prikk format upgrade [path]
 prikk unlock
 prikk unlock --lock <path> [--yes|--force]
 prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]
+prikk compact --received-index|--trust-policy --keep-slot a|b [--plan-only]
 prikk --version
 ```
 

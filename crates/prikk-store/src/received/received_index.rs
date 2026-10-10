@@ -42,8 +42,9 @@ const RECEIVED_INDEX_DAMAGE_TEXT: &str = "received-ref index has a damaged entry
 /// not damage, and Q1's own proof rules out any rule that reads only the slots. No ref log exists
 /// to re-derive this container from, so the backup is the only way out.
 const RECEIVED_INDEX_AMBIGUOUS_TEXT: &str = "the received index's generation log is lost, and its two slots fit two different \
-     histories; prikk will not guess. Restore the repository's whole `.prikk/` from a backup \
-     taken before the log was lost";
+     histories; run `prikk compact --received-index --keep-slot a|b --plan-only` to see both \
+     slots and choose, or restore the repository's whole `.prikk/` from a backup taken before \
+     the log was lost";
 
 /// The exact reduction `compact_received_index` performs: last entry per `ref_name_key` survives, in
 /// the order each key's own last occurrence appears in `entries`. Factored out so Part E3's

@@ -154,8 +154,10 @@ pub use commit_boundary::worktree_patch::{
 };
 pub use commit_index::CommitIndexDivergence;
 pub use compact::{
-    CompactionReport, compact_received_index, compact_ref_pointer_index, compact_trust_policy,
-    plan_compact_received_index, plan_compact_ref_pointer_index, plan_compact_trust_policy,
+    CompactionReport, KeepSlotReport, compact_received_index, compact_received_index_keep_slot,
+    compact_ref_pointer_index, compact_trust_policy, compact_trust_policy_keep_slot,
+    plan_compact_received_index, plan_compact_received_index_keep_slot,
+    plan_compact_ref_pointer_index, plan_compact_trust_policy, plan_compact_trust_policy_keep_slot,
     precheck_received_index_before_compaction, precheck_ref_pointer_index_before_compaction,
     precheck_trust_policy_before_compaction,
 };

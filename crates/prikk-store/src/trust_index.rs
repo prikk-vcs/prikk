@@ -60,9 +60,10 @@ const TRUST_POLICY_DAMAGE_TEXT: &str = "trust policy container has a damaged sna
 /// (H1/H2) rules out any rule that reads only the slots. The backup is the only way out; unlike
 /// the pointer index, there is no ref log to re-derive this container from.
 const TRUST_POLICY_AMBIGUOUS_TEXT: &str = "the trust policy's generation log is lost, and its two slots fit two different \
-     histories (one trusts a key the other has revoked); prikk will not guess. Restore the \
-     repository's whole `.prikk/` from a backup taken before the log was lost, then re-apply \
-     every trust change made since that backup";
+     histories (one trusts a key the other has revoked); run `prikk compact --trust-policy \
+     --keep-slot a|b --plan-only` to see both slots and choose, or restore the repository's \
+     whole `.prikk/` from a backup taken before the log was lost, then re-apply every trust \
+     change made since that backup";
 
 /// The exact reduction `compact_trust_policy` performs: only the last snapshot survives (0 or 1
 /// entries). Factored out so Part E3's deduction (`C = compaction(A)`) uses the identical logic the

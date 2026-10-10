@@ -706,16 +706,18 @@ fn push_container_interior_damage_issues(
         issues.push(DoctorIssue::error(
             "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS",
             message.clone(),
-            "prikk will not guess; restore the repository's whole `.prikk/` from a backup taken \
-             before the log was lost",
+            "run `prikk compact --received-index --keep-slot a|b --plan-only` to see both slots \
+             and choose, or restore the repository's whole `.prikk/` from a backup taken before \
+             the log was lost",
         ));
     }
     if let Some(message) = &ambiguity.trust_policy {
         issues.push(DoctorIssue::error(
             "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS",
             message.clone(),
-            "prikk will not guess; restore the repository's whole `.prikk/` from a backup taken \
-             before the log was lost, then re-apply every trust change made since that backup",
+            "run `prikk compact --trust-policy --keep-slot a|b --plan-only` to see both slots \
+             and choose, or restore the repository's whole `.prikk/` from a backup taken before \
+             the log was lost, then re-apply every trust change made since that backup",
         ));
     }
     if let Some(message) = &damage.pointer_index {

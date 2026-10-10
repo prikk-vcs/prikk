@@ -535,9 +535,16 @@ right in both histories, so refusing is the only honest answer. This is a distin
 **The way out, named in the message itself:** for the ref pointer index, run `prikk doctor
 --rebuild-pointer-index --plan-only`, then the real run — it re-derives the index from the ref log,
 never reading either slot, so the ambiguity does not touch it. For the received index and the trust
-policy container, no rebuild exists; restore this repository's whole `.prikk/` directory from a
-backup taken before the generation log was lost (the trust policy text also says to re-apply every
-trust change made since that backup).
+policy container, 0.51.0 adds a second way out, named first: `prikk compact --received-index
+--keep-slot a|b --plan-only` (or `--trust-policy`) prints each slot's own entry count and folded
+state — for the trust policy, the keys trusted in one slot and not the other, by name — and which
+slot content would deduce, or "ambiguous: prikk will not choose," before anything is written. The
+user knows which history is theirs; running the real command (without `--plan-only`) saves the
+slot it overwrites and the generation log, as one recovery run, before writing anything. A whole-
+`.prikk/` backup taken before the generation log was lost stays the second way out (the trust
+policy text also says to re-apply every trust change made since that backup) — and the only one
+left for either container once the generation log is lost *and* the chosen slot does not decode
+cleanly (`--keep-slot` refuses on a damaged chosen slot, naming that fact, rather than guessing).
 
 ## `error: integrity error: the ref pointer index's live slot is not recorded; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then \`prikk doctor --rebuild-pointer-index\` first`
 

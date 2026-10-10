@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
+
+- For the received index and the trust policy container, a lost generation log can leave two slots
+  that fit two equally honest histories — proven, not merely undecided (handoff 165's own H1/H2
+  twin). Until now the only way out was a whole-`.prikk/` backup. `--keep-slot a|b [--plan-only]`
+  prints each slot's own entry count and folded state (for the trust policy, the keys trusted in
+  one slot and not the other, by name) and which slot content would deduce, or that the state is
+  ambiguous; unless `--plan-only`, it then treats the chosen slot as live and compacts it into the
+  other slot, saving what it overwrites — the slot and the generation log, as one recovery run,
+  before writing anything, the identical save-before-write order an ordinary deduced compaction
+  already uses. Refuses when the generation log already names a live slot (plain `compact` is for
+  that), when the chosen slot does not decode cleanly or holds no entries, with `--pointer-index`
+  (its own rebuild never reads either slot as live, so there is no choice to make), or with `--all`
+  or more than one target (it names which slot of exactly one container).
+
+### Output changes
+
+- The ambiguous generation-log refusal, and `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS`, now name
+  `prikk compact --received-index|--trust-policy --keep-slot a|b --plan-only` first, before the
+  whole-`.prikk/` backup.
+
 ## 0.50.0 — 2026-10-09
 
 ### Upgrading

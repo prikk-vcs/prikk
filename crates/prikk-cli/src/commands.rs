@@ -363,6 +363,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]",
             "                                             Reclaim stale index/policy records (--plan-only previews only)",
+            "  prikk compact --trust-policy|--received-index --keep-slot a|b [--plan-only]",
+            "                                             Choose a slot to keep when the generation log is lost",
         ],
     },
     Command {

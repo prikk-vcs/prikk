@@ -678,6 +678,106 @@ pub(crate) fn resolve_or_deduce<T: PartialEq + Clone>(
     ))
 }
 
+/// 0.51.0 step 1 Part C: one slot's own decode outcome, for `--keep-slot`'s own precondition --
+/// unlike [`resolve_or_deduce`], which collapses either slot's damage into one refusal, `--keep-slot`
+/// needs to know *which* slot is damaged (K6: the chosen one refuses; K7: the other one does not).
+pub(crate) enum KeepSlotStatus<T> {
+    Damaged,
+    Entries(Vec<T>),
+}
+
+/// 0.51.0 step 1 Part C: the state `--keep-slot`'s own precondition decides between (the handoff's
+/// K1/K11/lost-log rows), reusing [`resolve_or_deduce`]'s own two-direction deduction but exposing
+/// what it collapses into a single resolved slot or a single refusal.
+pub(crate) enum KeepSlotState<T> {
+    /// K1: the generation log already names a live slot -- `--keep-slot` is only for a lost log.
+    LiveSlotRecorded(ContainerSlot),
+    /// K11: never compacted (the log is empty), and slot B holds no data either -- nothing to choose
+    /// between; slot A is live by the same default [`resolve_or_deduce`] uses.
+    NeverCompacted,
+    /// The lost-log state `--keep-slot` exists for: the log names no slot, and slot B holds data --
+    /// covers both the ambiguous state (`deduced: None`) and the deduced one (`Some`).
+    LostLog {
+        slot_a: KeepSlotStatus<T>,
+        slot_b: KeepSlotStatus<T>,
+        deduced: Option<(ContainerSlot, DeductionReason)>,
+    },
+}
+
+/// 0.51.0 step 1 Part C: `--keep-slot`'s own precondition check. `decode_entries`/`fold_entry` are
+/// the same per-container pieces [`resolve_or_deduce`] takes; this reads both slots whole in the
+/// identical rare state that function already does (declared under the same
+/// `generation-resolver-deduction` scope -- one more read of an already-rare path, not a new cost
+/// class), but keeps each slot's own damage status and the deduction outcome separate rather than
+/// folding them into one `Err`.
+pub(crate) fn keep_slot_state<T: PartialEq + Clone>(
+    layout: &RepositoryLayout,
+    generation_log_path: &std::path::Path,
+    slot_a_path: &std::path::Path,
+    slot_b_path: &std::path::Path,
+    damage_text: &str,
+    decode_entries: &impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
+    fold_entry: &impl Fn(&mut Vec<T>, T),
+) -> Result<KeepSlotState<T>> {
+    let replay = replay_generation_log(layout, generation_log_path)?;
+    if replay.has_item_failure() {
+        return Err(PrikkError::Integrity(damage_text.to_string()));
+    }
+    if let Some(record) = replay.records.last() {
+        return Ok(KeepSlotState::LiveSlotRecorded(record.live_slot));
+    }
+    if !slot_b_has_data(layout, slot_b_path)? {
+        return Ok(KeepSlotState::NeverCompacted);
+    }
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("generation-resolver-deduction");
+    let slot_a_relative = layout.repository_relative(slot_a_path)?;
+    let slot_a_bytes = read_file_if_exists(layout.repository_mutation_root(), &slot_a_relative)?
+        .unwrap_or_default();
+    let slot_b_relative = layout.repository_relative(slot_b_path)?;
+    let slot_b_bytes = read_file_if_exists(layout.repository_mutation_root(), &slot_b_relative)?
+        .unwrap_or_default();
+    let decoded_a = decode_entries(&slot_a_bytes)?;
+    let decoded_b = decode_entries(&slot_b_bytes)?;
+    let slot_a = if decoded_a.damaged {
+        KeepSlotStatus::Damaged
+    } else {
+        KeepSlotStatus::Entries(decoded_a.entries)
+    };
+    let slot_b = if decoded_b.damaged {
+        KeepSlotStatus::Damaged
+    } else {
+        KeepSlotStatus::Entries(decoded_b.entries)
+    };
+    let deduced = match (&slot_a, &slot_b) {
+        (KeepSlotStatus::Entries(a), KeepSlotStatus::Entries(b)) => {
+            let a_stale_beside_b = stale_beside(a, b, fold_entry);
+            let b_stale_beside_a = stale_beside(b, a, fold_entry);
+            match (a_stale_beside_b, b_stale_beside_a) {
+                (false, true) => Some((ContainerSlot::A, DeductionReason::BStaleBesideA)),
+                (true, false) => Some((ContainerSlot::B, DeductionReason::AStaleBesideB)),
+                (true, true) => {
+                    let fold_a = fold_all(a, fold_entry);
+                    let fold_b = fold_all(b, fold_entry);
+                    if fold_a == fold_b {
+                        Some((ContainerSlot::A, DeductionReason::BothSlotsAgree))
+                    } else {
+                        None
+                    }
+                }
+                (false, false) => None,
+            }
+        }
+        _ => None,
+    };
+    Ok(KeepSlotState::LostLog {
+        slot_a,
+        slot_b,
+        deduced,
+    })
+}
+
 /// Like [`resolve_live_slot`], but never deduces or refuses on an ambiguous state -- trusts slot `A`
 /// unconditionally when the log names none, matching every release before Part E. The one caller
 /// this exists for, `recovery_log::meaning_paths_for` (RFC 168 §3.2), is a best-effort naming lookup

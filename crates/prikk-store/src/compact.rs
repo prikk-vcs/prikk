@@ -211,8 +211,9 @@ pub fn precheck_received_index_before_compaction(layout: &RepositoryLayout) -> R
              the way out is a copy of this repository's own `.prikk/` directory from a backup \
              taken before the damage",
             "the received index's generation log is lost, and its two slots fit two different \
-             histories; prikk will not guess. Restore the repository's whole `.prikk/` from a \
-             backup taken before the log was lost",
+             histories; run `prikk compact --received-index --keep-slot a|b --plan-only` to see \
+             both slots and choose, or restore the repository's whole `.prikk/` from a backup \
+             taken before the log was lost",
             decode_received_index_entries_for_resolver,
             fold_one_received_index_entry,
         )?;
@@ -252,9 +253,10 @@ pub fn precheck_trust_policy_before_compaction(layout: &RepositoryLayout) -> Res
              a backup taken before the damage, then re-apply every trust change made since that \
              backup",
             "the trust policy's generation log is lost, and its two slots fit two different \
-             histories (one trusts a key the other has revoked); prikk will not guess. Restore \
-             the repository's whole `.prikk/` from a backup taken before the log was lost, then \
-             re-apply every trust change made since that backup",
+             histories (one trusts a key the other has revoked); run `prikk compact \
+             --trust-policy --keep-slot a|b --plan-only` to see both slots and choose, or \
+             restore the repository's whole `.prikk/` from a backup taken before the log was \
+             lost, then re-apply every trust change made since that backup",
             decode_trust_policy_entries_for_resolver,
             fold_one_trust_policy_entry,
         )?;
@@ -417,8 +419,9 @@ fn run_received_index_compaction(
              the way out is a copy of this repository's own `.prikk/` directory from a backup \
              taken before the damage",
             "the received index's generation log is lost, and its two slots fit two different \
-             histories; prikk will not guess. Restore the repository's whole `.prikk/` from a \
-             backup taken before the log was lost",
+             histories; run `prikk compact --received-index --keep-slot a|b --plan-only` to see \
+             both slots and choose, or restore the repository's whole `.prikk/` from a backup \
+             taken before the log was lost",
             &decode_received_index_entries_for_resolver,
             &fold_one_received_index_entry,
         )?;
@@ -541,9 +544,10 @@ fn run_trust_policy_compaction(
              a backup taken before the damage, then re-apply every trust change made since that \
              backup",
             "the trust policy's generation log is lost, and its two slots fit two different \
-             histories (one trusts a key the other has revoked); prikk will not guess. Restore \
-             the repository's whole `.prikk/` from a backup taken before the log was lost, then \
-             re-apply every trust change made since that backup",
+             histories (one trusts a key the other has revoked); run `prikk compact \
+             --trust-policy --keep-slot a|b --plan-only` to see both slots and choose, or \
+             restore the repository's whole `.prikk/` from a backup taken before the log was \
+             lost, then re-apply every trust change made since that backup",
             &decode_trust_policy_entries_for_resolver,
             &fold_one_trust_policy_entry,
         )?;
@@ -647,6 +651,354 @@ pub fn compact_trust_policy(layout: &RepositoryLayout) -> Result<CompactionRepor
 /// Report what `compact_trust_policy` would reclaim, without writing anything.
 pub fn plan_compact_trust_policy(layout: &RepositoryLayout) -> Result<CompactionReport> {
     run_trust_policy_compaction(layout, CompactionMode::PlanOnly)
+}
+
+/// 0.51.0 step 1 Part C: `--keep-slot`'s own report -- see the handoff's own "what `--plan-only` and
+/// every real run print first." One shared shape for both eligible containers (the received index
+/// and the trust policy); the ref pointer index has no `--keep-slot` at all (K9: the ref log decides,
+/// refused at the CLI's own argument-parsing layer, never reaching this module).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeepSlotReport {
+    /// Which container this run (or preview) targets.
+    pub container: LockableContainer,
+    /// The slot the caller chose to treat as live.
+    pub chosen_slot: ContainerSlot,
+    /// Slot A's own raw entry count (before folding).
+    pub slot_a_entry_count: usize,
+    /// Slot A's own folded state, one line per surviving item -- trusted key ids for the trust
+    /// policy, `"{ref_name}: {ref_state_id}"` for the received index. `["(damaged; cannot be
+    /// read)"]` when the slot itself does not decode cleanly.
+    pub slot_a_summary: Vec<String>,
+    /// Slot B's own raw entry count (before folding).
+    pub slot_b_entry_count: usize,
+    /// Slot B's own folded state, same shape as `slot_a_summary`.
+    pub slot_b_summary: Vec<String>,
+    /// Trust policy only: keys trusted in slot A and not in slot B, by name. Always empty for the
+    /// received index -- the handoff names this diff for the trust policy specifically.
+    pub only_in_a: Vec<String>,
+    /// Trust policy only: the mirror of `only_in_a`.
+    pub only_in_b: Vec<String>,
+    /// Which slot content deduces, when it does -- `None` reads as "ambiguous: prikk will not
+    /// choose."
+    pub deduced_slot: Option<ContainerSlot>,
+    /// How many entries the chosen slot's own fold would write (or did write, for a real run).
+    pub entries_after: usize,
+    /// `true` for a real run that wrote; `false` for a `--plan-only` preview.
+    pub wrote: bool,
+}
+
+/// 0.51.0 step 1 Part C: shared precondition decoding for `--keep-slot`, used by both eligible
+/// containers -- turns [`generation::KeepSlotState`] into the report's own per-slot fields, or one
+/// of the ruling's typed refusals (K1, K6, K8, K11), before either container's own `run_*_keep_slot`
+/// does anything container-specific (the write, and the trust-policy-only key diff).
+fn keep_slot_precondition<T: PartialEq + Clone>(
+    state: generation::KeepSlotState<T>,
+    chosen: ContainerSlot,
+    plain_compact_flag: &str,
+    summarize: impl Fn(&[T]) -> (usize, Vec<String>),
+) -> Result<(
+    (usize, Vec<String>),
+    (usize, Vec<String>),
+    Option<ContainerSlot>,
+    Vec<T>,
+)> {
+    let (slot_a, slot_b, deduced) = match state {
+        generation::KeepSlotState::LiveSlotRecorded(slot) => {
+            return Err(PrikkError::Precondition(format!(
+                "the generation log names slot {}; `--keep-slot` is only for a lost log -- run \
+                 plain `prikk compact {plain_compact_flag}`",
+                slot.as_str()
+            )));
+        }
+        generation::KeepSlotState::NeverCompacted => {
+            return Err(PrikkError::Precondition(
+                "slot a is live; there is nothing to choose".to_string(),
+            ));
+        }
+        generation::KeepSlotState::LostLog {
+            slot_a,
+            slot_b,
+            deduced,
+        } => (slot_a, slot_b, deduced),
+    };
+    let describe = |status: &generation::KeepSlotStatus<T>| -> (usize, Vec<String>) {
+        match status {
+            generation::KeepSlotStatus::Damaged => {
+                (0, vec!["(damaged; cannot be read)".to_string()])
+            }
+            generation::KeepSlotStatus::Entries(entries) => summarize(entries),
+        }
+    };
+    let slot_a_summary = describe(&slot_a);
+    let slot_b_summary = describe(&slot_b);
+    let deduced_slot = deduced.map(|(slot, _)| slot);
+    let chosen_status = match chosen {
+        ContainerSlot::A => &slot_a,
+        ContainerSlot::B => &slot_b,
+    };
+    let generation::KeepSlotStatus::Entries(chosen_entries) = chosen_status else {
+        return Err(PrikkError::Precondition(format!(
+            "slot {} cannot be read; its own damage makes it unsafe to treat as live",
+            chosen.as_str()
+        )));
+    };
+    if chosen_entries.is_empty() {
+        return Err(PrikkError::Precondition(format!(
+            "slot {} holds no entries; it cannot be the live slot",
+            chosen.as_str()
+        )));
+    }
+    Ok((
+        slot_a_summary,
+        slot_b_summary,
+        deduced_slot,
+        chosen_entries.clone(),
+    ))
+}
+
+fn run_trust_policy_keep_slot(
+    layout: &RepositoryLayout,
+    chosen: ContainerSlot,
+    mode: CompactionMode,
+) -> Result<KeepSlotReport> {
+    layout.require_current_format()?;
+    let _lock = acquire_container_locks(layout, &[LockableContainer::TrustPolicy])?;
+    let generation_log_path = layout.trust_policy_generation_log_path();
+    let state = generation::keep_slot_state(
+        layout,
+        &generation_log_path,
+        &layout.trust_policy_container_slot_path(ContainerSlot::A),
+        &layout.trust_policy_container_slot_path(ContainerSlot::B),
+        "trust policy container has a damaged snapshot; no repair exists -- preserve the \
+         repository; the way out is a copy of this repository's own `.prikk/` directory from \
+         a backup taken before the damage, then re-apply every trust change made since that \
+         backup",
+        &decode_trust_policy_entries_for_resolver,
+        &fold_one_trust_policy_entry,
+    )?;
+    let summarize_trust_policy = |entries: &[crate::trust_index::TrustPolicySnapshotEntry]| {
+        let raw_count = entries.len();
+        let folded = reduce_trust_policy_entries(entries.to_vec());
+        let mut ids = folded
+            .first()
+            .map(|entry| entry.key_ids.clone())
+            .unwrap_or_default();
+        ids.sort();
+        (raw_count, ids)
+    };
+    let (
+        (slot_a_entry_count, slot_a_summary),
+        (slot_b_entry_count, slot_b_summary),
+        deduced_slot,
+        chosen_entries,
+    ) = keep_slot_precondition(state, chosen, "--trust-policy", summarize_trust_policy)?;
+    let (only_in_a, only_in_b) = {
+        use std::collections::BTreeSet;
+        let a_set: BTreeSet<&String> = slot_a_summary.iter().collect();
+        let b_set: BTreeSet<&String> = slot_b_summary.iter().collect();
+        (
+            a_set.difference(&b_set).map(|s| (*s).clone()).collect(),
+            b_set.difference(&a_set).map(|s| (*s).clone()).collect(),
+        )
+    };
+    let compacted = reduce_trust_policy_entries(chosen_entries);
+    let entries_after = compacted.len();
+
+    if mode == CompactionMode::Execute {
+        let target_slot = chosen.other();
+        let target_relative =
+            layout.repository_relative(&layout.trust_policy_container_slot_path(target_slot))?;
+        let generation_log_relative = layout.repository_relative(&generation_log_path)?;
+        let root = layout.repository_mutation_root();
+        let buffer = match compacted.first() {
+            Some(entry) => encode_trust_policy_record(entry)?,
+            None => Vec::new(),
+        };
+        // The same save-before-write ordering Q2b's own ruling fixed for an ordinary deduced-state
+        // compaction (see `run_trust_policy_compaction` above) -- `--keep-slot` always reaches this
+        // in the lost-log state, so it always saves, unconditionally (never behind `deduced.then`).
+        let _run = crate::recovery_log::begin_run();
+        let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, true)?;
+        save_deduced_target_slot_recovery(
+            layout,
+            &target_relative,
+            &target_before_bytes,
+            &buffer,
+            "trust policy --keep-slot over a lost generation log",
+        )?;
+        let generation_log_before =
+            read_before_bytes_if_deduced(layout, &generation_log_relative, true)?;
+        let mut generation_log_after = generation_log_before.clone();
+        generation_log_after.extend_from_slice(&generation::encode_generation_record(
+            &GenerationRecord {
+                live_slot: target_slot,
+            },
+        ));
+        save_deduced_generation_log_recovery(
+            layout,
+            &generation_log_relative,
+            &generation_log_before,
+            &generation_log_after,
+            "trust policy --keep-slot over a lost generation log",
+        )?;
+        truncate_file_empty_required(root, &target_relative)?;
+        if !buffer.is_empty() {
+            append_file_required(root, &target_relative, &buffer)?;
+        }
+        generation::append_generation_record(
+            layout,
+            &generation_log_path,
+            &GenerationRecord {
+                live_slot: target_slot,
+            },
+        )?;
+    }
+
+    Ok(KeepSlotReport {
+        container: LockableContainer::TrustPolicy,
+        chosen_slot: chosen,
+        slot_a_entry_count,
+        slot_a_summary,
+        slot_b_entry_count,
+        slot_b_summary,
+        only_in_a,
+        only_in_b,
+        deduced_slot,
+        entries_after,
+        wrote: mode == CompactionMode::Execute,
+    })
+}
+
+/// `prikk compact --trust-policy --keep-slot a|b`: the user chooses which slot to treat as live, in
+/// the lost-generation-log state -- see the handoff's own K1-K15 ruling.
+pub fn compact_trust_policy_keep_slot(
+    layout: &RepositoryLayout,
+    chosen: ContainerSlot,
+) -> Result<KeepSlotReport> {
+    run_trust_policy_keep_slot(layout, chosen, CompactionMode::Execute)
+}
+
+/// Report what `compact_trust_policy_keep_slot` would do, without writing anything.
+pub fn plan_compact_trust_policy_keep_slot(
+    layout: &RepositoryLayout,
+    chosen: ContainerSlot,
+) -> Result<KeepSlotReport> {
+    run_trust_policy_keep_slot(layout, chosen, CompactionMode::PlanOnly)
+}
+
+fn run_received_index_keep_slot(
+    layout: &RepositoryLayout,
+    chosen: ContainerSlot,
+    mode: CompactionMode,
+) -> Result<KeepSlotReport> {
+    layout.require_current_format()?;
+    let _lock = acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
+    let generation_log_path = layout.received_index_generation_log_path();
+    let state = generation::keep_slot_state(
+        layout,
+        &generation_log_path,
+        &layout.received_index_slot_path(ContainerSlot::A),
+        &layout.received_index_slot_path(ContainerSlot::B),
+        "received-ref index has a damaged entry; no repair exists -- preserve the repository; \
+         the way out is a copy of this repository's own `.prikk/` directory from a backup \
+         taken before the damage",
+        &decode_received_index_entries_for_resolver,
+        &fold_one_received_index_entry,
+    )?;
+    let summarize_received_index = |entries: &[crate::received::received_index::ReceivedIndexEntry]| {
+        let raw_count = entries.len();
+        let folded = reduce_received_index_entries(entries.to_vec());
+        let mut lines: Vec<String> = folded
+            .iter()
+            .map(|entry| format!("{}: {}", entry.ref_name, entry.ref_state_id))
+            .collect();
+        lines.sort();
+        (raw_count, lines)
+    };
+    let (
+        (slot_a_entry_count, slot_a_summary),
+        (slot_b_entry_count, slot_b_summary),
+        deduced_slot,
+        chosen_entries,
+    ) = keep_slot_precondition(state, chosen, "--received-index", summarize_received_index)?;
+    let compacted = reduce_received_index_entries(chosen_entries);
+    let entries_after = compacted.len();
+
+    if mode == CompactionMode::Execute {
+        let target_slot = chosen.other();
+        let target_relative =
+            layout.repository_relative(&layout.received_index_slot_path(target_slot))?;
+        let generation_log_relative = layout.repository_relative(&generation_log_path)?;
+        let root = layout.repository_mutation_root();
+        let mut buffer = Vec::new();
+        for entry in &compacted {
+            buffer.extend_from_slice(&encode_received_index_record(entry)?);
+        }
+        let _run = crate::recovery_log::begin_run();
+        let target_before_bytes = read_before_bytes_if_deduced(layout, &target_relative, true)?;
+        save_deduced_target_slot_recovery(
+            layout,
+            &target_relative,
+            &target_before_bytes,
+            &buffer,
+            "received index --keep-slot over a lost generation log",
+        )?;
+        let generation_log_before =
+            read_before_bytes_if_deduced(layout, &generation_log_relative, true)?;
+        let mut generation_log_after = generation_log_before.clone();
+        generation_log_after.extend_from_slice(&generation::encode_generation_record(
+            &GenerationRecord {
+                live_slot: target_slot,
+            },
+        ));
+        save_deduced_generation_log_recovery(
+            layout,
+            &generation_log_relative,
+            &generation_log_before,
+            &generation_log_after,
+            "received index --keep-slot over a lost generation log",
+        )?;
+        truncate_file_empty_required(root, &target_relative)?;
+        append_file_required(root, &target_relative, &buffer)?;
+        generation::append_generation_record(
+            layout,
+            &generation_log_path,
+            &GenerationRecord {
+                live_slot: target_slot,
+            },
+        )?;
+    }
+
+    Ok(KeepSlotReport {
+        container: LockableContainer::ReceivedIndex,
+        chosen_slot: chosen,
+        slot_a_entry_count,
+        slot_a_summary,
+        slot_b_entry_count,
+        slot_b_summary,
+        only_in_a: Vec::new(),
+        only_in_b: Vec::new(),
+        deduced_slot,
+        entries_after,
+        wrote: mode == CompactionMode::Execute,
+    })
+}
+
+/// `prikk compact --received-index --keep-slot a|b`: see [`compact_trust_policy_keep_slot`]'s own
+/// doc.
+pub fn compact_received_index_keep_slot(
+    layout: &RepositoryLayout,
+    chosen: ContainerSlot,
+) -> Result<KeepSlotReport> {
+    run_received_index_keep_slot(layout, chosen, CompactionMode::Execute)
+}
+
+/// Report what `compact_received_index_keep_slot` would do, without writing anything.
+pub fn plan_compact_received_index_keep_slot(
+    layout: &RepositoryLayout,
+    chosen: ContainerSlot,
+) -> Result<KeepSlotReport> {
+    run_received_index_keep_slot(layout, chosen, CompactionMode::PlanOnly)
 }
 
 #[cfg(test)]

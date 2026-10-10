@@ -144,7 +144,8 @@ fn removing_a_declaration_names_its_file() {
         // `resolve_or_deduce` directly (needing the live slot too), and item 5's two `Ambiguous
         // GenerationLog` deferral arms in `check_appended_file_tails`, 2,631 -> 2,766, then a
         // `cargo fmt` pass, 2,766 -> 2,778.
-        detail.contains("2778"),
+        // 0.51.0 step 1 Part C: the ambiguous-text literals name `--keep-slot` first, 2,778 -> 2,780.
+        detail.contains("2780"),
         "the line count is in the message: {detail}"
     );
     assert!(

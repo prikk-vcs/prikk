@@ -4,11 +4,12 @@ use prikk_crypto::Ed25519KeyPair;
 use prikk_error::Result;
 
 use super::{
-    compact_received_index, compact_ref_pointer_index, compact_trust_policy,
-    plan_compact_ref_pointer_index,
+    compact_received_index, compact_received_index_keep_slot, compact_ref_pointer_index,
+    compact_trust_policy, compact_trust_policy_keep_slot, plan_compact_ref_pointer_index,
+    plan_compact_trust_policy, plan_compact_trust_policy_keep_slot,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
+use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{ContainerSlot, LockableContainer};
 use crate::lock::acquire_container_locks;
@@ -1939,3 +1940,516 @@ fn compact_pointer_index_refuses_in_the_deduced_state_and_names_the_rebuild() ->
 // Handoff 165 row 19 (either slot damaged) needs no new test: it is exactly
 // `a_damaged_slot_refuses_the_deduction_rather_than_guessing`, above in this file, which already
 // covers it under Part E2's own numbering.
+
+// ---------------------------------------------------------------------------------------------
+// 0.51.0 step 1 Part C: `--keep-slot`, the K1-K15 ruling. Every fixture below is built by real
+// commands -- the generation log is the one file emptied by hand, matching every other fixture in
+// this file and the handoff's own "building twins by writing slot bytes when commands can build
+// them" prohibition.
+// ---------------------------------------------------------------------------------------------
+
+/// Flip the last byte of a container file -- damages its own last complete record (a checksum
+/// mismatch), the same technique `doctor::tests::interior_damage_routing::flip_a_body_byte` uses.
+fn flip_last_byte(path: &std::path::Path) -> Result<()> {
+    let mut bytes = std::fs::read(path)?;
+    assert!(!bytes.is_empty(), "fixture bug: nothing to damage");
+    let offset = bytes.len() - 1;
+    bytes[offset] ^= 0xFF;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+/// K1's own fixture: one ordinary compaction, so the generation log already names a live slot.
+fn build_recorded_live_slot(layout: &RepositoryLayout) -> Result<()> {
+    add_trusted_maintainer(layout, "k", &public_key_hex(&[81_u8; 32]))?;
+    compact_trust_policy(layout)?;
+    Ok(())
+}
+
+/// K11's own fixture: never compacted at all -- the log is empty, and slot B holds no data either.
+fn build_never_compacted(layout: &RepositoryLayout) -> Result<()> {
+    add_trusted_maintainer(layout, "k", &public_key_hex(&[82_u8; 32]))?;
+    Ok(())
+}
+
+/// K2/K3/K12/K13/K14's own fixture: the H1/H2 twin (`row_14b_…`'s own shape), reused exactly --
+/// two equally honest histories leave slot A folding to `{k}` and slot B folding to `{k, l}`, with
+/// both `stale_beside` directions holding and the folds disagreeing -- genuinely ambiguous, not
+/// merely undecided.
+fn build_ambiguous_twin(layout: &RepositoryLayout) -> Result<()> {
+    let k_key = public_key_hex(&[83_u8; 32]);
+    let l_key = public_key_hex(&[84_u8; 32]);
+    add_trusted_maintainer(layout, "k", &k_key)?;
+    add_trusted_maintainer(layout, "l", &l_key)?;
+    remove_trusted_maintainer(layout, "l")?; // revoked
+    compact_trust_policy(layout)?; // k=1: live snapshot {k}
+    add_trusted_maintainer(layout, "l", &l_key)?; // re-trusted, landing in the now-live slot
+    compact_trust_policy(layout)?; // k=2: live snapshot {k,l}, retired slot holds the {k} snapshot
+    remove_trusted_maintainer(layout, "l")?; // revoked again, repeating the retired slot's own snapshot
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?; // lose the record
+    assert!(
+        matches!(
+            load_maintainer_trust_policy(layout),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
+        "fixture bug: must read as genuinely ambiguous"
+    );
+    Ok(())
+}
+
+/// K4/K5's own fixture: two compactions with nothing written to the stale slot afterward -- both
+/// `stale_beside` directions hold, and the folds agree, so content deduces slot A (`BothSlotsAgree`)
+/// without ambiguity.
+fn build_deduced_both_agree(layout: &RepositoryLayout) -> Result<()> {
+    let k1_key = public_key_hex(&[85_u8; 32]);
+    let k2_key = public_key_hex(&[86_u8; 32]);
+    add_trusted_maintainer(layout, "k1", &k1_key)?;
+    compact_trust_policy(layout)?; // k=1: live snapshot {k1}
+    add_trusted_maintainer(layout, "k2", &k2_key)?; // lands in the now-live slot
+    compact_trust_policy(layout)?; // k=2: live snapshot {k1,k2}
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?; // lose the record
+    assert!(
+        load_maintainer_trust_policy(layout).is_ok(),
+        "fixture bug: must deduce cleanly, not refuse"
+    );
+    Ok(())
+}
+
+/// K6/K7's own fixture: two ordinary compactions, then the stale slot's own last record damaged
+/// directly (never the live one) before the log is lost -- the live slot (A) stays sound; the
+/// retired one (B) does not decode.
+fn build_lost_log_with_slot_b_damaged(layout: &RepositoryLayout) -> Result<()> {
+    build_deduced_both_agree(layout)?;
+    // `build_deduced_both_agree` already lost the log; restore it so the corruption below targets
+    // the genuinely stale slot (B), then lose it again the same way.
+    add_trusted_maintainer(layout, "k3", &public_key_hex(&[87_u8; 32]))?;
+    flip_last_byte(&layout.trust_policy_container_slot_path(ContainerSlot::B))?;
+    Ok(())
+}
+
+/// K8's own fixture: one ordinary compaction leaves slot A (the never-written default) with zero
+/// raw entries -- the lost-log state still applies (B holds data), but choosing A has nothing to
+/// fold.
+fn build_lost_log_with_empty_chosen_slot(layout: &RepositoryLayout) -> Result<()> {
+    add_trusted_maintainer(layout, "k", &public_key_hex(&[88_u8; 32]))?;
+    compact_trust_policy(layout)?; // B live, folded from A; A still holds its own original entry
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?; // lose the record
+    // K8's own degenerate case does not arise from any reachable command sequence: slot A always
+    // holds at least the entry it was built from, and slot B always holds at least the fold that
+    // produced it, so neither is ever genuinely empty once the lost-log state is reached by real
+    // writes. This one defensive check is instead tested by truncating the slot the test will
+    // choose to the empty file a compaction's own truncate step leaves when nothing follows it --
+    // not a twin (no deduction content is faked, only "this file holds zero records," exactly what
+    // the check reads).
+    std::fs::write(
+        layout.trust_policy_container_slot_path(ContainerSlot::A),
+        b"",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k1_refuses_when_the_log_already_names_a_live_slot() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k1");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_recorded_live_slot(&layout)?;
+    let before = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))
+        .unwrap_or_default();
+
+    let Err(err) = compact_trust_policy_keep_slot(&layout, ContainerSlot::A) else {
+        panic!("must refuse when the log already names a live slot");
+    };
+    assert!(
+        matches!(err, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("only for a lost log"), "{err}");
+    assert!(err.to_string().contains("prikk compact --trust-policy"), "{err}");
+    assert_eq!(
+        std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))
+            .unwrap_or_default(),
+        before,
+        "a refusal must write nothing"
+    );
+    assert!(crate::recovery_list(&layout)?.entries.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k11_refuses_when_never_compacted() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k11");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_never_compacted(&layout)?;
+
+    let Err(err) = compact_trust_policy_keep_slot(&layout, ContainerSlot::A) else {
+        panic!("must refuse when never compacted");
+    };
+    assert!(
+        matches!(err, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert_eq!(err.to_string(), "precondition not met: slot a is live; there is nothing to choose");
+    assert!(crate::recovery_list(&layout)?.entries.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k2_the_ambiguous_twin_keep_a() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k2");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_ambiguous_twin(&layout)?;
+
+    let plan = plan_compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    assert!(!plan.wrote);
+    assert_eq!(plan.deduced_slot, None, "genuinely ambiguous: prikk must not choose");
+    assert_eq!(plan.slot_a_summary, vec!["k".to_string()]);
+    assert_eq!(plan.slot_b_summary, vec!["k".to_string(), "l".to_string()]);
+    assert_eq!(plan.only_in_b, vec!["l".to_string()]);
+    assert!(plan.only_in_a.is_empty());
+
+    let report = compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    assert!(report.wrote);
+    assert_eq!(report.entries_after, 1);
+    let policy = load_maintainer_trust_policy(&layout)?;
+    assert_eq!(policy.keys.len(), 1);
+    assert_eq!(policy.keys[0].key_id, "k");
+
+    let listing = crate::recovery_list(&layout)?;
+    assert!(
+        listing
+            .entries
+            .iter()
+            .any(|entry| entry.label == "trust policy --keep-slot over a lost generation log")
+    );
+    let run_id = listing.entries[0].id.clone();
+    let before_restore = crate::recovery_restore(&layout, &run_id, true)?; // plan-only probe
+    assert!(before_restore.refusal.is_none(), "{:?}", before_restore.refusal);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k3_the_ambiguous_twin_keep_b() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k3");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_ambiguous_twin(&layout)?;
+
+    let report = compact_trust_policy_keep_slot(&layout, ContainerSlot::B)?;
+    assert!(report.wrote);
+    let policy = load_maintainer_trust_policy(&layout)?;
+    let mut ids: Vec<&str> = policy.keys.iter().map(|key| key.key_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["k", "l"]);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k4_deduced_a_keep_a_matches() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k4");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_deduced_both_agree(&layout)?;
+
+    let plan = plan_compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    assert_eq!(plan.deduced_slot, Some(ContainerSlot::A));
+    assert_eq!(plan.chosen_slot, ContainerSlot::A);
+
+    // Same result as plain `compact`, with the save: compare against what the ordinary (deduced)
+    // compaction would write.
+    let plain = plan_compact_trust_policy(&layout)?;
+    let report = compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    assert_eq!(report.entries_after, plain.entries_after);
+    assert!(
+        crate::recovery_list(&layout)?
+            .entries
+            .iter()
+            .any(|entry| entry.label == "trust policy --keep-slot over a lost generation log"),
+        "the save still happens even though the chosen slot matches the deduction"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k5_deduced_a_keep_b_differs() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k5");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_deduced_both_agree(&layout)?;
+
+    let plan = plan_compact_trust_policy_keep_slot(&layout, ContainerSlot::B)?;
+    assert_eq!(plan.deduced_slot, Some(ContainerSlot::A));
+    assert_eq!(plan.chosen_slot, ContainerSlot::B);
+    assert_ne!(
+        plan.deduced_slot,
+        Some(plan.chosen_slot),
+        "the plan must be able to tell the caller chose differently from the deduction"
+    );
+
+    let report = compact_trust_policy_keep_slot(&layout, ContainerSlot::B)?;
+    assert!(report.wrote);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k6_the_chosen_slot_is_damaged_refuses() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k6");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_lost_log_with_slot_b_damaged(&layout)?;
+    let before = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))?;
+
+    let Err(err) = compact_trust_policy_keep_slot(&layout, ContainerSlot::B) else {
+        panic!("choosing the damaged slot must refuse");
+    };
+    assert!(
+        matches!(err, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("cannot be read"), "{err}");
+    assert_eq!(
+        std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))?,
+        before,
+        "a refusal must write nothing"
+    );
+    assert!(crate::recovery_list(&layout)?.entries.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k7_the_other_slot_is_damaged_chosen_is_sound_allowed() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k7");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_lost_log_with_slot_b_damaged(&layout)?;
+    let damaged_before = std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::B))?;
+
+    let report = compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    assert!(report.wrote);
+    assert_eq!(report.slot_b_summary, vec!["(damaged; cannot be read)".to_string()]);
+
+    let listing = crate::recovery_list(&layout)?;
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "trust policy --keep-slot over a lost generation log")
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| panic!("the damaged bytes must still be saved byte for byte: {listing:?}"));
+    let restored = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
+    assert!(restored.written);
+    assert_eq!(
+        std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::B))?,
+        damaged_before,
+        "restore must give back the damaged bytes exactly, byte for byte"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k8_the_chosen_slot_holds_no_entries() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k8");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_lost_log_with_empty_chosen_slot(&layout)?;
+
+    let Err(err) = compact_trust_policy_keep_slot(&layout, ContainerSlot::A) else {
+        panic!("choosing the empty slot must refuse");
+    };
+    assert!(
+        matches!(err, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "precondition not met: slot a holds no entries; it cannot be the live slot"
+    );
+    assert!(crate::recovery_list(&layout)?.entries.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn keep_slot_k12_a_crash_at_the_truncate_still_restores() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k12");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_ambiguous_twin(&layout)?;
+
+    let target_slot_path = layout.trust_policy_container_slot_path(ContainerSlot::B);
+    let generation_log_path = layout.trust_policy_generation_log_path();
+    let target_before = std::fs::read(&target_slot_path)?;
+    let generation_log_before = std::fs::read(&generation_log_path)?;
+
+    fail_after_for_test(TestFailPoint::Truncate, 0);
+    assert!(
+        compact_trust_policy_keep_slot(&layout, ContainerSlot::A).is_err(),
+        "fixture: must actually crash at the truncate"
+    );
+    clear_failpoint_for_test();
+    assert_eq!(
+        std::fs::read(&target_slot_path)?,
+        target_before,
+        "fixture: the crash must land before the truncate changes anything"
+    );
+
+    let listing = crate::recovery_list(&layout)?;
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "trust policy --keep-slot over a lost generation log")
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| {
+            panic!("the save must already be durable when the crash lands at the truncate: {listing:?}")
+        });
+    let restored = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
+    assert!(restored.written);
+    assert_eq!(std::fs::read(&target_slot_path)?, target_before);
+    assert_eq!(std::fs::read(&generation_log_path)?, generation_log_before);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k13_a_write_after_keep_slot_then_a_restore_of_its_run_refuses() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k13");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_ambiguous_twin(&layout)?;
+
+    compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    let listing = crate::recovery_list(&layout)?;
+    let run_id = listing
+        .entries
+        .iter()
+        .find(|entry| entry.label == "trust policy --keep-slot over a lost generation log")
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| panic!("the run must be listed: {listing:?}"));
+
+    // Restore it once, successfully, first -- confirms the run is genuinely restorable and puts
+    // the generation log and slot B back to their exact pre-`--keep-slot` (ambiguous) bytes, the
+    // same two-step shape `compaction_over_a_deduced_live_slot_saves_what_it_overwrites` uses for
+    // an ordinary deduced compaction above in this file.
+    let first_restore = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(first_restore.refusal.is_none(), "{:?}", first_restore.refusal);
+    assert!(first_restore.written);
+
+    // A later write must make the run unrestorable a second time -- the same hash-mismatch
+    // refusal every other recovery run already gives (A1/F2). The restore above put the state
+    // back to the ambiguous twin (an ordinary write cannot proceed there at all -- resolving the
+    // live slot to append to is exactly what is ambiguous), so the one write available is another
+    // `--keep-slot` run, which changes the generation log -- the earlier run's own slot entry has
+    // that log as its meaning file.
+    compact_trust_policy_keep_slot(&layout, ContainerSlot::B)?;
+
+    let restored = crate::recovery_restore(&layout, &run_id, false)?;
+    assert!(
+        restored.refusal.is_some(),
+        "a restore must refuse once a later write has touched what it would overwrite: {restored:?}"
+    );
+    assert!(!restored.written);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn keep_slot_k14_plan_only_writes_nothing() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k14");
+    let layout = RepositoryLayout::init(root.clone())?;
+    build_ambiguous_twin(&layout)?;
+    let before = snapshot_tree_bytes(&layout);
+
+    let plan = plan_compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
+    assert!(!plan.wrote);
+    assert_eq!(
+        snapshot_tree_bytes(&layout),
+        before,
+        "a --plan-only run must write nothing at all"
+    );
+    assert!(crate::recovery_list(&layout)?.entries.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Hash every file under `.prikk/`, path and content both -- the same "a refusal/preview writes
+/// nothing" comparison `refs/tests/every_publication_refuses_first.rs::snapshot_tree` uses.
+fn snapshot_tree_bytes(layout: &RepositoryLayout) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    fn walk(
+        dir: &std::path::Path,
+        root: &std::path::Path,
+        out: &mut Vec<(std::path::PathBuf, Vec<u8>)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                out.push((
+                    path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                    bytes,
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(layout.prikk_dir(), layout.prikk_dir(), &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn keep_slot_k15_received_index_twin_keep_slot_shows_chosen_tips() -> Result<()> {
+    let root = unique_temp_dir("keep-slot-k15");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let target = objects_target(&layout)?;
+    let tip1 = signed_ref_state_envelope("heads/main", None, target, 1).object_id();
+    let tip2 = signed_ref_state_envelope("heads/main", None, target, 2).object_id();
+
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip1)?;
+    compact_received_index(&layout)?; // k=1: live holds [tip1]
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip2)?; // a newer import
+    compact_received_index(&layout)?; // k=2: retired slot holds [tip1, tip2]; live holds [tip2]
+    crate::received::write_received_pointer(&layout, "remotes/heads/main", tip1)?; // the tip "returns"
+    std::fs::write(layout.received_index_generation_log_path(), b"")?;
+    assert!(
+        matches!(
+            crate::received::read_received_pointer(&layout, "remotes/heads/main"),
+            Err(prikk_error::PrikkError::AmbiguousGenerationLog(_))
+        ),
+        "fixture bug: must read as genuinely ambiguous"
+    );
+
+    let report = compact_received_index_keep_slot(&layout, ContainerSlot::A)?;
+    assert!(report.wrote);
+    assert!(
+        report
+            .slot_a_summary
+            .iter()
+            .any(|line| line.contains(&tip1.to_string()) || line.contains(&tip2.to_string())),
+        "the chosen slot's own tip must be named in the plan: {:?}",
+        report.slot_a_summary
+    );
+
+    let resolved = crate::received::read_received_pointer(&layout, "remotes/heads/main")?
+        .map(|pointer| pointer.ref_state_id);
+    assert!(resolved == Some(tip1) || resolved == Some(tip2));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
