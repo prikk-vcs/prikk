@@ -307,7 +307,9 @@ use crate::author::author_key_index::{AuthorKeyRecordStatus, replay_author_keys}
 use crate::block_state::{BlockStateOutcome, BlockStateStatus};
 use crate::commit_boundary::active::ActiveRefMetadata;
 use crate::commit_index::{CommitIndexDivergence, verify_divergence};
-use crate::foundation::generation::{GenerationRecordStatus, replay_generation_log, resolve_or_deduce};
+use crate::foundation::generation::{
+    GenerationRecordStatus, replay_generation_log, resolve_or_deduce,
+};
 use crate::foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout,
 };
@@ -930,7 +932,11 @@ pub(crate) fn check_generation_log_deductions(
     ) {
         Ok((slot, _, _, deduced)) => {
             if let Some(deduced) = &deduced {
-                notes.push(deduction_note("the ref pointer index", "--pointer-index", deduced));
+                notes.push(deduction_note(
+                    "the ref pointer index",
+                    "--pointer-index",
+                    deduced,
+                ));
             }
             if let Some(note) = retired_slot_tail(
                 layout,
@@ -968,7 +974,11 @@ pub(crate) fn check_generation_log_deductions(
     ) {
         Ok((slot, _, _, deduced)) => {
             if let Some(deduced) = &deduced {
-                notes.push(deduction_note("the received index", "--received-index", deduced));
+                notes.push(deduction_note(
+                    "the received index",
+                    "--received-index",
+                    deduced,
+                ));
             }
             if let Some(note) = retired_slot_tail(
                 layout,
@@ -1052,10 +1062,12 @@ fn retired_slot_tail(
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("retired-slot-tail-check");
     let relative = layout.repository_relative(retired_slot_path).ok()?;
-    let bytes =
-        crate::foundation::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)
-            .ok()?
-            .unwrap_or_default();
+    let bytes = crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    )
+    .ok()?
+    .unwrap_or_default();
     let (trailing_partial_bytes, tail_offset) = decode_raw(&bytes).ok()?;
     if trailing_partial_bytes == 0 {
         return None;

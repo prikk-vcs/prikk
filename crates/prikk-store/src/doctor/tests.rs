@@ -113,11 +113,10 @@ fn verify_ok_is_absent_beside_the_generation_log_ambiguity_error() -> prikk_erro
 
     let report = doctor_repository(&layout);
     assert!(
-        report
-            .issues
-            .iter()
-            .any(|issue| issue.code == "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS"
-                && issue.severity == DoctorSeverity::Error),
+        report.issues.iter().any(
+            |issue| issue.code == "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS"
+                && issue.severity == DoctorSeverity::Error
+        ),
         "fixture bug: must read as a genuine generation-log ambiguity error: {:?}",
         report.issues
     );
@@ -1250,19 +1249,19 @@ fn signed_publication_envelope(
 /// AMBIGUOUS`, even though nothing had failed to decode. Reuses the same genuinely-ambiguous
 /// trust-policy fixture `verify_ok_is_absent_beside_the_generation_log_ambiguity_error` does.
 #[test]
-fn appended_file_interior_damage_defers_to_the_ambiguity_issue() {
+fn appended_file_interior_damage_defers_to_the_ambiguity_issue() -> prikk_error::Result<()> {
     let root = unique_temp_dir("doctor-ambiguity-not-interior-damage");
-    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let layout = RepositoryLayout::init(root.clone())?;
     let k_key = public_key_hex(&[71_u8; 32]);
     let l_key = public_key_hex(&[72_u8; 32]);
-    add_trusted_maintainer(&layout, "k", &k_key).unwrap();
-    add_trusted_maintainer(&layout, "l", &l_key).unwrap();
-    remove_trusted_maintainer(&layout, "l").unwrap();
-    compact_trust_policy(&layout).unwrap();
-    add_trusted_maintainer(&layout, "l", &l_key).unwrap();
-    compact_trust_policy(&layout).unwrap();
-    remove_trusted_maintainer(&layout, "l").unwrap();
-    std::fs::write(layout.trust_policy_generation_log_path(), b"").unwrap();
+    add_trusted_maintainer(&layout, "k", &k_key)?;
+    add_trusted_maintainer(&layout, "l", &l_key)?;
+    remove_trusted_maintainer(&layout, "l")?;
+    compact_trust_policy(&layout)?;
+    add_trusted_maintainer(&layout, "l", &l_key)?;
+    compact_trust_policy(&layout)?;
+    remove_trusted_maintainer(&layout, "l")?;
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
 
     let report = doctor_repository(&layout);
     assert!(
@@ -1281,15 +1280,21 @@ fn appended_file_interior_damage_defers_to_the_ambiguity_issue() {
         "the ambiguous state must not also print a second issue calling it interior damage: {:?}",
         report.issues
     );
-    let appended_file_tails = report
-        .verification
-        .as_ref()
-        .expect("verification ran")
+    let Some(verification) = &report.verification else {
+        panic!("verification did not run: {:?}", report.issues);
+    };
+    let Some(appended_file_tails) = verification
         .appended_file_tails
         .iter()
         .find(|status| status.label == "trust policy")
-        .expect("the trust policy row exists");
+    else {
+        panic!(
+            "the trust policy row does not exist: {:?}",
+            verification.appended_file_tails
+        );
+    };
     assert_eq!(appended_file_tails.interior_damage, None);
 
     let _ = std::fs::remove_dir_all(&root);
+    Ok(())
 }

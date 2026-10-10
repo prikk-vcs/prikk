@@ -1348,7 +1348,9 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // "scan completed" must not print beside a stage that failed or an error-severity
             // finding, both equally.
             if !verification.has_stage_failure()
-                && !issues.iter().any(|issue| issue.severity == DoctorSeverity::Error)
+                && !issues
+                    .iter()
+                    .any(|issue| issue.severity == DoctorSeverity::Error)
             {
                 issues.push(DoctorIssue::info(
                     "PRIKK-DOCTOR-VERIFY-OK",

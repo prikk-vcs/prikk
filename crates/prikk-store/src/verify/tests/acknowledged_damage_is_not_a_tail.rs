@@ -32,8 +32,10 @@ fn classify_now(layout: &RepositoryLayout) -> Verdict {
         .replay()
         .unwrap();
     let owning_ref = crate::commit_boundary::active::read_active_ref_metadata(layout).unwrap();
-    let witness = crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME).unwrap();
-    crate::commit_boundary::classification::classify(layout, &replay, &owning_ref, &witness).unwrap()
+    let witness =
+        crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME).unwrap();
+    crate::commit_boundary::classification::classify(layout, &replay, &owning_ref, &witness)
+        .unwrap()
 }
 
 /// The queued record's own checksum is flipped (the exact fixture
@@ -62,7 +64,9 @@ fn acknowledged_damage_is_not_counted_as_trailing_partial_wal_bytes() {
 
     // The raw WAL replay, independent of `verify`, really does have a nonzero tail here --
     // confirming the fixture produces the shape this test is actually about, not a vacuous pass.
-    let raw_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME).replay().unwrap();
+    let raw_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+        .replay()
+        .unwrap();
     assert!(
         raw_replay.trailing_partial_bytes > 0,
         "fixture bug: rule 3 must fold the damaged record into the tail"
