@@ -158,3 +158,11 @@ then a resume from each; a cancel from each; a full disk.
 - Building a test state by writing container bytes, when commands can build it.
 
 **Part E ACCEPTED 2026-10-10** (`c61e6d4c`; review `rfc155-impl-E-review-v1`). **Part V gains one item:** export's report names objects by type and refs (local, received, tags), in text and JSON, rather than "sections: 13". **Next: Part V.**
+
+**Part V approved in part 2026-10-11** (`365c3383`; review `rfc155-impl-V-review-v1`).
+
+| part | items | budget | report |
+|---|---|---:|---|
+| **V2: the manifest, the fuzz property, the note** | **V1:** a checksum over every manifest byte, found from the trailer and checked before use; refuse an unknown `repository_format`, naming it; update `archive-format.md`. **V2:** find from source why 20,000 fuzz cases never caught a manifest flip that passes as consistent; show the property red on it before the fix and green after. **V3:** the *"internally consistent"* note (text and JSON) only when consistent. Controls: drop the manifest check; accept any format. Docs, CHANGELOG, 14 gates | 45 min | `rfc155-impl-V2-report.md` |
+
+**Next: V2, then Import A.**
