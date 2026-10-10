@@ -60,7 +60,7 @@ fn build_one_block_archive() -> Vec<u8> {
 /// `decode_manifest_for_test` does, duplicated here only for the raw byte offsets this module's own
 /// corruption tests need (that function returns *decoded* content, not where it lives).
 fn manifest_region(bytes: &[u8]) -> (usize, usize) {
-    let end_trailer_start = bytes.len() - 24;
+    let end_trailer_start = bytes.len() - 56;
     let manifest_offset = u64::from_be_bytes(
         bytes[end_trailer_start + 8..end_trailer_start + 16]
             .try_into()
@@ -116,18 +116,9 @@ fn verify_names_every_unresolvable_signature_without_failing_structure_or_closur
         report.unresolvable_signatures
     );
     assert!(
-        report.note.contains("internally consistent"),
-        "note: {}",
-        report.note
-    );
-    assert!(
-        report.note.contains("not trusted"),
-        "the note must say it is not a trust claim, not merely avoid one word: {}",
-        report.note
-    );
-    assert!(
-        !report.note.contains("is trusted") && !report.note.starts_with("trusted"),
-        "the note must never make an affirmative trust claim: {}",
+        report.note.is_none(),
+        "V3: a not-internally-consistent archive must never carry the 'internally consistent' \
+         note beside its own damage/unresolvable-signature lines: {:?}",
         report.note
     );
 }
@@ -188,6 +179,22 @@ fn verify_resolves_a_genuinely_signed_maintainer_signature() {
         report.signatures_checked >= 1,
         "the real maintainer signature must count toward signatures_checked"
     );
+    assert!(
+        report.is_internally_consistent(),
+        "this fixture has nothing else wrong with it"
+    );
+    let note = report
+        .note
+        .expect("V3: a genuinely internally-consistent archive must carry the note");
+    assert!(note.contains("internally consistent"), "note: {note}");
+    assert!(
+        note.contains("not trusted"),
+        "the note must say it is not a trust claim, not merely avoid one word: {note}"
+    );
+    assert!(
+        !note.contains("is trusted") && !note.starts_with("trusted"),
+        "the note must never make an affirmative trust claim: {note}"
+    );
 }
 
 /// §8's control, also a required test: "a byte flipped in any envelope makes `verify` fail and
@@ -243,12 +250,55 @@ fn verify_refuses_a_truncated_archive() {
     );
 }
 
+/// V1a (review `rfc155-impl-V-review-v1`, finding V1): a bit flipped inside the manifest body,
+/// isolated from V1b's own known-format check -- this flips an entry's own checksum byte (offset
+/// and length are cross-checked by `validate_manifest_shape` already; the checksum field inside
+/// each entry record was not, before this fix), never `repository_format` itself, so this test
+/// proves the manifest checksum catches damage on its own, not merely as a side effect of the
+/// format check also tripping on the same byte.
+#[test]
+fn verify_refuses_a_flipped_manifest_byte() {
+    let mut bytes = build_one_block_archive();
+    let first_entry_checksum_byte = entry_record_offset(&bytes, 0) + 18;
+    bytes[first_entry_checksum_byte] ^= 0xFF;
+    let mut cursor = Cursor::new(bytes);
+    let err = verify_archive(&mut cursor).expect_err("a flipped manifest byte must refuse");
+    assert!(
+        err.to_string().contains("checksum"),
+        "must name the manifest checksum, not merely fail some other way: {err}"
+    );
+}
+
+/// V1b: a *legitimately re-encoded* manifest (correct checksum) declaring a `repository_format`
+/// this build does not know -- proves the format check is independent of the checksum check, not a
+/// side effect of it (a future build's own correctly-written archive must still be refused by name,
+/// not silently misread).
+#[test]
+fn verify_refuses_an_unknown_repository_format() {
+    let mut bytes = build_one_block_archive();
+    crate::archive::tests::rewrite_manifest_repository_format_for_test(&mut bytes, 999);
+    let mut cursor = Cursor::new(bytes);
+    let err = verify_archive(&mut cursor).expect_err("an unknown repository format must refuse");
+    let message = err.to_string();
+    assert!(
+        message.contains("999"),
+        "must name the value it saw: {message}"
+    );
+    assert!(
+        message.contains("repository format"),
+        "must say what kind of value it is: {message}"
+    );
+}
+
 #[test]
 fn verify_refuses_an_unknown_section_kind() {
     let mut bytes = build_one_block_archive();
     let record_offset = entry_record_offset(&bytes, 0);
     bytes[record_offset] = 0xFF;
     bytes[record_offset + 1] = 0xFF; // kind 0xFFFF, outside the fixed allow-list
+    // V1a's own checksum check runs before the section-kind check this test means to exercise --
+    // recompute it so this test reaches that check, not the (also-now-true) checksum mismatch.
+    crate::archive::tests::recompute_manifest_checksum_for_test(&mut bytes);
     let mut cursor = Cursor::new(bytes);
     let err = verify_archive(&mut cursor).expect_err("an unknown section kind must refuse");
     assert!(err.to_string().contains("unknown section kind"), "{err}");
@@ -262,6 +312,7 @@ fn verify_refuses_a_duplicated_section_kind() {
     // Overwrite the second entry's own kind field with the first entry's kind code.
     bytes[second] = bytes[first];
     bytes[second + 1] = bytes[first + 1];
+    crate::archive::tests::recompute_manifest_checksum_for_test(&mut bytes);
     let mut cursor = Cursor::new(bytes);
     let err = verify_archive(&mut cursor).expect_err("a duplicated section kind must refuse");
     assert!(err.to_string().contains("twice"), "{err}");
@@ -287,6 +338,7 @@ fn verify_never_treats_a_carried_string_as_a_path() {
     let traversal: Vec<u8> = b"../".iter().copied().cycle().take(old_len).collect();
     let value_start = tool_version_len_offset + 2;
     bytes[value_start..value_start + old_len].copy_from_slice(&traversal);
+    crate::archive::tests::recompute_manifest_checksum_for_test(&mut bytes);
 
     let mut cursor = Cursor::new(bytes);
     let report = verify_archive(&mut cursor).expect("verify");

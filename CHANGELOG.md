@@ -39,11 +39,34 @@
   one that fails to verify) is named, never silently skipped. Reports *internally consistent*,
   **never** *trusted*; lists the archive's own carried maintainer keys labeled *"carried, not
   adopted."* Writes nothing, on any exit path. A new fuzz target
-  (`test_gates::archive_decoder_fuzz`) feeds the decoder mutated bytes of a real, valid archive:
-  20,000 cases found no panic and no mutated archive reporting itself internally consistent. See
+  (`test_gates::archive_decoder_fuzz`) feeds the decoder mutated bytes of a real, valid archive. See
   [The Archive Format](docs/src/reference/archive-format.md).
 - This is the second of four implementation parts. `archive import` is a separate, later part of the
   same RFC.
+
+### Fixed — `prikk archive verify` now checksums the manifest itself, refuses an unknown repository format, and only claims "internally consistent" when it is
+
+- Part V's own review (`rfc155-impl-V-review-v1`): the manifest was not integrity-checked at all —
+  a flipped byte in its `repository_format` field passed as *"internally consistent"*. The end
+  trailer now carries a 56th-to-24th-byte SHA-256 of the manifest body, checked before any manifest
+  field (including `repository_format`) is read as anything but raw bytes; a mismatch refuses the
+  whole archive by name. `repository_format` must also be one this build actually knows how to read
+  (6 or 7 today) — an archive a future build legitimately wrote with a format number this one
+  predates is refused by name, never silently misread. See
+  [The Archive Format](docs/src/reference/archive-format.md).
+- The note field (*"internally consistent — not trusted ..."*) is now printed, in text and
+  `--format json`, only when the archive genuinely is internally consistent — a damaged or
+  unresolvable archive no longer gets a note that contradicts its own damage lines and error exit.
+- Part V's own fuzz target (`test_gates::archive_decoder_fuzz`) is corrected: its fixture used to
+  carry permanently-unresolvable placeholder signatures, which made `is_internally_consistent`
+  false even for the *unmutated* baseline archive — every one of the target's 20,000 long-run cases
+  passed vacuously, regardless of whether `verify_archive` caught anything. The claim in this
+  changelog's own Part V entry above ("20,000 cases found no panic and no mutated archive reporting
+  itself internally consistent") was therefore not evidence of a real check; it is removed above.
+  The fixture now builds a genuinely internally-consistent archive, and a new exhaustive test
+  (`archive_decoder_catches_every_manifest_and_trailer_byte_flip`) flips every byte of the
+  manifest+trailer region deterministically, rather than relying on a random mutation landing
+  there.
 
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 

@@ -20,8 +20,12 @@ use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryL
 
 /// Seal a one-block `heads/main` into `layout`, returning the tip Block id -- the minimum history
 /// that gives every object container at least one real record. `pub(crate)`, not private:
-/// `archive::verify`'s own tests and `test_gates::archive_decoder_fuzz` both need the identical
-/// fixture rather than a second, drifting copy of it.
+/// `archive::verify`'s own tests need it beyond this module's own file. Its signatures are
+/// deliberate placeholders that never resolve (`test_support`'s own doc comment: "a value, not a
+/// signer") -- `test_gates::archive_decoder_fuzz` used to share this fixture too, until V2's own
+/// fix found that choice makes `is_internally_consistent` false even unmutated, which makes that
+/// module's whole fuzz property vacuous; it now builds its own genuinely-consistent fixture
+/// instead.
 pub(crate) fn seal_one_block(layout: &RepositoryLayout) -> prikk_error::Result<ObjectId> {
     let mut object_store = FileObjectStore::new(layout.clone());
     // `signed_patch_envelope`'s own `CreateFile` operation names this blob's id -- writing it here
@@ -65,7 +69,7 @@ pub(crate) fn seal_one_block(layout: &RepositoryLayout) -> prikk_error::Result<O
 pub(in crate::archive) fn decode_manifest_for_test(
     bytes: &[u8],
 ) -> (u32, String, Vec<(u16, u64, u64, [u8; 32])>) {
-    let end_trailer_start = bytes.len() - 24;
+    let end_trailer_start = bytes.len() - 56;
     assert_eq!(
         &bytes[end_trailer_start..end_trailer_start + 8],
         b"PRPOEND1"
@@ -124,6 +128,49 @@ fn read_section_body_for_test(
     assert_eq!(&recomputed, checksum.as_slice(), "section own checksum");
     assert_eq!(trailer, checksum.as_slice(), "trailer matches manifest");
     body
+}
+
+/// Rewrite the manifest's own `repository_format` field to `new_format`, then recompute and
+/// rewrite the end trailer's manifest checksum to match -- a *legitimately re-encoded* manifest
+/// declaring a different format, not a corrupted one. This is what Part V2's own "unknown format"
+/// test needs: a build that genuinely writes a format this one does not know about still has a
+/// manifest whose checksum is internally correct, so the format check (V1b) must refuse on its own,
+/// never merely as a side effect of the checksum check (V1a) catching a byte it did not expect to
+/// change. `pub(in crate::archive)`: `archive::verify`'s own tests build this scenario.
+pub(in crate::archive) fn rewrite_manifest_repository_format_for_test(
+    bytes: &mut [u8],
+    new_format: u32,
+) {
+    let end_trailer_start = bytes.len() - 56;
+    let manifest_offset = u64::from_be_bytes(
+        bytes[end_trailer_start + 8..end_trailer_start + 16]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    bytes[manifest_offset + 8..manifest_offset + 12].copy_from_slice(&new_format.to_be_bytes());
+    recompute_manifest_checksum_for_test(bytes);
+}
+
+/// Recompute the end trailer's manifest checksum from `bytes`'s own current manifest body, and
+/// rewrite it in place -- for a test that deliberately edits manifest bytes to reach some *other*
+/// refusal (an unknown/duplicated section kind, a traversal-shaped string) and needs the checksum
+/// check (V1a) to pass so that other refusal is actually what's being exercised, not merely the
+/// checksum mismatch every unrecomputed edit would now trigger first.
+pub(in crate::archive) fn recompute_manifest_checksum_for_test(bytes: &mut [u8]) {
+    let end_trailer_start = bytes.len() - 56;
+    let manifest_offset = u64::from_be_bytes(
+        bytes[end_trailer_start + 8..end_trailer_start + 16]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let manifest_length = u64::from_be_bytes(
+        bytes[end_trailer_start + 16..end_trailer_start + 24]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let body = bytes[manifest_offset..manifest_offset + manifest_length].to_vec();
+    let checksum = prikk_hash::sha256(&body);
+    bytes[end_trailer_start + 24..end_trailer_start + 56].copy_from_slice(&checksum);
 }
 
 #[test]

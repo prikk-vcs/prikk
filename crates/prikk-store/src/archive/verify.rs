@@ -70,7 +70,9 @@ const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 /// bounded by key/policy count, never by repository content size, so a real one is at most a few
 /// hundred KiB even for a repository with thousands of distinct keys.
 const MAX_SMALL_SECTION_BYTES: u64 = 64 * 1024 * 1024;
-const END_TRAILER_LEN_USIZE: usize = 24;
+/// Magic(8) + manifest_offset(8) + manifest_length(8) + manifest_checksum(32). V2's own fix: the
+/// checksum field, so the manifest itself is checked before any of its fields are trusted.
+const END_TRAILER_LEN_USIZE: usize = 56;
 const SECTION_HEADER_LEN: usize = 18;
 
 /// One maintainer key this archive carries -- listed, never adopted (§9.1/§9.4/§9.8): *"carried, not
@@ -112,9 +114,10 @@ pub struct ArchiveVerifyReport {
     /// Every maintainer key this archive carries, listed for inspection -- never adopted by this
     /// call.
     pub maintainer_keys: Vec<CarriedMaintainerKeySummary>,
-    /// *"internally consistent"*, never *"trusted"* -- carried verbatim so a caller cannot mistake
-    /// this report for a trust claim (R2).
-    pub note: &'static str,
+    /// *"internally consistent"*, never *"trusted"* -- `Some` only when [`Self::
+    /// is_internally_consistent`] is true (V2's own fix, finding V3): a damaged or unresolvable
+    /// archive gets the damage lines and the error, never a note that contradicts them.
+    pub note: Option<&'static str>,
 }
 
 impl ArchiveVerifyReport {
@@ -144,8 +147,9 @@ struct ManifestView {
 /// instead, with [`ArchiveVerifyReport::is_internally_consistent`] turning `false` -- consistent with
 /// §9.1: "damage ... travels verbatim. The archive's verify names it."
 pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyReport> {
-    let (total_len, manifest_offset, manifest_length) = read_end_trailer(source)?;
-    let manifest = read_manifest(source, manifest_offset, manifest_length)?;
+    let (total_len, manifest_offset, manifest_length, manifest_checksum) =
+        read_end_trailer(source)?;
+    let manifest = read_manifest(source, manifest_offset, manifest_length, manifest_checksum)?;
     validate_manifest_shape(&manifest, manifest_offset, manifest_length, total_len)?;
 
     let mut damaged = Vec::new();
@@ -225,7 +229,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
         })
         .collect();
 
-    Ok(ArchiveVerifyReport {
+    let mut report = ArchiveVerifyReport {
         repository_format: manifest.repository_format,
         tool_version: manifest.tool_version,
         structurally_sound,
@@ -234,9 +238,19 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
         unresolvable_signatures,
         damaged,
         maintainer_keys,
-        note: "internally consistent -- not trusted; trust comes only from a receiver's own adopted \
-               set, checked after import, never from this archive's own carried record",
-    })
+        note: None,
+    };
+    // V3's own fix (review `rfc155-impl-V-review-v1` finding V3): the note claimed "internally
+    // consistent" even beside damage and an error exit -- printed only when it is actually true,
+    // computed from the report already built so this can never drift from
+    // `is_internally_consistent`'s own formula.
+    if report.is_internally_consistent() {
+        report.note = Some(
+            "internally consistent -- not trusted; trust comes only from a receiver's own adopted \
+             set, checked after import, never from this archive's own carried record",
+        );
+    }
+    Ok(report)
 }
 
 fn check_signatures(
@@ -549,7 +563,7 @@ fn read_author_material<R: Read + Seek>(
     Ok(map)
 }
 
-fn read_end_trailer<R: Read + Seek>(source: &mut R) -> Result<(u64, u64, u64)> {
+fn read_end_trailer<R: Read + Seek>(source: &mut R) -> Result<(u64, u64, u64, [u8; 32])> {
     let total_len = source.seek(SeekFrom::End(0))?;
     if total_len < END_TRAILER_LEN_USIZE as u64 + 8 {
         return Err(PrikkError::MalformedData(
@@ -574,13 +588,24 @@ fn read_end_trailer<R: Read + Seek>(source: &mut R) -> Result<(u64, u64, u64)> {
     }
     let manifest_offset = u64::from_be_bytes(trailer[8..16].try_into().unwrap_or([0u8; 8]));
     let manifest_length = u64::from_be_bytes(trailer[16..24].try_into().unwrap_or([0u8; 8]));
-    Ok((total_len, manifest_offset, manifest_length))
+    let manifest_checksum: [u8; 32] = trailer[24..56].try_into().unwrap_or([0u8; 32]);
+    Ok((
+        total_len,
+        manifest_offset,
+        manifest_length,
+        manifest_checksum,
+    ))
 }
 
+/// V2's own fix (review `rfc155-impl-V-review-v1` finding V1a): `manifest_checksum` (from the end
+/// trailer) is checked against the manifest's own real bytes **before** `decode_manifest_bytes`
+/// turns any of them into a field this call trusts -- a mismatch refuses by name, never silently
+/// decoding a manifest that does not match what the trailer says it should be.
 fn read_manifest<R: Read + Seek>(
     source: &mut R,
     manifest_offset: u64,
     manifest_length: u64,
+    manifest_checksum: [u8; 32],
 ) -> Result<ManifestView> {
     if manifest_length > MAX_MANIFEST_BYTES {
         return Err(PrikkError::ObjectOverBound {
@@ -593,6 +618,12 @@ fn read_manifest<R: Read + Seek>(
         .map_err(|_| PrikkError::Integrity("archive manifest length overflow".to_string()))?;
     let mut body = vec![0u8; len];
     source.read_exact(&mut body)?;
+    let actual_checksum = prikk_hash::sha256(&body);
+    if actual_checksum != manifest_checksum {
+        return Err(PrikkError::MalformedData(
+            "archive manifest failed its own checksum -- refusing the whole archive".to_string(),
+        ));
+    }
     decode_manifest_bytes(&body)
 }
 
@@ -658,6 +689,17 @@ fn validate_manifest_shape(
     manifest_length: u64,
     total_len: u64,
 ) -> Result<()> {
+    // V2's own fix (review `rfc155-impl-V-review-v1` finding V1b): the manifest checksum (checked
+    // just before this call, in `read_manifest`) only proves the bytes are the ones a real export
+    // wrote -- not that *this build* knows how to read the format number carried inside them. A
+    // future build may legitimately write a format this one predates.
+    if !super::known_repository_format_numbers().contains(&manifest.repository_format) {
+        return Err(PrikkError::MalformedData(format!(
+            "archive declares repository format {}, which this build does not know how to read \
+             -- refusing the whole archive",
+            manifest.repository_format
+        )));
+    }
     let claimed_end = manifest_offset
         .checked_add(manifest_length)
         .and_then(|sum| sum.checked_add(END_TRAILER_LEN_USIZE as u64))

@@ -15,12 +15,12 @@ section 2
 ...
 section N
 manifest
-end trailer (24 bytes, fixed)
+end trailer (56 bytes, fixed)
 ```
 
 Nothing is random-accessed to write it: every section streams forward, in fixed-size chunks, from
 one on-disk source file to the output. A reader finds the manifest without scanning the whole file:
-seek to `length - 24`, read the end trailer, then seek to the manifest's own offset.
+seek to `length - 56`, read the end trailer, then seek to the manifest's own offset.
 
 ## One section per carried file
 
@@ -78,13 +78,25 @@ without decoding the section headers itself.
 
 ## The end trailer
 
-Fixed 24 bytes, always the file's last 24: `magic(8, "PRPOEND1") ‖ manifest_offset(8) ‖
-manifest_length(8)`.
+Fixed 56 bytes, always the file's last 56: `magic(8, "PRPOEND1") ‖ manifest_offset(8) ‖
+manifest_length(8) ‖ manifest_checksum(32)`.
+
+`manifest_checksum` is SHA-256 of the manifest body (`magic ‖ repository_format ‖
+tool_version_len ‖ tool_version ‖ section_count ‖ entries`) — the manifest cannot checksum itself
+in its own body, so the checksum lives in the trailer instead, written last, after the manifest
+body is already known in full (RFC 155 implementation Part V2: the manifest itself was not
+integrity-checked before this, so a flipped byte inside it — `repository_format`, in particular —
+passed `archive verify` as consistent).
 
 ## `archive verify`
 
 Reads the end trailer and the manifest first (seek, never scan), then checks:
 
+- **the manifest's own checksum**, before any of its fields (including `repository_format`) are
+  read as anything but raw bytes — a mismatch refuses the whole archive by name;
+- **the manifest's own `repository_format`** is one this build actually knows how to read (today:
+  6 or 7) — an archive legitimately written by some other build, naming a format number this one
+  predates, is refused by name rather than silently misread;
 - **structure** — every section's own checksum matches the manifest's recorded one, the fixed set
   of thirteen section kinds is present exactly once each (an unknown, duplicated, or missing kind
   refuses before any section body is read), and the manifest's own declared layout reaches exactly
@@ -99,8 +111,11 @@ Reads the end trailer and the manifest first (seek, never scan), then checks:
   skipped.
 
 It reports *internally consistent*, **never** *trusted*: trust comes only from a receiver's own
-adopted set, checked after import. The carried maintainer keys are listed, labeled *"carried, not
-adopted."* It writes nothing, on any exit path — no scratch file, no scratch directory.
+adopted set, checked after import. That note is printed — in text and in `--format json` — only
+when the archive genuinely is internally consistent; a damaged or unresolvable archive gets its
+damage lines and the error, never a note beside them that contradicts them. The carried maintainer
+keys are listed, labeled *"carried, not adopted."* It writes nothing, on any exit path — no scratch
+file, no scratch directory.
 
 ## Carry-forward
 

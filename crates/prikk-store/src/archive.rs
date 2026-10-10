@@ -51,8 +51,13 @@ const SECTION_MAGIC: &[u8; 8] = b"PRPOSEC1";
 const MANIFEST_MAGIC: &[u8; 8] = b"PRPOMAN1";
 /// The fixed end trailer's own magic.
 const END_TRAILER_MAGIC: &[u8; 8] = b"PRPOEND1";
-/// The end trailer's fixed length: magic(8) + manifest_offset(8) + manifest_length(8).
-const END_TRAILER_LEN: u64 = 24;
+/// The end trailer's fixed length: magic(8) + manifest_offset(8) + manifest_length(8) +
+/// manifest_checksum(32). V2's own fix (review `rfc155-impl-V-review-v1`, finding V1): the manifest
+/// itself was not checksummed anywhere, so a flipped byte inside it (the `repository_format` field,
+/// confirmed) passed `archive verify` as consistent. The checksum lives in the trailer, not the
+/// manifest body, because it must cover the *whole* manifest body -- a checksum inside the thing it
+/// checksums cannot cover its own bytes.
+const END_TRAILER_LEN: u64 = 56;
 /// Chunk size for every streamed copy -- large enough to amortize one syscall per chunk, small
 /// enough that peak memory never scales with a section's own length.
 const STREAM_CHUNK_BYTES: usize = 64 * 1024;
@@ -293,8 +298,9 @@ pub fn export_archive(
     let repository_format = repository_format_number(layout.format());
     let tool_version = env!("CARGO_PKG_VERSION").to_string();
     let manifest_offset = offset;
-    let manifest_length = write_manifest(out, &manifest, repository_format, &tool_version)?;
-    write_end_trailer(out, manifest_offset, manifest_length)?;
+    let (manifest_length, manifest_checksum) =
+        write_manifest(out, &manifest, repository_format, &tool_version)?;
+    write_end_trailer(out, manifest_offset, manifest_length, manifest_checksum)?;
 
     let total_bytes = manifest_offset + manifest_length + END_TRAILER_LEN;
     let ref_pointers = crate::refs::RefStore::new(layout.clone()).list_ref_pointers()?;
@@ -598,13 +604,15 @@ fn stream_copy(
 }
 
 /// `MANIFEST_MAGIC`(8) + `repository_format`(4) + `tool_version_len`(2) + `tool_version` +
-/// `count`(8) + repeated `{kind(2) | offset(8) | length(8) | checksum(32)}`.
+/// `count`(8) + repeated `{kind(2) | offset(8) | length(8) | checksum(32)}`. Returns the body's own
+/// length and its SHA-256 (over every byte written here, in order) -- the end trailer carries the
+/// checksum, since the manifest body cannot checksum itself.
 fn write_manifest(
     out: &mut dyn Write,
     entries: &[ManifestEntry],
     repository_format: u32,
     tool_version: &str,
-) -> Result<u64> {
+) -> Result<(u64, [u8; 32])> {
     let mut body = Vec::new();
     body.extend_from_slice(MANIFEST_MAGIC);
     body.extend_from_slice(&repository_format.to_be_bytes());
@@ -621,17 +629,20 @@ fn write_manifest(
         body.extend_from_slice(&entry.checksum);
     }
     out.write_all(&body)?;
-    len_to_u64(body.len())
+    let checksum = prikk_hash::sha256(&body);
+    Ok((len_to_u64(body.len())?, checksum))
 }
 
 fn write_end_trailer(
     out: &mut dyn Write,
     manifest_offset: u64,
     manifest_length: u64,
+    manifest_checksum: [u8; 32],
 ) -> Result<()> {
     out.write_all(END_TRAILER_MAGIC)?;
     out.write_all(&manifest_offset.to_be_bytes())?;
     out.write_all(&manifest_length.to_be_bytes())?;
+    out.write_all(&manifest_checksum)?;
     Ok(())
 }
 
@@ -640,6 +651,18 @@ const fn repository_format_number(format: RepositoryFormat) -> u32 {
         RepositoryFormat::CurrentV6 => 6,
         RepositoryFormat::V7 => 7,
     }
+}
+
+/// Every `repository_format` number a real export can ever write -- the inverse of
+/// [`repository_format_number`], enumerated the same way rather than re-guessed as a numeric range.
+/// `verify::validate_manifest_shape` refuses, naming the value, when a carried archive declares
+/// anything else (V2's own fix, review `rfc155-impl-V-review-v1` finding V1b): import would
+/// otherwise act on a format number nobody actually wrote.
+pub(crate) fn known_repository_format_numbers() -> [u32; 2] {
+    [
+        repository_format_number(RepositoryFormat::CurrentV6),
+        repository_format_number(RepositoryFormat::V7),
+    ]
 }
 
 #[cfg(test)]

@@ -222,7 +222,9 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
     for line in &report.damaged {
         println!("damaged: {line}");
     }
-    println!("note: {}", report.note);
+    if let Some(note) = report.note {
+        println!("note: {note}");
+    }
 }
 
 fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
@@ -282,7 +284,10 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
     ));
     json.push_str(&format!(
         "  \"note\": {}\n",
-        escape_json_string(report.note)
+        match report.note {
+            Some(note) => escape_json_string(note),
+            None => "null".to_string(),
+        }
     ));
     json.push_str("}\n");
     print!("{json}");
