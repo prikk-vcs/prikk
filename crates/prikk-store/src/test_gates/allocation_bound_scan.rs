@@ -81,6 +81,30 @@ const ALLOWED: &[Allowed] = &[
         bound: "the size of the spliced result: `text.len()` less the located range plus `replacement.len()`, both slices in memory, the range having just been checked against `text.len()`",
         witness: "end > text.len()",
     },
+    Allowed {
+        file: "archive/verify.rs",
+        expr: "record_body_len_usize",
+        bound: "RFC 155 Part V: one object record's own declared body length, checked against `DEFAULT_BUNDLE_MAX_OBJECT_BYTES` (the same bound `read_bounded_object_frame` already uses) before this allocation is made",
+        witness: "ObjectOverBound",
+    },
+    Allowed {
+        file: "archive/verify.rs",
+        expr: "remaining_usize",
+        bound: "RFC 155 Part V: the bytes left in one section after its last complete record -- bounded transitively by `entry.length`, itself bounded by the archive's own real file length once `validate_manifest_shape`'s cross-check against `total_len` holds",
+        witness: "claimed_end != total_len",
+    },
+    Allowed {
+        file: "archive/verify.rs",
+        expr: "len",
+        bound: "RFC 155 Part V: the manifest's own declared byte length (`MAX_MANIFEST_BYTES`) and one small, carried key-material section's own declared length (`MAX_SMALL_SECTION_BYTES`), each checked before its own allocation",
+        witness: "ObjectOverBound",
+    },
+    Allowed {
+        file: "archive/verify.rs",
+        expr: "usize::try_from(count).unwrap_or(0)",
+        bound: "RFC 155 Part V: the manifest's own declared section count, checked against `MAX_MANIFEST_ENTRIES` before this capacity is requested",
+        witness: "ObjectOverBound",
+    },
 ];
 
 fn source_roots() -> Vec<(&'static str, PathBuf)> {

@@ -158,7 +158,8 @@ bundle you make, not only here.
 
 For every ref, every object, and the trust material in one file, see
 [The Archive Format](../reference/archive-format.md) instead: `prikk archive export <file>` carries
-the whole repository, verbatim. Reading one back (`archive verify`/`archive import`) is a separate,
+the whole repository, verbatim. `prikk archive verify <file>` reads one back and reports whether it
+is internally consistent, needing no repository and writing nothing. `archive import` is a separate,
 not-yet-built part of the same RFC.
 
 ## Check a backup later, without restoring it
@@ -270,9 +271,11 @@ it is; import's own report is not a substitute for running it.
 
 A restore is therefore an intact, checkable copy of the history, not a repository you continue working
 in. `prikk archive export <file>` now writes a whole repository, verbatim, into one file (RFC 155) —
-see [The Archive Format](../reference/archive-format.md) — but reading one back is not yet built:
-`archive verify`/`archive import`, and the landing step that turns a received branch into a working
-one, remain later parts of the same RFC.
+see [The Archive Format](../reference/archive-format.md). `prikk archive verify <file>` reads one
+back and checks structure, reference closure, and every signature against the archive's own carried
+key material, reporting *internally consistent*, never *trusted* — it needs no repository and writes
+nothing. `archive import`, and the landing step that turns a received branch into a working one,
+remain later parts of the same RFC.
 
 ## What this proves, stated precisely
 

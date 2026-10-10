@@ -303,7 +303,10 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.50.0 step 1 (019 §5.2) split `refs::rebuild_discovery` out of `refs.rs` (over the size-check
     // limit after the tail-offset field): 159 -> 160.
     // RFC 155 implementation Part E added `archive.rs`; its own `tests.rs` is `cfg(test)`-invisible: 160 -> 161.
-    assert_eq!(store.production_files, 161);
+    // RFC 155 implementation Part V added `archive/verify.rs`; its own `verify/tests.rs` and
+    // `test_gates/archive_decoder_fuzz.rs` (itself `cfg(test)`-gated at the `mod` declaration) are
+    // both `cfg(test)`-invisible: 161 -> 162.
+    assert_eq!(store.production_files, 162);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

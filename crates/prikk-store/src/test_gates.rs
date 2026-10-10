@@ -7,6 +7,8 @@
 #[cfg(test)]
 pub(crate) mod allocation_bound_scan;
 #[cfg(test)]
+pub(crate) mod archive_decoder_fuzz;
+#[cfg(test)]
 pub(crate) mod dc55_identity_evidence;
 #[cfg(test)]
 pub(crate) mod existence_report;

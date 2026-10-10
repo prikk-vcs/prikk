@@ -212,7 +212,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_archive,
         help_lines: &[
             "  prikk archive export <file> [--format json]  Write a whole-repository archive (PREPO001); refuses an existing file",
-            "  note: verify and import are not built yet",
+            "  prikk archive verify <file> [--format json]  Check structure, reference closure, and every signature against the archive's own carried material",
+            "  note: import is not built yet",
         ],
     },
     Command {

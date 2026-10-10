@@ -25,6 +25,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+mod verify;
+
+pub use verify::{ArchiveVerifyReport, CarriedMaintainerKeySummary, verify_archive};
+
 use prikk_error::{PrikkError, Result};
 use prikk_hash::IncrementalSha256;
 use prikk_object::ObjectType;
@@ -102,6 +106,29 @@ impl ArchiveSectionKind {
         }
     }
 
+    /// The inverse of [`Self::wire_code`] -- `None` for any code this format does not define,
+    /// which [`verify::verify_archive`]'s own manifest validation treats as a refusal, never a
+    /// silent skip (the implementation handoff's own security section: "an unknown ... section is a
+    /// refusal naming it").
+    fn from_wire_code(code: u16) -> Option<Self> {
+        Some(match code {
+            0 => Self::ObjectContainer(ObjectType::Patch),
+            1 => Self::ObjectContainer(ObjectType::Block),
+            2 => Self::ObjectContainer(ObjectType::RefState),
+            3 => Self::ObjectContainer(ObjectType::Tag),
+            4 => Self::ObjectContainer(ObjectType::Attestation),
+            5 => Self::ObjectContainer(ObjectType::Blob),
+            6 => Self::ObjectContainer(ObjectType::RecognitionClaim),
+            7 => Self::RefLog,
+            8 => Self::RefPointerIndex,
+            9 => Self::ReceivedIndex,
+            10 => Self::TrustPolicy,
+            11 => Self::MaintainerKeys,
+            12 => Self::AuthorKeys,
+            _ => return None,
+        })
+    }
+
     /// A short, human-readable label for refusal/report text -- never a filesystem path.
     fn label(self) -> &'static str {
         match self {
@@ -131,16 +158,28 @@ struct ManifestEntry {
     checksum: [u8; 32],
 }
 
-/// Summary of an archive export.
+/// Summary of an archive export. Part E's own review: *"'sections: 13' says nothing about whether
+/// the backup holds the user's work."* This reports what a user can actually check against `branch
+/// list`/their own expectation -- objects by type, and refs by namespace -- not an internal framing
+/// detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveExportReport {
     /// The on-disk repository format (`layout::RepositoryFormat`) that produced this archive.
     pub repository_format: u32,
     /// The exporting `prikk` build's own version (`CARGO_PKG_VERSION`).
     pub tool_version: String,
-    /// Number of sections written (object containers present, plus the six non-object sections
-    /// always written).
-    pub section_count: usize,
+    /// Sound record count per object type, in `persisted_object_types()`'s own order. Counted by
+    /// skipping each record's own declared body length via seek, never by reading it -- reading
+    /// every object's bytes just to count them would reintroduce the unbounded-memory shape this
+    /// design otherwise avoids.
+    pub object_counts: Vec<(ObjectType, usize)>,
+    /// Local branch count (`heads/*`), from the resolved pointer index -- the same list `branch
+    /// list` reads.
+    pub local_branches: usize,
+    /// Tag count (`tags/*`), from the same resolved pointer index.
+    pub tags: usize,
+    /// Received-ref count, from the resolved received index.
+    pub received_refs: usize,
     /// Total archive bytes written, including the manifest and end trailer.
     pub total_bytes: u64,
 }
@@ -186,9 +225,14 @@ pub fn export_archive(
     let mut offset: u64 = 8;
     let mut manifest = Vec::new();
 
+    let mut object_counts = Vec::new();
     for object_type in persisted_object_types() {
         let path = layout.container_slot_path(object_type, ContainerSlot::A);
         let body_len = stat_len(&path)?;
+        object_counts.push((
+            object_type,
+            count_object_records(&path, object_type, body_len)?,
+        ));
         let entry = write_section(
             out,
             ArchiveSectionKind::ObjectContainer(object_type),
@@ -253,12 +297,66 @@ pub fn export_archive(
     write_end_trailer(out, manifest_offset, manifest_length)?;
 
     let total_bytes = manifest_offset + manifest_length + END_TRAILER_LEN;
+    let ref_pointers = crate::refs::RefStore::new(layout.clone()).list_ref_pointers()?;
+    let local_branches = ref_pointers
+        .iter()
+        .filter(|pointer| pointer.ref_name.starts_with("heads/"))
+        .count();
+    let tags = ref_pointers
+        .iter()
+        .filter(|pointer| pointer.ref_name.starts_with("tags/"))
+        .count();
+    let received_refs = crate::received::list_received_pointers(layout)?.len();
     Ok(ArchiveExportReport {
         repository_format,
         tool_version,
-        section_count: manifest.len(),
+        object_counts,
+        local_branches,
+        tags,
+        received_refs,
         total_bytes,
     })
+}
+
+/// Count sound records in one object-type container by skipping each record's own declared body
+/// (seek, never a read) -- the report's own object count needs no more than this, and reading every
+/// body just to count it would reintroduce exactly the unbounded-memory shape this design otherwise
+/// avoids. Stops counting (best-effort) at the first record whose header does not match, the same
+/// "a torn tail is not content" reasoning `write_section`'s own sound-length resolution already
+/// uses elsewhere in this module.
+fn count_object_records(path: &Path, object_type: ObjectType, sound_len: u64) -> Result<usize> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err.into()),
+    };
+    let magic = crate::foundation::container::container_magic(object_type)?;
+    let mut remaining = sound_len;
+    let mut count = 0usize;
+    while remaining >= crate::foundation::container::CONTAINER_HEADER_LEN as u64 {
+        let mut header = [0u8; crate::foundation::container::CONTAINER_HEADER_LEN];
+        if file.read_exact(&mut header).is_err() {
+            break;
+        }
+        remaining -= crate::foundation::container::CONTAINER_HEADER_LEN as u64;
+        let record_magic: [u8; 8] = header[0..8].try_into().unwrap_or([0u8; 8]);
+        let body_len = u64::from_be_bytes(header[10..18].try_into().unwrap_or([0u8; 8]));
+        if record_magic != *magic || body_len > remaining {
+            break;
+        }
+        if file
+            .seek(SeekFrom::Current(
+                i64::try_from(body_len).unwrap_or(i64::MAX),
+            ))
+            .is_err()
+        {
+            break;
+        }
+        remaining -= body_len;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// §9.1: "a session holds queued, unsealed commits ... the message names the session, the count,
@@ -558,4 +656,4 @@ pub(crate) fn after_export_locks_acquired_for_test(check: impl FnOnce() + 'stati
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

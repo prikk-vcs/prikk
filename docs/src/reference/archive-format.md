@@ -1,9 +1,10 @@
 # The archive format, `PREPO001`
 
-`prikk archive export <file>` writes a whole repository, verbatim, into one file (RFC 155). This
-page documents the byte layout `export_archive` writes and a future `archive verify`/`archive
-import` will read — the format itself, not the command surface (see
-[commands](commands.md) for that).
+`prikk archive export <file>` writes a whole repository, verbatim, into one file (RFC 155).
+`prikk archive verify <file>` reads one back, streamed, and checks structure, reference closure, and
+every signature against the archive's own carried key material. This page documents the byte layout
+both commands use and a future `archive import` will read — the format itself, not the command
+surface (see [commands](commands.md) for that).
 
 ## Shape
 
@@ -53,11 +54,10 @@ Every repository this format carries from writes exactly 13 sections, in the ord
 (`ArchiveSectionKind`'s own fixed list — `crates/prikk-store/src/archive.rs`).
 
 **Damage in an object container, the ref log, the maintainer record, or the author-key material
-travels verbatim** — the archive is a faithful copy, damage included, and a reader's own `verify`
-(a later part) names it rather than refusing the export. **A slotted family that cannot be
-resolved** (an ambiguous lost generation log, or genuine interior damage in the resolved content)
-**refuses the whole export before anything is written**, naming the existing `doctor`/`verify`
-texts for that state.
+travels verbatim** — the archive is a faithful copy, damage included, and `archive verify` names it
+rather than refusing the export. **A slotted family that cannot be resolved** (an ambiguous lost
+generation log, or genuine interior damage in the resolved content) **refuses the whole export
+before anything is written**, naming the existing `doctor`/`verify` texts for that state.
 
 ## The manifest
 
@@ -80,6 +80,27 @@ without decoding the section headers itself.
 
 Fixed 24 bytes, always the file's last 24: `magic(8, "PRPOEND1") ‖ manifest_offset(8) ‖
 manifest_length(8)`.
+
+## `archive verify`
+
+Reads the end trailer and the manifest first (seek, never scan), then checks:
+
+- **structure** — every section's own checksum matches the manifest's recorded one, the fixed set
+  of thirteen section kinds is present exactly once each (an unknown, duplicated, or missing kind
+  refuses before any section body is read), and the manifest's own declared layout reaches exactly
+  the archive's real byte length;
+- **reference closure**, in two passes over the seven object sections: the first builds a set of
+  every carried object's own id (32 bytes each, never the object's bytes); the second re-streams and
+  checks every reference a `Block`/`Patch`/`Tag`/`Attestation`/`RefState`/`RecognitionClaim` makes
+  against that set, naming any that is absent;
+- **every signature**, against the archive's own carried author-key and maintainer material — small
+  key material, decoded once into memory, never the local repository's. A signature this check
+  cannot resolve (no recorded material, or a key that does not verify) is named, never silently
+  skipped.
+
+It reports *internally consistent*, **never** *trusted*: trust comes only from a receiver's own
+adopted set, checked after import. The carried maintainer keys are listed, labeled *"carried, not
+adopted."* It writes nothing, on any exit path — no scratch file, no scratch directory.
 
 ## Carry-forward
 

@@ -59,6 +59,7 @@ prikk bundle import --input <file> [--max-object-bytes N]
 prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]
 prikk bundle verify --input <file> [--max-object-bytes N]
 prikk archive export <file> [--format json]
+prikk archive verify <file> [--format json]
 prikk sync summary --output <file>
 prikk sync compare --summary <file>
 prikk sync have <ref> --output <file>

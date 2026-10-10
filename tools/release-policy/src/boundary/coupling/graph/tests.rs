@@ -149,7 +149,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // 0.50.0 step 1 (019 §5.2) split the rebuild's ref-log discovery out of `refs` into
     // `refs::rebuild_discovery`, the same size-check reason: 158 -> 159.
     // RFC 155 implementation Part E added `archive`, the whole-repository export module: 159 -> 160.
-    assert_eq!(modules.len(), 160, "modules: {modules:?}");
+    // RFC 155 implementation Part V added `archive::verify`, the archive's own streaming reader: 160 -> 161.
+    assert_eq!(modules.len(), 161, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

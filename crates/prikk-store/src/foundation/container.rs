@@ -28,8 +28,8 @@ use crate::foundation::frame_resync::{
 };
 use crate::foundation::fsutil::len_to_u64;
 
-const CONTAINER_VERSION: u16 = 1;
-const CONTAINER_HEADER_LEN: usize = 8 + 2 + 8 + 32;
+pub(crate) const CONTAINER_VERSION: u16 = 1;
+pub(crate) const CONTAINER_HEADER_LEN: usize = 8 + 2 + 8 + 32;
 
 /// Return the fixed 8-byte magic for one persisted object type's container frames. Every
 /// `persisted_object_types()` entry has one; called with anything else is a programmer error (no
@@ -523,7 +523,11 @@ fn parse_header(magic: &[u8; 8], header: &[u8]) -> Result<ContainerHeader> {
     Ok(ContainerHeader { body_len, checksum })
 }
 
-fn record_checksum(magic: &[u8; 8], body_len: u64, body: &[u8]) -> [u8; 32] {
+/// RFC 155 Part V: the archive verifier streams one container record at a time from a raw section
+/// body and must recompute this exact checksum to confirm an object survived transport -- reused,
+/// not re-derived, so a flipped byte is detected the identical way a local repository's own replay
+/// would detect it.
+pub(crate) fn record_checksum(magic: &[u8; 8], body_len: u64, body: &[u8]) -> [u8; 32] {
     let mut preimage = Vec::new();
     preimage.extend_from_slice(magic);
     preimage.extend_from_slice(&CONTAINER_VERSION.to_be_bytes());

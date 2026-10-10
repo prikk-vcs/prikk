@@ -13,8 +13,37 @@
   holds queued, unsealed commits (naming `prikk seal`), or a slotted container's generation log
   cannot be resolved (the existing `doctor`/`verify` texts). See
   [The Archive Format](docs/src/reference/archive-format.md).
-- This is the first of four implementation parts (export, verify, import A, import B); only export
-  exists so far. `archive verify`/`archive import` are separate, later parts of the same RFC.
+- This is the first of four implementation parts (export, verify, import A, import B).
+  `archive import` is a separate, later part of the same RFC.
+
+### Output changes — `prikk archive export` reports objects by type and refs by namespace, not a bare section count
+
+- Part E's own review: *"'sections: 13' says nothing about whether the backup holds the user's
+  work."* The report (text and `--format json`) now names sound object counts by type (patch,
+  block, ref-state, tag, attestation, blob, recognition-claim — counted by skipping each record's
+  own declared body, never by reading it) and ref counts by namespace (local branches, tags,
+  received), the same things a user can check against `branch list`.
+
+### Added — `prikk archive verify <file> [--format json]` checks structure, reference closure, and every signature against the archive's own carried material
+
+- RFC 155 §9.4: a streaming, read-only reader. Finds the manifest by seeking to the fixed end
+  trailer, never scanning; confirms the manifest's own section layout reaches exactly the archive's
+  real length; refuses an unknown, duplicated, or missing section kind before any section body is
+  read. Checks reference closure in two passes over the object sections, with an id set (32 bytes
+  per object, memory bounded by object count, never by archive bytes) — a `Block`/`Patch`/`Tag`/
+  `Attestation`/`RefState`/`RecognitionClaim` naming an id this archive does not carry is named, not
+  silently accepted. Checks every signature against the archive's own carried author and maintainer
+  material (small key material, decoded once into memory, never the local repository's) through the
+  same `verify_author_signatures_with`/`verify_trusted_publication_envelope` checks a local
+  repository's own `verify` already uses — a signature this cannot resolve (no recorded material, or
+  one that fails to verify) is named, never silently skipped. Reports *internally consistent*,
+  **never** *trusted*; lists the archive's own carried maintainer keys labeled *"carried, not
+  adopted."* Writes nothing, on any exit path. A new fuzz target
+  (`test_gates::archive_decoder_fuzz`) feeds the decoder mutated bytes of a real, valid archive:
+  20,000 cases found no panic and no mutated archive reporting itself internally consistent. See
+  [The Archive Format](docs/src/reference/archive-format.md).
+- This is the second of four implementation parts. `archive import` is a separate, later part of the
+  same RFC.
 
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 

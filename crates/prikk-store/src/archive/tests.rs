@@ -19,9 +19,16 @@ use crate::wal::Wal;
 use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryLayout};
 
 /// Seal a one-block `heads/main` into `layout`, returning the tip Block id -- the minimum history
-/// that gives every object container at least one real record.
-fn seal_one_block(layout: &RepositoryLayout) -> prikk_error::Result<ObjectId> {
+/// that gives every object container at least one real record. `pub(crate)`, not private:
+/// `archive::verify`'s own tests and `test_gates::archive_decoder_fuzz` both need the identical
+/// fixture rather than a second, drifting copy of it.
+pub(crate) fn seal_one_block(layout: &RepositoryLayout) -> prikk_error::Result<ObjectId> {
     let mut object_store = FileObjectStore::new(layout.clone());
+    // `signed_patch_envelope`'s own `CreateFile` operation names this blob's id -- writing it here
+    // is what makes this fixture's reference closure genuinely sound (RFC 155 implementation Part
+    // V's own closure check, added after this fixture, found the pre-existing gap: the blob was
+    // never actually written).
+    object_store.write_object(&crate::test_gates::test_support::signed_patch_blob_envelope())?;
     let patch = signed_patch_envelope();
     let patch_id = object_store.write_object(&patch)?;
     let root_block = signed_block(BlockKind::Root, Vec::new(), vec![patch_id], None);
@@ -52,8 +59,12 @@ fn seal_one_block(layout: &RepositoryLayout) -> prikk_error::Result<ObjectId> {
 }
 
 /// Decode one manifest entry's own `(kind, offset, length, checksum)`, test-only -- the real
-/// decoder is Part V's job. Returns `(repository_format, tool_version, entries)`.
-fn decode_manifest_for_test(bytes: &[u8]) -> (u32, String, Vec<(u16, u64, u64, [u8; 32])>) {
+/// decoder is Part V's job. Returns `(repository_format, tool_version, entries)`. `pub(in
+/// crate::archive)`: `archive::verify`'s own tests need to locate a specific section's own byte
+/// range to corrupt it precisely, not guess an offset.
+pub(in crate::archive) fn decode_manifest_for_test(
+    bytes: &[u8],
+) -> (u32, String, Vec<(u16, u64, u64, [u8; 32])>) {
     let end_trailer_start = bytes.len() - 24;
     assert_eq!(
         &bytes[end_trailer_start..end_trailer_start + 8],
@@ -124,7 +135,30 @@ fn export_archive_round_trips_a_small_history() {
     let mut buffer = Vec::new();
     let report = export_archive(&layout, &mut buffer).expect("export");
     assert_eq!(report.repository_format, 7);
-    assert_eq!(report.section_count, 13);
+    assert_eq!(
+        report
+            .object_counts
+            .iter()
+            .find(|(object_type, _)| *object_type == ObjectType::Block)
+            .map(|(_, count)| *count),
+        Some(1),
+        "the one sealed block is counted"
+    );
+    assert_eq!(
+        report
+            .object_counts
+            .iter()
+            .find(|(object_type, _)| *object_type == ObjectType::Patch)
+            .map(|(_, count)| *count),
+        Some(1),
+        "the one sealed patch is counted"
+    );
+    assert_eq!(
+        report.local_branches, 1,
+        "heads/main is counted as a local branch"
+    );
+    assert_eq!(report.tags, 0);
+    assert_eq!(report.received_refs, 0);
     assert_eq!(report.total_bytes as usize, buffer.len());
     assert_eq!(&buffer[0..8], b"PREPO001");
 

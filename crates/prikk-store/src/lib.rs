@@ -117,7 +117,10 @@ mod test_gates;
 pub use anchor_fallback::take_anchor_fallbacks;
 #[cfg(feature = "test-support")]
 pub use anchor_trust::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
-pub use archive::{ArchiveExportReport, ArchiveSectionKind, export_archive};
+pub use archive::{
+    ArchiveExportReport, ArchiveSectionKind, ArchiveVerifyReport, CarriedMaintainerKeySummary,
+    export_archive, verify_archive,
+};
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 #[cfg(feature = "test-support")]
