@@ -13,9 +13,9 @@ use prikk_object::{
 use crate::{
     ActiveSessionRepairStatus, DEFAULT_ACTIVE_NAME, DoctorRepairOptions, DoctorSeverity,
     Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectWriter, RepositoryLayout,
-    Wal, add_trusted_maintainer, derive_next_state_root, doctor_repository,
-    maintainer_signature as real_maintainer_signature, repair_repository,
-    write_active_ref_metadata,
+    Wal, add_trusted_maintainer, compact_trust_policy, derive_next_state_root, doctor_repository,
+    maintainer_signature as real_maintainer_signature, remove_trusted_maintainer,
+    repair_repository, write_active_ref_metadata,
 };
 
 use crate::test_gates::test_support::{
@@ -75,6 +75,63 @@ fn doctor_reports_healthy_repository() {
         assert_eq!(report.count_by_severity(DoctorSeverity::Info), 1);
     }
     let _ = std::fs::remove_dir_all(root);
+}
+
+fn public_key_hex(seed: &[u8; 32]) -> String {
+    prikk_crypto::Ed25519KeyPair::from_seed(seed)
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// 0.51.0 step 1 Part B item 2 (020's grade): `PRIKK-DOCTOR-VERIFY-OK` must be absent beside an
+/// error-severity issue, decided last over the whole accumulated list, not pushed first and
+/// unconditionally. Reuses `compact::tests::handoff_165_row_14_trust_policy_revoke_retrust_revoke_
+/// across_two_compactions`'s own exact sequence (a key revoked, re-trusted, then revoked again,
+/// straddling two compactions, with the generation log then emptied) to reach a genuinely ambiguous
+/// trust-policy generation log -- `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS`, an error
+/// `push_container_interior_damage_issues` pushes *before* `verify_repository` ever runs.
+#[test]
+fn verify_ok_is_absent_beside_the_generation_log_ambiguity_error() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("doctor-verify-ok-beside-ambiguity");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let k_key = public_key_hex(&[55_u8; 32]);
+    let l_key = public_key_hex(&[56_u8; 32]);
+
+    add_trusted_maintainer(&layout, "k", &k_key)?;
+    add_trusted_maintainer(&layout, "l", &l_key)?;
+    remove_trusted_maintainer(&layout, "l")?; // revoked
+    compact_trust_policy(&layout)?; // k=1: live snapshot {k}
+
+    add_trusted_maintainer(&layout, "l", &l_key)?; // re-trusted, landing in the now-live slot
+    compact_trust_policy(&layout)?; // k=2: live snapshot {k,l}, retired slot holds the {k} snapshot
+
+    // The write after the second switch repeats the {k} snapshot the retired slot already holds.
+    remove_trusted_maintainer(&layout, "l")?; // revoked again
+    std::fs::write(layout.trust_policy_generation_log_path(), b"")?;
+
+    let report = doctor_repository(&layout);
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS"
+                && issue.severity == DoctorSeverity::Error),
+        "fixture bug: must read as a genuine generation-log ambiguity error: {:?}",
+        report.issues
+    );
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-DOCTOR-VERIFY-OK"),
+        "VERIFY-OK must not print beside an error-severity issue: {:?}",
+        report.issues
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
 }
 
 #[test]
@@ -1183,4 +1240,56 @@ fn signed_publication_envelope(
         assert!(envelope.add_signature(signature).is_ok());
     }
     envelope
+}
+
+/// 0.51.0 step 1 Part B item 5 (021's grade): `check_appended_file_tails`'s own trust-policy and
+/// received-index rows used to turn *any* `Err` from `replay_trust_policy`/`replay_received_index`
+/// into `interior_damage`, including `PrikkError::AmbiguousGenerationLog` -- so an ambiguous
+/// generation log printed a second, wrong issue (`PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE: trust
+/// policy: ambiguous generation log: ...`) beside the correct `PRIKK-DOCTOR-GENERATION-LOG-
+/// AMBIGUOUS`, even though nothing had failed to decode. Reuses the same genuinely-ambiguous
+/// trust-policy fixture `verify_ok_is_absent_beside_the_generation_log_ambiguity_error` does.
+#[test]
+fn appended_file_interior_damage_defers_to_the_ambiguity_issue() {
+    let root = unique_temp_dir("doctor-ambiguity-not-interior-damage");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let k_key = public_key_hex(&[71_u8; 32]);
+    let l_key = public_key_hex(&[72_u8; 32]);
+    add_trusted_maintainer(&layout, "k", &k_key).unwrap();
+    add_trusted_maintainer(&layout, "l", &l_key).unwrap();
+    remove_trusted_maintainer(&layout, "l").unwrap();
+    compact_trust_policy(&layout).unwrap();
+    add_trusted_maintainer(&layout, "l", &l_key).unwrap();
+    compact_trust_policy(&layout).unwrap();
+    remove_trusted_maintainer(&layout, "l").unwrap();
+    std::fs::write(layout.trust_policy_generation_log_path(), b"").unwrap();
+
+    let report = doctor_repository(&layout);
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS"),
+        "fixture bug: must read as a genuine generation-log ambiguity error: {:?}",
+        report.issues
+    );
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE"),
+        "the ambiguous state must not also print a second issue calling it interior damage: {:?}",
+        report.issues
+    );
+    let appended_file_tails = report
+        .verification
+        .as_ref()
+        .expect("verification ran")
+        .appended_file_tails
+        .iter()
+        .find(|status| status.label == "trust policy")
+        .expect("the trust policy row exists");
+    assert_eq!(appended_file_tails.interior_damage, None);
+
+    let _ = std::fs::remove_dir_all(&root);
 }

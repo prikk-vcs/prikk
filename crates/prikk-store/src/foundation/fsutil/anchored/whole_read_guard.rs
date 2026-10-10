@@ -121,6 +121,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reference: "RFC 102 Stage 6 Step 2 (0.50.0 step 1 Part E2)",
     },
     DeclaredScope {
+        id: "retired-slot-tail-check",
+        status: ScopeStatus::Intentional,
+        reason: "`check_generation_log_deductions` reads a compacting container's own retired (non-live) slot whole, once per                  `verify` pass, only after the generation log names a live slot cleanly -- to report a torn tail a cut-short                  compaction left there, which nothing else reads until a later crash also loses the log",
+        reference: "RFC 165, 0.51.0 step 1 Part B item 4",
+    },
+    DeclaredScope {
         id: "pointer-index-rebuild-recovery-save",
         status: ScopeStatus::Intentional,
         reason: "`run_pointer_index_rebuild` reads the whole live slot once, only on a real run that writes, to save it to the                  recovery log before flipping away from it -- the saved copy is the way back, so it must be the whole slot, not a range",

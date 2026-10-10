@@ -310,7 +310,12 @@ fn run_ref_pointer_index_compaction(
         // removes the meaning-lookup hazard H1 found (this container's own slot meaning is the ref
         // log, not the generation log, but there is still only one way out worth naming) and keeps
         // a single answer rather than two.
-        return Err(PrikkError::Integrity(
+        //
+        // 0.51.0 step 1 Part B item 3 (020's grade, Q2b review's own "noted, not for 0.50.0"):
+        // `Precondition`, not `Integrity` -- nothing here is damaged. Both slots decode cleanly;
+        // the generation log simply does not name one of them live, which is a state a caller can
+        // walk away from (the rebuild), not a corrupted byte anywhere.
+        return Err(PrikkError::Precondition(
             "ref pointer index's generation log names no live slot; compaction refuses to act on \
              a deduced slot -- run `prikk doctor --rebuild-pointer-index --plan-only`, then \
              `prikk doctor --rebuild-pointer-index` instead, which re-derives the index from the \

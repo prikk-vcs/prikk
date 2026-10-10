@@ -1913,6 +1913,15 @@ fn compact_pointer_index_refuses_in_the_deduced_state_and_names_the_rebuild() ->
         panic!("compact --pointer-index must refuse in the deduced state");
     };
     assert!(err.to_string().contains("--rebuild-pointer-index"), "{err}");
+    // 0.51.0 step 1 Part B item 3 (020's grade, Q2b review's own "noted, not for 0.50.0"): nothing
+    // here is damaged -- both slots decode cleanly, only the generation log's own missing record is
+    // the issue -- so the refusal is `Precondition`, not `Integrity`, and must not read "integrity
+    // error:".
+    assert!(
+        matches!(err, prikk_error::PrikkError::Precondition(_)),
+        "a deduced-state refusal is a precondition, not damage: {err:?}"
+    );
+    assert!(!err.to_string().contains("integrity error"), "{err}");
     assert!(
         crate::recovery_list(&layout)?.entries.is_empty(),
         "a refused compaction must save nothing"

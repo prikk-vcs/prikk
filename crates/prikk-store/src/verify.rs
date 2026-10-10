@@ -307,9 +307,7 @@ use crate::author::author_key_index::{AuthorKeyRecordStatus, replay_author_keys}
 use crate::block_state::{BlockStateOutcome, BlockStateStatus};
 use crate::commit_boundary::active::ActiveRefMetadata;
 use crate::commit_index::{CommitIndexDivergence, verify_divergence};
-use crate::foundation::generation::{
-    GenerationRecordStatus, replay_generation_log, resolve_live_slot_with_deduction_note,
-};
+use crate::foundation::generation::{GenerationRecordStatus, replay_generation_log, resolve_or_deduce};
 use crate::foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout,
 };
@@ -778,6 +776,30 @@ pub struct RepositoryVerification {
     /// alongside `container_interior_damage` above -- typed separately from it (the Q1 review's
     /// H1/H2 proof: this is not damage, and no rule reading only the slots can be right either).
     pub container_generation_ambiguity: ContainerGenerationAmbiguity,
+    /// 0.51.0 step 1 Part B item 4 (021's grade): a torn tail a compaction cut short left on its own
+    /// *retired* (non-live) slot. The live slot and the generation log are both untouched and sound
+    /// -- nothing is at risk and no reader uses this slot until a later crash also loses the log --
+    /// but nothing else reports it, so it is otherwise invisible until the next compaction silently
+    /// overwrites it. Empty in the overwhelmingly common case (no compaction was cut short).
+    pub retired_slot_tails: Vec<RetiredSlotTailNote>,
+}
+
+/// 0.51.0 step 1 Part B item 4: one compacting container's own retired-slot tail warning (see
+/// [`RepositoryVerification::retired_slot_tails`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RetiredSlotTailNote {
+    /// A stable, human-readable label naming the container -- matches
+    /// [`AppendedFileTailStatus::label`] and [`GenerationLogDeductionNote::container_label`].
+    pub container_label: &'static str,
+    /// How many trailing bytes do not form a complete record.
+    pub trailing_partial_bytes: usize,
+    /// The byte offset where `trailing_partial_bytes` begins.
+    pub tail_offset: usize,
+    /// `prikk compact`'s own flag for this container -- the command whose *next* ordinary run
+    /// overwrites the retired slot, truncating the torn bytes away as a side effect of writing the
+    /// new compacted content.
+    pub compact_flag: &'static str,
 }
 
 /// One compacting container's own Part E2 warning: its generation log named no live slot, but its
@@ -845,20 +867,25 @@ pub struct ContainerGenerationAmbiguity {
 /// state, read directly (never through whichever reader happens to touch each one first) so `verify`
 /// reports it even when nothing else this run touches the affected container. 0.50.0 P3c: the same
 /// three reads also catch each container's own interior damage directly, in
-/// [`ContainerInteriorDamage`] -- the one case `resolve_live_slot_with_deduction_note` cannot deduce
-/// past, which it reports as `Err`. Handoff 165 Q1b: a third outcome, [`ContainerGenerationAmbiguity`]
-/// -- the deduction's own `Err` is typed (`PrikkError::AmbiguousGenerationLog`, distinct from
-/// `Integrity`) precisely so this can tell the two refusals apart without matching text.
+/// [`ContainerInteriorDamage`] -- the one case `resolve_or_deduce` cannot deduce past, which it
+/// reports as `Err`. Handoff 165 Q1b: a third outcome, [`ContainerGenerationAmbiguity`] -- the
+/// deduction's own `Err` is typed (`PrikkError::AmbiguousGenerationLog`, distinct from `Integrity`)
+/// precisely so this can tell the two refusals apart without matching text. 0.51.0 step 1 Part B
+/// item 4: on `Ok`, also checks the resolved live slot's own retired twin for a tail a cut-short
+/// compaction left there ([`RetiredSlotTailNote`]) -- the one piece `resolve_or_deduce` alone would
+/// not surface, since it only reads the retired slot at all in the rare ambiguous/deduced case.
 pub(crate) fn check_generation_log_deductions(
     layout: &RepositoryLayout,
 ) -> (
     Vec<GenerationLogDeductionNote>,
     ContainerInteriorDamage,
     ContainerGenerationAmbiguity,
+    Vec<RetiredSlotTailNote>,
 ) {
     let mut notes = Vec::new();
     let mut damage = ContainerInteriorDamage::default();
     let mut ambiguity = ContainerGenerationAmbiguity::default();
+    let mut retired_slot_tails = Vec::new();
     // 0.50.0 P3c: checked first, directly, the same two-part way `refs::pointer_index_interior_
     // damage` does -- the live slot's own content failing to decode is the common shape (no
     // compaction has ever run, so the generation log names no ambiguity for the deduction below to
@@ -888,7 +915,7 @@ pub(crate) fn check_generation_log_deductions(
                 .to_string(),
         );
     }
-    match resolve_live_slot_with_deduction_note(
+    match resolve_or_deduce(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
         &layout.ref_pointer_index_slot_path(ContainerSlot::A),
@@ -898,15 +925,26 @@ pub(crate) fn check_generation_log_deductions(
         "ref pointer index's generation log is lost, and its two slots fit two different \
          histories; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
          --rebuild-pointer-index` -- the ref log decides, not either slot",
-        decode_pointer_index_entries_for_resolver,
-        fold_one_pointer_index_entry,
+        &decode_pointer_index_entries_for_resolver,
+        &fold_one_pointer_index_entry,
     ) {
-        Ok(Some(deduced)) => notes.push(deduction_note(
-            "the ref pointer index",
-            "--pointer-index",
-            &deduced,
-        )),
-        Ok(None) => {}
+        Ok((slot, _, _, deduced)) => {
+            if let Some(deduced) = &deduced {
+                notes.push(deduction_note("the ref pointer index", "--pointer-index", deduced));
+            }
+            if let Some(note) = retired_slot_tail(
+                layout,
+                &layout.ref_pointer_index_slot_path(slot.other()),
+                "the ref pointer index",
+                "--pointer-index",
+                |bytes| {
+                    let replay = crate::refs::decode_pointer_index_records(bytes)?;
+                    Ok((replay.trailing_partial_bytes, replay.tail_offset))
+                },
+            ) {
+                retired_slot_tails.push(note);
+            }
+        }
         Err(PrikkError::AmbiguousGenerationLog(message)) => {
             ambiguity.pointer_index.get_or_insert(message);
         }
@@ -914,7 +952,7 @@ pub(crate) fn check_generation_log_deductions(
             damage.pointer_index.get_or_insert(err.to_string());
         }
     };
-    match resolve_live_slot_with_deduction_note(
+    match resolve_or_deduce(
         layout,
         &layout.received_index_generation_log_path(),
         &layout.received_index_slot_path(ContainerSlot::A),
@@ -925,15 +963,27 @@ pub(crate) fn check_generation_log_deductions(
         "the received index's generation log is lost, and its two slots fit two different \
          histories; prikk will not guess. Restore the repository's whole `.prikk/` from a backup \
          taken before the log was lost",
-        decode_received_index_entries_for_resolver,
-        fold_one_received_index_entry,
+        &decode_received_index_entries_for_resolver,
+        &fold_one_received_index_entry,
     ) {
-        Ok(Some(deduced)) => notes.push(deduction_note(
-            "the received index",
-            "--received-index",
-            &deduced,
-        )),
-        Ok(None) => {}
+        Ok((slot, _, _, deduced)) => {
+            if let Some(deduced) = &deduced {
+                notes.push(deduction_note("the received index", "--received-index", deduced));
+            }
+            if let Some(note) = retired_slot_tail(
+                layout,
+                &layout.received_index_slot_path(slot.other()),
+                "the received index",
+                "--received-index",
+                |bytes| {
+                    let replay =
+                        crate::received::received_index::decode_received_index_records(bytes)?;
+                    Ok((replay.trailing_partial_bytes, replay.tail_offset))
+                },
+            ) {
+                retired_slot_tails.push(note);
+            }
+        }
         Err(PrikkError::AmbiguousGenerationLog(message)) => {
             ambiguity.received_index.get_or_insert(message);
         }
@@ -941,7 +991,7 @@ pub(crate) fn check_generation_log_deductions(
             damage.received_index.get_or_insert(err.to_string());
         }
     };
-    match resolve_live_slot_with_deduction_note(
+    match resolve_or_deduce(
         layout,
         &layout.trust_policy_generation_log_path(),
         &layout.trust_policy_container_slot_path(ContainerSlot::A),
@@ -953,15 +1003,30 @@ pub(crate) fn check_generation_log_deductions(
          histories (one trusts a key the other has revoked); prikk will not guess. Restore the \
          repository's whole `.prikk/` from a backup taken before the log was lost, then re-apply \
          every trust change made since that backup",
-        decode_trust_policy_entries_for_resolver,
-        fold_one_trust_policy_entry,
+        &decode_trust_policy_entries_for_resolver,
+        &fold_one_trust_policy_entry,
     ) {
-        Ok(Some(deduced)) => notes.push(deduction_note(
-            "the trust policy container",
-            "--trust-policy",
-            &deduced,
-        )),
-        Ok(None) => {}
+        Ok((slot, _, _, deduced)) => {
+            if let Some(deduced) = &deduced {
+                notes.push(deduction_note(
+                    "the trust policy container",
+                    "--trust-policy",
+                    deduced,
+                ));
+            }
+            if let Some(note) = retired_slot_tail(
+                layout,
+                &layout.trust_policy_container_slot_path(slot.other()),
+                "the trust policy container",
+                "--trust-policy",
+                |bytes| {
+                    let replay = crate::trust_index::decode_trust_policy_records(bytes)?;
+                    Ok((replay.trailing_partial_bytes, replay.tail_offset))
+                },
+            ) {
+                retired_slot_tails.push(note);
+            }
+        }
         Err(PrikkError::AmbiguousGenerationLog(message)) => {
             ambiguity.trust_policy.get_or_insert(message);
         }
@@ -969,7 +1034,38 @@ pub(crate) fn check_generation_log_deductions(
             damage.trust_policy.get_or_insert(err.to_string());
         }
     };
-    (notes, damage, ambiguity)
+    (notes, damage, ambiguity, retired_slot_tails)
+}
+
+/// 0.51.0 step 1 Part B item 4: a compacting container's own retired (non-live) slot, read whole
+/// (`retired-slot-tail-check`, declared), to report a tail a cut-short compaction left there --
+/// `None` when the retired slot has no tail (the overwhelmingly common case: no compaction was cut
+/// short, or none has ever run and the slot is simply empty).
+fn retired_slot_tail(
+    layout: &RepositoryLayout,
+    retired_slot_path: &std::path::Path,
+    container_label: &'static str,
+    compact_flag: &'static str,
+    decode_raw: impl Fn(&[u8]) -> Result<(usize, usize)>,
+) -> Option<RetiredSlotTailNote> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("retired-slot-tail-check");
+    let relative = layout.repository_relative(retired_slot_path).ok()?;
+    let bytes =
+        crate::foundation::fsutil::read_file_if_exists(layout.repository_mutation_root(), &relative)
+            .ok()?
+            .unwrap_or_default();
+    let (trailing_partial_bytes, tail_offset) = decode_raw(&bytes).ok()?;
+    if trailing_partial_bytes == 0 {
+        return None;
+    }
+    Some(RetiredSlotTailNote {
+        container_label,
+        trailing_partial_bytes,
+        tail_offset,
+        compact_flag,
+    })
 }
 
 fn deduction_note(
@@ -1492,6 +1588,17 @@ pub(crate) fn check_appended_file_tails(
                 }
             }),
         }),
+        // 0.51.0 step 1 Part B item 5 (021's grade): an ambiguous generation log is not interior
+        // damage -- nothing here failed to decode, the log simply names no slot and content cannot
+        // decide between them either. `container_generation_ambiguity`/`PRIKK-DOCTOR-GENERATION-
+        // LOG-AMBIGUOUS` already reports it; this row defers, decided by the typed variant, never
+        // by matching the message text.
+        Err(PrikkError::AmbiguousGenerationLog(_)) => rows.push(AppendedFileTailStatus {
+            label: "trust policy",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: None,
+        }),
         Err(error) => rows.push(AppendedFileTailStatus {
             label: "trust policy",
             trailing_partial_bytes: 0,
@@ -1531,6 +1638,14 @@ pub(crate) fn check_appended_file_tails(
                     ReceivedIndexRecordStatus::Evaluated => None,
                 }
             }),
+        }),
+        // 0.51.0 step 1 Part B item 5: the same deferral as the trust policy row above -- an
+        // ambiguous generation log is not interior damage.
+        Err(PrikkError::AmbiguousGenerationLog(_)) => rows.push(AppendedFileTailStatus {
+            label: "received index",
+            trailing_partial_bytes: 0,
+            tail_offset: 0,
+            interior_damage: None,
         }),
         Err(error) => rows.push(AppendedFileTailStatus {
             label: "received index",
@@ -2043,8 +2158,12 @@ pub fn verify_repository_with_options(
     // logs directly, unconditionally, the same footing as `AppendedFileTails` above. 0.50.0 P3c: the
     // same reads also catch each container's own interior damage directly (`container_interior_
     // damage`), independent of which stage a caller happens to find failing over it.
-    let (generation_log_deductions, container_interior_damage, container_generation_ambiguity) =
-        check_generation_log_deductions(layout);
+    let (
+        generation_log_deductions,
+        container_interior_damage,
+        container_generation_ambiguity,
+        retired_slot_tails,
+    ) = check_generation_log_deductions(layout);
 
     // RFC 136 increment 2b: every Block this run confirmed by replay joins the record, whatever else
     // the run found -- each such outcome is individually sound. Best-effort; never fails verify.
@@ -2083,7 +2202,22 @@ pub fn verify_repository_with_options(
         object_interrupted_appends,
         object_container_tails,
         unreferenced_remnants,
-        trailing_partial_wal_bytes: replay.as_ref().map(|replay| replay.trailing_partial_bytes),
+        // 0.51.0 step 1 Part B item 1 (020's grade): a record the commit witness explains as
+        // acknowledged damage is not a tail -- it is complete, written, and already named by the
+        // witness, not an unresolved crash shape -- so it is not counted as trailing partial bytes.
+        // `AcknowledgedLoss` never reaches here with a nonzero count (`classify`'s own row 5
+        // requires no unexplained tail in the first place), so only `AcknowledgedDamage` needs the
+        // zero.
+        trailing_partial_wal_bytes: replay.as_ref().map(|replay| {
+            if matches!(
+                commit_witness_verdict,
+                Some(crate::commit_boundary::classification::Verdict::AcknowledgedDamage { .. })
+            ) {
+                0
+            } else {
+                replay.trailing_partial_bytes
+            }
+        }),
         active_wal_metadata_status,
         commit_witness_verdict,
         commit_witness_running_hash_agrees,
@@ -2104,6 +2238,7 @@ pub fn verify_repository_with_options(
         generation_log_deductions,
         container_interior_damage,
         container_generation_ambiguity,
+        retired_slot_tails,
     })
 }
 

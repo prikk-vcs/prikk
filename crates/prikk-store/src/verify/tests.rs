@@ -1,5 +1,6 @@
 //! Repository verification tests.
 
+mod acknowledged_damage_is_not_a_tail;
 mod connectivity;
 mod current_branch_warning;
 mod every_signature;
@@ -9,6 +10,7 @@ mod object_index_tail;
 mod reachability;
 mod received_refs;
 mod ref_cluster;
+mod retired_slot_tail;
 mod root_authority;
 mod row10_substituted_earlier_record;
 mod stage_containment;

@@ -569,18 +569,11 @@ pub(crate) fn print_verify_report(
         "trailing partial WAL bytes: {}",
         format_count(report.trailing_partial_wal_bytes)
     );
-    // 0.50.0 step 1, A6 item 1 (N6, RFC 163 §4): rule 3's own tail classification is unchanged and
-    // correct (an acknowledged record's own bytes, damaged, with nothing sound after it, *is* a
-    // tail by that rule) -- what changes is only this warning sentence, suppressed when the commit
-    // witness already explains the identical bytes as acknowledged damage or loss: that finding
-    // (below) names the one command that actually resolves it, `--discard-damaged-commits`, and
-    // "an incomplete trailing record" would read as the ordinary, benign crash-tail case this same
-    // sentence means everywhere else -- misleading here, since the record was never merely queued.
-    let acknowledged_damage_or_loss = matches!(
-        report.commit_witness_verdict,
-        Some(Verdict::AcknowledgedDamage { .. } | Verdict::AcknowledgedLoss { .. })
-    );
-    if report.has_trailing_partial_wal() && !acknowledged_damage_or_loss {
+    // 0.51.0 step 1 Part B item 1 (020's grade, superseding 0.50.0 step 1 A6 item 1): an acknowledged
+    // damaged record is not a tail at all, so `trailing_partial_wal_bytes`/`has_trailing_partial_wal`
+    // already exclude it (`verify.rs`) -- no separate suppression needed here. The finding below
+    // names the command that actually resolves it, `--discard-damaged-commits`.
+    if report.has_trailing_partial_wal() {
         println!("warning: active WAL contains an incomplete trailing record");
     }
     println!(
@@ -647,6 +640,17 @@ pub(crate) fn print_verify_report(
                 note.container_label, note.deduced_slot, note.reason, note.compact_flag
             );
         }
+    }
+    // 0.51.0 step 1 Part B item 4 (021's grade): a compaction cut short left a torn tail on its own
+    // retired slot -- not at risk (the live slot and the generation log are both sound), but
+    // otherwise invisible until the next compaction silently overwrites it.
+    for note in &report.retired_slot_tails {
+        println!(
+            "warning: {}'s retired slot has an incomplete tail at byte offset {} ({} byte(s)) \
+             left by a compaction that was cut short; no action is required, the next `prikk \
+             compact {}` overwrites this slot",
+            note.container_label, note.tail_offset, note.trailing_partial_bytes, note.compact_flag
+        );
     }
     match &report.active_wal_metadata_status {
         Some(status) => print_active_wal_metadata_status(status),

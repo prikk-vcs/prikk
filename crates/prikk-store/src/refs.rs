@@ -41,7 +41,8 @@ pub(crate) use pointer_index::{
 // `pointer_index` itself stays a private submodule; only the specific items a caller outside `refs`
 // needs are widened.
 pub use pointer_index::PointerIndexRepair;
-#[cfg(test)]
+// 0.51.0 step 1 Part B item 4: `verify`'s own retired-slot tail check needs the raw decoder too,
+// so this is no longer test-only.
 pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
     PointerIndexEntry, decode_pointer_index_entries_for_resolver, empty_pointer_index_replay,

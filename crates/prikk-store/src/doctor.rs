@@ -690,7 +690,7 @@ fn push_container_interior_damage_issues(
     layout: &RepositoryLayout,
     issues: &mut Vec<DoctorIssue>,
 ) -> (ContainerInteriorDamage, ContainerGenerationAmbiguity) {
-    let (_, damage, ambiguity) = check_generation_log_deductions(layout);
+    let (_, damage, ambiguity, _) = check_generation_log_deductions(layout);
     // Handoff 165 Q1b: the ambiguous-refusal issues print first, same as G2 already does for
     // damage -- the one message that explains the state comes before the current-branch warning
     // and the stage errors the same ambiguity also causes.
@@ -839,11 +839,6 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     push_interrupted_materialization_issue(layout, &mut issues);
     match verify_repository(layout) {
         Ok(verification) => {
-            issues.push(DoctorIssue::info(
-                "PRIKK-DOCTOR-VERIFY-OK",
-                "repository structural verification scan completed",
-                "review the remaining diagnostics before deciding whether action is required",
-            ));
             // DC-95 Stage 2 Level 1: a stage that failed or could not evaluate is blocking by
             // construction (severity derives from the stage outcome itself, not a per-field decision
             // here) -- this is what preserves `repair_repository`'s refusal gate now that
@@ -1009,20 +1004,14 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     );
                 }
             }
-            // 0.50.0 step 1, A6 item 1 (N6, RFC 163 §4): suppressed when the commit witness already
-            // explains these identical bytes as acknowledged damage or loss -- `--repair-wal-tail`
-            // would truncate the very record the discard verb exists to handle formally (saving it
-            // to the recovery log, not merely removing it), so recommending it here is a dead end,
-            // not a second valid way out. See `output/verification.rs`'s matching suppression of
-            // the equivalent `verify` warning sentence for the identical reasoning.
-            let acknowledged_damage_or_loss = matches!(
-                verification.commit_witness_verdict,
-                Some(Verdict::AcknowledgedDamage { .. } | Verdict::AcknowledgedLoss { .. })
-            );
+            // 0.51.0 step 1 Part B item 1 (020's grade, superseding 0.50.0 step 1 A6 item 1): an
+            // acknowledged damaged record is not a tail, so `verification.trailing_partial_wal_bytes`
+            // already excludes it (`verify.rs`) -- `--repair-wal-tail` would otherwise truncate the
+            // very record the discard verb exists to handle formally (saving it to the recovery log,
+            // not merely removing it), which is a dead end, not a second valid way out.
             if verification
                 .trailing_partial_wal_bytes
                 .is_some_and(|n| n != 0)
-                && !acknowledged_damage_or_loss
             {
                 issues.push(
                     DoctorIssue::warning(
@@ -1247,6 +1236,25 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     recommendation,
                 ));
             }
+            // 0.51.0 step 1 Part B item 4 (021's grade): a compaction cut short left a torn tail on
+            // its own retired slot -- the live slot and the generation log are both sound, so
+            // nothing is at risk and no reader uses this slot yet, but nothing else reports it. The
+            // next ordinary compaction overwrites it (truncate-then-append, the same as any other
+            // run), so that is the way out named here, not a repair verb.
+            for note in &verification.retired_slot_tails {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-RETIRED-SLOT-TAIL",
+                    format!(
+                        "{}'s retired slot has an incomplete tail at byte offset {} ({} byte(s)) \
+                         left by a compaction that was cut short",
+                        note.container_label, note.tail_offset, note.trailing_partial_bytes
+                    ),
+                    format!(
+                        "no action is required; the next `prikk compact {}` overwrites this slot",
+                        note.compact_flag
+                    ),
+                ));
+            }
             // RFC 164 Addendum 1 (N7): an object container's own short tail, reported (never
             // repaired -- Rule B only makes these report, per the review's ruling).
             for status in &verification.object_container_tails {
@@ -1335,6 +1343,19 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             }
             add_active_wal_metadata_issues(&verification, &mut issues);
             add_commit_witness_issues(&verification, &mut issues);
+            // 0.51.0 step 1 Part B item 2 (020's grade): decided last, over every issue this call
+            // pushed (before and after `verify_repository` ran), not first and unconditionally --
+            // "scan completed" must not print beside a stage that failed or an error-severity
+            // finding, both equally.
+            if !verification.has_stage_failure()
+                && !issues.iter().any(|issue| issue.severity == DoctorSeverity::Error)
+            {
+                issues.push(DoctorIssue::info(
+                    "PRIKK-DOCTOR-VERIFY-OK",
+                    "repository structural verification scan completed",
+                    "review the remaining diagnostics before deciding whether action is required",
+                ));
+            }
             DoctorReport {
                 verification: Some(verification),
                 issues,

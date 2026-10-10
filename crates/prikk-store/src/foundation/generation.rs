@@ -758,34 +758,10 @@ pub(crate) fn resolve_live_slot_with_tail<T: PartialEq + Clone>(
     Ok((slot, trailing_partial_bytes, tail_offset))
 }
 
-/// `verify`/`doctor`'s own warning (Part E2): the identical deduction every reader and writer now
-/// makes silently, surfaced explicitly so the ambiguous state stays visible and nameable, rather than
-/// going unremarked once it stops being a refusal. `None` when the log names a slot outright, or slot
-/// B is genuinely empty -- nothing to warn about.
-// Handoff 165 Q1b: `ambiguous_text`, alongside `damage_text`, pushed this to 8 -- each names a container's own text for a distinct, already-typed refusal; bundling them would hide which is which at every call site.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_live_slot_with_deduction_note<T: PartialEq + Clone>(
-    layout: &RepositoryLayout,
-    generation_log_path: &std::path::Path,
-    slot_a_path: &std::path::Path,
-    slot_b_path: &std::path::Path,
-    damage_text: &str,
-    ambiguous_text: &str,
-    decode_entries: impl Fn(&[u8]) -> Result<DecodedEntries<T>>,
-    fold_entry: impl Fn(&mut Vec<T>, T),
-) -> Result<Option<DeducedFromContent>> {
-    Ok(resolve_or_deduce(
-        layout,
-        generation_log_path,
-        slot_a_path,
-        slot_b_path,
-        damage_text,
-        ambiguous_text,
-        &decode_entries,
-        &fold_entry,
-    )?
-    .3)
-}
+// 0.51.0 step 1 Part B item 4: `resolve_live_slot_with_deduction_note` (the deduction note alone,
+// discarding the live slot) was removed here -- `verify.rs`'s own `check_generation_log_deductions`,
+// its one caller, now calls `resolve_or_deduce` directly, since it needs the live slot too (to find
+// the *retired* slot's own path for the new tail check).
 
 #[cfg(test)]
 mod tests;
