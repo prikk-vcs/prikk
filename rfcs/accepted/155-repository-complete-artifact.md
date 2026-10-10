@@ -203,8 +203,9 @@ every signature it cannot check.
 ### 9.5 Import: untouched or complete, literally (R4 as written)
 
 - **Stage 0, checks:** the archive's verify, the author-key conflict check, the landing plan. A refusal writes nothing.
-- **The journal, the first write:** the archive's identity, the landing plan, and each object container's length.
-  Taken under the object lock, which import holds **from the journal to the end of the objects**.
+- **The journal, the first write:** the archive's identity, the landing plan, and the length of every container import
+  can append to: each object container, the ref log, and the live slots of the pointer index and the received index.
+  It is taken under every container lock, which import holds **from the journal to the commit point**.
 - **Stage 1, objects:** in dependency order through the ordinary write path. Content-addressed and idempotent.
 - **Stage 2, author keys:** recorded.
 - **Stage 3, refs:** each landing written, idempotently, under the control-plane locks.
@@ -215,13 +216,14 @@ every signature it cannot check.
 | no journal | nothing started, or finished | none needed |
 | journal, *N* of *M* refs landed (0 ≤ *N* ≤ *M*) | interrupted: `PRIKK-DOCTOR-INTERRUPTED-IMPORT` | run the same import again (it resumes), **or** `prikk doctor --cancel-import <id>` |
 
-- **Cancel restores "untouched".** For each object container, it saves the bytes past the journaled length (one
-  RFC 168 run), truncates back, then removes any landed refs the journal names and empties the journal.
-  `--recovery-restore` can undo the cancel.
-- **While a journal is present, every writer that appends objects refuses,** naming *"run the same import again, or
-  `prikk doctor --cancel-import <id>`"*. Nothing may be appended behind an unfinished import, because that would make
-  the cut-back unsafe. This is RFC 163's rule: a write never buries a crash state.
-- **The cost:** writers refuse for the import's duration. Today's `bundle import` writes 1.15 GiB in 8.2 s, an upper
+- **Cancel restores "untouched".** For every container the journal names, it saves the bytes past the journaled
+  length (one RFC 168 run, before any truncate), truncates back, and empties the journal. Landed refs are appends to
+  those containers, so they go back with them. `--recovery-restore` can undo the cancel.
+- **While a journal is present, every repository writer refuses** except the import itself, the cancel and the
+  recovery verbs. The message names *"run the same import again, or `prikk doctor --cancel-import <id>`"*. Nothing may
+  be appended behind an unfinished import, because that would make the cut-back unsafe. This is RFC 163's rule: a
+  write never buries a crash state.
+- **The cost:** writers refuse for the import's duration (held locks fail fast). Today's `bundle import` writes 1.15 GiB in 8.2 s, an upper
   bound, because it buffers. On §5's carry-forward target, a fresh repository, that costs nothing.
 
 ### 9.6 Landing (§5), and the narrowed `--adopt`
