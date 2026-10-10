@@ -277,7 +277,21 @@ fn tag_create_refuses_behind_another_refs_incomplete_publication() {
         &maintainer(),
     );
     drop(session);
-    assert!(result.is_err(), "{result:?}");
+    let err = result.expect_err("tag create must refuse behind heads/broken's own torn lead");
+    // 0.51.0 step 1 Part A (020's grade): `build_incomplete_unrelated_ref`'s crash leaves a torn
+    // ref-log tail for `heads/broken` itself, which also leads its own pointer -- before the fix,
+    // `ensure_may_publish`'s tail guard answered `--repair-tails` for this state before the
+    // publication check ever ran; now the publication check runs first and `create_local_tag`'s own
+    // `.map_err` names the one-step way out directly.
+    let message = err.to_string();
+    assert!(
+        !message.contains("--repair-tails"),
+        "must not answer --repair-tails over heads/broken's own torn lead: {message}"
+    );
+    assert!(
+        message.contains("run `prikk ref complete heads/broken`"),
+        "unexpected refusal text: {message}"
+    );
 
     assert_eq!(
         before,

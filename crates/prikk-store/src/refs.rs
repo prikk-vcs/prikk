@@ -250,7 +250,12 @@ pub fn ensure_no_incomplete_publication_except(
 /// **Why this is not the same question as an incomplete publication**: `publish_locked` writes the
 /// pointer before the log, so a genuine crash mid-publication always leaves a pointer lead, which the
 /// precondition's own agreement check (above) catches regardless of whether the ref log also has a
-/// tail. A tail with **no** pointer lead -- zeros, random bytes, or a torn prefix the crash left behind
+/// tail -- enforced by the order the checks below run in (0.51.0 step 1 Part A, 020's grade): the
+/// agreement check, the object-index lookup, candidate debris and pending active cleanup all run
+/// before this tail is ever turned into a refusal, so a non-excluded ref's own lead is named
+/// `IncompletePublication` (and so `ref complete <ref>`) before the tail guard gets a chance to answer
+/// `--repair-tails` for the very same crash. A tail with **no** pointer lead -- zeros, random bytes,
+/// or a torn prefix the crash left behind
 /// for reasons unrelated to any pending write -- is not an interrupted publication at all (RFC 165 R5
 /// names exactly this shape), and must not block `commit` or any other writer that does not append to
 /// the ref log; `ensure_no_incomplete_publication_except` alone (no tail check) is what those callers
@@ -291,6 +296,7 @@ fn ensure_publication_precondition(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
     let mut newest_log: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
+    let mut pending_tail_refusal: Option<(usize, usize)> = None;
     if let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
         layout.repository_mutation_root(),
         &relative,
@@ -314,35 +320,27 @@ fn ensure_publication_precondition(
             }
             newest_log.insert(record.ref_name_key, update.new_ref_state_id);
         }
+        // 0.51.0 step 1 Part A (020's 0.51.0 grade): the tail guard below must not run until every
+        // check that can name a genuine incomplete publication (the agreement loop, the object-index
+        // lookup, candidate debris, pending active cleanup) has had its say. A tail left by a crash
+        // between a publication's pointer write and its log write is, for a *non-excluded* ref, also
+        // that ref's own lead -- `require_no_unclean_tail` and the agreement loop below would both
+        // refuse, but only the agreement loop's `incomplete_publication_refusal()` is typed
+        // `PrikkError::IncompletePublication`, which `ref complete`'s own callers (`seal`, `tag
+        // create`, `branch create`, `branch close`) match to name the one-step way out. Firing the
+        // tail guard first (the previous order) answered `--repair-tails` for a state `ref complete`
+        // alone already fixes -- two steps where one suffices. Deferred here to a plain local, not
+        // resolved early, so the checks below run unconditionally first; the comment reasoning two
+        // paragraphs above (excluded ref's own retry, or genuinely lead-free by elimination) still
+        // decides whether a tail is even a candidate refusal at all.
         if check_ref_log_tail {
             if let Some(tail) = container::ref_log_container_tail(&bytes, &discovery) {
-                // RFC 165 Addendum 1 §1 fix: a torn tail too short to carry a readable
-                // `ref_name_key` (as little as a handful of bytes -- shorter even than the header's
-                // own `ref_name_key` field) is "unattributable" by header inspection alone, but the
-                // excluded ref's *own* retry still must not be blocked by it. The earlier version of
-                // this check used `tail.attributed_ref_name_key == excluded_key`, which refused a
-                // seal retrying its own first-ever, very-short torn write (nothing to read a name
-                // from) -- `seal_truncates_only_partial_tail_before_completion` caught this. The
-                // right test is not "whose name does the tail's header claim" but "does the excluded
-                // ref itself currently have a pointer lead" (`newest_pointer` vs. `newest_log`
-                // disagree for it): the agreement loop below already refuses for every *other* ref
-                // that leads, before this point is ever reached (publish_locked writes the pointer
-                // before the log, so a genuine crash always produces a lead for its own ref, not just
-                // a tail) -- so if control reaches here, either the excluded ref itself leads (its
-                // own business, DC-38 completes it regardless of whether the physical tail can be
-                // attributed to it by header inspection), or no ref leads at all, in which case
-                // whatever tail is present is lead-free by elimination and Rule D applies.
                 let excluded_ref_leads = match excluded_key {
                     Some(key) => newest_pointer.get(&key) != newest_log.get(&key),
                     None => false,
                 };
                 if !excluded_ref_leads {
-                    crate::foundation::tail_guard::require_no_unclean_tail(
-                        "the ref log",
-                        tail.len,
-                        tail.offset,
-                        "`prikk doctor --repair-tails` truncates it",
-                    )?;
+                    pending_tail_refusal = Some((tail.len, tail.offset));
                 }
             }
         }
@@ -377,6 +375,18 @@ fn ensure_publication_precondition(
     }
     if evidence::has_incomplete_active_cleanup(layout, exclude_ref_name)? {
         return Err(incomplete_publication_refusal());
+    }
+
+    // Every check above that could have named a genuine incomplete publication (and so `ref
+    // complete`) has passed. Only now does a still-pending tail -- lead-free by elimination, or the
+    // excluded ref's own attributable retry -- answer with its own, differently worded refusal.
+    if let Some((len, offset)) = pending_tail_refusal {
+        crate::foundation::tail_guard::require_no_unclean_tail(
+            "the ref log",
+            len,
+            offset,
+            "`prikk doctor --repair-tails` truncates it",
+        )?;
     }
     Ok(())
 }
