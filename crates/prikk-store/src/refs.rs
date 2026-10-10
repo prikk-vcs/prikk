@@ -330,11 +330,15 @@ fn ensure_publication_precondition(
         // create`, `branch create`, `branch close`) match to name the one-step way out. Firing the
         // tail guard first (the previous order) answered `--repair-tails` for a state `ref complete`
         // alone already fixes -- two steps where one suffices. Deferred here to a plain local, not
-        // resolved early, so the checks below run unconditionally first; the comment reasoning two
-        // paragraphs above (excluded ref's own retry, or genuinely lead-free by elimination) still
-        // decides whether a tail is even a candidate refusal at all.
+        // resolved early, so the checks below run unconditionally first; `excluded_ref_leads` below
+        // still decides whether a tail is even a candidate refusal at all.
         if check_ref_log_tail {
             if let Some(tail) = container::ref_log_container_tail(&bytes, &discovery) {
+                // RFC 165 Addendum 1 §1: tests whether the *excluded* ref itself has a pointer lead,
+                // not whether the tail's own header names it -- a torn tail can be too short to carry
+                // a readable `ref_name_key`, and `tail.attributed_ref_name_key == excluded_key` wrongly
+                // refused a seal retrying its own first-ever, very-short torn write
+                // (`seal_truncates_only_partial_tail_before_completion` caught this).
                 let excluded_ref_leads = match excluded_key {
                     Some(key) => newest_pointer.get(&key) != newest_log.get(&key),
                     None => false,
