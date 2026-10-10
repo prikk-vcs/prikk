@@ -264,9 +264,9 @@ pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
 };
 pub use recovery_log::{
-    RecoveryClearView, RecoveryEntryView, RecoveryListing, RecoveryRef, RestoreConditionView,
-    RestorePlanView, RestoreStepView, recovery_clear, recovery_list, recovery_restore,
-    recovery_verify_line,
+    RecoveryClearView, RecoveryEntryKind, RecoveryEntryView, RecoveryListing, RecoveryRef,
+    RestoreConditionView, RestorePlanView, RestoreStepView, recovery_clear, recovery_list,
+    recovery_restore, recovery_verify_line,
 };
 pub use ref_completion::{
     CompletionPlan, CompletionRefusal, complete_ref_publication,

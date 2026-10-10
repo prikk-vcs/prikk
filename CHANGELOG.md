@@ -22,6 +22,15 @@
 - The ambiguous generation-log refusal, and `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS`, now name
   `prikk compact --received-index|--trust-policy --keep-slot a|b --plan-only` first, before the
   whole-`.prikk/` backup.
+- `--keep-slot`'s own final line said "kept slot X live" and, under `--plan-only`, that the other
+  slot "were saved" — both wrong: the chosen slot's own bytes are never touched (its *content*
+  compacts into the other slot, which becomes live), and nothing is saved under `--plan-only`. Now
+  names the target slot correctly and says "would be saved" under `--plan-only`; a real run also
+  names the recovery run's own id, to restore by.
+- `prikk doctor --recovery-list` printed every entry as "cut at N M bytes", including a whole-file
+  replacement (`--keep-slot`'s own save, and the commit witness/`ref-name` rewrite), which read as
+  a truncation even when nothing was removed from the end. A `Replace` entry now prints "replaced,
+  N bytes saved" instead; a `Cut` entry is unchanged.
 
 ## 0.50.0 — 2026-10-09
 

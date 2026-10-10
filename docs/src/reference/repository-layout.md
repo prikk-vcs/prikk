@@ -102,7 +102,7 @@ except by `prikk doctor --recovery-clear`, which removes the saved content for g
 
 The three commands:
 
-- `prikk doctor --recovery-list` prints the saved entries grouped by the repair run that wrote them: a line per run with its id and entry count, then each entry's source, the offset it was cut at, its length in bytes, and its label (`crates/prikk-cli/src/main.rs:1036-1062`). It does not judge whether an entry can be restored.
+- `prikk doctor --recovery-list` prints the saved entries grouped by the repair run that wrote them: a line per run with its id and entry count, then each entry's source and its label. A `Cut` entry (trailing bytes a repair removed) prints the offset it was cut at and its length; a `Replace` entry (the whole file's own previous bytes, before a repair rewrote it in place — `--keep-slot`'s own saves, and the commit witness/`ref-name` rewrite) prints "replaced, N bytes saved" instead (0.51.0 step 1 Part C2, C4: "cut at 0" read as a truncation even when nothing was removed). It does not judge whether an entry can be restored.
 - `prikk doctor --recovery-restore <run id> [--plan-only]` undoes the whole run, in reverse order: it prints its plan first (each step, and its conditions), then writes only when every condition holds. A step that already holds its result is skipped, so an interrupted restore finishes when it is run again. A later run that changed the same files is named, and the restore waits for it.
   It writes only when the source is exactly as long as the recorded offset, its bytes before that offset hash to the recorded hash, and the files that give the
   bytes their meaning are unchanged.

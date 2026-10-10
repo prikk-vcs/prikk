@@ -216,15 +216,29 @@ fn print_keep_slot_report(report: &KeepSlotReport, plan_only: bool) {
             );
         }
     }
-    let verb = if plan_only { "would keep" } else { "kept" };
-    println!(
-        "{name}: {verb} slot {} live, {} record(s); the other slot and the generation log were \
-         saved first",
-        report.chosen_slot.as_str(),
-        report.entries_after
-    );
-    if !report.wrote {
-        println!("{name}: --plan-only, nothing written");
+    // C2 (0.51.0 step 1 Part C review): the chosen slot's own *content* survives, but the chosen
+    // slot itself is never touched -- `target_slot` (`chosen.other()`) is the one that is
+    // overwritten and becomes live. "kept slot X live" said the wrong slot; this names both.
+    if plan_only {
+        println!(
+            "{name}: would compact slot {}'s state into slot {}, which would become live ({} \
+             record(s)); slot {}'s bytes and the generation log would be saved first",
+            report.chosen_slot.as_str(),
+            report.target_slot.as_str(),
+            report.entries_after,
+            report.target_slot.as_str(),
+        );
+    } else {
+        let run_id = report.run_id.as_deref().unwrap_or("<unknown>");
+        println!(
+            "{name}: kept slot {}'s state: compacted into slot {}, which is now live ({} \
+             record(s)); slot {}'s previous bytes and the generation log were saved first (run \
+             {run_id})",
+            report.chosen_slot.as_str(),
+            report.target_slot.as_str(),
+            report.entries_after,
+            report.target_slot.as_str(),
+        );
     }
 }
 

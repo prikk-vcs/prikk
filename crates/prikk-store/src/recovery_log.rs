@@ -234,6 +234,14 @@ pub(crate) struct RunScope {
     owned: bool,
 }
 
+/// 0.51.0 step 1 Part C2 (C2, the review): the open run's own id, hex-encoded the same way
+/// [`RecoveryEntryView::id`] is -- so a caller that just saved something under [`begin_run`] can
+/// name the run id in its own report, rather than making the user find it in `--recovery-list`.
+/// `None` when no run is open (a `--plan-only` preview never calls `begin_run` at all).
+pub(crate) fn current_run_id_hex() -> Option<String> {
+    CURRENT_RUN.with(|current| current.get().map(|run| prikk_hash::to_hex(&run)))
+}
+
 impl Drop for RunScope {
     fn drop(&mut self) {
         if self.owned {
@@ -1100,6 +1108,21 @@ pub struct RecoveryEntryView {
     pub label: String,
     /// The prikk version that wrote the entry.
     pub binary_version: String,
+    /// 0.51.0 step 1 Part C2 (C4, the review): `Cut` removed trailing bytes at `offset`; `Replace`
+    /// rewrote the whole file in place (`offset` is always 0 for this kind) -- printing both the
+    /// same way as "cut at 0" read as a truncation even for a `--keep-slot` save, which replaces a
+    /// whole file, not a tail.
+    pub kind: RecoveryEntryKind,
+}
+
+/// A public mirror of [`Kind`] for [`RecoveryEntryView`] (which is `pub`, unlike `Kind` itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecoveryEntryKind {
+    /// Trailing bytes a repair removed from the end of the file.
+    Cut,
+    /// The whole file's own previous bytes, before a repair rewrote it in place.
+    Replace,
 }
 
 /// What `--recovery-list` prints: the sound entries, the damaged regions, and the older files listed by hand.
@@ -1236,6 +1259,10 @@ pub fn recovery_list(layout: &RepositoryLayout) -> Result<RecoveryListing> {
                 len: listed.entry.removed.len() as u64,
                 label: listed.entry.label,
                 binary_version: listed.entry.binary_version,
+                kind: match listed.entry.kind {
+                    Kind::Cut => RecoveryEntryKind::Cut,
+                    Kind::Replace => RecoveryEntryKind::Replace,
+                },
             })
             .collect(),
         damaged_regions: listing.damaged_regions,

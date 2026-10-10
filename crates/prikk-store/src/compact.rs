@@ -681,10 +681,18 @@ pub struct KeepSlotReport {
     /// Which slot content deduces, when it does -- `None` reads as "ambiguous: prikk will not
     /// choose."
     pub deduced_slot: Option<ContainerSlot>,
+    /// The slot the chosen one's state is compacted *into*, and which becomes (or would become)
+    /// live -- `chosen_slot.other()`. C2 (0.51.0 step 1 Part C review): the chosen slot's own
+    /// *content* is what survives, but the chosen slot itself is never touched; this is the slot
+    /// whose bytes actually change, and whose name the generation log now (or would now) carry.
+    pub target_slot: ContainerSlot,
     /// How many entries the chosen slot's own fold would write (or did write, for a real run).
     pub entries_after: usize,
     /// `true` for a real run that wrote; `false` for a `--plan-only` preview.
     pub wrote: bool,
+    /// The recovery run's own 16-hex-character id, for a real write (`doctor --recovery-restore
+    /// <id>` undoes it) -- `None` for a `--plan-only` preview, which writes nothing to restore.
+    pub run_id: Option<String>,
 }
 
 /// One slot's own entry count and folded-state summary (the handoff's own "for each slot, its
@@ -828,9 +836,10 @@ fn run_trust_policy_keep_slot(
     };
     let compacted = reduce_trust_policy_entries(chosen_entries);
     let entries_after = compacted.len();
+    let target_slot = chosen.other();
+    let mut run_id = None;
 
     if mode == CompactionMode::Execute {
-        let target_slot = chosen.other();
         let target_relative =
             layout.repository_relative(&layout.trust_policy_container_slot_path(target_slot))?;
         let generation_log_relative = layout.repository_relative(&generation_log_path)?;
@@ -839,6 +848,9 @@ fn run_trust_policy_keep_slot(
             Some(entry) => encode_trust_policy_record(entry)?,
             None => Vec::new(),
         };
+        // The same save-before-write ordering Q2b's own ruling fixed for an ordinary deduced-state
+        // compaction (see `run_trust_policy_compaction` above) -- `--keep-slot` always reaches this
+        // in the lost-log state, so it always saves, unconditionally (never behind `deduced.then`).
         // The same save-before-write ordering Q2b's own ruling fixed for an ordinary deduced-state
         // compaction (see `run_trust_policy_compaction` above) -- `--keep-slot` always reaches this
         // in the lost-log state, so it always saves, unconditionally (never behind `deduced.then`).
@@ -877,6 +889,7 @@ fn run_trust_policy_keep_slot(
                 live_slot: target_slot,
             },
         )?;
+        run_id = crate::recovery_log::current_run_id_hex();
     }
 
     Ok(KeepSlotReport {
@@ -889,8 +902,10 @@ fn run_trust_policy_keep_slot(
         only_in_a,
         only_in_b,
         deduced_slot,
+        target_slot,
         entries_after,
         wrote: mode == CompactionMode::Execute,
+        run_id,
     })
 }
 
@@ -957,9 +972,10 @@ fn run_received_index_keep_slot(
     } = keep_slot_precondition(state, chosen, "--received-index", summarize_received_index)?;
     let compacted = reduce_received_index_entries(chosen_entries);
     let entries_after = compacted.len();
+    let target_slot = chosen.other();
+    let mut run_id = None;
 
     if mode == CompactionMode::Execute {
-        let target_slot = chosen.other();
         let target_relative =
             layout.repository_relative(&layout.received_index_slot_path(target_slot))?;
         let generation_log_relative = layout.repository_relative(&generation_log_path)?;
@@ -1001,6 +1017,7 @@ fn run_received_index_keep_slot(
                 live_slot: target_slot,
             },
         )?;
+        run_id = crate::recovery_log::current_run_id_hex();
     }
 
     Ok(KeepSlotReport {
@@ -1013,8 +1030,10 @@ fn run_received_index_keep_slot(
         only_in_a: Vec::new(),
         only_in_b: Vec::new(),
         deduced_slot,
+        target_slot,
         entries_after,
         wrote: mode == CompactionMode::Execute,
+        run_id,
     })
 }
 

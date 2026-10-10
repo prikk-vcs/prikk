@@ -1068,10 +1068,26 @@ fn run_recovery_command(
                     if members.len() == 1 { "y" } else { "ies" }
                 );
                 for entry in members {
-                    println!(
-                        "  {}  cut at {}  {} bytes  ({}, prikk {})",
-                        entry.source, entry.offset, entry.len, entry.label, entry.binary_version
-                    );
+                    // C4 (0.51.0 step 1 Part C review): `Replace` rewrote the whole file in place --
+                    // "cut at 0" read as a truncation even when nothing was removed from the end.
+                    match entry.kind {
+                        prikk_store::RecoveryEntryKind::Cut => println!(
+                            "  {}  cut at {}  {} bytes  ({}, prikk {})",
+                            entry.source,
+                            entry.offset,
+                            entry.len,
+                            entry.label,
+                            entry.binary_version
+                        ),
+                        prikk_store::RecoveryEntryKind::Replace => println!(
+                            "  {}  replaced, {} bytes saved  ({}, prikk {})",
+                            entry.source, entry.len, entry.label, entry.binary_version
+                        ),
+                        _ => println!(
+                            "  {}  {} bytes  ({}, prikk {})",
+                            entry.source, entry.len, entry.label, entry.binary_version
+                        ),
+                    }
                 }
             }
             if listing.newer_versions > 0 {

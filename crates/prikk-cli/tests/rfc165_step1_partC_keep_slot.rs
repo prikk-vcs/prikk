@@ -125,6 +125,17 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
     assert!(plan.status.success(), "{:?}", plan);
     let plan_text = String::from_utf8_lossy(&plan.stdout);
     assert!(plan_text.contains('k'), "{plan_text}");
+    // C1/C2 (0.51.0 step 1 Part C2 review): the plan names the *target* slot (b, chosen.other())
+    // as the one that would become live, and says the save "would" happen, not that it did.
+    assert!(
+        plan_text.contains("would compact slot a's state into slot b, which would become live"),
+        "{plan_text}"
+    );
+    assert!(
+        plan_text.contains("would be saved first"),
+        "a plan must not claim the save already happened: {plan_text}"
+    );
+    assert!(!plan_text.contains("were saved first"), "{plan_text}");
     let before = store_bytes(&repo);
 
     let real = compact(&repo, &["--trust-policy", "--keep-slot", "a"]);
@@ -133,6 +144,19 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
         before,
         store_bytes(&repo),
         "a real run must write something"
+    );
+    let real_text = String::from_utf8_lossy(&real.stdout);
+    assert!(
+        real_text.contains("kept slot a's state: compacted into slot b, which is now live"),
+        "{real_text}"
+    );
+    assert!(
+        real_text.contains("were saved first (run "),
+        "the run id must be named so it can be restored: {real_text}"
+    );
+    assert!(
+        !real_text.contains("kept slot a live"),
+        "the chosen slot itself is never touched -- b is the one that becomes live: {real_text}"
     );
 
     let check = prikk(&repo)
@@ -156,6 +180,13 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
         recovery_text.contains("keep-slot"),
         "the run must be listed: {recovery_text}"
     );
+    // C4 (0.51.0 step 1 Part C2 review): a `--keep-slot` save replaces a whole file in place; it
+    // must print "replaced, N bytes saved", never "cut at 0" (which reads as a truncation).
+    assert!(
+        recovery_text.contains("replaced,") && recovery_text.contains("bytes saved"),
+        "{recovery_text}"
+    );
+    assert!(!recovery_text.contains("cut at"), "{recovery_text}");
 
     let _ = std::fs::remove_dir_all(&repo);
 }
