@@ -2064,7 +2064,10 @@ fn keep_slot_k1_refuses_when_the_log_already_names_a_live_slot() -> Result<()> {
         "{err:?}"
     );
     assert!(err.to_string().contains("only for a lost log"), "{err}");
-    assert!(err.to_string().contains("prikk compact --trust-policy"), "{err}");
+    assert!(
+        err.to_string().contains("prikk compact --trust-policy"),
+        "{err}"
+    );
     assert_eq!(
         std::fs::read(layout.trust_policy_container_slot_path(ContainerSlot::A))
             .unwrap_or_default(),
@@ -2090,7 +2093,10 @@ fn keep_slot_k11_refuses_when_never_compacted() -> Result<()> {
         matches!(err, prikk_error::PrikkError::Precondition(_)),
         "{err:?}"
     );
-    assert_eq!(err.to_string(), "precondition not met: slot a is live; there is nothing to choose");
+    assert_eq!(
+        err.to_string(),
+        "precondition not met: slot a is live; there is nothing to choose"
+    );
     assert!(crate::recovery_list(&layout)?.entries.is_empty());
 
     let _ = std::fs::remove_dir_all(root);
@@ -2105,7 +2111,10 @@ fn keep_slot_k2_the_ambiguous_twin_keep_a() -> Result<()> {
 
     let plan = plan_compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
     assert!(!plan.wrote);
-    assert_eq!(plan.deduced_slot, None, "genuinely ambiguous: prikk must not choose");
+    assert_eq!(
+        plan.deduced_slot, None,
+        "genuinely ambiguous: prikk must not choose"
+    );
     assert_eq!(plan.slot_a_summary, vec!["k".to_string()]);
     assert_eq!(plan.slot_b_summary, vec!["k".to_string(), "l".to_string()]);
     assert_eq!(plan.only_in_b, vec!["l".to_string()]);
@@ -2127,7 +2136,11 @@ fn keep_slot_k2_the_ambiguous_twin_keep_a() -> Result<()> {
     );
     let run_id = listing.entries[0].id.clone();
     let before_restore = crate::recovery_restore(&layout, &run_id, true)?; // plan-only probe
-    assert!(before_restore.refusal.is_none(), "{:?}", before_restore.refusal);
+    assert!(
+        before_restore.refusal.is_none(),
+        "{:?}",
+        before_restore.refusal
+    );
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())
@@ -2234,7 +2247,10 @@ fn keep_slot_k7_the_other_slot_is_damaged_chosen_is_sound_allowed() -> Result<()
 
     let report = compact_trust_policy_keep_slot(&layout, ContainerSlot::A)?;
     assert!(report.wrote);
-    assert_eq!(report.slot_b_summary, vec!["(damaged; cannot be read)".to_string()]);
+    assert_eq!(
+        report.slot_b_summary,
+        vec!["(damaged; cannot be read)".to_string()]
+    );
 
     let listing = crate::recovery_list(&layout)?;
     let run_id = listing
@@ -2242,7 +2258,9 @@ fn keep_slot_k7_the_other_slot_is_damaged_chosen_is_sound_allowed() -> Result<()
         .iter()
         .find(|entry| entry.label == "trust policy --keep-slot over a lost generation log")
         .map(|entry| entry.id.clone())
-        .unwrap_or_else(|| panic!("the damaged bytes must still be saved byte for byte: {listing:?}"));
+        .unwrap_or_else(|| {
+            panic!("the damaged bytes must still be saved byte for byte: {listing:?}")
+        });
     let restored = crate::recovery_restore(&layout, &run_id, false)?;
     assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
     assert!(restored.written);
@@ -2310,7 +2328,9 @@ fn keep_slot_k12_a_crash_at_the_truncate_still_restores() -> Result<()> {
         .find(|entry| entry.label == "trust policy --keep-slot over a lost generation log")
         .map(|entry| entry.id.clone())
         .unwrap_or_else(|| {
-            panic!("the save must already be durable when the crash lands at the truncate: {listing:?}")
+            panic!(
+                "the save must already be durable when the crash lands at the truncate: {listing:?}"
+            )
         });
     let restored = crate::recovery_restore(&layout, &run_id, false)?;
     assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
@@ -2342,7 +2362,11 @@ fn keep_slot_k13_a_write_after_keep_slot_then_a_restore_of_its_run_refuses() -> 
     // same two-step shape `compaction_over_a_deduced_live_slot_saves_what_it_overwrites` uses for
     // an ordinary deduced compaction above in this file.
     let first_restore = crate::recovery_restore(&layout, &run_id, false)?;
-    assert!(first_restore.refusal.is_none(), "{:?}", first_restore.refusal);
+    assert!(
+        first_restore.refusal.is_none(),
+        "{:?}",
+        first_restore.refusal
+    );
     assert!(first_restore.written);
 
     // A later write must make the run unrestorable a second time -- the same hash-mismatch

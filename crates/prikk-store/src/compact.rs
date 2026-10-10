@@ -687,6 +687,22 @@ pub struct KeepSlotReport {
     pub wrote: bool,
 }
 
+/// One slot's own entry count and folded-state summary (the handoff's own "for each slot, its
+/// entry count and its folded state").
+struct SlotSummary {
+    entry_count: usize,
+    summary: Vec<String>,
+}
+
+/// [`keep_slot_precondition`]'s own successful outcome, named rather than a four-tuple (clippy's
+/// own type-complexity lint, and a reader does not have to count positions).
+struct KeepSlotPreconditionOutcome<T> {
+    slot_a: SlotSummary,
+    slot_b: SlotSummary,
+    deduced_slot: Option<ContainerSlot>,
+    chosen_entries: Vec<T>,
+}
+
 /// 0.51.0 step 1 Part C: shared precondition decoding for `--keep-slot`, used by both eligible
 /// containers -- turns [`generation::KeepSlotState`] into the report's own per-slot fields, or one
 /// of the ruling's typed refusals (K1, K6, K8, K11), before either container's own `run_*_keep_slot`
@@ -696,12 +712,7 @@ fn keep_slot_precondition<T: PartialEq + Clone>(
     chosen: ContainerSlot,
     plain_compact_flag: &str,
     summarize: impl Fn(&[T]) -> (usize, Vec<String>),
-) -> Result<(
-    (usize, Vec<String>),
-    (usize, Vec<String>),
-    Option<ContainerSlot>,
-    Vec<T>,
-)> {
+) -> Result<KeepSlotPreconditionOutcome<T>> {
     let (slot_a, slot_b, deduced) = match state {
         generation::KeepSlotState::LiveSlotRecorded(slot) => {
             return Err(PrikkError::Precondition(format!(
@@ -748,12 +759,18 @@ fn keep_slot_precondition<T: PartialEq + Clone>(
             chosen.as_str()
         )));
     }
-    Ok((
-        slot_a_summary,
-        slot_b_summary,
+    Ok(KeepSlotPreconditionOutcome {
+        slot_a: SlotSummary {
+            entry_count: slot_a_summary.0,
+            summary: slot_a_summary.1,
+        },
+        slot_b: SlotSummary {
+            entry_count: slot_b_summary.0,
+            summary: slot_b_summary.1,
+        },
         deduced_slot,
-        chosen_entries.clone(),
-    ))
+        chosen_entries: chosen_entries.clone(),
+    })
 }
 
 fn run_trust_policy_keep_slot(
@@ -786,12 +803,20 @@ fn run_trust_policy_keep_slot(
         ids.sort();
         (raw_count, ids)
     };
-    let (
-        (slot_a_entry_count, slot_a_summary),
-        (slot_b_entry_count, slot_b_summary),
+    let KeepSlotPreconditionOutcome {
+        slot_a:
+            SlotSummary {
+                entry_count: slot_a_entry_count,
+                summary: slot_a_summary,
+            },
+        slot_b:
+            SlotSummary {
+                entry_count: slot_b_entry_count,
+                summary: slot_b_summary,
+            },
         deduced_slot,
         chosen_entries,
-    ) = keep_slot_precondition(state, chosen, "--trust-policy", summarize_trust_policy)?;
+    } = keep_slot_precondition(state, chosen, "--trust-policy", summarize_trust_policy)?;
     let (only_in_a, only_in_b) = {
         use std::collections::BTreeSet;
         let a_set: BTreeSet<&String> = slot_a_summary.iter().collect();
@@ -905,22 +930,31 @@ fn run_received_index_keep_slot(
         &decode_received_index_entries_for_resolver,
         &fold_one_received_index_entry,
     )?;
-    let summarize_received_index = |entries: &[crate::received::received_index::ReceivedIndexEntry]| {
-        let raw_count = entries.len();
-        let folded = reduce_received_index_entries(entries.to_vec());
-        let mut lines: Vec<String> = folded
-            .iter()
-            .map(|entry| format!("{}: {}", entry.ref_name, entry.ref_state_id))
-            .collect();
-        lines.sort();
-        (raw_count, lines)
-    };
-    let (
-        (slot_a_entry_count, slot_a_summary),
-        (slot_b_entry_count, slot_b_summary),
+    let summarize_received_index =
+        |entries: &[crate::received::received_index::ReceivedIndexEntry]| {
+            let raw_count = entries.len();
+            let folded = reduce_received_index_entries(entries.to_vec());
+            let mut lines: Vec<String> = folded
+                .iter()
+                .map(|entry| format!("{}: {}", entry.ref_name, entry.ref_state_id))
+                .collect();
+            lines.sort();
+            (raw_count, lines)
+        };
+    let KeepSlotPreconditionOutcome {
+        slot_a:
+            SlotSummary {
+                entry_count: slot_a_entry_count,
+                summary: slot_a_summary,
+            },
+        slot_b:
+            SlotSummary {
+                entry_count: slot_b_entry_count,
+                summary: slot_b_summary,
+            },
         deduced_slot,
         chosen_entries,
-    ) = keep_slot_precondition(state, chosen, "--received-index", summarize_received_index)?;
+    } = keep_slot_precondition(state, chosen, "--received-index", summarize_received_index)?;
     let compacted = reduce_received_index_entries(chosen_entries);
     let entries_after = compacted.len();
 

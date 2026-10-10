@@ -32,10 +32,7 @@ fn keep_slot_k9_refuses_with_pointer_index() {
         text.contains("--rebuild-pointer-index"),
         "must name the rebuild: {text}"
     );
-    assert!(
-        text.contains("the ref log decides"),
-        "must say why: {text}"
-    );
+    assert!(text.contains("the ref log decides"), "must say why: {text}");
 
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -68,12 +65,7 @@ fn keep_slot_k10_refuses_with_more_than_one_explicit_target() {
 
     let output = compact(
         &repo,
-        &[
-            "--trust-policy",
-            "--received-index",
-            "--keep-slot",
-            "a",
-        ],
+        &["--trust-policy", "--received-index", "--keep-slot", "a"],
     );
     assert!(!output.status.success());
     let text = String::from_utf8_lossy(&output.stderr);
@@ -107,14 +99,8 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
 
     let k_key = maintainer_public_key_hex_for_seed(&[91_u8; 32]);
     let l_key = maintainer_public_key_hex_for_seed(&[92_u8; 32]);
-    ok(
-        &trust_add(&repo, "k", &k_key),
-        "trust maintainer add k",
-    );
-    ok(
-        &trust_add(&repo, "l", &l_key),
-        "trust maintainer add l",
-    );
+    ok(&trust_add(&repo, "k", &k_key), "trust maintainer add k");
+    ok(&trust_add(&repo, "l", &l_key), "trust maintainer add l");
     ok(
         &trust_remove(&repo, "l"),
         "trust maintainer remove l (revoked)",
@@ -132,7 +118,10 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
     // Lose the record the same way every other fixture in this suite does.
     std::fs::write(repo.join(".prikk/trust/policy-generation.log"), b"").unwrap();
 
-    let plan = compact(&repo, &["--trust-policy", "--keep-slot", "a", "--plan-only"]);
+    let plan = compact(
+        &repo,
+        &["--trust-policy", "--keep-slot", "a", "--plan-only"],
+    );
     assert!(plan.status.success(), "{:?}", plan);
     let plan_text = String::from_utf8_lossy(&plan.stdout);
     assert!(plan_text.contains('k'), "{plan_text}");
@@ -140,7 +129,11 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
 
     let real = compact(&repo, &["--trust-policy", "--keep-slot", "a"]);
     ok(&real, "compact --trust-policy --keep-slot a");
-    assert_ne!(before, store_bytes(&repo), "a real run must write something");
+    assert_ne!(
+        before,
+        store_bytes(&repo),
+        "a real run must write something"
+    );
 
     let check = prikk(&repo)
         .args(["trust", "maintainer", "check", "--key-id", "l"])

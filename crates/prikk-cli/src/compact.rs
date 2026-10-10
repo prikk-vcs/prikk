@@ -105,7 +105,9 @@ pub(crate) fn run_compact(root: PathBuf, args: Vec<String>) -> std::result::Resu
                     .to_string(),
             ));
         }
-        let target = targets[0];
+        let Some(&target) = targets.first() else {
+            unreachable!("targets.len() == 1 was just checked above");
+        };
         if target == Target::PointerIndex {
             return Err(CliError::Usage(
                 "compact --keep-slot does not apply to --pointer-index; run `prikk doctor \
@@ -114,8 +116,8 @@ pub(crate) fn run_compact(root: PathBuf, args: Vec<String>) -> std::result::Resu
                     .to_string(),
             ));
         }
-        let report = run_one_keep_slot(&layout, target, slot, plan_only)
-            .map_err(|err| err.to_string())?;
+        let report =
+            run_one_keep_slot(&layout, target, slot, plan_only).map_err(|err| err.to_string())?;
         print_keep_slot_report(&report, plan_only);
         return Ok(());
     }
@@ -202,10 +204,7 @@ fn print_keep_slot_report(report: &KeepSlotReport, plan_only: bool) {
         );
     }
     match report.deduced_slot {
-        Some(slot) => println!(
-            "{name}: prikk deduced slot {}",
-            slot.as_str()
-        ),
+        Some(slot) => println!("{name}: prikk deduced slot {}", slot.as_str()),
         None => println!("{name}: ambiguous: prikk will not choose"),
     }
     if let Some(deduced) = report.deduced_slot {
@@ -217,11 +216,7 @@ fn print_keep_slot_report(report: &KeepSlotReport, plan_only: bool) {
             );
         }
     }
-    let verb = if plan_only {
-        "would keep"
-    } else {
-        "kept"
-    };
+    let verb = if plan_only { "would keep" } else { "kept" };
     println!(
         "{name}: {verb} slot {} live, {} record(s); the other slot and the generation log were \
          saved first",
