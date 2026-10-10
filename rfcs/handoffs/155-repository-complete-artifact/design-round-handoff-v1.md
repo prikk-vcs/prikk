@@ -100,3 +100,20 @@ owner reads and accepts before any implementation.
 
 - **Per part:** the facts with code references, the prototype's measurements (the build profile named), the case
   tables, and the options laid out without a choice where this handoff says *"choose none"*.
+
+**Part D1 ACCEPTED 2026-10-10** (review `rfc155-design-round-D1-review-v1`). **D2 gains six items,** detailed in that
+review:
+1. Author keys follow DC-78's recording, with conflicts refused; they are not inert. Only maintainer material is
+   inert. State it from source.
+2. Unsealed work in an active session: the facts, then options (refuse and name `seal`; warn; carry inert), with
+   consequences. Choose none.
+3. Export refuses in a state it cannot resolve (an ambiguous lost log, a damaged slot, a torn tail).
+4. Locks fail fast:
+   - (a) measure export on at least 1 GiB of blobs;
+   - (b) a killed export's lock files;
+   - (c) the option to lock briefly, copy the slotted containers, record object-container lengths, release, then
+     stream. Its case table, and choose none.
+5. Verify's staging: its location, disk cost, and cleanup on a kill.
+6. The prototype exports a repository whose live slot is `b`.
+
+**D2's budget grows to 120 minutes** (stop at 2×).
