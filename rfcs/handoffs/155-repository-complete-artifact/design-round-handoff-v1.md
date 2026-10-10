@@ -119,3 +119,14 @@ review:
 **Not a bigger D2 (one sitting is 60–90 minutes): a third part, D3.** D2 stays as written (90 min,
 `rfc155-design-round-D2-report.md`). **D3** takes items 1–6 above (90 min, `rfc155-design-round-D3-report.md`), after D2.
 The design goes to the owner after D3.
+
+**Part D2 ACCEPTED 2026-10-10** as design input (review `rfc155-design-round-D2-review-v1`).
+- **Ruled:** the carried maintainer record is listed from the artifact, never stored in the repository and never given
+  a new verb. The operator adopts with `trust maintainer add`.
+- **A fourth part, D4 (60 min, `rfc155-design-round-D4-report.md`), after D3:**
+  - **7.** The intent journal comes before the first object write, so `doctor` names every interrupted stage.
+  - **8.** "Untouched", strict (hold the object lock; record container lengths; a cancel cuts back with a recovery
+    save) or relaxed (unreferenced objects remain and are named). A case table for each; choose none.
+  - **10.** The command surface, without overloading `prikk verify [path]`. Two or three namings; choose none.
+
+**Next: D3, then D4.**
