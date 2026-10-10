@@ -116,4 +116,6 @@ review:
 5. Verify's staging: its location, disk cost, and cleanup on a kill.
 6. The prototype exports a repository whose live slot is `b`.
 
-**D2's budget grows to 120 minutes** (stop at 2×).
+**Not a bigger D2 (one sitting is 60–90 minutes): a third part, D3.** D2 stays as written (90 min,
+`rfc155-design-round-D2-report.md`). **D3** takes items 1–6 above (90 min, `rfc155-design-round-D3-report.md`), after D2.
+The design goes to the owner after D3.
