@@ -166,3 +166,5 @@ then a resume from each; a cancel from each; a full disk.
 | **V2: the manifest, the fuzz property, the note** | **V1:** a checksum over every manifest byte, found from the trailer and checked before use; refuse an unknown `repository_format`, naming it; update `archive-format.md`. **V2:** find from source why 20,000 fuzz cases never caught a manifest flip that passes as consistent; show the property red on it before the fix and green after. **V3:** the *"internally consistent"* note (text and JSON) only when consistent. Controls: drop the manifest check; accept any format. Docs, CHANGELOG, 14 gates | 45 min | `rfc155-impl-V2-report.md` |
 
 **Next: V2, then Import A.**
+
+**V2 ACCEPTED, Part V CLOSED 2026-10-11** (`458c6c5f`; review `rfc155-impl-V2-review-v1`). **Next: Import A.**
