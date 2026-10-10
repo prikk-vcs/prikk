@@ -142,8 +142,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.51.0 step 1 Part B: item 4's `RetiredSlotTailNote` type and `retired_slot_tail` helper,
         // `check_generation_log_deductions` switched from `resolve_live_slot_with_deduction_note` to
         // `resolve_or_deduce` directly (needing the live slot too), and item 5's two `Ambiguous
-        // GenerationLog` deferral arms in `check_appended_file_tails`, 2,631 -> 2,766.
-        detail.contains("2766"),
+        // GenerationLog` deferral arms in `check_appended_file_tails`, 2,631 -> 2,766, then a
+        // `cargo fmt` pass, 2,766 -> 2,778.
+        detail.contains("2778"),
         "the line count is in the message: {detail}"
     );
     assert!(
