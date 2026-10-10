@@ -1115,7 +1115,7 @@ pub struct RecoveryEntryView {
     pub kind: RecoveryEntryKind,
 }
 
-/// A public mirror of [`Kind`] for [`RecoveryEntryView`] (which is `pub`, unlike `Kind` itself).
+/// A public mirror of `Kind` for [`RecoveryEntryView`] (which is `pub`, unlike `Kind` itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecoveryEntryKind {
