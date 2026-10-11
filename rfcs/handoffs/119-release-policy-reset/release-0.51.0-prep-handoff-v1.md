@@ -54,3 +54,11 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 **Next: P2b, then P3.**
 
 **P2b ACCEPTED, and P2 CLOSED, 2026-10-11** (`38177fe7`; review `release-0.51.0-prep-P2b-review-v1`). Import RSS is bounded at about 5x the largest object, and flat when the archive doubles. The ratio move is measurement conditions: the architect's same-day A/B gives 0.50.0's code 1.911x mean and HEAD 1.874x. Windows CI time is runner variance (the same binary swung 1,574 to 1,101 s before any journal code). **Next: P3.**
+
+**P3 approved in part 2026-10-11** (`328dbc3d`, `e6ec2560`; review `release-0.51.0-prep-P3-review-v1`). The release commit, the gates and the matrix v6 are accepted.
+
+| part | items | budget | report |
+|---|---|---:|---|
+| **P3b: the notes include step 1** | Step 1's Parts A and B are unreleased (`git tag --contains 01e30337` is empty) but missing from 0.51.0's notes. Add one `### Fixed` entry, and six Output-changes lines with before and after: `ref complete` named in one step; the WAL trailing count for acknowledged damage; `VERIFY-OK` absent beside errors; `precondition not met:` in place of `integrity error:`; the retired-slot torn-tail warning; no interior-damage line beside the ambiguity issue. One commit on top of `e6ec2560`; 14 gates | 30 min | `release-0.51.0-prep-P3b-report.md` |
+
+**Next: P3b.**
