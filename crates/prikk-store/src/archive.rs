@@ -70,6 +70,7 @@ const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 /// One of the fixed, allow-listed section kinds `PREPO001` ever carries. Never derived from a
 /// carried path -- the importer and verifier (later parts) switch on this directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ArchiveSectionKind {
     /// One object-type container (`Patch`, `Block`, `RefState`, `Tag`, `Attestation`, `Blob`,
     /// `RecognitionClaim`), live slot's bytes, verbatim.
@@ -173,6 +174,7 @@ struct ManifestEntry {
 /// list`/their own expectation -- objects by type, and refs by namespace -- not an internal framing
 /// detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ArchiveExportReport {
     /// The on-disk repository format (`layout::RepositoryFormat`) that produced this archive.
     pub repository_format: u32,

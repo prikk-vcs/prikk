@@ -78,6 +78,7 @@ const SECTION_HEADER_LEN: usize = 18;
 /// One maintainer key this archive carries -- listed, never adopted (§9.1/§9.4/§9.8): *"carried, not
 /// adopted"*.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CarriedMaintainerKeySummary {
     /// The adopted maintainer key id, as carried.
     pub key_id: String,
@@ -88,6 +89,7 @@ pub struct CarriedMaintainerKeySummary {
 /// Summary of an archive verify (§9.4). Never claims trust: see [`Self::note`] and
 /// [`Self::is_internally_consistent`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ArchiveVerifyReport {
     /// The on-disk repository format the archive's own manifest declares.
     pub repository_format: u32,

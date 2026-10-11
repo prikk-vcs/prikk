@@ -179,6 +179,7 @@ impl JournaledContainerKind {
 /// the same way. §9.6: "the archive's received pointers stay received under their own names; its
 /// local refs land under `remotes/<ref>`, or locally with `--adopt`."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LandingOrigin {
     /// From the archive's own resolved ref-pointer-index (its own local branches/tags). Lands
     /// under `remotes/<ref_name>` by default, or as a real local ref under `--adopt`.
@@ -214,6 +215,7 @@ impl LandingOrigin {
 /// journal so a resumed stage 3 has a plan to act on without re-deriving it from the archive a
 /// second time.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlannedRefLanding {
     /// Which resolved family this came from, and therefore how it is landed.
     pub origin: LandingOrigin,
@@ -256,6 +258,7 @@ pub struct ArchiveImportOptions {
 
 /// How one planned landing actually resolved at stage 3.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LandingOutcome {
     /// The ref name as planned (see [`PlannedRefLanding::ref_name`]).
     pub ref_name: String,
@@ -275,6 +278,7 @@ pub struct LandingOutcome {
 
 /// Summary of an RFC 155 `archive import` run: stages 0-3, the journal, and the commit point.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ArchiveImportReport {
     /// Whether this run started a fresh journal (`false`) or resumed one an earlier, interrupted
     /// run left behind (`true`).
@@ -1341,6 +1345,7 @@ pub fn cancel_import(
 
 /// One container's own cancel outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CancelImportStep {
     /// The container's own stable label (matches `ArchiveImportReport`'s own labeling, and the
     /// journal's own).
@@ -1355,6 +1360,7 @@ pub struct CancelImportStep {
 
 /// `prikk doctor --cancel-import`'s own report.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CancelImportReport {
     /// The import's own id, as confirmed against the journal.
     pub id: String,

@@ -658,6 +658,7 @@ pub fn plan_compact_trust_policy(layout: &RepositoryLayout) -> Result<Compaction
 /// and the trust policy); the ref pointer index has no `--keep-slot` at all (K9: the ref log decides,
 /// refused at the CLI's own argument-parsing layer, never reaching this module).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct KeepSlotReport {
     /// Which container this run (or preview) targets.
     pub container: LockableContainer,

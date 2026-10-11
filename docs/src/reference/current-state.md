@@ -231,6 +231,10 @@ planned for.
   284 MiB. Streaming and chunking (large objects, Stages B–D) are not yet built.
 - **The object index's own lookup is a linear scan**, and the whole index is held resident in memory for
   the duration of a write session. Not yet fixed.
+- **`bundle import` peaks at about 4.6 times the bundle's size in memory** (5.26 GiB for a 1.15 GiB
+  bundle), from whole-file and whole-object buffering. Found during RFC 155's design round, outside
+  that RFC's own scope; a candidate for a later release. `prikk archive import` does not share this
+  defect — it never holds a whole object type's own batch, let alone the whole archive, in memory.
 
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes
