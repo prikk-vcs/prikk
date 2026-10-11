@@ -462,3 +462,93 @@ fn verify_detects_a_genuinely_dangling_reference() {
         report.damaged
     );
 }
+
+/// External review 023: a tail inside a section (bytes the section's own declared length counts,
+/// but that the record loop never decoded or abandoned as torn) must be damage -- an honest export
+/// never produces this (every section ends exactly at its own sound length), so *any* tail is a
+/// hostile or corrupted archive, even when the section's own trailing checksum still matches
+/// (because that checksum was computed over exactly these bytes). Built from a real export, then
+/// surgically shrunk: the block section's one real record's own declared body length is reduced by
+/// 16 bytes (its real trailing 16 bytes become the tail, left completely unmodified -- no new bytes
+/// are ever appended), and the section's own trailing checksum is recomputed over the result, so
+/// the checksum genuinely matches what is now on disk.
+#[test]
+fn verify_names_a_tail_inside_a_section_as_damage_even_when_its_checksum_matches() {
+    let mut bytes = build_one_block_archive();
+    let (_, _, entries) = decode_manifest_for_test(&bytes);
+    let block_entry = entries
+        .iter()
+        .find(|(kind, ..)| {
+            *kind
+                == crate::archive::ArchiveSectionKind::ObjectContainer(
+                    prikk_object::ObjectType::Block,
+                )
+                .wire_code()
+        })
+        .expect("block section present");
+    let (_, offset, length, _) = *block_entry;
+    let offset = offset as usize;
+    let length = length as usize;
+
+    const SECTION_HEADER_LEN: usize = 18;
+    const CONTAINER_HEADER_LEN: usize = 8 + 2 + 8 + 32;
+    const TAIL_LEN: usize = 16;
+
+    let record_header_start = offset + SECTION_HEADER_LEN;
+    // magic(8) | version(2) | body_len(8) | checksum(32) -- `body_len` starts after magic+version.
+    let declared_len_field = record_header_start + 10..record_header_start + 18;
+    let real_body_len = u64::from_be_bytes(
+        bytes[declared_len_field.clone()]
+            .try_into()
+            .expect("8 bytes"),
+    ) as usize;
+    assert_eq!(
+        length,
+        CONTAINER_HEADER_LEN + real_body_len,
+        "this fixture's block section must hold exactly one record, filling it, or this test's \
+         own arithmetic does not isolate a tail cleanly"
+    );
+    assert!(
+        real_body_len > TAIL_LEN,
+        "the sealed block's own body must have real content to shrink"
+    );
+
+    // Shrink the one real record's own declared body length -- its real trailing `TAIL_LEN` bytes
+    // are left completely untouched on disk, but no longer claimed by any record: exactly the
+    // "tail inside a section" shape, built from a real export, not hand-crafted from scratch.
+    let new_body_len = (real_body_len - TAIL_LEN) as u64;
+    bytes[declared_len_field].copy_from_slice(&new_body_len.to_be_bytes());
+
+    // Recompute the section's own trailing checksum over the now-edited bytes, so it genuinely
+    // matches what is on disk -- the whole point: the checksum alone cannot catch this.
+    let section_checksum_at = offset + SECTION_HEADER_LEN + length;
+    let mut hasher = prikk_hash::IncrementalSha256::new();
+    hasher.update(&bytes[offset..offset + SECTION_HEADER_LEN + length]);
+    let recomputed = hasher.finalize();
+    bytes[section_checksum_at..section_checksum_at + 32].copy_from_slice(&recomputed);
+
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("a damaged archive still produces a report");
+    assert!(
+        !report.is_internally_consistent(),
+        "a tail inside a section must never read as consistent"
+    );
+    assert!(!report.structurally_sound);
+    assert!(
+        report
+            .damaged
+            .iter()
+            .any(|line| line.contains("block container") && line.contains("trailing byte")),
+        "the tail must be named as damage in its own right, not folded into a checksum-failure \
+         line: {:?}",
+        report.damaged
+    );
+    assert!(
+        !report.damaged.iter().any(
+            |line| line.contains("block container") && line.contains("failed its own checksum")
+        ),
+        "the checksum genuinely matches here -- the control this test is actually for -- so no \
+         checksum-failure line should also appear: {:?}",
+        report.damaged
+    );
+}

@@ -1717,3 +1717,484 @@ fn adopt_over_an_existing_local_ref_falls_through_to_remotes_instead_of_overwrit
         })
     );
 }
+
+/// External review 023's own shape: the source repository carries, for the *same* ref name, both
+/// its own live local ref (from [`build_adoptable_source_repository`]) and a carried received
+/// pointer at `remotes/<ref_name>` -- as if this source repository itself had once `bundle
+/// import`ed something for that name. A real second `Block`+`RefState` pair, maintainer-signed by
+/// the fixture's own already-adopted key (so export's own `verify` resolves it, not a placeholder
+/// signature), is the received pointer's own target, distinct from the exporter's own tip -- so a
+/// test can tell, after import, which one actually won. Returns the planted `RefState` id.
+fn plant_colliding_received_pointer(layout: &RepositoryLayout, ref_name: &str) -> ObjectId {
+    // The same deterministic seed `build_adoptable_source_repository` used -- already adopted at
+    // this source, so this second `RefState`'s own signature resolves too, without a second trust
+    // call.
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("adopt-test-maintainer", &[0x33; 32])
+            .expect("reconstruct the same maintainer signer");
+
+    let mut store = FileObjectStore::new(layout.clone());
+    let block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        // A distinct state root keeps this block's own id different from the exporter's own root
+        // block, which otherwise carries an identical payload.
+        state_merkle_root: MerkleRoot([0xAB; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode the colliding block payload");
+    let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    let block_id = block_envelope.object_id();
+    block_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::Block, block_id)
+                .expect("sign the colliding block for real"),
+        )
+        .expect("attach the real maintainer signature");
+    store
+        .write_object(&block_envelope)
+        .expect("write the colliding block");
+
+    let ref_state_payload = RefStatePayload {
+        ref_name: ref_name.to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_bytes = ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode the colliding ref-state payload");
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_bytes);
+    let ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, ref_state_id)
+                .expect("sign the colliding ref state for real"),
+        )
+        .expect("attach the real maintainer signature");
+    store
+        .write_object(&ref_state_envelope)
+        .expect("write the colliding ref state");
+
+    crate::received::write_received_pointer(layout, &format!("remotes/{ref_name}"), ref_state_id)
+        .expect("plant the colliding received pointer");
+    ref_state_id
+}
+
+/// External review 023: by default (no `--adopt`), the exporter's own local ref must win the
+/// `remotes/<ref>` name over a carried received pointer that collides with it -- the received
+/// pointer is named, not landed, and its own objects were still imported by stage 1.
+#[test]
+fn landing_collision_lets_the_exporters_own_ref_win_by_default() {
+    let source_dir = unique_temp_dir("archive-ic-collision-source-default");
+    let (source_layout, exporter_ref_state_id, _maintainer_key_id, _maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let received_ref_state_id = plant_colliding_received_pointer(&source_layout, "heads/main");
+
+    let bytes = export_bytes(&source_layout);
+    let mut verify_cursor = Cursor::new(bytes.clone());
+    assert!(
+        crate::archive::verify_archive(&mut verify_cursor)
+            .expect("verify")
+            .is_internally_consistent(),
+        "the fixture's own two maintainer signatures must both resolve, or this test proves \
+         nothing"
+    );
+
+    let dest_dir = unique_temp_dir("archive-ic-collision-dest-default");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import");
+
+    assert_eq!(report.landing_outcomes.len(), 2);
+    let destination = "remotes/heads/main";
+    let winner = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| outcome.landed)
+        .expect("exactly one entry must actually land at the collision destination");
+    assert_eq!(winner.ref_name, "heads/main");
+    assert_eq!(winner.landed_as, destination);
+
+    let loser = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| !outcome.landed)
+        .expect("the colliding received pointer must be named, not silently dropped");
+    assert_eq!(loser.ref_name, destination);
+    assert_eq!(loser.collision_target, Some(received_ref_state_id));
+    assert!(loser.remote_reason.is_some());
+
+    let actual = crate::received::read_received_pointer(&dest_layout, destination)
+        .expect("read")
+        .expect("something must actually be on disk at the collision destination");
+    assert_eq!(
+        actual.ref_state_id, exporter_ref_state_id,
+        "the exporter's own ref must be what actually landed, never the colliding received \
+         pointer"
+    );
+
+    // Stage 1 is unaffected by stage 3's landing decision: both RefState objects, including the
+    // one the colliding, unlanded received pointer named, are present.
+    let object_store = FileObjectStore::new(dest_layout.clone());
+    assert!(
+        object_store
+            .read_object(received_ref_state_id)
+            .expect("read")
+            .is_some(),
+        "the colliding received pointer's own object must still be imported, even though its \
+         pointer was not landed"
+    );
+}
+
+/// External review 023: a successful `--adopt` lands the exporter's own ref as a real local
+/// branch (a bare name, never `remotes/`-shaped), so there is no collision at all -- the carried
+/// received pointer lands normally, exactly as it would without any collision in the picture.
+#[test]
+fn landing_collision_is_not_a_collision_at_all_once_adopt_succeeds() {
+    let source_dir = unique_temp_dir("archive-ic-collision-source-adopt-ok");
+    let (source_layout, exporter_ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let received_ref_state_id = plant_colliding_received_pointer(&source_layout, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ic-collision-dest-adopt-ok");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before import");
+
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import with --adopt");
+
+    let adopted = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| outcome.ref_name == "heads/main")
+        .expect("the exporter's own ref must be in the report");
+    assert!(adopted.adopted, "it must actually adopt: {adopted:?}");
+    assert_eq!(adopted.landed_as, "heads/main");
+
+    let received = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| outcome.ref_name == "remotes/heads/main")
+        .expect("the received pointer must be in the report");
+    assert!(
+        received.landed,
+        "a bare-named adopted ref never collides with a remotes/-shaped received pointer: \
+         {received:?}"
+    );
+
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read"),
+        Some(exporter_ref_state_id)
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read")
+            .map(|pointer| pointer.ref_state_id),
+        Some(received_ref_state_id),
+        "the received pointer lands normally once adoption removes the collision"
+    );
+}
+
+/// External review 023: `--adopt` requested but the signer not adopted at the destination still
+/// falls through to the default `remotes/<ref>` landing -- which still collides, and still wins,
+/// the same way the plain default case does.
+#[test]
+fn landing_collision_still_wins_when_adopt_falls_through() {
+    let source_dir = unique_temp_dir("archive-ic-collision-source-adopt-fallthrough");
+    let (source_layout, exporter_ref_state_id, _maintainer_key_id, _maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    plant_colliding_received_pointer(&source_layout, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ic-collision-dest-adopt-fallthrough");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    // Deliberately never adopted at the destination.
+
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import with --adopt");
+
+    let fell_through = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| outcome.ref_name == "heads/main")
+        .expect("the exporter's own ref must be in the report");
+    assert!(!fell_through.adopted);
+    assert_eq!(fell_through.landed_as, "remotes/heads/main");
+    assert!(fell_through.landed);
+
+    let loser = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| !outcome.landed)
+        .expect("the colliding received pointer must be named, not silently dropped");
+    assert_eq!(loser.ref_name, "remotes/heads/main");
+
+    let actual = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read")
+        .expect("something must be on disk");
+    assert_eq!(actual.ref_state_id, exporter_ref_state_id);
+}
+
+/// External review 023's own "also": the plan lists a ref at most once, from its own latest
+/// entry -- the exporter's own container held two pointer-index entries for the same ref (two
+/// `seal`s advanced it), which the plan must fold to one, not two.
+#[test]
+fn landing_plan_lists_a_ref_at_most_once_even_after_two_seals() {
+    let source_dir = unique_temp_dir("archive-ic-collision-source-dedup");
+    let (source_layout, _first_ref_state_id, _maintainer_key_id, _maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+
+    // A second, real advance of the same ref -- the exporter's own live container now holds two
+    // pointer-index entries for `heads/main`, the superseded one and the new tip.
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("adopt-test-maintainer", &[0x33; 32])
+            .expect("reconstruct the same maintainer signer");
+    let mut store = FileObjectStore::new(source_layout.clone());
+    let block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: MerkleRoot([0xCD; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode the second block payload");
+    let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    let block_id = block_envelope.object_id();
+    block_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::Block, block_id)
+                .expect("sign the second block for real"),
+        )
+        .expect("attach the real maintainer signature");
+    store
+        .write_object(&block_envelope)
+        .expect("write the second block");
+
+    let current_ref_state_id = RefStore::new(source_layout.clone())
+        .read_current_ref_state_id("heads/main")
+        .expect("read")
+        .expect("heads/main must already exist from the fixture");
+
+    let ref_state_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block_id,
+        update_seq: 2,
+        previous_ref_state_id: Some(current_ref_state_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_bytes = ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode the second ref-state payload");
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_bytes);
+    let second_ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(
+            maintainer_signature(
+                &maintainer_signer,
+                ObjectType::RefState,
+                second_ref_state_id,
+            )
+            .expect("sign the second ref state for real"),
+        )
+        .expect("attach the real maintainer signature");
+
+    let ref_update_payload = prikk_object::RefUpdatePayload {
+        ref_name: "heads/main".to_string(),
+        old_ref_state_id: Some(current_ref_state_id),
+        new_ref_state_id: second_ref_state_id,
+        new_target_object_id: block_id,
+        update_seq: 2,
+        created_at: 0,
+        author_key_id: maintainer_signer.key_id().to_string(),
+    };
+    let ref_update_bytes = ref_update_payload
+        .to_canonical_bytes()
+        .expect("encode the second ref-update payload");
+    let mut ref_update_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, ref_update_bytes);
+    let ref_update_id = ref_update_envelope.object_id();
+    ref_update_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefUpdate, ref_update_id)
+                .expect("sign the second ref update for real"),
+        )
+        .expect("attach the real maintainer signature");
+
+    RefStore::new(source_layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: Some(current_ref_state_id),
+            ref_state: ref_state_envelope,
+            ref_update: ref_update_envelope,
+        })
+        .expect("publish the second advance");
+
+    let bytes = export_bytes(&source_layout);
+    let dest_dir = unique_temp_dir("archive-ic-collision-dest-dedup");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import");
+
+    assert_eq!(
+        report.landing_outcomes.len(),
+        1,
+        "a ref advanced twice must still be planned once, from its own latest entry: {:?}",
+        report.landing_outcomes
+    );
+    assert_eq!(report.landing_outcomes[0].ref_name, "heads/main");
+
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        None,
+        "no --adopt was requested, so heads/main must not become a real local branch"
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read")
+            .map(|pointer| pointer.ref_state_id),
+        Some(second_ref_state_id),
+        "the landed pointer must be the ref's own latest entry, not the superseded one"
+    );
+}
+
+/// Control, run and reverted (RFC 155 §9.6, external review 023): disabling the collision rule
+/// reproduces the exact bug -- the received pointer, landed in plan order with no check, silently
+/// overwrites the exporter's own ref at the same name.
+#[test]
+fn control_disabling_the_collision_rule_lets_the_received_pointer_overwrite_the_exporters_ref() {
+    let source_dir = unique_temp_dir("archive-ic-collision-control-source");
+    let (source_layout, exporter_ref_state_id, _maintainer_key_id, _maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let received_ref_state_id = plant_colliding_received_pointer(&source_layout, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ic-collision-control-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::archive::import::disable_landing_collision_rule_for_test();
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import");
+
+    assert!(
+        report.landing_outcomes.iter().all(|outcome| outcome.landed),
+        "with the collision rule disabled, nothing is skipped -- both land, in plan order"
+    );
+
+    let actual = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read")
+        .expect("something is on disk");
+    assert_eq!(
+        actual.ref_state_id, received_ref_state_id,
+        "the control's own real value: with the rule disabled, the received pointer -- landed \
+         last, in plan order -- silently overwrites the exporter's own ref {exporter_ref_state_id}, \
+         exactly the bug external review 023 found"
+    );
+}
+
+/// External review 023 (item 2): a tail inside a section makes `verify_archive` report the
+/// archive as not internally consistent (see `archive::verify::tests::
+/// verify_names_a_tail_inside_a_section_as_damage_even_when_its_checksum_matches`, which proves
+/// the tail is named as damage even though the section's own checksum still matches) -- stage 0
+/// reuses that same check, not a copy, so this one archive must refuse here too, writing nothing.
+/// Built from [`build_signed_source_repository`] (genuinely consistent: a real author-signed
+/// `Patch`/`Blob` and a real maintainer-signed `Block`/`RefState`), not the placeholder-signed
+/// fixture, so the refusal is cleanly attributable to the tail alone, not to an unrelated
+/// unresolvable signature.
+#[test]
+fn import_refuses_an_archive_with_a_tail_inside_a_section() {
+    let source_dir = unique_temp_dir("archive-ic-tail-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let mut bytes = export_bytes(&source_layout);
+
+    let (_, _, entries) = crate::archive::tests::decode_manifest_for_test(&bytes);
+    let block_entry = entries
+        .iter()
+        .find(|(kind, ..)| {
+            *kind
+                == crate::archive::ArchiveSectionKind::ObjectContainer(ObjectType::Block)
+                    .wire_code()
+        })
+        .expect("block section present");
+    let (_, offset, length, _) = *block_entry;
+    let offset = offset as usize;
+    let length = length as usize;
+
+    const SECTION_HEADER_LEN: usize = 18;
+    const CONTAINER_HEADER_LEN: usize = 8 + 2 + 8 + 32;
+    const TAIL_LEN: usize = 16;
+
+    let record_header_start = offset + SECTION_HEADER_LEN;
+    let declared_len_field = record_header_start + 10..record_header_start + 18;
+    let real_body_len = u64::from_be_bytes(
+        bytes[declared_len_field.clone()]
+            .try_into()
+            .expect("8 bytes"),
+    ) as usize;
+    assert_eq!(
+        length,
+        CONTAINER_HEADER_LEN + real_body_len,
+        "this fixture's block section must hold exactly one record, filling it"
+    );
+    assert!(real_body_len > TAIL_LEN);
+
+    let new_body_len = (real_body_len - TAIL_LEN) as u64;
+    bytes[declared_len_field].copy_from_slice(&new_body_len.to_be_bytes());
+
+    let section_checksum_at = offset + SECTION_HEADER_LEN + length;
+    let mut hasher = prikk_hash::IncrementalSha256::new();
+    hasher.update(&bytes[offset..offset + SECTION_HEADER_LEN + length]);
+    let recomputed = hasher.finalize();
+    bytes[section_checksum_at..section_checksum_at + 32].copy_from_slice(&recomputed);
+
+    let dest_dir = unique_temp_dir("archive-ic-tail-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    let fingerprint_before = directory_fingerprint(&dest_dir);
+
+    let mut cursor = Cursor::new(bytes);
+    let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect_err("a tail inside a section must refuse the whole import");
+    assert!(
+        error.to_string().contains("not internally consistent"),
+        "{error}"
+    );
+    assert_eq!(
+        fingerprint_before,
+        directory_fingerprint(&dest_dir),
+        "a refused import must write nothing"
+    );
+}

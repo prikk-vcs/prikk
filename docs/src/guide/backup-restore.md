@@ -166,6 +166,13 @@ real local branch under `--adopt`, when it is absent locally, signed by a key th
 adopted (`trust maintainer add`), and verified — every other ref still lands under `remotes/`, with
 the reason named.
 
+**If the archive's own exported local ref and one of its own carried received pointers would land
+at the same `remotes/<ref>` name** — because the source repository itself once `bundle import`ed
+something for that same ref — the exporter's own ref wins the name; the colliding received pointer
+is not landed, and the import's own report names it and the `RefState` it would have landed (its
+objects are still imported either way). A successful `--adopt` lands the exporter's own ref as a
+real local branch instead, so there is no collision at all in that case.
+
 **If `archive import` is killed or lost partway through**, `prikk doctor` names it
 (`PRIKK-DOCTOR-INTERRUPTED-IMPORT`) and its id, with two ways out: run the same import again (it
 resumes from wherever it stopped), or `prikk doctor --cancel-import <id>` to restore the repository

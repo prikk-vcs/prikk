@@ -168,16 +168,31 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     // 32-byte ids, never an envelope.
     let mut ids: HashSet<ObjectId> = HashSet::new();
     for entry in &manifest.entries {
-        let outer_ok = if let ArchiveSectionKind::ObjectContainer(object_type) = entry.kind {
-            for_each_object_record(source, entry, object_type, |body| {
+        if let ArchiveSectionKind::ObjectContainer(object_type) = entry.kind {
+            let outcome = for_each_object_record(source, entry, object_type, |body| {
                 let envelope = decode_envelope_file(body)?;
                 ids.insert(envelope.object_id());
                 Ok(())
-            })?
-        } else {
-            stream_opaque_section(source, entry)?
-        };
-        if !outer_ok {
+            })?;
+            if !outcome.checksum_ok {
+                structurally_sound = false;
+                damaged.push(format!(
+                    "{} failed its own checksum or is truncated",
+                    entry.kind.label()
+                ));
+            } else if outcome.tail_len > 0 {
+                // External review 023: an honest export never leaves this -- every section ends
+                // exactly at its own sound length. A checksum that still matches only proves the
+                // tail was present when it was computed, not that it is benign.
+                structurally_sound = false;
+                damaged.push(format!(
+                    "{} has {} trailing byte(s) after its last record -- an honest export never \
+                     produces this",
+                    entry.kind.label(),
+                    outcome.tail_len
+                ));
+            }
+        } else if !stream_opaque_section(source, entry)? {
             structurally_sound = false;
             damaged.push(format!(
                 "{} failed its own checksum or is truncated",
@@ -367,11 +382,26 @@ fn extract_references(envelope: &ObjectEnvelope) -> Result<Vec<ObjectId>> {
     Ok(refs)
 }
 
+/// [`for_each_object_record`]'s own outcome: the outer checksum's own pass/fail, and separately,
+/// whether any bytes inside the section's own declared length were never a decoded or
+/// torn-and-abandoned record (external review 023: an honest export never produces this --
+/// sections end exactly at their own sound length -- so *any* non-zero `tail_len` is damage from a
+/// hostile or corrupted archive, even when the outer checksum still matches, because that checksum
+/// was computed over exactly these bytes when the archive itself was written or tampered with).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SectionReadOutcome {
+    pub(super) checksum_ok: bool,
+    /// Bytes left over, inside the section's own declared length, after the last record this loop
+    /// either decoded or abandoned as torn. Zero for a section with no tail at all.
+    pub(super) tail_len: u64,
+}
+
 /// Read and validate one object-container section: its own outer header against `entry`, then every
 /// inner container record in turn (header, bounded body, checksum -- `foundation/container.rs`'s own
 /// shape, reused), feeding `on_record` only the records whose own checksum matches. Returns whether
 /// the section's outer checksum (covering every byte read, sound records and torn/damaged ones
-/// alike) matches what the manifest recorded.
+/// alike) matches what the manifest recorded, and whether a tail was found (see
+/// [`SectionReadOutcome`]).
 ///
 /// `pub(super)`: RFC 155 Part I-A's own `archive::import` needs the identical decode -- not a
 /// second copy of it -- for its own stage 1, over an archive its own stage 0 already confirmed
@@ -381,7 +411,7 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
     entry: &ManifestEntry,
     object_type: ObjectType,
     mut on_record: impl FnMut(&[u8]) -> Result<()>,
-) -> Result<bool> {
+) -> Result<SectionReadOutcome> {
     source.seek(SeekFrom::Start(entry.offset))?;
     let mut header = [0u8; SECTION_HEADER_LEN];
     source.read_exact(&mut header)?;
@@ -389,7 +419,10 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
         && u16::from_be_bytes([header[8], header[9]]) == entry.kind.wire_code()
         && u64::from_be_bytes(header[10..18].try_into().unwrap_or([0u8; 8])) == entry.length;
     if !header_ok {
-        return Ok(false);
+        return Ok(SectionReadOutcome {
+            checksum_ok: false,
+            tail_len: 0,
+        });
     }
 
     let mut outer_hasher = IncrementalSha256::new();
@@ -447,10 +480,14 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
         source.read_exact(&mut tail)?;
         outer_hasher.update(&tail);
     }
+    let tail_len = remaining;
 
     let mut section_checksum = [0u8; 32];
     source.read_exact(&mut section_checksum)?;
-    Ok(outer_hasher.finalize() == section_checksum)
+    Ok(SectionReadOutcome {
+        checksum_ok: outer_hasher.finalize() == section_checksum,
+        tail_len,
+    })
 }
 
 /// As [`for_each_object_record`], for a non-object section: stream the body in fixed chunks (never
@@ -666,9 +703,11 @@ fn decode_manifest_bytes(body: &[u8]) -> Result<ManifestView> {
     let tool_version = cursor.read_string_u16()?;
     let count = cursor.read_u64()?;
     if count > MAX_MANIFEST_ENTRIES {
-        return Err(PrikkError::ObjectOverBound {
-            declared_bytes: count,
-            bound_bytes: MAX_MANIFEST_ENTRIES,
+        // External review 023: this bounds a *count* of entries, not a byte length --
+        // `CountOverBound`, not `ObjectOverBound`, so the refusal names what is actually bounded.
+        return Err(PrikkError::CountOverBound {
+            declared_count: count,
+            bound_count: MAX_MANIFEST_ENTRIES,
         });
     }
     let mut entries = Vec::with_capacity(usize::try_from(count).unwrap_or(0));

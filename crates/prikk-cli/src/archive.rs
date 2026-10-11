@@ -380,7 +380,20 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
     }
     println!("author keys recorded: {}", report.recorded_author_key_count);
     for landing in &report.landing_outcomes {
-        if landing.adopted {
+        if !landing.landed {
+            println!(
+                "{}: not landed -- {} (would have landed RefState {})",
+                landing.ref_name,
+                landing
+                    .remote_reason
+                    .as_deref()
+                    .unwrap_or("collides with another ref"),
+                landing
+                    .collision_target
+                    .map(|id| id.to_string())
+                    .unwrap_or_default()
+            );
+        } else if landing.adopted {
             println!("{}: adopted as a local branch", landing.ref_name);
         } else if let Some(reason) = &landing.remote_reason {
             println!(
@@ -390,6 +403,18 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
         } else {
             println!("{}: landed as {}", landing.ref_name, landing.landed_as);
         }
+    }
+    let unadopted_landed_count = report
+        .landing_outcomes
+        .iter()
+        .filter(|landing| landing.landed && !landing.adopted)
+        .count();
+    if unadopted_landed_count > 0 {
+        println!(
+            "note: {unadopted_landed_count} ref(s) landed under remotes/, not as local branches; \
+             `prikk verify` fails their publication trust until `trust maintainer add` adopts the \
+             signing key (or re-run with --adopt once it is)"
+        );
     }
     println!("already imported: {}", report.already_imported);
 }
@@ -452,12 +477,18 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
         .iter()
         .map(|landing| {
             format!(
-                "{{ \"ref_name\": {}, \"landed_as\": {}, \"adopted\": {}, \"remote_reason\": {} }}",
+                "{{ \"ref_name\": {}, \"landed_as\": {}, \"adopted\": {}, \"remote_reason\": {}, \
+                 \"landed\": {}, \"collision_target\": {} }}",
                 escape_json_string(&landing.ref_name),
                 escape_json_string(&landing.landed_as),
                 landing.adopted,
                 match &landing.remote_reason {
                     Some(reason) => escape_json_string(reason),
+                    None => "null".to_string(),
+                },
+                landing.landed,
+                match landing.collision_target {
+                    Some(id) => escape_json_string(&id.to_string()),
                     None => "null".to_string(),
                 }
             )
@@ -466,6 +497,23 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
     json.push_str(&format!(
         "  \"landings\": [{}],\n",
         landing_lines.join(", ")
+    ));
+    let unadopted_landed_count = report
+        .landing_outcomes
+        .iter()
+        .filter(|landing| landing.landed && !landing.adopted)
+        .count();
+    json.push_str(&format!(
+        "  \"note\": {},\n",
+        if unadopted_landed_count > 0 {
+            escape_json_string(&format!(
+                "{unadopted_landed_count} ref(s) landed under remotes/, not as local branches; \
+                 verify fails their publication trust until trust maintainer add adopts the \
+                 signing key (or re-run with --adopt once it is)"
+            ))
+        } else {
+            "null".to_string()
+        }
     ));
     json.push_str(&format!(
         "  \"already_imported\": {}\n",

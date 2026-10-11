@@ -55,6 +55,36 @@
   container whose generation log is merely ambiguous (before: the identical state printed both
   `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` and a separate, misleading interior-damage line — nothing
   there failed to decode; the log simply names no live slot).
+- `archive import`'s own report gains two fields on each landing outcome, `landed` and
+  `collision_target` (text and JSON): `landed` is `false` only when a carried received pointer was
+  not written because it collided with the exporter's own ref at the same `remotes/<ref>` name,
+  and `collision_target` then names the `RefState` id it would have landed. A new note, printed
+  once, after any import that landed at least one ref under `remotes/` rather than as a real local
+  branch: *"N ref(s) landed under remotes/, not as local branches; `prikk verify` fails their
+  publication trust until `trust maintainer add` adopts the signing key (or re-run with --adopt
+  once it is)"*.
+- `archive verify`/`archive import`'s own manifest section-count bound refused with
+  `` `an object declares N bytes, over the per-object bound of M bytes` `` for a *count*, not a
+  byte length — borrowed wording from the per-object bound, not this bound's own. It now refuses
+  with `` `declares N entries, over the bound of M` ``.
+
+### Fixed — `archive import` could silently drop a ref behind a colliding received pointer, and a tail inside a section passed as consistent
+
+- External review 023, found before the candidate shipped. A received pointer can carry the
+  exporter's own default `remotes/<ref>` name verbatim, when the source repository itself once
+  `bundle import`ed something for that same ref — landing every carried ref in plan order, with no
+  check, let whichever one landed last silently overwrite the other, so the exporter's own real
+  history could disappear behind a received pointer with no diagnostic at all. The exporter's own
+  ref now always wins the name (RFC 155 §9.6, amended): a colliding received pointer is never
+  landed, and is named in the report instead (see Output changes, above); a successful `--adopt`
+  removes the collision entirely, since the exporter's ref then lands bare, not under `remotes/`.
+  The plan itself is also now built from each ref's own latest entry, once, rather than once per
+  superseded entry the exporter's own live container happened to still hold.
+- A tail inside an object-container section — bytes its own declared length counts but that no
+  record ever claimed — passed `archive verify` as internally consistent, because the section's own
+  trailing checksum still matched (it was computed over exactly those bytes). An honest export never
+  produces this; any tail is now damage in its own right, named by `verify` and refused by `import`,
+  independently of whether the section's own checksum happens to still match.
 
 ### Fixed — a ref-log tail, an acknowledged-damage WAL record, a deduced pointer-index state, and an ambiguous generation log were each reported in a way that pointed at the wrong command, or twice
 
@@ -102,14 +132,17 @@
   to about 1.3 GiB under the existing 256 MiB per-object ceiling), admitting a carried signature for
   an id already held through RFC 156 §4's merge (the same path `bundle import` uses) — a signature
   that does not qualify is dropped and named, never silently discarded. Stage 2 records carried
-  author keys. Stage 3 lands every ref the archive carries, idempotently: the archive's own received
-  pointers land under their own, already-`remotes/`-shaped name; its local refs land under
-  `remotes/<ref>` by default, or as a real local branch under `--adopt`, when — and only when — it
-  is absent locally, every step of its own history (replayed from genesis, not only the tip) is
-  signed by a key this repository has adopted and verifies, and its compare-and-swap against
-  *absent* holds; every other ref still lands under `remotes/`, with the reason named. Re-importing
-  the same archive reports *already imported*. A real kill is recoverable: `prikk doctor` names the
-  interruption and both ways out (see Output changes above for the exact sequence).
+  author keys. Stage 3 lands every ref the archive carries, once each, idempotently: the archive's
+  own received pointers land under their own, already-`remotes/`-shaped name; its local refs land
+  under `remotes/<ref>` by default, or as a real local branch under `--adopt`, when — and only
+  when — it is absent locally, every step of its own history (replayed from genesis, not only the
+  tip) is signed by a key this repository has adopted and verifies, and its compare-and-swap
+  against *absent* holds; every other ref still lands under `remotes/`, with the reason named. On a
+  name collision between the exporter's own local ref and one of its own carried received pointers,
+  the exporter's own ref always wins the name; the colliding received pointer is not landed, and is
+  named in the report instead (its own objects are still imported). Re-importing the same archive
+  reports *already imported*. A real kill is recoverable: `prikk doctor` names the interruption and
+  both ways out (see Output changes above for the exact sequence).
 - **`prikk doctor --cancel-import <id> [--plan-only]`**: for every container the journal names,
   saves the bytes past its journaled starting length to the recovery log, then truncates back;
   refuses an id that does not match the journal present. `--plan-only` previews without writing.

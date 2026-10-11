@@ -109,10 +109,12 @@ use crate::lock::{
     ActiveLock, ContainerLockGuard, acquire_container_locks_allowing_import_journal,
 };
 use crate::object_store::{ObjectReader, ObjectWriteSession};
-use crate::received::received_index::decode_received_index_entries_for_resolver;
+use crate::received::received_index::{
+    decode_received_index_entries_for_resolver, reduce_received_index_entries,
+};
 use crate::refs::{
     RefPublication, RefStore, decode_pointer_index_entries_for_resolver,
-    decode_ref_log_records_from_bytes,
+    decode_ref_log_records_from_bytes, reduce_pointer_index_entries,
 };
 use crate::signature_admission::DroppedSignature;
 use crate::trust::{load_maintainer_trust_policy_or_empty, verify_trusted_publication_envelope};
@@ -288,6 +290,17 @@ pub struct LandingOutcome {
     /// requested, when this is a [`LandingOrigin::Received`] entry (adoption never applies), or
     /// when adoption actually succeeded.
     pub remote_reason: Option<String>,
+    /// `false` only when this entry was not landed at all, because it collided with another ref's
+    /// own, already-landed destination (RFC 155 §9.6, amended 2026-10-12, external review 023: the
+    /// exporter's own local ref wins the name; the colliding carried received pointer is not
+    /// written). `true` for every ordinary outcome -- this can only ever be `false` when an
+    /// exporter's own local ref and one of its own carried received pointers resolve to the same
+    /// `remotes/<ref>` name.
+    pub landed: bool,
+    /// Set only when `landed` is `false`: the `RefState` id this entry would have landed, had it
+    /// not collided -- named so nothing is silently dropped from the report even though nothing
+    /// was written here. Its own object was still imported by stage 1, which this never touches.
+    pub collision_target: Option<ObjectId>,
 }
 
 /// Summary of an RFC 155 `archive import` run: stages 0-3, the journal, and the commit point.
@@ -650,9 +663,30 @@ pub fn import_archive<R: Read + Seek>(
     if let Some(callback) = RUN_BEFORE_STAGE_3_FOR_TEST.with(|cell| cell.borrow_mut().take()) {
         callback();
     }
-    let mut landing_outcomes = Vec::with_capacity(journal.landing.len());
+    // External review 023: a received pointer can carry the exporter's own `remotes/<ref>` name
+    // verbatim, if the source repository ever `bundle import`ed something for that same ref name.
+    // Landing every entry in plan order, unconditionally, let whichever one ran last silently
+    // overwrite the other -- the exporter's own real history could disappear behind a received
+    // pointer. RFC 155 §9.6 (amended 2026-10-12) rules it: the exporter's own local ref wins the
+    // name. Every `Local` landing runs first, so its own *actual* destination (the bare adopted
+    // name, which never collides, or the `remotes/<ref>` fallback, which can) is known before any
+    // `Received` landing is decided -- each outcome is written into its own planned index, so the
+    // final order still matches `journal.landing`'s own order, regardless of which origin a given
+    // index holds.
+    #[cfg(test)]
+    let collision_rule_disabled =
+        DISABLE_LANDING_COLLISION_RULE_FOR_TEST.with(std::cell::Cell::take);
+    #[cfg(not(test))]
+    let collision_rule_disabled = false;
+
+    let mut landing_outcomes: Vec<Option<LandingOutcome>> = vec![None; journal.landing.len()];
     let mut any_landing_changed = false;
-    for landing in &journal.landing {
+    let mut local_destinations: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for (index, landing) in journal.landing.iter().enumerate() {
+        if landing.origin != LandingOrigin::Local {
+            continue;
+        }
         let (outcome, changed) = land_one_ref(
             layout,
             &ref_store,
@@ -664,8 +698,62 @@ pub fn import_archive<R: Read + Seek>(
             &_container_locks,
         )?;
         any_landing_changed = any_landing_changed || changed;
-        landing_outcomes.push(outcome);
+        local_destinations.insert(outcome.landed_as.clone());
+        if let Some(slot) = landing_outcomes.get_mut(index) {
+            *slot = Some(outcome);
+        }
     }
+    for (index, landing) in journal.landing.iter().enumerate() {
+        if landing.origin != LandingOrigin::Received {
+            continue;
+        }
+        if !collision_rule_disabled && local_destinations.contains(&landing.ref_name) {
+            // The exporter's own local ref already landed at this exact name -- its objects were
+            // already imported by stage 1 (unaffected by any stage-3 landing decision); only the
+            // pointer write itself is skipped, and named, not silently dropped.
+            if let Some(slot) = landing_outcomes.get_mut(index) {
+                *slot = Some(LandingOutcome {
+                    ref_name: landing.ref_name.clone(),
+                    landed_as: landing.ref_name.clone(),
+                    adopted: false,
+                    remote_reason: Some(
+                        "collides with the exporter's own ref at this name; the exporter's ref \
+                         wins (RFC 155 §9.6)"
+                            .to_string(),
+                    ),
+                    landed: false,
+                    collision_target: Some(landing.ref_state_id),
+                });
+            }
+            continue;
+        }
+        let (outcome, changed) = land_one_ref(
+            layout,
+            &ref_store,
+            &adopted_policy,
+            landing,
+            options,
+            &mut object_store,
+            &ref_log_records,
+            &_container_locks,
+        )?;
+        any_landing_changed = any_landing_changed || changed;
+        if let Some(slot) = landing_outcomes.get_mut(index) {
+            *slot = Some(outcome);
+        }
+    }
+    let landing_outcomes: Vec<LandingOutcome> = landing_outcomes
+        .into_iter()
+        .map(|outcome| {
+            outcome.ok_or_else(|| {
+                PrikkError::Integrity(
+                    "archive import: a planned landing's own origin matched neither Local nor \
+                     Received -- refusing"
+                        .to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     // The commit point: the journal is emptied, its name kept (RFC 168 §6's conservative choice on
     // Windows).
@@ -719,6 +807,8 @@ fn land_one_ref(
                     landed_as: landing.ref_name.clone(),
                     adopted: false,
                     remote_reason: None,
+                    landed: true,
+                    collision_target: None,
                 },
                 changed,
             ))
@@ -738,6 +828,8 @@ fn land_one_ref(
                         landed_as: landing.ref_name.clone(),
                         adopted: true,
                         remote_reason: None,
+                        landed: true,
+                        collision_target: None,
                     },
                     true,
                 )),
@@ -754,6 +846,8 @@ fn land_one_ref(
                             landed_as: landing.destination.clone(),
                             adopted: false,
                             remote_reason: Some(reason),
+                            landed: true,
+                            collision_target: None,
                         },
                         changed,
                     ))
@@ -773,6 +867,8 @@ fn land_one_ref(
                     landed_as: landing.destination.clone(),
                     adopted: false,
                     remote_reason: None,
+                    landed: true,
+                    collision_target: None,
                 },
                 changed,
             ))
@@ -922,7 +1018,12 @@ fn compute_landing_plan(
                 .to_string(),
         ));
     }
-    for entry in decoded_pointers.entries {
+    // External review 023: the exporter's own live container is append-only, so a ref that was
+    // advanced more than once carries one entry per advance here, not one per ref -- the same
+    // superseded-entry shape `reduce_pointer_index_entries` already exists to fold away for the
+    // real compactor (last entry per `ref_name_key` survives). Reused verbatim, not re-derived,
+    // so a ref is planned once, from its own latest entry (RFC 155 §9.6, amended 2026-10-12).
+    for entry in reduce_pointer_index_entries(decoded_pointers.entries) {
         landings.push(PlannedRefLanding {
             origin: LandingOrigin::Local,
             destination: format!("remotes/{}", entry.ref_name),
@@ -941,7 +1042,8 @@ fn compute_landing_plan(
                 .to_string(),
         ));
     }
-    for entry in decoded_received.entries {
+    // Same reasoning as the pointer index, just above: one entry per ref, from its own latest.
+    for entry in reduce_received_index_entries(decoded_received.entries) {
         // RFC 155 Part I-B (review `rfc155-impl-IA-review-v1`, finding A3): a received-index
         // entry's own `ref_name` is already `remotes/`-shaped (`received.rs`'s own
         // `ReceivedPointer` doc: "Local logical name, always `remotes/<origin ref name>`") --
@@ -1424,6 +1526,16 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static RUN_BEFORE_STAGE_3_FOR_TEST: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static DISABLE_LANDING_COLLISION_RULE_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
+/// lands every planned ref unconditionally, in plan order, with no collision check -- reproducing
+/// the exact external-review-023 bug (RFC 155 §9.6, amended 2026-10-12) for the control this
+/// part's own test requires. Consumed (reset to `false`) by that one call.
+#[cfg(test)]
+pub(crate) fn disable_landing_collision_rule_for_test() {
+    DISABLE_LANDING_COLLISION_RULE_FOR_TEST.with(|cell| cell.set(true));
 }
 
 /// Test seam, unreachable from production: the next call to [`import_archive`] on this thread

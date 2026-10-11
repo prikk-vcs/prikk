@@ -32,6 +32,14 @@ seek to `length - 56`, read the end trailer, then seek to the manifest's own off
 | body | `body_len` | verbatim bytes of one source file, or a resolved family's sound prefix |
 | checksum | 32 | SHA-256 of `magic ‖ kind ‖ body_len ‖ body`, **after** the body — a trailer, not a header, so the encoder never needs the whole body in hand before writing the header |
 
+**An honest export never leaves a tail inside an object-container section**: every record this
+build writes fills exactly the section's own declared length, with nothing left over. `archive
+verify` treats *any* leftover bytes inside a section — after the last record it could decode or
+abandon as torn — as damage in their own right, even when the section's own trailing checksum
+still matches (external review 023: a checksum alone cannot tell "the bytes genuinely end here"
+from "the bytes genuinely include a tail", since it is computed over whatever is actually on disk
+either way).
+
 ### Section kinds
 
 | code | kind | content |

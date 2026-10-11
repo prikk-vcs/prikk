@@ -74,6 +74,17 @@ pub enum PrikkError {
         /// The per-object bound that was exceeded, in bytes.
         bound_bytes: u64,
     },
+    /// RFC 155 Part I-C (external review 023): a DC-86 bound on a *count* -- entries, sections,
+    /// records -- not a byte length. [`Self::ObjectOverBound`]'s own `Display` text says "bytes"
+    /// unconditionally, which misleads when the thing actually bounded is a count; this variant
+    /// exists so a count-bound refusal reads honestly, without borrowing byte-shaped wording for a
+    /// unit it never had.
+    CountOverBound {
+        /// The count this frame declared.
+        declared_count: u64,
+        /// The bound that was exceeded.
+        bound_count: u64,
+    },
     /// An I/O failure. `kind` is `Some` only when this value was built from a real
     /// `std::io::Error` via [`From`] -- every explicit construction site elsewhere in the workspace
     /// (a caller-precondition violation, a platform-capability refusal, or a validation failure
@@ -115,6 +126,13 @@ impl fmt::Display for PrikkError {
                 f,
                 "an object declares {declared_bytes} bytes, over the per-object bound of \
                  {bound_bytes} bytes"
+            ),
+            Self::CountOverBound {
+                declared_count,
+                bound_count,
+            } => write!(
+                f,
+                "declares {declared_count} entries, over the bound of {bound_count}"
             ),
             Self::Io { context, .. } => write!(f, "i/o error: {context}"),
         }
