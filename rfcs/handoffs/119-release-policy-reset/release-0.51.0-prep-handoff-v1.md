@@ -62,3 +62,5 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 | **P3b: the notes include step 1** | Step 1's Parts A and B are unreleased (`git tag --contains 01e30337` is empty) but missing from 0.51.0's notes. Add one `### Fixed` entry, and six Output-changes lines with before and after: `ref complete` named in one step; the WAL trailing count for acknowledged damage; `VERIFY-OK` absent beside errors; `precondition not met:` in place of `integrity error:`; the retired-slot torn-tail warning; no interior-damage line beside the ambiguity issue. One commit on top of `e6ec2560`; 14 gates | 30 min | `release-0.51.0-prep-P3b-report.md` |
 
 **Next: P3b.**
+
+**P3b ACCEPTED 2026-10-11** (`e2292eb5`; review `release-0.51.0-prep-P3b-review-v1`). **The candidate is complete.** Three wording fixes ride the date commit at the tag. The architect pushes; the owner decides on the external review.
