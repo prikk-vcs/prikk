@@ -1089,52 +1089,112 @@ pub(crate) struct CarriedAdmission {
     pub(crate) dropped: Vec<crate::DroppedSignature>,
 }
 
+/// One carried envelope's own RFC 156 §4 admission outcome -- [`CarriedSignatureAdmitter::
+/// admit_one`]'s own return type, factored out of [`admit_carried_signatures`]'s own loop body (RFC
+/// 155 Part P2b) so a streaming caller can admit and write one object at a time, never collecting a
+/// whole batch of carried envelopes first just to call this rule.
+pub(crate) struct AdmittedOne {
+    pub(crate) envelope: ObjectEnvelope,
+    pub(crate) merged: bool,
+    pub(crate) dropped: Vec<crate::DroppedSignature>,
+}
+
+/// RFC 156 §4 rules 1–3's own policy, loaded once and reused across many [`Self::admit_one`] calls
+/// -- the batching `admit_carried_signatures` already did per call, now also available to a caller
+/// that admits one envelope at a time instead of a whole pre-built slice (RFC 155 Part P2b:
+/// `archive::import`'s stage 1 used to collect a whole object type's own envelopes into one `Vec`
+/// specifically so it could call `admit_carried_signatures` once; this type lets it load the same
+/// policy once and admit each envelope as it streams in, instead).
+pub(crate) struct CarriedSignatureAdmitter {
+    policy: crate::trust::MaintainerTrustPolicy,
+    several_records: bool,
+}
+
+impl CarriedSignatureAdmitter {
+    pub(crate) fn new(layout: &RepositoryLayout) -> Result<Self> {
+        Ok(Self {
+            policy: crate::trust::load_maintainer_trust_policy_or_empty(layout)?,
+            several_records: layout.format().holds_several_records_per_id(),
+        })
+    }
+
+    /// RFC 156 §4 rules 1-3 for one carried object -- the exact decision [`admit_carried_signatures`]
+    /// makes per envelope in its own loop; factored out, not re-derived, so the two never drift
+    /// apart.
+    pub(crate) fn admit_one(
+        &self,
+        stored_objects: &impl ObjectReader,
+        envelope: &ObjectEnvelope,
+        mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
+    ) -> Result<AdmittedOne> {
+        // Read through the caller's session, opened under the active lock, so the count below is the one
+        // every other importer sees (RFC 156 §7.4 rule 5).
+        let Some(stored) = stored_objects.read_object(envelope.object_id())? else {
+            // A new object is stored as carried; the bound applies to it as to a merge.
+            crate::signature_admission::require_within_signature_bound(envelope, &self.policy)?;
+            return Ok(AdmittedOne {
+                envelope: envelope.clone(),
+                merged: false,
+                dropped: Vec::new(),
+            });
+        };
+        if !self.several_records {
+            // Format 6: the store keeps the stored record or refuses a different one; nothing merges.
+            return Ok(AdmittedOne {
+                envelope: envelope.clone(),
+                merged: false,
+                dropped: Vec::new(),
+            });
+        }
+        let decided = crate::signature_admission::admit_signatures(
+            &stored,
+            envelope,
+            &self.policy,
+            &mut author_material,
+        )?;
+        if decided.adds_signatures {
+            // Judged as it would be stored: the union. A copy adding nothing writes nothing, so a set a
+            // local writer filled past the limit never refuses a re-import.
+            crate::signature_admission::require_within_signature_bound(
+                &decided.envelope,
+                &self.policy,
+            )?;
+        }
+        Ok(AdmittedOne {
+            envelope: decided.envelope,
+            merged: decided.adds_signatures,
+            dropped: decided.dropped,
+        })
+    }
+}
+
 /// RFC 156 §4 rules 1–3 over a batch of carried objects — `bundle import` and `sync accept` both. Reads
-/// only; the caller writes `envelopes` afterwards.
+/// only; the caller writes `envelopes` afterwards. A thin loop over [`CarriedSignatureAdmitter::
+/// admit_one`] now (RFC 155 Part P2b) -- unchanged behavior and signature for this function's own
+/// two existing callers; see [`CarriedSignatureAdmitter`] for the streaming-shaped alternative
+/// `archive::import`'s stage 1 uses instead of calling this one over a whole pre-collected type.
 pub(crate) fn admit_carried_signatures(
     layout: &RepositoryLayout,
     stored_objects: &impl ObjectReader,
     carried: &[ObjectEnvelope],
     mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
 ) -> Result<CarriedAdmission> {
+    let admitter = CarriedSignatureAdmitter::new(layout)?;
     let mut admission = CarriedAdmission {
         envelopes: Vec::with_capacity(carried.len()),
         merged_object_count: 0,
         dropped: Vec::new(),
     };
-    let policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
-    let several_records = layout.format().holds_several_records_per_id();
     for envelope in carried {
-        // Read through the caller's session, opened under the active lock, so the count below is the one
-        // every other importer sees (RFC 156 §7.4 rule 5).
-        let Some(stored) = stored_objects.read_object(envelope.object_id())? else {
-            // A new object is stored as carried; the bound applies to it as to a merge.
-            crate::signature_admission::require_within_signature_bound(envelope, &policy)?;
-            admission.envelopes.push(envelope.clone());
-            continue;
-        };
-        if !several_records {
-            // Format 6: the store keeps the stored record or refuses a different one; nothing merges.
-            admission.envelopes.push(envelope.clone());
-            continue;
-        }
-        let decided = crate::signature_admission::admit_signatures(
-            &stored,
-            envelope,
-            &policy,
-            &mut author_material,
-        )?;
-        if decided.adds_signatures {
-            // Judged as it would be stored: the union. A copy adding nothing writes nothing, so a set a
-            // local writer filled past the limit never refuses a re-import.
-            crate::signature_admission::require_within_signature_bound(&decided.envelope, &policy)?;
+        let admitted = admitter.admit_one(stored_objects, envelope, &mut author_material)?;
+        if admitted.merged {
             admission.merged_object_count = admission
                 .merged_object_count
                 .checked_add(1)
                 .ok_or_else(|| PrikkError::Integrity("merged-object count overflow".to_string()))?;
         }
-        admission.dropped.extend(decided.dropped);
-        admission.envelopes.push(decided.envelope);
+        admission.dropped.extend(admitted.dropped);
+        admission.envelopes.push(admitted.envelope);
     }
     Ok(admission)
 }

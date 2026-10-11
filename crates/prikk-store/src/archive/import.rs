@@ -21,16 +21,31 @@
 //! this sibling module through their shared parent) rather than re-deriving the frame format a
 //! second time -- see each reused function's own doc note in `verify.rs`.
 //!
-//! **Stage 1 never holds more than one object type's own records in memory at a time** (the
-//! handoff's own prohibited-shortcut: "holding the whole archive or every object in memory").
-//! Processed in [`crate::bundle::object_type_dependency_rank`]'s own cross-type order -- the same
-//! ranking `bundle import` and `patch_exchange::accept` already use -- with same-kind topological
-//! order applied per type via [`crate::bundle::objects_in_dependency_order`]. **An id already
-//! present locally may gain a carried signature** (§9.7, RFC 156 §4's merge), through
-//! [`crate::bundle::admit_carried_signatures`] -- the same path `bundle import`/
-//! `patch_exchange::accept` already use, not a second copy of that rule. A signature that does not
-//! qualify (an unadopted MAINTAINER key, an unrecorded AUTHOR key, an unverifiable role) is dropped
-//! and named, never silently discarded.
+//! **Stage 1 never holds more than one decoded object's own bytes in memory at a time** (RFC 155
+//! Part P2b, review `release-0.51.0-prep-P2-review-v1`: the handoff's own prohibited-shortcut,
+//! "holding the whole archive or every object in memory," held only *across* types at first --
+//! within one type, every one of its objects was still collected into a `Vec` before any of them
+//! was admitted or written, which measured at 2.254x the archive's own size for a 1 GiB fixture
+//! concentrated in one type. Fixed by streaming: each record `for_each_object_record` decodes is
+//! admitted through [`crate::bundle::CarriedSignatureAdmitter`] and written immediately, one at a
+//! time, before the next is even decoded.) Processed in [`crate::bundle::
+//! object_type_dependency_rank`]'s own cross-type order -- the same ranking `bundle import` and
+//! `patch_exchange::accept` already use. **No same-kind re-sort is needed within a type**: an
+//! archive's own `ObjectContainer` section is a verbatim stream of the live container file's own
+//! bytes (`archive.rs`'s own `write_section`), so decode order here is exactly the container's own
+//! on-disk append order, and this codebase's write-once, content-addressed object stores can only
+//! ever append a same-kind dependency (a `Block`'s own parents, a `RefState`'s own
+//! `previous_ref_state_id`) *before* whatever will later reference it -- container order is
+//! already a valid topological order for these, unlike a *bundle*'s own carried order, which
+//! [`crate::bundle::objects_in_dependency_order`]'s own doc comment notes can list a child before
+//! its parent (that function keeps re-sorting for `bundle import`'s own, differently-assembled
+//! envelope list; this module no longer needs it). **An id already present locally may gain a
+//! carried signature** (§9.7, RFC 156 §4's merge), through [`crate::bundle::
+//! CarriedSignatureAdmitter::admit_one`] -- the same rule `bundle import`/`patch_exchange::accept`
+//! apply through [`crate::bundle::admit_carried_signatures`], factored so both share one admission
+//! decision rather than this module re-deriving it. A signature that does not qualify (an unadopted
+//! MAINTAINER key, an unrecorded AUTHOR key, an unverifiable role) is dropped and named, never
+//! silently discarded.
 //!
 //! **Stage 2 records carried author keys through the unchanged DC-78 path**
 //! (`check_author_key_conflict` at stage 0, `record_author_key_material` here) -- both already
@@ -82,9 +97,7 @@ use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload};
 use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
 };
-use crate::bundle::{
-    admit_carried_signatures, object_type_dependency_rank, objects_in_dependency_order,
-};
+use crate::bundle::{CarriedSignatureAdmitter, object_type_dependency_rank};
 use crate::foundation::file_codec::decode_envelope_file;
 use crate::foundation::fsutil::{
     create_new_file_required, ensure_directory_required, read_file_if_exists,
@@ -426,11 +439,13 @@ pub fn import_archive<R: Read + Seek>(
         crate::foundation::layout::DEFAULT_ACTIVE_NAME,
     )?;
 
-    // Stage 1: one object type at a time, in dependency order, never the whole archive's objects
-    // in memory together. RFC 155 Part I-B (§9.7, review finding IA1's own restriction lifted):
-    // an id already present locally may now gain a carried signature through RFC 156 §4's merge,
-    // the same way `import_bundle` and `patch_exchange::accept` already admit one -- via
-    // `admit_carried_signatures`, not a second copy of that rule.
+    // Stage 1: one object type at a time, in container (= dependency) order, one decoded object
+    // at a time within a type -- never the whole archive's, or even a whole type's, objects in
+    // memory together (RFC 155 Part P2b; see this module's own doc comment for why container
+    // order needs no re-sort). RFC 155 Part I-B (§9.7, review finding IA1's own restriction
+    // lifted): an id already present locally may now gain a carried signature through RFC 156 §4's
+    // merge, the same way `import_bundle` and `patch_exchange::accept` already admit one -- via
+    // `CarriedSignatureAdmitter::admit_one`, not a second copy of that rule.
     let mut object_store = ObjectWriteSession::open(layout)?;
     let mut object_types: Vec<ObjectType> = persisted_object_types().to_vec();
     object_types.sort_by_key(|object_type| object_type_dependency_rank(*object_type));
@@ -462,35 +477,61 @@ pub fn import_archive<R: Read + Seek>(
     // `#[cfg(test)]` seam (whose `Err` always runs every `Drop`) could ever exercise.
     #[cfg(feature = "test-support")]
     let mut test_support_objects_written_so_far = 0usize;
+    // RFC 155 Part P2b (review `release-0.51.0-prep-P2-review-v1`): stream within a type instead
+    // of collecting its whole batch of envelopes first. `export_archive` writes each
+    // `ObjectContainer` section as a verbatim stream of the live container file's own bytes
+    // (`archive.rs`'s own `write_section`/`stream_copy`, never a re-encode), so the records
+    // `for_each_object_record` decodes here arrive in exactly the container's own on-disk append
+    // order. Because every object store in this codebase is write-once and content-addressed, a
+    // same-kind dependency (a `Block`'s own parents, a `RefState`'s own `previous_ref_state_id` --
+    // `same_kind_dependencies`' own two cases) can only ever be *appended* after the record that
+    // will later reference it already exists on disk -- so container order is already a valid
+    // topological order for same-kind references, and `objects_in_dependency_order`'s own re-sort
+    // (which needed the whole type's envelopes collected first, precisely to sort them) is
+    // unnecessary here. (This does **not** generalize to a *bundle*'s own carried order, which
+    // `objects_in_dependency_order`'s own doc comment notes can list a child before its parent --
+    // a bundle's envelope list is assembled by a different, non-append-order process; this
+    // reasoning is specific to an archive's own verbatim container sections.) Each decoded record
+    // is admitted through RFC 156 §4 and written immediately, one at a time, never collecting more
+    // than one envelope's own memory at once; `admit_one`'s own repeated, incremental reads against
+    // `object_store` (which this same loop is concurrently writing to) see a consistent answer
+    // because every id within one archive's own single container is distinct from every other --
+    // this run's own earlier writes for this type never change a later admission decision for a
+    // different id. `object_store.check_write` is not called separately before the write any more
+    // either: `write_object_under_held_lock` already re-validates via its own `decide_write` call,
+    // so a second, separate pre-pass over the whole type was redundant work, not an extra
+    // guarantee -- and a `check_write` failure partway through a type is exactly as resumable as
+    // any other mid-type kill this module's own journal/cancel mechanism already handles.
     for object_type in object_types {
         let entry = find_entry(&manifest, ArchiveSectionKind::ObjectContainer(object_type))?;
-        let mut envelopes: Vec<ObjectEnvelope> = Vec::new();
-        for_each_object_record(source, entry, object_type, |body| {
-            envelopes.push(decode_envelope_file(body)?);
-            Ok(())
-        })?;
-        // RFC 156 §4 rules 1-3: for every carried object of this type this repository already
-        // holds, which of its signatures may join the stored record -- verified here, before any
-        // of this type's objects is written, the same discipline `import_bundle` already follows
-        // (its own doc note on `admission`). A format-6 repository's own store refuses a second
-        // envelope for an id it holds instead of merging (`admit_carried_signatures`'s own `!
-        // several_records` branch); nothing here duplicates that rule.
-        let admission = admit_carried_signatures(layout, &object_store, &envelopes, |key_id| {
-            let mut entries = lookup_author_key_entries(layout, key_id)?;
-            if let Some(carried) = author_material.get(key_id) {
-                entries.extend(carried.iter().cloned());
-            }
-            Ok(entries)
-        })?;
-        for envelope in &admission.envelopes {
-            object_store.check_write(envelope)?;
-        }
-        let admitted_envelopes = objects_in_dependency_order(admission.envelopes)?;
+        let admitter = CarriedSignatureAdmitter::new(layout)?;
         let mut written = 0usize;
-        for envelope in admitted_envelopes {
-            let id = envelope.object_id();
+        let mut type_merged_count = 0usize;
+        for_each_object_record(source, entry, object_type, |body| {
+            let envelope = decode_envelope_file(body)?;
+            // RFC 156 §4 rules 1-3: for every carried object of this type this repository already
+            // holds, which of its signatures may join the stored record -- verified here, before
+            // this one object is written, the same rule `import_bundle` already follows, over one
+            // envelope at a time instead of a whole pre-built batch (`CarriedSignatureAdmitter`'s
+            // own doc comment). A format-6 repository's own store refuses a second envelope for an
+            // id it holds instead of merging (`admit_one`'s own `!several_records` branch); nothing
+            // here duplicates that rule.
+            let admitted = admitter.admit_one(&object_store, &envelope, |key_id| {
+                let mut entries = lookup_author_key_entries(layout, key_id)?;
+                if let Some(carried) = author_material.get(key_id) {
+                    entries.extend(carried.iter().cloned());
+                }
+                Ok(entries)
+            })?;
+            if admitted.merged {
+                type_merged_count = type_merged_count.checked_add(1).ok_or_else(|| {
+                    PrikkError::Integrity("merged-object count overflow".to_string())
+                })?;
+            }
+            dropped_signatures.extend(admitted.dropped);
+            let id = admitted.envelope.object_id();
             let already_present = object_store.contains_object(object_type, id)?;
-            object_store.write_object_under_held_lock(&envelope, &_container_locks)?;
+            object_store.write_object_under_held_lock(&admitted.envelope, &_container_locks)?;
             if !already_present {
                 written = written.checked_add(1).ok_or_else(|| {
                     PrikkError::Integrity(
@@ -529,10 +570,10 @@ pub fn import_archive<R: Read + Seek>(
                     test_support_objects_written_so_far.saturating_add(1);
                 block_after_n_objects_for_real_kill_test(test_support_objects_written_so_far);
             }
-        }
+            Ok(())
+        })?;
         written_object_counts.push((object_type, written));
-        merged_object_counts.push((object_type, admission.merged_object_count));
-        dropped_signatures.extend(admission.dropped);
+        merged_object_counts.push((object_type, type_merged_count));
     }
 
     // Test seam, unreachable from production: a kill right after stage 1's own last write, before

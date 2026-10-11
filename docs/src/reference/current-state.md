@@ -234,7 +234,11 @@ planned for.
 - **`bundle import` peaks at about 4.6 times the bundle's size in memory** (5.26 GiB for a 1.15 GiB
   bundle), from whole-file and whole-object buffering. Found during RFC 155's design round, outside
   that RFC's own scope; a candidate for a later release. `prikk archive import` does not share this
-  defect — it never holds a whole object type's own batch, let alone the whole archive, in memory.
+  defect: it processes one object at a time, so its own peak RSS is bounded by the single largest
+  object the archive carries, not by the archive's own total size — measured at about 5 times the
+  largest object's own size (an earlier version held a whole object type's own batch at once,
+  measured at 2.25 times the archive's own size for 1 GiB concentrated in one type; fixed before
+  0.51.0 shipped).
 
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes

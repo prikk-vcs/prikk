@@ -408,33 +408,93 @@ fn archive_import_rss_at_one_gib_of_blob_content() {
          samples (KiB) = {peaks:?}, median = {median_kib}, wall (ms) = {wall_ms:?}"
     );
 
-    // The bound this test exists to prove: import's own peak RSS must not scale with the
-    // archive's own size (the "prohibited shortcut" this part's own handoff names: holding the
-    // whole archive in memory) -- it is bounded by the single largest object instead (itself
-    // capped at `DEFAULT_BUNDLE_MAX_OBJECT_BYTES`, see the verify test's own comment for why a
-    // ceiling equal to that bound itself would leave no room for decode overhead), plus an
-    // explicit comparison against the archive's own size so a future regression that merely stays
-    // under the per-object ceiling (but now scales with archive size) is still visible.
+    // RFC 155 Part P2b (review `release-0.51.0-prep-P2-review-v1`): the bound this test exists to
+    // prove is "bounded by the largest object times a small constant," not by the archive's own
+    // size. The real constant, measured here, is close to 5x the largest single object -- not the
+    // ~1-2x an idealized single-copy decode might suggest, because one object's own bytes are
+    // genuinely alive more than once at peak: the raw record `for_each_object_record` reads from
+    // the container section, the decoded `ObjectEnvelope`'s own `canonical_payload`, and the clone
+    // `CarriedSignatureAdmitter::admit_one` produces for a brand-new object's own admission result
+    // -- three live copies of one object's own payload, plus write-path and allocator overhead.
+    // Still a small constant, genuinely independent of archive size (confirmed by the second
+    // measurement below, not merely asserted) -- just not as tight as 4x. A future change that
+    // avoids the admission clone for a brand-new object (no signature decision to make, so nothing
+    // to merge) could tighten this further; out of this part's own scope.
     const PER_BLOB_KIB: i64 = (PER_BLOB / 1024) as i64;
-    const CEILING_KIB: i64 = PER_BLOB_KIB * 4;
+    const CEILING_KIB: i64 = PER_BLOB_KIB * 6;
     assert!(
         median_kib < CEILING_KIB,
-        "median peak RSS {median_kib} KiB exceeds the {CEILING_KIB} KiB ceiling (4x the largest \
+        "median peak RSS {median_kib} KiB exceeds the {CEILING_KIB} KiB ceiling (6x the largest \
          single object, {PER_BLOB_KIB} KiB) for importing a ~1 GiB archive"
     );
+
+    // The real independence control: a second archive, double this one's own total size but with
+    // the *same* largest single object, must not roughly double peak RSS too -- if it did, memory
+    // would still be scaling with archive size, just under a looser per-object ceiling than
+    // before this part's own fix. One sample only (not `SAMPLES_PER_POINT`): this check only
+    // needs to detect a *doubling*, not a precise median, and a second ~2 GiB fixture already
+    // roughly doubles this test's own wall time.
+    let doubled_source_repo = support::unique_repo("rfc155-archive-import-rss-2gib-source");
+    support::init(&doubled_source_repo);
+    write_many_blobs_totaling(&doubled_source_repo, ONE_GIB * 2, PER_BLOB);
+    support::ok(
+        &support::commit(
+            &doubled_source_repo,
+            "heads/main",
+            "~2 GiB across several blobs",
+        ),
+        "commit",
+    );
+    support::ok(&support::seal(&doubled_source_repo, "heads/main"), "seal");
+    let doubled_archive_path = doubled_source_repo.join("source.prepo");
+    let doubled_export_status = std::process::Command::new(env!("CARGO_BIN_EXE_prikk"))
+        .current_dir(&doubled_source_repo)
+        .args(["archive", "export", "source.prepo"])
+        .status()
+        .expect("spawning archive export for the doubled-size import fixture");
     assert!(
-        median_kib < archive_size_kib / 4,
-        "median peak RSS {median_kib} KiB is not clearly bounded independently of the archive's \
-         own size ({archive_size_kib} KiB) -- expected well under a quarter of it"
+        doubled_export_status.success(),
+        "archive export must succeed to build the doubled-size import fixture"
+    );
+    let doubled_archive_size_kib =
+        (std::fs::metadata(&doubled_archive_path).unwrap().len() / 1024) as i64;
+    let doubled_dest_repo = support::unique_repo("rfc155-archive-import-rss-2gib-dest");
+    support::init(&doubled_dest_repo);
+    let doubled_run = measure_rss(
+        &doubled_dest_repo,
+        &["archive", "import", doubled_archive_path.to_str().unwrap()],
+        &[],
+    );
+    assert_eq!(
+        doubled_run.exit_code,
+        Some(0),
+        "import of the doubled-size archive must succeed: {}",
+        doubled_run.stderr
+    );
+    let _ = std::fs::remove_dir_all(&doubled_dest_repo);
+    eprintln!(
+        "2 GiB archive ({doubled_archive_size_kib} KiB, same {PER_BLOB_KIB} KiB largest object): \
+         import peak RSS (KiB) = {}",
+        doubled_run.peak_rss_kib
+    );
+    assert!(
+        doubled_run.peak_rss_kib < median_kib * 3 / 2,
+        "doubling the archive's own size ({archive_size_kib} KiB -> {doubled_archive_size_kib} \
+         KiB) grew import's peak RSS from {median_kib} KiB to {} KiB -- expected it to stay \
+         close (under 1.5x), not scale with the archive",
+        doubled_run.peak_rss_kib
     );
 
     let report = format!(
         "# RFC 155 archive import -- peak RSS at ~1 GiB of blob content\n\n\
          Generated by `cargo test -p prikk --release --locked --test rfc155_archive_export_memory -- \
          --ignored --nocapture`. {SAMPLES_PER_POINT} samples, median shown. Archive size: \
-         {archive_size_bytes} bytes ({archive_size_kib} KiB).\n\n\
+         {archive_size_bytes} bytes ({archive_size_kib} KiB). A second, ~2 GiB archive with the \
+         same largest object measured peak RSS {} KiB ({doubled_archive_size_kib} KiB archive), \
+         confirming the bound does not scale with archive size.\n\n\
          | peak RSS samples (KiB) | median (KiB) | wall samples (ms) |\n|---|---:|---|\n\
-         | {peaks:?} | {median_kib} | {wall_ms:?} |\n"
+         | {peaks:?} | {median_kib} | {wall_ms:?} |\n",
+        doubled_run.peak_rss_kib
     );
     let out_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.git-exclude/measurements/rfc155");
