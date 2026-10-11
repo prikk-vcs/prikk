@@ -25,13 +25,51 @@ impl ActiveLock {
     /// RFC 108 increment 3a: `name` widened from `&str` to `impl AsRef<Path>`, matching
     /// `wal.rs::Wal::for_layout`. No other change needed here -- `relative` was already **derived**
     /// from `path` via `repository_relative`, never reconstructed from `name` the way `Wal` used to.
+    ///
+    /// RFC 155 Part I-A: refuses while an archive import's journal is present, for the default
+    /// session only (confirmed from source: every production writer that takes this lock --
+    /// `commit`, `seal`, `trust maintainer add`, `bundle import`, and the rest -- passes
+    /// `DEFAULT_ACTIVE_NAME` unconditionally; a non-default session is RFC 108's own parallel
+    /// authoring mechanism, not "the" repository-wide writer gate). This is the structural half of
+    /// §9.5's rule ("every repository writer refuses"): every caller of this function, present and
+    /// future, is covered with no per-call-site enumeration to remember, because this is -- by this
+    /// module's own established doc note on `ensure_write_state` -- "the one call site every writer
+    /// passes through." `Self::acquire_allowing_import_journal` is the named, narrow exception,
+    /// used only by the import itself (so a resume can re-acquire this lock while its own journal
+    /// is present), the cancel, and doctor's own recovery verbs.
     pub fn acquire(layout: &RepositoryLayout, name: impl AsRef<Path>) -> Result<Self> {
+        Self::acquire_checked(layout, name, true)
+    }
+
+    /// As [`Self::acquire`], but never refuses for an archive import's own journal -- the named
+    /// exception [`Self::acquire`]'s own doc comment describes. Used only by: `archive::import`'s
+    /// own lock acquisition (a resume must be able to re-acquire this lock while its own journal is
+    /// still present), `archive::import::cancel_import`, and doctor's recovery verbs
+    /// (`repair_tails`/`plan_repair_tails`, `discard_damaged_commits`, `restore_queue_target`,
+    /// `repair_repository`'s per-active loop, and `recovery_restore`/`recovery_clear` via
+    /// `recovery_log::repair_locks`) -- enumerated here, from source, the same way RFC 163
+    /// enumerated its own write-side tail-guard call sites, so this doc comment's own list is a
+    /// checkable claim, not a label.
+    pub(crate) fn acquire_allowing_import_journal(
+        layout: &RepositoryLayout,
+        name: impl AsRef<Path>,
+    ) -> Result<Self> {
+        Self::acquire_checked(layout, name, false)
+    }
+
+    fn acquire_checked(
+        layout: &RepositoryLayout,
+        name: impl AsRef<Path>,
+        check_import_journal: bool,
+    ) -> Result<Self> {
         let is_default = name.as_ref() == Path::new(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+        if is_default && check_import_journal {
+            crate::foundation::import_journal_marker::refuse_while_present(layout)?;
+        }
         let path = layout.active_lock_path(name);
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
         acquire_lock_file(&mutation_root, &relative, &path, "active")?;
-        let _ = is_default;
         Ok(Self {
             path,
             relative,
@@ -45,6 +83,21 @@ impl ActiveLock {
     pub fn acquire_for_write(layout: &RepositoryLayout, name: impl AsRef<Path>) -> Result<Self> {
         let is_default = name.as_ref() == Path::new(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
         let lock = Self::acquire(layout, name)?;
+        if is_default {
+            layout.ensure_write_state()?;
+        }
+        Ok(lock)
+    }
+
+    /// As [`Self::acquire_for_write`], built on [`Self::acquire_allowing_import_journal`] instead of
+    /// [`Self::acquire`] -- doctor's own recovery verbs that also need `ensure_write_state` run
+    /// (`repair_tails`, `repair_repository`'s per-active loop) use this one.
+    pub(crate) fn acquire_for_write_allowing_import_journal(
+        layout: &RepositoryLayout,
+        name: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let is_default = name.as_ref() == Path::new(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+        let lock = Self::acquire_allowing_import_journal(layout, name)?;
         if is_default {
             layout.ensure_write_state()?;
         }

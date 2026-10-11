@@ -133,10 +133,14 @@ impl ArchiveVerifyReport {
     }
 }
 
-struct ManifestView {
-    repository_format: u32,
-    tool_version: String,
-    entries: Vec<ManifestEntry>,
+/// `pub(super)`, not private: RFC 155 Part I-A's own `archive::import` re-reads the same manifest
+/// (over the same already-internally-consistent archive, confirmed by its own call to
+/// [`verify_archive`] first) to locate the sections it writes from -- not a second decoder, the
+/// same one, shared with its sibling module through their common parent.
+pub(super) struct ManifestView {
+    pub(super) repository_format: u32,
+    pub(super) tool_version: String,
+    pub(super) entries: Vec<ManifestEntry>,
 }
 
 /// Verify a `PREPO001` archive read from `source`, streamed on both ends (§9.4). Never writes
@@ -366,7 +370,11 @@ fn extract_references(envelope: &ObjectEnvelope) -> Result<Vec<ObjectId>> {
 /// shape, reused), feeding `on_record` only the records whose own checksum matches. Returns whether
 /// the section's outer checksum (covering every byte read, sound records and torn/damaged ones
 /// alike) matches what the manifest recorded.
-fn for_each_object_record<R: Read + Seek>(
+///
+/// `pub(super)`: RFC 155 Part I-A's own `archive::import` needs the identical decode -- not a
+/// second copy of it -- for its own stage 1, over an archive its own stage 0 already confirmed
+/// internally consistent via [`verify_archive`] (see [`ManifestView`]'s own doc note).
+pub(super) fn for_each_object_record<R: Read + Seek>(
     source: &mut R,
     entry: &ManifestEntry,
     object_type: ObjectType,
@@ -481,7 +489,13 @@ fn stream_opaque_section<R: Read + Seek>(source: &mut R, entry: &ManifestEntry) 
 
 /// Read one section's full body into memory -- only ever called for the three small, carried
 /// key-material sections, bounded by [`MAX_SMALL_SECTION_BYTES`], never for an object container.
-fn read_section_body_fully<R: Read + Seek>(
+///
+/// `pub(super)`: RFC 155 Part I-A's own `archive::import` needs this for the two resolved-ref-index
+/// sections (to compute its landing plan, §9.5) as well, which this module never decodes past their
+/// own outer checksum (`verify_archive` only cares that each resolved family's checksum matches --
+/// it never needs the ref names inside, so [`stream_opaque_section`] is all it ever runs against
+/// them). See [`ManifestView`]'s own doc note.
+pub(super) fn read_section_body_fully<R: Read + Seek>(
     source: &mut R,
     entry: &ManifestEntry,
 ) -> Result<Vec<u8>> {
@@ -499,7 +513,11 @@ fn read_section_body_fully<R: Read + Seek>(
     Ok(body)
 }
 
-fn find_entry(manifest: &ManifestView, kind: ArchiveSectionKind) -> Result<&ManifestEntry> {
+/// `pub(super)`: `archive::import`'s own reuse, see [`ManifestView`]'s own doc note.
+pub(super) fn find_entry(
+    manifest: &ManifestView,
+    kind: ArchiveSectionKind,
+) -> Result<&ManifestEntry> {
     manifest
         .entries
         .iter()
@@ -547,7 +565,9 @@ fn read_maintainer_policy<R: Read + Seek>(
     Ok(MaintainerTrustPolicy { keys })
 }
 
-fn read_author_material<R: Read + Seek>(
+/// `pub(super)`: RFC 155 Part I-A's own stage 2 needs the identical carried author-key material
+/// this module's own signature checks already decode -- see [`ManifestView`]'s own doc note.
+pub(super) fn read_author_material<R: Read + Seek>(
     source: &mut R,
     manifest: &ManifestView,
 ) -> Result<HashMap<String, Vec<AuthorKeyEntry>>> {
@@ -563,7 +583,11 @@ fn read_author_material<R: Read + Seek>(
     Ok(map)
 }
 
-fn read_end_trailer<R: Read + Seek>(source: &mut R) -> Result<(u64, u64, u64, [u8; 32])> {
+/// `pub(super)`: RFC 155 Part I-A's own `archive::import` re-locates the manifest the same way
+/// [`verify_archive`] already did, over the same reader -- see [`ManifestView`]'s own doc note.
+pub(super) fn read_end_trailer<R: Read + Seek>(
+    source: &mut R,
+) -> Result<(u64, u64, u64, [u8; 32])> {
     let total_len = source.seek(SeekFrom::End(0))?;
     if total_len < END_TRAILER_LEN_USIZE as u64 + 8 {
         return Err(PrikkError::MalformedData(
@@ -601,7 +625,8 @@ fn read_end_trailer<R: Read + Seek>(source: &mut R) -> Result<(u64, u64, u64, [u
 /// trailer) is checked against the manifest's own real bytes **before** `decode_manifest_bytes`
 /// turns any of them into a field this call trusts -- a mismatch refuses by name, never silently
 /// decoding a manifest that does not match what the trailer says it should be.
-fn read_manifest<R: Read + Seek>(
+/// `pub(super)`: RFC 155 Part I-A's own reuse -- see [`ManifestView`]'s own doc note.
+pub(super) fn read_manifest<R: Read + Seek>(
     source: &mut R,
     manifest_offset: u64,
     manifest_length: u64,

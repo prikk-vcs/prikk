@@ -150,7 +150,11 @@ fn walk_finds_the_confirmed_production_module_count() {
     // `refs::rebuild_discovery`, the same size-check reason: 158 -> 159.
     // RFC 155 implementation Part E added `archive`, the whole-repository export module: 159 -> 160.
     // RFC 155 implementation Part V added `archive::verify`, the archive's own streaming reader: 160 -> 161.
-    assert_eq!(modules.len(), 161, "modules: {modules:?}");
+    // RFC 155 implementation Part I-A added `archive::import`, the journal and stages 0-2: 161 -> 162.
+    // RFC 155 implementation Part I-A added `foundation::import_journal_marker`, the minimal
+    // journal-presence read `lock.rs` itself needs without depending on `archive` (the layer rule
+    // caught a first version's `archive -> lock` cycle): 162 -> 163.
+    assert_eq!(modules.len(), 163, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

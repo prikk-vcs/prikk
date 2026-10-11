@@ -96,7 +96,11 @@ fn run_repair_tails(layout: &RepositoryLayout, plan_only: bool) -> Result<Repair
     // still takes it (and every lock below) -- it writes nothing, but reads under the identical hold
     // a real run would, so the plan it prints is provably the plan a real run would also act on.
     let _run = crate::recovery_log::begin_run();
-    let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
+    // RFC 155 Part I-A: one of doctor's own recovery verbs -- runs even while an archive import's
+    // journal is present (`ActiveLock::acquire_for_write`'s own doc comment enumerates this call
+    // site).
+    let _active_lock =
+        ActiveLock::acquire_for_write_allowing_import_journal(layout, DEFAULT_ACTIVE_NAME)?;
     let _container_locks = acquire_container_locks(
         layout,
         &[

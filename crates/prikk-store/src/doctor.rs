@@ -828,6 +828,33 @@ fn push_interrupted_materialization_issue(
     }
 }
 
+/// RFC 155 Part I-A: `doctor`'s own state table (§9.5) -- *N of M refs landed* is §9.5's own
+/// phrasing for the full import (stages 0-3); Part I-A builds no landing yet, so this names what
+/// this part actually tracks (whether the journal is present) rather than a literal "N of M"
+/// count Part I-B's own stage 3 will own.
+fn push_interrupted_import_issue(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue>) {
+    match crate::archive::interrupted_import_short_id(layout) {
+        Ok(None) => {}
+        Ok(Some(id)) => {
+            issues.push(DoctorIssue::error(
+                "PRIKK-DOCTOR-INTERRUPTED-IMPORT",
+                format!(
+                    "an archive import did not finish (id {id}); it may have written some \
+                     objects, but landed no ref"
+                ),
+                format!(
+                    "run the same import again (it resumes), or `prikk doctor --cancel-import {id}`"
+                ),
+            ));
+        }
+        Err(err) => issues.push(DoctorIssue::error(
+            "PRIKK-DOCTOR-INTERRUPTED-IMPORT",
+            format!("the archive import journal could not be read: {err}"),
+            "preserve the repository and inspect `.prikk/import/journal`".to_string(),
+        )),
+    }
+}
+
 /// Run doctor diagnostics for a repository layout.
 #[must_use]
 pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
@@ -839,6 +866,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     push_current_branch_issue(layout, &mut issues);
     push_provisional_worktree_issue(layout, &mut issues);
     push_interrupted_materialization_issue(layout, &mut issues);
+    push_interrupted_import_issue(layout, &mut issues);
     match verify_repository(layout) {
         Ok(verification) => {
             // DC-95 Stage 2 Level 1: a stage that failed or could not evaluate is blocking by
@@ -1520,7 +1548,10 @@ pub fn repair_repository(
             });
             continue;
         }
-        let lock = match ActiveLock::acquire_for_write(layout, &name) {
+        // RFC 155 Part I-A: `repair_repository` is one of doctor's own recovery verbs -- runs even
+        // while an archive import's journal is present (`ActiveLock::
+        // acquire_for_write_allowing_import_journal`'s own doc comment enumerates this call site).
+        let lock = match ActiveLock::acquire_for_write_allowing_import_journal(layout, &name) {
             Ok(lock) => lock,
             Err(error) => {
                 active_repairs.push(ActiveSessionRepairOutcome {

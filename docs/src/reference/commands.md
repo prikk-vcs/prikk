@@ -84,6 +84,7 @@ prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [-
 prikk doctor [path] --recovery-list
 prikk doctor [path] --recovery-restore <run id> [--plan-only]
 prikk doctor [path] --recovery-clear [--plan-only]
+prikk doctor [path] --cancel-import <id> [--plan-only]
 prikk ref complete <ref> [--plan-only]
 prikk format upgrade [path]
 prikk unlock

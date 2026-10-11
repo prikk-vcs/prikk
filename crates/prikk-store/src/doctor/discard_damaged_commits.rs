@@ -91,7 +91,10 @@ fn refusal_reason(verdict: &Verdict) -> Option<&'static str> {
 fn run(layout: &RepositoryLayout, mode: Mode) -> Result<DiscardDamagedCommitsPlan> {
     // RFC 168 A1, item 2: the WAL cut and the witness rewrite below are one run.
     let _run = crate::recovery_log::begin_run();
-    let _active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME)?;
+    // RFC 155 Part I-A: one of doctor's own recovery verbs -- runs even while an archive import's
+    // journal is present (`ActiveLock::acquire_allowing_import_journal`'s own doc comment
+    // enumerates this call site).
+    let _active_lock = ActiveLock::acquire_allowing_import_journal(layout, DEFAULT_ACTIVE_NAME)?;
     if matches!(mode, Mode::Execute) {
         // RFC 168 F6: a plan-only run creates nothing; the execute path is a writer (RFC 168 §3.1, §3.3).
         layout.ensure_write_state()?;

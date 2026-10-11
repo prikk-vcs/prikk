@@ -25,8 +25,13 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+mod import;
 mod verify;
 
+pub use import::{
+    ArchiveImportReport, CancelImportReport, CancelImportStep, PlannedRefLanding, cancel_import,
+    import_archive, interrupted_import_short_id,
+};
 pub use verify::{ArchiveVerifyReport, CarriedMaintainerKeySummary, verify_archive};
 
 use prikk_error::{PrikkError, Result};

@@ -342,6 +342,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  prikk doctor [path] --recovery-list       List the saved entries, grouped by the repair run that wrote them (RFC 168)",
             "  prikk doctor [path] --recovery-restore <run id> [--plan-only]  Undo one repair run, its steps in reverse order; refuses unless every file still holds what the run left; --plan-only previews without writing",
             "  prikk doctor [path] --recovery-clear [--plan-only]  Remove every saved entry, permanently; --plan-only previews without writing",
+            "  prikk doctor [path] --cancel-import <id> [--plan-only]  Cancel an interrupted archive import (RFC 155 §9.5): saves the bytes an interrupted import appended to the recovery log, then cuts every container it touched back to its own starting length; refuses if no import with that id is present; --plan-only previews without writing",
         ],
     },
     Command {

@@ -570,6 +570,19 @@ pub(crate) fn repairable_sources(layout: &RepositoryLayout) -> Result<Vec<String
     paths.push(layout.received_index_generation_log_path());
     paths.push(layout.trust_key_container_path());
     paths.push(layout.author_key_container_path());
+    // RFC 155 Part I-A: `archive import`'s cancel is the first writer ever to truncate an object
+    // container (Rule B's own "object containers... report only" has held everywhere else) --
+    // slot A only, since object containers never use slot B (D1/D3's confirmed finding: never
+    // compacted, never repaired in place). No `meaning_paths_for` row needed: like the trust/author
+    // key containers just above, an object container is read by its own frames alone, so it falls
+    // through to that function's own "no meaning files" default.
+    for object_type in crate::foundation::layout::persisted_object_types() {
+        paths.push(layout.container_slot_path(object_type, ContainerSlot::A));
+    }
+    // The shared object index: `LockableContainer::ObjectStore` is every object container *and*
+    // this file, taken together as one resource (`layout.rs`'s own doc note) -- `cancel_import`
+    // cuts it back too, alongside whichever type container(s) grew.
+    paths.push(layout.container_index_path());
     paths
         .iter()
         .map(|path| {
@@ -1229,7 +1242,12 @@ fn repair_locks(
     sessions.insert(std::ffi::OsString::from(DEFAULT_ACTIVE_NAME));
     let mut actives = Vec::with_capacity(sessions.len());
     for name in &sessions {
-        actives.push(crate::lock::ActiveLock::acquire(layout, name)?);
+        // RFC 155 Part I-A: `--recovery-restore`/`--recovery-clear` are among doctor's own recovery
+        // verbs -- run even while an archive import's own journal is present (`ActiveLock::
+        // acquire_allowing_import_journal`'s own doc comment enumerates this call site).
+        actives.push(crate::lock::ActiveLock::acquire_allowing_import_journal(
+            layout, name,
+        )?);
     }
     let containers = crate::lock::acquire_container_locks(
         layout,

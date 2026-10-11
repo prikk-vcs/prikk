@@ -105,6 +105,18 @@ const ALLOWED: &[Allowed] = &[
         bound: "RFC 155 Part V: the manifest's own declared section count, checked against `MAX_MANIFEST_ENTRIES` before this capacity is requested",
         witness: "ObjectOverBound",
     },
+    Allowed {
+        file: "archive/import.rs",
+        expr: "container_count",
+        bound: "RFC 155 Part I-A: the import journal's own declared container count, checked against `MAX_JOURNAL_CONTAINER_COUNT` before this capacity is requested -- the journal is this repository's own prior write, not adversarial input, but still bounded the same way",
+        witness: "ObjectOverBound",
+    },
+    Allowed {
+        file: "archive/import.rs",
+        expr: "landing_count",
+        bound: "RFC 155 Part I-A: the import journal's own declared landing-plan entry count, checked against `MAX_JOURNAL_LANDING_COUNT` before this capacity is requested",
+        witness: "ObjectOverBound",
+    },
 ];
 
 fn source_roots() -> Vec<(&'static str, PathBuf)> {

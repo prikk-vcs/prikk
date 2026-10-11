@@ -951,7 +951,12 @@ pub fn import_bundle(
 /// reference for `verify`'s object-connectivity stage to miss -- see
 /// `objects_in_dependency_order`'s own callers (`import_bundle`, `patch_exchange::accept`) for what
 /// this closes.
-fn object_type_dependency_rank(object_type: ObjectType) -> u8 {
+///
+/// `pub(crate)`, not private: RFC 155 Part I-A's own `archive::import` needs the same per-type
+/// order to process one object-container section at a time (never the whole archive's objects in
+/// memory at once, unlike `objects_in_dependency_order`'s own single-`Vec` callers here) -- reusing
+/// this ranking is what keeps that per-type order and this one from drifting apart.
+pub(crate) fn object_type_dependency_rank(object_type: ObjectType) -> u8 {
     match object_type {
         ObjectType::Blob | ObjectType::Patch => 0,
         ObjectType::Block => 1,

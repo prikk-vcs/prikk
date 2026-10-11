@@ -948,6 +948,17 @@ impl RepositoryLayout {
         self.trust_dir().join("author-keys.container")
     }
 
+    /// Return the archive import journal's path (RFC 155 §9.5, Part I-A). Created lazily, by the
+    /// first import a repository ever runs -- not at `init`, since most repositories never import
+    /// an archive. Its own directory, not a bare file directly under `.prikk/`, so a future
+    /// per-run artifact (if one is ever needed) has somewhere to live without a second `init`-time
+    /// allocation; today there is exactly one journal at a time, matching §9.5's own "untouched or
+    /// complete" model, which never describes two imports in flight together.
+    #[must_use]
+    pub(crate) fn import_journal_path(&self) -> PathBuf {
+        self.prikk_dir.join("import").join("journal")
+    }
+
     /// Return the trust policy container path for a given slot (RFC 102 Stage 5, design-v1.md
     /// §14/§14.9, gaining a slot in Stage 6 Step 1, design-v1.md §15.6 -- the third of the three
     /// genuine compaction targets: one complete snapshot appended per `add`/`remove`, every earlier

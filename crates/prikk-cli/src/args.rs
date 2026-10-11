@@ -121,9 +121,13 @@ pub(crate) struct DoctorArgs {
     pub(crate) not_current_branch: bool,
     /// RFC 168 §3.2: a recovery-log command (`--recovery-list`, `--recovery-restore`, `--recovery-clear`), run alone.
     pub(crate) recovery: Option<RecoveryCommand>,
+    /// RFC 155 Part I-A: `--cancel-import <id> [--plan-only]`. Its own field, not folded into
+    /// [`RecoveryCommand`] -- an archive import's journal is not a `recovery_log` entry, even
+    /// though cancelling one writes to that same log on its way to truncating back.
+    pub(crate) cancel_import: Option<String>,
     /// RFC 165 R5 K1 / RFC 166 D5 K1: print the repair's own plan and write nothing. Shared between
     /// every repair verb that has a plan (`--rebuild-pointer-index`, `--discard-damaged-commits`,
-    /// `--restore-queue-target`) -- accepted only alongside exactly one of them.
+    /// `--restore-queue-target`, `--cancel-import`) -- accepted only alongside exactly one of them.
     pub(crate) plan_only: bool,
 }
 
@@ -488,6 +492,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut recovery_list = false;
     let mut recovery_clear = false;
     let mut recovery_restore: Option<String> = None;
+    let mut cancel_import: Option<String> = None;
     let mut path = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -529,6 +534,10 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             "--recovery-restore" => {
                 let value = flag_value(&mut iter, "doctor --recovery-restore")?;
                 recovery_restore.set_once("--recovery-restore", value)?;
+            }
+            "--cancel-import" => {
+                let value = flag_value(&mut iter, "doctor --cancel-import")?;
+                cancel_import.set_once("--cancel-import", value)?;
             }
             other if other.starts_with('-') => return Err(unknown_argument("doctor", other)),
             _ => {
@@ -624,11 +633,28 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             || discard_damaged_commits
             || restore_queue_target
             || not_current_branch
-            || restore_queue_target_ref.is_some())
+            || restore_queue_target_ref.is_some()
+            || cancel_import.is_some())
     {
         return Err(CliError::Usage(
             "a recovery-log command cannot be combined with a repair flag -- run it alone"
                 .to_string(),
+        ));
+    }
+    if cancel_import.is_some()
+        && (repair_wal_tail
+            || repair_main_ref
+            || repair_index
+            || repair_pointer_index_tail
+            || repair_tails
+            || rebuild_pointer_index
+            || discard_damaged_commits
+            || restore_queue_target
+            || not_current_branch
+            || restore_queue_target_ref.is_some())
+    {
+        return Err(CliError::Usage(
+            "--cancel-import cannot be combined with a repair flag -- run it alone".to_string(),
         ));
     }
     if plan_only && recovery_list {
@@ -645,11 +671,12 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         && !repair_tails
         && recovery_restore.is_none()
         && !recovery_clear
+        && cancel_import.is_none()
     {
         return Err(CliError::Usage(
             "--plan-only is only accepted alongside --rebuild-pointer-index, \
              --discard-damaged-commits, --restore-queue-target, --repair-tails, \
-             --recovery-restore or --recovery-clear"
+             --recovery-restore, --recovery-clear or --cancel-import"
                 .to_string(),
         ));
     }
@@ -674,6 +701,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         restore_queue_target_ref,
         not_current_branch,
         recovery,
+        cancel_import,
         plan_only,
     })
 }

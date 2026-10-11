@@ -306,7 +306,11 @@ fn a_cfg_test_subtree_is_never_walked() {
     // RFC 155 implementation Part V added `archive/verify.rs`; its own `verify/tests.rs` and
     // `test_gates/archive_decoder_fuzz.rs` (itself `cfg(test)`-gated at the `mod` declaration) are
     // both `cfg(test)`-invisible: 161 -> 162.
-    assert_eq!(store.production_files, 162);
+    // RFC 155 implementation Part I-A added `archive/import.rs`; its own `import/tests.rs` is
+    // `cfg(test)`-invisible: 162 -> 163.
+    // RFC 155 implementation Part I-A added `foundation/import_journal_marker.rs` (the layer-rule
+    // fix for a first version's `archive -> lock` cycle): 163 -> 164.
+    assert_eq!(store.production_files, 164);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

@@ -1388,6 +1388,38 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     if let Some(command) = &doctor_args.recovery {
         return run_recovery_command(&layout, command, doctor_args.plan_only);
     }
+    // RFC 155 Part I-A: handled first and returns immediately -- args.rs already refuses to combine
+    // it with any repair flag. `--plan-only` and a real run share the one computation
+    // (`cancel_import` takes `plan_only` itself, under the same locks either way), so the plan
+    // printed here is always the plan a real run would also act on.
+    if let Some(id) = &doctor_args.cancel_import {
+        let report = prikk_store::cancel_import(&layout, id, doctor_args.plan_only)
+            .map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        println!("import {}", report.id);
+        for step in &report.steps {
+            if step.cut_bytes == 0 {
+                println!("  {}: nothing to cut", step.label);
+                continue;
+            }
+            match &step.recovery {
+                Some(recovery) => println!(
+                    "  {}: {} bytes saved to {recovery} before truncation",
+                    step.label, step.cut_bytes
+                ),
+                None => println!(
+                    "  {}: {} bytes would be cut (--plan-only)",
+                    step.label, step.cut_bytes
+                ),
+            }
+        }
+        if report.plan_only {
+            println!("plan only -- nothing written");
+        } else {
+            println!("import cancelled; the repository is untouched");
+        }
+        return Ok(());
+    }
     // RFC 164 Rule C: handled first and returns immediately -- args.rs already refuses to combine
     // it with any other repair flag, so nothing below this block runs when it is set.
     if doctor_args.repair_tails {

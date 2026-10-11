@@ -138,6 +138,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reason: "a compaction whose own live slot was deduced, not read off a recorded generation entry, reads the whole target                  slot and generation log once, only on a real run, to save both to the recovery log before overwriting them -- the                  saved copy is the way back, so it must be the whole file, not a range",
         reference: "RFC 165 Q2 (0.50.0)",
     },
+    DeclaredScope {
+        id: "archive-import-cancel-save",
+        status: ScopeStatus::Intentional,
+        reason: "`archive::import::cancel_import` reads an object container or the ref log container whole, once per container                  that grew, only on a real cancel, to save the bytes past the import's own journaled starting length to the                  recovery log before truncating back -- the same reasoning `pointer-index-rebuild-recovery-save` already has:                  the saved copy is the way back, so it must be the whole file, not a range",
+        reference: "RFC 155 §9.5 (Part I-A)",
+    },
 ];
 
 /// Which family of store-growing file `relative` (relative to the repository's `.prikk/` directory) is in, if it is in one.

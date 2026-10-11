@@ -68,6 +68,31 @@
   manifest+trailer region deterministically, rather than relying on a random mutation landing
   there.
 
+### Added — archive import's journal, stages 0-2, and `prikk doctor --cancel-import <id> [--plan-only]`
+
+- RFC 155 Part I-A (no public `prikk archive import` command yet — that is Part I-B's own
+  deliverable, along with stage 3 landing and `--adopt`). A new internal `import_archive` function:
+  stage 0 reuses `archive verify` directly (not a copy) and the existing DC-78 author-key conflict
+  check, then computes a landing plan (every ref the archive carries, planned for `remotes/<ref>`;
+  `--adopt` is Part I-B's own narrower rule); **the journal is the first write** — the archive's own
+  identity, every appendable container's starting length, and the plan — taken under the ref
+  pointer index, ref log, and received index locks, held to the commit point. Stage 1 writes
+  objects one type at a time, in dependency order, never the whole archive's objects in memory
+  together; an id already present locally is left untouched (the RFC 156 signature merge is Part
+  I-B's own "Identity" work, not available here, so a colliding id is never written through the
+  merge path). Stage 2 records carried author keys through the unchanged, idempotent path. The
+  commit point empties the journal, keeping its name (RFC 168 §6).
+- **While the journal is present, every ordinary repository writer refuses**, naming the import's
+  own id and both ways out (resume, or cancel) — enforced inside `ActiveLock::acquire` itself (the
+  one call site every writer passes through), not by a per-call-site discipline, so a future writer
+  is covered automatically. Doctor's own recovery verbs, the cancel, and a resumed import are the
+  named exceptions, enumerated from source.
+- `prikk doctor` reports `PRIKK-DOCTOR-INTERRUPTED-IMPORT` when a journal is present, naming both
+  ways out. `prikk doctor --cancel-import <id> [--plan-only]`: for every container the journal
+  names, saves the bytes past its journaled starting length to the recovery log, then truncates
+  back; refuses an id that does not match the journal present. `--plan-only` previews without
+  writing. See [the commands reference](docs/src/reference/commands.md).
+
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 
 - For the received index and the trust policy container, a lost generation log can leave two slots
