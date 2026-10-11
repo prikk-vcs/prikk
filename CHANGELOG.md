@@ -2,174 +2,83 @@
 
 ## Unreleased
 
-### Added — `prikk archive export <file> [--format json]` writes a whole repository, verbatim, into one file
+### Upgrading
 
-- RFC 155: every object container, the ref log, and the resolved content of the ref pointer index,
-  the received index, and the trust policy, plus the adopted maintainer keys and the author key
-  material — streamed into a new `PREPO001` file, memory bounded independently of repository size
-  (measured flat at the release-gate node counts and at 1 GiB of blob content). Holds every
-  container lock for the whole run, so an export taken during a concurrent `seal` is the repository
-  strictly before or after it, never a mix. Refuses before writing anything if an active session
-  holds queued, unsealed commits (naming `prikk seal`), or a slotted container's generation log
-  cannot be resolved (the existing `doctor`/`verify` texts). See
-  [The Archive Format](docs/src/reference/archive-format.md).
-- This is the first of four implementation parts (export, verify, import A, import B).
-  `archive import` is a separate, later part of the same RFC.
+- **Rust callers of `prikk-store`:** this release adds `export_archive`, `verify_archive`,
+  `import_archive`, and `cancel_import`, with new report/enum types
+  (`ArchiveExportReport`, `ArchiveSectionKind`, `ArchiveVerifyReport`, `CarriedMaintainerKeySummary`,
+  `ArchiveImportReport`, `ArchiveImportOptions`, `LandingOrigin`, `LandingOutcome`,
+  `PlannedRefLanding`, `CancelImportStep`, `CancelImportReport`), plus `compact`'s own
+  `KeepSlotReport`. Every one of these is `#[non_exhaustive]`, so this compiles unchanged if
+  constructed and matched only through the crate, per the existing convention — construct with
+  `..` or the type's own `Default`, match with `..`.
 
-### Output changes — `prikk archive export` reports objects by type and refs by namespace, not a bare section count
+### Output changes
 
-- Part E's own review: *"'sections: 13' says nothing about whether the backup holds the user's
-  work."* The report (text and `--format json`) now names sound object counts by type (patch,
-  block, ref-state, tag, attestation, blob, recognition-claim — counted by skipping each record's
-  own declared body, never by reading it) and ref counts by namespace (local branches, tags,
-  received), the same things a user can check against `branch list`.
+- **Every ordinary repository writer** (`commit`, `seal`, `branch`, `trust maintainer add`,
+  `bundle import`, `compact`, and the rest) **can now refuse with a new message** while an
+  `archive import` is mid-flight or was interrupted: *"an archive import did not finish (id …);
+  every repository writer refuses while its journal is present — run the same import again (it
+  resumes), or `prikk doctor --cancel-import <id>`"*. `prikk doctor` gains a new issue,
+  `PRIKK-DOCTOR-INTERRUPTED-IMPORT`, naming the same two ways out — and, if a real kill (not a
+  command that returned its own error) left a lock file behind that does not appear to belong to a
+  running process, `prikk unlock` first, ahead of either.
+- The ambiguous generation-log refusal, and `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS`, now name
+  `prikk compact --received-index|--trust-policy --keep-slot a|b --plan-only` first, before the
+  whole-`.prikk/` backup.
+- `prikk doctor --recovery-list` printed every entry as "cut at N M bytes", including a whole-file
+  replacement (`--keep-slot`'s own save, and the commit witness/`ref-name` rewrite), which read as
+  a truncation even when nothing was removed from the end. A `Replace` entry now prints "replaced,
+  N bytes saved" instead; a `Cut` entry is unchanged.
 
-### Added — `prikk archive verify <file> [--format json]` checks structure, reference closure, and every signature against the archive's own carried material
+### Added — `prikk archive export|verify|import [--adopt] <file> [--format json]`, and `prikk doctor --cancel-import`: a whole repository, verbatim, in and out of one file
 
-- RFC 155 §9.4: a streaming, read-only reader. Finds the manifest by seeking to the fixed end
-  trailer, never scanning; confirms the manifest's own section layout reaches exactly the archive's
-  real length; refuses an unknown, duplicated, or missing section kind before any section body is
-  read. Checks reference closure in two passes over the object sections, with an id set (32 bytes
-  per object, memory bounded by object count, never by archive bytes) — a `Block`/`Patch`/`Tag`/
-  `Attestation`/`RefState`/`RecognitionClaim` naming an id this archive does not carry is named, not
-  silently accepted. Checks every signature against the archive's own carried author and maintainer
-  material (small key material, decoded once into memory, never the local repository's) through the
-  same `verify_author_signatures_with`/`verify_trusted_publication_envelope` checks a local
-  repository's own `verify` already uses — a signature this cannot resolve (no recorded material, or
-  one that fails to verify) is named, never silently skipped. Reports *internally consistent*,
-  **never** *trusted*; lists the archive's own carried maintainer keys labeled *"carried, not
-  adopted."* Writes nothing, on any exit path. A new fuzz target
-  (`test_gates::archive_decoder_fuzz`) feeds the decoder mutated bytes of a real, valid archive. See
-  [The Archive Format](docs/src/reference/archive-format.md).
-- This is the second of four implementation parts. `archive import` is a separate, later part of the
-  same RFC.
-
-### Fixed — `prikk archive verify` now checksums the manifest itself, refuses an unknown repository format, and only claims "internally consistent" when it is
-
-- Part V's own review (`rfc155-impl-V-review-v1`): the manifest was not integrity-checked at all —
-  a flipped byte in its `repository_format` field passed as *"internally consistent"*. The end
-  trailer now carries a 56th-to-24th-byte SHA-256 of the manifest body, checked before any manifest
-  field (including `repository_format`) is read as anything but raw bytes; a mismatch refuses the
-  whole archive by name. `repository_format` must also be one this build actually knows how to read
-  (6 or 7 today) — an archive a future build legitimately wrote with a format number this one
-  predates is refused by name, never silently misread. See
-  [The Archive Format](docs/src/reference/archive-format.md).
-- The note field (*"internally consistent — not trusted ..."*) is now printed, in text and
-  `--format json`, only when the archive genuinely is internally consistent — a damaged or
-  unresolvable archive no longer gets a note that contradicts its own damage lines and error exit.
-- Part V's own fuzz target (`test_gates::archive_decoder_fuzz`) is corrected: its fixture used to
-  carry permanently-unresolvable placeholder signatures, which made `is_internally_consistent`
-  false even for the *unmutated* baseline archive — every one of the target's 20,000 long-run cases
-  passed vacuously, regardless of whether `verify_archive` caught anything. The claim in this
-  changelog's own Part V entry above ("20,000 cases found no panic and no mutated archive reporting
-  itself internally consistent") was therefore not evidence of a real check; it is removed above.
-  The fixture now builds a genuinely internally-consistent archive, and a new exhaustive test
-  (`archive_decoder_catches_every_manifest_and_trailer_byte_flip`) flips every byte of the
-  manifest+trailer region deterministically, rather than relying on a random mutation landing
-  there.
-
-### Added — archive import's journal, stages 0-2, and `prikk doctor --cancel-import <id> [--plan-only]`
-
-- RFC 155 Part I-A (no public `prikk archive import` command yet — that is Part I-B's own
-  deliverable, along with stage 3 landing and `--adopt`). A new internal `import_archive` function:
-  stage 0 reuses `archive verify` directly (not a copy) and the existing DC-78 author-key conflict
-  check, then computes a landing plan (every ref the archive carries, planned for `remotes/<ref>`;
-  `--adopt` is Part I-B's own narrower rule); **the journal is the first write** — the archive's own
-  identity, every appendable container's starting length, and the plan — taken under the ref
-  pointer index, ref log, and received index locks, held to the commit point. Stage 1 writes
-  objects one type at a time, in dependency order, never the whole archive's objects in memory
-  together; an id already present locally is left untouched (the RFC 156 signature merge is Part
-  I-B's own "Identity" work, not available here, so a colliding id is never written through the
-  merge path). Stage 2 records carried author keys through the unchanged, idempotent path. The
-  commit point empties the journal, keeping its name (RFC 168 §6).
-- **While the journal is present, every ordinary repository writer refuses**, naming the import's
-  own id and both ways out (resume, or cancel) — enforced inside `ActiveLock::acquire` itself (the
-  one call site every writer passes through), not by a per-call-site discipline, so a future writer
-  is covered automatically. Doctor's own recovery verbs, the cancel, and a resumed import are the
-  named exceptions, enumerated from source.
-- `prikk doctor` reports `PRIKK-DOCTOR-INTERRUPTED-IMPORT` when a journal is present, naming both
-  ways out. `prikk doctor --cancel-import <id> [--plan-only]`: for every container the journal
-  names, saves the bytes past its journaled starting length to the recovery log, then truncates
-  back; refuses an id that does not match the journal present. `--plan-only` previews without
-  writing. See [the commands reference](docs/src/reference/commands.md).
-
-### Fixed — archive import's `ObjectStore` lock is now held structurally through stage 1, the author-key container is journaled and cut back on cancel, and the writer refusal covers every session
-
-- Part I-A's own review (`rfc155-impl-IA-review-v1`): stage 1 appended objects without holding the
-  `ObjectStore` container lock across the whole run, relying instead on every other object
-  appender happening to go through the default session's `ActiveLock` — an argument, not the
-  structural guarantee §9.5 promises. Stage 1 now holds `ObjectStore` together with the other
-  three container locks, from the journal to the commit point, appending through a new
-  `ObjectWriteSession::write_object_under_held_lock` path instead of the ordinary per-append one —
-  a concurrent object append from any handle now genuinely refuses with a lock conflict for the
-  whole of stage 1, proven by a test that attempts exactly that append while stage 1 is running.
-- The author-key container is now journaled and cut back on cancel. RFC 155 §9.5 is corrected
-  (2026-10-11) to list it: a cancelled import that left a recorded author key behind would bind
-  that key id for good, refusing a later, genuine key for the same id as a conflict.
-- **The writer refusal now covers every session, not only the default one** — RFC 108's other
-  sessions can append objects too, and a cancel would otherwise cut their work out from under them
-  with no refusal having warned them off first.
-- The case table's three open rows are closed: a kill strictly between two object writes, the same
-  failpoint returning a real i/o error (a full disk), and a cancel right after the journal (nothing
-  to cut) — each with a resume and a cancel that restores every journaled container to a state
-  byte-identical to before the import ever started.
-- §8's "the adopted set is unchanged" is now tested directly: a destination's own, already-adopted
-  maintainer set (distinct from the archive's own, inert, never-adopted keys) is confirmed
-  byte-identical, trust-container by trust-container, after a real import.
-
-### Added — `prikk archive import <file> [--adopt] [--format json]` lands a whole repository (RFC 155 Part I-B)
-
-- The fourth and final implementation part of RFC 155 §9.9. Stage 1 now admits a carried signature
-  for an object id already held, through RFC 156 §4's merge (`admit_carried_signatures`, the same
-  path `bundle import`/`patch_exchange::accept` already use) — a signature that does not qualify is
-  dropped and named, never silently discarded. Stage 3 lands every ref the archive carries,
-  idempotently, under the locks already held: the archive's own received pointers land under their
-  own, already-`remotes/`-shaped name, never wrapped in `remotes/` a second time (a real bug in Part
-  I-A's own first cut, found and fixed here); the archive's own local refs land under
-  `remotes/<ref>` by default.
-- **`--adopt` lands a local ref for real** when, and only when, all four of §9.6's conditions hold:
-  it is absent locally; every step of its own history, replayed from genesis (not only the tip —
-  publish's own CAS would otherwise refuse a tip whose `previous_ref_state_id` is not `None`), is
-  signed by a key this repository has adopted; every one of those signatures verifies; and its CAS
-  against *absent* holds, enforced by `RefStore::publish` itself. Every other ref still lands under
-  `remotes/`, with the reason named.
-- Re-importing the same archive reports *already imported*: a zero-delta run (nothing newly
-  written, nothing merged, no new author key, no landing changed) computed from the report's own
-  other fields, not tracked by a second, separate ledger.
-- A named, non-structural deviation from §9.5's own text: the ref-pointer-index, ref-log, and
-  received-index container locks are **not** held continuously from the journal to the commit
-  point the way `ObjectStore` is (Part I-A2's own fix) — stage 1/2 never write a ref, so they are
-  acquired later, per call, by `RefStore::publish`/`write_received_pointer` themselves, the same way
-  `branch create`/`seal` always have. Safe in practice only because every repository writer, every
-  session, already refuses while this import's own journal is present (Part I-A2, finding IA1(b));
-  not the structural guarantee §9.5 states, and flagged for the architect rather than silently
-  built that way.
+- **RFC 155.** A new `PREPO001` file format carries every object container, the ref log, the
+  resolved content of the ref pointer index, the received index, and the trust policy, plus the
+  adopted maintainer keys and the author key material — the backup and transfer story `bundle`
+  (one ref) never covered.
+- **`archive export <file>`** streams the whole repository into one file, memory bounded
+  independently of repository size (measured flat at the release-gate node counts and at 1 GiB of
+  blob content). Holds every container lock for the whole run, so an export taken during a
+  concurrent `seal` is the repository strictly before or after it, never a mix. Refuses before
+  writing anything if an active session holds queued, unsealed commits (naming `prikk seal`), or a
+  slotted container's generation log cannot be resolved (the existing `doctor`/`verify` texts). Its
+  report names sound object counts by type and ref counts by namespace (local branches, tags,
+  received) — the same things a user can check against `branch list`.
+- **`archive verify <file>`** is a streaming, read-only reader needing no repository. It finds the
+  manifest by seeking to the fixed end trailer, never scanning, and checksums the manifest itself
+  before trusting any field inside it (including the declared repository format, which must be one
+  this build knows how to read). It checks reference closure in two passes with an id set (memory
+  bounded by object count, never by archive bytes), and every signature against the archive's own
+  carried author and maintainer material, through the same checks a local repository's own
+  `verify` already uses. It reports *internally consistent*, **never** *trusted* — the note saying
+  so prints only when the archive genuinely is consistent, never beside a damage line or an error
+  exit — and lists the archive's own carried maintainer keys labeled *"carried, not adopted."*
+  Writes nothing, on any exit path.
+- **`archive import <file> [--adopt]`** is strict: untouched, or complete. The journal — the
+  archive's own identity, every appendable container's starting length, and the landing plan — is
+  the first write, and every container lock it names (the object store, the ref pointer index, the
+  ref log, the received index) is held structurally from the journal to the commit point, which
+  empties the journal (keeping its name). Stage 1 writes objects one at a time, never the whole
+  archive or even one whole object type in memory together (peak RSS bounded by about five times
+  the single largest object the archive carries, independent of the archive's own total size — up
+  to about 1.3 GiB under the existing 256 MiB per-object ceiling), admitting a carried signature for
+  an id already held through RFC 156 §4's merge (the same path `bundle import` uses) — a signature
+  that does not qualify is dropped and named, never silently discarded. Stage 2 records carried
+  author keys. Stage 3 lands every ref the archive carries, idempotently: the archive's own received
+  pointers land under their own, already-`remotes/`-shaped name; its local refs land under
+  `remotes/<ref>` by default, or as a real local branch under `--adopt`, when — and only when — it
+  is absent locally, every step of its own history (replayed from genesis, not only the tip) is
+  signed by a key this repository has adopted and verifies, and its compare-and-swap against
+  *absent* holds; every other ref still lands under `remotes/`, with the reason named. Re-importing
+  the same archive reports *already imported*. A real kill is recoverable: `prikk doctor` names the
+  interruption and both ways out (see Output changes above for the exact sequence).
+- **`prikk doctor --cancel-import <id> [--plan-only]`**: for every container the journal names,
+  saves the bytes past its journaled starting length to the recovery log, then truncates back;
+  refuses an id that does not match the journal present. `--plan-only` previews without writing.
 - See [the commands reference](docs/src/reference/commands.md), [the archive format
   reference](docs/src/reference/archive-format.md), and [the backup/restore
-  guide](docs/src/guide/backup-restore.md), each updated for the real command this part adds.
-
-### Fixed — `archive import` now holds every container lock structurally for real, every writer that took only a container lock is covered, and a real kill is recoverable
-
-- Part I-B's own review: the ref-pointer-index, ref-log, and received-index container locks are now
-  held continuously from the journal to the commit point, literally as §9.5 states, through two new
-  held-lock primitives (`RefStore::publish_with_object_store_under_held_lock`,
-  `write_received_pointer_under_held_lock`) — the same shape `ObjectStore`'s own
-  `write_object_under_held_lock` already was. This closes the named deviation Part I-B's own entry
-  above described.
-- `acquire_container_locks` itself now refuses while an import's journal is present, the same way
-  `ActiveLock::acquire` already did — `compact --pointer-index`/`--received-index`/`--trust-policy`
-  and `doctor --rebuild-pointer-index` each took only a container lock, with no `ActiveLock` at all,
-  so none of them passed through the earlier, narrower fix. `archive export`'s own call is
-  deliberately not exempted either: exporting mid-import would read whatever has landed so far,
-  which a cancel might still cut away.
-- A real `SIGKILL` (not a seam that returns an error, which `Drop` always recovers from cleanly) now
-  leaves a repository recoverable in the documented order: `prikk doctor` names the interrupted
-  import and, when a lock file it left behind does not appear to belong to a running process, names
-  `prikk unlock` first — ahead of resuming the same import or `prikk doctor --cancel-import`. See
-  [the backup/restore guide](docs/src/guide/backup-restore.md) for the sequence, proven end to end
-  against the real binary, a real child process, and a real `SIGKILL`.
-- **This is RFC 155's fourth and final implementation part, now fully delivered**: `prikk archive
-  export|verify|import` and `prikk doctor --cancel-import` all exist, matching §9.9 in full.
+  guide](docs/src/guide/backup-restore.md).
 
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 
@@ -184,22 +93,8 @@
   already uses. Refuses when the generation log already names a live slot (plain `compact` is for
   that), when the chosen slot does not decode cleanly or holds no entries, with `--pointer-index`
   (its own rebuild never reads either slot as live, so there is no choice to make), or with `--all`
-  or more than one target (it names which slot of exactly one container).
-
-### Output changes
-
-- The ambiguous generation-log refusal, and `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS`, now name
-  `prikk compact --received-index|--trust-policy --keep-slot a|b --plan-only` first, before the
-  whole-`.prikk/` backup.
-- `--keep-slot`'s own final line said "kept slot X live" and, under `--plan-only`, that the other
-  slot "were saved" — both wrong: the chosen slot's own bytes are never touched (its *content*
-  compacts into the other slot, which becomes live), and nothing is saved under `--plan-only`. Now
-  names the target slot correctly and says "would be saved" under `--plan-only`; a real run also
-  names the recovery run's own id, to restore by.
-- `prikk doctor --recovery-list` printed every entry as "cut at N M bytes", including a whole-file
-  replacement (`--keep-slot`'s own save, and the commit witness/`ref-name` rewrite), which read as
-  a truncation even when nothing was removed from the end. A `Replace` entry now prints "replaced,
-  N bytes saved" instead; a `Cut` entry is unchanged.
+  or more than one target (it names which slot of exactly one container). A real run also names the
+  recovery run's own id, to restore by.
 
 ## 0.50.0 — 2026-10-09
 
