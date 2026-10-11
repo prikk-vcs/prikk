@@ -159,8 +159,12 @@ bundle you make, not only here.
 For every ref, every object, and the trust material in one file, see
 [The Archive Format](../reference/archive-format.md) instead: `prikk archive export <file>` carries
 the whole repository, verbatim. `prikk archive verify <file>` reads one back and reports whether it
-is internally consistent, needing no repository and writing nothing. `archive import` is a separate,
-not-yet-built part of the same RFC.
+is internally consistent, needing no repository and writing nothing. `prikk archive import <file>
+[--adopt]` lands every ref the archive carries into a fresh (or existing) repository: by default
+under `remotes/<ref>`, the same received-pointer shape `bundle import` already produces, or as a
+real local branch under `--adopt`, when it is absent locally, signed by a key this repository has
+adopted (`trust maintainer add`), and verified — every other ref still lands under `remotes/`, with
+the reason named.
 
 ## Check a backup later, without restoring it
 
@@ -269,13 +273,15 @@ it is; import's own report is not a substitute for running it.
 - **It cannot be passed on.** `prikk bundle export --ref remotes/heads/main` refuses, so a restored copy
   is not itself a backup source.
 
-A restore is therefore an intact, checkable copy of the history, not a repository you continue working
-in. `prikk archive export <file>` now writes a whole repository, verbatim, into one file (RFC 155) —
-see [The Archive Format](../reference/archive-format.md). `prikk archive verify <file>` reads one
-back and checks structure, reference closure, and every signature against the archive's own carried
-key material, reporting *internally consistent*, never *trusted* — it needs no repository and writes
-nothing. `archive import`, and the landing step that turns a received branch into a working one,
-remain later parts of the same RFC.
+A `bundle import` restore is therefore an intact, checkable copy of the history, not a repository you
+continue working in that way. `prikk archive export <file>` writes a whole repository, verbatim, into
+one file (RFC 155) — see [The Archive Format](../reference/archive-format.md). `prikk archive verify
+<file>` reads one back and checks structure, reference closure, and every signature against the
+archive's own carried key material, reporting *internally consistent*, never *trusted* — it needs no
+repository and writes nothing. `prikk archive import <file> --adopt` is the landing step that turns a
+carried branch into a working one: absent locally, signed by an adopted key, and verified, it becomes
+a real local branch; every other ref still lands under `remotes/`, exactly like `bundle import`'s own
+received pointer, with the reason named.
 
 ## What this proves, stated precisely
 

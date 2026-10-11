@@ -118,9 +118,10 @@ pub use anchor_fallback::take_anchor_fallbacks;
 #[cfg(feature = "test-support")]
 pub use anchor_trust::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
 pub use archive::{
-    ArchiveExportReport, ArchiveImportReport, ArchiveSectionKind, ArchiveVerifyReport,
-    CancelImportReport, CancelImportStep, CarriedMaintainerKeySummary, PlannedRefLanding,
-    cancel_import, export_archive, import_archive, interrupted_import_short_id, verify_archive,
+    ArchiveExportReport, ArchiveImportOptions, ArchiveImportReport, ArchiveSectionKind,
+    ArchiveVerifyReport, CancelImportReport, CancelImportStep, CarriedMaintainerKeySummary,
+    LandingOrigin, LandingOutcome, PlannedRefLanding, cancel_import, export_archive,
+    import_archive, interrupted_import_short_id, verify_archive,
 };
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};

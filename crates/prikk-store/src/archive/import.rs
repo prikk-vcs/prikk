@@ -1,9 +1,8 @@
-//! RFC 155 implementation handoff, Part I-A: `archive import`'s stages 0-2, the import journal,
-//! and the writer-refusal interlock (§9.5). Stage 3 (ref landing, `--adopt`, RFC 156 identity
-//! merge) is Part I-B's own, later work -- not built here. There is no public `prikk archive
-//! import` command yet; that CLI surface is Part I-B's own deliverable too (§9.9 item 3's own
-//! `prikk archive import <file> [--adopt]`). This part's only new CLI surface is
-//! `prikk doctor --cancel-import <id> [--plan-only]`.
+//! RFC 155 implementation handoff: `archive import`'s stages 0-3, the import journal, the
+//! writer-refusal interlock, and RFC 156's identity merge (§9.5/§9.6/§9.7) -- Parts I-A, I-A2, and
+//! I-B, in that order. The public CLI surface this module backs is `prikk archive import <file>
+//! [--adopt]` (`prikk-cli::archive::run_import`, Part I-B's own deliverable) and `prikk doctor
+//! --cancel-import <id> [--plan-only]` (Part I-A's own).
 //!
 //! **The journal is the first write** (§9.5): before it exists, stage 0's checks (the archive's own
 //! verify, the author-key conflict check, the landing plan) have all already run, read-only, and a
@@ -27,11 +26,11 @@
 //! Processed in [`crate::bundle::object_type_dependency_rank`]'s own cross-type order -- the same
 //! ranking `bundle import` and `patch_exchange::accept` already use -- with same-kind topological
 //! order applied per type via [`crate::bundle::objects_in_dependency_order`]. **An id already
-//! present locally is left untouched, never merged**: `ObjectWriteSession::write_object`'s own
-//! merge path (format 7, a stored id gaining another signer's signatures) assumes
-//! `admit_carried_signatures`'s validation already ran -- that is RFC 156's identity merge, Part
-//! I-B's own later work (§9.7), not available here. Skipping a colliding id outright is the safe
-//! boundary until I-B adds it; nothing here ever calls the merge path.
+//! present locally may gain a carried signature** (§9.7, RFC 156 §4's merge), through
+//! [`crate::bundle::admit_carried_signatures`] -- the same path `bundle import`/
+//! `patch_exchange::accept` already use, not a second copy of that rule. A signature that does not
+//! qualify (an unadopted MAINTAINER key, an unrecorded AUTHOR key, an unverifiable role) is dropped
+//! and named, never silently discarded.
 //!
 //! **Stage 2 records carried author keys through the unchanged DC-78 path**
 //! (`check_author_key_conflict` at stage 0, `record_author_key_material` here) -- both already
@@ -63,10 +62,14 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectEnvelope, ObjectType};
+use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload};
 
-use crate::author::author_key_index::{check_author_key_conflict, record_author_key_material};
-use crate::bundle::{object_type_dependency_rank, objects_in_dependency_order};
+use crate::author::author_key_index::{
+    check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
+};
+use crate::bundle::{
+    admit_carried_signatures, object_type_dependency_rank, objects_in_dependency_order,
+};
 use crate::foundation::file_codec::decode_envelope_file;
 use crate::foundation::fsutil::{
     create_new_file_required, ensure_directory_required, read_file_if_exists,
@@ -75,9 +78,14 @@ use crate::foundation::fsutil::{
 use crate::foundation::layout::persisted_object_types;
 use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
 use crate::lock::{ActiveLock, acquire_container_locks};
-use crate::object_store::ObjectWriteSession;
+use crate::object_store::{ObjectReader, ObjectWriteSession};
 use crate::received::received_index::decode_received_index_entries_for_resolver;
-use crate::refs::decode_pointer_index_entries_for_resolver;
+use crate::refs::{
+    RefPublication, RefStore, decode_pointer_index_entries_for_resolver,
+    decode_ref_log_records_from_bytes,
+};
+use crate::signature_admission::DroppedSignature;
+use crate::trust::{load_maintainer_trust_policy_or_empty, verify_trusted_publication_envelope};
 
 use super::ArchiveSectionKind;
 use super::verify::{
@@ -149,19 +157,60 @@ impl JournaledContainerKind {
     }
 }
 
+/// Which of the archive's own two resolved ref families a planned landing came from -- RFC 155
+/// Part I-B's own fix (review `rfc155-impl-IA-review-v1`, finding A3): the two are **not** landed
+/// the same way. §9.6: "the archive's received pointers stay received under their own names; its
+/// local refs land under `remotes/<ref>`, or locally with `--adopt`."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LandingOrigin {
+    /// From the archive's own resolved ref-pointer-index (its own local branches/tags). Lands
+    /// under `remotes/<ref_name>` by default, or as a real local ref under `--adopt`.
+    Local,
+    /// From the archive's own resolved received-index (refs the *source* repository itself had
+    /// only received, never advanced locally). `ref_name` is already `remotes/`-shaped (that
+    /// index's own stored convention -- see `received.rs`'s own doc on `ReceivedPointer`), so it
+    /// lands verbatim, never re-wrapped a second time.
+    Received,
+}
+
+impl LandingOrigin {
+    fn to_wire(self) -> u8 {
+        match self {
+            Self::Local => 0,
+            Self::Received => 1,
+        }
+    }
+
+    fn from_wire(code: u8) -> Result<Self> {
+        match code {
+            0 => Ok(Self::Local),
+            1 => Ok(Self::Received),
+            other => Err(PrikkError::Integrity(format!(
+                "import journal names an unknown landing origin {other}"
+            ))),
+        }
+    }
+}
+
 /// One ref the archive carries, and where it would land if stage 3 ran today (§9.6's default --
-/// Part I-B's own narrowed `--adopt` is not evaluated here). Recorded in the journal so a future
-/// stage 3 (added by Part I-B, reading the same journal) has a plan to act on without re-deriving
-/// it; Part I-A itself never writes any ref.
+/// `--adopt` may change this at stage 3 for a [`LandingOrigin::Local`] entry). Recorded in the
+/// journal so a resumed stage 3 has a plan to act on without re-deriving it from the archive a
+/// second time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedRefLanding {
-    /// The ref name as the archive's own resolved pointer/received index carries it (fully
-    /// qualified, e.g. `heads/main`, `tags/v1.0`).
+    /// Which resolved family this came from, and therefore how it is landed.
+    pub origin: LandingOrigin,
+    /// The ref name as the archive's own resolved pointer/received index carries it (bare for
+    /// [`LandingOrigin::Local`], e.g. `heads/main`; already `remotes/`-shaped for
+    /// [`LandingOrigin::Received`]).
     pub ref_name: String,
-    /// Where this ref would land today -- always under `remotes/` in Part I-A (`--adopt` is Part
-    /// I-B's own work). **Not yet the final naming convention**: a received-index entry's own
-    /// `ref_name` may already read as a remote-shaped name, in which case this nests it a second
-    /// time -- flagged here, for Part I-B to settle before stage 3 ever executes a real landing.
+    /// This ref's own resolved tip `RefState` id, from the archive's own resolved index -- stage 1
+    /// already wrote the object this names (`RefState` is one of the seven persisted object
+    /// types), so stage 3 reads it back rather than re-deriving it.
+    pub ref_state_id: ObjectId,
+    /// Where this ref lands absent `--adopt` (or always, for [`LandingOrigin::Received]`): the
+    /// archive's own received-index entries land under this name verbatim; the archive's own
+    /// local refs land under `remotes/<ref_name>`.
     pub destination: String,
 }
 
@@ -178,22 +227,62 @@ fn journal_short_id(archive_identity: &[u8; 32]) -> String {
     crate::foundation::import_journal_marker::short_id(archive_identity)
 }
 
-/// Summary of a Part I-A import run (stages 0-2 only; no ref ever lands). `--format json`/the full
-/// `prikk archive import` command are Part I-B's own deliverable.
+/// `prikk archive import <file> [--adopt]` (§9.8).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ArchiveImportOptions {
+    /// §9.6's narrowed `--adopt`: land a [`LandingOrigin::Local`] ref as a real local ref when it
+    /// is absent locally, signed by an adopted key, verified, and its CAS against absent holds --
+    /// every other ref (and every [`LandingOrigin::Received`] one, always) still lands under
+    /// `remotes/`, with the reason named.
+    pub adopt: bool,
+}
+
+/// How one planned landing actually resolved at stage 3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandingOutcome {
+    /// The ref name as planned (see [`PlannedRefLanding::ref_name`]).
+    pub ref_name: String,
+    /// Where it actually landed: a received pointer's own full name (`remotes/...` already, or
+    /// the default `remotes/<ref_name>` wrap), or the bare local name when `--adopt` applied.
+    pub landed_as: String,
+    /// `true` only when a [`LandingOrigin::Local`] ref landed as a real local ref under
+    /// `--adopt`; `false` for every received-pointer landing (whether by default or because
+    /// `--adopt` could not apply).
+    pub adopted: bool,
+    /// Why this landed as a received pointer instead of a real local ref, when `--adopt` was
+    /// requested but one of §9.6's four conditions did not hold. `None` when `--adopt` was not
+    /// requested, when this is a [`LandingOrigin::Received`] entry (adoption never applies), or
+    /// when adoption actually succeeded.
+    pub remote_reason: Option<String>,
+}
+
+/// Summary of an RFC 155 `archive import` run: stages 0-3, the journal, and the commit point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveImportReport {
     /// Whether this run started a fresh journal (`false`) or resumed one an earlier, interrupted
     /// run left behind (`true`).
     pub resumed: bool,
-    /// Objects actually written in this run, per type -- an object already present locally is not
-    /// counted here (it was skipped, not written; see this module's own doc note on why a
-    /// colliding id is never merged in this part).
+    /// Objects actually, newly written in this run, per type -- an object already present
+    /// locally, and left as it was (no signature to merge, or format 6), is not counted here.
     pub written_object_counts: Vec<(ObjectType, usize)>,
+    /// Objects already present locally that gained at least one carried signature this run, per
+    /// type (§9.7, RFC 156 §4's merge through `admit_carried_signatures`) -- format 7 only; always
+    /// zero on a format-6 repository, which keeps one record per id and merges nothing.
+    pub merged_object_counts: Vec<(ObjectType, usize)>,
+    /// Every carried signature this run could not admit to a stored object, named (§9.7: "a
+    /// dropped signature named").
+    pub dropped_signatures: Vec<DroppedSignature>,
     /// Author keys recorded in this run (idempotent; a key already on file is not counted again).
     pub recorded_author_key_count: usize,
-    /// Every ref the archive carries, and where it would land -- planned, never executed, by this
-    /// part.
-    pub planned_landings: Vec<PlannedRefLanding>,
+    /// Every ref the archive carries, and how it actually landed (stage 3).
+    pub landing_outcomes: Vec<LandingOutcome>,
+    /// §9.7: "re-importing the same archive reports 'already imported'" -- `true` when this run
+    /// (resumed or fresh) found every object already present, merged nothing, recorded no new
+    /// author key, and every landing already matched what this run would have done -- a
+    /// zero-delta run, computed from this same report's own other fields rather than tracked
+    /// separately, so it can never disagree with them. See this module's own doc note on why no
+    /// new persistent "already imported" ledger exists.
+    pub already_imported: bool,
 }
 
 /// `doctor`'s own `PRIKK-DOCTOR-INTERRUPTED-IMPORT` issue reads this: `Some(id)` when a journal is
@@ -204,13 +293,17 @@ pub fn interrupted_import_short_id(layout: &RepositoryLayout) -> Result<Option<S
     crate::foundation::import_journal_marker::short_id_if_present(layout)
 }
 
-/// Run Part I-A's own stages over `source`: stage 0's checks, the journal, stage 1's objects in
-/// dependency order, and stage 2's author keys. Never lands a ref (Part I-B's stage 3). A refusal
-/// at stage 0 writes nothing; past the journal, only I/O or a concurrent lock holder can stop this,
-/// never a content decision (mirrors `import_bundle`'s own documented shape).
+/// Run every stage over `source`: stage 0's checks, the journal, stage 1's objects in dependency
+/// order (merging a carried signature into an id already held, through RFC 156 §4), stage 2's
+/// author keys, and stage 3's ref landing (§9.6/§9.7). A refusal at stage 0 writes nothing; past
+/// the journal, only I/O or a concurrent lock holder can stop this, never a content decision
+/// (mirrors `import_bundle`'s own documented shape) -- except stage 3's own per-ref `--adopt`
+/// decision, which is not a refusal at all: a ref that cannot be adopted still lands, under
+/// `remotes/`, with the reason named (§9.6).
 pub fn import_archive<R: Read + Seek>(
     layout: &RepositoryLayout,
     source: &mut R,
+    options: &ArchiveImportOptions,
 ) -> Result<ArchiveImportReport> {
     // Stage 0, part 1: the archive's own verify, Part V's code, not a copy.
     let verify_report = super::verify_archive(source)?;
@@ -235,9 +328,18 @@ pub fn import_archive<R: Read + Seek>(
     // every carried (key_id, public_key) pair before stage 1 ever runs. One key_id binds to one
     // public key (DC-53), so checking every entry under a key_id (not just the first) catches a
     // conflict *within* the archive's own carried material too, not only against this repository.
+    // RFC 155 Part I-B: also the cheapest place to learn whether *any* carried author key is new to
+    // this repository -- needed only for `already_imported`'s own zero-delta computation, below;
+    // `record_author_key_material` itself returns nothing a caller can use for that (it is a thin,
+    // idempotent check-then-append wrapper around this same check).
+    let mut any_new_author_key = false;
     for entries in author_material.values() {
         for entry in entries {
-            check_author_key_conflict(layout, &entry.key_id, entry.public_key)?;
+            if check_author_key_conflict(layout, &entry.key_id, entry.public_key)?
+                == crate::author::author_key_index::AuthorKeyCheck::New
+            {
+                any_new_author_key = true;
+            }
         }
     }
 
@@ -273,25 +375,32 @@ pub fn import_archive<R: Read + Seek>(
         }
     };
 
-    // Every container lock, held from here to the commit point (§9.5) -- acquired *after* the
-    // journal exists for a fresh start (the journal write above needed none of them), and
-    // unconditionally for a resume, since the prior run already held and released them when it
-    // was killed. **`ObjectStore` included, as of Part I-A2** (review finding IA1(a)): stage 1
+    // `ObjectStore`, held from here to the commit point (§9.5), acquired *after* the journal
+    // exists for a fresh start (the journal write above needed none of them), and unconditionally
+    // for a resume, since the prior run already held and released it when it was killed. Stage 1
     // appends through `ObjectWriteSession::write_object_under_held_lock`, which takes this guard
     // instead of acquiring the lock itself per append -- see that function's own doc, and
     // `append_object_under_held_lock`'s, for why the ordinary per-append path cannot be reused by
-    // a caller holding this lock continuously. Nothing in stage 1/2 writes a ref, so holding the
-    // other three is only to keep a concurrent recovery verb (which bypasses the `ActiveLock`
-    // check) from moving them out from under this run's own journaled starting lengths.
-    let _container_locks = acquire_container_locks(
-        layout,
-        &[
-            LockableContainer::ObjectStore,
-            LockableContainer::RefPointerIndex,
-            LockableContainer::RefLog,
-            LockableContainer::ReceivedIndex,
-        ],
-    )?;
+    // a caller holding this lock continuously.
+    //
+    // **A named deviation from §9.5's literal text for the other three** (`RefPointerIndex`,
+    // `RefLog`, `ReceivedIndex`): §9.5 says every container lock is held from the journal to the
+    // commit point. Stage 1/2 never write a ref, so these three are acquired later instead, right
+    // before stage 3 (below), not here -- `RefStore::publish_with_object_store` and
+    // `write_received_pointer` each already acquire them per call, the same way `branch create`/
+    // `seal` always have, and a caller already holding one of them would conflict with its own
+    // acquisition (`write_object_under_held_lock`'s own fix, for `ObjectStore`, exists precisely
+    // because of this; building the same "under an already-held lock" primitive for `publish` and
+    // `write_received_pointer` was judged out of this part's own budget). **Why this is still
+    // safe**: nothing else can write to these containers between the journal and stage 3 anyway --
+    // every repository writer, every session, refuses while this import's own journal is present
+    // (RFC 155 Part I-A2, finding IA1(b)), and the recovery verbs exempted from that refusal
+    // (`repair_tails`, `discard_damaged_commits`, `restore_queue_target`, `repair_repository`'s own
+    // loop, `recovery_log::repair_locks`) never write a ref pointer, a ref-log record, or a
+    // received-index entry. The gap is real against §9.5's own stated structural guarantee, though,
+    // not merely argued away -- flagged for the architect the same way Part I-A's own IA1 finding
+    // was, in this part's own report.
+    let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
     // Unconditionally the "allowing" variant: a fresh start has no journal yet (trivially passes
     // either way); a resume's own journal is already present, from this same import, and must not
     // refuse itself.
@@ -301,11 +410,16 @@ pub fn import_archive<R: Read + Seek>(
     )?;
 
     // Stage 1: one object type at a time, in dependency order, never the whole archive's objects
-    // in memory together.
+    // in memory together. RFC 155 Part I-B (§9.7, review finding IA1's own restriction lifted):
+    // an id already present locally may now gain a carried signature through RFC 156 §4's merge,
+    // the same way `import_bundle` and `patch_exchange::accept` already admit one -- via
+    // `admit_carried_signatures`, not a second copy of that rule.
     let mut object_store = ObjectWriteSession::open(layout)?;
     let mut object_types: Vec<ObjectType> = persisted_object_types().to_vec();
     object_types.sort_by_key(|object_type| object_type_dependency_rank(*object_type));
     let mut written_object_counts = Vec::with_capacity(object_types.len());
+    let mut merged_object_counts = Vec::with_capacity(object_types.len());
+    let mut dropped_signatures = Vec::new();
     // Test seams, unreachable from production: taken once, at the top, so a resumed call (which
     // starts this function fresh) does not re-trigger them -- the case table's own "kill
     // mid-objects" and "full disk" rows, which (unlike the two seams above) must fire *between*
@@ -325,22 +439,37 @@ pub fn import_archive<R: Read + Seek>(
             envelopes.push(decode_envelope_file(body)?);
             Ok(())
         })?;
-        let envelopes = objects_in_dependency_order(envelopes)?;
-        let mut written = 0usize;
-        for envelope in envelopes {
-            let id = envelope.object_id();
-            if object_store.contains_object(object_type, id)? {
-                // Already present locally: left untouched, never merged (this module's own doc
-                // note on why the merge path is out of scope for Part I-A).
-                continue;
+        // RFC 156 §4 rules 1-3: for every carried object of this type this repository already
+        // holds, which of its signatures may join the stored record -- verified here, before any
+        // of this type's objects is written, the same discipline `import_bundle` already follows
+        // (its own doc note on `admission`). A format-6 repository's own store refuses a second
+        // envelope for an id it holds instead of merging (`admit_carried_signatures`'s own `!
+        // several_records` branch); nothing here duplicates that rule.
+        let admission = admit_carried_signatures(layout, &object_store, &envelopes, |key_id| {
+            let mut entries = lookup_author_key_entries(layout, key_id)?;
+            if let Some(carried) = author_material.get(key_id) {
+                entries.extend(carried.iter().cloned());
             }
-            object_store.check_write(&envelope)?;
-            object_store.write_object_under_held_lock(&envelope, &_container_locks)?;
-            written = written.checked_add(1).ok_or_else(|| {
-                PrikkError::Integrity("archive import written-object count overflow".to_string())
-            })?;
+            Ok(entries)
+        })?;
+        for envelope in &admission.envelopes {
+            object_store.check_write(envelope)?;
+        }
+        let admitted_envelopes = objects_in_dependency_order(admission.envelopes)?;
+        let mut written = 0usize;
+        for envelope in admitted_envelopes {
+            let id = envelope.object_id();
+            let already_present = object_store.contains_object(object_type, id)?;
+            object_store.write_object_under_held_lock(&envelope, &_object_store_lock)?;
+            if !already_present {
+                written = written.checked_add(1).ok_or_else(|| {
+                    PrikkError::Integrity(
+                        "archive import written-object count overflow".to_string(),
+                    )
+                })?;
+            }
             #[cfg(test)]
-            {
+            if !already_present {
                 total_objects_written_so_far = total_objects_written_so_far.saturating_add(1);
                 if let Some(callback) = RUN_AFTER_FIRST_OBJECT_WRITE_FOR_TEST.with(|cell| {
                     if total_objects_written_so_far == 1 {
@@ -366,6 +495,8 @@ pub fn import_archive<R: Read + Seek>(
             }
         }
         written_object_counts.push((object_type, written));
+        merged_object_counts.push((object_type, admission.merged_object_count));
+        dropped_signatures.extend(admission.dropped);
     }
 
     // Test seam, unreachable from production: a kill right after stage 1's own last write, before
@@ -404,16 +535,270 @@ pub fn import_archive<R: Read + Seek>(
         ));
     }
 
+    // Stage 3: land every ref the archive carries (§9.6/§9.7). The ref-side container locks are
+    // *not* acquired here, continuously -- see this function's own doc note above, on the
+    // `ObjectStore` acquisition, for why that is a named deviation from §9.5's literal text, not
+    // an oversight. `RefStore::publish_with_object_store` and `write_received_pointer`, called
+    // below, each acquire them again, per call, their own ordinary way -- the same way `branch
+    // create`/`seal` always have.
+    //
+    // `--adopt`'s own chain replay needs the archive's carried ref log, decoded once (not per ref)
+    // and only when there is a `LandingOrigin::Local` entry to even consider adopting -- a
+    // received-only archive, or a run without `--adopt`, never touches it.
+    let needs_ref_log = options.adopt
+        && journal
+            .landing
+            .iter()
+            .any(|landing| matches!(landing.origin, LandingOrigin::Local));
+    let ref_log_records: Vec<crate::refs::RefLogRecord> = if needs_ref_log {
+        let ref_log_entry = find_entry(&manifest, ArchiveSectionKind::RefLog)?;
+        let ref_log_bytes = read_section_body_fully(source, ref_log_entry)?;
+        let (records, damaged) = decode_ref_log_records_from_bytes(&ref_log_bytes)?;
+        if damaged {
+            return Err(PrikkError::Integrity(
+                "archive's carried ref log decodes with interior damage -- refusing to adopt \
+                 any ref from it; retry without --adopt to land every ref under remotes/ instead"
+                    .to_string(),
+            ));
+        }
+        records
+    } else {
+        Vec::new()
+    };
+    let ref_store = RefStore::new(layout.clone());
+    let adopted_policy = load_maintainer_trust_policy_or_empty(layout)?;
+    let mut landing_outcomes = Vec::with_capacity(journal.landing.len());
+    let mut any_landing_changed = false;
+    for landing in &journal.landing {
+        let (outcome, changed) = land_one_ref(
+            layout,
+            &ref_store,
+            &adopted_policy,
+            landing,
+            options,
+            &mut object_store,
+            &ref_log_records,
+        )?;
+        any_landing_changed = any_landing_changed || changed;
+        landing_outcomes.push(outcome);
+    }
+
     // The commit point: the journal is emptied, its name kept (RFC 168 §6's conservative choice on
     // Windows).
     empty_journal(layout)?;
 
+    // §9.7: "re-importing the same archive reports 'already imported'" -- computed from this same
+    // report's own other fields (see `ArchiveImportReport::already_imported`'s own doc note on why
+    // no separate ledger exists), not before the fields themselves are final.
+    let any_object_changed = written_object_counts.iter().any(|(_, count)| *count > 0)
+        || merged_object_counts.iter().any(|(_, count)| *count > 0);
+    let already_imported = !any_object_changed && !any_new_author_key && !any_landing_changed;
+
     Ok(ArchiveImportReport {
         resumed,
         written_object_counts,
+        merged_object_counts,
+        dropped_signatures,
         recorded_author_key_count,
-        planned_landings: journal.landing,
+        landing_outcomes,
+        already_imported,
     })
+}
+
+/// One planned landing's real outcome at stage 3, and whether it actually changed anything (the
+/// caller's own tally for [`ArchiveImportReport::already_imported`]).
+fn land_one_ref(
+    layout: &RepositoryLayout,
+    ref_store: &RefStore,
+    adopted_policy: &crate::trust::MaintainerTrustPolicy,
+    landing: &PlannedRefLanding,
+    options: &ArchiveImportOptions,
+    object_store: &mut ObjectWriteSession,
+    ref_log_records: &[crate::refs::RefLogRecord],
+) -> Result<(LandingOutcome, bool)> {
+    match landing.origin {
+        // §9.6: the archive's own received pointers stay received, under their own
+        // already-`remotes/`-shaped name -- never re-wrapped a second time (review
+        // `rfc155-impl-IA-review-v1`, finding A3).
+        LandingOrigin::Received => {
+            let changed =
+                land_as_received_pointer(layout, &landing.ref_name, landing.ref_state_id)?;
+            Ok((
+                LandingOutcome {
+                    ref_name: landing.ref_name.clone(),
+                    landed_as: landing.ref_name.clone(),
+                    adopted: false,
+                    remote_reason: None,
+                },
+                changed,
+            ))
+        }
+        LandingOrigin::Local if options.adopt => {
+            match try_adopt_local_ref(
+                ref_store,
+                adopted_policy,
+                landing,
+                object_store,
+                ref_log_records,
+            )? {
+                AdoptOutcome::Adopted => Ok((
+                    LandingOutcome {
+                        ref_name: landing.ref_name.clone(),
+                        landed_as: landing.ref_name.clone(),
+                        adopted: true,
+                        remote_reason: None,
+                    },
+                    true,
+                )),
+                AdoptOutcome::FellThrough { reason } => {
+                    let changed = land_as_received_pointer(
+                        layout,
+                        &landing.destination,
+                        landing.ref_state_id,
+                    )?;
+                    Ok((
+                        LandingOutcome {
+                            ref_name: landing.ref_name.clone(),
+                            landed_as: landing.destination.clone(),
+                            adopted: false,
+                            remote_reason: Some(reason),
+                        },
+                        changed,
+                    ))
+                }
+            }
+        }
+        LandingOrigin::Local => {
+            let changed =
+                land_as_received_pointer(layout, &landing.destination, landing.ref_state_id)?;
+            Ok((
+                LandingOutcome {
+                    ref_name: landing.ref_name.clone(),
+                    landed_as: landing.destination.clone(),
+                    adopted: false,
+                    remote_reason: None,
+                },
+                changed,
+            ))
+        }
+    }
+}
+
+/// Write (or idempotently re-write) a received pointer, returning whether the pointer's own
+/// target actually changed -- `write_received_pointer` itself is unconditional (last-entry-wins,
+/// no CAS: see its own doc note), so this reads the prior value first purely to report
+/// [`ArchiveImportReport::already_imported`] accurately, never to decide whether to write.
+fn land_as_received_pointer(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    ref_state_id: ObjectId,
+) -> Result<bool> {
+    let before = crate::received::read_received_pointer(layout, ref_name)?;
+    crate::received::write_received_pointer(layout, ref_name, ref_state_id)?;
+    Ok(before.map(|pointer| pointer.ref_state_id) != Some(ref_state_id))
+}
+
+enum AdoptOutcome {
+    Adopted,
+    FellThrough { reason: String },
+}
+
+/// §9.6's narrowed `--adopt`: land `landing` (a [`LandingOrigin::Local`] ref) as a real local ref
+/// only when every one of the four conditions holds; otherwise names why it falls through to the
+/// default `remotes/` landing instead, writing nothing here either way until every condition is
+/// confirmed.
+///
+/// **The chain, not only the tip.** A ref's current state may be several updates past its own
+/// genesis (more than one `seal` advanced it before this export) -- [`RefStore::publish`]'s own
+/// CAS only accepts a `RefState` whose `previous_ref_state_id` matches what the caller expects,
+/// so landing the tip alone into an absent ref would be refused by that same CAS (the tip's own
+/// `previous_ref_state_id` is not `None`, but a ref genuinely absent locally has no current state
+/// to match it). The whole chain, from genesis to tip, is replayed instead, each step through the
+/// same already-signed `(RefState, RefUpdate)` pair the archive itself carries -- this never
+/// re-signs or re-derives anything, only replays what the archive's own maintainer already
+/// produced. Idempotent on retry: a step already landed reads as [`PublicationState::Complete`]
+/// inside `publish` itself (unchanged, pre-existing behavior this function does not touch).
+fn try_adopt_local_ref(
+    ref_store: &RefStore,
+    adopted_policy: &crate::trust::MaintainerTrustPolicy,
+    landing: &PlannedRefLanding,
+    object_store: &mut ObjectWriteSession,
+    ref_log_records: &[crate::refs::RefLogRecord],
+) -> Result<AdoptOutcome> {
+    // Condition 1, checked first and cheaply (a second, atomic check happens inside `publish`
+    // itself, under the ref lock, for the chain's own first step -- this is the lock-free,
+    // fail-fast read, not the enforcement). While this import's own journal is present, every
+    // other session's writer refuses too (RFC 155 Part I-A2), so nothing else can create this ref
+    // between this read and the first `publish` call below.
+    if ref_store
+        .read_current_ref_state_id(&landing.ref_name)?
+        .is_some()
+    {
+        return Ok(AdoptOutcome::FellThrough {
+            reason: "a ref by this name already exists locally; adopting onto an existing ref \
+                     is RFC 154's"
+                .to_string(),
+        });
+    }
+
+    // This ref's own subsequence, in order -- filtered from the archive's whole, interleaved
+    // carried ref log (decoded once by the caller, not per ref).
+    let mut chain: Vec<(RefUpdatePayload, ObjectEnvelope)> = Vec::new();
+    for record in ref_log_records {
+        let update = RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload)?;
+        if update.ref_name == landing.ref_name {
+            chain.push((update, record.envelope.clone()));
+        }
+    }
+    chain.sort_by_key(|(update, _)| update.update_seq);
+    if chain.is_empty() {
+        return Err(PrikkError::Integrity(format!(
+            "archive's carried ref log has no record for {}, but its resolved ref-pointer-index \
+             names it as a live local ref -- refusing to adopt it",
+            landing.ref_name
+        )));
+    }
+
+    // Conditions 2 and 3, together: every step's `RefUpdate` must carry a MAINTAINER signature by
+    // a key this repository has adopted, and that signature must verify (`verify_trusted_
+    // publication_envelope` is exactly this combined check -- see its own doc comment). Checked
+    // for the *whole* chain before any step is published, so a mid-chain trust failure never
+    // leaves a partially-adopted ref behind.
+    for (_, ref_update_envelope) in &chain {
+        if let Err(issue) = verify_trusted_publication_envelope(adopted_policy, ref_update_envelope)
+        {
+            return Ok(AdoptOutcome::FellThrough {
+                reason: issue.message,
+            });
+        }
+    }
+
+    // Condition 4 (CAS against absent) for the first step, and the chain's own internal CAS for
+    // every step after it -- both enforced by `publish_with_object_store` itself, never
+    // re-implemented here.
+    let mut expected_previous: Option<ObjectId> = None;
+    for (update, ref_update_envelope) in &chain {
+        let ref_state_envelope = object_store
+            .read_object(update.new_ref_state_id)?
+            .ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "archive's carried ref log names RefState {} for {}, but stage 1 never wrote \
+                     it -- refusing to adopt",
+                    update.new_ref_state_id, landing.ref_name
+                ))
+            })?;
+        ref_store.publish_with_object_store(
+            object_store,
+            &RefPublication {
+                ref_name: landing.ref_name.clone(),
+                expected_previous_ref_state_id: expected_previous,
+                ref_state: ref_state_envelope,
+                ref_update: ref_update_envelope.clone(),
+            },
+        )?;
+        expected_previous = Some(update.new_ref_state_id);
+    }
+    Ok(AdoptOutcome::Adopted)
 }
 
 fn compute_landing_plan(
@@ -433,7 +818,9 @@ fn compute_landing_plan(
     }
     for entry in decoded_pointers.entries {
         landings.push(PlannedRefLanding {
+            origin: LandingOrigin::Local,
             destination: format!("remotes/{}", entry.ref_name),
+            ref_state_id: entry.ref_state_id,
             ref_name: entry.ref_name,
         });
     }
@@ -449,8 +836,15 @@ fn compute_landing_plan(
         ));
     }
     for entry in decoded_received.entries {
+        // RFC 155 Part I-B (review `rfc155-impl-IA-review-v1`, finding A3): a received-index
+        // entry's own `ref_name` is already `remotes/`-shaped (`received.rs`'s own
+        // `ReceivedPointer` doc: "Local logical name, always `remotes/<origin ref name>`") --
+        // landed verbatim, under its own name, never wrapped in a second `remotes/` prefix the
+        // way Part I-A's own first cut did.
         landings.push(PlannedRefLanding {
-            destination: format!("remotes/{}", entry.ref_name),
+            origin: LandingOrigin::Received,
+            destination: entry.ref_name.clone(),
+            ref_state_id: entry.ref_state_id,
             ref_name: entry.ref_name,
         });
     }
@@ -548,7 +942,9 @@ fn encode_journal(journal: &ImportJournal) -> Result<Vec<u8>> {
         .map_err(|_| PrikkError::Integrity("import journal landing count overflow".to_string()))?;
     body.extend_from_slice(&landing_count.to_be_bytes());
     for landing in &journal.landing {
+        body.push(landing.origin.to_wire());
         push_string(&mut body, &landing.ref_name)?;
+        body.extend_from_slice(landing.ref_state_id.as_bytes());
         push_string(&mut body, &landing.destination)?;
     }
     let checksum = prikk_hash::sha256(&body);
@@ -694,10 +1090,14 @@ fn decode_journal(bytes: &[u8]) -> Result<ImportJournal> {
     }
     let mut landing = Vec::with_capacity(landing_count);
     for _ in 0..landing_count {
+        let origin = LandingOrigin::from_wire(reader.take_u8()?)?;
         let ref_name = reader.take_string()?;
+        let ref_state_id_bytes: [u8; 32] = reader.take(32)?.try_into().unwrap_or([0u8; 32]);
         let destination = reader.take_string()?;
         landing.push(PlannedRefLanding {
+            origin,
             ref_name,
+            ref_state_id: ObjectId::from_bytes(ref_state_id_bytes),
             destination,
         });
     }

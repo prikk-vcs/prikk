@@ -117,6 +117,37 @@
   maintainer set (distinct from the archive's own, inert, never-adopted keys) is confirmed
   byte-identical, trust-container by trust-container, after a real import.
 
+### Added — `prikk archive import <file> [--adopt] [--format json]` lands a whole repository (RFC 155 Part I-B)
+
+- The fourth and final implementation part of RFC 155 §9.9. Stage 1 now admits a carried signature
+  for an object id already held, through RFC 156 §4's merge (`admit_carried_signatures`, the same
+  path `bundle import`/`patch_exchange::accept` already use) — a signature that does not qualify is
+  dropped and named, never silently discarded. Stage 3 lands every ref the archive carries,
+  idempotently, under the locks already held: the archive's own received pointers land under their
+  own, already-`remotes/`-shaped name, never wrapped in `remotes/` a second time (a real bug in Part
+  I-A's own first cut, found and fixed here); the archive's own local refs land under
+  `remotes/<ref>` by default.
+- **`--adopt` lands a local ref for real** when, and only when, all four of §9.6's conditions hold:
+  it is absent locally; every step of its own history, replayed from genesis (not only the tip —
+  publish's own CAS would otherwise refuse a tip whose `previous_ref_state_id` is not `None`), is
+  signed by a key this repository has adopted; every one of those signatures verifies; and its CAS
+  against *absent* holds, enforced by `RefStore::publish` itself. Every other ref still lands under
+  `remotes/`, with the reason named.
+- Re-importing the same archive reports *already imported*: a zero-delta run (nothing newly
+  written, nothing merged, no new author key, no landing changed) computed from the report's own
+  other fields, not tracked by a second, separate ledger.
+- A named, non-structural deviation from §9.5's own text: the ref-pointer-index, ref-log, and
+  received-index container locks are **not** held continuously from the journal to the commit
+  point the way `ObjectStore` is (Part I-A2's own fix) — stage 1/2 never write a ref, so they are
+  acquired later, per call, by `RefStore::publish`/`write_received_pointer` themselves, the same way
+  `branch create`/`seal` always have. Safe in practice only because every repository writer, every
+  session, already refuses while this import's own journal is present (Part I-A2, finding IA1(b));
+  not the structural guarantee §9.5 states, and flagged for the architect rather than silently
+  built that way.
+- See [the commands reference](docs/src/reference/commands.md), [the archive format
+  reference](docs/src/reference/archive-format.md), and [the backup/restore
+  guide](docs/src/guide/backup-restore.md), each updated for the real command this part adds.
+
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 
 - For the received index and the trust policy container, a lost generation log can leave two slots

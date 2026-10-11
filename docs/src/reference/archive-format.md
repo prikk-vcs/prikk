@@ -2,9 +2,9 @@
 
 `prikk archive export <file>` writes a whole repository, verbatim, into one file (RFC 155).
 `prikk archive verify <file>` reads one back, streamed, and checks structure, reference closure, and
-every signature against the archive's own carried key material. This page documents the byte layout
-both commands use and a future `archive import` will read — the format itself, not the command
-surface (see [commands](commands.md) for that).
+every signature against the archive's own carried key material. `prikk archive import <file>
+[--adopt]` reads the same file and lands it. This page documents the byte layout all three commands
+use — the format itself, not the command surface (see [commands](commands.md) for that).
 
 ## Shape
 

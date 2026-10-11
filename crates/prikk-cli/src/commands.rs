@@ -213,7 +213,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk archive export <file> [--format json]  Write a whole-repository archive (PREPO001); refuses an existing file",
             "  prikk archive verify <file> [--format json]  Check structure, reference closure, and every signature against the archive's own carried material",
-            "  note: import is not built yet",
+            "  prikk archive import <file> [--adopt] [--format json]  Land every ref an archive carries; --adopt lands an absent, adopted, verified ref as a real local branch",
         ],
     },
     Command {

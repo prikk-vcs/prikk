@@ -5,6 +5,8 @@
 
 use std::io::Cursor;
 
+use crate::object_store::ObjectReader as _;
+
 use prikk_object::{
     BlobKind, BlobPayload, BlockKind, BlockPayload, CanonicalEncode, MerkleRoot, ObjectEnvelope,
     ObjectId, ObjectType, RefKind, RefStatePayload,
@@ -12,7 +14,9 @@ use prikk_object::{
 
 use std::sync::{Arc, Mutex};
 
-use crate::archive::{export_archive, import_archive, interrupted_import_short_id};
+use crate::archive::{
+    ArchiveImportOptions, export_archive, import_archive, interrupted_import_short_id,
+};
 use crate::author::author_signing::AuthorSigner as _;
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::lock::ActiveLock;
@@ -163,6 +167,121 @@ fn export_bytes(layout: &RepositoryLayout) -> Vec<u8> {
     bytes
 }
 
+/// A genuinely internally-consistent source repository, like [`build_signed_source_repository`],
+/// but with a **really** maintainer-signed `RefUpdate` -- `build_signed_source_repository`'s own
+/// ref update goes through `test_support::signed_ref_update_envelope`, whose own signature is a
+/// placeholder that verifies against nothing (the same `test_support` convention
+/// `archive::tests::seal_one_block` uses), which is fine for Part I-A/I-A2's own tests (nothing
+/// there ever checks a ref update's signature) but would make every `--adopt` test in this module
+/// fall through to `remotes/` regardless of whether the signer is adopted, since
+/// `verify_trusted_publication_envelope` would find no verifying signature either way. Returns the
+/// layout, the ref's own tip `RefState` id, the maintainer signer's key id, and its public key hex
+/// (so a test can choose whether to adopt it at the destination before importing).
+fn build_adoptable_source_repository(
+    dir: &std::path::Path,
+    ref_name: &str,
+) -> (RepositoryLayout, ObjectId, String, String) {
+    let layout = RepositoryLayout::init(dir).expect("init");
+
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("adopt-test-maintainer", &[0x33; 32])
+            .expect("maintainer signer");
+    let maintainer_key_id = maintainer_signer.key_id().to_string();
+    let maintainer_public_key_hex: String = maintainer_signer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    // Adopted locally at the *source*, so the source's own `verify`/export carries this key in
+    // its `MaintainerKeys`/`TrustPolicy` sections -- without this, the source repository's own
+    // `verify_archive` would find an unresolvable signature and refuse the import at stage 0
+    // before any `--adopt` logic is ever reached.
+    crate::add_trusted_maintainer(&layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the source, so export carries it");
+
+    let mut store = FileObjectStore::new(layout.clone());
+    let block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: crate::compute_state_root(&[]).expect("empty state root"),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode block payload");
+    let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    let block_id = block_envelope.object_id();
+    block_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::Block, block_id)
+                .expect("sign the block for real"),
+        )
+        .expect("attach the real maintainer signature");
+    store.write_object(&block_envelope).expect("write block");
+
+    let ref_state_payload = RefStatePayload {
+        ref_name: ref_name.to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_bytes = ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode ref-state payload");
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_bytes);
+    let ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, ref_state_id)
+                .expect("sign the ref state for real"),
+        )
+        .expect("attach the real maintainer signature");
+
+    let ref_update_payload = prikk_object::RefUpdatePayload {
+        ref_name: ref_name.to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: ref_state_id,
+        new_target_object_id: block_id,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: maintainer_key_id.clone(),
+    };
+    let ref_update_bytes = ref_update_payload
+        .to_canonical_bytes()
+        .expect("encode ref-update payload");
+    let mut ref_update_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, ref_update_bytes);
+    let ref_update_id = ref_update_envelope.object_id();
+    ref_update_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefUpdate, ref_update_id)
+                .expect("sign the ref update for real -- the point of this fixture"),
+        )
+        .expect("attach the real maintainer signature");
+
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: ref_name.to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: ref_state_envelope,
+            ref_update: ref_update_envelope,
+        })
+        .expect("publish the ref");
+
+    (
+        layout,
+        ref_state_id,
+        maintainer_key_id,
+        maintainer_public_key_hex,
+    )
+}
+
 #[test]
 fn source_fixture_is_genuinely_internally_consistent() {
     let dir = unique_temp_dir("archive-import-fixture");
@@ -187,7 +306,8 @@ fn import_writes_objects_records_the_author_key_and_commits_the_journal() {
     let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
 
     let mut cursor = Cursor::new(bytes);
-    let report = import_archive(&dest_layout, &mut cursor).expect("import");
+    let report = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import");
     assert!(!report.resumed);
     assert!(
         report
@@ -196,9 +316,10 @@ fn import_writes_objects_records_the_author_key_and_commits_the_journal() {
             .any(|(object_type, count)| *object_type == ObjectType::Block && *count == 1)
     );
     assert_eq!(report.recorded_author_key_count, 1);
-    assert_eq!(report.planned_landings.len(), 1);
-    assert_eq!(report.planned_landings[0].ref_name, "heads/main");
-    assert_eq!(report.planned_landings[0].destination, "remotes/heads/main");
+    assert_eq!(report.landing_outcomes.len(), 1);
+    assert_eq!(report.landing_outcomes[0].ref_name, "heads/main");
+    assert_eq!(report.landing_outcomes[0].landed_as, "remotes/heads/main");
+    assert!(!report.landing_outcomes[0].adopted);
 
     // Stage 1 really wrote the block through the ordinary path -- content-addressed, readable
     // back.
@@ -241,7 +362,7 @@ fn import_refuses_an_inconsistent_archive_and_writes_nothing() {
     let fingerprint_before = directory_fingerprint(&dest_dir);
 
     let mut cursor = Cursor::new(bytes);
-    let error = import_archive(&dest_layout, &mut cursor)
+    let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
         .expect_err("a placeholder-signed archive is not internally consistent");
     assert!(
         error.to_string().contains("not internally consistent"),
@@ -267,7 +388,7 @@ fn killed_right_after_the_journal_blocks_writers_and_doctor_sees_it_then_resumes
     // The case table's own "kill right after the journal" row.
     crate::archive::import::stop_after_journal_for_test();
     let mut cursor = Cursor::new(bytes.clone());
-    let error = import_archive(&dest_layout, &mut cursor)
+    let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
         .expect_err("the test seam stops the import right after the journal's own write");
     assert!(error.to_string().contains("simulated kill"), "{error}");
 
@@ -285,7 +406,8 @@ fn killed_right_after_the_journal_blocks_writers_and_doctor_sees_it_then_resumes
     // Nothing was written yet (the journal was the first and only write) -- `doctor`'s own two
     // ways out both apply cleanly from here. Resume: running the same import again finishes it.
     let mut cursor2 = Cursor::new(bytes);
-    let resumed = import_archive(&dest_layout, &mut cursor2).expect("resume finishes the import");
+    let resumed = import_archive(&dest_layout, &mut cursor2, &ArchiveImportOptions::default())
+        .expect("resume finishes the import");
     assert!(resumed.resumed);
     let dest_store = FileObjectStore::new(dest_layout.clone());
     assert!(dest_store.contains_object(ObjectType::Block, block_id));
@@ -310,7 +432,7 @@ fn killed_after_the_objects_is_cancelled_and_every_container_is_cut_back() {
     // test seam stops before stage 2 or the commit point.
     crate::archive::import::stop_after_stage_1_for_test();
     let mut cursor = Cursor::new(bytes);
-    let error = import_archive(&dest_layout, &mut cursor)
+    let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
         .expect_err("the test seam stops the import right after stage 1");
     assert!(error.to_string().contains("simulated kill"), "{error}");
 
@@ -381,7 +503,8 @@ fn cancel_refuses_an_id_that_does_not_match_the_present_journal() {
 
     crate::archive::import::stop_after_journal_for_test();
     let mut cursor = Cursor::new(bytes);
-    import_archive(&dest_layout, &mut cursor).expect_err("the test seam stops the import");
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect_err("the test seam stops the import");
 
     let error = crate::archive::cancel_import(&dest_layout, "0000000000000000", false)
         .expect_err("the present journal's real id does not match this one");
@@ -417,7 +540,8 @@ fn concurrent_object_append_refuses_while_stage_1_holds_the_object_store_lock() 
     });
 
     let mut cursor = Cursor::new(bytes);
-    import_archive(&dest_layout, &mut cursor).expect("import completes normally");
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import completes normally");
 
     let outcome = concurrent_result
         .lock()
@@ -451,7 +575,7 @@ fn cancelled_import_cuts_back_the_author_key_so_a_different_key_can_be_recorded_
 
     crate::archive::import::stop_after_stage_2_for_test();
     let mut cursor = Cursor::new(bytes);
-    let error = import_archive(&dest_layout, &mut cursor)
+    let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
         .expect_err("the test seam stops right after stage 2");
     assert!(error.to_string().contains("simulated kill"), "{error}");
 
@@ -512,7 +636,7 @@ fn killed_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_conta
         let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
         crate::archive::import::kill_mid_objects_after_n_for_test(2);
         let mut cursor = Cursor::new(bytes.clone());
-        let error = import_archive(&dest_layout, &mut cursor)
+        let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
             .expect_err("the test seam stops strictly between two object writes");
         assert!(error.to_string().contains("simulated kill"), "{error}");
         interrupted_import_short_id(&dest_layout)
@@ -520,7 +644,8 @@ fn killed_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_conta
             .expect("a journal is present after the simulated kill");
 
         let mut cursor2 = Cursor::new(bytes.clone());
-        let resumed = import_archive(&dest_layout, &mut cursor2).expect("resume finishes");
+        let resumed = import_archive(&dest_layout, &mut cursor2, &ArchiveImportOptions::default())
+            .expect("resume finishes");
         assert!(resumed.resumed);
         let dest_store = FileObjectStore::new(dest_layout.clone());
         assert!(dest_store.contains_object(ObjectType::Block, block_id));
@@ -541,7 +666,7 @@ fn killed_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_conta
 
         crate::archive::import::kill_mid_objects_after_n_for_test(2);
         let mut cursor = Cursor::new(bytes);
-        import_archive(&dest_layout, &mut cursor)
+        import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
             .expect_err("the test seam stops strictly between two object writes");
         let id = interrupted_import_short_id(&dest_layout)
             .expect("read journal state")
@@ -574,7 +699,7 @@ fn full_disk_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_co
         let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
         crate::archive::import::fail_mid_objects_after_n_for_test(2);
         let mut cursor = Cursor::new(bytes.clone());
-        let error = import_archive(&dest_layout, &mut cursor)
+        let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
             .expect_err("the test seam fails strictly between two object writes");
         assert!(
             matches!(error, prikk_error::PrikkError::Io { .. }),
@@ -585,7 +710,8 @@ fn full_disk_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_co
             .expect("a journal is present after the simulated i/o failure");
 
         let mut cursor2 = Cursor::new(bytes.clone());
-        let resumed = import_archive(&dest_layout, &mut cursor2).expect("resume finishes");
+        let resumed = import_archive(&dest_layout, &mut cursor2, &ArchiveImportOptions::default())
+            .expect("resume finishes");
         assert!(resumed.resumed);
         let dest_store = FileObjectStore::new(dest_layout.clone());
         assert!(dest_store.contains_object(ObjectType::Block, block_id));
@@ -601,7 +727,7 @@ fn full_disk_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_co
 
         crate::archive::import::fail_mid_objects_after_n_for_test(2);
         let mut cursor = Cursor::new(bytes);
-        import_archive(&dest_layout, &mut cursor)
+        import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
             .expect_err("the test seam fails strictly between two object writes");
         let id = interrupted_import_short_id(&dest_layout)
             .expect("read journal state")
@@ -632,7 +758,7 @@ fn cancel_right_after_the_journal_cuts_nothing_and_every_session_proceeds_after(
 
     crate::archive::import::stop_after_journal_for_test();
     let mut cursor = Cursor::new(bytes);
-    import_archive(&dest_layout, &mut cursor)
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
         .expect_err("the test seam stops right after the journal");
     let id = interrupted_import_short_id(&dest_layout)
         .expect("read journal state")
@@ -703,7 +829,8 @@ fn import_leaves_the_destinations_own_adopted_maintainer_set_untouched() {
             .unwrap_or_default();
 
     let mut cursor = Cursor::new(bytes);
-    import_archive(&dest_layout, &mut cursor).expect("import completes normally");
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import completes normally");
 
     let policy_after =
         crate::load_maintainer_trust_policy(&dest_layout).expect("policy after import");
@@ -748,4 +875,554 @@ fn directory_fingerprint(dir: &std::path::Path) -> Vec<(String, u64)> {
     walk(dir, &mut out);
     out.sort();
     out
+}
+
+/// §9.6's narrowed `--adopt`, condition 2/3: a ref absent locally, signed by an adopted key, and
+/// verified, lands as a real local ref -- not a received pointer.
+#[test]
+fn adopt_lands_a_ref_signed_by_an_adopted_key_as_a_real_local_branch() {
+    let source_dir = unique_temp_dir("archive-ib-adopt-source");
+    let (source_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib-adopt-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before import");
+
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import with --adopt");
+
+    assert_eq!(report.landing_outcomes.len(), 1);
+    assert_eq!(report.landing_outcomes[0].ref_name, "heads/main");
+    assert_eq!(report.landing_outcomes[0].landed_as, "heads/main");
+    assert!(
+        report.landing_outcomes[0].adopted,
+        "a ref signed by an adopted, verified key must adopt: {:?}",
+        report.landing_outcomes[0]
+    );
+    assert!(report.landing_outcomes[0].remote_reason.is_none());
+    assert!(!report.already_imported);
+
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        Some(ref_state_id),
+        "heads/main must be a real local branch at the archive's own tip"
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read received pointer"),
+        None,
+        "a successfully adopted ref must not also land under remotes/"
+    );
+}
+
+/// §9.6: every other ref goes to `remotes/`, with the reason named -- here, a key this
+/// repository has not adopted.
+#[test]
+fn adopt_lands_a_ref_signed_by_a_non_adopted_key_under_remotes_instead() {
+    let source_dir = unique_temp_dir("archive-ib-no-adopt-source");
+    let (source_layout, ref_state_id, _maintainer_key_id, _maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib-no-adopt-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    // Deliberately never adopted at the destination.
+
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import with --adopt");
+
+    assert_eq!(report.landing_outcomes.len(), 1);
+    assert!(!report.landing_outcomes[0].adopted);
+    assert_eq!(report.landing_outcomes[0].landed_as, "remotes/heads/main");
+    assert!(
+        report.landing_outcomes[0].remote_reason.is_some(),
+        "the fallback must name why"
+    );
+
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        None,
+        "a non-adopted ref must never become a real local branch"
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read received pointer"),
+        Some(crate::ReceivedPointer {
+            ref_name: "remotes/heads/main".to_string(),
+            ref_state_id,
+        })
+    );
+}
+
+/// §9.7: re-importing the same archive reports "already imported" -- a second, identical run
+/// changes nothing (no new object, no merge, no new author key, no landing change).
+#[test]
+fn reimporting_the_same_archive_reports_already_imported() {
+    let source_dir = unique_temp_dir("archive-ib-reimport-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib-reimport-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    let first = import_archive(
+        &dest_layout,
+        &mut Cursor::new(bytes.clone()),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("first import");
+    assert!(
+        !first.already_imported,
+        "the first import of genuinely new content must not report already-imported"
+    );
+
+    let second = import_archive(
+        &dest_layout,
+        &mut Cursor::new(bytes),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("second import of the identical archive");
+    assert!(
+        second.already_imported,
+        "a byte-identical re-import must report already-imported: {second:?}"
+    );
+    assert!(
+        second
+            .written_object_counts
+            .iter()
+            .all(|(_, count)| *count == 0)
+    );
+    assert!(
+        second
+            .merged_object_counts
+            .iter()
+            .all(|(_, count)| *count == 0)
+    );
+    assert!(second.dropped_signatures.is_empty());
+}
+
+/// §8's remaining controls, combined: a carried maintainer signature for an id already stored
+/// merges in when its own key is adopted at the destination, and is dropped (named) when it is
+/// not -- both over the exact same object id.
+#[test]
+fn a_carried_maintainer_signature_merges_when_adopted_and_drops_when_not() {
+    let maintainer_a =
+        Ed25519MaintainerSigner::from_seed("merge-drop-maintainer-a", &[0x41; 32]).expect("m-a");
+    let maintainer_b =
+        Ed25519MaintainerSigner::from_seed("merge-drop-maintainer-b", &[0x42; 32]).expect("m-b");
+    let public_key_hex = |signer: &Ed25519MaintainerSigner| -> String {
+        signer
+            .public_key_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    };
+
+    let block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: crate::compute_state_root(&[]).expect("empty state root"),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode block payload");
+
+    // Archive 1: the block, signed only by maintainer A, published under a throwaway ref name so
+    // its own landing never interacts with this test's real subject (object admission).
+    let source_a_dir = unique_temp_dir("archive-ib-merge-drop-source-a");
+    let source_a = RepositoryLayout::init(&source_a_dir).expect("init source a");
+    crate::add_trusted_maintainer(
+        &source_a,
+        maintainer_a.key_id(),
+        &public_key_hex(&maintainer_a),
+    )
+    .expect("adopt maintainer a at source a");
+    let mut envelope_a = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes.clone());
+    let block_id = envelope_a.object_id();
+    envelope_a
+        .add_signature(
+            maintainer_signature(&maintainer_a, ObjectType::Block, block_id).expect("sign a"),
+        )
+        .expect("attach a's signature");
+    FileObjectStore::new(source_a.clone())
+        .write_object(&envelope_a)
+        .expect("write block under maintainer a alone");
+    let bytes_a = export_bytes(&source_a);
+
+    // Archive 2: the *same* block id, now carrying both A's and B's signatures. The source for
+    // this archive adopts both, so its own export's carried MaintainerKeys/TrustPolicy sections
+    // resolve both signatures (stage 0's own `verify_archive` would otherwise refuse it).
+    let source_b_dir = unique_temp_dir("archive-ib-merge-drop-source-b");
+    let source_b = RepositoryLayout::init(&source_b_dir).expect("init source b");
+    crate::add_trusted_maintainer(
+        &source_b,
+        maintainer_a.key_id(),
+        &public_key_hex(&maintainer_a),
+    )
+    .expect("adopt maintainer a at source b");
+    crate::add_trusted_maintainer(
+        &source_b,
+        maintainer_b.key_id(),
+        &public_key_hex(&maintainer_b),
+    )
+    .expect("adopt maintainer b at source b");
+    let mut envelope_ab = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    assert_eq!(envelope_ab.object_id(), block_id, "same content, same id");
+    envelope_ab
+        .add_signature(
+            maintainer_signature(&maintainer_a, ObjectType::Block, block_id).expect("sign a"),
+        )
+        .expect("attach a's signature");
+    envelope_ab
+        .add_signature(
+            maintainer_signature(&maintainer_b, ObjectType::Block, block_id).expect("sign b"),
+        )
+        .expect("attach b's signature");
+    FileObjectStore::new(source_b.clone())
+        .write_object(&envelope_ab)
+        .expect("write block under both maintainers");
+    let bytes_ab = export_bytes(&source_b);
+
+    // Destination adopts only A to start.
+    let dest_dir = unique_temp_dir("archive-ib-merge-drop-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(
+        &dest_layout,
+        maintainer_a.key_id(),
+        &public_key_hex(&maintainer_a),
+    )
+    .expect("adopt maintainer a at the destination");
+
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(bytes_a),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("first import establishes the block under maintainer a alone");
+
+    // B is not yet adopted: its signature must be dropped and named; nothing merges.
+    let second = import_archive(
+        &dest_layout,
+        &mut Cursor::new(bytes_ab.clone()),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("second import");
+    assert!(
+        second
+            .merged_object_counts
+            .iter()
+            .all(|(_, count)| *count == 0),
+        "nothing qualifies to merge while b is not adopted: {:?}",
+        second.merged_object_counts
+    );
+    assert_eq!(
+        second.dropped_signatures.len(),
+        1,
+        "b's signature must be dropped and named: {:?}",
+        second.dropped_signatures
+    );
+    assert_eq!(second.dropped_signatures[0].key_id, maintainer_b.key_id());
+    assert_eq!(second.dropped_signatures[0].object_id, block_id);
+    let stored_after_second = FileObjectStore::new(dest_layout.clone())
+        .read_object(block_id)
+        .expect("read")
+        .expect("stored");
+    assert_eq!(
+        stored_after_second.signatures.len(),
+        1,
+        "b's dropped signature must never be attached"
+    );
+
+    // Now adopt b too, and re-import the same carrying archive: b's signature now qualifies and
+    // merges in.
+    crate::add_trusted_maintainer(
+        &dest_layout,
+        maintainer_b.key_id(),
+        &public_key_hex(&maintainer_b),
+    )
+    .expect("adopt maintainer b at the destination");
+    let third = import_archive(
+        &dest_layout,
+        &mut Cursor::new(bytes_ab),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("third import");
+    assert!(
+        third
+            .merged_object_counts
+            .iter()
+            .any(|(object_type, count)| *object_type == ObjectType::Block && *count == 1),
+        "b's signature must now merge in: {:?}",
+        third.merged_object_counts
+    );
+    assert!(third.dropped_signatures.is_empty());
+    let stored_after_third = FileObjectStore::new(dest_layout.clone())
+        .read_object(block_id)
+        .expect("read")
+        .expect("stored");
+    assert_eq!(
+        stored_after_third.signatures.len(),
+        2,
+        "both signatures must now be stored"
+    );
+}
+
+/// The full carry-forward story (§5/§9's own "whole repository, verbatim" promise), end to end:
+/// export from repository 1; `init` repository 2; verify lists the maintainer keys; `trust
+/// maintainer add`; `import --adopt`; every branch is a branch; verify exits 0. Doubles as the
+/// handoff's own required round-trip proof: `branch list` and the object ids are identical.
+#[test]
+fn carry_forward_story_end_to_end_and_round_trip() {
+    let source_dir = unique_temp_dir("archive-ib-carry-forward-source");
+    let (source_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let source_object_ids: std::collections::BTreeSet<ObjectId> = {
+        let store = FileObjectStore::new(source_layout.clone());
+        [RefStore::new(source_layout.clone())
+            .read_current_ref_state_id("heads/main")
+            .expect("source current ref state")
+            .expect("heads/main exists at the source")]
+        .into_iter()
+        .filter(|id| store.contains_object(ObjectType::RefState, *id))
+        .collect()
+    };
+    let bytes = export_bytes(&source_layout);
+
+    // `init` repository 2.
+    let dest_dir = unique_temp_dir("archive-ib-carry-forward-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init repository 2");
+
+    // verify lists the maintainer keys.
+    let verify_report = {
+        let mut cursor = Cursor::new(bytes.clone());
+        crate::archive::verify_archive(&mut cursor).expect("verify")
+    };
+    assert!(verify_report.is_internally_consistent());
+    assert!(
+        verify_report
+            .maintainer_keys
+            .iter()
+            .any(|key| key.key_id == maintainer_key_id),
+        "verify must list the archive's own carried maintainer key: {:?}",
+        verify_report.maintainer_keys
+    );
+
+    // trust maintainer add.
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("trust maintainer add");
+
+    // import --adopt.
+    let import_report = import_archive(
+        &dest_layout,
+        &mut Cursor::new(bytes),
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import --adopt");
+
+    // every branch is a branch.
+    assert!(import_report.landing_outcomes[0].adopted);
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    let dest_pointers = dest_ref_store.list_ref_pointers().expect("list branches");
+    assert_eq!(dest_pointers.len(), 1);
+    assert_eq!(dest_pointers[0].ref_name, "heads/main");
+    assert_eq!(dest_pointers[0].ref_state_id, ref_state_id);
+
+    // The round trip: `branch list` and the object ids are identical.
+    let source_pointers = RefStore::new(source_layout.clone())
+        .list_ref_pointers()
+        .expect("list source branches");
+    assert_eq!(
+        source_pointers, dest_pointers,
+        "branch list must round-trip"
+    );
+    let dest_store = FileObjectStore::new(dest_layout.clone());
+    for id in &source_object_ids {
+        assert!(
+            dest_store.contains_object(ObjectType::RefState, *id),
+            "every source object id must round-trip to the destination"
+        );
+    }
+
+    // Whether `prikk verify` itself would exit 0 is a `prikk-cli`-level question (its own
+    // `VERDICT_CONDITIONS`, nine conditions, not a `prikk-store` predicate -- RFC 118 stage 5
+    // deliberately removed the single-predicate shortcut this test could otherwise have reached
+    // for). That real claim is checked by the release-build smoke test instead
+    // (`carry_forward_story_smoke`, `crates/prikk-cli/tests/`), which runs the actual `prikk
+    // verify` command and reads its real exit code. Here, at the library level, the two
+    // structural signals `prikk-store` itself can answer cleanly: no stage failed outright, and
+    // no individual item failed within a stage that did.
+    let repository_verification =
+        crate::verify_repository(&dest_layout).expect("verify the destination repository");
+    assert!(
+        !repository_verification.has_stage_failure(),
+        "no verification stage must fail after the carry-forward story: {repository_verification:?}"
+    );
+    assert!(
+        !repository_verification.has_item_failure(),
+        "no individual item must fail after the carry-forward story: {repository_verification:?}"
+    );
+}
+
+/// §9.6's condition 1: a ref signed by an adopted, verified key, but already present locally,
+/// still falls through to `remotes/` -- adopting onto an existing ref is RFC 154's, not this
+/// part's.
+#[test]
+fn adopt_over_an_existing_local_ref_falls_through_to_remotes_instead_of_overwriting_it() {
+    let source_dir = unique_temp_dir("archive-ib-adopt-existing-source");
+    let (source_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib-adopt-existing-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before import");
+
+    // The destination already has its own, unrelated `heads/main` before the import ever runs.
+    let existing_block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: crate::compute_state_root(&[]).expect("empty state root"),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let existing_block_bytes = existing_block_payload
+        .to_canonical_bytes()
+        .expect("encode block payload");
+    let mut existing_block_envelope =
+        ObjectEnvelope::unsigned(ObjectType::Block, 2, existing_block_bytes);
+    let existing_block_id = existing_block_envelope.object_id();
+    let dest_maintainer =
+        Ed25519MaintainerSigner::from_seed("adopt-existing-dest-maintainer", &[0x44; 32])
+            .expect("dest maintainer signer");
+    let dest_maintainer_public_key_hex: String = dest_maintainer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::add_trusted_maintainer(
+        &dest_layout,
+        dest_maintainer.key_id(),
+        &dest_maintainer_public_key_hex,
+    )
+    .expect("adopt the destination's own maintainer key");
+    existing_block_envelope
+        .add_signature(
+            maintainer_signature(&dest_maintainer, ObjectType::Block, existing_block_id)
+                .expect("sign the destination's own existing block for real"),
+        )
+        .expect("attach the real maintainer signature");
+    FileObjectStore::new(dest_layout.clone())
+        .write_object(&existing_block_envelope)
+        .expect("write the destination's own existing block");
+
+    let existing_ref_state_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: existing_block_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let existing_ref_state_bytes = existing_ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode ref-state payload");
+    let mut existing_ref_state_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, existing_ref_state_bytes);
+    let existing_ref_state_id = existing_ref_state_envelope.object_id();
+    existing_ref_state_envelope
+        .add_signature(
+            maintainer_signature(
+                &dest_maintainer,
+                ObjectType::RefState,
+                existing_ref_state_id,
+            )
+            .expect("sign the destination's own existing ref state for real"),
+        )
+        .expect("attach the real maintainer signature");
+    let existing_ref_update_envelope = {
+        let payload = prikk_object::RefUpdatePayload {
+            ref_name: "heads/main".to_string(),
+            old_ref_state_id: None,
+            new_ref_state_id: existing_ref_state_id,
+            new_target_object_id: existing_block_id,
+            update_seq: 1,
+            created_at: 0,
+            author_key_id: dest_maintainer.key_id().to_string(),
+        };
+        let bytes = payload.to_canonical_bytes().expect("encode ref update");
+        let mut envelope = ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, bytes);
+        let id = envelope.object_id();
+        envelope
+            .add_signature(
+                maintainer_signature(&dest_maintainer, ObjectType::RefUpdate, id)
+                    .expect("sign the destination's own existing ref update for real"),
+            )
+            .expect("attach signature");
+        envelope
+    };
+    RefStore::new(dest_layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: existing_ref_state_envelope,
+            ref_update: existing_ref_update_envelope,
+        })
+        .expect("publish the destination's own existing heads/main");
+
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import with --adopt over an existing ref must not fail the whole import");
+
+    assert_eq!(report.landing_outcomes.len(), 1);
+    assert!(!report.landing_outcomes[0].adopted);
+    assert_eq!(report.landing_outcomes[0].landed_as, "remotes/heads/main");
+    assert!(report.landing_outcomes[0].remote_reason.is_some());
+
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        Some(existing_ref_state_id),
+        "the destination's own existing heads/main must be untouched"
+    );
+    assert_eq!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read received pointer"),
+        Some(crate::ReceivedPointer {
+            ref_name: "remotes/heads/main".to_string(),
+            ref_state_id,
+        })
+    );
 }

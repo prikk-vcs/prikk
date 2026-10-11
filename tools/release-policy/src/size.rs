@@ -114,6 +114,22 @@ const DECLARED_LARGE_FILES: &[DeclaredLargeFile] = &[
                               around 400 lines. The writer and reader should not be separated from \
                               each other.",
     },
+    DeclaredLargeFile {
+        path: "crates/prikk-store/src/archive/import.rs",
+        reason: "RFC 155 §9.5-§9.7: one import's four stages (verify-reuse and the landing plan; \
+                 the journal; objects, with RFC 156's signature merge; author keys; ref landing and \
+                 `--adopt`) and its own journal codec and `cancel_import` are read together because \
+                 the journal is what makes every stage after it resumable and cancellable -- a \
+                 change to what one stage writes almost always means a matching change to what the \
+                 journal records about it and what `cancel_import` cuts back, and keeping all three \
+                 in one file is what keeps that correspondence a diff shows rather than a thing to \
+                 remember across files.",
+        what_would_split_it: "Stage 3's own landing helpers (`land_one_ref`, \
+                              `land_as_received_pointer`, `try_adopt_local_ref`, `AdoptOutcome`, \
+                              roughly 160 lines) touch neither the journal's own codec nor stages \
+                              0/1/2, and could move to `archive/import/landing.rs` without \
+                              separating the journal from what it journals.",
+    },
 ];
 
 #[derive(Debug, Serialize)]

@@ -88,7 +88,9 @@ pub(crate) fn encode_log_record_for_test(envelope: &ObjectEnvelope) -> Result<Ve
     )
 }
 
-pub(crate) use container::{DecodedRefLog, read_and_decode_ref_log};
+pub(crate) use container::{
+    DecodedRefLog, decode_ref_log_records_from_bytes, read_and_decode_ref_log,
+};
 pub use container::{RefLogRecord, RefLogReplay};
 pub use verify::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefPublicationIssue,

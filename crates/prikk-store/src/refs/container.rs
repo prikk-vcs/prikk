@@ -118,6 +118,32 @@ impl RefLogReplay {
     }
 }
 
+/// RFC 155 Part I-B: decode a ref-log container's own bytes directly, rather than the live
+/// repository file [`decode_ref_container_records`]'s other callers all read via
+/// `read_file_if_exists`. The only caller outside this crate's own live-repository write path is
+/// `archive::import`'s `--adopt` chain replay, over an archive's own carried `RefLog` section
+/// (already read whole into memory by that caller, the way a `--adopt` landing's own ref-history
+/// walk needs it -- see that module's own doc note on why this is not "the whole archive in
+/// memory," only the one section). Reuses the exact same frame decoder
+/// [`decode_ref_container_records`] already uses, so a byte this returns is a byte a live
+/// container would also accept -- no second ref-log codec. `bool` is `true` when any frame failed
+/// to validate (the caller's own cue to refuse rather than replay a chain it cannot fully trust).
+pub(crate) fn decode_ref_log_records_from_bytes(bytes: &[u8]) -> Result<(Vec<RefLogRecord>, bool)> {
+    let replay = decode_ref_container_records(bytes)?;
+    let damaged = replay
+        .record_outcomes
+        .iter()
+        .any(|outcome| matches!(outcome.status, RefContainerRecordStatus::Failed { .. }));
+    let records = replay
+        .records
+        .into_iter()
+        .map(|record| RefLogRecord {
+            envelope: record.envelope,
+        })
+        .collect();
+    Ok((records, damaged))
+}
+
 const REF_CONTAINER_MAGIC: &[u8; 8] = b"PREFCON1";
 const REF_CONTAINER_VERSION: u16 = 1;
 /// magic(8) + version(2) + ref_name_key(32) + body_len(8) + checksum(32).

@@ -1,5 +1,5 @@
-//! RFC 155 §9.8: `prikk archive export|verify|import`. `export` and `verify` exist so far (the
-//! implementation handoff's own Parts E and V); `import` is a separate, later part.
+//! RFC 155 §9.8: `prikk archive export|verify|import`. All three, plus `doctor --cancel-import`,
+//! now exist (the implementation handoff's own Parts E, V, I-A/I-A2, and I-B).
 
 use std::path::PathBuf;
 
@@ -7,20 +7,20 @@ use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 use crate::output::verification::escape_json_string;
 use crate::stdout::{print, println};
-use prikk_store::export_archive;
+use prikk_store::{ArchiveImportOptions, export_archive};
 
-/// Dispatch `prikk archive [export|verify]`.
+/// Dispatch `prikk archive [export|verify|import]`.
 pub fn run_archive(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut iter = args.into_iter();
     match iter.next().as_deref() {
         Some("export") => run_export(root, iter.collect()),
         Some("verify") => run_verify(iter.collect()),
+        Some("import") => run_import(root, iter.collect()),
         Some(other) => Err(CliError::Usage(format!(
-            "unknown archive subcommand: {other} (expected export or verify; import is not built \
-             yet)"
+            "unknown archive subcommand: {other} (expected export, verify, or import)"
         ))),
         None => Err(CliError::Usage(
-            "archive requires a subcommand: export, verify".to_string(),
+            "archive requires a subcommand: export, verify, import".to_string(),
         )),
     }
 }
@@ -288,6 +288,189 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
             Some(note) => escape_json_string(note),
             None => "null".to_string(),
         }
+    ));
+    json.push_str("}\n");
+    print!("{json}");
+}
+
+struct ImportArgs {
+    input: PathBuf,
+    adopt: bool,
+    format_json: bool,
+}
+
+fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliError> {
+    let mut input = None;
+    let mut adopt = false;
+    let mut format_json = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--adopt" => mark_seen(&mut adopt, "--adopt")?,
+            "--format" => {
+                let value = flag_value(&mut iter, "archive import --format")?;
+                match value.as_str() {
+                    "json" => mark_seen(&mut format_json, "--format")?,
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "archive import --format does not support {other:?}"
+                        )));
+                    }
+                }
+            }
+            other if other.starts_with('-') => {
+                return Err(unknown_argument("archive import", other));
+            }
+            _ => input.set_once("<file>", PathBuf::from(arg))?,
+        }
+    }
+    let input =
+        input.ok_or_else(|| CliError::Usage("archive import requires <file>".to_string()))?;
+    Ok(ImportArgs {
+        input,
+        adopt,
+        format_json,
+    })
+}
+
+/// `prikk archive import <file> [--adopt] [--format json]` (§9.8/§9.9). Opens the destination
+/// repository and reads `parsed.input` -- every refusal before the journal's own first write
+/// leaves the repository untouched (§9.1/§9.5); past it, see `import_archive`'s own doc comment.
+fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
+    let parsed = parse_import_args(args)?;
+    let layout = crate::open_repository(root)?;
+    let file = std::fs::File::open(&parsed.input).map_err(|err| {
+        format!(
+            "failed to open archive at {}: {err}",
+            parsed.input.display()
+        )
+    })?;
+    let mut reader = std::io::BufReader::new(file);
+    let options = ArchiveImportOptions {
+        adopt: parsed.adopt,
+    };
+    let report = prikk_store::import_archive(&layout, &mut reader, &options)
+        .map_err(|err| err.to_string())?;
+
+    if parsed.format_json {
+        print_import_report_json(&report);
+    } else {
+        print_import_report(&report);
+    }
+    Ok(())
+}
+
+fn print_import_report(report: &prikk_store::ArchiveImportReport) {
+    println!("resumed: {}", report.resumed);
+    for (object_type, count) in &report.written_object_counts {
+        println!("  written {object_type}: {count}");
+    }
+    for (object_type, count) in &report.merged_object_counts {
+        if *count > 0 {
+            println!("  merged {object_type}: {count}");
+        }
+    }
+    for dropped in &report.dropped_signatures {
+        println!(
+            "dropped signature: {} {} by key {} ({})",
+            dropped.object_type,
+            dropped.object_id,
+            dropped.key_id,
+            dropped.reason.describe()
+        );
+    }
+    println!("author keys recorded: {}", report.recorded_author_key_count);
+    for landing in &report.landing_outcomes {
+        if landing.adopted {
+            println!("{}: adopted as a local branch", landing.ref_name);
+        } else if let Some(reason) = &landing.remote_reason {
+            println!(
+                "{}: landed as {} (not adopted -- {reason})",
+                landing.ref_name, landing.landed_as
+            );
+        } else {
+            println!("{}: landed as {}", landing.ref_name, landing.landed_as);
+        }
+    }
+    println!("already imported: {}", report.already_imported);
+}
+
+fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
+    let mut json = String::new();
+    json.push_str("{\n");
+    json.push_str("  \"schema_version\": \"prepo-import-report-v1\",\n");
+    json.push_str("  \"ok\": true,\n");
+    json.push_str(&format!("  \"resumed\": {},\n", report.resumed));
+    json.push_str("  \"written_objects\": {\n");
+    let written_lines: Vec<String> = report
+        .written_object_counts
+        .iter()
+        .map(|(object_type, count)| {
+            format!(
+                "    {}: {count}",
+                escape_json_string(&object_type.to_string())
+            )
+        })
+        .collect();
+    json.push_str(&written_lines.join(",\n"));
+    json.push_str("\n  },\n");
+    json.push_str("  \"merged_objects\": {\n");
+    let merged_lines: Vec<String> = report
+        .merged_object_counts
+        .iter()
+        .map(|(object_type, count)| {
+            format!(
+                "    {}: {count}",
+                escape_json_string(&object_type.to_string())
+            )
+        })
+        .collect();
+    json.push_str(&merged_lines.join(",\n"));
+    json.push_str("\n  },\n");
+    let dropped_lines: Vec<String> = report
+        .dropped_signatures
+        .iter()
+        .map(|dropped| {
+            format!(
+                "{{ \"object_type\": {}, \"object_id\": {}, \"key_id\": {}, \"reason\": {} }}",
+                escape_json_string(&dropped.object_type.to_string()),
+                escape_json_string(&dropped.object_id.to_string()),
+                escape_json_string(&dropped.key_id),
+                escape_json_string(dropped.reason.describe())
+            )
+        })
+        .collect();
+    json.push_str(&format!(
+        "  \"dropped_signatures\": [{}],\n",
+        dropped_lines.join(", ")
+    ));
+    json.push_str(&format!(
+        "  \"recorded_author_key_count\": {},\n",
+        report.recorded_author_key_count
+    ));
+    let landing_lines: Vec<String> = report
+        .landing_outcomes
+        .iter()
+        .map(|landing| {
+            format!(
+                "{{ \"ref_name\": {}, \"landed_as\": {}, \"adopted\": {}, \"remote_reason\": {} }}",
+                escape_json_string(&landing.ref_name),
+                escape_json_string(&landing.landed_as),
+                landing.adopted,
+                match &landing.remote_reason {
+                    Some(reason) => escape_json_string(reason),
+                    None => "null".to_string(),
+                }
+            )
+        })
+        .collect();
+    json.push_str(&format!(
+        "  \"landings\": [{}],\n",
+        landing_lines.join(", ")
+    ));
+    json.push_str(&format!(
+        "  \"already_imported\": {}\n",
+        report.already_imported
     ));
     json.push_str("}\n");
     print!("{json}");

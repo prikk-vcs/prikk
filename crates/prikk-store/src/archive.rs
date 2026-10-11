@@ -29,8 +29,8 @@ mod import;
 mod verify;
 
 pub use import::{
-    ArchiveImportReport, CancelImportReport, CancelImportStep, PlannedRefLanding, cancel_import,
-    import_archive, interrupted_import_short_id,
+    ArchiveImportOptions, ArchiveImportReport, CancelImportReport, CancelImportStep, LandingOrigin,
+    LandingOutcome, PlannedRefLanding, cancel_import, import_archive, interrupted_import_short_id,
 };
 pub use verify::{ArchiveVerifyReport, CarriedMaintainerKeySummary, verify_archive};
 
