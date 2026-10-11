@@ -23,8 +23,9 @@ use crate::lock::ActiveLock;
 use crate::maintainer_signing::MaintainerSigner as _;
 use crate::test_gates::test_support::{signed_ref_update_envelope, unique_temp_dir};
 use crate::{
-    Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, ObjectWriter, RefPublication,
-    RefStore, RepositoryLayout, author_signature, maintainer_signature,
+    Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, ObjectWriteSession,
+    ObjectWriter, RefPublication, RefStore, RepositoryLayout, author_signature,
+    maintainer_signature,
 };
 
 /// A genuinely internally-consistent source repository: one real author-signed `Patch` (and its
@@ -511,6 +512,102 @@ fn cancel_refuses_an_id_that_does_not_match_the_present_journal() {
     assert!(error.to_string().contains("no import with id"), "{error}");
 }
 
+/// RFC 155 Part I-B2, review finding IB1(b): `acquire_container_locks` now refuses while a
+/// journal is present, so `archive::export`'s own call (never named in the review's own
+/// exemption list, unlike the import/cancel/recovery call sites) refuses too -- deliberately, not
+/// by oversight. Exporting a repository mid-import would read whatever the import has landed so
+/// far, which a cancel might still cut away: not the consistent, settled snapshot §9.3 promises.
+#[test]
+fn export_refuses_while_an_import_journal_is_present_and_succeeds_once_it_is_gone() {
+    let source_dir = unique_temp_dir("archive-ib2-export-refuse-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib2-export-refuse-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    crate::archive::import::stop_after_journal_for_test();
+    let mut cursor = Cursor::new(bytes.clone());
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect_err("the test seam stops the import right after the journal's own write");
+    let id = interrupted_import_short_id(&dest_layout)
+        .expect("read journal state")
+        .expect("a journal is present after the simulated kill");
+
+    let mut export_buffer = Vec::new();
+    let export_err = export_archive(&dest_layout, &mut export_buffer)
+        .expect_err("archive export must refuse while an import journal is present");
+    assert!(export_err.to_string().contains(&id), "{export_err}");
+    assert!(
+        export_buffer.is_empty(),
+        "a refusal must write nothing, not even a partial header"
+    );
+
+    // Resume, finishing the import and emptying the journal -- export must now succeed.
+    let mut cursor2 = Cursor::new(bytes);
+    import_archive(&dest_layout, &mut cursor2, &ArchiveImportOptions::default())
+        .expect("resume finishes the import");
+    let mut export_buffer2 = Vec::new();
+    export_archive(&dest_layout, &mut export_buffer2)
+        .expect("archive export succeeds once the journal is gone");
+}
+
+/// RFC 155 Part I-B2, review finding IB2: every kill this module's own test seams exercise
+/// returns an `Err`, so `Drop` releases every lock before `doctor` ever runs -- `doctor`'s own
+/// `PRIKK-DOCTOR-INTERRUPTED-IMPORT` issue must therefore name only resume/cancel here, with no
+/// mention of `prikk unlock`. A lock file left behind by something that does not release on drop
+/// (a real `SIGKILL`, simulated here the same way `unlock`'s own tests simulate a dead process --
+/// a lock body naming a `pid=` astronomically unlikely to exist) changes that recommendation to
+/// name `prikk unlock` first.
+#[test]
+fn doctor_names_unlock_first_only_when_a_lock_from_the_import_appears_abandoned() {
+    let source_dir = unique_temp_dir("archive-ib2-doctor-unlock-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib2-doctor-unlock-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    crate::archive::import::stop_after_journal_for_test();
+    let mut cursor = Cursor::new(bytes);
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect_err("the test seam stops the import right after the journal's own write");
+
+    let before = crate::doctor_repository(&dest_layout);
+    let issue = before
+        .issues
+        .iter()
+        .find(|issue| issue.code == "PRIKK-DOCTOR-INTERRUPTED-IMPORT")
+        .expect("the interrupted-import issue is present");
+    assert!(
+        !issue.recommendation.contains("prikk unlock"),
+        "a clean seam releases every lock on drop, so there is nothing to unlock yet: {}",
+        issue.recommendation
+    );
+    assert!(issue.recommendation.contains("run the same import again"));
+
+    // A lock file that, for whatever reason, is present and does not appear to belong to a
+    // running process -- the same fabricated-dead-pid technique `unlock`'s own tests use.
+    std::fs::write(
+        dest_layout.default_active_lock_path(),
+        "pid=999999\nkind=active\nnote=test\n",
+    )
+    .expect("write a fabricated stale lock");
+
+    let after = crate::doctor_repository(&dest_layout);
+    let issue = after
+        .issues
+        .iter()
+        .find(|issue| issue.code == "PRIKK-DOCTOR-INTERRUPTED-IMPORT")
+        .expect("the interrupted-import issue is still present");
+    assert!(
+        issue.recommendation.contains("prikk unlock"),
+        "a lock that does not appear to be running must be named first: {}",
+        issue.recommendation
+    );
+    assert!(issue.recommendation.contains("run the same import again"));
+}
+
 /// RFC 155 Part I-A2, review finding IA1(a): stage 1 now holds the `ObjectStore` container lock
 /// for its whole run, not just per append -- this proves it structurally, not by inspection. A
 /// callback runs right after stage 1's own first object write, while the lock is genuinely held,
@@ -556,6 +653,200 @@ fn concurrent_object_append_refuses_while_stage_1_holds_the_object_store_lock() 
         matches!(error, prikk_error::PrikkError::LockConflict(_)),
         "expected LockConflict, got: {error:?}"
     );
+}
+
+/// RFC 155 Part I-B2, review finding IB1(a): the ref-side container locks (`RefPointerIndex`,
+/// `RefLog`, `ReceivedIndex`) are now held structurally through stage 3, not just by inspection, on
+/// top of `ObjectStore`. A callback runs right before stage 3's own first landing, while all four
+/// container locks are genuinely held, and attempts a concurrent, wholly unrelated `publish`
+/// through an ordinary `RefStore` handle (never through this import's own). The published ref's
+/// own `RefState` object is written to the destination *before* the import starts (while nothing
+/// holds any lock yet), so the concurrent `publish` call's own `write_object` call is a no-op
+/// (`AlreadyPresent`, never touching `ObjectStore`) and the conflict this test actually proves is
+/// on `RefPointerIndex`/`RefLog`, not a re-run of IA1(a)'s own `ObjectStore` test.
+#[test]
+fn concurrent_publish_refuses_while_stage_3_holds_the_ref_side_locks() {
+    let source_dir = unique_temp_dir("archive-ib2-ib1a-source");
+    let (source_layout, _ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib2-ib1a-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before import");
+
+    // A second, wholly unrelated ref's own RefState object, written at the destination before the
+    // import ever starts -- so the concurrent `publish` below finds it already present and never
+    // touches the `ObjectStore` lock itself.
+    let other_ref_state_payload = RefStatePayload {
+        ref_name: "heads/other".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: _ref_state_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let other_ref_state_bytes = other_ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode other ref-state payload");
+    let mut other_ref_state_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, other_ref_state_bytes);
+    let other_ref_state_id = other_ref_state_envelope.object_id();
+    // `publish`'s own `validate_publication` requires a non-empty signature on both envelopes
+    // (`require_signed_type`) -- any real signature does, since `publish` itself never checks
+    // whether the signer is adopted (that is only `--adopt`'s own `verify_trusted_publication_
+    // envelope`, not exercised by this ordinary, unrelated probe).
+    let probe_signer = Ed25519MaintainerSigner::from_seed("concurrent-publish-probe", &[0x55; 32])
+        .expect("probe signer");
+    other_ref_state_envelope
+        .add_signature(
+            maintainer_signature(&probe_signer, ObjectType::RefState, other_ref_state_id)
+                .expect("sign the probe's own ref state for real"),
+        )
+        .expect("attach the probe's own real signature");
+    FileObjectStore::new(dest_layout.clone())
+        .write_object(&other_ref_state_envelope)
+        .expect("pre-write the concurrent probe's own RefState object");
+
+    let other_ref_update_payload = prikk_object::RefUpdatePayload {
+        ref_name: "heads/other".to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: other_ref_state_id,
+        new_target_object_id: _ref_state_id,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: maintainer_key_id.clone(),
+    };
+    let other_ref_update_bytes = other_ref_update_payload
+        .to_canonical_bytes()
+        .expect("encode other ref-update payload");
+    let mut other_ref_update_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, other_ref_update_bytes);
+    let other_ref_update_id = other_ref_update_envelope.object_id();
+    other_ref_update_envelope
+        .add_signature(
+            maintainer_signature(&probe_signer, ObjectType::RefUpdate, other_ref_update_id)
+                .expect("sign the probe's own ref update for real"),
+        )
+        .expect("attach the probe's own real signature");
+
+    let concurrent_result: Arc<Mutex<Option<prikk_error::Result<ObjectId>>>> =
+        Arc::new(Mutex::new(None));
+    let probe_layout = dest_layout.clone();
+    let probe_result = concurrent_result.clone();
+    crate::archive::import::run_before_stage_3_for_test(move || {
+        // A fresh `ObjectWriteSession`, not the default `FileObjectStore` -- `RefStore::publish`'s
+        // own plain path always acquires `ObjectStore` unconditionally for the ref-state write
+        // (`FileObjectStore::write_object` has no lock-free "already present" fast path at all,
+        // unlike `ObjectWriteSession::write_object`'s own `decide_write`), which would make this
+        // probe conflict on `ObjectStore` regardless of whatever this test is actually trying to
+        // isolate -- the ref-side locks, not the (already proven, IA1(a)) object-store one. The
+        // probe's own ref-state object was pre-written above, so `ObjectWriteSession`'s own
+        // `AlreadyPresent` fast path means this call never touches `ObjectStore` at all, and
+        // whatever it does touch is purely the ref-side containers this test is actually about.
+        let mut probe_object_store =
+            ObjectWriteSession::open(&probe_layout).expect("open a fresh object-write session");
+        let outcome = RefStore::new(probe_layout).publish_with_object_store(
+            &mut probe_object_store,
+            &RefPublication {
+                ref_name: "heads/other".to_string(),
+                expected_previous_ref_state_id: None,
+                ref_state: other_ref_state_envelope,
+                ref_update: other_ref_update_envelope,
+            },
+        );
+        *probe_result.lock().expect("lock") = Some(outcome);
+    });
+
+    let mut cursor = Cursor::new(bytes);
+    import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions { adopt: true },
+    )
+    .expect("import completes normally");
+
+    let outcome = concurrent_result
+        .lock()
+        .expect("lock")
+        .take()
+        .expect("the callback ran before stage 3");
+    let error = outcome.expect_err(
+        "a concurrent publish must refuse with LockConflict while stage 3 holds the ref-side \
+         container locks for the whole import",
+    );
+    assert!(
+        matches!(error, prikk_error::PrikkError::LockConflict(_)),
+        "expected LockConflict, got: {error:?}"
+    );
+}
+
+/// RFC 155 Part I-B2, review finding IB1(b): `compact --pointer-index`/`--received-index`/
+/// `--trust-policy` and `doctor --rebuild-pointer-index` each take only a container lock, with no
+/// `ActiveLock` at all -- none of them passed through Part I-A2's own writer-refusal fix.
+/// `acquire_container_locks` itself now refuses while a journal is present, so each of these must
+/// refuse too, and must succeed again once the journal is gone.
+#[test]
+fn compact_and_rebuild_refuse_while_a_journal_is_present_and_succeed_once_it_is_gone() {
+    let source_dir = unique_temp_dir("archive-ib2-ib1b-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-ib2-ib1b-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    crate::archive::import::stop_after_journal_for_test();
+    let mut cursor = Cursor::new(bytes.clone());
+    import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect_err("the test seam stops the import right after the journal's own write");
+    let id = interrupted_import_short_id(&dest_layout)
+        .expect("read journal state")
+        .expect("a journal is present after the simulated kill");
+
+    let compact_pointer_err = crate::compact_ref_pointer_index(&dest_layout)
+        .expect_err("compact --pointer-index must refuse while the journal is present");
+    assert!(
+        compact_pointer_err.to_string().contains(&id),
+        "{compact_pointer_err}"
+    );
+
+    let compact_received_err = crate::compact_received_index(&dest_layout)
+        .expect_err("compact --received-index must refuse while the journal is present");
+    assert!(
+        compact_received_err.to_string().contains(&id),
+        "{compact_received_err}"
+    );
+
+    let compact_trust_err = crate::compact_trust_policy(&dest_layout)
+        .expect_err("compact --trust-policy must refuse while the journal is present");
+    assert!(
+        compact_trust_err.to_string().contains(&id),
+        "{compact_trust_err}"
+    );
+
+    let rebuild_err = crate::rebuild_pointer_index(&dest_layout)
+        .expect_err("doctor --rebuild-pointer-index must refuse while the journal is present");
+    assert!(rebuild_err.to_string().contains(&id), "{rebuild_err}");
+
+    // Resume, finishing the import and emptying the journal -- every one of them must now succeed.
+    let mut cursor2 = Cursor::new(bytes);
+    import_archive(&dest_layout, &mut cursor2, &ArchiveImportOptions::default())
+        .expect("resume finishes the import");
+    assert!(
+        interrupted_import_short_id(&dest_layout).unwrap().is_none(),
+        "the commit point emptied the journal"
+    );
+
+    crate::compact_ref_pointer_index(&dest_layout)
+        .expect("compact --pointer-index succeeds once the journal is gone");
+    crate::compact_received_index(&dest_layout)
+        .expect("compact --received-index succeeds once the journal is gone");
+    crate::compact_trust_policy(&dest_layout)
+        .expect("compact --trust-policy succeeds once the journal is gone");
+    crate::rebuild_pointer_index(&dest_layout)
+        .expect("doctor --rebuild-pointer-index succeeds once the journal is gone");
 }
 
 /// RFC 155 Part I-A2, review finding IA2: the author-key container is journaled and cut back on

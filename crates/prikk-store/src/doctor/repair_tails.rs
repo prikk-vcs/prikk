@@ -41,7 +41,7 @@ use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout,
 };
-use crate::lock::{ActiveLock, acquire_container_locks};
+use crate::lock::{ActiveLock, acquire_container_locks_allowing_import_journal};
 use crate::received::received_index::{
     decode_received_index_entries_for_resolver, fold_one_received_index_entry,
 };
@@ -101,7 +101,9 @@ fn run_repair_tails(layout: &RepositoryLayout, plan_only: bool) -> Result<Repair
     // site).
     let _active_lock =
         ActiveLock::acquire_for_write_allowing_import_journal(layout, DEFAULT_ACTIVE_NAME)?;
-    let _container_locks = acquire_container_locks(
+    // RFC 155 Part I-B2: as the active lock above -- `acquire_container_locks`'s own doc comment
+    // enumerates this call site.
+    let _container_locks = acquire_container_locks_allowing_import_journal(
         layout,
         &[
             LockableContainer::RefPointerIndex,

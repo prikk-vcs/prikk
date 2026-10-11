@@ -57,6 +57,21 @@
 //! the ordinary per-append path -- so a concurrent object append from *any* handle, default
 //! session or not, genuinely refuses with `LockConflict` for the whole of stage 1, not merely "in
 //! every case this module's own author could think of."
+//!
+//! **RFC 155 Part I-B2 (review `rfc155-impl-IB-review-v1`, finding IB1): the other three container
+//! locks are now held structurally too, closing a real gap, not a gap on paper.** Part I-B's own
+//! first cut, when stage 3 (ref landing) first existed, chose not to hold `RefPointerIndex`/
+//! `RefLog`/`ReceivedIndex` continuously, arguing that every other repository writer already
+//! refuses while this import's own journal is present, so nothing else could touch them in between
+//! -- true for `ActiveLock`-based writers, but `compact --pointer-index`/`--received-index`/
+//! `--trust-policy`, `doctor --rebuild-pointer-index`, and `doctor --repair-index`/
+//! `--repair-pointer-index-tail` each take only a container lock, with no `ActiveLock` at all, so
+//! none of them were actually blocked. All four container locks are now held from the journal to
+//! the commit point, literally as §9.5 states, through
+//! [`crate::refs::RefStore::publish_with_object_store_under_held_lock`] and
+//! [`crate::received::write_received_pointer_under_held_lock`] in stage 3, and
+//! [`crate::lock::acquire_container_locks`] itself now refuses while a journal is present (see its
+//! own doc comment) -- so every one of those lock-only writers, present and future, is covered too.
 
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -77,7 +92,9 @@ use crate::foundation::fsutil::{
 };
 use crate::foundation::layout::persisted_object_types;
 use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
-use crate::lock::{ActiveLock, acquire_container_locks};
+use crate::lock::{
+    ActiveLock, ContainerLockGuard, acquire_container_locks_allowing_import_journal,
+};
 use crate::object_store::{ObjectReader, ObjectWriteSession};
 use crate::received::received_index::decode_received_index_entries_for_resolver;
 use crate::refs::{
@@ -375,32 +392,27 @@ pub fn import_archive<R: Read + Seek>(
         }
     };
 
-    // `ObjectStore`, held from here to the commit point (§9.5), acquired *after* the journal
+    // All four container locks, held from here to the commit point, literally as §9.5 requires
+    // (RFC 155 Part I-B2, review `rfc155-impl-IB-review-v1` finding IB1(a), closing the named
+    // deviation Part I-B's own report flagged: the three ref-side locks used to be acquired later,
+    // per call, by `publish`/`write_received_pointer` themselves). Acquired *after* the journal
     // exists for a fresh start (the journal write above needed none of them), and unconditionally
-    // for a resume, since the prior run already held and released it when it was killed. Stage 1
-    // appends through `ObjectWriteSession::write_object_under_held_lock`, which takes this guard
-    // instead of acquiring the lock itself per append -- see that function's own doc, and
-    // `append_object_under_held_lock`'s, for why the ordinary per-append path cannot be reused by
-    // a caller holding this lock continuously.
-    //
-    // **A named deviation from §9.5's literal text for the other three** (`RefPointerIndex`,
-    // `RefLog`, `ReceivedIndex`): §9.5 says every container lock is held from the journal to the
-    // commit point. Stage 1/2 never write a ref, so these three are acquired later instead, right
-    // before stage 3 (below), not here -- `RefStore::publish_with_object_store` and
-    // `write_received_pointer` each already acquire them per call, the same way `branch create`/
-    // `seal` always have, and a caller already holding one of them would conflict with its own
-    // acquisition (`write_object_under_held_lock`'s own fix, for `ObjectStore`, exists precisely
-    // because of this; building the same "under an already-held lock" primitive for `publish` and
-    // `write_received_pointer` was judged out of this part's own budget). **Why this is still
-    // safe**: nothing else can write to these containers between the journal and stage 3 anyway --
-    // every repository writer, every session, refuses while this import's own journal is present
-    // (RFC 155 Part I-A2, finding IA1(b)), and the recovery verbs exempted from that refusal
-    // (`repair_tails`, `discard_damaged_commits`, `restore_queue_target`, `repair_repository`'s own
-    // loop, `recovery_log::repair_locks`) never write a ref pointer, a ref-log record, or a
-    // received-index entry. The gap is real against §9.5's own stated structural guarantee, though,
-    // not merely argued away -- flagged for the architect the same way Part I-A's own IA1 finding
-    // was, in this part's own report.
-    let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
+    // for a resume, since the prior run already held and released them when it was killed. Stage 1
+    // appends through `ObjectWriteSession::write_object_under_held_lock`; stage 3 lands through
+    // `RefStore::publish_with_object_store_under_held_lock` and
+    // `write_received_pointer_under_held_lock` -- each takes this same guard instead of acquiring
+    // its own container lock per call, which is exactly why a plain per-call acquisition could not
+    // be reused by a caller already holding these locks continuously (the identical class of
+    // conflict `write_object_under_held_lock` already exists to avoid for `ObjectStore`).
+    let _container_locks = acquire_container_locks_allowing_import_journal(
+        layout,
+        &[
+            LockableContainer::ObjectStore,
+            LockableContainer::RefPointerIndex,
+            LockableContainer::RefLog,
+            LockableContainer::ReceivedIndex,
+        ],
+    )?;
     // Unconditionally the "allowing" variant: a fresh start has no journal yet (trivially passes
     // either way); a resume's own journal is already present, from this same import, and must not
     // refuse itself.
@@ -432,6 +444,19 @@ pub fn import_archive<R: Read + Seek>(
         FAIL_MID_OBJECTS_AFTER_N_FOR_TEST.with(std::cell::Cell::take);
     #[cfg(test)]
     let mut total_objects_written_so_far = 0usize;
+    // RFC 155 Part I-B2, review finding IB2: every kill in this module's own unit tests is a
+    // seam that returns an `Err`, so `Drop` still runs and releases every lock normally -- a real
+    // `SIGKILL` does not. This is the one seam that can actually be reached by a real, separately
+    // compiled `prikk` process (gated by the `test-support` feature, not `#[cfg(test)]`, which
+    // only ever compiles into `prikk-store`'s own unit-test binary and could never be reached from
+    // a child process spawned by an integration test): with
+    // `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST=<n>` set, it writes a marker file (named by
+    // `PRIKK_ARCHIVE_IMPORT_BLOCKED_MARKER_FOR_TEST`) after the `n`th object write and then blocks
+    // forever, so the test harness can wait for the marker, send a genuine `SIGKILL`, and inspect
+    // exactly what a real interrupted process leaves behind -- stale lock files included, which no
+    // `#[cfg(test)]` seam (whose `Err` always runs every `Drop`) could ever exercise.
+    #[cfg(feature = "test-support")]
+    let mut test_support_objects_written_so_far = 0usize;
     for object_type in object_types {
         let entry = find_entry(&manifest, ArchiveSectionKind::ObjectContainer(object_type))?;
         let mut envelopes: Vec<ObjectEnvelope> = Vec::new();
@@ -460,7 +485,7 @@ pub fn import_archive<R: Read + Seek>(
         for envelope in admitted_envelopes {
             let id = envelope.object_id();
             let already_present = object_store.contains_object(object_type, id)?;
-            object_store.write_object_under_held_lock(&envelope, &_object_store_lock)?;
+            object_store.write_object_under_held_lock(&envelope, &_container_locks)?;
             if !already_present {
                 written = written.checked_add(1).ok_or_else(|| {
                     PrikkError::Integrity(
@@ -492,6 +517,12 @@ pub fn import_archive<R: Read + Seek>(
                     )
                     .into());
                 }
+            }
+            #[cfg(feature = "test-support")]
+            if !already_present {
+                test_support_objects_written_so_far =
+                    test_support_objects_written_so_far.saturating_add(1);
+                block_after_n_objects_for_real_kill_test(test_support_objects_written_so_far);
             }
         }
         written_object_counts.push((object_type, written));
@@ -535,12 +566,11 @@ pub fn import_archive<R: Read + Seek>(
         ));
     }
 
-    // Stage 3: land every ref the archive carries (§9.6/§9.7). The ref-side container locks are
-    // *not* acquired here, continuously -- see this function's own doc note above, on the
-    // `ObjectStore` acquisition, for why that is a named deviation from §9.5's literal text, not
-    // an oversight. `RefStore::publish_with_object_store` and `write_received_pointer`, called
-    // below, each acquire them again, per call, their own ordinary way -- the same way `branch
-    // create`/`seal` always have.
+    // Stage 3: land every ref the archive carries (§9.6/§9.7), under the same four container
+    // locks held continuously since the journal (see this function's own doc note above) --
+    // through `publish_with_object_store_under_held_lock`/`write_received_pointer_under_held_lock`,
+    // never the ordinary per-call paths `branch create`/`seal`/`bundle import` use, which would
+    // conflict with this function's own continuous hold.
     //
     // `--adopt`'s own chain replay needs the archive's carried ref log, decoded once (not per ref)
     // and only when there is a `LandingOrigin::Local` entry to even consider adopting -- a
@@ -567,6 +597,13 @@ pub fn import_archive<R: Read + Seek>(
     };
     let ref_store = RefStore::new(layout.clone());
     let adopted_policy = load_maintainer_trust_policy_or_empty(layout)?;
+    // Test seam, unreachable from production: run once, right before stage 3's own first landing,
+    // while the four container locks above are genuinely held -- IB1(a)'s own test (a concurrent,
+    // ordinary `publish` must refuse with `LockConflict`).
+    #[cfg(test)]
+    if let Some(callback) = RUN_BEFORE_STAGE_3_FOR_TEST.with(|cell| cell.borrow_mut().take()) {
+        callback();
+    }
     let mut landing_outcomes = Vec::with_capacity(journal.landing.len());
     let mut any_landing_changed = false;
     for landing in &journal.landing {
@@ -578,6 +615,7 @@ pub fn import_archive<R: Read + Seek>(
             options,
             &mut object_store,
             &ref_log_records,
+            &_container_locks,
         )?;
         any_landing_changed = any_landing_changed || changed;
         landing_outcomes.push(outcome);
@@ -607,6 +645,7 @@ pub fn import_archive<R: Read + Seek>(
 
 /// One planned landing's real outcome at stage 3, and whether it actually changed anything (the
 /// caller's own tally for [`ArchiveImportReport::already_imported`]).
+#[allow(clippy::too_many_arguments)]
 fn land_one_ref(
     layout: &RepositoryLayout,
     ref_store: &RefStore,
@@ -615,14 +654,19 @@ fn land_one_ref(
     options: &ArchiveImportOptions,
     object_store: &mut ObjectWriteSession,
     ref_log_records: &[crate::refs::RefLogRecord],
+    container_locks: &ContainerLockGuard,
 ) -> Result<(LandingOutcome, bool)> {
     match landing.origin {
         // §9.6: the archive's own received pointers stay received, under their own
         // already-`remotes/`-shaped name -- never re-wrapped a second time (review
         // `rfc155-impl-IA-review-v1`, finding A3).
         LandingOrigin::Received => {
-            let changed =
-                land_as_received_pointer(layout, &landing.ref_name, landing.ref_state_id)?;
+            let changed = land_as_received_pointer(
+                layout,
+                &landing.ref_name,
+                landing.ref_state_id,
+                container_locks,
+            )?;
             Ok((
                 LandingOutcome {
                     ref_name: landing.ref_name.clone(),
@@ -640,6 +684,7 @@ fn land_one_ref(
                 landing,
                 object_store,
                 ref_log_records,
+                container_locks,
             )? {
                 AdoptOutcome::Adopted => Ok((
                     LandingOutcome {
@@ -655,6 +700,7 @@ fn land_one_ref(
                         layout,
                         &landing.destination,
                         landing.ref_state_id,
+                        container_locks,
                     )?;
                     Ok((
                         LandingOutcome {
@@ -669,8 +715,12 @@ fn land_one_ref(
             }
         }
         LandingOrigin::Local => {
-            let changed =
-                land_as_received_pointer(layout, &landing.destination, landing.ref_state_id)?;
+            let changed = land_as_received_pointer(
+                layout,
+                &landing.destination,
+                landing.ref_state_id,
+                container_locks,
+            )?;
             Ok((
                 LandingOutcome {
                     ref_name: landing.ref_name.clone(),
@@ -688,13 +738,21 @@ fn land_one_ref(
 /// target actually changed -- `write_received_pointer` itself is unconditional (last-entry-wins,
 /// no CAS: see its own doc note), so this reads the prior value first purely to report
 /// [`ArchiveImportReport::already_imported`] accurately, never to decide whether to write.
+/// `container_locks` must already hold `ReceivedIndex` -- checked, not assumed, by
+/// [`crate::received::write_received_pointer_under_held_lock`].
 fn land_as_received_pointer(
     layout: &RepositoryLayout,
     ref_name: &str,
     ref_state_id: ObjectId,
+    container_locks: &ContainerLockGuard,
 ) -> Result<bool> {
     let before = crate::received::read_received_pointer(layout, ref_name)?;
-    crate::received::write_received_pointer(layout, ref_name, ref_state_id)?;
+    crate::received::write_received_pointer_under_held_lock(
+        layout,
+        ref_name,
+        ref_state_id,
+        container_locks,
+    )?;
     Ok(before.map(|pointer| pointer.ref_state_id) != Some(ref_state_id))
 }
 
@@ -724,6 +782,7 @@ fn try_adopt_local_ref(
     landing: &PlannedRefLanding,
     object_store: &mut ObjectWriteSession,
     ref_log_records: &[crate::refs::RefLogRecord],
+    container_locks: &ContainerLockGuard,
 ) -> Result<AdoptOutcome> {
     // Condition 1, checked first and cheaply (a second, atomic check happens inside `publish`
     // itself, under the ref lock, for the chain's own first step -- this is the lock-free,
@@ -774,8 +833,8 @@ fn try_adopt_local_ref(
     }
 
     // Condition 4 (CAS against absent) for the first step, and the chain's own internal CAS for
-    // every step after it -- both enforced by `publish_with_object_store` itself, never
-    // re-implemented here.
+    // every step after it -- both enforced by `publish_with_object_store_under_held_lock` itself,
+    // never re-implemented here.
     let mut expected_previous: Option<ObjectId> = None;
     for (update, ref_update_envelope) in &chain {
         let ref_state_envelope = object_store
@@ -787,7 +846,7 @@ fn try_adopt_local_ref(
                     update.new_ref_state_id, landing.ref_name
                 ))
             })?;
-        ref_store.publish_with_object_store(
+        ref_store.publish_with_object_store_under_held_lock(
             object_store,
             &RefPublication {
                 ref_name: landing.ref_name.clone(),
@@ -795,6 +854,7 @@ fn try_adopt_local_ref(
                 ref_state: ref_state_envelope,
                 ref_update: ref_update_envelope.clone(),
             },
+            container_locks,
         )?;
         expected_previous = Some(update.new_ref_state_id);
     }
@@ -1181,7 +1241,7 @@ pub fn cancel_import(
     // holding it continuously would conflict with `write_object`'s own per-append acquisition;
     // cancel does not call `write_object`, but holding it here for the whole run is still
     // needlessly wide when a scoped acquisition per cut is just as correct and cheap).
-    let _container_locks = acquire_container_locks(
+    let _container_locks = acquire_container_locks_allowing_import_journal(
         layout,
         &[
             LockableContainer::RefPointerIndex,
@@ -1209,7 +1269,7 @@ pub fn cancel_import(
         // protected solely by the `_active_lock` already held above, the same way
         // `record_author_key_material` always was.
         let _object_store_lock = if container.kind == JournaledContainerKind::ObjectStore {
-            Some(acquire_container_locks(
+            Some(acquire_container_locks_allowing_import_journal(
                 layout,
                 &[LockableContainer::ObjectStore],
             )?)
@@ -1314,6 +1374,8 @@ thread_local! {
     static FAIL_MID_OBJECTS_AFTER_N_FOR_TEST: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static RUN_AFTER_FIRST_OBJECT_WRITE_FOR_TEST: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static RUN_BEFORE_STAGE_3_FOR_TEST: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
@@ -1372,6 +1434,47 @@ pub(crate) fn fail_mid_objects_after_n_for_test(n: usize) {
 pub(crate) fn run_after_first_object_write_for_test(callback: impl FnOnce() + 'static) {
     RUN_AFTER_FIRST_OBJECT_WRITE_FOR_TEST
         .with(|cell| *cell.borrow_mut() = Some(Box::new(callback)));
+}
+
+/// Test seam, unreachable from production: run `callback` once, right before stage 3's own first
+/// landing -- while all four container locks are genuinely held, so a callback that attempts a
+/// concurrent, ordinary `publish` (through an unrelated `RefStore` handle, never through this
+/// import's own) can observe whether that publish refuses. This is finding IB1(a)'s own test.
+#[cfg(test)]
+pub(crate) fn run_before_stage_3_for_test(callback: impl FnOnce() + 'static) {
+    RUN_BEFORE_STAGE_3_FOR_TEST.with(|cell| *cell.borrow_mut() = Some(Box::new(callback)));
+}
+
+/// RFC 155 Part I-B2, review finding IB2: the one seam reachable from a real, separately
+/// compiled `prikk` process, gated by the `test-support` feature (never the shipped binary --
+/// see this crate's own `Cargo.toml` doc note on `test-support`, and `prikk-cli`'s identical one)
+/// rather than `#[cfg(test)]` (which only ever compiles into this crate's own unit-test binary).
+///
+/// A no-op unless `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST` is set to `total_objects_written`'s
+/// own value -- read fresh on every call rather than cached once, since this is cheap (one env
+/// lookup) and avoids any state this function would otherwise need to keep across calls. When it
+/// matches: writes a marker file at the path named by `PRIKK_ARCHIVE_IMPORT_BLOCKED_MARKER_FOR_TEST`
+/// (so the harness that spawned this process knows it is now genuinely blocked, not merely slow),
+/// then blocks forever -- there is no unblock path, by design: the harness's own next step is a
+/// real `SIGKILL`, and the whole point is to leave real lock files on disk the way an actual crash
+/// would, which no `Err`-returning, `Drop`-respecting seam ever could.
+#[cfg(feature = "test-support")]
+fn block_after_n_objects_for_real_kill_test(total_objects_written: usize) {
+    let Ok(block_after) = std::env::var("PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST") else {
+        return;
+    };
+    let Ok(block_after) = block_after.parse::<usize>() else {
+        return;
+    };
+    if block_after != total_objects_written {
+        return;
+    }
+    if let Ok(marker_path) = std::env::var("PRIKK_ARCHIVE_IMPORT_BLOCKED_MARKER_FOR_TEST") {
+        let _ = std::fs::write(marker_path, b"blocked\n");
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 }
 
 /// Test-only: a SHA-256 of each container the journal would name (or does name, if one is

@@ -842,9 +842,7 @@ fn push_interrupted_import_issue(layout: &RepositoryLayout, issues: &mut Vec<Doc
                     "an archive import did not finish (id {id}); it may have written some \
                      objects, but landed no ref"
                 ),
-                format!(
-                    "run the same import again (it resumes), or `prikk doctor --cancel-import {id}`"
-                ),
+                import_interrupted_way_out(layout, &id),
             ));
         }
         Err(err) => issues.push(DoctorIssue::error(
@@ -853,6 +851,36 @@ fn push_interrupted_import_issue(layout: &RepositoryLayout, issues: &mut Vec<Doc
             "preserve the repository and inspect `.prikk/import/journal`".to_string(),
         )),
     }
+}
+
+/// RFC 155 Part I-B2, review finding IB2: every kill this module's own unit tests exercise is a
+/// seam that returns an `Err`, so `Drop` releases every lock normally before `doctor` ever runs --
+/// a real `SIGKILL` does not, and leaves the import's own lock files on disk. Resuming or
+/// cancelling against a repository that still carries them would itself refuse with a bare
+/// `LockConflict`, naming no way out -- so this names `prikk unlock` *first*, ahead of resume or
+/// cancel, whenever a lock is present and nothing currently held indicates its own process is
+/// still genuinely alive. **Advisory, not authorization** (the same split `unlock::list_held_locks`
+/// documents for itself): a lock whose recorded pid [`crate::unlock::PidLiveness::AppearsRunning`]
+/// is left out of this guidance entirely, because the import may simply still be running; this
+/// function never decides to clear anything itself, only what to tell the operator.
+fn import_interrupted_way_out(layout: &RepositoryLayout, id: &str) -> String {
+    let resume_or_cancel =
+        format!("run the same import again (it resumes), or `prikk doctor --cancel-import {id}`");
+    let held = match crate::unlock::list_held_locks(layout) {
+        Ok(held) => held,
+        Err(_) => return resume_or_cancel,
+    };
+    let any_appears_running = held
+        .iter()
+        .any(|lock| lock.liveness == crate::unlock::PidLiveness::AppearsRunning);
+    if held.is_empty() || any_appears_running {
+        return resume_or_cancel;
+    }
+    format!(
+        "{} lock file(s) remain from this import, and none appears to still be held by a running \
+         process -- if it is genuinely gone, run `prikk unlock` first; then {resume_or_cancel}",
+        held.len()
+    )
 }
 
 /// Run doctor diagnostics for a repository layout.

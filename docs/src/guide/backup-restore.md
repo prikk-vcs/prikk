@@ -166,6 +166,17 @@ real local branch under `--adopt`, when it is absent locally, signed by a key th
 adopted (`trust maintainer add`), and verified — every other ref still lands under `remotes/`, with
 the reason named.
 
+**If `archive import` is killed or lost partway through**, `prikk doctor` names it
+(`PRIKK-DOCTOR-INTERRUPTED-IMPORT`) and its id, with two ways out: run the same import again (it
+resumes from wherever it stopped), or `prikk doctor --cancel-import <id>` to restore the repository
+to what it was before the import ever started. If the process was killed outright — a real
+`SIGKILL`, a lost machine, not a command that returned an error on its own — its lock files are
+still on disk (nothing steals a lock automatically: see `prikk unlock`'s own guide), and `doctor`'s
+own message says so, naming `prikk unlock` *first*, ahead of resume or cancel. The sequence is
+always the same order: `prikk doctor` to see what is true, `prikk unlock --lock <path>` for each
+lock it (or `prikk unlock` on its own) lists, if any are present, and only then the same import
+again, or `--cancel-import`.
+
 ## Check a backup later, without restoring it
 
 `bundle verify` reads a bundle file and reports whether it is structurally sound and internally

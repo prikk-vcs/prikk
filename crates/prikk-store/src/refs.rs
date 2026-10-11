@@ -650,6 +650,23 @@ impl RefStore {
         publication::publish(self, object_store, publication)
     }
 
+    /// As [`Self::publish_with_object_store`], but for a caller that already holds
+    /// `RefPointerIndex` and `RefLog` itself (RFC 155 Part I-B2, review `rfc155-impl-IB-review-v1`
+    /// finding IB1(a)): `archive::import`'s stage 3 landing, which holds every container lock from
+    /// the journal to the commit point. See [`publication::publish_under_held_lock`]'s own doc for
+    /// why the ordinary path cannot be reused by a caller holding these locks continuously.
+    pub(crate) fn publish_with_object_store_under_held_lock(
+        &self,
+        object_store: &mut impl ObjectWriter,
+        publication: &RefPublication,
+        guard: &crate::lock::ContainerLockGuard,
+    ) -> Result<ObjectId> {
+        self.layout.require_current_format()?;
+        crate::format::validate_object_envelope(self.layout.format(), &publication.ref_state)?;
+        crate::format::validate_object_envelope(self.layout.format(), &publication.ref_update)?;
+        publication::publish_under_held_lock(self, object_store, publication, guard)
+    }
+
     /// Finish an exact signer-backed interrupted publication, including a framing-incomplete tail.
     /// Writes through a freshly decoded `FileObjectStore` -- see
     /// [`Self::finish_interrupted_publication_with_object_store`] for a caller that already has one.

@@ -148,6 +148,29 @@
   reference](docs/src/reference/archive-format.md), and [the backup/restore
   guide](docs/src/guide/backup-restore.md), each updated for the real command this part adds.
 
+### Fixed — `archive import` now holds every container lock structurally for real, every writer that took only a container lock is covered, and a real kill is recoverable
+
+- Part I-B's own review: the ref-pointer-index, ref-log, and received-index container locks are now
+  held continuously from the journal to the commit point, literally as §9.5 states, through two new
+  held-lock primitives (`RefStore::publish_with_object_store_under_held_lock`,
+  `write_received_pointer_under_held_lock`) — the same shape `ObjectStore`'s own
+  `write_object_under_held_lock` already was. This closes the named deviation Part I-B's own entry
+  above described.
+- `acquire_container_locks` itself now refuses while an import's journal is present, the same way
+  `ActiveLock::acquire` already did — `compact --pointer-index`/`--received-index`/`--trust-policy`
+  and `doctor --rebuild-pointer-index` each took only a container lock, with no `ActiveLock` at all,
+  so none of them passed through the earlier, narrower fix. `archive export`'s own call is
+  deliberately not exempted either: exporting mid-import would read whatever has landed so far,
+  which a cancel might still cut away.
+- A real `SIGKILL` (not a seam that returns an error, which `Drop` always recovers from cleanly) now
+  leaves a repository recoverable in the documented order: `prikk doctor` names the interrupted
+  import and, when a lock file it left behind does not appear to belong to a running process, names
+  `prikk unlock` first — ahead of resuming the same import or `prikk doctor --cancel-import`. See
+  [the backup/restore guide](docs/src/guide/backup-restore.md) for the sequence, proven end to end
+  against the real binary, a real child process, and a real `SIGKILL`.
+- **This is RFC 155's fourth and final implementation part, now fully delivered**: `prikk archive
+  export|verify|import` and `prikk doctor --cancel-import` all exist, matching §9.9 in full.
+
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 
 - For the received index and the trust policy container, a lost generation log can leave two slots

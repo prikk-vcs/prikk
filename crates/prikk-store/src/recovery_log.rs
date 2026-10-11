@@ -1249,7 +1249,9 @@ fn repair_locks(
             layout, name,
         )?);
     }
-    let containers = crate::lock::acquire_container_locks(
+    // RFC 155 Part I-B2: one of doctor's own recovery verbs -- runs even while an archive import's
+    // journal is present (`acquire_container_locks`'s own doc comment enumerates this call site).
+    let containers = crate::lock::acquire_container_locks_allowing_import_journal(
         layout,
         &[
             LockableContainer::ObjectStore,

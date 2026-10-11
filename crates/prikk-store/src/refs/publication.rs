@@ -9,7 +9,7 @@ use super::{
     validate_publication,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryFormat, ref_name_key_bytes};
-use crate::lock::{RefLock, acquire_container_locks};
+use crate::lock::{ContainerLockGuard, RefLock, acquire_container_locks};
 use crate::object_store::ObjectWriter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,16 +41,6 @@ fn publish_locked(
     publication: &RefPublication,
     allow_partial_tail_repair: bool,
 ) -> Result<ObjectId> {
-    let update = validate_coherent_publication(publication)?;
-    // DC-72: `expected_previous_ref_state_id: None` is this publication's own CAS signal for "no
-    // current state" — the same signal `branch create`/`tag create`/first `seal` already use to mean
-    // "this ref does not exist yet" (branch.rs, tag.rs, seal.rs). Checked only here, not on every
-    // ordinary pointer-update publication, so an existing ref's routine seal never re-scans every ref.
-    if publication.expected_previous_ref_state_id.is_none() {
-        validate_no_ref_name_collision(store, &publication.ref_name)?;
-    }
-    let ref_state_id = publication.ref_state.object_id();
-    let ref_name_key = ref_name_key_bytes(&publication.ref_name);
     let ref_lock = RefLock::acquire(&store.layout, &publication.ref_name)?;
     // RFC 102 Stage 6 Step 2, design-v1.md §15.8 (ruled wide): both containers this function writes
     // -- the pointer index and the ref log -- are locked together, for the whole critical section
@@ -68,6 +58,60 @@ fn publish_locked(
             LockableContainer::RefLog,
         ],
     )?;
+    let result = publish_body(store, object_store, publication, allow_partial_tail_repair);
+    drop(container_locks);
+    drop(ref_lock);
+    result
+}
+
+/// As [`publish_locked`], but for a caller that already holds `RefPointerIndex` and `RefLog`
+/// itself, across many publications -- RFC 155 Part I-B2's own fix (review `rfc155-impl-IB-review-v1`,
+/// finding IB1(a)): `archive::import`'s stage 3 holds these two container locks from the journal to
+/// the commit point, so taking them again here, per publish, would be that same process conflicting
+/// with its own continuous hold (the identical class of bug Part I-A2 already fixed for
+/// `ObjectStore` via `write_object_under_held_lock`). `guard` is checked, not assumed, to actually
+/// hold both containers ([`ContainerLockGuard::holds`]) -- a caller cannot reach the publish
+/// primitive while believing it holds locks it does not. The ref-specific [`RefLock`] is still
+/// acquired here, per call: it is not one of the four `LockableContainer` kinds import holds
+/// continuously, and nothing about it conflicts with a continuous container-lock hold. Never used
+/// for an interrupted-publication repair (`allow_partial_tail_repair: false` always) -- import's own
+/// chain replay only ever publishes a ref from a clean, freshly-computed state, never resumes one
+/// left mid-write by a different writer.
+pub(super) fn publish_under_held_lock(
+    store: &RefStore,
+    object_store: &mut impl ObjectWriter,
+    publication: &RefPublication,
+    guard: &ContainerLockGuard,
+) -> Result<ObjectId> {
+    if !guard.holds(LockableContainer::RefPointerIndex) || !guard.holds(LockableContainer::RefLog) {
+        return Err(PrikkError::LockConflict(
+            "publish_under_held_lock was called without both the ref-pointer-index and ref-log \
+             locks actually held -- refusing rather than publishing unsynchronized"
+                .to_string(),
+        ));
+    }
+    let ref_lock = RefLock::acquire(&store.layout, &publication.ref_name)?;
+    let result = publish_body(store, object_store, publication, false);
+    drop(ref_lock);
+    result
+}
+
+fn publish_body(
+    store: &RefStore,
+    object_store: &mut impl ObjectWriter,
+    publication: &RefPublication,
+    allow_partial_tail_repair: bool,
+) -> Result<ObjectId> {
+    let update = validate_coherent_publication(publication)?;
+    // DC-72: `expected_previous_ref_state_id: None` is this publication's own CAS signal for "no
+    // current state" — the same signal `branch create`/`tag create`/first `seal` already use to mean
+    // "this ref does not exist yet" (branch.rs, tag.rs, seal.rs). Checked only here, not on every
+    // ordinary pointer-update publication, so an existing ref's routine seal never re-scans every ref.
+    if publication.expected_previous_ref_state_id.is_none() {
+        validate_no_ref_name_collision(store, &publication.ref_name)?;
+    }
+    let ref_state_id = publication.ref_state.object_id();
+    let ref_name_key = ref_name_key_bytes(&publication.ref_name);
     // RFC 164 Rule D: the pointer index's own tail/damage check, run again here -- before the
     // RefState object write just below -- from its own prior position inside `classify_state`'s
     // read (damage, via `lookup_ref_pointer`'s own refusal on `has_item_failure()`) and
@@ -166,8 +210,6 @@ fn publish_locked(
         }
     };
     ensure_agreement(store, publication, &update, &replay, &outcome)?;
-    drop(container_locks);
-    drop(ref_lock);
     Ok(ref_state_id)
 }
 

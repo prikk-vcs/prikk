@@ -106,6 +106,30 @@ pub(crate) fn write_received_pointer(
     )
 }
 
+/// As [`write_received_pointer`], but checked -- not assumed -- against a caller-supplied
+/// [`crate::lock::ContainerLockGuard`] that must already hold `ReceivedIndex` (RFC 155 Part I-B2,
+/// review `rfc155-impl-IB-review-v1` finding IB1(a)): `append_received_index_entry` itself never
+/// acquires this lock -- every one of its other callers (`bundle_import`) already holds it
+/// continuously across the whole operation, the same pattern `archive::import`'s stage 3 now also
+/// follows. This wrapper exists so stage 3's own call site states that contract explicitly, the same
+/// shape `write_object_under_held_lock`/`publish_under_held_lock` already check for their own
+/// containers, rather than relying on it silently.
+pub(crate) fn write_received_pointer_under_held_lock(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    ref_state_id: ObjectId,
+    guard: &crate::lock::ContainerLockGuard,
+) -> Result<()> {
+    if !guard.holds(crate::foundation::layout::LockableContainer::ReceivedIndex) {
+        return Err(PrikkError::LockConflict(
+            "write_received_pointer_under_held_lock was called without the received-index lock \
+             actually held -- refusing rather than writing unsynchronized"
+                .to_string(),
+        ));
+    }
+    write_received_pointer(layout, ref_name, ref_state_id)
+}
+
 /// Read a received ref's current pointer, if one has been imported.
 pub fn read_received_pointer(
     layout: &RepositoryLayout,

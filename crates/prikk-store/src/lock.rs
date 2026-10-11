@@ -218,10 +218,53 @@ impl ContainerLockGuard {
 /// own `Drop` releases it. A partial, leaked hold on early-failure is exactly the wedge shape this
 /// stage's stale-lock recovery work exists to stop introducing more of, so this path must never leave
 /// one behind.
+///
+/// RFC 155 Part I-B2: refuses while an archive import's journal is present, mirroring
+/// [`ActiveLock::acquire`]'s own check (review `rfc155-impl-IB-review-v1`, finding IB1(b)) --
+/// `ActiveLock::acquire` alone was not "the one call site every writer passes through" after all:
+/// `compact --pointer-index`/`--received-index`/`--trust-policy`, `doctor --rebuild-pointer-index`,
+/// and `doctor --repair-index`/`--repair-pointer-index-tail` each take only a container lock, with
+/// no `ActiveLock` at all, so none of them passed through Part I-A2's own fix. [`acquire_container_locks`]
+/// is the one function every one of those, and every ordinary writer that also holds `ActiveLock`
+/// first, passes through -- so this is now the actual "one call site," not `ActiveLock::acquire`
+/// alone. `acquire_container_locks_allowing_import_journal` is the named, narrow exception, used
+/// only by the import itself, the cancel, and doctor's own recovery verbs (`repair_tails`/
+/// `plan_repair_tails`, `recovery_log::repair_locks` backing `--recovery-restore`/`--recovery-clear`)
+/// -- enumerated here, from source, the same way `ActiveLock::acquire_allowing_import_journal`'s own
+/// doc comment does for its list. `doctor --repair-index`/`--repair-pointer-index-tail` are
+/// deliberately **not** exempted: unlike `repair_tails`/`--recovery-restore`/`--recovery-clear`,
+/// neither is part of the import's own resume/cancel flow (the interrupted-import issue only ever
+/// names resume or `--cancel-import`), and rebuilding the object index or truncating a pointer-index
+/// tail mid-import is exactly the "another writer mutates a journaled container while the journal
+/// still names its old length" hazard this part exists to close -- the same reasoning that keeps
+/// `compact`/`--rebuild-pointer-index` refusing too.
 pub fn acquire_container_locks(
     layout: &RepositoryLayout,
     containers: &[LockableContainer],
 ) -> Result<ContainerLockGuard> {
+    acquire_container_locks_checked(layout, containers, true)
+}
+
+/// As [`acquire_container_locks`], but never refuses for an archive import's own journal -- the
+/// named exception that function's own doc comment describes. Used only by: `archive::import`'s own
+/// lock acquisition (a resume must be able to re-acquire these locks while its own journal is still
+/// present), `archive::import::cancel_import`, `doctor::repair_tails`/`plan_repair_tails`, and
+/// `recovery_log::repair_locks` (backing `--recovery-restore`/`--recovery-clear`).
+pub(crate) fn acquire_container_locks_allowing_import_journal(
+    layout: &RepositoryLayout,
+    containers: &[LockableContainer],
+) -> Result<ContainerLockGuard> {
+    acquire_container_locks_checked(layout, containers, false)
+}
+
+fn acquire_container_locks_checked(
+    layout: &RepositoryLayout,
+    containers: &[LockableContainer],
+    check_import_journal: bool,
+) -> Result<ContainerLockGuard> {
+    if check_import_journal {
+        crate::foundation::import_journal_marker::refuse_while_present(layout)?;
+    }
     let mut sorted = containers.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
