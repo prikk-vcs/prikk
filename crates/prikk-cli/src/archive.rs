@@ -346,9 +346,8 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         )
     })?;
     let mut reader = std::io::BufReader::new(file);
-    let options = ArchiveImportOptions {
-        adopt: parsed.adopt,
-    };
+    let mut options = ArchiveImportOptions::default();
+    options.adopt = parsed.adopt;
     let report = prikk_store::import_archive(&layout, &mut reader, &options)
         .map_err(|err| err.to_string())?;
 

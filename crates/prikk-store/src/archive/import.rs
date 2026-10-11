@@ -248,6 +248,7 @@ fn journal_short_id(archive_identity: &[u8; 32]) -> String {
 
 /// `prikk archive import <file> [--adopt]` (§9.8).
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ArchiveImportOptions {
     /// §9.6's narrowed `--adopt`: land a [`LandingOrigin::Local`] ref as a real local ref when it
     /// is absent locally, signed by an adopted key, verified, and its CAS against absent holds --
