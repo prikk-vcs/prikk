@@ -178,3 +178,11 @@ then a resume from each; a cancel from each; a full disk.
 **Next: I-A2, then I-B.**
 
 **I-A2 ACCEPTED, Import A CLOSED 2026-10-11** (`516d260b`; review `rfc155-impl-IA2-review-v1`). **Next: I-B.** Where received refs land (from the I-A review): the archive's received pointers stay received under their own names; its local refs land under `remotes/<ref>`, or locally with `--adopt`.
+
+**Part I-B approved in part 2026-10-11** (`a4d3c867`; review `rfc155-impl-IB-review-v1`).
+
+| part | items | budget | report |
+|---|---|---:|---|
+| **I-B2: no writer slips past, and a real kill** | **IB1(a):** hold `RefPointerIndex`, `RefLog` and `ReceivedIndex` from the journal to the commit point, through under-held-lock publish and received-pointer writes. **IB1(b):** `acquire_container_locks` also refuses while a journal is present, with the narrow exemptions; enumerate the newly refused callers. `compact` and `--rebuild-pointer-index` take only container locks, so they currently bypass the journal refusal. Tests: compact and rebuild refuse behind a journal; a concurrent publish refuses. Controls run red. **IB2:** a CLI test with a real `SIGKILL` mid-objects; follow `doctor` to resume and to a byte-identical cancel; if stale locks block the way, `doctor` names them and `prikk unlock` first (no auto-steal); docs. CHANGELOG, 14 gates, release smoke | 90 min | `rfc155-impl-IB2-report.md` |
+
+**Next: I-B2. RFC 155's implementation closes after it.**
