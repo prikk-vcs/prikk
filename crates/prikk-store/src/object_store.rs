@@ -14,7 +14,7 @@ use crate::foundation::index::{
     read_object_envelope_at,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
-use crate::lock::acquire_container_locks;
+use crate::lock::{ContainerLockGuard, acquire_container_locks};
 
 /// Read-only object access boundary.
 pub trait ObjectReader {
@@ -215,6 +215,38 @@ fn append_object_under_lock<'a>(
     choose: impl FnOnce() -> Result<LockedWrite<'a>>,
 ) -> Result<ObjectId> {
     let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
+    let appended = match choose()? {
+        LockedWrite::AlreadyPresent(id) => return Ok(id),
+        LockedWrite::Append(envelope) => envelope,
+    };
+    let envelope: &ObjectEnvelope = &appended;
+    append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)
+}
+
+/// As [`append_object_under_lock`], but for a caller that already holds the `ObjectStore`
+/// container lock itself, across many appends -- RFC 155 Part I-A2's own fix (review
+/// `rfc155-impl-IA-review-v1`, finding IA1(a)): `archive::import`'s stage 1 holds `ObjectStore`
+/// from the journal to the commit point, so taking it again here, per append, would be that same
+/// process conflicting with its own continuous hold (this crate's locks are fail-fast exclusive
+/// creates, not a reentrant mutex -- confirmed the hard way in Part I-A, whose first attempt at
+/// holding this lock through stage 1 hit exactly that `LockConflict` against itself).
+///
+/// `guard` is checked, not assumed, to actually hold `ObjectStore`
+/// ([`ContainerLockGuard::holds`]) -- a caller cannot reach the container-append primitive while
+/// believing it holds a lock it does not.
+fn append_object_under_held_lock<'a>(
+    layout: &RepositoryLayout,
+    guard: &ContainerLockGuard,
+    object_type: ObjectType,
+    choose: impl FnOnce() -> Result<LockedWrite<'a>>,
+) -> Result<ObjectId> {
+    if !guard.holds(LockableContainer::ObjectStore) {
+        return Err(PrikkError::LockConflict(
+            "append_object_under_held_lock was called without the object-store lock actually \
+             held -- refusing rather than appending unsynchronized"
+                .to_string(),
+        ));
+    }
     let appended = match choose()? {
         LockedWrite::AlreadyPresent(id) => return Ok(id),
         LockedWrite::Append(envelope) => envelope,
@@ -648,6 +680,42 @@ impl ObjectWriteSession {
         self.snapshot.ensure_current(&self.layout)?;
         let existing = self.snapshot.lookup(envelope.object_id());
         decide_write_outcome(&self.layout, envelope.object_type, envelope, existing)
+    }
+}
+
+impl ObjectWriteSession {
+    /// As [`ObjectWriter::write_object`], but appends under a `LockableContainer::ObjectStore`
+    /// lock `guard` already holds, rather than acquiring it itself for this one append -- RFC 155
+    /// Part I-A2's own fix (see [`append_object_under_held_lock`]'s own doc for why the ordinary
+    /// path cannot be reused by a caller that holds this lock continuously). Everything else
+    /// about the write -- the lock-free decision first, the re-check under the lock, refreshing
+    /// this session's own snapshot afterward -- is identical to `write_object`; only which
+    /// primitive performs the append differs.
+    pub(crate) fn write_object_under_held_lock(
+        &mut self,
+        envelope: &ObjectEnvelope,
+        guard: &ContainerLockGuard,
+    ) -> Result<ObjectId> {
+        match self.decide_write(envelope)? {
+            WriteDecision::AlreadyPresent(id) => Ok(id),
+            WriteDecision::New | WriteDecision::Merge(_) => {
+                #[cfg(test)]
+                if let Some(change) = BEFORE_OBJECT_STORE_LOCK.with(|slot| slot.borrow_mut().take())
+                {
+                    change();
+                }
+                let layout = &self.layout;
+                let snapshot = &mut self.snapshot;
+                let object_id =
+                    append_object_under_held_lock(layout, guard, envelope.object_type, || {
+                        snapshot.ensure_current_locked(layout)?;
+                        let existing = snapshot.lookup(envelope.object_id()).copied();
+                        locked_write(layout, envelope, existing.as_ref())
+                    })?;
+                self.snapshot.ensure_current(&self.layout)?;
+                Ok(object_id)
+            }
+        }
     }
 }
 

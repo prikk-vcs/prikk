@@ -26,17 +26,22 @@ impl ActiveLock {
     /// `wal.rs::Wal::for_layout`. No other change needed here -- `relative` was already **derived**
     /// from `path` via `repository_relative`, never reconstructed from `name` the way `Wal` used to.
     ///
-    /// RFC 155 Part I-A: refuses while an archive import's journal is present, for the default
-    /// session only (confirmed from source: every production writer that takes this lock --
+    /// RFC 155 Part I-A2: refuses while an archive import's journal is present, for **every**
+    /// session name, not only the default one (corrected from Part I-A's own first cut, which
+    /// checked `is_default` here -- review `rfc155-impl-IA-review-v1`, finding IA1(b): RFC 108's
+    /// other sessions can append objects too, and a cancel would otherwise cut their work out from
+    /// under them with no refusal having warned them off first). Confirmed from source that nothing
+    /// relies on the old, narrower behavior: every production writer that takes this lock --
     /// `commit`, `seal`, `trust maintainer add`, `bundle import`, and the rest -- passes
-    /// `DEFAULT_ACTIVE_NAME` unconditionally; a non-default session is RFC 108's own parallel
-    /// authoring mechanism, not "the" repository-wide writer gate). This is the structural half of
-    /// §9.5's rule ("every repository writer refuses"): every caller of this function, present and
-    /// future, is covered with no per-call-site enumeration to remember, because this is -- by this
-    /// module's own established doc note on `ensure_write_state` -- "the one call site every writer
-    /// passes through." `Self::acquire_allowing_import_journal` is the named, narrow exception,
-    /// used only by the import itself (so a resume can re-acquire this lock while its own journal
-    /// is present), the cancel, and doctor's own recovery verbs.
+    /// `DEFAULT_ACTIVE_NAME` unconditionally; the only non-default callers anywhere in the
+    /// workspace are RFC 108's own multi-session tests, none of which runs while an import journal
+    /// is present. This is the structural half of §9.5's rule ("every repository writer refuses"):
+    /// every caller of this function, present and future, is covered with no per-call-site
+    /// enumeration to remember, because this is -- by this module's own established doc note on
+    /// `ensure_write_state` -- "the one call site every writer passes through."
+    /// `Self::acquire_allowing_import_journal` is the named, narrow exception, used only by the
+    /// import itself (so a resume can re-acquire this lock while its own journal is present), the
+    /// cancel, and doctor's own recovery verbs.
     pub fn acquire(layout: &RepositoryLayout, name: impl AsRef<Path>) -> Result<Self> {
         Self::acquire_checked(layout, name, true)
     }
@@ -62,8 +67,7 @@ impl ActiveLock {
         name: impl AsRef<Path>,
         check_import_journal: bool,
     ) -> Result<Self> {
-        let is_default = name.as_ref() == Path::new(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
-        if is_default && check_import_journal {
+        if check_import_journal {
             crate::foundation::import_journal_marker::refuse_while_present(layout)?;
         }
         let path = layout.active_lock_path(name);
@@ -169,6 +173,10 @@ impl Drop for RefLock {
 /// nothing can acquire a container lock any other way.
 #[derive(Debug)]
 struct ContainerLockHandle {
+    /// RFC 155 Part I-A2: which container this handle actually holds -- read back by
+    /// [`ContainerLockGuard::holds`], so a caller that needs to *prove* a lock is held (rather
+    /// than simply trusting its own bookkeeping) has something to check against.
+    kind: LockableContainer,
     relative: PathBuf,
     mutation_root: MutationRoot,
 }
@@ -184,7 +192,17 @@ impl Drop for ContainerLockHandle {
 /// `ActiveLock`/`RefLock` already use.
 #[derive(Debug)]
 pub struct ContainerLockGuard {
-    _handles: Vec<ContainerLockHandle>,
+    handles: Vec<ContainerLockHandle>,
+}
+
+impl ContainerLockGuard {
+    /// Whether this guard actually holds `container`'s own lock -- RFC 155 Part I-A2's own need:
+    /// `object_store`'s under-held-lock append path (import's stage 1, which holds `ObjectStore`
+    /// for its whole run rather than once per append) checks this before appending, rather than
+    /// trusting a caller's claim that it already holds the lock it is about to rely on.
+    pub(crate) fn holds(&self, container: LockableContainer) -> bool {
+        self.handles.iter().any(|handle| handle.kind == container)
+    }
 }
 
 /// Acquire every lock in `containers`, sorted into `LockableContainer`'s fixed `Ord` before any file
@@ -219,11 +237,12 @@ pub fn acquire_container_locks(
             container_lock_kind(container),
         )?;
         handles.push(ContainerLockHandle {
+            kind: container,
             relative,
             mutation_root: mutation_root.clone(),
         });
     }
-    Ok(ContainerLockGuard { _handles: handles })
+    Ok(ContainerLockGuard { handles })
 }
 
 fn container_lock_kind(container: LockableContainer) -> &'static str {

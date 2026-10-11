@@ -10,6 +10,8 @@ use prikk_object::{
     ObjectId, ObjectType, RefKind, RefStatePayload,
 };
 
+use std::sync::{Arc, Mutex};
+
 use crate::archive::{export_archive, import_archive, interrupted_import_short_id};
 use crate::author::author_signing::AuthorSigner as _;
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
@@ -384,6 +386,348 @@ fn cancel_refuses_an_id_that_does_not_match_the_present_journal() {
     let error = crate::archive::cancel_import(&dest_layout, "0000000000000000", false)
         .expect_err("the present journal's real id does not match this one");
     assert!(error.to_string().contains("no import with id"), "{error}");
+}
+
+/// RFC 155 Part I-A2, review finding IA1(a): stage 1 now holds the `ObjectStore` container lock
+/// for its whole run, not just per append -- this proves it structurally, not by inspection. A
+/// callback runs right after stage 1's own first object write, while the lock is genuinely held,
+/// and attempts a *second*, wholly unrelated object append through an ordinary `FileObjectStore`
+/// handle (never through this import's own session). That append must refuse with `LockConflict`.
+#[test]
+fn concurrent_object_append_refuses_while_stage_1_holds_the_object_store_lock() {
+    let source_dir = unique_temp_dir("archive-import-ia1-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-import-ia1-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    let concurrent_result: Arc<Mutex<Option<prikk_error::Result<()>>>> = Arc::new(Mutex::new(None));
+    let probe_layout = dest_layout.clone();
+    let probe_result = concurrent_result.clone();
+    crate::archive::import::run_after_first_object_write_for_test(move || {
+        let blob_payload = BlobPayload::new(BlobKind::Text, b"concurrent append\n".to_vec());
+        let blob_bytes = blob_payload
+            .to_canonical_bytes()
+            .expect("encode concurrent blob payload");
+        let envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, blob_bytes);
+        let mut concurrent_store = FileObjectStore::new(probe_layout);
+        let outcome = concurrent_store.write_object(&envelope).map(|_| ());
+        *probe_result.lock().expect("lock") = Some(outcome);
+    });
+
+    let mut cursor = Cursor::new(bytes);
+    import_archive(&dest_layout, &mut cursor).expect("import completes normally");
+
+    let outcome = concurrent_result
+        .lock()
+        .expect("lock")
+        .take()
+        .expect("the callback ran during stage 1");
+    let error = outcome.expect_err(
+        "a concurrent object append must refuse with LockConflict while stage 1 holds the \
+         object-store lock for its whole run",
+    );
+    assert!(
+        matches!(error, prikk_error::PrikkError::LockConflict(_)),
+        "expected LockConflict, got: {error:?}"
+    );
+}
+
+/// RFC 155 Part I-A2, review finding IA2: the author-key container is journaled and cut back on
+/// cancel. The kill point is *after* stage 2 has actually recorded the author key (the seam right
+/// after stage 1 would never exercise this at all -- the key would never have been recorded in
+/// the first place), so this test genuinely depends on the cut-back: without it, the key id would
+/// stay bound to the cancelled import's own public key, and recording a different one for the
+/// same id afterward would refuse as a conflict.
+#[test]
+fn cancelled_import_cuts_back_the_author_key_so_a_different_key_can_be_recorded_for_the_same_id() {
+    let source_dir = unique_temp_dir("archive-import-ia2-source");
+    let (source_layout, _block_id, author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-import-ia2-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    crate::archive::import::stop_after_stage_2_for_test();
+    let mut cursor = Cursor::new(bytes);
+    let error = import_archive(&dest_layout, &mut cursor)
+        .expect_err("the test seam stops right after stage 2");
+    assert!(error.to_string().contains("simulated kill"), "{error}");
+
+    let id = interrupted_import_short_id(&dest_layout)
+        .expect("read journal state")
+        .expect("a journal is present after the simulated kill");
+
+    // Stage 2 really ran before the kill: the archive's own author key is bound, under the
+    // archive's own public key.
+    let source_author_signer =
+        Ed25519AuthorSigner::from_seed("import-test-author", &[0x11; 32]).expect("signer");
+    assert_eq!(
+        crate::author_key_binding(
+            &dest_layout,
+            &author_key_id,
+            source_author_signer.public_key_bytes(),
+        )
+        .expect("author_key_binding"),
+        crate::AuthorKeyBinding::Matches,
+        "stage 2 ran before the kill -- the archive's own author key is already recorded"
+    );
+
+    crate::archive::cancel_import(&dest_layout, &id, false).expect("cancel");
+    assert!(interrupted_import_short_id(&dest_layout).unwrap().is_none());
+
+    // The cut-back's own proof: a genuinely different public key for the *same* key id is now
+    // recordable. Before IA2's fix, the cancelled import's own record would still be on file,
+    // and this would refuse as a key-rotation conflict.
+    let rotated_signer =
+        Ed25519AuthorSigner::from_seed("import-test-author-rotated", &[0x33; 32]).expect("signer");
+    let active_lock =
+        ActiveLock::acquire_for_write(&dest_layout, DEFAULT_ACTIVE_NAME).expect("active lock");
+    crate::author::author_key_index::record_author_key_material(
+        &dest_layout,
+        &author_key_id,
+        rotated_signer.public_key_bytes(),
+        &active_lock,
+    )
+    .expect(
+        "a different public key must be recordable for this key id -- the cancelled import's \
+         own record was cut back",
+    );
+}
+
+/// RFC 155 Part I-A2, review finding IA3(a): a kill strictly *between* two object writes (not
+/// only before or after the whole of stage 1). A resume from here must finish the import; a
+/// cancel from here must restore every journaled container to a state byte-identical to before
+/// the import ever started.
+#[test]
+fn killed_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_container() {
+    let source_dir = unique_temp_dir("archive-import-ia3a-source");
+    let (source_layout, block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    // Resume branch.
+    {
+        let dest_dir = unique_temp_dir("archive-import-ia3a-resume-dest");
+        let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+        crate::archive::import::kill_mid_objects_after_n_for_test(2);
+        let mut cursor = Cursor::new(bytes.clone());
+        let error = import_archive(&dest_layout, &mut cursor)
+            .expect_err("the test seam stops strictly between two object writes");
+        assert!(error.to_string().contains("simulated kill"), "{error}");
+        interrupted_import_short_id(&dest_layout)
+            .expect("read journal state")
+            .expect("a journal is present after the simulated kill");
+
+        let mut cursor2 = Cursor::new(bytes.clone());
+        let resumed = import_archive(&dest_layout, &mut cursor2).expect("resume finishes");
+        assert!(resumed.resumed);
+        let dest_store = FileObjectStore::new(dest_layout.clone());
+        assert!(dest_store.contains_object(ObjectType::Block, block_id));
+        assert!(
+            interrupted_import_short_id(&dest_layout).unwrap().is_none(),
+            "the commit point emptied the journal"
+        );
+    }
+
+    // Cancel branch -- a separate destination, so the hash-before snapshot is genuinely "before
+    // the import ever started" rather than "before a resume."
+    {
+        let dest_dir = unique_temp_dir("archive-import-ia3a-cancel-dest");
+        let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+        let hashes_before =
+            crate::archive::import::hash_journaled_containers_for_test(&dest_layout)
+                .expect("hash before");
+
+        crate::archive::import::kill_mid_objects_after_n_for_test(2);
+        let mut cursor = Cursor::new(bytes);
+        import_archive(&dest_layout, &mut cursor)
+            .expect_err("the test seam stops strictly between two object writes");
+        let id = interrupted_import_short_id(&dest_layout)
+            .expect("read journal state")
+            .expect("a journal is present after the simulated kill");
+
+        crate::archive::cancel_import(&dest_layout, &id, false).expect("cancel");
+        assert!(interrupted_import_short_id(&dest_layout).unwrap().is_none());
+
+        let hashes_after = crate::archive::import::hash_journaled_containers_for_test(&dest_layout)
+            .expect("hash after");
+        assert_eq!(
+            hashes_before, hashes_after,
+            "cancel must restore every journaled container to a state byte-identical to before \
+             the import ever started"
+        );
+    }
+}
+
+/// RFC 155 Part I-A2, review finding IA3(b): the same mid-objects failpoint, but a real
+/// `std::io::Error` (simulating a full disk) rather than a clean kill -- resume and cancel must
+/// behave identically to IA3(a)'s clean kill.
+#[test]
+fn full_disk_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_container() {
+    let source_dir = unique_temp_dir("archive-import-ia3b-source");
+    let (source_layout, block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    {
+        let dest_dir = unique_temp_dir("archive-import-ia3b-resume-dest");
+        let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+        crate::archive::import::fail_mid_objects_after_n_for_test(2);
+        let mut cursor = Cursor::new(bytes.clone());
+        let error = import_archive(&dest_layout, &mut cursor)
+            .expect_err("the test seam fails strictly between two object writes");
+        assert!(
+            matches!(error, prikk_error::PrikkError::Io { .. }),
+            "expected a real i/o error, got: {error:?}"
+        );
+        interrupted_import_short_id(&dest_layout)
+            .expect("read journal state")
+            .expect("a journal is present after the simulated i/o failure");
+
+        let mut cursor2 = Cursor::new(bytes.clone());
+        let resumed = import_archive(&dest_layout, &mut cursor2).expect("resume finishes");
+        assert!(resumed.resumed);
+        let dest_store = FileObjectStore::new(dest_layout.clone());
+        assert!(dest_store.contains_object(ObjectType::Block, block_id));
+        assert!(interrupted_import_short_id(&dest_layout).unwrap().is_none());
+    }
+
+    {
+        let dest_dir = unique_temp_dir("archive-import-ia3b-cancel-dest");
+        let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+        let hashes_before =
+            crate::archive::import::hash_journaled_containers_for_test(&dest_layout)
+                .expect("hash before");
+
+        crate::archive::import::fail_mid_objects_after_n_for_test(2);
+        let mut cursor = Cursor::new(bytes);
+        import_archive(&dest_layout, &mut cursor)
+            .expect_err("the test seam fails strictly between two object writes");
+        let id = interrupted_import_short_id(&dest_layout)
+            .expect("read journal state")
+            .expect("a journal is present after the simulated i/o failure");
+
+        crate::archive::cancel_import(&dest_layout, &id, false).expect("cancel");
+        let hashes_after = crate::archive::import::hash_journaled_containers_for_test(&dest_layout)
+            .expect("hash after");
+        assert_eq!(
+            hashes_before, hashes_after,
+            "cancel must restore every journaled container to a state byte-identical to before \
+             the import ever started, the same as a clean kill"
+        );
+    }
+}
+
+/// RFC 155 Part I-A2, review finding IA3(c): a cancel right after the journal (before stage 1 has
+/// written anything) has nothing to cut, empties the journal, and leaves every session's writer
+/// unrefused afterward -- including a non-default session, per IA1(b)'s "every session" fix.
+#[test]
+fn cancel_right_after_the_journal_cuts_nothing_and_every_session_proceeds_after() {
+    let source_dir = unique_temp_dir("archive-import-ia3c-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-import-ia3c-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    crate::archive::import::stop_after_journal_for_test();
+    let mut cursor = Cursor::new(bytes);
+    import_archive(&dest_layout, &mut cursor)
+        .expect_err("the test seam stops right after the journal");
+    let id = interrupted_import_short_id(&dest_layout)
+        .expect("read journal state")
+        .expect("a journal is present after the simulated kill");
+
+    // Before cancel: every session refuses, not only the default one (IA1(b)).
+    assert!(
+        ActiveLock::acquire_for_write(&dest_layout, DEFAULT_ACTIVE_NAME).is_err(),
+        "the default session must refuse while the journal is present"
+    );
+    assert!(
+        ActiveLock::acquire_for_write(&dest_layout, "second").is_err(),
+        "a non-default session must refuse while the journal is present too"
+    );
+
+    let report = crate::archive::cancel_import(&dest_layout, &id, false).expect("cancel");
+    assert!(
+        report.steps.iter().all(|step| step.cut_bytes == 0),
+        "nothing was ever written past the journal's own starting lengths: {:?}",
+        report.steps
+    );
+    assert!(interrupted_import_short_id(&dest_layout).unwrap().is_none());
+
+    // After cancel: every session proceeds.
+    ActiveLock::acquire_for_write(&dest_layout, DEFAULT_ACTIVE_NAME)
+        .expect("the default session must not refuse once the journal is gone");
+    ActiveLock::acquire_for_write(&dest_layout, "second")
+        .expect("a non-default session must not refuse once the journal is gone either");
+}
+
+/// RFC 155 Part I-A2, review finding IA4 (§8's "the adopted set is unchanged," tested rather than
+/// reasoned): the archive carries its own maintainer keys, inert and never adopted (§9.1); after
+/// a real import, the destination's own, already-adopted maintainer set -- a different key from
+/// the archive's own -- is untouched: the trust container files are byte-identical, and the
+/// policy query reports the same set.
+#[test]
+fn import_leaves_the_destinations_own_adopted_maintainer_set_untouched() {
+    let source_dir = unique_temp_dir("archive-import-ia4-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-import-ia4-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    let dest_maintainer =
+        Ed25519MaintainerSigner::from_seed("import-test-dest-maintainer", &[0x44; 32])
+            .expect("signer");
+    let dest_maintainer_public_key_hex: String = dest_maintainer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::add_trusted_maintainer(
+        &dest_layout,
+        dest_maintainer.key_id(),
+        &dest_maintainer_public_key_hex,
+    )
+    .expect("adopt the destination's own maintainer key, distinct from the archive's own");
+
+    let policy_before =
+        crate::load_maintainer_trust_policy(&dest_layout).expect("policy before import");
+    let trust_keys_before =
+        std::fs::read(dest_layout.trust_key_container_path()).expect("read trust keys before");
+    let trust_policy_a_before =
+        std::fs::read(dest_layout.trust_policy_container_slot_path(crate::ContainerSlot::A))
+            .unwrap_or_default();
+    let trust_policy_b_before =
+        std::fs::read(dest_layout.trust_policy_container_slot_path(crate::ContainerSlot::B))
+            .unwrap_or_default();
+
+    let mut cursor = Cursor::new(bytes);
+    import_archive(&dest_layout, &mut cursor).expect("import completes normally");
+
+    let policy_after =
+        crate::load_maintainer_trust_policy(&dest_layout).expect("policy after import");
+    assert_eq!(
+        policy_before, policy_after,
+        "the destination's own adopted maintainer set must be unchanged by import"
+    );
+    assert_eq!(
+        trust_keys_before,
+        std::fs::read(dest_layout.trust_key_container_path()).expect("read trust keys after"),
+        "the trust-keys container must be byte-identical"
+    );
+    assert_eq!(
+        trust_policy_a_before,
+        std::fs::read(dest_layout.trust_policy_container_slot_path(crate::ContainerSlot::A))
+            .unwrap_or_default(),
+        "trust-policy slot a must be byte-identical"
+    );
+    assert_eq!(
+        trust_policy_b_before,
+        std::fs::read(dest_layout.trust_policy_container_slot_path(crate::ContainerSlot::B))
+            .unwrap_or_default(),
+        "trust-policy slot b must be byte-identical"
+    );
 }
 
 fn directory_fingerprint(dir: &std::path::Path) -> Vec<(String, u64)> {

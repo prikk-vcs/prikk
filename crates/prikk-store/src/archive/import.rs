@@ -37,16 +37,27 @@
 //! (`check_author_key_conflict` at stage 0, `record_author_key_material` here) -- both already
 //! idempotent, so a resume safely re-runs stage 2 from its start without double-recording anything.
 //!
-//! **A genuine ambiguity, resolved and named rather than guessed past** (RFC 155 §9.5's own text
-//! lists, for the journal, "the length of every container import can append to: each object
-//! container, the ref log, and the live slots of the pointer index and the received index" --
-//! the author-key container is not in that list, even though stage 2 appends to it). Read
-//! literally: cancel does not revert author-key records. This is very likely intentional, not an
-//! omission -- `record_author_key_material` is commutative and idempotent (one `key_id` binds to
-//! one public key, recorded at most once), so a half-finished stage 2 left behind by a cancelled
-//! import is inert, never an inconsistent repository state the way a landed ref or a dangling
-//! object reference would be. This module follows §9.5's literal text; the architect should
-//! confirm this reading before Part I-B relies on it.
+//! **RFC 155 Part I-A2 (review `rfc155-impl-IA-review-v1`, finding IA2): the author-key container
+//! is journaled and cut back on cancel.** Part I-A's own first cut read §9.5's journaled-container
+//! list literally and left it out, reasoning that `record_author_key_material`'s own idempotency
+//! made a leftover record harmless. That reasoning had a real hole: a cancel that leaves a
+//! recorded author key behind binds that `key_id` **for good** -- one `key_id` binds to one public
+//! key (DC-53), so a later, genuine key for the same id would then be refused as a conflict rather
+//! than recorded. §9.5 is corrected (2026-10-11) to list this container; this module now journals
+//! its starting length the same way as every other appendable container, and `cancel_import` cuts
+//! it back, with the same recovery-log save first, as part of the same loop.
+//!
+//! **RFC 155 Part I-A2 (finding IA1): the `ObjectStore` container lock is held structurally,
+//! through stage 1, not just by inspection.** Part I-A's own first cut did not hold it (reasoning:
+//! `write_object` already takes it per append, so holding it continuously would be import
+//! conflicting with its own per-append acquisition), leaning instead on "every other object
+//! appender already goes through the default session's `ActiveLock`" -- true, but an argument,
+//! not the structural guarantee §9.5 actually promises. Stage 1 now holds `ObjectStore` together
+//! with the other three container locks, from the journal to the commit point, and appends
+//! through [`crate::object_store::ObjectWriteSession::write_object_under_held_lock`] instead of
+//! the ordinary per-append path -- so a concurrent object append from *any* handle, default
+//! session or not, genuinely refuses with `LockConflict` for the whole of stage 1, not merely "in
+//! every case this module's own author could think of."
 
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -64,7 +75,7 @@ use crate::foundation::fsutil::{
 use crate::foundation::layout::persisted_object_types;
 use crate::foundation::layout::{ContainerSlot, LockableContainer, RepositoryLayout};
 use crate::lock::{ActiveLock, acquire_container_locks};
-use crate::object_store::{ObjectWriteSession, ObjectWriter};
+use crate::object_store::ObjectWriteSession;
 use crate::received::received_index::decode_received_index_entries_for_resolver;
 use crate::refs::decode_pointer_index_entries_for_resolver;
 
@@ -100,13 +111,17 @@ struct JournaledContainer {
     kind: JournaledContainerKind,
 }
 
-/// Which `LockableContainer` a journaled file belongs to.
+/// Which `LockableContainer` a journaled file belongs to -- `AuthorKey` has none (RFC 155 Part
+/// I-A2's own fix, review finding IA2: §9.5 is corrected to journal this container too, but it is
+/// protected solely by the default session's `ActiveLock`, the same way `record_author_key_
+/// material` always was, not by a `LockableContainer` of its own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JournaledContainerKind {
     ObjectStore,
     RefLog,
     RefPointerIndex,
     ReceivedIndex,
+    AuthorKey,
 }
 
 impl JournaledContainerKind {
@@ -116,6 +131,7 @@ impl JournaledContainerKind {
             Self::RefLog => 1,
             Self::RefPointerIndex => 2,
             Self::ReceivedIndex => 3,
+            Self::AuthorKey => 4,
         }
     }
 
@@ -125,18 +141,10 @@ impl JournaledContainerKind {
             1 => Ok(Self::RefLog),
             2 => Ok(Self::RefPointerIndex),
             3 => Ok(Self::ReceivedIndex),
+            4 => Ok(Self::AuthorKey),
             other => Err(PrikkError::Integrity(format!(
                 "import journal names an unknown container kind {other}"
             ))),
-        }
-    }
-
-    fn lockable(self) -> LockableContainer {
-        match self {
-            Self::ObjectStore => LockableContainer::ObjectStore,
-            Self::RefLog => LockableContainer::RefLog,
-            Self::RefPointerIndex => LockableContainer::RefPointerIndex,
-            Self::ReceivedIndex => LockableContainer::ReceivedIndex,
         }
     }
 }
@@ -265,18 +273,20 @@ pub fn import_archive<R: Read + Seek>(
         }
     };
 
-    // The ref-side container locks, held from here to the commit point (§9.5) -- acquired *after*
-    // the journal exists for a fresh start (the journal write above needed none of them), and
+    // Every container lock, held from here to the commit point (§9.5) -- acquired *after* the
+    // journal exists for a fresh start (the journal write above needed none of them), and
     // unconditionally for a resume, since the prior run already held and released them when it
-    // was killed. **Not `ObjectStore`**: `ObjectWriteSession::write_object` already takes that
-    // lock itself, once per append (`object_store.rs`'s own `_object_store_lock`) -- holding it
-    // here too would be this same process conflicting with its own per-append acquisition, not a
-    // defense against anything. Nothing in stage 1/2 writes a ref, so holding these three is only
-    // to keep a concurrent recovery verb (which bypasses the `ActiveLock` check) from moving them
-    // out from under this run's own journaled starting lengths.
+    // was killed. **`ObjectStore` included, as of Part I-A2** (review finding IA1(a)): stage 1
+    // appends through `ObjectWriteSession::write_object_under_held_lock`, which takes this guard
+    // instead of acquiring the lock itself per append -- see that function's own doc, and
+    // `append_object_under_held_lock`'s, for why the ordinary per-append path cannot be reused by
+    // a caller holding this lock continuously. Nothing in stage 1/2 writes a ref, so holding the
+    // other three is only to keep a concurrent recovery verb (which bypasses the `ActiveLock`
+    // check) from moving them out from under this run's own journaled starting lengths.
     let _container_locks = acquire_container_locks(
         layout,
         &[
+            LockableContainer::ObjectStore,
             LockableContainer::RefPointerIndex,
             LockableContainer::RefLog,
             LockableContainer::ReceivedIndex,
@@ -296,6 +306,18 @@ pub fn import_archive<R: Read + Seek>(
     let mut object_types: Vec<ObjectType> = persisted_object_types().to_vec();
     object_types.sort_by_key(|object_type| object_type_dependency_rank(*object_type));
     let mut written_object_counts = Vec::with_capacity(object_types.len());
+    // Test seams, unreachable from production: taken once, at the top, so a resumed call (which
+    // starts this function fresh) does not re-trigger them -- the case table's own "kill
+    // mid-objects" and "full disk" rows, which (unlike the two seams above) must fire *between*
+    // two object writes, not only before or after the whole of stage 1.
+    #[cfg(test)]
+    let kill_mid_objects_after_n: Option<usize> =
+        KILL_MID_OBJECTS_AFTER_N_FOR_TEST.with(std::cell::Cell::take);
+    #[cfg(test)]
+    let fail_mid_objects_after_n: Option<usize> =
+        FAIL_MID_OBJECTS_AFTER_N_FOR_TEST.with(std::cell::Cell::take);
+    #[cfg(test)]
+    let mut total_objects_written_so_far = 0usize;
     for object_type in object_types {
         let entry = find_entry(&manifest, ArchiveSectionKind::ObjectContainer(object_type))?;
         let mut envelopes: Vec<ObjectEnvelope> = Vec::new();
@@ -313,10 +335,35 @@ pub fn import_archive<R: Read + Seek>(
                 continue;
             }
             object_store.check_write(&envelope)?;
-            object_store.write_object(&envelope)?;
+            object_store.write_object_under_held_lock(&envelope, &_container_locks)?;
             written = written.checked_add(1).ok_or_else(|| {
                 PrikkError::Integrity("archive import written-object count overflow".to_string())
             })?;
+            #[cfg(test)]
+            {
+                total_objects_written_so_far = total_objects_written_so_far.saturating_add(1);
+                if let Some(callback) = RUN_AFTER_FIRST_OBJECT_WRITE_FOR_TEST.with(|cell| {
+                    if total_objects_written_so_far == 1 {
+                        cell.borrow_mut().take()
+                    } else {
+                        None
+                    }
+                }) {
+                    callback();
+                }
+                if kill_mid_objects_after_n == Some(total_objects_written_so_far) {
+                    return Err(PrikkError::Integrity(
+                        "import stopped for test: simulated kill mid-objects".to_string(),
+                    ));
+                }
+                if fail_mid_objects_after_n == Some(total_objects_written_so_far) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::StorageFull,
+                        "simulated full disk for test",
+                    )
+                    .into());
+                }
+            }
         }
         written_object_counts.push((object_type, written));
     }
@@ -344,6 +391,17 @@ pub fn import_archive<R: Read + Seek>(
                     )
                 })?;
         }
+    }
+
+    // Test seam, unreachable from production: a kill right after stage 2's own last write, before
+    // the commit point -- needed to test IA2 (the author-key container is journaled and cut back
+    // on cancel): a kill before this point never calls `record_author_key_material` at all, so it
+    // cannot exercise the cut-back the review's own finding is about.
+    #[cfg(test)]
+    if STOP_AFTER_STAGE_2_FOR_TEST.with(std::cell::Cell::take) {
+        return Err(PrikkError::Integrity(
+            "import stopped for test: simulated kill after stage 2's author keys".to_string(),
+        ));
     }
 
     // The commit point: the journal is emptied, its name kept (RFC 168 §6's conservative choice on
@@ -450,6 +508,23 @@ fn compute_container_starting_lengths(
         relative_path: relative_string(layout, &received_path)?,
         starting_length: super::stat_len(&received_path)?,
         kind: JournaledContainerKind::ReceivedIndex,
+    });
+    // RFC 155 Part I-A2 (review finding IA2): journaled too, now that §9.5 is corrected to list
+    // it. The file may not exist yet on a repository that has never authored anything --
+    // `stat_len` already reads that as length 0, matching `ensure_author_key_container_exists`'s
+    // own lazy-create-on-first-write behavior, so a cancel's truncate-back-to-0 is exactly right
+    // either way.
+    // RFC 155 Part I-A2 (review finding IA2): journaled too, now that §9.5 is corrected to list
+    // it. The file may not exist yet on a repository that has never authored anything --
+    // `stat_len` already reads that as length 0, matching `ensure_author_key_container_exists`'s
+    // own lazy-create-on-first-write behavior, so a cancel's truncate-back-to-0 is exactly right
+    // either way.
+    let author_key_path = layout.author_key_container_path();
+    containers.push(JournaledContainer {
+        label: "author key container".to_string(),
+        relative_path: relative_string(layout, &author_key_path)?,
+        starting_length: super::stat_len(&author_key_path)?,
+        kind: JournaledContainerKind::AuthorKey,
     });
     Ok(containers)
 }
@@ -727,10 +802,16 @@ pub fn cancel_import(
     let root = layout.repository_mutation_root();
     let mut steps = Vec::with_capacity(journal.containers.len());
     for container in &journal.containers {
+        // Only `ObjectStore` needs its own lock acquired here: the other three
+        // `LockableContainer` kinds are already held continuously, above, for this whole cancel
+        // run, and re-acquiring an already-held lock would conflict with itself. `AuthorKey` has
+        // no `LockableContainer` at all (see `JournaledContainerKind`'s own doc note) -- it is
+        // protected solely by the `_active_lock` already held above, the same way
+        // `record_author_key_material` always was.
         let _object_store_lock = if container.kind == JournaledContainerKind::ObjectStore {
             Some(acquire_container_locks(
                 layout,
-                &[container.kind.lockable()],
+                &[LockableContainer::ObjectStore],
             )?)
         } else {
             None
@@ -828,6 +909,11 @@ pub struct CancelImportReport {
 thread_local! {
     static STOP_AFTER_JOURNAL_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STOP_AFTER_STAGE_1_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static STOP_AFTER_STAGE_2_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static KILL_MID_OBJECTS_AFTER_N_FOR_TEST: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static FAIL_MID_OBJECTS_AFTER_N_FOR_TEST: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static RUN_AFTER_FIRST_OBJECT_WRITE_FOR_TEST: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
@@ -844,6 +930,75 @@ pub(crate) fn stop_after_journal_for_test() {
 #[cfg(test)]
 pub(crate) fn stop_after_stage_1_for_test() {
     STOP_AFTER_STAGE_1_FOR_TEST.with(|cell| cell.set(true));
+}
+
+/// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
+/// stops right after stage 2's own last write (every carried author key recorded), before the
+/// commit point -- needed to exercise IA2's own fix (the author-key container is journaled and
+/// cut back on cancel), which a kill before stage 2 runs cannot reach.
+#[cfg(test)]
+pub(crate) fn stop_after_stage_2_for_test() {
+    STOP_AFTER_STAGE_2_FOR_TEST.with(|cell| cell.set(true));
+}
+
+/// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
+/// stops with a clean, named error right after its `n`th object write overall (counting across
+/// every object type, in the order stage 1 processes them) -- the case table's own "kill
+/// mid-objects" row, which (unlike [`stop_after_stage_1_for_test`]) fires strictly *before* stage
+/// 1 finishes, not after.
+#[cfg(test)]
+pub(crate) fn kill_mid_objects_after_n_for_test(n: usize) {
+    KILL_MID_OBJECTS_AFTER_N_FOR_TEST.with(|cell| cell.set(Some(n)));
+}
+
+/// As [`kill_mid_objects_after_n_for_test`], but the error is a real `std::io::Error` of kind
+/// [`std::io::ErrorKind::StorageFull`] rather than a clean "simulated kill" -- the case table's
+/// own "full disk" row, distinguishing "the process was killed" (a clean stop, nothing more to
+/// learn from it) from "the write itself failed" (import must behave the same way either way, and
+/// this is what proves it rather than assumes it).
+#[cfg(test)]
+pub(crate) fn fail_mid_objects_after_n_for_test(n: usize) {
+    FAIL_MID_OBJECTS_AFTER_N_FOR_TEST.with(|cell| cell.set(Some(n)));
+}
+
+/// Test seam, unreachable from production: run `callback` once, right after stage 1's own first
+/// object write -- while this import's own `ObjectStore` container lock is genuinely held, so a
+/// callback that attempts a *second*, concurrent object append (through an ordinary, unrelated
+/// `ObjectWriteSession`/`FileObjectStore` handle, never through this import's own) can observe
+/// whether that append refuses. This is finding IA1(a)'s own test: `ObjectStore` held through
+/// stage 1 is a structural guarantee only if a real concurrent append genuinely cannot land while
+/// it holds.
+#[cfg(test)]
+pub(crate) fn run_after_first_object_write_for_test(callback: impl FnOnce() + 'static) {
+    RUN_AFTER_FIRST_OBJECT_WRITE_FOR_TEST
+        .with(|cell| *cell.borrow_mut() = Some(Box::new(callback)));
+}
+
+/// Test-only: a SHA-256 of each container the journal would name (or does name, if one is
+/// present), labeled, in `compute_container_starting_lengths`'s own order -- for asserting that a
+/// cancel restores every journaled container to a state byte-identical to before the import ever
+/// started (the case table's own "kill mid-objects"/"full disk" rows: a hash of every journaled
+/// file before the import and after the cancel must match). Reads whatever bytes are on disk
+/// *now*; a missing file hashes the same as an empty one, matching `stat_len`'s own "absent reads
+/// as 0" convention used throughout this module.
+///
+/// Reads through plain `std::fs::read`, not the anchored, mutation-root-relative primitive --
+/// deliberately outside RFC 160 §3.1's whole-read guard, which polices *production* whole reads
+/// of a store-growing file (`whole_read_guard::SCOPES` is a ledger of production cost decisions,
+/// each with its own RFC/ROADMAP reference). This function is `#[cfg(test)]`-only scaffolding, not
+/// a production path, so it has no cost decision to declare there.
+#[cfg(test)]
+pub(crate) fn hash_journaled_containers_for_test(
+    layout: &RepositoryLayout,
+) -> Result<Vec<(String, [u8; 32])>> {
+    let containers = compute_container_starting_lengths(layout)?;
+    let mut hashes = Vec::with_capacity(containers.len());
+    for container in &containers {
+        let absolute = layout.prikk_dir().join(&container.relative_path);
+        let bytes = std::fs::read(&absolute).unwrap_or_default();
+        hashes.push((container.label.clone(), prikk_hash::sha256(&bytes)));
+    }
+    Ok(hashes)
 }
 
 #[cfg(test)]

@@ -93,6 +93,30 @@
   back; refuses an id that does not match the journal present. `--plan-only` previews without
   writing. See [the commands reference](docs/src/reference/commands.md).
 
+### Fixed — archive import's `ObjectStore` lock is now held structurally through stage 1, the author-key container is journaled and cut back on cancel, and the writer refusal covers every session
+
+- Part I-A's own review (`rfc155-impl-IA-review-v1`): stage 1 appended objects without holding the
+  `ObjectStore` container lock across the whole run, relying instead on every other object
+  appender happening to go through the default session's `ActiveLock` — an argument, not the
+  structural guarantee §9.5 promises. Stage 1 now holds `ObjectStore` together with the other
+  three container locks, from the journal to the commit point, appending through a new
+  `ObjectWriteSession::write_object_under_held_lock` path instead of the ordinary per-append one —
+  a concurrent object append from any handle now genuinely refuses with a lock conflict for the
+  whole of stage 1, proven by a test that attempts exactly that append while stage 1 is running.
+- The author-key container is now journaled and cut back on cancel. RFC 155 §9.5 is corrected
+  (2026-10-11) to list it: a cancelled import that left a recorded author key behind would bind
+  that key id for good, refusing a later, genuine key for the same id as a conflict.
+- **The writer refusal now covers every session, not only the default one** — RFC 108's other
+  sessions can append objects too, and a cancel would otherwise cut their work out from under them
+  with no refusal having warned them off first.
+- The case table's three open rows are closed: a kill strictly between two object writes, the same
+  failpoint returning a real i/o error (a full disk), and a cancel right after the journal (nothing
+  to cut) — each with a resume and a cancel that restores every journaled container to a state
+  byte-identical to before the import ever started.
+- §8's "the adopted set is unchanged" is now tested directly: a destination's own, already-adopted
+  maintainer set (distinct from the archive's own, inert, never-adopted keys) is confirmed
+  byte-identical, trust-container by trust-container, after a real import.
+
 ### Added — `prikk compact --received-index|--trust-policy --keep-slot a|b` lets the user choose a slot when the generation log is lost
 
 - For the received index and the trust policy container, a lost generation log can leave two slots
