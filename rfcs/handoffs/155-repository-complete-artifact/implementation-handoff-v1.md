@@ -176,3 +176,5 @@ then a resume from each; a cancel from each; a full disk.
 | **I-A2: the lock held, the author keys, the open rows** | **IA1:** hold `ObjectStore` from the journal to the commit point, through an append that runs under a held lock, and refuse behind a journal for **every** session; a concurrent append test, plus a control. **IA2:** journal and cut back the author-key container (a test: import, cancel, then a different key for the same id succeeds). **IA3:** a kill mid-objects (failpoint), an injected I/O error (full disk), a cancel right after the journal; resume and byte-identical cancel for each. **IA4:** the adopted set unchanged, tested. Docs, CHANGELOG, 14 gates | 60 min | `rfc155-impl-IA2-report.md` |
 
 **Next: I-A2, then I-B.**
+
+**I-A2 ACCEPTED, Import A CLOSED 2026-10-11** (`516d260b`; review `rfc155-impl-IA2-review-v1`). **Next: I-B.** Where received refs land (from the I-A review): the archive's received pointers stay received under their own names; its local refs land under `remotes/<ref>`, or locally with `--adopt`.
