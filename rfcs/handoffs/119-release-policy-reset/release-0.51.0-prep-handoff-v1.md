@@ -52,3 +52,5 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 - (3) per-binary Windows test times against `50737d0f`.
 
 **Next: P2b, then P3.**
+
+**P2b ACCEPTED, and P2 CLOSED, 2026-10-11** (`38177fe7`; review `release-0.51.0-prep-P2b-review-v1`). Import RSS is bounded at about 5x the largest object, and flat when the archive doubles. The ratio move is measurement conditions: the architect's same-day A/B gives 0.50.0's code 1.911x mean and HEAD 1.874x. Windows CI time is runner variance (the same binary swung 1,574 to 1,101 s before any journal code). **Next: P3.**
