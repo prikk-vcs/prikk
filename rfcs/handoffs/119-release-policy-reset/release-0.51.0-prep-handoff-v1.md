@@ -45,3 +45,10 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 - the consumer letters (the owner's, possibly after 0.51.0).
 
 **P1 ACCEPTED 2026-10-11** (`65bc464b`; review `release-0.51.0-prep-P1-review-v1`). **No `### Security` block.** **P2 gains item 0:** `#[non_exhaustive]` on `ArchiveImportOptions` (in-tree literals move to `default()`). The archive's memory limits go into `current-state.md` after P2's import measurement. **Next: P2.**
+
+**P2 approved in part 2026-10-11** (review `release-0.51.0-prep-P2-review-v1`). **P2b (90 min, `release-0.51.0-prep-P2b-report.md`), blocking:**
+- (1) stage 1 of `archive import` streams within a type in container order, with per-object or byte-bounded admission; RSS bounded by the largest object, measured at 1 GiB in one type, 3 samples, plus a control; the doc comment and `current-state.md` corrected;
+- (2) A/B the +1.3 to 1.9% ratio move (the journal check stubbed);
+- (3) per-binary Windows test times against `50737d0f`.
+
+**Next: P2b, then P3.**
