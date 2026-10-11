@@ -171,6 +171,15 @@ compensates.
 **Damage in an object container travels verbatim.** The archive's verify names it, and import refuses such an archive,
 naming the object (§8). An archive is a faithful copy, damage included.
 
+*(Amended 2026-10-12, review `rfc155-impl-IC-review-v1`.)* **The archive classifies a container's frames exactly as
+the store does** (RFC 162 rule 2, `foundation::container`'s `complete` flag), reusing that rule, not re-deriving it:
+- **a complete frame that fails is damage:** verify names its section and offset, and import refuses;
+- **an incomplete frame is an interrupted append** (a crash tail, or bytes added since): verify names it, and import
+  never writes it, but neither refuses. The source's own `prikk verify` only warns about it, so a backup of that
+  repository must still restore.
+
+The same bytes get the same outcome whether a crash or a hand wrote them, and it is the outcome the source itself gives.
+
 ### 9.2 The format, `PREPO001`
 
 - **Sections:** one per carried file, in the container frame (magic, length, body, checksum).
@@ -203,6 +212,13 @@ The archive's verify checks:
 
 It writes nothing anywhere, on any exit path. It reports *"internally consistent"*, never *"trusted"*, and names
 every signature it cannot check.
+
+*(Amended 2026-10-12, review `rfc155-impl-IC-review-v1`.)*
+- **A signature by a key the archive does not carry is named, *"not checked"*, and does not make the archive
+  inconsistent.** Trust is the receiver's (R2). A received pointer the source never trusted is exactly this case.
+  Refusing it made such a repository's archive unimportable everywhere, even into a receiver that trusts the key.
+- **A signature by a carried key that does not verify is damage,** and import refuses.
+- **Each section's trailer checksum must equal its manifest entry.**
 - **Rejected alternative:** staging into `$TMPDIR` plus `verify_repository`. That costs a full copy (memory, on a tmpfs
   `/tmp`), a double write on import, and deletions in a shared temp directory.
 
