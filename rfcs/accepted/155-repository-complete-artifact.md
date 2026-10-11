@@ -206,7 +206,10 @@ every signature it cannot check.
 
 - **Stage 0, checks:** the archive's verify, the author-key conflict check, the landing plan. A refusal writes nothing.
 - **The journal, the first write:** the archive's identity, the landing plan, and the length of every container import
-  can append to: each object container, the ref log, and the live slots of the pointer index and the received index.
+  can append to: each object container and the shared object index, the ref log, the live slots of the pointer
+  index and the received index, and the author-key container. *(Corrected 2026-10-11: the first text omitted the
+  object index and the author-key container. Stage 2 appends to the latter, and a cancel that left a recorded author
+  key behind would bind that key id for good. Found in Import A.)*
   It is taken under every container lock, which import holds **from the journal to the commit point**.
 - **Stage 1, objects:** in dependency order through the ordinary write path. Content-addressed and idempotent.
 - **Stage 2, author keys:** recorded.

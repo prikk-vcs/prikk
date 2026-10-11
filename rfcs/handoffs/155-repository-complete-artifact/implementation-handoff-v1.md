@@ -168,3 +168,11 @@ then a resume from each; a cancel from each; a full disk.
 **Next: V2, then Import A.**
 
 **V2 ACCEPTED, Part V CLOSED 2026-10-11** (`458c6c5f`; review `rfc155-impl-V2-review-v1`). **Next: Import A.**
+
+**Part I-A approved in part 2026-10-11** (`e2f8a608`; review `rfc155-impl-IA-review-v1`). RFC 155 §9.5's journaled list is corrected: it now includes the object index and the author-key container.
+
+| part | items | budget | report |
+|---|---|---:|---|
+| **I-A2: the lock held, the author keys, the open rows** | **IA1:** hold `ObjectStore` from the journal to the commit point, through an append that runs under a held lock, and refuse behind a journal for **every** session; a concurrent append test, plus a control. **IA2:** journal and cut back the author-key container (a test: import, cancel, then a different key for the same id succeeds). **IA3:** a kill mid-objects (failpoint), an injected I/O error (full disk), a cancel right after the journal; resume and byte-identical cancel for each. **IA4:** the adopted set unchanged, tested. Docs, CHANGELOG, 14 gates | 60 min | `rfc155-impl-IA2-report.md` |
+
+**Next: I-A2, then I-B.**
