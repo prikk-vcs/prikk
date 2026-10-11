@@ -30,6 +30,43 @@
   replacement (`--keep-slot`'s own save, and the commit witness/`ref-name` rewrite), which read as
   a truncation even when nothing was removed from the end. A `Replace` entry now prints "replaced,
   N bytes saved" instead; a `Cut` entry is unchanged.
+- `seal`, `tag create`, `branch create`, and `branch close`, over a ref left mid-publication by an
+  earlier crash, named `` `prikk doctor --repair-tails` `` first (before: a torn ref-log tail was
+  answered before the publication check itself ran). They now name `` `prikk ref complete <ref>` ``
+  directly, the one step that actually finishes it.
+- `prikk verify`'s *"trailing partial WAL bytes"* count, and the *"warning: active WAL contains an
+  incomplete trailing record"* line, no longer count a record the commit witness already
+  acknowledges as damaged or lost (before: the identical bytes were counted and warned on twice,
+  once as acknowledged damage and once as an ordinary tail — `--repair-wal-tail` would have
+  truncated the very record `--discard-damaged-commits` exists to handle formally).
+- `PRIKK-DOCTOR-VERIFY-OK` (*"repository structural verification scan completed"*) is now decided
+  last, over every issue a `doctor` run raises, and is absent whenever any stage failed or any
+  error-severity issue was raised (before: it printed unconditionally, sometimes beside the very
+  errors it seemed to clear).
+- `prikk compact --pointer-index`, refusing to act on a deduced (not decided) live slot, printed
+  `` `integrity error: …` `` (before: nothing here is actually damaged — both slots decode cleanly).
+  It now prints `` `precondition not met: …` ``.
+- New warning, `PRIKK-DOCTOR-RETIRED-SLOT-TAIL`: a compaction cut short can leave a torn tail on a
+  container's own *retired* (non-live) slot — not at risk, since the live slot and the generation
+  log are both sound, but previously invisible until the next compaction silently overwrote it.
+  Named by `prikk verify` and `prikk doctor`, with no action required: the next ordinary
+  `prikk compact --pointer-index|--received-index|--trust-policy` run overwrites it.
+- `prikk verify`'s appended-file tail listing no longer reports an *"interior damage"* line for a
+  container whose generation log is merely ambiguous (before: the identical state printed both
+  `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` and a separate, misleading interior-damage line — nothing
+  there failed to decode; the log simply names no live slot).
+
+### Fixed — a ref-log tail, an acknowledged-damage WAL record, a deduced pointer-index state, and an ambiguous generation log were each reported in a way that pointed at the wrong command, or twice
+
+- Five reporting corrections from this release's own external review (020/021), all local
+  conditions — none reachable by a received bundle, an exchange artifact, or a peer's objects: a
+  ref-log tail left by an interrupted publication now names `ref complete` directly instead of
+  `--repair-tails` first; an acknowledged-damage WAL record is no longer double-counted and
+  double-warned as an ordinary tail; `` `compact --pointer-index` `` on a deduced slot refuses with
+  `precondition not met:`, not `integrity error:`; a compaction's own retired-slot tail is now
+  named, where before it was silently invisible; and an ambiguous generation log no longer also
+  reads as interior damage in `verify`'s own tail listing. See Output changes, above, for each
+  one's exact before and after.
 
 ### Added — `prikk archive export|verify|import [--adopt] <file> [--format json]`, and `prikk doctor --cancel-import`: a whole repository, verbatim, in and out of one file
 
