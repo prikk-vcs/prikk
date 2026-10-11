@@ -174,7 +174,9 @@ naming the object (§8). An archive is a faithful copy, damage included.
 ### 9.2 The format, `PREPO001`
 
 - **Sections:** one per carried file, in the container frame (magic, length, body, checksum).
-- **A trailing manifest and a fixed 24-byte end trailer,** so a reader finds the manifest without scanning.
+- **A trailing manifest and a fixed 56-byte end trailer** (magic, the manifest's offset and length, and the
+  manifest's own checksum), so a reader finds the manifest without scanning and checks it before using any field.
+  *(Corrected 2026-10-12: the first text said 24 bytes, before Part V2 added the manifest checksum.)*
 - **Streamed on both ends,** with memory independent of the archive's size. The prototype's RSS stayed flat (2.7 MiB)
   across a 600× size range.
 - **Reference closure in two passes, with an id set:** memory bounded by object count, 32 bytes an id.
@@ -235,7 +237,10 @@ every signature it cannot check.
 
 ### 9.6 Landing (§5), and the narrowed `--adopt`
 
-- **The default:** every ref under `remotes/`.
+- **The default:** every ref under `remotes/`. **On a name collision** (an exporter's own `heads/X` landing at
+  `remotes/heads/X` while the archive also carries the exporter's received pointer `remotes/heads/X`), **the
+  exporter's own ref wins.** The received pointer is not landed; the outcome names it and its target, and its objects
+  are still imported. Each ref is planned once, from its latest entry. *(Added 2026-10-12, external review 023.)*
 - **`--adopt`** lands a ref as a local ref only when four conditions all hold:
   1. it does not yet exist locally;
   2. its chain is signed by a key in **this** repository's adopted set;

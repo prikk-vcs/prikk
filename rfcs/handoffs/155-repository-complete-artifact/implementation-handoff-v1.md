@@ -188,3 +188,12 @@ then a resume from each; a cancel from each; a full disk.
 **Next: I-B2. RFC 155's implementation closes after it.**
 
 **I-B2 ACCEPTED, and RFC 155's implementation CLOSED, 2026-10-11** (`f26ec154`; review `rfc155-impl-IB2-review-v1`). Ruled: `--repair-index` and `--repair-pointer-index-tail` refusing behind a journal is correct (each rewrites a journaled file; `--repair-tails` stays the exempt way out). **Next: 0.51.0 release prep.**
+
+**External review 023 (2026-10-12): one finding blocks the tag** (assessment `external-review-023-assessment-v1`).
+RFC 155 §9.6 is amended (the collision rule), and §9.2's trailer text is corrected.
+
+| part | items | budget | report |
+|---|---|---:|---|
+| **I-C: the landing collision, and three small items** | **1.** The landing plan: each ref planned once, from its latest entry. On a collision between an exporter's own ref landing at `remotes/heads/X` and a carried received pointer `remotes/heads/X`, **the exporter's ref wins**; the received pointer is not landed and is named in the outcome (text and JSON) with its target, and its objects are still imported. Tests: 023's shape (a source that imported a bundle for its own `heads/main`), by default and with `--adopt` both succeeding and failing; `branch list` shows the exporter's target; the control (received written last) goes red. **2.** Any tail inside a section is damage: `verify` reports it and `import` refuses (an honest export ends each section at its sound length); test plus control. **3.** The section-count bound gets its own error text. **4.** A default import without the signer adopted says that `verify` fails on publication trust until `trust maintainer add` (or `--adopt`). Docs, CHANGELOG (the collision belongs under Fixed, since it never shipped; Output changes if needed), 14 gates, and the release smoke | 60 min | `rfc155-impl-IC-report.md` |
+
+**Next: I-C.** Then a P3-style re-run (gates, matrix v6, `reproduce.sh`) on the new candidate, and letter 024.
