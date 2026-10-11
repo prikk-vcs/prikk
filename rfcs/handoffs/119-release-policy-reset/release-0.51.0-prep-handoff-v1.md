@@ -43,3 +43,5 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 - RFC 155's move to `done/` at the cut (the architect's records);
 - crates.io;
 - the consumer letters (the owner's, possibly after 0.51.0).
+
+**P1 ACCEPTED 2026-10-11** (`65bc464b`; review `release-0.51.0-prep-P1-review-v1`). **No `### Security` block.** **P2 gains item 0:** `#[non_exhaustive]` on `ArchiveImportOptions` (in-tree literals move to `default()`). The archive's memory limits go into `current-state.md` after P2's import measurement. **Next: P2.**
