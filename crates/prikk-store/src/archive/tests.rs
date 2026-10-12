@@ -270,6 +270,76 @@ pub(in crate::archive) fn insert_tail_bytes_into_section_for_test(
     recompute_manifest_checksum_for_test(bytes);
 }
 
+/// Replace the named section's own body outright with `new_body` (any length, including empty) --
+/// unlike [`insert_tail_bytes_into_section_for_test`], which only ever grows a section, this can
+/// shrink one. Fixes up everything a length change shifts: every manifest entry whose own offset
+/// comes after the target (by the signed delta), the target's own declared `length` and
+/// recomputed checksum (over the real new body, both in its own section header and its own
+/// manifest entry), the end trailer's own `manifest_offset`, and the manifest's own checksum.
+/// `pub(in crate::archive)`: external review 024's own "strip the carried key section" shape is
+/// built this way, on a real export, never by hand-assembling a whole archive from scratch.
+pub(in crate::archive) fn replace_section_body_for_test(
+    bytes: &mut Vec<u8>,
+    section_kind: u16,
+    new_body: &[u8],
+) {
+    let (_, _, entries) = decode_manifest_for_test(bytes);
+    let (_, target_offset, target_length, _) = *entries
+        .iter()
+        .find(|(kind, ..)| *kind == section_kind)
+        .expect("section present");
+    const SECTION_HEADER_LEN: u64 = 8 + 2 + 8;
+    let body_start = (target_offset + SECTION_HEADER_LEN) as usize;
+    let old_body_end = body_start + target_length as usize;
+    // The 32-byte trailing checksum right after the old body moves with the splice automatically;
+    // only the body itself is replaced.
+    bytes.splice(body_start..old_body_end, new_body.iter().copied());
+    let shift = new_body.len() as i64 - target_length as i64;
+
+    let end_trailer_start = bytes.len() - 56;
+    let manifest_offset = u64::from_be_bytes(
+        bytes[end_trailer_start + 8..end_trailer_start + 16]
+            .try_into()
+            .unwrap(),
+    );
+    let new_manifest_offset = (manifest_offset as i64 + shift) as u64;
+    bytes[end_trailer_start + 8..end_trailer_start + 16]
+        .copy_from_slice(&new_manifest_offset.to_be_bytes());
+
+    let manifest = &bytes[new_manifest_offset as usize..];
+    let tool_version_len = u16::from_be_bytes(manifest[12..14].try_into().unwrap()) as usize;
+    let count_at = 14 + tool_version_len;
+    let count = u64::from_be_bytes(manifest[count_at..count_at + 8].try_into().unwrap()) as usize;
+    let first_entry = new_manifest_offset as usize + count_at + 8;
+    let new_length = new_body.len() as u64;
+    let new_checksum = {
+        let header = &bytes[target_offset as usize..target_offset as usize + 10];
+        let length_field = new_length.to_be_bytes();
+        let new_body_start = target_offset as usize + SECTION_HEADER_LEN as usize;
+        let new_body_end = new_body_start + new_body.len();
+        prikk_hash::sha256_parts(&[header, &length_field, &bytes[new_body_start..new_body_end]])
+    };
+    for index in 0..count {
+        let entry_at = first_entry + index * 50;
+        let entry_offset =
+            u64::from_be_bytes(bytes[entry_at + 2..entry_at + 10].try_into().unwrap());
+        if entry_offset == target_offset {
+            bytes[entry_at + 10..entry_at + 18].copy_from_slice(&new_length.to_be_bytes());
+            bytes[entry_at + 18..entry_at + 50].copy_from_slice(&new_checksum);
+            let section_header_start = target_offset as usize;
+            bytes[section_header_start + 10..section_header_start + 18]
+                .copy_from_slice(&new_length.to_be_bytes());
+            let new_body_start = section_header_start + SECTION_HEADER_LEN as usize;
+            let new_body_end = new_body_start + new_body.len();
+            bytes[new_body_end..new_body_end + 32].copy_from_slice(&new_checksum);
+        } else if entry_offset > target_offset {
+            let shifted = (entry_offset as i64 + shift) as u64;
+            bytes[entry_at + 2..entry_at + 10].copy_from_slice(&shifted.to_be_bytes());
+        }
+    }
+    recompute_manifest_checksum_for_test(bytes);
+}
+
 #[test]
 fn export_archive_round_trips_a_small_history() {
     let dir = unique_temp_dir("archive-export-basic");

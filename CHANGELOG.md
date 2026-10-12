@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.51.0 — 2026-10-11
+## 0.51.0 — 2026-10-13
 
 ### Upgrading
 
@@ -94,11 +94,17 @@
   `verify` already uses. A signature by a key the archive simply does not carry is named *"not
   checked"* and does not make the archive inconsistent — trust is always the receiver's own
   decision (`trust maintainer add`), never the archive's own carried record; a signature by a key
-  the archive **does** carry, that nonetheless fails to verify, is damage. Each object-container
-  section's own frames are classified exactly as a live repository's own container read already
-  classifies the identical bytes: a complete frame that fails its own checksum is damage, named by
-  section and offset; an incomplete frame (a crash tail, or one a later write overran) is named but
-  never refused on, so a backup of a repository whose own `verify` exits 0 still restores. Each
+  the archive **does** carry, that nonetheless fails to verify, is damage (this catches only a
+  tamperer who leaves the key in place — the receiving repository's own `verify`, after import, is
+  the real check). The report always shows both counts together, *"signatures checked: N, not
+  checked: M"* in text and `--format json` — even an archive whose carried key section is stripped
+  or swapped, reading every signature as *"not checked,"* says so plainly rather than looking
+  identical to one that checked everything. Each object-container section's own frames are
+  classified exactly as a live repository's own container read already classifies the identical
+  bytes: a complete frame that fails its own checksum is damage, named by section and offset; an
+  incomplete frame (a crash tail, or one a later write overran) is named as an interrupted append,
+  never with damage-shaped wording, and never refused on, so a backup of a repository whose own
+  `verify` exits 0 still restores. Each
   section's own trailing checksum must also equal what the manifest itself recorded for it, or
   that too is damage. It reports *internally consistent*, **never** *trusted* — the note saying so
   prints only when the archive genuinely is consistent, never beside a damage line or an error

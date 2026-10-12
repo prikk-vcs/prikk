@@ -209,6 +209,94 @@ fn verify_resolves_a_genuinely_signed_maintainer_signature() {
     );
 }
 
+/// External review 024's own finding: starting from a real export of the fixture above (one
+/// genuinely signed, genuinely adopted maintainer signature, `signatures_checked == 1`), stripping
+/// the archive's own carried `MaintainerKeys`/`TrustPolicy` sections to empty -- real byte surgery
+/// on a real export, never a hand-assembled archive -- turns that same signature into *"not
+/// checked"*, per §9.4 (R2: trust is the receiver's). This is the rule's own correct consequence,
+/// not a defect, but a report that only ever printed `signatures checked: N` read identically
+/// whether 0 of 1 or 1 of 1 signatures were actually checked. Both counts, and the note explaining
+/// what a nonzero `not_checked` count means, must appear together.
+#[test]
+fn verify_shows_both_signature_counts_when_the_key_section_is_stripped() {
+    let dir = unique_temp_dir("archive-verify-stripped-key-section");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let signer = crate::Ed25519MaintainerSigner::from_seed("archive-verify-stripped", &[0x53; 32])
+        .expect("signer");
+    let public_key_hex: String = signer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::add_trusted_maintainer(&layout, signer.key_id(), &public_key_hex).expect("adopt");
+
+    let mut store = crate::FileObjectStore::new(layout.clone());
+    let payload = prikk_object::BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: prikk_object::BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: prikk_object::MerkleRoot([0u8; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let payload_bytes = payload.to_canonical_bytes().expect("encode block payload");
+    let mut envelope =
+        prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Block, 2, payload_bytes);
+    let block_id = envelope.object_id();
+    envelope
+        .add_signature(
+            crate::maintainer_signature(&signer, prikk_object::ObjectType::Block, block_id)
+                .expect("sign for real"),
+        )
+        .expect("attach signature");
+    store.write_object(&envelope).expect("write block");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+
+    // Confirm the baseline first: this real export genuinely checks the signature before any
+    // stripping, or the rest of this test would be proving nothing.
+    {
+        let mut cursor = Cursor::new(bytes.clone());
+        let before = verify_archive(&mut cursor).expect("verify before stripping");
+        assert_eq!(
+            before.signatures_checked, 1,
+            "baseline: checked, before: {before:?}"
+        );
+        assert!(
+            before.not_checked_signatures.is_empty(),
+            "baseline: nothing not-checked yet: {before:?}"
+        );
+    }
+
+    let maintainer_keys_wire_code = crate::archive::ArchiveSectionKind::MaintainerKeys.wire_code();
+    let trust_policy_wire_code = crate::archive::ArchiveSectionKind::TrustPolicy.wire_code();
+    crate::archive::tests::replace_section_body_for_test(
+        &mut bytes,
+        maintainer_keys_wire_code,
+        &[],
+    );
+    crate::archive::tests::replace_section_body_for_test(&mut bytes, trust_policy_wire_code, &[]);
+
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify after stripping the key section");
+    assert_eq!(
+        report.signatures_checked, 0,
+        "with the key section stripped, nothing can be checked against carried material: \
+         {report:?}"
+    );
+    assert_eq!(
+        report.not_checked_signatures.len(),
+        1,
+        "the one real signature must now read as not checked, not vanish: {report:?}"
+    );
+    assert!(
+        report.is_internally_consistent(),
+        "a stripped key section is not damage -- trust is the receiver's own decision: {report:?}"
+    );
+}
+
 /// N1's own other half (review `rfc155-impl-IC-review-v1`): a signature by a key this archive
 /// **does** carry (adopted here), that nonetheless fails to verify, is damage -- never folded into
 /// the "not checked" bucket the previous test exercises. Built by attaching a genuinely-computed
@@ -736,6 +824,17 @@ mod section_frame_classification {
             "the tail must be named as an interrupted append: {:?}",
             report.interrupted_appends
         );
+        // External review 024: the *classification* (`damaged` empty, above) was already right,
+        // but one call site's own printed text still said "damage" -- borrowed verbatim from
+        // `foundation::frame_resync::partial_before_sound_frame_message`, written for several
+        // live-repository readers that do treat this shape as damage in their own context. The
+        // text a user reads must agree with the classification it describes, never contradict it.
+        for line in &report.interrupted_appends {
+            assert!(
+                !line.contains("damage"),
+                "an interrupted-append line must never say \"damage\": {line:?}"
+            );
+        }
         assert!(
             report.is_internally_consistent(),
             "an interrupted append alone must leave the archive internally consistent: {report:?}"
@@ -1060,6 +1159,25 @@ mod section_frame_classification {
             !report.interrupted_appends.is_empty(),
             "the overrun torn frame must be named as an interrupted append"
         );
+        // External review 024's own exact finding, on this exact shape: the line used to read
+        // "... but a sound frame starts at byte offset M: damage, not a torn tail" --
+        // `foundation::frame_resync::partial_before_sound_frame_message`'s own prose, leaked
+        // through unchanged. It must now read as an interrupted append, in the archive's own
+        // words, never the store-reader-facing word "damage".
+        for line in &report.interrupted_appends {
+            assert!(
+                !line.contains("damage"),
+                "the reviewer's own overrun shape must never print \"damage\": {line:?}"
+            );
+            assert!(
+                line.contains("interrupted append")
+                    && line.contains("claims more bytes than remain")
+                    && line.contains("a sound frame starts at byte offset")
+                    && line.ends_with("not imported"),
+                "the overrun line must read as an interrupted append, in the archive's own \
+                 words: {line:?}"
+            );
+        }
         assert!(
             report.is_internally_consistent(),
             "an overrun torn frame alone must leave the archive internally consistent: {report:?}"

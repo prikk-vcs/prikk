@@ -43,8 +43,7 @@ use crate::foundation::container::{
 };
 use crate::foundation::file_codec::decode_envelope_file;
 use crate::foundation::frame_resync::{
-    BoundedScan, ScanBudget, partial_before_sound_frame_message, resync_to_next_magic,
-    scan_budget_exceeded_message,
+    BoundedScan, ScanBudget, resync_to_next_magic, scan_budget_exceeded_message,
 };
 use crate::foundation::layout::persisted_object_types;
 use crate::patch_replay::decode::{
@@ -483,6 +482,20 @@ pub(super) struct SectionReadOutcome {
     pub(super) tail_len: u64,
 }
 
+/// One archive-specific framing for every [`SectionReadOutcome::interrupted_appends`] line,
+/// regardless of which of the several call sites inside [`for_each_object_record`] produces it.
+/// External review 024's own finding: one of those sites used to push
+/// `foundation::frame_resync::partial_before_sound_frame_message`'s own text unchanged, whose
+/// prose literally says *"damage, not a torn tail"* -- correct for the several *live-repository*
+/// readers that helper serves (several of which do treat this shape as damage in their own
+/// context), but wrong for the archive, where this exact shape is an interrupted append the
+/// source repository's own `prikk verify` only ever warns about (§9.1). This helper is the one
+/// place that wording is written, so no call site can silently reintroduce "damage" by calling a
+/// store-side message function directly.
+fn interrupted_append_message(detail: impl std::fmt::Display) -> String {
+    format!("interrupted append: {detail}; not imported")
+}
+
 /// Read and validate one object-container section: its own outer header and checksum against
 /// `entry` (read in one streamed, chunked pass -- [`section_header_and_checksum`]), then every
 /// inner container record in turn, feeding `on_record` only the records whose own checksum matches
@@ -832,7 +845,9 @@ fn classify_section_records<R: Read + Seek>(
             // `Failed{complete: false}` (confirmed from source) -- an interrupted append here, not
             // damage, matching every other budget-exceeded case outside `checksum_mismatch_is_
             // complete`'s own, which is the one place `Undetermined` maps to `complete: true`.
-            interrupted_appends.push(scan_budget_exceeded_message(offset));
+            interrupted_appends.push(interrupted_append_message(scan_budget_exceeded_message(
+                offset,
+            )));
             break;
         }
         match parse_frame_at_streamed(
@@ -881,21 +896,31 @@ fn classify_section_records<R: Read + Seek>(
                         // arm pushes `complete: false` for its own `Undetermined` case too -- unlike
                         // `checksum_mismatch_is_complete`'s own, this is the one place `Undetermined`
                         // does *not* become damage. An interrupted append.
-                        interrupted_appends.push(scan_budget_exceeded_message(offset));
+                        interrupted_appends.push(interrupted_append_message(
+                            scan_budget_exceeded_message(offset),
+                        ));
                         break;
                     }
                     BoundedScan::Sound(next) => {
                         // `foundation::container`'s own `ContainerRecordStatus::Failed{complete:
                         // false}` for this exact branch (confirmed from source,
-                        // `decode_container_records`'s own `TrailingPartial` arm) -- the message
-                        // text says "damage, not a torn tail" (frame_resync.rs's own prose, written
-                        // for every isolate-and-continue reader this helper serves), but the
-                        // structured `complete` flag this format's own downstream classifier
-                        // actually reads (`verify/objects.rs`: `if *complete { Failed } else {
-                        // InterruptedAppend }`) is false here regardless -- object containers
-                        // report this as a warning, per RFC 164 Rule E, and a live repository's own
-                        // `prikk verify` agrees. Interrupted append, not damage.
-                        interrupted_appends.push(partial_before_sound_frame_message(offset, next));
+                        // `decode_container_records`'s own `TrailingPartial` arm): the structured
+                        // `complete` flag this format's own downstream classifier actually reads
+                        // (`verify/objects.rs`: `if *complete { Failed } else { InterruptedAppend }`)
+                        // is false here -- object containers report this as a warning, per RFC 164
+                        // Rule E, and a live repository's own `prikk verify` agrees. External review
+                        // 024's own finding: `frame_resync.rs`'s own `partial_before_sound_frame_
+                        // message` is written for every isolate-and-continue *reader* this helper
+                        // serves, several of which legitimately call this shape damage in their own
+                        // context -- its own prose literally says "damage, not a torn tail", which
+                        // leaked into the archive's own report even though the structured
+                        // classification was already correct. The wording below never uses that
+                        // word for an outcome a healthy backup's own source repository only warns
+                        // about.
+                        interrupted_appends.push(interrupted_append_message(format!(
+                            "the frame at byte offset {offset} claims more bytes than remain, \
+                             and a sound frame starts at byte offset {next}"
+                        )));
                         if next <= offset {
                             return Err(PrikkError::Integrity(format!(
                                 "archive section decode did not advance past byte offset {offset}"
@@ -916,7 +941,7 @@ fn classify_section_records<R: Read + Seek>(
                 if complete {
                     record_damage.push(message);
                 } else {
-                    interrupted_appends.push(message);
+                    interrupted_appends.push(interrupted_append_message(message));
                 }
                 match resync_to_next_magic_streamed(
                     source,

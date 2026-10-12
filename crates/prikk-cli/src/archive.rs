@@ -209,7 +209,11 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
         "reference closure sound: {}",
         report.reference_closure_sound
     );
-    println!("signatures checked: {}", report.signatures_checked);
+    let not_checked_count = report.not_checked_signatures.len();
+    println!(
+        "signatures checked: {}, not checked: {not_checked_count}",
+        report.signatures_checked
+    );
     for key in &report.maintainer_keys {
         println!(
             "maintainer key {} (carried, not adopted): {}",
@@ -228,9 +232,31 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
     for line in &report.interrupted_appends {
         println!("warning: {line}");
     }
+    if let Some(note) = signature_not_checked_note(report.signatures_checked, not_checked_count) {
+        println!("note: {note}");
+    }
     if let Some(note) = report.note {
         println!("note: {note}");
     }
+}
+
+/// External review 024: stripping (or swapping) the archive's own carried maintainer-key section
+/// turns every signature into *"not checked"* -- correct per §9.4 (R2: trust is the receiver's,
+/// never the archive's own), but a report that only ever printed `signatures checked: N` read
+/// identically whether 0 of 16 or 16 of 16 signatures were actually checked against this
+/// archive's own carried material. Both counts are now always shown together; this note explains
+/// what a nonzero `not_checked` count means, only when there is one to explain.
+fn signature_not_checked_note(checked: usize, not_checked: usize) -> Option<String> {
+    if not_checked == 0 {
+        return None;
+    }
+    let total = checked + not_checked;
+    Some(format!(
+        "{checked} of {total} signatures were checked against this archive's own carried \
+         material; the other {not_checked} are checked only by the receiving repository's own \
+         `prikk verify`, after import -- not a weaker check, the step that was always going to \
+         check them for real"
+    ))
 }
 
 fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
@@ -267,9 +293,13 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
         .iter()
         .map(|line| escape_json_string(line))
         .collect();
+    let not_checked_count = report.not_checked_signatures.len();
+    let not_checked_note = signature_not_checked_note(report.signatures_checked, not_checked_count)
+        .map(|note| escape_json_string(&note))
+        .unwrap_or_else(|| "null".to_string());
     json.push_str(&format!(
-        "  \"signatures\": {{ \"checked\": {}, \"unresolvable\": [{}], \"not_checked\": [{}] \
-         }},\n",
+        "  \"signatures\": {{ \"checked\": {}, \"not_checked_count\": {not_checked_count}, \
+         \"unresolvable\": [{}], \"not_checked\": [{}], \"note\": {not_checked_note} }},\n",
         report.signatures_checked,
         unresolvable.join(", "),
         not_checked.join(", ")
@@ -597,4 +627,48 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
     ));
     json.push_str("}\n");
     print!("{json}");
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::signature_not_checked_note;
+
+    /// External review 024: when every signature was checked, there is nothing to explain.
+    #[test]
+    fn no_note_when_nothing_is_unchecked() {
+        assert_eq!(signature_not_checked_note(3, 0), None);
+    }
+
+    /// The reviewer's own stripped-key-section shape: `checked: 0, not_checked: 1` (singular,
+    /// matching the store-level test `archive::verify::tests::
+    /// verify_shows_both_signature_counts_when_the_key_section_is_stripped`). The note must state
+    /// both halves of the real total, and that the receiver's own `verify` is the real check.
+    #[test]
+    fn note_names_both_counts_when_the_key_section_is_stripped() {
+        let note = signature_not_checked_note(0, 1).expect("a note when not_checked > 0");
+        assert!(
+            note.contains("0 of 1 signatures were checked"),
+            "note: {note}"
+        );
+        assert!(
+            note.contains(
+                "the other 1 are checked only by the receiving repository's own \
+                            `prikk verify`, after import"
+            ),
+            "note: {note}"
+        );
+    }
+
+    /// A partial case: some checked, some not -- the counts must still both appear, against the
+    /// real total (checked + not_checked), not just the not_checked count alone.
+    #[test]
+    fn note_names_both_counts_in_a_partial_case() {
+        let note = signature_not_checked_note(5, 2).expect("a note when not_checked > 0");
+        assert!(
+            note.contains("5 of 7 signatures were checked"),
+            "note: {note}"
+        );
+        assert!(note.contains("the other 2 are checked"), "note: {note}");
+    }
 }

@@ -120,9 +120,19 @@ Reads the end trailer and the manifest first (seek, never scan), then checks:
   checks every reference a `Block`/`Patch`/`Tag`/`Attestation`/`RefState`/`RecognitionClaim` makes
   against that set, naming any that is absent;
 - **every signature**, against the archive's own carried author-key and maintainer material — small
-  key material, decoded once into memory, never the local repository's. A signature this check
-  cannot resolve (no recorded material, or a key that does not verify) is named, never silently
-  skipped.
+  key material, decoded once into memory, never the local repository's. A signature by a key this
+  archive carries, that fails to verify, is damage, named, and refuses the whole archive — the one
+  case this check actually catches: a tamperer who left the signature's own key in place but
+  altered the signed bytes. A signature by a key this archive does **not** carry — including every
+  signature at all, if the carried key section is empty or was swapped for something else — is
+  named *"not checked"* and leaves the archive internally consistent; it is not a weaker version of
+  the real check, because the real check happens only after import, against the **receiving**
+  repository's own adopted set (R2). Stripping or swapping the carried key section therefore proves
+  nothing either way about an archive's own trustworthiness, by design: `archive verify` answers
+  only *"is this archive internally consistent with itself,"* never *"should you trust it."* The
+  report always shows both counts together (*"signatures checked: N, not checked: M"*, in text and
+  `--format json`), and names what a nonzero `not_checked` count means, so a reader never has to
+  guess whether 0 of 16 or 16 of 16 signatures were actually checked against carried material.
 
 It reports *internally consistent*, **never** *trusted*: trust comes only from a receiver's own
 adopted set, checked after import. That note is printed — in text and in `--format json` — only
@@ -130,6 +140,12 @@ when the archive genuinely is internally consistent; a damaged or unresolvable a
 damage lines and the error, never a note beside them that contradicts them. The carried maintainer
 keys are listed, labeled *"carried, not adopted."* It writes nothing, on any exit path — no scratch
 file, no scratch directory.
+
+The manifest's own declared `repository_format` number (checked above, against what this build
+knows how to read) is purely informative past that check: `archive import` always writes the
+**receiving** repository's own real, current format, never the carried number. A format-6 archive
+built from format-7 bytes, or any other mismatch between the carried number and the carried
+content's own real shape, changes nothing about what import actually writes.
 
 ## Carry-forward
 
