@@ -220,7 +220,10 @@ every signature it cannot check.
 - **A signature by a key the archive does not carry is named, *"not checked"*, and does not make the archive
   inconsistent.** Trust is the receiver's (R2). A received pointer the source never trusted is exactly this case.
   Refusing it made such a repository's archive unimportable everywhere, even into a receiver that trusts the key.
-- **A signature by a carried key that does not verify is damage,** and import refuses.
+- **A signature by a carried key that does not verify is damage,** and import refuses. This catches only a tamperer
+  who leaves the key in. Stripping the key section turns every signature into *"not checked"*, and the archive still
+  verifies as consistent. **The receiver's own `verify` after import is the real check**, so verify prints both counts
+  (*"signatures checked: N, not checked: M"*) and its note says so. *(Added 2026-10-13, external review 024.)*
 - **Each section's trailer checksum must equal its manifest entry.**
 - **Rejected alternative:** staging into `$TMPDIR` plus `verify_repository`. That costs a full copy (memory, on a tmpfs
   `/tmp`), a double write on import, and deletions in a shared temp directory.
