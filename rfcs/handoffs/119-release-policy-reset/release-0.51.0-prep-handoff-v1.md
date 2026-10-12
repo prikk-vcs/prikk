@@ -64,3 +64,11 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 **Next: P3b.**
 
 **P3b ACCEPTED 2026-10-11** (`e2292eb5`; review `release-0.51.0-prep-P3b-review-v1`). **The candidate is complete.** Three wording fixes ride the date commit at the tag. The architect pushes; the owner decides on the external review.
+
+**External review 023 blocked the tag (2026-10-12).** RFC 155 parts I-C to I-F follow in
+`rfcs/handoffs/155-repository-complete-artifact/implementation-handoff-v1.md`. P4 re-runs the candidate on I-F's
+final commit. **It is live only once I-F is accepted.**
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **P4: the candidate again** | On I-F's accepted commit, untouched tree, release build. **1.** The 14 gates. **2.** `matrix.py` v6 at `--compactions 1` and `2`, on the release build and on 0.50.0's binary, compared by row as in P3. **3.** The external `reproduce.sh`, both binaries. **4.** `smoke-0.51.0.sh`. **5. The archive at scale, again,** because I-D and I-D2 rewrote the walk stage 1 uses: P2b's method (about 1 GiB of blobs in one type, idle machine, 3 samples). Wall time and peak RSS for export, verify and import, against P2b's figures. The promise in `current-state.md` (about 5× the largest object, flat when the archive doubles) must still hold, or the text changes. **6.** The CHANGELOG's 0.51.0 section read once as a whole against RFC 161's shape. All outputs kept in `.git-exclude/review-request/release-0.51.0-prep-P4-*` | 75 min | `release-0.51.0-prep-P4-report.md` |

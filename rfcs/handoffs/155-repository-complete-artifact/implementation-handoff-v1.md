@@ -235,3 +235,14 @@ it. **I-E gains item 0. Its budget becomes 75 min.**
 
 **Next: I-E (item 0, then items 4, 3, the aside and the small items), 75 min.** Then the P3-style re-run and letter
 024.
+
+**I-E approved in part 2026-10-12** (`c3af85f3`; review `rfc155-impl-IE-review-v1`). Item 0, item 3, the manifest
+checksum and the small items are accepted, and so is 0(a)'s hard refusal of an over-bound candidate that fits the
+section. Two things remain: the trust note misses a collided received pointer whose objects `verify` still reports,
+and the 0.51.0 notes describe the archive's pre-release defects as if they had shipped (the architect's I-C wording).
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **I-F: the note says what `verify` will say; the notes read as one feature** | **1. The note.** Name every planned entry whose tip has no maintainer signature this repository trusts, **landed or not**. A not-landed (collided) entry says its history was imported without a ref, because the exporter's ref holds the name. Each line names the signing key id. Singular and plural follow the count. The `--adopt` hint appears only for the exporter's own refs. Compute `publication_trusted` for collided entries too. CLI tests, text and JSON, for the review's five rows: r1 names both; **r2 (trusts only the exporter, no `--adopt`) names the collided pointer**; r3 names the received pointer; r4 and r5 print nothing. **2. The 0.51.0 notes.** Remove `### Fixed — archive import could silently drop a ref…` and the three archive `### Output changes` bullets (landing fields, the count text, interrupted-append lines). Fold the final behaviour into the `archive` Added entry, briefly: the collision rule; interrupted appends named, never refused; a complete damaged frame refuses; a signature by a key not carried is named; the trust note; each section bound to its manifest entry. The step-1 Fixed entry stays. **3. The three wording fixes held for the tag** (review `release-0.51.0-prep-P3b-review-v1`): *"because the tail guard ran first"* in the `ref complete` line; *"nothing is damaged"* in the `compact --pointer-index` line; *"external reviews 020 and 021"*, and `VERIFY-OK` added to the step-1 Fixed entry (six). After this, the date commit at the tag changes only the date. `release-policy-check` and `reference-check` clean; 14 gates; release smoke | 60 min | `rfc155-impl-IF-report.md` |
+
+**Next: I-F. Then P4** in `rfcs/handoffs/119-release-policy-reset/release-0.51.0-prep-handoff-v1.md`.
