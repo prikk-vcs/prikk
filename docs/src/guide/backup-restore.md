@@ -296,7 +296,10 @@ continue working in that way. `prikk archive export <file>` writes a whole repos
 one file (RFC 155) — see [The Archive Format](../reference/archive-format.md). `prikk archive verify
 <file>` reads one back and checks structure, reference closure, and every signature against the
 archive's own carried key material, reporting *internally consistent*, never *trusted* — it needs no
-repository and writes nothing. `prikk archive import <file> --adopt` is the landing step that turns a
+repository and writes nothing. A signature by a key the archive does not carry (for instance, a
+received branch the source repository itself never trusted) is named, not refused on: trust is
+always the receiving repository's own decision, never the archive's. `prikk archive import <file>
+--adopt` is the landing step that turns a
 carried branch into a working one: absent locally, signed by an adopted key, and verified, it becomes
 a real local branch; every other ref still lands under `remotes/`, exactly like `bundle import`'s own
 received pointer, with the reason named.

@@ -106,13 +106,30 @@ pub struct ArchiveVerifyReport {
     /// Count of signatures that verified against the archive's own carried material (author or
     /// maintainer).
     pub signatures_checked: usize,
-    /// Every signature this verify could not positively check, named -- never silently skipped
-    /// (§9.4). Includes an AUTHOR signature with no recorded material in the archive and any
-    /// signature that fails to verify outright.
+    /// Every signature by a key this archive **does carry**, that nonetheless fails to verify --
+    /// damage, named, and part of [`Self::is_internally_consistent`]'s own formula (§9.4, amended
+    /// 2026-10-12, review `rfc155-impl-IC-review-v1`, finding N1). Before this fix, a signature by a
+    /// key the archive simply does not carry (R2: trust is the receiver's, never the archive's own)
+    /// was folded into this same list and refused on -- making such an archive permanently
+    /// unimportable, by anyone, even into a destination that already trusts the key. That case now
+    /// lives in [`Self::not_checked_signatures`] instead.
     pub unresolvable_signatures: Vec<String>,
+    /// Every signature by a key this archive does **not** carry, named *"not checked"* -- never
+    /// silently skipped (§9.4), but never refused on either: trust is the receiver's own adopted
+    /// set, checked only after import (R2), not this archive's own carried record. A received
+    /// pointer the source repository itself never trusted is exactly this case.
+    pub not_checked_signatures: Vec<String>,
     /// Every structural or reference defect found, named -- a flipped byte, a dangling reference, a
-    /// torn tail. Damage in an object container travels verbatim (§9.1); this is where it surfaces.
+    /// complete container record that fails its own checksum. Damage in an object container travels
+    /// verbatim (§9.1); this is where it surfaces. Part of [`Self::is_internally_consistent`]'s own
+    /// formula.
     pub damaged: Vec<String>,
+    /// A container record this archive's own section declares but never finishes -- a crash tail
+    /// (or bytes added since), carried verbatim because the source repository's own `prikk verify`
+    /// only ever warns about it (§9.1, amended 2026-10-12). Named, but never part of [`Self::
+    /// is_internally_consistent`]'s own formula: an honest backup of a repository whose own `verify`
+    /// exits 0 must still restore.
+    pub interrupted_appends: Vec<String>,
     /// Every maintainer key this archive carries, listed for inspection -- never adopted by this
     /// call.
     pub maintainer_keys: Vec<CarriedMaintainerKeySummary>,
@@ -133,6 +150,9 @@ impl ArchiveVerifyReport {
             && self.unresolvable_signatures.is_empty()
             && self.damaged.is_empty()
     }
+    // Deliberately not consulted above: `not_checked_signatures` (R2: trust is the receiver's, not
+    // this archive's own carried record) and `interrupted_appends` (§9.1: the source's own `verify`
+    // only warns about one of these, so a backup of that repository must still restore).
 }
 
 /// `pub(super)`, not private: RFC 155 Part I-A's own `archive::import` re-reads the same manifest
@@ -159,6 +179,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     validate_manifest_shape(&manifest, manifest_offset, manifest_length, total_len)?;
 
     let mut damaged = Vec::new();
+    let mut interrupted_appends = Vec::new();
     let mut structurally_sound = true;
 
     // Pass 1: every section's own outer checksum, and -- for the seven object-container sections,
@@ -180,14 +201,19 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                     "{} failed its own checksum or is truncated",
                     entry.kind.label()
                 ));
-            } else if outcome.tail_len > 0 {
-                // External review 023: an honest export never leaves this -- every section ends
-                // exactly at its own sound length. A checksum that still matches only proves the
-                // tail was present when it was computed, not that it is benign.
+            }
+            // §9.1, amended 2026-10-12 (review `rfc155-impl-IC-review-v1`): the archive classifies a
+            // container's frames exactly as the store does (RFC 162 rule 2). A complete frame that
+            // fails is damage; an incomplete one (a crash tail, or bytes added since) is named, never
+            // refused on -- the source repository's own `prikk verify` only warns about it.
+            for message in &outcome.record_damage {
                 structurally_sound = false;
-                damaged.push(format!(
-                    "{} has {} trailing byte(s) after its last record -- an honest export never \
-                     produces this",
+                damaged.push(format!("{}: {message}", entry.kind.label()));
+            }
+            if outcome.tail_len > 0 {
+                interrupted_appends.push(format!(
+                    "{} has {} trailing byte(s) after its last complete record -- an interrupted \
+                     append, not necessarily damage",
                     entry.kind.label(),
                     outcome.tail_len
                 ));
@@ -211,6 +237,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     let mut reference_closure_sound = true;
     let mut signatures_checked = 0usize;
     let mut unresolvable_signatures = Vec::new();
+    let mut not_checked_signatures = Vec::new();
     for entry in &manifest.entries {
         let ArchiveSectionKind::ObjectContainer(object_type) = entry.kind else {
             continue;
@@ -236,6 +263,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                 &author_material,
                 &mut signatures_checked,
                 &mut unresolvable_signatures,
+                &mut not_checked_signatures,
             );
             Ok(())
         })?;
@@ -257,7 +285,9 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
         reference_closure_sound,
         signatures_checked,
         unresolvable_signatures,
+        not_checked_signatures,
         damaged,
+        interrupted_appends,
         maintainer_keys,
         note: None,
     };
@@ -274,12 +304,18 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     Ok(report)
 }
 
+/// §9.4's amended rule (N1): a signature by a key this archive does not carry is named *"not
+/// checked"* and never refused on (trust is the receiver's, R2); a signature by a key this archive
+/// **does** carry, that nonetheless fails to verify, is damage. Applies identically to MAINTAINER
+/// and AUTHOR signatures -- both buckets below are symmetric for the two roles, not a special case
+/// for one.
 fn check_signatures(
     envelope: &ObjectEnvelope,
     maintainer_policy: &MaintainerTrustPolicy,
     author_material: &HashMap<String, Vec<AuthorKeyEntry>>,
     signatures_checked: &mut usize,
     unresolvable: &mut Vec<String>,
+    not_checked: &mut Vec<String>,
 ) {
     if envelope
         .signatures
@@ -288,6 +324,17 @@ fn check_signatures(
     {
         match verify_trusted_publication_envelope(maintainer_policy, envelope) {
             Ok(_) => *signatures_checked += 1,
+            // "PRIKK-TRUST-PUBLICATION-UNTRUSTED": every MAINTAINER signature on this envelope is by
+            // a key `maintainer_policy` does not carry -- not checked, not damage (R2).
+            Err(issue) if issue.code == "PRIKK-TRUST-PUBLICATION-UNTRUSTED" => {
+                not_checked.push(format!(
+                    "{} {}: not checked: signed by a key this archive does not carry",
+                    envelope.object_type,
+                    envelope.object_id()
+                ));
+            }
+            // "PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE": a key the policy *does* carry, whose
+            // signature does not verify -- damage.
             Err(issue) => unresolvable.push(format!(
                 "{} {}: {}",
                 envelope.object_type,
@@ -300,12 +347,17 @@ fn check_signatures(
         Ok(author_material.get(key_id).cloned().unwrap_or_default())
     }) {
         Ok(Some((_, true))) => *signatures_checked += 1,
-        Ok(Some((key_id, false))) => unresolvable.push(format!(
-            "{} {}: AUTHOR key {key_id} has no recorded material in this archive",
+        // No recorded material at all for this key id in the archive -- not carried, not checked,
+        // not damage (the same N1 rule, for AUTHOR signatures).
+        Ok(Some((key_id, false))) => not_checked.push(format!(
+            "{} {}: not checked: AUTHOR key {key_id} is not carried by this archive",
             envelope.object_type,
             envelope.object_id()
         )),
         Ok(None) => {}
+        // Material *is* recorded for this key id, but the signature itself does not verify against
+        // it (or the key id's own recorded material disagrees with itself, DC-53 Stage 2 D8) --
+        // damage.
         Err(err) => unresolvable.push(format!(
             "{} {}: AUTHOR signature does not verify: {err}",
             envelope.object_type,
@@ -382,26 +434,40 @@ fn extract_references(envelope: &ObjectEnvelope) -> Result<Vec<ObjectId>> {
     Ok(refs)
 }
 
-/// [`for_each_object_record`]'s own outcome: the outer checksum's own pass/fail, and separately,
-/// whether any bytes inside the section's own declared length were never a decoded or
-/// torn-and-abandoned record (external review 023: an honest export never produces this --
-/// sections end exactly at their own sound length -- so *any* non-zero `tail_len` is damage from a
-/// hostile or corrupted archive, even when the outer checksum still matches, because that checksum
-/// was computed over exactly these bytes when the archive itself was written or tampered with).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// [`for_each_object_record`]'s own outcome: the outer checksum's own pass/fail; every **complete**
+/// frame that failed (RFC 162 rule 2's own `complete: true` -- a full header and a full claimed
+/// body were actually present, but the record failed its own checksum, or decoded to the wrong
+/// envelope type), named by byte offset -- damage, in [`SectionReadOutcome::record_damage`]; and the
+/// trailing byte count left over once an **incomplete** frame (rule 2's `complete: false`) ended the
+/// scan -- an interrupted append, in [`SectionReadOutcome::tail_len`]. §9.1, amended 2026-10-12: the
+/// archive classifies exactly as the store does, not by a cruder rule of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SectionReadOutcome {
     pub(super) checksum_ok: bool,
-    /// Bytes left over, inside the section's own declared length, after the last record this loop
-    /// either decoded or abandoned as torn. Zero for a section with no tail at all.
+    /// Bytes left over, inside the section's own declared length, after the last frame this loop
+    /// could classify as complete (sound or damaged). Zero for a section with no tail at all. Named,
+    /// but never damage on its own -- the same bytes a live repository's own crash-tail would leave.
     pub(super) tail_len: u64,
+    /// One message per complete frame that failed -- a checksum mismatch over a fully-present
+    /// claimed body, or a body that decodes to the wrong envelope type. Damage, named by byte offset
+    /// within the section.
+    pub(super) record_damage: Vec<String>,
 }
 
 /// Read and validate one object-container section: its own outer header against `entry`, then every
 /// inner container record in turn (header, bounded body, checksum -- `foundation/container.rs`'s own
-/// shape, reused), feeding `on_record` only the records whose own checksum matches. Returns whether
-/// the section's outer checksum (covering every byte read, sound records and torn/damaged ones
-/// alike) matches what the manifest recorded, and whether a tail was found (see
-/// [`SectionReadOutcome`]).
+/// shape, reused), feeding `on_record` only the records whose own checksum matches. Classifies every
+/// non-sound frame exactly as `foundation::container`'s own `ContainerRecordStatus::Failed {
+/// complete }` would (RFC 162 rule 2, §9.1 amended 2026-10-12): a frame whose magic/version does not
+/// match, or whose claimed body length runs past what the section has left, is **incomplete** -- the
+/// scan stops there, and everything from that point to the section's own declared end is named as
+/// one trailing-partial byte count, never damage on its own (a live repository's own crash tail gets
+/// the same treatment, never refused on). A frame whose header *does* match and whose full claimed
+/// body *is* present, but which fails its own checksum (or decodes to the wrong envelope type), is
+/// **complete** -- damage, named by offset, and the scan continues past it to find any further sound
+/// records (the twin of `foundation::container`'s own isolate-and-continue reading). Memory is
+/// bounded by one record at a time, the same as before this part -- classification adds no
+/// buffering of its own.
 ///
 /// `pub(super)`: RFC 155 Part I-A's own `archive::import` needs the identical decode -- not a
 /// second copy of it -- for its own stage 1, over an archive its own stage 0 already confirmed
@@ -422,6 +488,7 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
         return Ok(SectionReadOutcome {
             checksum_ok: false,
             tail_len: 0,
+            record_damage: Vec::new(),
         });
     }
 
@@ -430,11 +497,11 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
 
     let container_type_magic = container_magic(object_type)?;
     let mut remaining = entry.length;
+    let mut offset_in_section: u64 = 0;
+    let mut record_damage = Vec::new();
     while remaining >= CONTAINER_HEADER_LEN as u64 {
         let mut record_header = [0u8; CONTAINER_HEADER_LEN];
         source.read_exact(&mut record_header)?;
-        outer_hasher.update(&record_header);
-        remaining -= CONTAINER_HEADER_LEN as u64;
 
         let record_magic: [u8; 8] = record_header[0..8].try_into().unwrap_or([0u8; 8]);
         let record_version = u16::from_be_bytes([record_header[8], record_header[9]]);
@@ -443,17 +510,36 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
         let record_checksum_declared: [u8; 32] =
             record_header[18..50].try_into().unwrap_or([0u8; 32]);
 
+        // RFC 162 rule 2: a header whose magic or version does not match is never damage, on its
+        // own -- the store's own `parse_header` classifies this unconditionally as `complete:
+        // false` (an archive is read once, from a frozen export, so the one scenario this rule
+        // exists for in a *live* repository -- a later reclaim write overrunning a torn frame,
+        // RFC 158 -- cannot arise here: nothing ever rewrites an archive's own bytes after export).
+        // Everything from this header's own first byte to the section's declared end is the
+        // trailing-partial byte count; the header's own bytes are *not* hashed into the outer
+        // checksum, matching `foundation::container`'s own `TrailingPartial`/`Invalid{complete:
+        // false}` arms, which never charge a candidate's bytes against anything once they are ruled
+        // out as a real frame start.
+        if record_magic != *container_type_magic || record_version != CONTAINER_VERSION {
+            source.seek(SeekFrom::Current(-(CONTAINER_HEADER_LEN as i64)))?;
+            break;
+        }
         if record_body_len > DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64 {
             return Err(PrikkError::ObjectOverBound {
                 declared_bytes: record_body_len,
                 bound_bytes: DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64,
             });
         }
-        if record_body_len > remaining {
-            // Declared more than this section has left -- a torn tail. Stop decoding further
-            // records; the leftover bytes are still hashed below, verbatim, as damage (§9.1).
+        if record_body_len > remaining - CONTAINER_HEADER_LEN as u64 {
+            // A well-formed header claiming more body than this section has left -- the body itself
+            // was cut short, the hallmark of a genuine crash tail (RFC 162 rule 2's own
+            // `TrailingPartial`). Incomplete, not damage; the header's own bytes are not hashed.
+            source.seek(SeekFrom::Current(-(CONTAINER_HEADER_LEN as i64)))?;
             break;
         }
+        outer_hasher.update(&record_header);
+        remaining -= CONTAINER_HEADER_LEN as u64;
+
         let record_body_len_usize = usize::try_from(record_body_len)
             .map_err(|_| PrikkError::Integrity("archive record length overflow".to_string()))?;
         let mut record_body = vec![0u8; record_body_len_usize];
@@ -461,16 +547,19 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
         outer_hasher.update(&record_body);
         remaining -= record_body_len;
 
-        let record_sound = record_magic == *container_type_magic
-            && record_version == CONTAINER_VERSION
-            && record_checksum(&record_magic, record_body_len, &record_body)
-                == record_checksum_declared;
-        if record_sound {
+        let checksum_matches = record_checksum(&record_magic, record_body_len, &record_body)
+            == record_checksum_declared;
+        if checksum_matches {
             on_record(&record_body)?;
+        } else {
+            // The full claimed body is genuinely present (checked above); a checksum mismatch over
+            // it is therefore complete -- damage, named by this frame's own offset within the
+            // section, not merely folded into the section's own outer checksum failure.
+            record_damage.push(format!(
+                "container record at byte offset {offset_in_section} failed its own checksum"
+            ));
         }
-        // An unsound record is skipped for decode purposes; its bytes are still hashed above, so
-        // the outer checksum comparison below reports the section as damaged without a second
-        // signal being needed here.
+        offset_in_section += CONTAINER_HEADER_LEN as u64 + record_body_len;
     }
     if remaining > 0 {
         let remaining_usize = usize::try_from(remaining).map_err(|_| {
@@ -487,6 +576,7 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
     Ok(SectionReadOutcome {
         checksum_ok: outer_hasher.finalize() == section_checksum,
         tail_len,
+        record_damage,
     })
 }
 

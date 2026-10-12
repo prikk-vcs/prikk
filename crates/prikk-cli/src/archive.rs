@@ -219,8 +219,14 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
     for line in &report.unresolvable_signatures {
         println!("unresolvable signature: {line}");
     }
+    for line in &report.not_checked_signatures {
+        println!("{line}");
+    }
     for line in &report.damaged {
         println!("damaged: {line}");
+    }
+    for line in &report.interrupted_appends {
+        println!("warning: {line}");
     }
     if let Some(note) = report.note {
         println!("note: {note}");
@@ -256,10 +262,17 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
         .iter()
         .map(|line| escape_json_string(line))
         .collect();
+    let not_checked: Vec<String> = report
+        .not_checked_signatures
+        .iter()
+        .map(|line| escape_json_string(line))
+        .collect();
     json.push_str(&format!(
-        "  \"signatures\": {{ \"checked\": {}, \"unresolvable\": [{}] }},\n",
+        "  \"signatures\": {{ \"checked\": {}, \"unresolvable\": [{}], \"not_checked\": [{}] \
+         }},\n",
         report.signatures_checked,
-        unresolvable.join(", ")
+        unresolvable.join(", "),
+        not_checked.join(", ")
     ));
     let damaged: Vec<String> = report
         .damaged
@@ -267,6 +280,15 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
         .map(|line| escape_json_string(line))
         .collect();
     json.push_str(&format!("  \"damaged\": [{}],\n", damaged.join(", ")));
+    let interrupted_appends: Vec<String> = report
+        .interrupted_appends
+        .iter()
+        .map(|line| escape_json_string(line))
+        .collect();
+    json.push_str(&format!(
+        "  \"interrupted_appends\": [{}],\n",
+        interrupted_appends.join(", ")
+    ));
     let maintainer_keys: Vec<String> = report
         .maintainer_keys
         .iter()

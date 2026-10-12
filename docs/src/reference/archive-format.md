@@ -32,13 +32,16 @@ seek to `length - 56`, read the end trailer, then seek to the manifest's own off
 | body | `body_len` | verbatim bytes of one source file, or a resolved family's sound prefix |
 | checksum | 32 | SHA-256 of `magic ‖ kind ‖ body_len ‖ body`, **after** the body — a trailer, not a header, so the encoder never needs the whole body in hand before writing the header |
 
-**An honest export never leaves a tail inside an object-container section**: every record this
-build writes fills exactly the section's own declared length, with nothing left over. `archive
-verify` treats *any* leftover bytes inside a section — after the last record it could decode or
-abandon as torn — as damage in their own right, even when the section's own trailing checksum
-still matches (external review 023: a checksum alone cannot tell "the bytes genuinely end here"
-from "the bytes genuinely include a tail", since it is computed over whatever is actually on disk
-either way).
+**An object-container section classifies its own frames exactly as the live store does** (RFC 162
+rule 2): a complete frame — a full header and its full claimed body are both present — that fails
+its own checksum is damage, named by `archive verify` and refused by `archive import`. An
+*incomplete* frame — a crash tail in the source repository's own live container, or bytes added
+since, carried verbatim because object containers travel damage included — is named but never
+refused on: the source repository's own `prikk verify` only ever warns about this shape, so a
+backup of that repository must still restore. The same bytes get the same outcome whether a crash
+or a hand wrote them (external review 023's own finding, and the architect's own correction of an
+earlier, wrong premise here: an honest export carries a crash tail exactly as it found it, rather
+than never producing one).
 
 ### Section kinds
 

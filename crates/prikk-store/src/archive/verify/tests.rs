@@ -12,10 +12,12 @@ use std::io::Cursor;
 use prikk_object::CanonicalEncode;
 
 use crate::archive::export_archive;
-use crate::archive::tests::{decode_manifest_for_test, seal_one_block};
+use crate::archive::tests::{
+    decode_manifest_for_test, insert_tail_bytes_into_section_for_test, seal_one_block,
+};
 use crate::maintainer_signing::MaintainerSigner;
-use crate::test_gates::test_support::unique_temp_dir;
-use crate::{ObjectWriter, RepositoryLayout};
+use crate::test_gates::test_support::{signed_text_blob_envelope, unique_temp_dir};
+use crate::{FileObjectStore, ObjectWriter, RepositoryLayout};
 
 use super::verify_archive;
 
@@ -90,35 +92,45 @@ fn entry_record_offset(bytes: &[u8], index: usize) -> usize {
 /// This fixture's own `maintainer_signature()`/AUTHOR signature are both placeholders -- "a value,
 /// not a signer" (`test_support`'s own doc comment): fixed bytes under a fixed `key_id`, never a
 /// real Ed25519 signature over anything. No maintainer key is ever adopted in this fixture and no
-/// author key material is ever recorded, so every signature on it is **correctly** unresolvable --
-/// this is exactly R2's "a signature it cannot check is reported, not skipped," demonstrated on the
-/// plainest fixture available, not an error in the test. Structure and closure, which do not depend
-/// on any of that, are both sound.
+/// author key material is ever recorded, so neither signature is by a key this archive carries --
+/// §9.4's own N1 fix (amended 2026-10-12, review `rfc155-impl-IC-review-v1`): named *"not
+/// checked,"* never refused on, since trust is the receiver's own (R2), not this archive's carried
+/// record. Structure and closure, which do not depend on any of that, are both sound, and -- since
+/// neither signature is damage -- so is the whole archive.
 #[test]
-fn verify_names_every_unresolvable_signature_without_failing_structure_or_closure() {
+fn verify_names_every_not_carried_signature_without_failing_structure_or_closure() {
     let bytes = build_one_block_archive();
     let mut cursor = Cursor::new(bytes);
     let report = verify_archive(&mut cursor).expect("verify");
     assert!(report.structurally_sound);
     assert!(report.reference_closure_sound);
     assert!(report.damaged.is_empty());
+    assert!(report.unresolvable_signatures.is_empty());
     assert!(
-        !report.is_internally_consistent(),
-        "a placeholder signature with no adopted key and no recorded author material must not \
-         read as internally consistent"
+        report.is_internally_consistent(),
+        "a signature by a key this archive does not carry must never refuse the whole archive \
+         (N1): {report:?}"
     );
     assert!(
         report
-            .unresolvable_signatures
+            .not_checked_signatures
             .iter()
-            .any(|line| line.contains("AUTHOR") && line.contains("no recorded material")),
-        "unresolvable_signatures: {:?}",
-        report.unresolvable_signatures
+            .any(|line| line.contains("AUTHOR") && line.contains("not carried")),
+        "not_checked_signatures: {:?}",
+        report.not_checked_signatures
     );
     assert!(
-        report.note.is_none(),
-        "V3: a not-internally-consistent archive must never carry the 'internally consistent' \
-         note beside its own damage/unresolvable-signature lines: {:?}",
+        report
+            .not_checked_signatures
+            .iter()
+            .any(|line| line.contains("not checked: signed by a key this archive does not carry")),
+        "the MAINTAINER signature must be named not-checked too: {:?}",
+        report.not_checked_signatures
+    );
+    assert!(
+        report.note.is_some(),
+        "N1: a signature by a key this archive does not carry must not stop the 'internally \
+         consistent' note from printing: {:?}",
         report.note
     );
 }
@@ -194,6 +206,85 @@ fn verify_resolves_a_genuinely_signed_maintainer_signature() {
     assert!(
         !note.contains("is trusted") && !note.starts_with("trusted"),
         "the note must never make an affirmative trust claim: {note}"
+    );
+}
+
+/// N1's own other half (review `rfc155-impl-IC-review-v1`): a signature by a key this archive
+/// **does** carry (adopted here), that nonetheless fails to verify, is damage -- never folded into
+/// the "not checked" bucket the previous test exercises. Built by attaching a genuinely-computed
+/// Ed25519 signature from a *different* signer, then relabeling its own `key_id` to the adopted
+/// one -- a real signature, cryptographically sound under its own real key, that simply does not
+/// verify under the key this archive carries for that id. The container's own checksum is computed
+/// over exactly these (relabeled) bytes, so it matches; only the signature itself is wrong.
+#[test]
+fn verify_names_a_carried_key_signature_that_does_not_verify_as_damage() {
+    let dir = unique_temp_dir("archive-verify-carried-invalid-signature");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let adopted_signer =
+        crate::Ed25519MaintainerSigner::from_seed("archive-verify-carried", &[0x43; 32])
+            .expect("signer");
+    let public_key_hex: String = adopted_signer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::add_trusted_maintainer(&layout, adopted_signer.key_id(), &public_key_hex)
+        .expect("adopt");
+    let other_signer =
+        crate::Ed25519MaintainerSigner::from_seed("archive-verify-wrong-signer", &[0x44; 32])
+            .expect("a different signer");
+
+    let mut store = crate::FileObjectStore::new(layout.clone());
+    let payload = prikk_object::BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: prikk_object::BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: prikk_object::MerkleRoot([0u8; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let payload_bytes = payload.to_canonical_bytes().expect("encode block payload");
+    let mut envelope =
+        prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Block, 2, payload_bytes);
+    let block_id = envelope.object_id();
+    let mut wrong_signature =
+        crate::maintainer_signature(&other_signer, prikk_object::ObjectType::Block, block_id)
+            .expect("sign for real, with the wrong key");
+    assert_ne!(
+        wrong_signature.key_id,
+        adopted_signer.key_id(),
+        "the two signers must have distinct key ids, or this test proves nothing"
+    );
+    wrong_signature.key_id = adopted_signer.key_id().to_string();
+    envelope
+        .add_signature(wrong_signature)
+        .expect("attach the relabeled signature");
+    store.write_object(&envelope).expect("write block");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(report.structurally_sound);
+    assert!(report.reference_closure_sound);
+    assert!(
+        report.not_checked_signatures.is_empty(),
+        "a carried key's own invalid signature must never be mistaken for a not-carried one: \
+         {:?}",
+        report.not_checked_signatures
+    );
+    assert!(
+        report
+            .unresolvable_signatures
+            .iter()
+            .any(|line| line.contains(&block_id.to_string())),
+        "the carried-key signature that does not verify must be named as damage: {:?}",
+        report.unresolvable_signatures
+    );
+    assert!(
+        !report.is_internally_consistent(),
+        "N1: a carried key's own invalid signature must still refuse the whole archive"
     );
 }
 
@@ -463,92 +554,399 @@ fn verify_detects_a_genuinely_dangling_reference() {
     );
 }
 
-/// External review 023: a tail inside a section (bytes the section's own declared length counts,
-/// but that the record loop never decoded or abandoned as torn) must be damage -- an honest export
-/// never produces this (every section ends exactly at its own sound length), so *any* tail is a
-/// hostile or corrupted archive, even when the section's own trailing checksum still matches
-/// (because that checksum was computed over exactly these bytes). Built from a real export, then
-/// surgically shrunk: the block section's one real record's own declared body length is reduced by
-/// 16 bytes (its real trailing 16 bytes become the tail, left completely unmodified -- no new bytes
-/// are ever appended), and the section's own trailing checksum is recomputed over the result, so
-/// the checksum genuinely matches what is now on disk.
-#[test]
-fn verify_names_a_tail_inside_a_section_as_damage_even_when_its_checksum_matches() {
-    let mut bytes = build_one_block_archive();
-    let (_, _, entries) = decode_manifest_for_test(&bytes);
-    let block_entry = entries
+/// Two real, unsigned-content `Blob` records in one container -- the minimum needed to test a
+/// *middle* record's own damage with a sound record after it, never hand-assembled from scratch.
+/// Both carry the same placeholder MAINTAINER signature `signed_text_blob_envelope` always does
+/// (N1's own "not checked" bucket, never damage on its own), so the only signal in play for these
+/// tests is each record's own structural soundness.
+fn two_blob_archive() -> Vec<u8> {
+    let dir = unique_temp_dir("archive-verify-two-blobs");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut store = FileObjectStore::new(layout.clone());
+    store
+        .write_object(&signed_text_blob_envelope(
+            b"first blob, long enough to flip a body byte \
+            without touching its own header or checksum fields",
+        ))
+        .expect("write first blob");
+    store
+        .write_object(&signed_text_blob_envelope(
+            b"second blob, also long enough to survive a \
+            flipped body byte and still be read back as one complete frame",
+        ))
+        .expect("write second blob");
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    bytes
+}
+
+/// Flip one byte inside the `index`th `Blob` record's own body (never its header), then recompute
+/// the section's own outer trailing checksum so it still matches what is now on disk -- isolating
+/// the *per-record* damage this part's own fix names, from the section's outer checksum, which
+/// would otherwise also (correctly, but less precisely) report the whole section as damaged.
+fn flip_one_blob_record_body(bytes: &mut [u8], index: usize) {
+    let (_, _, entries) = decode_manifest_for_test(bytes);
+    let (_, offset, length, _) = *entries
         .iter()
         .find(|(kind, ..)| {
             *kind
                 == crate::archive::ArchiveSectionKind::ObjectContainer(
-                    prikk_object::ObjectType::Block,
+                    prikk_object::ObjectType::Blob,
                 )
                 .wire_code()
         })
-        .expect("block section present");
-    let (_, offset, length, _) = *block_entry;
-    let offset = offset as usize;
-    let length = length as usize;
+        .expect("blob section present");
+    const SECTION_HEADER_LEN: u64 = 8 + 2 + 8;
+    const CONTAINER_HEADER_LEN: u64 = 8 + 2 + 8 + 32;
+    let mut cursor = offset + SECTION_HEADER_LEN;
+    for seen in 0..=index {
+        let header_at = cursor as usize;
+        let body_len =
+            u64::from_be_bytes(bytes[header_at + 10..header_at + 18].try_into().unwrap());
+        if seen == index {
+            let flip_at = header_at + CONTAINER_HEADER_LEN as usize;
+            bytes[flip_at] ^= 0xFF;
+            break;
+        }
+        cursor += CONTAINER_HEADER_LEN + body_len;
+    }
+    let section_header_start = offset as usize;
+    let body_start = section_header_start + SECTION_HEADER_LEN as usize;
+    let body_end = body_start + length as usize;
+    let checksum = prikk_hash::sha256_parts(&[
+        &bytes[section_header_start..section_header_start + 8],
+        &bytes[section_header_start + 8..section_header_start + 10],
+        &bytes[section_header_start + 10..body_start],
+        &bytes[body_start..body_end],
+    ]);
+    bytes[body_end..body_end + 32].copy_from_slice(&checksum);
+    // The manifest's own entry for this section carries its own copy of the same checksum
+    // (`archive-format.md`'s own cross-check, I-E's own item) -- recomputed here too, so this test
+    // isolates the per-record damage this part adds, not a manifest/trailer mismatch I-E's own
+    // item would otherwise also catch first.
+    let (_, _, manifest_entries) = decode_manifest_for_test(bytes);
+    let entry_index = manifest_entries
+        .iter()
+        .position(|(kind, ..)| {
+            *kind
+                == crate::archive::ArchiveSectionKind::ObjectContainer(
+                    prikk_object::ObjectType::Blob,
+                )
+                .wire_code()
+        })
+        .expect("blob entry present");
+    let (_, _, manifest_offset) = (0u8, 0u8, {
+        let end_trailer_start = bytes.len() - 56;
+        u64::from_be_bytes(
+            bytes[end_trailer_start + 8..end_trailer_start + 16]
+                .try_into()
+                .unwrap(),
+        )
+    });
+    let manifest_body = &bytes[manifest_offset as usize..];
+    let tool_version_len = u16::from_be_bytes(manifest_body[12..14].try_into().unwrap()) as usize;
+    let first_entry = manifest_offset as usize + 14 + tool_version_len + 8;
+    let entry_at = first_entry + entry_index * 50;
+    bytes[entry_at + 18..entry_at + 50].copy_from_slice(&checksum);
+    crate::archive::tests::recompute_manifest_checksum_for_test(bytes);
+}
 
-    const SECTION_HEADER_LEN: usize = 18;
-    const CONTAINER_HEADER_LEN: usize = 8 + 2 + 8 + 32;
-    const TAIL_LEN: usize = 16;
+/// §9.1, amended 2026-10-12 (review `rfc155-impl-IC-review-v1`): "the archive classifies a
+/// container's frames exactly as the store does" -- the full required test matrix, each shape
+/// built on a real export, never hand-assembled. For every shape, the assertion is the one the
+/// amended spec states: an *incomplete* frame (a short section-ending tail, however it reads) is
+/// named but leaves the archive consistent and importable; a *complete* frame that fails its own
+/// checksum is damage.
+mod section_frame_classification {
+    use super::*;
 
-    let record_header_start = offset + SECTION_HEADER_LEN;
-    // magic(8) | version(2) | body_len(8) | checksum(32) -- `body_len` starts after magic+version.
-    let declared_len_field = record_header_start + 10..record_header_start + 18;
-    let real_body_len = u64::from_be_bytes(
-        bytes[declared_len_field.clone()]
-            .try_into()
-            .expect("8 bytes"),
-    ) as usize;
-    assert_eq!(
-        length,
-        CONTAINER_HEADER_LEN + real_body_len,
-        "this fixture's block section must hold exactly one record, filling it, or this test's \
-         own arithmetic does not isolate a tail cleanly"
-    );
-    assert!(
-        real_body_len > TAIL_LEN,
-        "the sealed block's own body must have real content to shrink"
-    );
-
-    // Shrink the one real record's own declared body length -- its real trailing `TAIL_LEN` bytes
-    // are left completely untouched on disk, but no longer claimed by any record: exactly the
-    // "tail inside a section" shape, built from a real export, not hand-crafted from scratch.
-    let new_body_len = (real_body_len - TAIL_LEN) as u64;
-    bytes[declared_len_field].copy_from_slice(&new_body_len.to_be_bytes());
-
-    // Recompute the section's own trailing checksum over the now-edited bytes, so it genuinely
-    // matches what is on disk -- the whole point: the checksum alone cannot catch this.
-    let section_checksum_at = offset + SECTION_HEADER_LEN + length;
-    let mut hasher = prikk_hash::IncrementalSha256::new();
-    hasher.update(&bytes[offset..offset + SECTION_HEADER_LEN + length]);
-    let recomputed = hasher.finalize();
-    bytes[section_checksum_at..section_checksum_at + 32].copy_from_slice(&recomputed);
-
-    let mut cursor = Cursor::new(bytes);
-    let report = verify_archive(&mut cursor).expect("a damaged archive still produces a report");
-    assert!(
-        !report.is_internally_consistent(),
-        "a tail inside a section must never read as consistent"
-    );
-    assert!(!report.structurally_sound);
-    assert!(
-        report
-            .damaged
+    fn assert_incomplete_tail_named_not_damage(bytes: Vec<u8>, min_tail_len: u64) {
+        let mut cursor = Cursor::new(bytes);
+        let report = verify_archive(&mut cursor).expect("verify");
+        assert!(
+            report.damaged.is_empty(),
+            "an incomplete frame must never be named as damage: {:?}",
+            report.damaged
+        );
+        assert!(
+            report
+                .interrupted_appends
+                .iter()
+                .any(|line| line.contains("block container")),
+            "the tail must be named as an interrupted append: {:?}",
+            report.interrupted_appends
+        );
+        let named_len: u64 = report
+            .interrupted_appends
             .iter()
-            .any(|line| line.contains("block container") && line.contains("trailing byte")),
-        "the tail must be named as damage in its own right, not folded into a checksum-failure \
-         line: {:?}",
-        report.damaged
-    );
-    assert!(
-        !report.damaged.iter().any(
-            |line| line.contains("block container") && line.contains("failed its own checksum")
-        ),
-        "the checksum genuinely matches here -- the control this test is actually for -- so no \
-         checksum-failure line should also appear: {:?}",
-        report.damaged
-    );
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .find_map(|word| word.parse::<u64>().ok())
+            })
+            .sum();
+        assert!(
+            named_len >= min_tail_len,
+            "the named tail byte count must be at least the bytes actually appended: {named_len} \
+             < {min_tail_len}"
+        );
+        assert!(
+            report.is_internally_consistent(),
+            "an interrupted append alone must leave the archive internally consistent: {report:?}"
+        );
+    }
+
+    fn block_section_wire_code() -> u16 {
+        crate::archive::ArchiveSectionKind::ObjectContainer(prikk_object::ObjectType::Block)
+            .wire_code()
+    }
+
+    /// Shape 1: 16 raw bytes, shorter than one container record header (50 bytes) -- the
+    /// shortest possible "a crash cut this append short" shape.
+    #[test]
+    fn sixteen_bytes_is_an_interrupted_append_not_damage() {
+        let mut bytes = build_one_block_archive();
+        insert_tail_bytes_into_section_for_test(&mut bytes, block_section_wire_code(), &[0u8; 16]);
+        assert_incomplete_tail_named_not_damage(bytes, 16);
+    }
+
+    /// Shape 2: 49 zero bytes -- still shorter than one header, the boundary I-C's own first fix
+    /// already handled correctly.
+    #[test]
+    fn forty_nine_zero_bytes_is_an_interrupted_append_not_damage() {
+        let mut bytes = build_one_block_archive();
+        insert_tail_bytes_into_section_for_test(&mut bytes, block_section_wire_code(), &[0u8; 49]);
+        assert_incomplete_tail_named_not_damage(bytes, 49);
+    }
+
+    /// Shape 3, external review 023's own exact shape: 100 zero bytes -- **longer** than one
+    /// header (50 bytes), so a naive loop reads it as two bogus zero-length "records" with the
+    /// wrong magic and silently absorbs them, naming nothing at all. This is the real finding:
+    /// the fix must stop at the first header whose magic/version does not match, not keep
+    /// consuming headers past it.
+    #[test]
+    fn one_hundred_zero_bytes_is_an_interrupted_append_not_damage() {
+        let mut bytes = build_one_block_archive();
+        insert_tail_bytes_into_section_for_test(&mut bytes, block_section_wire_code(), &[0u8; 100]);
+        assert_incomplete_tail_named_not_damage(bytes, 100);
+    }
+
+    /// Shape 4: 30 bytes of plain text, not zeros -- the same class, a different byte pattern.
+    #[test]
+    fn thirty_text_bytes_is_an_interrupted_append_not_damage() {
+        let mut bytes = build_one_block_archive();
+        insert_tail_bytes_into_section_for_test(
+            &mut bytes,
+            block_section_wire_code(),
+            b"this is not a container record",
+        );
+        assert_incomplete_tail_named_not_damage(bytes, 30);
+    }
+
+    /// Shape 7: a 16 MiB tail -- the same shape, at a size that would matter if classification
+    /// buffered the whole section (it does not: memory stays bounded by one frame).
+    #[test]
+    fn a_sixteen_mebibyte_tail_is_an_interrupted_append_not_damage() {
+        let mut bytes = build_one_block_archive();
+        let tail = vec![0u8; 16 * 1024 * 1024];
+        insert_tail_bytes_into_section_for_test(&mut bytes, block_section_wire_code(), &tail);
+        assert_incomplete_tail_named_not_damage(bytes, tail.len() as u64);
+    }
+
+    /// Shape 5: a complete *last* frame, one body byte flipped -- damage, named by offset, and the
+    /// archive refuses on it, even though the section's own outer checksum is recomputed to still
+    /// match (isolating the per-record signal this part adds).
+    #[test]
+    fn a_flipped_last_record_is_damage() {
+        let mut bytes = two_blob_archive();
+        flip_one_blob_record_body(&mut bytes, 1);
+        let mut cursor = Cursor::new(bytes);
+        let report = verify_archive(&mut cursor).expect("verify");
+        assert!(
+            report.interrupted_appends.is_empty(),
+            "a flipped complete record must never read as a mere interrupted append: {:?}",
+            report.interrupted_appends
+        );
+        assert!(
+            report
+                .damaged
+                .iter()
+                .any(|line| line.contains("blob container")
+                    && line.contains("failed its own checksum")),
+            "the flipped record must be named as damage by its own section: {:?}",
+            report.damaged
+        );
+        assert!(!report.is_internally_consistent());
+    }
+
+    /// Shape 6: a complete *middle* frame flipped, with a sound frame after it -- damage is named,
+    /// and the scan still finds the later sound record (the twin of `foundation::container`'s own
+    /// isolate-and-continue reading).
+    #[test]
+    fn a_flipped_middle_record_is_damage_and_the_sound_record_after_it_still_reads() {
+        let mut bytes = two_blob_archive();
+        flip_one_blob_record_body(&mut bytes, 0);
+        let mut cursor = Cursor::new(bytes);
+        let mut decoded_second = false;
+        let report = {
+            // Re-run the same decode `verify_archive` uses internally, directly, to confirm the
+            // second (sound) record is still reached -- `verify_archive` itself does not expose
+            // which records it decoded, only the aggregate report.
+            let (_, _, entries) = decode_manifest_for_test(&cursor.clone().into_inner());
+            let entry = entries
+                .iter()
+                .find(|(kind, ..)| *kind == block_section_wire_code_for_blob())
+                .expect("blob entry");
+            let manifest_entry = crate::archive::ManifestEntry {
+                kind: crate::archive::ArchiveSectionKind::from_wire_code(entry.0)
+                    .expect("known kind"),
+                offset: entry.1,
+                length: entry.2,
+                checksum: entry.3,
+            };
+            super::super::for_each_object_record(
+                &mut cursor,
+                &manifest_entry,
+                prikk_object::ObjectType::Blob,
+                |_body| {
+                    decoded_second = true;
+                    Ok(())
+                },
+            )
+            .expect("read section");
+            cursor.set_position(0);
+            verify_archive(&mut cursor).expect("verify")
+        };
+        assert!(
+            decoded_second,
+            "the sound record after the flipped one must still be decoded"
+        );
+        assert!(
+            report
+                .damaged
+                .iter()
+                .any(|line| line.contains("blob container")
+                    && line.contains("failed its own checksum")),
+            "the flipped middle record must be named as damage: {:?}",
+            report.damaged
+        );
+        assert!(!report.is_internally_consistent());
+    }
+
+    fn block_section_wire_code_for_blob() -> u16 {
+        crate::archive::ArchiveSectionKind::ObjectContainer(prikk_object::ObjectType::Blob)
+            .wire_code()
+    }
+
+    /// The twin, required by the handoff: a crafted tail and an honest one are the same bytes, so
+    /// they must get the same outcome. Built by extracting the *real* trailing bytes a genuine,
+    /// interrupted second write leaves in a live container (one blob written, then a second
+    /// write's own record header started but never finished, then the process "crashes" --
+    /// simulated here by truncating the live container file directly, the same shape a real crash
+    /// mid-append leaves), and splicing that exact byte sequence into an otherwise-clean one-blob
+    /// archive via the same crafting helper every other shape above uses.
+    #[test]
+    fn a_crafted_tail_and_a_genuine_crash_tail_are_the_same_bytes_and_get_the_same_outcome() {
+        // The "crash": one real blob, then a second write that only gets its own header plus part
+        // of its body on disk before the container file is truncated -- a real, physically short
+        // container file, not a crafted archive.
+        let crash_dir = unique_temp_dir("archive-verify-crash-tail-source");
+        let crash_layout = RepositoryLayout::init(&crash_dir).expect("init");
+        let mut crash_store = FileObjectStore::new(crash_layout.clone());
+        crash_store
+            .write_object(&signed_text_blob_envelope(
+                b"the only blob that finishes writing",
+            ))
+            .expect("write first blob");
+        let container_path = crash_layout.container_slot_path(
+            prikk_object::ObjectType::Blob,
+            crate::foundation::layout::ContainerSlot::A,
+        );
+        let full_len = std::fs::metadata(&container_path).expect("stat").len();
+        crash_store
+            .write_object(&signed_text_blob_envelope(
+                b"a second blob whose own write never finishes, because the process is about to crash",
+            ))
+            .expect("write second blob");
+        let grown_len = std::fs::metadata(&container_path).expect("stat").len();
+        let second_record_bytes = grown_len - full_len;
+        assert!(
+            second_record_bytes > 32,
+            "the second record must be long enough to truncate meaningfully"
+        );
+        let truncated_len = full_len + 24; // a genuine short read: part of the second header, no body.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&container_path)
+            .expect("open container for truncation");
+        file.set_len(truncated_len)
+            .expect("truncate (simulated crash)");
+        drop(file);
+
+        let mut crash_bytes = Vec::new();
+        export_archive(&crash_layout, &mut crash_bytes)
+            .expect("export the crash-tailed repository");
+        let crash_report = {
+            let mut cursor = Cursor::new(crash_bytes.clone());
+            verify_archive(&mut cursor).expect("verify the crash-tailed archive")
+        };
+        assert!(
+            crash_report.damaged.is_empty(),
+            "a genuine crash tail must never be named as damage: {:?}",
+            crash_report.damaged
+        );
+        assert!(
+            !crash_report.interrupted_appends.is_empty(),
+            "a genuine crash tail must be named as an interrupted append"
+        );
+
+        // Extract the real trailing bytes the crash left (relative to the blob section's own
+        // body start), then splice the identical bytes into an otherwise-clean one-blob archive.
+        let (_, _, crash_entries) = decode_manifest_for_test(&crash_bytes);
+        let (_, crash_offset, crash_length, _) = *crash_entries
+            .iter()
+            .find(|(kind, ..)| *kind == block_section_wire_code_for_blob())
+            .expect("blob section present");
+        let crash_body_start = crash_offset as usize + 18;
+        let crash_tail_len = (truncated_len - full_len) as usize;
+        let crash_tail_bytes = &crash_bytes[crash_body_start + crash_length as usize
+            - crash_tail_len
+            ..crash_body_start + crash_length as usize];
+
+        let mut crafted_dir_bytes = {
+            let dir = unique_temp_dir("archive-verify-crafted-twin");
+            let layout = RepositoryLayout::init(&dir).expect("init");
+            let mut store = FileObjectStore::new(layout.clone());
+            store
+                .write_object(&signed_text_blob_envelope(
+                    b"the only blob that finishes writing",
+                ))
+                .expect("write the one real blob");
+            let mut bytes = Vec::new();
+            export_archive(&layout, &mut bytes).expect("export");
+            bytes
+        };
+        insert_tail_bytes_into_section_for_test(
+            &mut crafted_dir_bytes,
+            block_section_wire_code_for_blob(),
+            crash_tail_bytes,
+        );
+        let crafted_report = {
+            let mut cursor = Cursor::new(crafted_dir_bytes);
+            verify_archive(&mut cursor).expect("verify the crafted-twin archive")
+        };
+        assert_eq!(
+            crash_report.damaged.len(),
+            crafted_report.damaged.len(),
+            "the crafted twin must agree with the genuine crash on damage"
+        );
+        assert_eq!(
+            crash_report.is_internally_consistent(),
+            crafted_report.is_internally_consistent(),
+            "the same bytes must get the same consistency verdict regardless of how they got there"
+        );
+        assert!(
+            !crafted_report.interrupted_appends.is_empty(),
+            "the crafted twin must also read the spliced bytes as an interrupted append"
+        );
+    }
 }

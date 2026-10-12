@@ -31,9 +31,13 @@ use crate::{
 /// A genuinely internally-consistent source repository: one real author-signed `Patch` (and its
 /// unsigned `Blob`), one real maintainer-signed `Block` naming it, and a real maintainer-signed
 /// `RefState` publishing `heads/main` at that block -- every signature in this fixture actually
-/// verifies, unlike `archive::tests::seal_one_block`'s deliberate placeholders (which make
-/// `is_internally_consistent` false, and so cannot be used for import: stage 0 refuses on exactly
-/// that). Returns the layout, the block id, and the author signer's own key id (for assertions).
+/// verifies *and* is by a key this repository itself has adopted, unlike `archive::tests::
+/// seal_one_block`'s deliberate placeholders, which are by keys nothing ever carries or adopts --
+/// since N1's own fix (review `rfc155-impl-IC-review-v1`), that alone no longer makes
+/// `is_internally_consistent` false (a signature by a key the archive does not carry is named, not
+/// refused on). This fixture is still the right one for tests that need signature *resolution* to
+/// positively succeed, not merely avoid refusing. Returns the layout, the block id, and the author
+/// signer's own key id (for assertions).
 fn build_signed_source_repository(dir: &std::path::Path) -> (RepositoryLayout, ObjectId, String) {
     let layout = RepositoryLayout::init(dir).expect("init");
 
@@ -351,12 +355,19 @@ fn import_writes_objects_records_the_author_key_and_commits_the_journal() {
         .expect("an ordinary writer must not refuse once the import has committed");
 }
 
+/// N1 (review `rfc155-impl-IC-review-v1`): a placeholder-signed archive (`seal_one_block`'s own
+/// fixture) is no longer internally consistent by itself -- neither signature is by a key the
+/// archive carries, so both are named "not checked," never refused on. Stage 0's own refusal is
+/// now exercised with genuine damage instead: a flipped byte in the block's own record body, which
+/// both fails that record's own checksum and breaks the archive's own reference closure.
 #[test]
 fn import_refuses_an_inconsistent_archive_and_writes_nothing() {
     let source_dir = unique_temp_dir("archive-import-inconsistent-source");
     let layout = RepositoryLayout::init(&source_dir).expect("init");
     crate::archive::tests::seal_one_block(&layout).expect("seal");
-    let bytes = export_bytes(&layout);
+    let mut bytes = export_bytes(&layout);
+    let flip_at = bytes.len() / 3;
+    bytes[flip_at] ^= 0xFF;
 
     let dest_dir = unique_temp_dir("archive-import-inconsistent-dest");
     let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
@@ -364,7 +375,7 @@ fn import_refuses_an_inconsistent_archive_and_writes_nothing() {
 
     let mut cursor = Cursor::new(bytes);
     let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
-        .expect_err("a placeholder-signed archive is not internally consistent");
+        .expect_err("a flipped byte makes the archive genuinely inconsistent");
     assert!(
         error.to_string().contains("not internally consistent"),
         "{error}"
@@ -2126,17 +2137,17 @@ fn control_disabling_the_collision_rule_lets_the_received_pointer_overwrite_the_
     );
 }
 
-/// External review 023 (item 2): a tail inside a section makes `verify_archive` report the
-/// archive as not internally consistent (see `archive::verify::tests::
-/// verify_names_a_tail_inside_a_section_as_damage_even_when_its_checksum_matches`, which proves
-/// the tail is named as damage even though the section's own checksum still matches) -- stage 0
-/// reuses that same check, not a copy, so this one archive must refuse here too, writing nothing.
-/// Built from [`build_signed_source_repository`] (genuinely consistent: a real author-signed
-/// `Patch`/`Blob` and a real maintainer-signed `Block`/`RefState`), not the placeholder-signed
-/// fixture, so the refusal is cleanly attributable to the tail alone, not to an unrelated
-/// unresolvable signature.
+/// §9.1, amended 2026-10-12 (review `rfc155-impl-IC-review-v1`): this fixture's own construction
+/// (shrinking a record's own declared body length without fixing *that record's own* inner
+/// checksum) produces a **complete frame whose checksum fails** -- damage, which still refuses --
+/// not a pure "tail with everything else sound" shape (the section's own *outer* checksum is
+/// recomputed to match, but the shrunk record's own checksum is not, deliberately, since this is
+/// what actually makes the refusal attributable to something real rather than the premise I-C's
+/// own fix got wrong). See `archive::verify::tests::section_frame_classification`'s own suite for
+/// the shapes that are genuinely *only* an interrupted append, which import does **not** refuse on
+/// (the `pure_interrupted_append...` test below).
 #[test]
-fn import_refuses_an_archive_with_a_tail_inside_a_section() {
+fn import_refuses_an_archive_whose_complete_record_fails_its_own_checksum() {
     let source_dir = unique_temp_dir("archive-ic-tail-source");
     let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
     let mut bytes = export_bytes(&source_layout);
@@ -2196,5 +2207,162 @@ fn import_refuses_an_archive_with_a_tail_inside_a_section() {
         fingerprint_before,
         directory_fingerprint(&dest_dir),
         "a refused import must write nothing"
+    );
+}
+
+/// §9.1, amended 2026-10-12: a *pure* interrupted append (no other damage) must never refuse the
+/// import -- the source repository's own `prikk verify` only ever warns about it, so a backup of
+/// that repository must still restore. Built by inserting raw bytes inside a section, never by
+/// shrinking an existing record's own declared length (which, as the sibling test above shows,
+/// introduces a genuine checksum failure instead).
+#[test]
+fn pure_interrupted_append_inside_a_section_does_not_refuse_the_import() {
+    let source_dir = unique_temp_dir("archive-id-pure-tail-source");
+    let (source_layout, _block_id, _author_key_id) = build_signed_source_repository(&source_dir);
+    let mut bytes = export_bytes(&source_layout);
+    crate::archive::tests::insert_tail_bytes_into_section_for_test(
+        &mut bytes,
+        crate::archive::ArchiveSectionKind::ObjectContainer(ObjectType::Block).wire_code(),
+        &[0u8; 100],
+    );
+
+    let dest_dir = unique_temp_dir("archive-id-pure-tail-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    let mut cursor = Cursor::new(bytes);
+    let report = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("a pure interrupted append must not refuse the import");
+    assert_eq!(
+        report
+            .written_object_counts
+            .iter()
+            .find(|(object_type, _)| *object_type == ObjectType::Block)
+            .map(|(_, count)| *count),
+        Some(1),
+        "the one real block must still be written"
+    );
+}
+
+/// N1 (review `rfc155-impl-IC-review-v1`), the full end-to-end scenario the finding is about: a
+/// repository that `bundle import`s another repository's ref **without ever trusting its signing
+/// key** (the default, documented outcome) must still produce an archive that can be verified and
+/// imported *anywhere* -- including into a destination that already trusts the key, and including
+/// a destination that initially does not. Before this fix, `archive verify` refused the whole
+/// archive on exactly this untrusted signature, making it unimportable everywhere, forever.
+#[test]
+fn an_untrusted_received_signature_never_blocks_verify_or_import_and_the_destination_decides_trust()
+{
+    // "upstream": its own real maintainer key, a real `heads/main`.
+    let upstream_dir = unique_temp_dir("archive-n1-upstream");
+    let (upstream_layout, upstream_block_id, _) = build_signed_source_repository(&upstream_dir);
+    let (_report, bundle_bytes) = crate::bundle::export_bundle(&upstream_layout, "heads/main")
+        .expect("export a bundle of upstream's own heads/main");
+
+    // "a": the archive's own source. Receives upstream's bundle, but never trusts its key -- the
+    // default, documented `bundle import` outcome. "a" never adopts upstream's maintainer key.
+    let a_dir = unique_temp_dir("archive-n1-a");
+    let a_layout = RepositoryLayout::init(&a_dir).expect("init a");
+    crate::bundle::import_bundle(
+        &a_layout,
+        &bundle_bytes,
+        &crate::bundle::BundleImportOptions::default_limits(),
+    )
+    .expect("bundle import succeeds even though the key is not trusted -- that is the point");
+
+    let archive_bytes = export_bytes(&a_layout);
+
+    // `archive verify` must exit 0 -- the untrusted signature is named, not refused on.
+    let verify_report = {
+        let mut cursor = Cursor::new(archive_bytes.clone());
+        super::super::verify_archive(&mut cursor).expect("verify")
+    };
+    assert!(
+        verify_report.is_internally_consistent(),
+        "N1: an untrusted-but-carried received signature must never make the archive \
+         inconsistent: {verify_report:?}"
+    );
+    assert!(
+        verify_report
+            .not_checked_signatures
+            .iter()
+            .any(|line| line.contains(&upstream_block_id.to_string())),
+        "the untrusted signature must be named: {:?}",
+        verify_report.not_checked_signatures
+    );
+
+    // A default import into a destination that has never heard of upstream's key must succeed.
+    let dest1_dir = unique_temp_dir("archive-n1-dest1-untrusting");
+    let dest1_layout = RepositoryLayout::init(&dest1_dir).expect("init destination 1");
+    let mut cursor = Cursor::new(archive_bytes.clone());
+    import_archive(&dest1_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("N1: a default import must succeed even though the carried signature is untrusted");
+
+    // The destination's own `verify` must now report the same kind of trust issue the source
+    // itself would -- `doctor` surfaces it as an error, naming the publication-trust code.
+    let issue_before = crate::doctor::doctor_repository(&dest1_layout)
+        .issues
+        .into_iter()
+        .find(|issue| issue.message.contains("PRIKK-TRUST-PUBLICATION-UNTRUSTED"))
+        .or_else(|| {
+            // The issue's own code field, if `doctor` surfaces this one under its own code rather
+            // than embedding the trust code in the message -- checked either way, not assumed.
+            crate::doctor::doctor_repository(&dest1_layout)
+                .issues
+                .into_iter()
+                .find(|issue| issue.code.contains("TRUST"))
+        });
+    assert!(
+        issue_before.is_some(),
+        "the destination's own doctor/verify must flag the landed-but-untrusted publication"
+    );
+
+    // Trusting the key after the fact resolves it.
+    let upstream_signer = Ed25519MaintainerSigner::from_seed("import-test-maintainer", &[0x22; 32])
+        .expect("re-derive upstream's own signer to read its key id/public key");
+    let upstream_public_key_hex: String = upstream_signer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::add_trusted_maintainer(
+        &dest1_layout,
+        upstream_signer.key_id(),
+        &upstream_public_key_hex,
+    )
+    .expect("adopt upstream's key at the destination, after the fact");
+    let issue_after = crate::doctor::doctor_repository(&dest1_layout)
+        .issues
+        .into_iter()
+        .find(|issue| {
+            issue.message.contains("PRIKK-TRUST-PUBLICATION-UNTRUSTED")
+                || issue.code.contains("TRUST")
+        });
+    assert!(
+        issue_after.is_none(),
+        "adopting the key after import must resolve the trust issue: {issue_after:?}"
+    );
+
+    // A destination that already trusts the key *before* import is clean immediately after.
+    let dest2_dir = unique_temp_dir("archive-n1-dest2-already-trusting");
+    let dest2_layout = RepositoryLayout::init(&dest2_dir).expect("init destination 2");
+    crate::add_trusted_maintainer(
+        &dest2_layout,
+        upstream_signer.key_id(),
+        &upstream_public_key_hex,
+    )
+    .expect("adopt upstream's key before import");
+    let mut cursor = Cursor::new(archive_bytes);
+    import_archive(&dest2_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect("import into an already-trusting destination");
+    let issue_immediately = crate::doctor::doctor_repository(&dest2_layout)
+        .issues
+        .into_iter()
+        .find(|issue| {
+            issue.message.contains("PRIKK-TRUST-PUBLICATION-UNTRUSTED")
+                || issue.code.contains("TRUST")
+        });
+    assert!(
+        issue_immediately.is_none(),
+        "a destination that already trusts the key must read clean immediately after import: \
+         {issue_immediately:?}"
     );
 }

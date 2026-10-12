@@ -173,6 +173,78 @@ pub(in crate::archive) fn recompute_manifest_checksum_for_test(bytes: &mut [u8])
     bytes[end_trailer_start + 24..end_trailer_start + 56].copy_from_slice(&checksum);
 }
 
+/// Insert `extra` bytes right before the named section's own trailing checksum -- inside its own
+/// declared length, after its last real record -- and fix up everything that insertion shifts:
+/// every manifest entry whose own offset comes after the insertion point (by `extra.len()`), the
+/// target section's own declared `length` and recomputed outer checksum, the end trailer's own
+/// `manifest_offset`, and the manifest's own checksum. `pub(in crate::archive)`: RFC 155 Part I-D's
+/// own test matrix builds every "extra bytes inside a section" shape this way, on a real export,
+/// never by hand-assembling a whole archive from scratch.
+pub(in crate::archive) fn insert_tail_bytes_into_section_for_test(
+    bytes: &mut Vec<u8>,
+    section_kind: u16,
+    extra: &[u8],
+) {
+    let (_, _, entries) = decode_manifest_for_test(bytes);
+    let (_, target_offset, target_length, _) = *entries
+        .iter()
+        .find(|(kind, ..)| *kind == section_kind)
+        .expect("section present");
+    const SECTION_HEADER_LEN: u64 = 8 + 2 + 8;
+    let insert_at = (target_offset + SECTION_HEADER_LEN + target_length) as usize;
+
+    bytes.splice(insert_at..insert_at, extra.iter().copied());
+    let shift = extra.len() as u64;
+
+    // Every manifest entry whose own section comes after the one just grown moves down by `shift`
+    // bytes -- sections are laid out in increasing offset order, so this is every entry whose
+    // offset exceeds the insertion point, which is every entry after the target including the
+    // target's own is not shifted (it starts before `insert_at`).
+    let end_trailer_start = bytes.len() - 56;
+    let manifest_offset = u64::from_be_bytes(
+        bytes[end_trailer_start + 8..end_trailer_start + 16]
+            .try_into()
+            .unwrap(),
+    );
+    let new_manifest_offset = manifest_offset + shift;
+    bytes[end_trailer_start + 8..end_trailer_start + 16]
+        .copy_from_slice(&new_manifest_offset.to_be_bytes());
+
+    let manifest = &bytes[new_manifest_offset as usize..];
+    let tool_version_len = u16::from_be_bytes(manifest[12..14].try_into().unwrap()) as usize;
+    let count_at = 14 + tool_version_len;
+    let count = u64::from_be_bytes(manifest[count_at..count_at + 8].try_into().unwrap()) as usize;
+    let first_entry = new_manifest_offset as usize + count_at + 8;
+    for index in 0..count {
+        let entry_at = first_entry + index * 50;
+        let entry_offset =
+            u64::from_be_bytes(bytes[entry_at + 2..entry_at + 10].try_into().unwrap());
+        if entry_offset == target_offset {
+            let new_length = target_length + shift;
+            bytes[entry_at + 10..entry_at + 18].copy_from_slice(&new_length.to_be_bytes());
+            let section_header_start = target_offset as usize;
+            // The section's own on-disk header also carries its own length (checked against the
+            // manifest entry's copy by every reader) -- both must agree, or `header_ok` refuses.
+            bytes[section_header_start + 10..section_header_start + 18]
+                .copy_from_slice(&new_length.to_be_bytes());
+            let body_start = section_header_start + SECTION_HEADER_LEN as usize;
+            let body_end = body_start + new_length as usize;
+            let checksum = prikk_hash::sha256_parts(&[
+                &bytes[section_header_start..section_header_start + 8],
+                &bytes[section_header_start + 8..section_header_start + 10],
+                &bytes[section_header_start + 10..body_start],
+                &bytes[body_start..body_end],
+            ]);
+            bytes[entry_at + 18..entry_at + 50].copy_from_slice(&checksum);
+            bytes[body_end..body_end + 32].copy_from_slice(&checksum);
+        } else if entry_offset > target_offset {
+            let shifted = entry_offset + shift;
+            bytes[entry_at + 2..entry_at + 10].copy_from_slice(&shifted.to_be_bytes());
+        }
+    }
+    recompute_manifest_checksum_for_test(bytes);
+}
+
 #[test]
 fn export_archive_round_trips_a_small_history() {
     let dir = unique_temp_dir("archive-export-basic");

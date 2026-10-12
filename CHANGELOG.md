@@ -80,11 +80,26 @@
   removes the collision entirely, since the exporter's ref then lands bare, not under `remotes/`.
   The plan itself is also now built from each ref's own latest entry, once, rather than once per
   superseded entry the exporter's own live container happened to still hold.
-- A tail inside an object-container section — bytes its own declared length counts but that no
-  record ever claimed — passed `archive verify` as internally consistent, because the section's own
-  trailing checksum still matched (it was computed over exactly those bytes). An honest export never
-  produces this; any tail is now damage in its own right, named by `verify` and refused by `import`,
-  independently of whether the section's own checksum happens to still match.
+- A tail inside an object-container section — a complete frame whose checksum fails, or bytes added
+  after the section's last real record — was not classified consistently: either silently absorbed
+  as nothing at all (a long run of zero bytes, external review 023's own exact shape), or treated as
+  damage unconditionally, even for a shape no different from an ordinary crash tail the source
+  repository's own `prikk verify` only warns about. The archive now classifies a section's own
+  frames exactly as the live store does (RFC 162 rule 2, reused, not re-derived, and streamed —
+  memory stays bounded by one frame, never the section): a complete frame that fails its own
+  checksum is damage, named by `verify` and refused by `import`; an incomplete frame (a crash tail,
+  or bytes added since) is named but never refused on, so a backup of a repository whose own
+  `verify` exits 0 still restores.
+- **N1, the more severe finding of the two:** `archive verify` refused the whole archive on *any*
+  signature it could not positively check — including a signature by a key the archive simply does
+  not carry (the default, documented outcome of a `bundle import` the source repository itself never
+  trusted). That made such a repository's archive unimportable, by anyone, anywhere, even into a
+  destination that already trusted the key, because the check was against the archive's own carried
+  material only, never the receiver's adopted set. A signature by a key the archive does not carry is
+  now named *"not checked"* and leaves the archive internally consistent (trust is always the
+  receiver's own decision, R2); a signature by a key the archive **does** carry, that nonetheless
+  fails to verify, is still damage and still refuses. Applies identically to MAINTAINER and AUTHOR
+  signatures.
 
 ### Fixed — a ref-log tail, an acknowledged-damage WAL record, a deduced pointer-index state, and an ambiguous generation log were each reported in a way that pointed at the wrong command, or twice
 
