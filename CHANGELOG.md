@@ -68,38 +68,37 @@
   byte length — borrowed wording from the per-object bound, not this bound's own. It now refuses
   with `` `declares N entries, over the bound of M` ``.
 
-### Fixed — `archive import` could silently drop a ref behind a colliding received pointer, and a tail inside a section passed as consistent
+### Fixed — `archive import` could silently drop a ref behind a colliding received pointer, refuse a healthy backup over an ordinary crash tail, and refuse a whole archive over one untrusted signature
 
-- External review 023, found before the candidate shipped. A received pointer can carry the
-  exporter's own default `remotes/<ref>` name verbatim, when the source repository itself once
-  `bundle import`ed something for that same ref — landing every carried ref in plan order, with no
-  check, let whichever one landed last silently overwrite the other, so the exporter's own real
-  history could disappear behind a received pointer with no diagnostic at all. The exporter's own
-  ref now always wins the name (RFC 155 §9.6, amended): a colliding received pointer is never
-  landed, and is named in the report instead (see Output changes, above); a successful `--adopt`
-  removes the collision entirely, since the exporter's ref then lands bare, not under `remotes/`.
-  The plan itself is also now built from each ref's own latest entry, once, rather than once per
-  superseded entry the exporter's own live container happened to still hold.
-- A tail inside an object-container section — a complete frame whose checksum fails, or bytes added
-  after the section's last real record — was not classified consistently: either silently absorbed
-  as nothing at all (a long run of zero bytes, external review 023's own exact shape), or treated as
-  damage unconditionally, even for a shape no different from an ordinary crash tail the source
-  repository's own `prikk verify` only warns about. The archive now classifies a section's own
-  frames exactly as the live store does (RFC 162 rule 2, reused, not re-derived, and streamed —
-  memory stays bounded by one frame, never the section): a complete frame that fails its own
-  checksum is damage, named by `verify` and refused by `import`; an incomplete frame (a crash tail,
-  or bytes added since) is named but never refused on, so a backup of a repository whose own
-  `verify` exits 0 still restores.
-- **N1, the more severe finding of the two:** `archive verify` refused the whole archive on *any*
-  signature it could not positively check — including a signature by a key the archive simply does
-  not carry (the default, documented outcome of a `bundle import` the source repository itself never
-  trusted). That made such a repository's archive unimportable, by anyone, anywhere, even into a
-  destination that already trusted the key, because the check was against the archive's own carried
-  material only, never the receiver's adopted set. A signature by a key the archive does not carry is
-  now named *"not checked"* and leaves the archive internally consistent (trust is always the
-  receiver's own decision, R2); a signature by a key the archive **does** carry, that nonetheless
-  fails to verify, is still damage and still refuses. Applies identically to MAINTAINER and AUTHOR
-  signatures.
+- A received pointer can carry the exporter's own default `remotes/<ref>` name verbatim, when the
+  source repository itself once `bundle import`ed something for that same ref — landing every
+  carried ref in plan order, with no check, let whichever one landed last silently overwrite the
+  other, so the exporter's own real history could disappear behind a received pointer with no
+  diagnostic at all. The exporter's own ref now always wins the name: a colliding received pointer
+  is never landed, and is named in the report instead (see Output changes, above); a successful
+  `--adopt` removes the collision entirely, since the exporter's ref then lands bare, not under
+  `remotes/`. The plan itself is also now built from each ref's own latest entry, once, rather than
+  once per superseded entry the exporter's own live container happened to still hold.
+- A section's own frames — the object records inside an `archive export`'s own container sections —
+  are now classified exactly as a live repository's own container read already classifies the
+  identical bytes, held equal to that real decoder by a dedicated test on every shape, including
+  random corruption, rather than by a simpler rule of the archive's own that disagreed with it on
+  two real shapes: a long run of trailing junk (absorbed as nothing at all instead of being named),
+  and a torn frame a later, genuine write overran (refused as damage instead of named as an
+  interrupted append, the same way the source repository's own `prikk verify` only ever warns about
+  it). A complete frame that fails its own checksum is still damage, named by `verify` and refused
+  by `import`; an incomplete frame (a crash tail, or one a later write overran) is named but never
+  refused on, so a backup of a repository whose own `verify` exits 0 still restores. Memory stays
+  bounded by one frame at a time, plus a small, fixed scan window — never the whole section.
+- `archive verify` refused the whole archive on *any* signature it could not positively check —
+  including a signature by a key the archive simply does not carry (the default, documented outcome
+  of a `bundle import` the source repository itself never trusted). That made such a repository's
+  archive unimportable, by anyone, anywhere, even into a destination that already trusted the key,
+  because the check was against the archive's own carried material only, never the receiver's
+  adopted set. A signature by a key the archive does not carry is now named *"not checked"* and
+  leaves the archive internally consistent (trust is always the receiver's own decision); a
+  signature by a key the archive **does** carry, that nonetheless fails to verify, is still damage
+  and still refuses. Applies identically to MAINTAINER and AUTHOR signatures.
 
 ### Fixed — a ref-log tail, an acknowledged-damage WAL record, a deduced pointer-index state, and an ambiguous generation log were each reported in a way that pointed at the wrong command, or twice
 

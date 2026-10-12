@@ -42,6 +42,10 @@ use crate::foundation::container::{
     CONTAINER_HEADER_LEN, CONTAINER_VERSION, container_magic, record_checksum,
 };
 use crate::foundation::file_codec::decode_envelope_file;
+use crate::foundation::frame_resync::{
+    BoundedScan, ScanBudget, partial_before_sound_frame_message, resync_to_next_magic,
+    scan_budget_exceeded_message,
+};
 use crate::foundation::layout::persisted_object_types;
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,
@@ -210,10 +214,13 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                 structurally_sound = false;
                 damaged.push(format!("{}: {message}", entry.kind.label()));
             }
+            for message in &outcome.interrupted_appends {
+                interrupted_appends.push(format!("{}: {message}", entry.kind.label()));
+            }
             if outcome.tail_len > 0 {
                 interrupted_appends.push(format!(
                     "{} has {} trailing byte(s) after its last complete record -- an interrupted \
-                     append, not necessarily damage",
+                     append",
                     entry.kind.label(),
                     outcome.tail_len
                 ));
@@ -437,37 +444,53 @@ fn extract_references(envelope: &ObjectEnvelope) -> Result<Vec<ObjectId>> {
 /// [`for_each_object_record`]'s own outcome: the outer checksum's own pass/fail; every **complete**
 /// frame that failed (RFC 162 rule 2's own `complete: true` -- a full header and a full claimed
 /// body were actually present, but the record failed its own checksum, or decoded to the wrong
-/// envelope type), named by byte offset -- damage, in [`SectionReadOutcome::record_damage`]; and the
-/// trailing byte count left over once an **incomplete** frame (rule 2's `complete: false`) ended the
-/// scan -- an interrupted append, in [`SectionReadOutcome::tail_len`]. §9.1, amended 2026-10-12: the
-/// archive classifies exactly as the store does, not by a cruder rule of its own.
+/// envelope type, or the resync scan itself exhausted its budget), named by byte offset -- damage,
+/// in [`SectionReadOutcome::record_damage`]; and every **incomplete** frame (rule 2's `complete:
+/// false`) -- a crash tail, or bytes added since, including one later overrun by a sound frame --
+/// named in [`SectionReadOutcome::interrupted_appends`], never damage on its own. The archive
+/// classifies a section's frames by the same rule the store applies to a live container's own
+/// bytes, held equal to it by a differential test (`section_frame_classification` test module)
+/// rather than by a shared function call: `foundation::container`'s own decoder takes the whole
+/// container as one in-memory slice, and its own resync scan's look-ahead is sized from that whole
+/// slice's length -- calling it here would mean holding one section wholly in memory, which this
+/// reader must never do. One shared, random-access-based primitive both paths could call literally
+/// is future work; what is reused today, unchanged, is the primitive pieces that do not require
+/// whole-buffer access: `ScanBudget`'s own accounting, `BoundedScan`'s own three outcomes,
+/// `resync_to_next_magic` itself (called on bounded, overlapping windows rather than the whole
+/// remainder), and `require_progress`'s own invariant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SectionReadOutcome {
     pub(super) checksum_ok: bool,
-    /// Bytes left over, inside the section's own declared length, after the last frame this loop
-    /// could classify as complete (sound or damaged). Zero for a section with no tail at all. Named,
-    /// but never damage on its own -- the same bytes a live repository's own crash-tail would leave.
-    pub(super) tail_len: u64,
     /// One message per complete frame that failed -- a checksum mismatch over a fully-present
-    /// claimed body, or a body that decodes to the wrong envelope type. Damage, named by byte offset
-    /// within the section.
+    /// claimed body that no later sound frame overran, a body that decodes to the wrong envelope
+    /// type, or a resync scan that exhausted its own budget. Damage, named by byte offset within
+    /// the section.
     pub(super) record_damage: Vec<String>,
+    /// One message per incomplete frame -- a crash tail (or bytes added since) that no later write
+    /// overran, or a torn frame a later, genuine write did overrun (the store's own overrun rule:
+    /// `checksum_mismatch_is_complete`). Named, but never damage on its own: the same bytes a live
+    /// repository's own crash tail would leave, which that repository's own `prikk verify` only
+    /// ever warns about.
+    pub(super) interrupted_appends: Vec<String>,
+    /// The genuinely final tail -- a short or long read that reaches the section's own declared
+    /// end with no sound frame anywhere in the remainder. Confirmed from source,
+    /// `foundation::container::decode_container_records`'s own `TrailingPartial` arm's
+    /// `BoundedScan::NoSoundFrame` case pushes **no** `record_outcomes` entry at all for this one
+    /// case -- only this separate `trailing_partial_bytes`-shaped field -- unlike every other
+    /// non-sound case (`Sound(next)`, `Undetermined`, `Invalid`, `ChecksumMismatch`), which all do
+    /// push one. Tracked separately so [`Self::record_damage`]/[`Self::interrupted_appends`] can be
+    /// held equal to `record_outcomes` exactly, offset for offset, by the differential test.
+    pub(super) tail_len: u64,
 }
 
-/// Read and validate one object-container section: its own outer header against `entry`, then every
-/// inner container record in turn (header, bounded body, checksum -- `foundation/container.rs`'s own
-/// shape, reused), feeding `on_record` only the records whose own checksum matches. Classifies every
-/// non-sound frame exactly as `foundation::container`'s own `ContainerRecordStatus::Failed {
-/// complete }` would (RFC 162 rule 2, §9.1 amended 2026-10-12): a frame whose magic/version does not
-/// match, or whose claimed body length runs past what the section has left, is **incomplete** -- the
-/// scan stops there, and everything from that point to the section's own declared end is named as
-/// one trailing-partial byte count, never damage on its own (a live repository's own crash tail gets
-/// the same treatment, never refused on). A frame whose header *does* match and whose full claimed
-/// body *is* present, but which fails its own checksum (or decodes to the wrong envelope type), is
-/// **complete** -- damage, named by offset, and the scan continues past it to find any further sound
-/// records (the twin of `foundation::container`'s own isolate-and-continue reading). Memory is
-/// bounded by one record at a time, the same as before this part -- classification adds no
-/// buffering of its own.
+/// Read and validate one object-container section: its own outer header and checksum against
+/// `entry` (read in one streamed, chunked pass -- [`section_header_and_checksum`]), then every
+/// inner container record in turn, feeding `on_record` only the records whose own checksum matches
+/// ([`classify_section_records`]). §9.1 (amended 2026-10-12): the archive classifies a section's
+/// frames exactly as a live repository's own container read would classify the identical bytes --
+/// including the resync-and-continue behavior after any unsound frame, and the overrun rule for a
+/// torn frame a later write genuinely finished past. Memory is bounded by one record's own body at a
+/// time, plus a small, fixed scan window the resync itself uses -- never the whole section.
 ///
 /// `pub(super)`: RFC 155 Part I-A's own `archive::import` needs the identical decode -- not a
 /// second copy of it -- for its own stage 1, over an archive its own stage 0 already confirmed
@@ -476,8 +499,40 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
     source: &mut R,
     entry: &ManifestEntry,
     object_type: ObjectType,
-    mut on_record: impl FnMut(&[u8]) -> Result<()>,
+    on_record: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<SectionReadOutcome> {
+    let Some(checksum_ok) = section_header_and_checksum(source, entry)? else {
+        // The section's own outer header (magic, wire code, declared length) does not match --
+        // nothing about its own record area can be trusted enough to classify; matches the
+        // pre-resync behavior exactly.
+        return Ok(SectionReadOutcome {
+            checksum_ok: false,
+            record_damage: Vec::new(),
+            interrupted_appends: Vec::new(),
+            tail_len: 0,
+        });
+    };
+    // The outer checksum is a separate, independent signal from record-level classification (it
+    // covers every raw byte in the section, verbatim) -- classification always runs, checksum_ok
+    // or not, the same as before this part.
+    let (record_damage, interrupted_appends, tail_len) =
+        classify_section_records(source, entry, object_type, on_record)?;
+    Ok(SectionReadOutcome {
+        checksum_ok,
+        record_damage,
+        interrupted_appends,
+        tail_len,
+    })
+}
+
+/// The section's own outer header and checksum, read in one streamed, chunked pass -- `None` when
+/// the header itself (magic, wire code, declared length) does not match `entry`; `Some(matches)`
+/// once it does, where `matches` is whether the trailing 32-byte checksum, computed over the header
+/// plus every byte of the record area, agrees with what is stored.
+fn section_header_and_checksum<R: Read + Seek>(
+    source: &mut R,
+    entry: &ManifestEntry,
+) -> Result<Option<bool>> {
     source.seek(SeekFrom::Start(entry.offset))?;
     let mut header = [0u8; SECTION_HEADER_LEN];
     source.read_exact(&mut header)?;
@@ -485,99 +540,415 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
         && u16::from_be_bytes([header[8], header[9]]) == entry.kind.wire_code()
         && u64::from_be_bytes(header[10..18].try_into().unwrap_or([0u8; 8])) == entry.length;
     if !header_ok {
-        return Ok(SectionReadOutcome {
-            checksum_ok: false,
-            tail_len: 0,
-            record_damage: Vec::new(),
-        });
+        return Ok(None);
     }
-
-    let mut outer_hasher = IncrementalSha256::new();
-    outer_hasher.update(&header);
-
-    let container_type_magic = container_magic(object_type)?;
+    let mut hasher = IncrementalSha256::new();
+    hasher.update(&header);
     let mut remaining = entry.length;
-    let mut offset_in_section: u64 = 0;
-    let mut record_damage = Vec::new();
-    while remaining >= CONTAINER_HEADER_LEN as u64 {
-        let mut record_header = [0u8; CONTAINER_HEADER_LEN];
-        source.read_exact(&mut record_header)?;
-
-        let record_magic: [u8; 8] = record_header[0..8].try_into().unwrap_or([0u8; 8]);
-        let record_version = u16::from_be_bytes([record_header[8], record_header[9]]);
-        let record_body_len =
-            u64::from_be_bytes(record_header[10..18].try_into().unwrap_or([0u8; 8]));
-        let record_checksum_declared: [u8; 32] =
-            record_header[18..50].try_into().unwrap_or([0u8; 32]);
-
-        // RFC 162 rule 2: a header whose magic or version does not match is never damage, on its
-        // own -- the store's own `parse_header` classifies this unconditionally as `complete:
-        // false` (an archive is read once, from a frozen export, so the one scenario this rule
-        // exists for in a *live* repository -- a later reclaim write overrunning a torn frame,
-        // RFC 158 -- cannot arise here: nothing ever rewrites an archive's own bytes after export).
-        // Everything from this header's own first byte to the section's declared end is the
-        // trailing-partial byte count; the header's own bytes are *not* hashed into the outer
-        // checksum, matching `foundation::container`'s own `TrailingPartial`/`Invalid{complete:
-        // false}` arms, which never charge a candidate's bytes against anything once they are ruled
-        // out as a real frame start.
-        if record_magic != *container_type_magic || record_version != CONTAINER_VERSION {
-            source.seek(SeekFrom::Current(-(CONTAINER_HEADER_LEN as i64)))?;
-            break;
-        }
-        if record_body_len > DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64 {
-            return Err(PrikkError::ObjectOverBound {
-                declared_bytes: record_body_len,
-                bound_bytes: DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64,
-            });
-        }
-        if record_body_len > remaining - CONTAINER_HEADER_LEN as u64 {
-            // A well-formed header claiming more body than this section has left -- the body itself
-            // was cut short, the hallmark of a genuine crash tail (RFC 162 rule 2's own
-            // `TrailingPartial`). Incomplete, not damage; the header's own bytes are not hashed.
-            source.seek(SeekFrom::Current(-(CONTAINER_HEADER_LEN as i64)))?;
-            break;
-        }
-        outer_hasher.update(&record_header);
-        remaining -= CONTAINER_HEADER_LEN as u64;
-
-        let record_body_len_usize = usize::try_from(record_body_len)
-            .map_err(|_| PrikkError::Integrity("archive record length overflow".to_string()))?;
-        let mut record_body = vec![0u8; record_body_len_usize];
-        source.read_exact(&mut record_body)?;
-        outer_hasher.update(&record_body);
-        remaining -= record_body_len;
-
-        let checksum_matches = record_checksum(&record_magic, record_body_len, &record_body)
-            == record_checksum_declared;
-        if checksum_matches {
-            on_record(&record_body)?;
-        } else {
-            // The full claimed body is genuinely present (checked above); a checksum mismatch over
-            // it is therefore complete -- damage, named by this frame's own offset within the
-            // section, not merely folded into the section's own outer checksum failure.
-            record_damage.push(format!(
-                "container record at byte offset {offset_in_section} failed its own checksum"
+    let mut buffer = vec![0u8; super::STREAM_CHUNK_BYTES];
+    while remaining > 0 {
+        let take = remaining.min(super::STREAM_CHUNK_BYTES as u64) as usize;
+        let Some(slice) = buffer.get_mut(..take) else {
+            return Err(PrikkError::Integrity(
+                "archive section checksum buffer slice out of bounds".to_string(),
             ));
-        }
-        offset_in_section += CONTAINER_HEADER_LEN as u64 + record_body_len;
+        };
+        source.read_exact(slice)?;
+        hasher.update(slice);
+        remaining -= take as u64;
     }
-    if remaining > 0 {
-        let remaining_usize = usize::try_from(remaining).map_err(|_| {
-            PrikkError::Integrity("archive section tail length overflow".to_string())
-        })?;
-        let mut tail = vec![0u8; remaining_usize];
-        source.read_exact(&mut tail)?;
-        outer_hasher.update(&tail);
-    }
-    let tail_len = remaining;
-
     let mut section_checksum = [0u8; 32];
     source.read_exact(&mut section_checksum)?;
-    Ok(SectionReadOutcome {
-        checksum_ok: outer_hasher.finalize() == section_checksum,
-        tail_len,
-        record_damage,
+    Ok(Some(hasher.finalize() == section_checksum))
+}
+
+/// One streamed container-frame attempt's outcome -- the archive's own twin of
+/// `foundation::container`'s private `FrameAttempt`, over a seekable source instead of an in-memory
+/// slice, so a candidate's bytes are read only when actually needed, never pre-loaded.
+enum StreamedFrameAttempt {
+    Record { body: Vec<u8>, frame_len: usize },
+    TrailingPartial,
+    Invalid { message: String, complete: bool },
+    ChecksumMismatch { message: String, body_end: usize },
+}
+
+/// Attempt to parse one container frame at `offset` (relative to the section's own record area,
+/// which starts at `record_area_start` in `source`), mirroring `foundation::container::
+/// parse_frame_at`'s own decision order exactly: magic/version, then the claimed body's own fit
+/// within the section, then the DC-86 per-object bound, then the checksum, then the envelope decode
+/// and its own type. Charges `budget` the same way, at the same point (right before hashing a
+/// candidate's claimed body), so a candidate rejected before that point costs nothing, matching the
+/// store's own accounting.
+fn parse_frame_at_streamed<R: Read + Seek>(
+    source: &mut R,
+    magic: &[u8; 8],
+    object_type: ObjectType,
+    record_area_start: u64,
+    section_len: usize,
+    offset: usize,
+    budget: &mut ScanBudget,
+) -> Result<StreamedFrameAttempt> {
+    let remaining = section_len.saturating_sub(offset);
+    if remaining < CONTAINER_HEADER_LEN {
+        return Ok(StreamedFrameAttempt::TrailingPartial);
+    }
+    source.seek(SeekFrom::Start(record_area_start + offset as u64))?;
+    let mut header = [0u8; CONTAINER_HEADER_LEN];
+    source.read_exact(&mut header)?;
+    let record_magic: [u8; 8] = header[0..8].try_into().unwrap_or([0u8; 8]);
+    let record_version = u16::from_be_bytes([header[8], header[9]]);
+    if record_magic != *magic || record_version != CONTAINER_VERSION {
+        return Ok(StreamedFrameAttempt::Invalid {
+            message: format!("invalid container record magic or version at byte offset {offset}"),
+            complete: false,
+        });
+    }
+    let body_len_u64 = u64::from_be_bytes(header[10..18].try_into().unwrap_or([0u8; 8]));
+    let checksum_declared: [u8; 32] = header[18..50].try_into().unwrap_or([0u8; 32]);
+    if body_len_u64 > DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64 {
+        // DC-86: never allocate on the strength of an unchecked declared length -- but this
+        // attempt may be a resync *candidate* (a magic-byte coincidence inside otherwise-garbage
+        // bytes, not the section's own main sequential position), so a hard `Err` here would aport
+        // the *whole* decode on one implausible candidate -- a denial-of-service shape an attacker
+        // could trigger with eight magic bytes and a huge length field anywhere in a section.
+        // Classified as `Invalid` (not sound, never a hard error) instead: the resync scan simply
+        // keeps looking, exactly as it already does for a bad magic/version.
+        return Ok(StreamedFrameAttempt::Invalid {
+            message: format!(
+                "container record at byte offset {offset} declares {body_len_u64} body bytes, \
+                 over the per-object bound of {} -- not a real record",
+                DEFAULT_BUNDLE_MAX_OBJECT_BYTES
+            ),
+            complete: false,
+        });
+    }
+    let Ok(body_len) = usize::try_from(body_len_u64) else {
+        return Ok(StreamedFrameAttempt::Invalid {
+            message: format!("container record length overflow at byte offset {offset}"),
+            complete: false,
+        });
+    };
+    let Some(body_end) = offset
+        .checked_add(CONTAINER_HEADER_LEN)
+        .and_then(|header_end| header_end.checked_add(body_len))
+    else {
+        return Ok(StreamedFrameAttempt::Invalid {
+            message: format!("container body end overflow at byte offset {offset}"),
+            complete: false,
+        });
+    };
+    if body_end > section_len {
+        // A well-formed header claiming more body than this section has left -- the hallmark of a
+        // genuine crash tail (RFC 162 rule 2's own `TrailingPartial`). Incomplete, not damage.
+        return Ok(StreamedFrameAttempt::TrailingPartial);
+    }
+    let mut body = vec![0u8; body_len];
+    source.read_exact(&mut body)?;
+    budget.charge((body.len() + CONTAINER_HEADER_LEN) as u64);
+    let expected = record_checksum(magic, body_len_u64, &body);
+    if expected != checksum_declared {
+        return Ok(StreamedFrameAttempt::ChecksumMismatch {
+            message: format!("container record at byte offset {offset} failed its own checksum"),
+            body_end,
+        });
+    }
+    let envelope = match decode_envelope_file(&body) {
+        Ok(envelope) => envelope,
+        Err(err) => {
+            return Ok(StreamedFrameAttempt::Invalid {
+                message: format!("container record at byte offset {offset}: {err}"),
+                complete: true,
+            });
+        }
+    };
+    if envelope.object_type != object_type {
+        return Ok(StreamedFrameAttempt::Invalid {
+            message: format!(
+                "container record at byte offset {offset} is under type {object_type} but \
+                 envelope type is {}",
+                envelope.object_type
+            ),
+            complete: true,
+        });
+    }
+    Ok(StreamedFrameAttempt::Record {
+        body,
+        frame_len: CONTAINER_HEADER_LEN + body_len,
     })
+}
+
+/// The streamed twin of `foundation::frame_resync::resync_to_next_magic`, over a seekable source:
+/// finds the next occurrence of `magic` at or after `start` (relative to the section's own record
+/// area), reading bounded, overlapping windows rather than the whole remainder -- each window is
+/// handed to the real `resync_to_next_magic` unchanged, so the actual byte-search algorithm is
+/// reused, not reimplemented; only the I/O around it is streamed.
+fn resync_to_next_magic_streamed<R: Read + Seek>(
+    source: &mut R,
+    record_area_start: u64,
+    section_len: usize,
+    start: usize,
+    magic: &[u8; 8],
+) -> Result<Option<usize>> {
+    const WINDOW_BYTES: usize = 1024 * 1024;
+    let overlap = magic.len().saturating_sub(1);
+    let mut window_start = start;
+    loop {
+        if window_start >= section_len {
+            return Ok(None);
+        }
+        let remaining = section_len - window_start;
+        let read_len = remaining.min(WINDOW_BYTES);
+        if read_len < magic.len() {
+            return Ok(None);
+        }
+        source.seek(SeekFrom::Start(record_area_start + window_start as u64))?;
+        let mut window = vec![0u8; read_len];
+        source.read_exact(&mut window)?;
+        if let Some(found) = resync_to_next_magic(&window, 0, magic.as_slice()) {
+            return Ok(Some(window_start + found));
+        }
+        let advance = read_len.saturating_sub(overlap);
+        if advance == 0 {
+            return Ok(None);
+        }
+        window_start += advance;
+    }
+}
+
+/// The streamed twin of `foundation::frame_resync::sound_frame_after_partial_budgeted`: scans
+/// forward from `offset + 1` for a byte-offset where a genuinely sound frame starts, using the
+/// streamed resync above to find each magic candidate and a full [`parse_frame_at_streamed`] to
+/// confirm it. Reuses [`BoundedScan`] and [`ScanBudget`] unchanged, so a budget-exceeded candidate
+/// resolves to [`BoundedScan::Undetermined`] by the identical rule the store's own version uses.
+fn sound_frame_after_partial_streamed<R: Read + Seek>(
+    source: &mut R,
+    magic: &[u8; 8],
+    object_type: ObjectType,
+    record_area_start: u64,
+    section_len: usize,
+    offset: usize,
+    budget: &mut ScanBudget,
+) -> Result<BoundedScan> {
+    let mut from = offset.saturating_add(1);
+    loop {
+        let Some(candidate) =
+            resync_to_next_magic_streamed(source, record_area_start, section_len, from, magic)?
+        else {
+            return Ok(BoundedScan::NoSoundFrame);
+        };
+        if budget.exceeded() {
+            return Ok(BoundedScan::Undetermined);
+        }
+        let sound = matches!(
+            parse_frame_at_streamed(
+                source,
+                magic,
+                object_type,
+                record_area_start,
+                section_len,
+                candidate,
+                budget
+            )?,
+            StreamedFrameAttempt::Record { .. }
+        );
+        if sound {
+            return Ok(BoundedScan::Sound(candidate));
+        }
+        from = candidate.saturating_add(1);
+    }
+}
+
+/// The streamed twin of `foundation::container::checksum_mismatch_is_complete` (RFC 162 rule 2, the
+/// overrun rule): a complete frame whose checksum fails is damage, **unless** a later, sound frame
+/// starts inside the range its own header claimed -- then the frame was torn, and a later write
+/// genuinely finished past it (an interrupted append, not damage). `body_end == section_len` means
+/// nothing can come after it in this section at all, so there is no overrun to check for.
+#[allow(clippy::too_many_arguments)]
+fn checksum_mismatch_is_complete_streamed<R: Read + Seek>(
+    source: &mut R,
+    magic: &[u8; 8],
+    object_type: ObjectType,
+    record_area_start: u64,
+    section_len: usize,
+    offset: usize,
+    body_end: usize,
+    budget: &mut ScanBudget,
+) -> Result<bool> {
+    if body_end == section_len {
+        return Ok(true);
+    }
+    match sound_frame_after_partial_streamed(
+        source,
+        magic,
+        object_type,
+        record_area_start,
+        section_len,
+        offset,
+        budget,
+    )? {
+        BoundedScan::Sound(next) => Ok(next >= body_end),
+        BoundedScan::NoSoundFrame | BoundedScan::Undetermined => Ok(true),
+    }
+}
+
+/// Classify every record in one section's own record area, calling `on_record` for each sound one.
+/// After any frame that is not sound -- a short read, a bad magic/version, or a checksum mismatch --
+/// scans forward for the next sound frame (mirroring `foundation::container::
+/// decode_container_records`'s own loop exactly) and resumes decoding from there, so damage or an
+/// interrupted append in one record never hides a sound record after it. §9.1's own rule: a
+/// budget-exhausting resync scan is damage (RFC 167 C3), never a tail.
+fn classify_section_records<R: Read + Seek>(
+    source: &mut R,
+    entry: &ManifestEntry,
+    object_type: ObjectType,
+    mut on_record: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<(Vec<String>, Vec<String>, u64)> {
+    let magic = container_magic(object_type)?;
+    let record_area_start = entry.offset + SECTION_HEADER_LEN as u64;
+    let section_len = usize::try_from(entry.length)
+        .map_err(|_| PrikkError::Integrity("archive section length overflow".to_string()))?;
+    let mut budget = ScanBudget::for_input(section_len);
+    let mut record_damage = Vec::new();
+    let mut interrupted_appends = Vec::new();
+    let mut tail_len: u64 = 0;
+    let mut offset: usize = 0;
+    while offset < section_len {
+        if budget.exceeded() {
+            // `decode_container_records`'s own top-of-loop budget check pushes
+            // `Failed{complete: false}` (confirmed from source) -- an interrupted append here, not
+            // damage, matching every other budget-exceeded case outside `checksum_mismatch_is_
+            // complete`'s own, which is the one place `Undetermined` maps to `complete: true`.
+            interrupted_appends.push(scan_budget_exceeded_message(offset));
+            break;
+        }
+        match parse_frame_at_streamed(
+            source,
+            magic,
+            object_type,
+            record_area_start,
+            section_len,
+            offset,
+            &mut budget,
+        )? {
+            StreamedFrameAttempt::Record { body, frame_len } => {
+                on_record(&body)?;
+                let next = offset.checked_add(frame_len).ok_or_else(|| {
+                    PrikkError::Integrity("archive section offset overflow".to_string())
+                })?;
+                if next <= offset {
+                    return Err(PrikkError::Integrity(format!(
+                        "archive section decode did not advance past byte offset {offset}"
+                    )));
+                }
+                offset = next;
+            }
+            StreamedFrameAttempt::TrailingPartial => {
+                match sound_frame_after_partial_streamed(
+                    source,
+                    magic,
+                    object_type,
+                    record_area_start,
+                    section_len,
+                    offset,
+                    &mut budget,
+                )? {
+                    BoundedScan::NoSoundFrame => {
+                        // Confirmed from source: `decode_container_records`'s own `TrailingPartial`
+                        // arm's `NoSoundFrame` case returns *without* pushing any `record_outcomes`
+                        // entry at all -- only `ContainerReplay::trailing_partial_bytes` is set.
+                        // Tracked separately here (`tail_len`), never as a differential-test-facing
+                        // `record_damage`/`interrupted_appends` entry, so those two stay held equal
+                        // to `record_outcomes` exactly.
+                        tail_len = (section_len - offset) as u64;
+                        break;
+                    }
+                    BoundedScan::Undetermined => {
+                        // Confirmed from source: `decode_container_records`'s own `TrailingPartial`
+                        // arm pushes `complete: false` for its own `Undetermined` case too -- unlike
+                        // `checksum_mismatch_is_complete`'s own, this is the one place `Undetermined`
+                        // does *not* become damage. An interrupted append.
+                        interrupted_appends.push(scan_budget_exceeded_message(offset));
+                        break;
+                    }
+                    BoundedScan::Sound(next) => {
+                        // `foundation::container`'s own `ContainerRecordStatus::Failed{complete:
+                        // false}` for this exact branch (confirmed from source,
+                        // `decode_container_records`'s own `TrailingPartial` arm) -- the message
+                        // text says "damage, not a torn tail" (frame_resync.rs's own prose, written
+                        // for every isolate-and-continue reader this helper serves), but the
+                        // structured `complete` flag this format's own downstream classifier
+                        // actually reads (`verify/objects.rs`: `if *complete { Failed } else {
+                        // InterruptedAppend }`) is false here regardless -- object containers
+                        // report this as a warning, per RFC 164 Rule E, and a live repository's own
+                        // `prikk verify` agrees. Interrupted append, not damage.
+                        interrupted_appends.push(partial_before_sound_frame_message(offset, next));
+                        if next <= offset {
+                            return Err(PrikkError::Integrity(format!(
+                                "archive section decode did not advance past byte offset {offset}"
+                            )));
+                        }
+                        offset = next;
+                    }
+                }
+            }
+            StreamedFrameAttempt::Invalid { message, complete } => {
+                // Confirmed from source: `decode_container_records`'s own `Invalid` arm always
+                // pushes exactly this one `Failed{message, complete}` entry (at this frame's own
+                // narrow offset), regardless of what resync finds afterward -- unlike
+                // `TrailingPartial`'s own `NoSoundFrame` case, it never widens into a whole-span
+                // "trailing bytes" claim, and `trailing_partial_bytes` stays 0 when resync finds
+                // nothing further (confirmed: the `None` arm there returns `trailing_partial_
+                // bytes: 0` explicitly, not `section_len - offset`).
+                if complete {
+                    record_damage.push(message);
+                } else {
+                    interrupted_appends.push(message);
+                }
+                match resync_to_next_magic_streamed(
+                    source,
+                    record_area_start,
+                    section_len,
+                    offset + 1,
+                    magic,
+                )? {
+                    Some(next) => offset = next,
+                    None => break,
+                }
+            }
+            StreamedFrameAttempt::ChecksumMismatch { message, body_end } => {
+                let complete = checksum_mismatch_is_complete_streamed(
+                    source,
+                    magic,
+                    object_type,
+                    record_area_start,
+                    section_len,
+                    offset,
+                    body_end,
+                    &mut budget,
+                )?;
+                // Confirmed from source: `decode_container_records`'s own `ChecksumMismatch` arm
+                // always pushes exactly this one `Failed{message, complete}` entry, the same as
+                // `Invalid` above -- never widened into a whole-span claim when resync finds
+                // nothing further (`trailing_partial_bytes` stays 0 there too).
+                if complete {
+                    record_damage.push(message);
+                } else {
+                    interrupted_appends.push(message);
+                }
+                match resync_to_next_magic_streamed(
+                    source,
+                    record_area_start,
+                    section_len,
+                    offset + 1,
+                    magic,
+                )? {
+                    Some(next) => offset = next,
+                    None => break,
+                }
+            }
+        }
+    }
+    Ok((record_damage, interrupted_appends, tail_len))
 }
 
 /// As [`for_each_object_record`], for a non-object section: stream the body in fixed chunks (never

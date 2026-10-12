@@ -130,6 +130,23 @@ const DECLARED_LARGE_FILES: &[DeclaredLargeFile] = &[
                               0/1/2, and could move to `archive/import/landing.rs` without \
                               separating the journal from what it journals.",
     },
+    DeclaredLargeFile {
+        path: "crates/prikk-store/src/archive/verify.rs",
+        reason: "RFC 155 §9.1/§9.4: a section's own frames are classified by the identical rule a \
+                 live repository's own container read applies -- the streamed header/checksum/\
+                 resync machinery (`parse_frame_at_streamed`, `resync_to_next_magic_streamed`, \
+                 `sound_frame_after_partial_streamed`, `checksum_mismatch_is_complete_streamed`) \
+                 is read together with the outer verify pass that calls it, because the two must \
+                 agree on every outcome -- a drift between them is exactly the defect a held-equal \
+                 differential test exists to catch, and that correspondence is a diff within one \
+                 file, not a thing to remember across two.",
+        what_would_split_it: "The streamed frame-classification primitives (`parse_frame_at_\
+                              streamed` through `classify_section_records`, roughly 350 lines) \
+                              touch no signature or reference-closure logic and could move to \
+                              `archive/verify/frames.rs` without separating the classification \
+                              rule from the differential test that holds it equal to the store's \
+                              own.",
+    },
 ];
 
 #[derive(Debug, Serialize)]
