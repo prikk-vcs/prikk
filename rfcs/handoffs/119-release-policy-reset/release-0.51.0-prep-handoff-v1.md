@@ -80,3 +80,16 @@ final commit. **It is live only once I-F is accepted.**
 - **Items 1–6** then run on that commit, untouched tree, as the P4 row above says.
 
 **Next: P4.**
+
+**P4 ACCEPTED 2026-10-13** (`f2cb3cde`; review `release-0.51.0-prep-P4-review-v1`), on the architect's own re-run:
+- the matrix v6 is identical to 0.50.0 at both depths;
+- `reproduce.sh` differs only in `info=0`;
+- the smoke gives 317 ok;
+- the archive's import is flat at about 5× the largest object.
+
+**The candidate is `f2cb3cde`.** For the next prep:
+- keep every output the handoff names, gate logs included (`| tee`);
+- build before running anything that reports on a commit.
+
+**Nothing is open for the team.** Next, the architect's and the owner's: push, CI, letter 024, the answer, the date
+commit, and the tag.
