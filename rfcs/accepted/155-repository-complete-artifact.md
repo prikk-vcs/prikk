@@ -172,7 +172,10 @@ compensates.
 naming the object (§8). An archive is a faithful copy, damage included.
 
 *(Amended 2026-10-12, review `rfc155-impl-IC-review-v1`.)* **The archive classifies a container's frames exactly as
-the store does** (RFC 162 rule 2, `foundation::container`'s `complete` flag), reusing that rule, not re-deriving it:
+the store does** (RFC 162 rule 2, `foundation::container`'s `complete` flag, including its resync and the overrun
+test). The archive's walk streams, so it cannot call the store's slice decoder. Until one primitive serves both
+(0.52.0), **a differential test holds the two equal** on every shape and on random corruptions *(review
+`rfc155-impl-ID-review-v1`)*. The rule:
 - **a complete frame that fails is damage:** verify names its section and offset, and import refuses;
 - **an incomplete frame is an interrupted append** (a crash tail, or bytes added since): verify names it, and import
   never writes it, but neither refuses. The source's own `prikk verify` only warns about it, so a backup of that

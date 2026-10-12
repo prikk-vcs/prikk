@@ -212,3 +212,15 @@ archive names.
 
 **Next: I-D, then I-E.** Then the P3-style re-run (gates, matrix v6, `reproduce.sh`) on the new candidate, and letter
 024.
+
+**I-D approved in part 2026-10-12** (`2c6a62ac`; review `rfc155-impl-ID-review-v1`). **N1 is accepted.** Item 2 is
+not: the archive walk has no resync. A torn frame overrun by a later commit, which the source's own `prikk verify`
+only warns about, makes the archive refused, and the objects after it are never found. **Ruled:** a streamed
+re-derivation is allowed for 0.51.0 only when a differential test holds it equal to the store's decoder. One shared
+primitive is 0.52.0 work.
+
+| part | items | budget (stop at ×2) | report |
+|---|---|---:|---|
+| **I-D2: resync, held equal to the store** | **1. The whole rule, streamed.** After any frame that is not sound (a short read, a bad magic or version, a checksum mismatch), scan forward for the next sound frame within the store's budget semantics (exhaustion means damage, RFC 167 C3), and continue decoding from it, in verify **and** stage 1. A checksum mismatch over a fully present body is an interrupted append when a later sound frame starts inside its claimed range (`checksum_mismatch_is_complete`), and damage otherwise. Memory stays bounded by one frame plus a scan window, never the section. **2. The differential test, the gate for item 1.** A test-only harness runs `foundation::container::decode_container_records` over a section's bytes in memory and the archive walk over the same section, and asserts they agree on: the sound frames, by offset and object id; the offsets of complete failures; and the offsets of interrupted appends. Run it on: every I-D shape; **the review's overrun shape** (a real header plus 10 body bytes, then a later commit); a torn frame whose claimed length runs past the section's end, with sound frames after it; a bad magic in the middle with sound frames after it; a checksum mismatch whose next sound frame starts after its claimed end (damage, then decoding continues); a budget-exhausting run. **Plus a proptest:** random flips, truncations, insertions and inserted torn frames over a real multi-record container. Control: drop the resync and the overrun shape goes red in the differential test. **3. CLI test of the overrun shape:** the source's `prikk verify` exits 0; `archive verify` is consistent with an interrupted append named; the import succeeds; the destination reads the second file and its `verify` exits 0. **4. Text:** the CHANGELOG must not say *"reused, not re-derived"*; say the archive applies the store's rule, held equal by a test. Remove review history from user-facing text (*"N1"*, *"the architect's own correction"*, *"external review 023's own"*). `archive-format.md` defines *complete* with the overrun test. Docs, CHANGELOG, 14 gates, release smoke | 90 min | `rfc155-impl-ID2-report.md` |
+
+**Next: I-D2, then I-E as written.** Then the P3-style re-run and letter 024.
