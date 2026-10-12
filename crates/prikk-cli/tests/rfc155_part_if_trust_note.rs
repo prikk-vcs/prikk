@@ -211,6 +211,13 @@ fn row1_nothing_trusted_names_both() {
         "the json note must not be null: {}",
         result.json
     );
+    assert!(
+        result
+            .text
+            .contains("adopts the signing keys (or re-run with --adopt once they are)"),
+        "two distinct keys are named, so the note must use the plural: {}",
+        result.text
+    );
     let _ = std::fs::remove_file(&archive_path);
 }
 
@@ -245,6 +252,11 @@ fn row2_trusts_only_the_exporter_names_the_collided_pointer() {
         !result.json.contains("\"note\": null"),
         "the json note must not be null: {}",
         result.json
+    );
+    assert!(
+        result.text.contains("adopts the signing key") && !result.text.contains("signing keys"),
+        "only one distinct key is named, so the note must stay singular: {}",
+        result.text
     );
     let _ = std::fs::remove_file(&archive_path);
 }

@@ -479,15 +479,25 @@ fn publication_trust_note(landing_outcomes: &[prikk_store::LandingOutcome]) -> O
         })
         .collect();
     let pronoun = if untrusted.len() == 1 { "its" } else { "their" };
+    let distinct_key_count = untrusted
+        .iter()
+        .flat_map(|landing| landing.signing_key_ids.iter())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let (key_noun, once_clause) = if distinct_key_count == 1 {
+        ("key", "once it is")
+    } else {
+        ("keys", "once they are")
+    };
     parts.push(if adopt_hint_applies {
         format!(
             "`prikk verify` will fail {pronoun} publication trust until `trust maintainer add` \
-             adopts the signing key (or re-run with --adopt once it is)"
+             adopts the signing {key_noun} (or re-run with --adopt {once_clause})"
         )
     } else {
         format!(
             "`prikk verify` will fail {pronoun} publication trust until `trust maintainer add` \
-             adopts the signing key"
+             adopts the signing {key_noun}"
         )
     });
     Some(parts.join("; "))
