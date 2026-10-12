@@ -93,3 +93,7 @@ final commit. **It is live only once I-F is accepted.**
 
 **Nothing is open for the team.** Next, the architect's and the owner's: push, CI, letter 024, the answer, the date
 commit, and the tag.
+
+**External review 024: nothing blocks the tag.** Part I-G (`3551fc92`, accepted) fixed one warning's wording, added both
+signature counts, and set the date to **2026-10-13**. **The candidate is this record commit**, pushed through the gate
+service. The tag goes on the owner's word, on the commit CI ran on. Nothing is open for the team.
