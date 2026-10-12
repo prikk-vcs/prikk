@@ -1,9 +1,11 @@
 //! RFC 155 Part I-E item 4: the default import's publication-trust note, re-scoped. Part I-C's
 //! own note fired for every landed-but-not-adopted ref regardless of whether the signer was
 //! actually trusted (review `rfc155-impl-IC-review-v1`'s own three-row finding). It now fires
-//! only for a landed ref whose own tip carries no maintainer signature *this destination*
-//! already trusts, and offers the `--adopt` hint only when one of those untrusted-tip refs is
-//! the exporter's own ref (a received pointer can never be adopted).
+//! only for a ref whose own tip carries no maintainer signature *this destination* already
+//! trusts, and offers the `--adopt` hint only when one of those untrusted-tip refs is the
+//! exporter's own ref (a received pointer can never be adopted). These three rows have no
+//! landing collision; `rfc155_part_if_trust_note.rs` covers Part I-F's own broader rule (every
+//! *planned* entry, landed or not) with a genuinely colliding fixture.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 mod support;

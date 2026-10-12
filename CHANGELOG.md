@@ -34,9 +34,9 @@
   a truncation even when nothing was removed from the end. A `Replace` entry now prints "replaced,
   N bytes saved" instead; a `Cut` entry is unchanged.
 - `seal`, `tag create`, `branch create`, and `branch close`, over a ref left mid-publication by an
-  earlier crash, named `` `prikk doctor --repair-tails` `` first (before: a torn ref-log tail was
-  answered before the publication check itself ran). They now name `` `prikk ref complete <ref>` ``
-  directly, the one step that actually finishes it.
+  earlier crash, named `` `prikk doctor --repair-tails` `` first (because the tail guard ran
+  first). They now name `` `prikk ref complete <ref>` `` directly, the one step that actually
+  finishes it.
 - `prikk verify`'s *"trailing partial WAL bytes"* count, and the *"warning: active WAL contains an
   incomplete trailing record"* line, no longer count a record the commit witness already
   acknowledges as damaged or lost (before: the identical bytes were counted and warned on twice,
@@ -47,8 +47,7 @@
   error-severity issue was raised (before: it printed unconditionally, sometimes beside the very
   errors it seemed to clear).
 - `prikk compact --pointer-index`, refusing to act on a deduced (not decided) live slot, printed
-  `` `integrity error: …` `` (before: nothing here is actually damaged — both slots decode cleanly).
-  It now prints `` `precondition not met: …` ``.
+  `` `integrity error: …` `` (nothing is damaged). It now prints `` `precondition not met: …` ``.
 - New warning, `PRIKK-DOCTOR-RETIRED-SLOT-TAIL`: a compaction cut short can leave a torn tail on a
   container's own *retired* (non-live) slot — not at risk, since the live slot and the generation
   log are both sound, but previously invisible until the next compaction silently overwrote it.
@@ -58,73 +57,15 @@
   container whose generation log is merely ambiguous (before: the identical state printed both
   `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` and a separate, misleading interior-damage line — nothing
   there failed to decode; the log simply names no live slot).
-- `archive import`'s own report gains four fields on each landing outcome, `landed`,
-  `collision_target`, `origin`, and `publication_trusted` (text and JSON): `landed` is `false`
-  only when a carried received pointer was not written because it collided with the exporter's
-  own ref at the same `remotes/<ref>` name, and `collision_target` then names the `RefState` id it
-  would have landed. A note is now printed only for a **landed** ref whose own tip carries no
-  maintainer signature this destination repository already trusts — not, as a first version had
-  it, for every landed-but-not-adopted ref regardless of whether the signer was actually trusted
-  (which could print "verify fails" beside a tip that in fact verifies fine). The `--adopt` hint
-  in that note appears only when one of the named refs is the exporter's own — a received pointer
-  can never be adopted, so the hint is never offered for one alone.
-- `archive verify`/`archive import`'s own manifest section-count bound refused with
-  `` `an object declares N bytes, over the per-object bound of M bytes` `` for a *count*, not a
-  byte length — borrowed wording from the per-object bound, and later with a corrected but still
-  subject-less `` `declares N entries, over the bound of M` ``. It now names its own subject:
-  `` `the archive manifest declares N sections, over the bound of M` ``.
-- `archive verify`'s own interrupted-append lines (a torn frame a later, genuine write overran)
-  used to reuse the identical *"container record at byte offset N failed its own checksum"*
-  wording genuine damage prints — alarming language for an outcome the source repository itself
-  only ever warns about. They now print *"interrupted append at byte offset N -- a later write
-  already completed past this frame's own claimed end; not imported"*, never the checksum-failure
-  wording, for this specific, non-damage outcome.
-
-### Fixed — `archive import` could silently drop a ref behind a colliding received pointer, refuse a healthy backup over an ordinary crash tail, and refuse a whole archive over one untrusted signature
-
-- A received pointer can carry the exporter's own default `remotes/<ref>` name verbatim, when the
-  source repository itself once `bundle import`ed something for that same ref — landing every
-  carried ref in plan order, with no check, let whichever one landed last silently overwrite the
-  other, so the exporter's own real history could disappear behind a received pointer with no
-  diagnostic at all. The exporter's own ref now always wins the name: a colliding received pointer
-  is never landed, and is named in the report instead (see Output changes, above); a successful
-  `--adopt` removes the collision entirely, since the exporter's ref then lands bare, not under
-  `remotes/`. The plan itself is also now built from each ref's own latest entry, once, rather than
-  once per superseded entry the exporter's own live container happened to still hold.
-- A section's own frames — the object records inside an `archive export`'s own container sections —
-  are now classified exactly as a live repository's own container read already classifies the
-  identical bytes, held equal to that real decoder by a dedicated test on every shape, including
-  random corruption, rather than by a simpler rule of the archive's own that disagreed with it on
-  two real shapes: a long run of trailing junk (absorbed as nothing at all instead of being named),
-  and a torn frame a later, genuine write overran (refused as damage instead of named as an
-  interrupted append, the same way the source repository's own `prikk verify` only ever warns about
-  it). A complete frame that fails its own checksum is still damage, named by `verify` and refused
-  by `import`; an incomplete frame (a crash tail, or one a later write overran) is named but never
-  refused on, so a backup of a repository whose own `verify` exits 0 still restores. Memory stays
-  bounded by one frame at a time, plus a small, fixed scan window — never the whole section.
-- `archive verify` refused the whole archive on *any* signature it could not positively check —
-  including a signature by a key the archive simply does not carry (the default, documented outcome
-  of a `bundle import` the source repository itself never trusted). That made such a repository's
-  archive unimportable, by anyone, anywhere, even into a destination that already trusted the key,
-  because the check was against the archive's own carried material only, never the receiver's
-  adopted set. A signature by a key the archive does not carry is now named *"not checked"* and
-  leaves the archive internally consistent (trust is always the receiver's own decision); a
-  signature by a key the archive **does** carry, that nonetheless fails to verify, is still damage
-  and still refuses. Applies identically to MAINTAINER and AUTHOR signatures.
-- `archive verify` checksummed each section's own bytes and the manifest's own overall body, but
-  never compared a section's own on-disk trailing checksum against what the manifest itself
-  recorded for that section — each individually self-consistent, so two sections swapped in place
-  (each still passing its own checksum) would have gone unnoticed, even though the carried,
-  checksummed manifest no longer named them correctly. A section's own trailing checksum must now
-  equal its manifest entry's own recorded checksum, or it is damage, named.
 
 ### Fixed — a ref-log tail, an acknowledged-damage WAL record, a deduced pointer-index state, and an ambiguous generation log were each reported in a way that pointed at the wrong command, or twice
 
-- Five reporting corrections from this release's own external review (020/021), all local
-  conditions — none reachable by a received bundle, an exchange artifact, or a peer's objects: a
-  ref-log tail left by an interrupted publication now names `ref complete` directly instead of
-  `--repair-tails` first; an acknowledged-damage WAL record is no longer double-counted and
-  double-warned as an ordinary tail; `` `compact --pointer-index` `` on a deduced slot refuses with
+- Six reporting corrections from external reviews 020 and 021, all local conditions — none
+  reachable by a received bundle, an exchange artifact, or a peer's objects: a ref-log tail left
+  by an interrupted publication now names `ref complete` directly instead of `--repair-tails`
+  first; an acknowledged-damage WAL record is no longer double-counted and double-warned as an
+  ordinary tail; `PRIKK-DOCTOR-VERIFY-OK` is now decided last and absent beside any error, instead
+  of printing unconditionally; `` `compact --pointer-index` `` on a deduced slot refuses with
   `precondition not met:`, not `integrity error:`; a compaction's own retired-slot tail is now
   named, where before it was silently invisible; and an ambiguous generation log no longer also
   reads as interior damage in `verify`'s own tail listing. See Output changes, above, for each
@@ -150,8 +91,17 @@
   this build knows how to read). It checks reference closure in two passes with an id set (memory
   bounded by object count, never by archive bytes), and every signature against the archive's own
   carried author and maintainer material, through the same checks a local repository's own
-  `verify` already uses. It reports *internally consistent*, **never** *trusted* — the note saying
-  so prints only when the archive genuinely is consistent, never beside a damage line or an error
+  `verify` already uses. A signature by a key the archive simply does not carry is named *"not
+  checked"* and does not make the archive inconsistent — trust is always the receiver's own
+  decision (`trust maintainer add`), never the archive's own carried record; a signature by a key
+  the archive **does** carry, that nonetheless fails to verify, is damage. Each object-container
+  section's own frames are classified exactly as a live repository's own container read already
+  classifies the identical bytes: a complete frame that fails its own checksum is damage, named by
+  section and offset; an incomplete frame (a crash tail, or one a later write overran) is named but
+  never refused on, so a backup of a repository whose own `verify` exits 0 still restores. Each
+  section's own trailing checksum must also equal what the manifest itself recorded for it, or
+  that too is damage. It reports *internally consistent*, **never** *trusted* — the note saying so
+  prints only when the archive genuinely is consistent, never beside a damage line or an error
   exit — and lists the archive's own carried maintainer keys labeled *"carried, not adopted."*
   Writes nothing, on any exit path.
 - **`archive import <file> [--adopt]`** is strict: untouched, or complete. The journal — the
@@ -172,9 +122,15 @@
   against *absent* holds; every other ref still lands under `remotes/`, with the reason named. On a
   name collision between the exporter's own local ref and one of its own carried received pointers,
   the exporter's own ref always wins the name; the colliding received pointer is not landed, and is
-  named in the report instead (its own objects are still imported). Re-importing the same archive
-  reports *already imported*. A real kill is recoverable: `prikk doctor` names the interruption and
-  both ways out (see Output changes above for the exact sequence).
+  named in the report instead (its own objects are still imported regardless). A plain import
+  (without `--adopt`, or where it could not apply) names every planned entry — landed or not —
+  whose own tip carries no maintainer signature this destination repository already trusts yet,
+  by its own signing key id, since a subsequent `prikk verify` will fail their publication trust
+  until `trust maintainer add` adopts it (or the import is re-run with `--adopt` once it is) — the
+  `--adopt` hint is offered only when one of those named entries is the exporter's own ref, since a
+  received pointer can never be adopted. Re-importing the same archive reports *already imported*.
+  A real kill is recoverable: `prikk doctor` names the interruption and both ways out (see Output
+  changes above for the exact sequence).
 - **`prikk doctor --cancel-import <id> [--plan-only]`**: for every container the journal names,
   saves the bytes past its journaled starting length to the recovery log, then truncates back;
   refuses an id that does not match the journal present. `--plan-only` previews without writing.

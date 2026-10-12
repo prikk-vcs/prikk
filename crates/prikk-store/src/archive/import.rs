@@ -92,7 +92,7 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload};
+use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload, SignerRole};
 
 use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
@@ -315,6 +315,27 @@ pub struct LandingOutcome {
     /// actually trusted, printing "verify fails" beside a tip that in fact verifies fine. `false`
     /// when `landed` is `false` (nothing was written to check).
     pub publication_trusted: bool,
+    /// Every distinct MAINTAINER signer key id on this landing's own tip (I-F item 1), sorted and
+    /// deduplicated -- so the CLI's own trust note can name a concrete key for `trust maintainer
+    /// add` to act on, since `verify`'s own lines name only object ids, never a key id. Empty when
+    /// the tip's own object could not be read (should not happen in practice; stage 1 already
+    /// wrote it before stage 3 ever runs) or when nothing was checked.
+    pub signing_key_ids: Vec<String>,
+}
+
+/// Every distinct MAINTAINER signer key id on `envelope`, sorted and deduplicated (I-F item 1) --
+/// used only to name a concrete key in the CLI's own trust note, never to decide trust itself
+/// (that is [`verify_trusted_publication_envelope`]'s own job).
+fn maintainer_signer_key_ids(envelope: &ObjectEnvelope) -> Vec<String> {
+    let mut ids: Vec<String> = envelope
+        .signatures
+        .iter()
+        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
+        .map(|signature| signature.key_id.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 /// Summary of an RFC 155 `archive import` run: stages 0-3, the journal, and the commit point.
@@ -725,6 +746,24 @@ pub fn import_archive<R: Read + Seek>(
             // The exporter's own local ref already landed at this exact name -- its objects were
             // already imported by stage 1 (unaffected by any stage-3 landing decision); only the
             // pointer write itself is skipped, and named, not silently dropped.
+            //
+            // I-F item 1: a collided (not-landed) entry's own trust still matters -- stage 1 wrote
+            // its object regardless of stage 3's landing decision, so the destination's own
+            // `verify` checks it too, even though no visible ref names it. Computed the same way
+            // `land_one_ref` does, against this object store and the destination's own adopted
+            // policy, not left as a hardcoded `false` that would silently hide an untrusted
+            // collided pointer from the CLI's own trust note.
+            let ref_state_envelope = object_store.read_object(landing.ref_state_id)?;
+            let publication_trusted = match &ref_state_envelope {
+                Some(envelope) => {
+                    verify_trusted_publication_envelope(&adopted_policy, envelope).is_ok()
+                }
+                None => false,
+            };
+            let signing_key_ids = ref_state_envelope
+                .as_ref()
+                .map(maintainer_signer_key_ids)
+                .unwrap_or_default();
             if let Some(slot) = landing_outcomes.get_mut(index) {
                 *slot = Some(LandingOutcome {
                     ref_name: landing.ref_name.clone(),
@@ -738,7 +777,8 @@ pub fn import_archive<R: Read + Seek>(
                     landed: false,
                     collision_target: Some(landing.ref_state_id),
                     origin: landing.origin,
-                    publication_trusted: false,
+                    publication_trusted,
+                    signing_key_ids,
                 });
             }
             continue;
@@ -811,12 +851,17 @@ fn land_one_ref(
     // every branch below, through the exact same `verify_trusted_publication_envelope` check
     // `archive verify` and `try_adopt_local_ref`'s own conditions 2/3 already use, against the
     // destination's own `adopted_policy` rather than the archive's own carried one.
-    let publication_trusted = match object_store.read_object(landing.ref_state_id)? {
-        Some(ref_state_envelope) => {
-            verify_trusted_publication_envelope(adopted_policy, &ref_state_envelope).is_ok()
-        }
+    let ref_state_envelope = object_store.read_object(landing.ref_state_id)?;
+    let publication_trusted = match &ref_state_envelope {
+        Some(envelope) => verify_trusted_publication_envelope(adopted_policy, envelope).is_ok(),
         None => false,
     };
+    // I-F item 1: the CLI's own trust note names a concrete signing key, not just "untrusted" --
+    // `verify`'s own lines name only object ids, never a key id.
+    let signing_key_ids = ref_state_envelope
+        .as_ref()
+        .map(maintainer_signer_key_ids)
+        .unwrap_or_default();
     match landing.origin {
         // §9.6: the archive's own received pointers stay received, under their own
         // already-`remotes/`-shaped name -- never re-wrapped a second time (review
@@ -838,6 +883,7 @@ fn land_one_ref(
                     collision_target: None,
                     origin: landing.origin,
                     publication_trusted,
+                    signing_key_ids: signing_key_ids.clone(),
                 },
                 changed,
             ))
@@ -861,6 +907,7 @@ fn land_one_ref(
                         collision_target: None,
                         origin: landing.origin,
                         publication_trusted,
+                        signing_key_ids: signing_key_ids.clone(),
                     },
                     true,
                 )),
@@ -881,6 +928,7 @@ fn land_one_ref(
                             collision_target: None,
                             origin: landing.origin,
                             publication_trusted,
+                            signing_key_ids: signing_key_ids.clone(),
                         },
                         changed,
                     ))
@@ -904,6 +952,7 @@ fn land_one_ref(
                     collision_target: None,
                     origin: landing.origin,
                     publication_trusted,
+                    signing_key_ids,
                 },
                 changed,
             ))

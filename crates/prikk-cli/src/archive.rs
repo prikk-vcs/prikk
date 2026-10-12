@@ -432,18 +432,23 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
     println!("already imported: {}", report.already_imported);
 }
 
-/// I-E item 4: the note fires only for a **landed** ref whose own tip carries no maintainer
+/// I-F item 1: names every **planned** entry (landed or not) whose own tip carries no maintainer
 /// signature this destination repository already trusts (`LandingOutcome::publication_trusted`,
-/// checked against the destination's own adopted policy -- not merely "was `--adopt` used"). The
-/// review's own three rows: untrusted prints the note; trusted without `--adopt` prints none
-/// (the ref is fine, just not a local branch); trusted with `--adopt` prints none either. The
-/// `--adopt` hint is given only when at least one of the named refs is the exporter's own
-/// ([`prikk_store::LandingOrigin::Local`]) -- a received pointer can never be adopted, so the
-/// hint must never be offered for one alone.
+/// checked against the destination's own adopted policy -- not merely "was `--adopt` used").
+/// I-E's own narrower rule (landed refs only) missed a collided received pointer: it loses I-C's
+/// own landing-collision rule and is never written as a ref, but its own object was still
+/// imported by stage 1, and the destination's own `prikk verify` checks it regardless of whether
+/// any ref names it -- so a user who did nothing unusual got a failing `verify` with no warning
+/// at all about why. Each entry names its own signing key id(s)
+/// (`LandingOutcome::signing_key_ids`), so `trust maintainer add` has something concrete to act
+/// on (`verify`'s own lines name only object ids, never a key id). The `--adopt` hint is given
+/// only when at least one named entry is the exporter's own ([`prikk_store::LandingOrigin::
+/// Local`]) -- a received pointer can never be adopted, so the hint must never be offered for one
+/// alone.
 fn publication_trust_note(landing_outcomes: &[prikk_store::LandingOutcome]) -> Option<String> {
     let untrusted: Vec<&prikk_store::LandingOutcome> = landing_outcomes
         .iter()
-        .filter(|landing| landing.landed && !landing.publication_trusted)
+        .filter(|landing| !landing.publication_trusted)
         .collect();
     if untrusted.is_empty() {
         return None;
@@ -451,24 +456,41 @@ fn publication_trust_note(landing_outcomes: &[prikk_store::LandingOutcome]) -> O
     let adopt_hint_applies = untrusted
         .iter()
         .any(|landing| landing.origin == prikk_store::LandingOrigin::Local);
-    let names = untrusted
+    let mut parts: Vec<String> = untrusted
         .iter()
-        .map(|landing| landing.ref_name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(if adopt_hint_applies {
+        .map(|landing| {
+            let keys = if landing.signing_key_ids.is_empty() {
+                "an unrecorded key".to_string()
+            } else {
+                landing.signing_key_ids.join(", ")
+            };
+            if landing.landed {
+                format!(
+                    "{} landed, signed by {keys}, not yet trusted",
+                    landing.ref_name
+                )
+            } else {
+                format!(
+                    "{} imported without a ref (the exporter's own ref holds the name), signed \
+                     by {keys}, not yet trusted",
+                    landing.ref_name
+                )
+            }
+        })
+        .collect();
+    let pronoun = if untrusted.len() == 1 { "its" } else { "their" };
+    parts.push(if adopt_hint_applies {
         format!(
-            "{names} landed with no maintainer signature this repository yet trusts; `prikk \
-             verify` will fail their publication trust until `trust maintainer add` adopts the \
-             signing key (or re-run with --adopt once it is)"
+            "`prikk verify` will fail {pronoun} publication trust until `trust maintainer add` \
+             adopts the signing key (or re-run with --adopt once it is)"
         )
     } else {
         format!(
-            "{names} landed with no maintainer signature this repository yet trusts; `prikk \
-             verify` will fail their publication trust until `trust maintainer add` adopts the \
-             signing key"
+            "`prikk verify` will fail {pronoun} publication trust until `trust maintainer add` \
+             adopts the signing key"
         )
-    })
+    });
+    Some(parts.join("; "))
 }
 
 fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
