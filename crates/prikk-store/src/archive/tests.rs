@@ -151,6 +151,31 @@ pub(in crate::archive) fn rewrite_manifest_repository_format_for_test(
     recompute_manifest_checksum_for_test(bytes);
 }
 
+/// Rewrite the manifest's own entry `count` field to `new_count`, then recompute and rewrite the
+/// end trailer's manifest checksum to match -- a *legitimately re-encoded* manifest declaring a
+/// count this build must refuse (I-E item 3), not a corrupted one. The manifest's own layout
+/// (`write_manifest`'s own order, `decode_manifest_bytes`'s own read order): magic(8) +
+/// repository_format(4) + tool_version_len(2) + tool_version + count(8) -- `count`'s own offset
+/// depends on `tool_version`'s own length, so it is located by walking the same fields
+/// `decode_manifest_bytes` reads, not assumed at a fixed offset.
+pub(in crate::archive) fn rewrite_manifest_entry_count_for_test(bytes: &mut [u8], new_count: u64) {
+    let end_trailer_start = bytes.len() - 56;
+    let manifest_offset = u64::from_be_bytes(
+        bytes[end_trailer_start + 8..end_trailer_start + 16]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let tool_version_len_offset = manifest_offset + 8 + 4;
+    let tool_version_len = u16::from_be_bytes(
+        bytes[tool_version_len_offset..tool_version_len_offset + 2]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let count_offset = tool_version_len_offset + 2 + tool_version_len;
+    bytes[count_offset..count_offset + 8].copy_from_slice(&new_count.to_be_bytes());
+    recompute_manifest_checksum_for_test(bytes);
+}
+
 /// Recompute the end trailer's manifest checksum from `bytes`'s own current manifest body, and
 /// rewrite it in place -- for a test that deliberately edits manifest bytes to reach some *other*
 /// refusal (an unknown/duplicated section kind, a traversal-shaped string) and needs the checksum

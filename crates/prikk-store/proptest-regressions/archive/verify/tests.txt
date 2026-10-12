@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc cf3ecaff99c0df979aad8faf4179174e301cab7a88e992c58bf0351e94c3173e # shrinks to mutation = Insert { at: 7627507924071915276, bytes: [1] }
+cc be04e50e54a59eb6a11cb2fa018de455a6a5124ef8bd9a2c3c12e6b063bbc17f # shrinks to mutation = RewriteU64 { at: 2650501174858507243, value: 0 }

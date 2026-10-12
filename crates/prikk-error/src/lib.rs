@@ -79,7 +79,17 @@ pub enum PrikkError {
     /// unconditionally, which misleads when the thing actually bounded is a count; this variant
     /// exists so a count-bound refusal reads honestly, without borrowing byte-shaped wording for a
     /// unit it never had.
+    ///
+    /// I-E item 3 (review `rfc155-impl-IC-review-v1`): the first version named no subject at all
+    /// (*"declares 20000 entries, over the bound of 10000"* -- a user cannot tell what declared
+    /// them). `declared_what`/`unit` are the call site's own words for what was counted, so every
+    /// construction site states its own subject explicitly rather than this shared variant
+    /// guessing one.
     CountOverBound {
+        /// What owns the count, in the call site's own words (e.g. `"the archive manifest"`).
+        declared_what: &'static str,
+        /// The plural noun for what was counted (e.g. `"sections"`).
+        unit: &'static str,
         /// The count this frame declared.
         declared_count: u64,
         /// The bound that was exceeded.
@@ -128,11 +138,13 @@ impl fmt::Display for PrikkError {
                  {bound_bytes} bytes"
             ),
             Self::CountOverBound {
+                declared_what,
+                unit,
                 declared_count,
                 bound_count,
             } => write!(
                 f,
-                "declares {declared_count} entries, over the bound of {bound_count}"
+                "{declared_what} declares {declared_count} {unit}, over the bound of {bound_count}"
             ),
             Self::Io { context, .. } => write!(f, "i/o error: {context}"),
         }

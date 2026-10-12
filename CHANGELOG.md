@@ -12,6 +12,9 @@
   `KeepSlotReport`. Every one of these is `#[non_exhaustive]`, so this compiles unchanged if
   constructed and matched only through the crate, per the existing convention — construct with
   `..` or the type's own `Default`, match with `..`.
+- **Rust callers of `prikk-error`:** a new public variant, `PrikkError::CountOverBound`, for a
+  DC-86 bound on a count (entries, sections, records) rather than a byte length — it carries its
+  own `declared_what`/`unit` fields so its message names its own subject.
 
 ### Output changes
 
@@ -55,18 +58,27 @@
   container whose generation log is merely ambiguous (before: the identical state printed both
   `PRIKK-DOCTOR-GENERATION-LOG-AMBIGUOUS` and a separate, misleading interior-damage line — nothing
   there failed to decode; the log simply names no live slot).
-- `archive import`'s own report gains two fields on each landing outcome, `landed` and
-  `collision_target` (text and JSON): `landed` is `false` only when a carried received pointer was
-  not written because it collided with the exporter's own ref at the same `remotes/<ref>` name,
-  and `collision_target` then names the `RefState` id it would have landed. A new note, printed
-  once, after any import that landed at least one ref under `remotes/` rather than as a real local
-  branch: *"N ref(s) landed under remotes/, not as local branches; `prikk verify` fails their
-  publication trust until `trust maintainer add` adopts the signing key (or re-run with --adopt
-  once it is)"*.
+- `archive import`'s own report gains four fields on each landing outcome, `landed`,
+  `collision_target`, `origin`, and `publication_trusted` (text and JSON): `landed` is `false`
+  only when a carried received pointer was not written because it collided with the exporter's
+  own ref at the same `remotes/<ref>` name, and `collision_target` then names the `RefState` id it
+  would have landed. A note is now printed only for a **landed** ref whose own tip carries no
+  maintainer signature this destination repository already trusts — not, as a first version had
+  it, for every landed-but-not-adopted ref regardless of whether the signer was actually trusted
+  (which could print "verify fails" beside a tip that in fact verifies fine). The `--adopt` hint
+  in that note appears only when one of the named refs is the exporter's own — a received pointer
+  can never be adopted, so the hint is never offered for one alone.
 - `archive verify`/`archive import`'s own manifest section-count bound refused with
   `` `an object declares N bytes, over the per-object bound of M bytes` `` for a *count*, not a
-  byte length — borrowed wording from the per-object bound, not this bound's own. It now refuses
-  with `` `declares N entries, over the bound of M` ``.
+  byte length — borrowed wording from the per-object bound, and later with a corrected but still
+  subject-less `` `declares N entries, over the bound of M` ``. It now names its own subject:
+  `` `the archive manifest declares N sections, over the bound of M` ``.
+- `archive verify`'s own interrupted-append lines (a torn frame a later, genuine write overran)
+  used to reuse the identical *"container record at byte offset N failed its own checksum"*
+  wording genuine damage prints — alarming language for an outcome the source repository itself
+  only ever warns about. They now print *"interrupted append at byte offset N -- a later write
+  already completed past this frame's own claimed end; not imported"*, never the checksum-failure
+  wording, for this specific, non-damage outcome.
 
 ### Fixed — `archive import` could silently drop a ref behind a colliding received pointer, refuse a healthy backup over an ordinary crash tail, and refuse a whole archive over one untrusted signature
 
@@ -99,6 +111,12 @@
   leaves the archive internally consistent (trust is always the receiver's own decision); a
   signature by a key the archive **does** carry, that nonetheless fails to verify, is still damage
   and still refuses. Applies identically to MAINTAINER and AUTHOR signatures.
+- `archive verify` checksummed each section's own bytes and the manifest's own overall body, but
+  never compared a section's own on-disk trailing checksum against what the manifest itself
+  recorded for that section — each individually self-consistent, so two sections swapped in place
+  (each still passing its own checksum) would have gone unnoticed, even though the carried,
+  checksummed manifest no longer named them correctly. A section's own trailing checksum must now
+  equal its manifest entry's own recorded checksum, or it is damage, named.
 
 ### Fixed — a ref-log tail, an acknowledged-damage WAL record, a deduced pointer-index state, and an ambiguous generation log were each reported in a way that pointed at the wrong command, or twice
 

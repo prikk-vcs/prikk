@@ -528,7 +528,12 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
 /// The section's own outer header and checksum, read in one streamed, chunked pass -- `None` when
 /// the header itself (magic, wire code, declared length) does not match `entry`; `Some(matches)`
 /// once it does, where `matches` is whether the trailing 32-byte checksum, computed over the header
-/// plus every byte of the record area, agrees with what is stored.
+/// plus every byte of the record area, agrees with what is stored **and** with the manifest's own
+/// recorded entry for this section (RFC 155 §9.4's own amendment, I-E's own aside: the exporter
+/// always writes the identical checksum to both places, `archive.rs`'s own `write_section`
+/// confirms it, so a section's own on-disk trailing checksum disagreeing with what the
+/// checksummed, tamper-evident manifest recorded for it -- e.g. two sections swapped, each still
+/// internally self-consistent -- is damage, the same way a torn or flipped section already is).
 fn section_header_and_checksum<R: Read + Seek>(
     source: &mut R,
     entry: &ManifestEntry,
@@ -559,7 +564,11 @@ fn section_header_and_checksum<R: Read + Seek>(
     }
     let mut section_checksum = [0u8; 32];
     source.read_exact(&mut section_checksum)?;
-    Ok(Some(hasher.finalize() == section_checksum))
+    let computed_matches_stored = hasher.finalize() == section_checksum;
+    let stored_matches_manifest_entry = section_checksum == entry.checksum;
+    Ok(Some(
+        computed_matches_stored && stored_matches_manifest_entry,
+    ))
 }
 
 /// One streamed container-frame attempt's outcome -- the archive's own twin of
@@ -605,23 +614,15 @@ fn parse_frame_at_streamed<R: Read + Seek>(
     }
     let body_len_u64 = u64::from_be_bytes(header[10..18].try_into().unwrap_or([0u8; 8]));
     let checksum_declared: [u8; 32] = header[18..50].try_into().unwrap_or([0u8; 32]);
-    if body_len_u64 > DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64 {
-        // DC-86: never allocate on the strength of an unchecked declared length -- but this
-        // attempt may be a resync *candidate* (a magic-byte coincidence inside otherwise-garbage
-        // bytes, not the section's own main sequential position), so a hard `Err` here would aport
-        // the *whole* decode on one implausible candidate -- a denial-of-service shape an attacker
-        // could trigger with eight magic bytes and a huge length field anywhere in a section.
-        // Classified as `Invalid` (not sound, never a hard error) instead: the resync scan simply
-        // keeps looking, exactly as it already does for a bad magic/version.
-        return Ok(StreamedFrameAttempt::Invalid {
-            message: format!(
-                "container record at byte offset {offset} declares {body_len_u64} body bytes, \
-                 over the per-object bound of {} -- not a real record",
-                DEFAULT_BUNDLE_MAX_OBJECT_BYTES
-            ),
-            complete: false,
-        });
-    }
+    // Past-the-end comes first, exactly as `parse_frame_at_reporting` orders it -- the DC-86 bound
+    // below only ever applies to a claim already known to fit entirely within real, present
+    // section bytes (I-E item 0(a): the pre-fix order checked the bound first, so a corrupted
+    // length field read as a huge number resynced to the next *magic* and was named damage,
+    // instead of resyncing to the next *sound* frame the way the store's own short-read path
+    // already does). The two overflow arms below mirror `parse_frame_at_reporting`'s own
+    // classification exactly (`Invalid`, not `TrailingPartial` -- a length that cannot even be
+    // represented is not "a well-formed header claiming more than is left," the one shape
+    // `TrailingPartial` is for).
     let Ok(body_len) = usize::try_from(body_len_u64) else {
         return Ok(StreamedFrameAttempt::Invalid {
             message: format!("container record length overflow at byte offset {offset}"),
@@ -641,6 +642,19 @@ fn parse_frame_at_streamed<R: Read + Seek>(
         // A well-formed header claiming more body than this section has left -- the hallmark of a
         // genuine crash tail (RFC 162 rule 2's own `TrailingPartial`). Incomplete, not damage.
         return Ok(StreamedFrameAttempt::TrailingPartial);
+    }
+    // The claim is now known to fit entirely within real, present section bytes -- no longer a
+    // magic-byte coincidence pointing past what is actually there. DC-86: the archive is untrusted
+    // input and must never allocate past its own per-object bound, so a claim this large, even
+    // though it is genuinely in range, is refused outright (the same whole-operation refusal
+    // `read_section_body_fully`/`read_manifest` already give an over-bound but structurally sound
+    // declared length) -- never silently skipped as "maybe not a real record," because by this
+    // point it demonstrably is one.
+    if body_len_u64 > DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64 {
+        return Err(PrikkError::ObjectOverBound {
+            declared_bytes: body_len_u64,
+            bound_bytes: DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64,
+        });
     }
     let mut body = vec![0u8; body_len];
     source.read_exact(&mut body)?;
@@ -933,7 +947,18 @@ fn classify_section_records<R: Read + Seek>(
                 if complete {
                     record_damage.push(message);
                 } else {
-                    interrupted_appends.push(message);
+                    // I-E item 0(f): the checksum genuinely does not match this frame's own claimed
+                    // bytes, but `checksum_mismatch_is_complete_streamed` has already confirmed a
+                    // later, sound frame starts inside its own claimed range -- a real write
+                    // finished past a torn one, exactly what the source repository's own `prikk
+                    // verify` calls an interrupted append, never a checksum failure. Reusing
+                    // `message`'s own "failed its own checksum" wording here would alarm a reader
+                    // of a healthy backup's own report with language the source itself does not
+                    // use for this outcome.
+                    interrupted_appends.push(format!(
+                        "interrupted append at byte offset {offset} -- a later write already \
+                         completed past this frame's own claimed end; not imported"
+                    ));
                 }
                 match resync_to_next_magic_streamed(
                     source,
@@ -984,7 +1009,10 @@ fn stream_opaque_section<R: Read + Seek>(source: &mut R, entry: &ManifestEntry) 
     }
     let mut checksum = [0u8; 32];
     source.read_exact(&mut checksum)?;
-    Ok(hasher.finalize() == checksum)
+    // I-E's own aside (RFC 155 §9.4): the section's own on-disk trailing checksum must also equal
+    // what the manifest itself recorded for this entry -- see `section_header_and_checksum`'s own
+    // doc comment for why (the exporter always writes the identical value to both places).
+    Ok(hasher.finalize() == checksum && checksum == entry.checksum)
 }
 
 /// Read one section's full body into memory -- only ever called for the three small, carried
@@ -1167,6 +1195,8 @@ fn decode_manifest_bytes(body: &[u8]) -> Result<ManifestView> {
         // External review 023: this bounds a *count* of entries, not a byte length --
         // `CountOverBound`, not `ObjectOverBound`, so the refusal names what is actually bounded.
         return Err(PrikkError::CountOverBound {
+            declared_what: "the archive manifest",
+            unit: "sections",
             declared_count: count,
             bound_count: MAX_MANIFEST_ENTRIES,
         });

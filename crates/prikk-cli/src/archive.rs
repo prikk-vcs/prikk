@@ -426,19 +426,49 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
             println!("{}: landed as {}", landing.ref_name, landing.landed_as);
         }
     }
-    let unadopted_landed_count = report
-        .landing_outcomes
-        .iter()
-        .filter(|landing| landing.landed && !landing.adopted)
-        .count();
-    if unadopted_landed_count > 0 {
-        println!(
-            "note: {unadopted_landed_count} ref(s) landed under remotes/, not as local branches; \
-             `prikk verify` fails their publication trust until `trust maintainer add` adopts the \
-             signing key (or re-run with --adopt once it is)"
-        );
+    if let Some(note) = publication_trust_note(&report.landing_outcomes) {
+        println!("note: {note}");
     }
     println!("already imported: {}", report.already_imported);
+}
+
+/// I-E item 4: the note fires only for a **landed** ref whose own tip carries no maintainer
+/// signature this destination repository already trusts (`LandingOutcome::publication_trusted`,
+/// checked against the destination's own adopted policy -- not merely "was `--adopt` used"). The
+/// review's own three rows: untrusted prints the note; trusted without `--adopt` prints none
+/// (the ref is fine, just not a local branch); trusted with `--adopt` prints none either. The
+/// `--adopt` hint is given only when at least one of the named refs is the exporter's own
+/// ([`prikk_store::LandingOrigin::Local`]) -- a received pointer can never be adopted, so the
+/// hint must never be offered for one alone.
+fn publication_trust_note(landing_outcomes: &[prikk_store::LandingOutcome]) -> Option<String> {
+    let untrusted: Vec<&prikk_store::LandingOutcome> = landing_outcomes
+        .iter()
+        .filter(|landing| landing.landed && !landing.publication_trusted)
+        .collect();
+    if untrusted.is_empty() {
+        return None;
+    }
+    let adopt_hint_applies = untrusted
+        .iter()
+        .any(|landing| landing.origin == prikk_store::LandingOrigin::Local);
+    let names = untrusted
+        .iter()
+        .map(|landing| landing.ref_name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(if adopt_hint_applies {
+        format!(
+            "{names} landed with no maintainer signature this repository yet trusts; `prikk \
+             verify` will fail their publication trust until `trust maintainer add` adopts the \
+             signing key (or re-run with --adopt once it is)"
+        )
+    } else {
+        format!(
+            "{names} landed with no maintainer signature this repository yet trusts; `prikk \
+             verify` will fail their publication trust until `trust maintainer add` adopts the \
+             signing key"
+        )
+    })
 }
 
 fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
@@ -500,7 +530,7 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
         .map(|landing| {
             format!(
                 "{{ \"ref_name\": {}, \"landed_as\": {}, \"adopted\": {}, \"remote_reason\": {}, \
-                 \"landed\": {}, \"collision_target\": {} }}",
+                 \"landed\": {}, \"collision_target\": {}, \"publication_trusted\": {} }}",
                 escape_json_string(&landing.ref_name),
                 escape_json_string(&landing.landed_as),
                 landing.adopted,
@@ -512,7 +542,8 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
                 match landing.collision_target {
                     Some(id) => escape_json_string(&id.to_string()),
                     None => "null".to_string(),
-                }
+                },
+                landing.publication_trusted
             )
         })
         .collect();
@@ -520,19 +551,10 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
         "  \"landings\": [{}],\n",
         landing_lines.join(", ")
     ));
-    let unadopted_landed_count = report
-        .landing_outcomes
-        .iter()
-        .filter(|landing| landing.landed && !landing.adopted)
-        .count();
     json.push_str(&format!(
         "  \"note\": {},\n",
-        if unadopted_landed_count > 0 {
-            escape_json_string(&format!(
-                "{unadopted_landed_count} ref(s) landed under remotes/, not as local branches; \
-                 verify fails their publication trust until trust maintainer add adopts the \
-                 signing key (or re-run with --adopt once it is)"
-            ))
+        if let Some(note) = publication_trust_note(&report.landing_outcomes) {
+            escape_json_string(&note)
         } else {
             "null".to_string()
         }

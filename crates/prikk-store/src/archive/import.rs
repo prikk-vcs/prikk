@@ -301,6 +301,20 @@ pub struct LandingOutcome {
     /// not collided -- named so nothing is silently dropped from the report even though nothing
     /// was written here. Its own object was still imported by stage 1, which this never touches.
     pub collision_target: Option<ObjectId>,
+    /// Which resolved family this landing came from (I-E item 4): the CLI's own default-import
+    /// trust note must give the `--adopt` hint only for a [`LandingOrigin::Local`] entry -- a
+    /// received pointer can never be adopted (`--adopt` only ever applies to the exporter's own
+    /// ref), so the hint must never be offered for one. `false`/irrelevant-shaped default when
+    /// `landed` is `false`, since nothing is checked for a landing that never happened.
+    pub origin: LandingOrigin,
+    /// `true` when this landing's own tip carries a maintainer signature **this destination
+    /// repository already trusts** (checked through `verify_trusted_publication_envelope` against
+    /// the destination's own adopted policy, independent of whether `--adopt` applied) -- I-E item
+    /// 4's own re-scoping of the review's finding: the review's own three rows showed the prior
+    /// note fired for every landed-but-not-adopted ref regardless of whether the signer was
+    /// actually trusted, printing "verify fails" beside a tip that in fact verifies fine. `false`
+    /// when `landed` is `false` (nothing was written to check).
+    pub publication_trusted: bool,
 }
 
 /// Summary of an RFC 155 `archive import` run: stages 0-3, the journal, and the commit point.
@@ -718,11 +732,13 @@ pub fn import_archive<R: Read + Seek>(
                     adopted: false,
                     remote_reason: Some(
                         "collides with the exporter's own ref at this name; the exporter's ref \
-                         wins (RFC 155 §9.6)"
+                         wins"
                             .to_string(),
                     ),
                     landed: false,
                     collision_target: Some(landing.ref_state_id),
+                    origin: landing.origin,
+                    publication_trusted: false,
                 });
             }
             continue;
@@ -790,6 +806,17 @@ fn land_one_ref(
     ref_log_records: &[crate::refs::RefLogRecord],
     container_locks: &ContainerLockGuard,
 ) -> Result<(LandingOutcome, bool)> {
+    // I-E item 4: whether this landing's own tip carries a maintainer signature the *destination*
+    // already trusts -- independent of whether `--adopt` applied, computed once and reused for
+    // every branch below, through the exact same `verify_trusted_publication_envelope` check
+    // `archive verify` and `try_adopt_local_ref`'s own conditions 2/3 already use, against the
+    // destination's own `adopted_policy` rather than the archive's own carried one.
+    let publication_trusted = match object_store.read_object(landing.ref_state_id)? {
+        Some(ref_state_envelope) => {
+            verify_trusted_publication_envelope(adopted_policy, &ref_state_envelope).is_ok()
+        }
+        None => false,
+    };
     match landing.origin {
         // §9.6: the archive's own received pointers stay received, under their own
         // already-`remotes/`-shaped name -- never re-wrapped a second time (review
@@ -809,6 +836,8 @@ fn land_one_ref(
                     remote_reason: None,
                     landed: true,
                     collision_target: None,
+                    origin: landing.origin,
+                    publication_trusted,
                 },
                 changed,
             ))
@@ -830,6 +859,8 @@ fn land_one_ref(
                         remote_reason: None,
                         landed: true,
                         collision_target: None,
+                        origin: landing.origin,
+                        publication_trusted,
                     },
                     true,
                 )),
@@ -848,6 +879,8 @@ fn land_one_ref(
                             remote_reason: Some(reason),
                             landed: true,
                             collision_target: None,
+                            origin: landing.origin,
+                            publication_trusted,
                         },
                         changed,
                     ))
@@ -869,6 +902,8 @@ fn land_one_ref(
                     remote_reason: None,
                     landed: true,
                     collision_target: None,
+                    origin: landing.origin,
+                    publication_trusted,
                 },
                 changed,
             ))

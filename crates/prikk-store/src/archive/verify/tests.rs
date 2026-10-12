@@ -360,6 +360,53 @@ fn verify_refuses_a_flipped_manifest_byte() {
     );
 }
 
+/// I-E's own aside (RFC 155 §9.4): each section's own on-disk trailing checksum must equal what
+/// the manifest itself recorded for that section, or it is damage -- a *legitimately re-encoded*
+/// manifest (its own outer checksum recomputed to match) that nonetheless disagrees with one
+/// section's own real, untouched trailing bytes. The exporter always writes the identical value to
+/// both places, so this divergence can only mean the manifest and the section were not produced
+/// together (e.g. one section's own bytes were swapped in from elsewhere, a shape each
+/// individually self-consistent, but the carried manifest no longer names them correctly).
+#[test]
+fn verify_refuses_a_manifest_entry_checksum_that_disagrees_with_its_own_section() {
+    let mut bytes = build_one_block_archive();
+    let checksum_offset = entry_record_offset(&bytes, 0) + 18;
+    bytes[checksum_offset] ^= 0xFF;
+    crate::archive::tests::recompute_manifest_checksum_for_test(&mut bytes);
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.is_internally_consistent(),
+        "a manifest entry checksum disagreeing with its own section must not be consistent: \
+         {report:?}"
+    );
+    assert!(
+        report
+            .damaged
+            .iter()
+            .any(|line| line.contains("checksum") || line.contains("truncated")),
+        "must name the section's own checksum problem: {:?}",
+        report.damaged
+    );
+}
+
+/// I-E item 3 (review `rfc155-impl-IC-review-v1`): the section-count bound's own refusal named no
+/// subject at all (*"declares 20000 entries, over the bound of 10000"*), borrowing wording that
+/// could not tell a user what was actually counted. The whole message is asserted, not merely
+/// that some refusal happened.
+#[test]
+fn verify_names_the_subject_of_a_manifest_section_count_over_its_bound() {
+    let mut bytes = build_one_block_archive();
+    crate::archive::tests::rewrite_manifest_entry_count_for_test(&mut bytes, 20_000);
+    let mut cursor = Cursor::new(bytes);
+    let err = verify_archive(&mut cursor).expect_err("an over-bound section count must refuse");
+    assert_eq!(
+        err.to_string(),
+        "the archive manifest declares 20000 sections, over the bound of 10000",
+        "the whole message must name the subject, not only that a count was over bound"
+    );
+}
+
 /// V1b: a *legitimately re-encoded* manifest (correct checksum) declaring a `repository_format`
 /// this build does not know -- proves the format check is independent of the checksum check, not a
 /// side effect of it (a future build's own correctly-written archive must still be refused by name,
@@ -1124,12 +1171,20 @@ mod differential_against_the_store {
     /// itself expects (`archive.rs`'s own shape: magic, kind, length, the bytes verbatim, a
     /// trailing checksum), and run it -- the archive's own streamed classification, over the
     /// identical bytes `real_classification` above just read directly.
-    /// `Err` only for [`prikk_error::PrikkError::ObjectOverBound`] -- the archive's own deliberate
-    /// DC-86 refusal for a claimed body length past 256 MiB, which `decode_container_records`
-    /// never applies at all (it trusts its own local container file; this bound exists only
-    /// because the archive is untrusted input). A mutation that happens to produce such a claim is
-    /// a case the two decoders are *supposed* to diverge on, not a differential-test failure --
-    /// [`assert_held_equal_to_the_store`] treats this `Err` as "nothing further to compare."
+    /// `Err` only for [`prikk_error::PrikkError::ObjectOverBound`] -- I-E item 0(c): after item
+    /// 0(a)'s reorder, `parse_frame_at_streamed` raises this **only** once a candidate's claimed
+    /// body is already known to fit entirely within the section's own real, present bytes (the
+    /// past-the-end check runs first) and *still* exceeds the 256 MiB per-object bound. That is
+    /// the one legitimate divergence: `decode_container_records` never applies this bound at all
+    /// (it trusts its own local container file; the bound exists only because the archive is
+    /// untrusted input), so it would read a record this large; the archive correctly refuses it
+    /// (DC-86). No other call path in this module can produce this error, so this `Err` arm is
+    /// already exactly this one shape, not a broad catch-all -- [`assert_held_equal_to_the_store`]
+    /// treats it as "nothing further to compare." Any `ObjectOverBound` arising from a claim that
+    /// does *not* fit the section would be a real differential-test failure; before item 0(a)'s
+    /// fix such a claim could never reach here at all (the bound was checked before the
+    /// past-the-end test), which is exactly why this `Err` arm was unreachable, and therefore
+    /// dead, prior to this part.
     fn archive_classification(
         object_type: ObjectType,
         bytes: &[u8],
@@ -1383,30 +1438,22 @@ mod differential_against_the_store {
     /// own (its `Insert` variant inserts arbitrary bytes, not specifically a plausible-looking
     /// header), so this part's own overrun-adjacent concern gets its own small property too.
     ///
-    /// `at` is bounded to this fixture's own three record boundaries (0, 258, 516, or the very
-    /// end, 774), not an arbitrary byte offset: a real crash or append can only ever happen *at*
-    /// an existing record's own boundary (append-only containers never rewrite a record already
-    /// on disk), so splicing a torn-frame-shaped chunk into the *middle* of an already-complete
-    /// record is not a shape either decoder is specified to agree on -- it would require this
-    /// fixture's own three identical records to coincidentally contain no false-positive magic
-    /// byte sequence anywhere in their own body content for the comparison to even be meaningful,
-    /// which this project's own `one_real_blob_record` fixture does not promise. The genuine
-    /// boundary-overrun shape (a torn header, then a later write starting right after it) is
-    /// exactly `agrees_on_the_reviews_own_overrun_shape`, above, and the required control.
+    /// I-E item 0(b): `at` and `claimed_len` were previously restricted to record boundaries and
+    /// under 10 MB, on the reasoning that a real crash or append can only ever happen at an
+    /// existing record's own boundary. The review's own finding: the archive is untrusted input,
+    /// so a writer of *any* bytes is in scope, not only a realistic crash shape -- and that
+    /// restriction is exactly what hid I-E item 0(a)'s own bug (a torn header spliced into the
+    /// *middle* of a record, corrupting its own length field to read as a huge number). Both
+    /// restrictions are removed: `at` ranges over every byte offset in the fixture, and
+    /// `claimed_len` ranges over all of `u64`.
     #[test]
     fn proptest_torn_frame_shaped_insertion_agrees_with_the_store() {
         use proptest::prelude::*;
         let magic = container_magic(ObjectType::Blob).expect("magic");
-        const RECORD_BOUNDARIES: [usize; 4] = [0, 258, 516, 774];
-        // Bounded well under the archive's own DC-86 per-object ceiling (`DEFAULT_BUNDLE_MAX_
-        // OBJECT_BYTES`, 256 MiB): that refusal is deliberate, archive-specific hardening against
-        // untrusted input the live store's own `decode_container_records` was never built to need
-        // (it trusts its own local container file), so a `claimed_len` at or past it is a case
-        // where the two decoders are *supposed* to diverge, not a shape this property should cover.
-        proptest!(ProptestConfig::with_cases(200), |(boundary_index: usize, claimed_len in 0u64..10_000_000u64)| {
+        proptest!(ProptestConfig::with_cases(200), |(at: usize, claimed_len: u64)| {
             let mut bytes = multi_record_container();
             assert_eq!(bytes.len(), 774, "sanity: this fixture's own three records are 258 bytes each");
-            let at = RECORD_BOUNDARIES[boundary_index % RECORD_BOUNDARIES.len()];
+            let at = at % (bytes.len() + 1);
             let mut torn = Vec::new();
             torn.extend_from_slice(magic);
             torn.extend_from_slice(&1u16.to_be_bytes());
@@ -1415,5 +1462,51 @@ mod differential_against_the_store {
             bytes.splice(at..at, torn);
             assert_held_equal_to_the_store(ObjectType::Blob, &bytes);
         });
+    }
+
+    /// 5,000 cases of each property above, run once by hand and reported in the I-E report rather
+    /// than committed as the default case count (the committed tests above keep their own
+    /// established, cheap default so ordinary `cargo test` stays fast) -- the architect's own
+    /// scratch-worktree run that found and fixed item 0(a)'s bug used this count.
+    #[test]
+    #[ignore = "run deliberately: 5,000 cases of each differential proptest, reported by hand"]
+    fn proptest_long_run_five_thousand_cases_each() {
+        use proptest::prelude::*;
+        let magic = container_magic(ObjectType::Blob).expect("magic");
+        proptest!(ProptestConfig::with_cases(5_000), |(mutation in crate::test_gates::framed_decoder_fuzz::mutation())| {
+            let valid = multi_record_container();
+            let mutated = crate::test_gates::framed_decoder_fuzz::apply(&valid, &mutation);
+            assert_held_equal_to_the_store(ObjectType::Blob, &mutated);
+        });
+        proptest!(ProptestConfig::with_cases(5_000), |(at: usize, claimed_len: u64)| {
+            let mut bytes = multi_record_container();
+            let at = at % (bytes.len() + 1);
+            let mut torn = Vec::new();
+            torn.extend_from_slice(magic);
+            torn.extend_from_slice(&1u16.to_be_bytes());
+            torn.extend_from_slice(&claimed_len.to_be_bytes());
+            torn.extend_from_slice(&[0u8; 32]);
+            bytes.splice(at..at, torn);
+            assert_held_equal_to_the_store(ObjectType::Blob, &bytes);
+        });
+    }
+
+    /// The review's own minimal failing case, named and deterministic rather than left to the
+    /// proptest to rediscover: a torn header with `claimed_len = 0` spliced at byte offset 10,
+    /// inside the first record's own header -- this corrupts that record's own length field to
+    /// read as a huge, bound-exceeding number. Before I-E item 0(a)'s fix, the archive wrongly
+    /// resynced to the next *magic* occurrence (the torn header itself) and called the result
+    /// damage; the fix resyncs to the next genuinely *sound* frame, agreeing with the store.
+    #[test]
+    fn the_reviews_own_minimal_case_offset_ten_claimed_len_zero_agrees_with_the_store() {
+        let magic = container_magic(ObjectType::Blob).expect("magic");
+        let mut bytes = multi_record_container();
+        let mut torn = Vec::new();
+        torn.extend_from_slice(magic);
+        torn.extend_from_slice(&1u16.to_be_bytes());
+        torn.extend_from_slice(&0u64.to_be_bytes());
+        torn.extend_from_slice(&[0u8; 32]);
+        bytes.splice(10..10, torn);
+        assert_held_equal_to_the_store(ObjectType::Blob, &bytes);
     }
 }
