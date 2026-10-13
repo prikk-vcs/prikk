@@ -192,7 +192,7 @@ These records currently live under `done/`.
 | 162 | [The recovery model](./done/162-the-recovery-model-caches-never-refuse-logs-end-positively.md) | **Done.** Accepted 2026-09-27; delivered in 0.48.0 |
 | 157 | [Reading a point of history: `tree` and `cat`](./done/157-reading-a-point.md) | **Done.** Accepted 2026-09-17; delivered in 0.46.0 |
 | 156 | [One object, several signers](./done/156-one-object-several-signers.md) | **Done.** Accepted 2026-09-16; delivered in 0.45.0 |
-| 155 | [The repository-complete artifact](./done/155-repository-complete-artifact.md) | **Done.** Accepted 2026-09-16; delivered in 0.51.0 |
+| 155 | [The repository-complete artifact](./done/155-repository-complete-artifact.md) | **Done.** Accepted 2026-09-16; delivered in 0.51.0; §9.4 closure amended 2026-10-13 (0.52.0 step 0) |
 | 153 | [`prikk diff`](./done/153-content-diff.md) | **Done.** Accepted 2026-09-17; delivered in 0.46.0 |
 | 133 | [Performance Cost and Its Evidence](./done/133-performance-cost-and-its-evidence.md) | Unscheduled. Extracted from RFC 126 on the owner's instruction 2026-09-03. **Owner ruling required** — whether peak RSS gets standing protection. Carries the measured commit-memory shape: O(nodes), not O(bytes) |
 | 145 | [Serving a Repository for Reading](./done/145-serving-a-repository-for-reading.md) | Unscheduled, ranked second. Opened 2026-09-10 on the owner's 2026-09-06 direction. Rules the shape of a read-only browse view — static export, a separate server project, or a serving subcommand. **Owner rulings required** (§9). **Decides no build** |

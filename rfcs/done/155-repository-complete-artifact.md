@@ -3,6 +3,9 @@
 **Status.** **DONE 2026-10-13:** delivered in 0.51.0 (tag on `41c0bd1d`). Implemented in 0.51.0 step 3 (parts E,
 V/V2, I-A/I-A2, I-B/I-B2, then I-C to I-G after external reviews 023 and 024; the reviews are in
 `.git-exclude/reviewed/rfc155-impl-*`), with §9.1, §9.4 and §9.6 amended on the way.
+**Amended 2026-10-13, after the release: §9.4's closure follows the store's own existence rules** (finding
+`archive-closure-finding-v1`). This is for the owner's reading. It is implemented in 0.52.0 step 0
+(`handoffs/155-…/0.52.0-step-0-closure-handoff-v1.md`).
 **ACCEPTED by the project owner 2026-09-16** (*"RFC 155 is accepted."*); proposed the same
 day by the architect. This is the "own RFC" that RFC 114 §5.2 (format carry-forward), RFC 115 §6.2 and
 RFC 116 §7 left open, and RFC 154 §6.2 needs it. planeter's requirements letter
@@ -226,6 +229,22 @@ every signature it cannot check.
   verifies as consistent. **The receiver's own `verify` after import is the real check**, so verify prints both counts
   (*"signatures checked: N, not checked: M"*) and its note says so. *(Added 2026-10-13, external review 024.)*
 - **Each section's trailer checksum must equal its manifest entry.**
+- **Closure means what the store means: a reference is damage when it is missing only if the store's own `verify`
+  requires it to resolve.** *(Amended 2026-10-13, finding `archive-closure-finding-v1`; 0.52.0 step 0.)*
+  - **What 0.51.0 did:** it required every reference of every object to be carried.
+  - **What the store does, by standing design:** it never existence-checks a recognition claim's references. It does
+    not re-derive a sealed patch's blob references (DC-65: an edited text file's old content lives in its edits, and
+    no blob is stored). It does not check a received ref's previous state (a disclosed gap).
+  - **The consequence:** any repository that had run `sync accept`, or had an edited, sealed, then deleted text file,
+    passed `prikk verify` but exported an archive that its own verify and import refused. That breaks R1 (*"carries
+    every stored object"*): an export of a store `verify` passes must itself verify.
+  - **The rule:**
+    - the archive uses the store's existence predicate, shared and not copied;
+    - a reference the store requires (a block's parents and patches, a ref's target, a required attestation) is
+      damage when it is missing;
+    - a reference the store leaves unchecked is not.
+  - **The round trip is the test:** for every state the store's `verify` passes, export, verify and import succeed,
+    and the receiver's `verify` passes.
 - **Rejected alternative:** staging into `$TMPDIR` plus `verify_repository`. That costs a full copy (memory, on a tmpfs
   `/tmp`), a double write on import, and deletions in a shared temp directory.
 
