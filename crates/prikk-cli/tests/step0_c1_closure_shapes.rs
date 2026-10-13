@@ -230,7 +230,8 @@ fn a_repository_that_ran_sync_accept_exports_verifies_and_imports_cleanly() {
 /// `archive-closure-finding-v1.md`'s own table quotes. The fixed binary accepts the identical,
 /// 0.51.0-written archive (§5's own forward-compatibility claim, checked for real, not assumed).
 #[test]
-fn an_unsealed_sync_accepted_claims_dangling_block_reference_exports_verifies_and_imports_cleanly() {
+fn an_unsealed_sync_accepted_claims_dangling_block_reference_exports_verifies_and_imports_cleanly()
+{
     let repo_a = support::unique_repo("0520-c2-sync-unsealed-a");
     support::init(&repo_a);
     support::generation(
@@ -527,7 +528,13 @@ fn a_merge_exports_verifies_and_imports_cleanly() {
         &support::branch_create(&repo, "heads/topic", "heads/main"),
         "branch create topic",
     );
-    support::generation(&repo, "heads/topic", "topic.txt", b"from topic\n", "topic change");
+    support::generation(
+        &repo,
+        "heads/topic",
+        "topic.txt",
+        b"from topic\n",
+        "topic change",
+    );
 
     let merge = support::prikk(&repo)
         .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
@@ -559,7 +566,13 @@ fn a_rename_exports_verifies_and_imports_cleanly() {
     let repo = support::unique_repo("0520-c2-rename");
     support::init(&repo);
     support::trust_maintainer(&repo);
-    support::generation(&repo, "heads/main", "a.txt", b"alpha\nline2\nline3\n", "base");
+    support::generation(
+        &repo,
+        "heads/main",
+        "a.txt",
+        b"alpha\nline2\nline3\n",
+        "base",
+    );
 
     support::ok(
         &support::prikk(&repo)
@@ -599,7 +612,10 @@ fn a_closed_branch_exports_verifies_and_imports_cleanly() {
         &support::branch_create(&repo, "heads/topic", "heads/main"),
         "branch create topic",
     );
-    support::ok(&support::branch_close(&repo, "heads/topic"), "branch close topic");
+    support::ok(
+        &support::branch_close(&repo, "heads/topic"),
+        "branch close topic",
+    );
 
     assert_source_verify_passes(&repo, "closed branch");
     assert_archive_round_trips_cleanly(&repo, "closed-branch");
@@ -681,7 +697,10 @@ fn queued_unsealed_work_still_refuses_archive_export() {
     let repo = support::unique_repo("0520-c2-queued-refused");
     support::init(&repo);
     std::fs::write(repo.join("a.txt"), b"queued\n").unwrap();
-    support::ok(&support::commit(&repo, "heads/main", "queued, never sealed"), "commit");
+    support::ok(
+        &support::commit(&repo, "heads/main", "queued, never sealed"),
+        "commit",
+    );
 
     let path = archive_path("queued-refused");
     let export = support::prikk(&repo)
@@ -751,8 +770,11 @@ fn a_claims_dangling_references_are_never_checked_by_either_side() {
     };
     let bytes =
         prikk_object::CanonicalEncode::to_canonical_bytes(&claim_payload).expect("encode claim");
-    let mut claim_envelope =
-        prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::RecognitionClaim, 1, bytes);
+    let mut claim_envelope = prikk_object::ObjectEnvelope::unsigned(
+        prikk_object::ObjectType::RecognitionClaim,
+        1,
+        bytes,
+    );
     let claim_id = claim_envelope.object_id();
     let signer = prikk_store::Ed25519MaintainerSigner::from_seed(
         support::MAINTAINER_KEY_ID,
@@ -765,7 +787,9 @@ fn a_claims_dangling_references_are_never_checked_by_either_side() {
         claim_id,
     )
     .expect("sign");
-    claim_envelope.add_signature(signature).expect("attach signature");
+    claim_envelope
+        .add_signature(signature)
+        .expect("attach signature");
     prikk_store::ObjectWriter::write_object(&mut object_store, &claim_envelope)
         .expect("write claim");
 

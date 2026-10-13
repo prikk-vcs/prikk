@@ -193,14 +193,10 @@ pub(crate) fn verify_refs_with(
     // can be found by.
     let (ref_items, classify_issues) = classify_ref_items(&pointers, &logs, |ref_name| {
         let ref_name_key = crate::foundation::layout::ref_name_key_bytes(ref_name);
-        let pointer_failure = pointers
-            .get(ref_name)
-            .is_none()
+        let pointer_failure = (!pointers.contains_key(ref_name))
             .then(|| pointer_failures_by_key.get(&ref_name_key).cloned())
             .flatten();
-        let log_failure = logs
-            .get(ref_name)
-            .is_none()
+        let log_failure = (!logs.contains_key(ref_name))
             .then(|| log_failures_by_key.get(&ref_name_key).cloned())
             .flatten();
         pointer_failure.or(log_failure)
@@ -326,11 +322,15 @@ fn classify_ref_state(
 /// `classify_ref_state` failure's own `Display` text (captured via `.to_string()` once, here) reach
 /// both callers identically to before this function existed -- preserving the store's own `verify`
 /// output byte for byte (confirmed on the matrix after this change).
+#[allow(clippy::type_complexity)]
 pub(crate) fn classify_ref_items(
     pointers: &BTreeMap<String, PointerState>,
     logs: &BTreeMap<String, LogState>,
     read_failure: impl Fn(&str) -> Option<String>,
-) -> (Vec<(String, std::result::Result<(), String>)>, Vec<RefPublicationIssue>) {
+) -> (
+    Vec<(String, std::result::Result<(), String>)>,
+    Vec<RefPublicationIssue>,
+) {
     let mut names = BTreeSet::new();
     names.extend(pointers.keys().cloned());
     names.extend(logs.keys().cloned());
@@ -343,7 +343,8 @@ pub(crate) fn classify_ref_items(
         }
         let pointer = pointers.get(&ref_name);
         let log = logs.get(&ref_name);
-        let result = classify_ref_state(&ref_name, pointer, log, &mut issues).map_err(|error| error.to_string());
+        let result = classify_ref_state(&ref_name, pointer, log, &mut issues)
+            .map_err(|error| error.to_string());
         outcomes.push((ref_name, result));
     }
     (outcomes, issues)
