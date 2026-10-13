@@ -51,8 +51,7 @@ fn assert_archive_round_trips_cleanly(repo: &Path, tag: &str) {
         String::from_utf8_lossy(&verify.stderr)
     );
     assert!(
-        stdout(&verify).contains("internally consistent")
-            || String::from_utf8_lossy(&verify.stderr).is_empty(),
+        stdout(&verify).contains("internally consistent"),
         "verify's own stdout: {}",
         stdout(&verify)
     );
@@ -69,6 +68,34 @@ fn assert_archive_round_trips_cleanly(repo: &Path, tag: &str) {
         "archive import must succeed for an archive whose own verify just passed: {}\n{}",
         stdout(&import),
         String::from_utf8_lossy(&import.stderr)
+    );
+
+    // C1-5: the two shapes must not stop at `import` succeeding -- the destination's own `prikk
+    // verify` must also pass, over the identical content the source repository's own `verify`
+    // already passed. The destination adopts the same maintainer key a real receiver would decide
+    // to trust (R2: trust is the receiver's own decision, never carried by import itself) -- with
+    // that one row settled the same way on both sides, the destination's own verify must agree with
+    // the source's.
+    support::trust_maintainer(&dest);
+    let source_verify = support::verify(repo);
+    assert!(
+        source_verify.status.success(),
+        "the source repository's own prikk verify must pass: {}\n{}",
+        stdout(&source_verify),
+        String::from_utf8_lossy(&source_verify.stderr)
+    );
+    let dest_verify = support::verify(&dest);
+    assert!(
+        dest_verify.status.success(),
+        "the destination's own prikk verify must pass after import, not merely `archive import` \
+         succeeding: {}\n{}",
+        stdout(&dest_verify),
+        String::from_utf8_lossy(&dest_verify.stderr)
+    );
+    assert!(
+        !stdout(&dest_verify).contains("damaged:"),
+        "the destination must carry no damage of its own: {}",
+        stdout(&dest_verify)
     );
 }
 

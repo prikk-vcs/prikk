@@ -7,6 +7,7 @@
     clippy::type_complexity
 )]
 
+use std::collections::HashMap;
 use std::io::Cursor;
 
 use prikk_object::CanonicalEncode;
@@ -727,13 +728,398 @@ fn verify_names_an_unreferenced_remnant_instead_of_refusing_an_archive_over_it()
         report.damaged
     );
     assert!(
-        report.unreferenced_remnants.iter().any(|line| {
-            line.contains(&orphan_block_id.to_string())
-                && line.contains(&missing_patch_id.to_string())
+        report.unreferenced_remnants.iter().any(|remnant| {
+            remnant.owner_object_id == orphan_block_id
+                && remnant.missing_object_id == missing_patch_id
         }),
         "the remnant must name both the owning block and what it lacks: {:?}",
         report.unreferenced_remnants
     );
+}
+
+/// 0.52.0 step 0, Part C1 round 2, control (a): before this round, `classify_references` required
+/// `previous_ref_state_id` only for a *received* ref's own current tip (C1-1) -- a local ref's own
+/// chain was never checked at all, even though the archive carries the `RefLog` section that would
+/// catch it (`stream_opaque_section` only checksums it). `RefStore::publish` itself cross-checks a
+/// publication's own fields against its own CAS precondition, so an honest `publish` call can never
+/// produce this shape -- this builds it the way a crafted or damaged archive would carry it instead:
+/// two real, signed RefState/RefUpdate object pairs, written directly (never through `publish`, which
+/// this specific shape cannot pass), with the ref-log's own second record naming a previous id that
+/// is not the first record's own id. The fix (sharing `refs::verify::scan::verify_update` over the
+/// archive's own carried `RefLog` section, through `ArchiveObjectReader`) catches it as a
+/// chain/sequence divergence -- the identical check `refs::verify::scan::validate_log_replay` already
+/// runs for a *live* repository's own ref log.
+#[test]
+fn control_a_a_local_tip_naming_a_missing_previous_ref_state_is_damage() {
+    let dir = unique_temp_dir("c1r2-control-a");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store.write_object(&root_block).expect("write block");
+
+    let ref_state_1 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_1_id = ref_state_1.object_id();
+    object_store
+        .write_object(&ref_state_1)
+        .expect("write ref state 1");
+    let ref_update_1 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_1_id,
+        root_block_id,
+        1,
+    );
+
+    // The second record's own declared `old_ref_state_id` names an id that is not `ref_state_1_id`
+    // -- nothing the honest chain above ever produced. An honest `RefStore::publish` call would
+    // refuse this (its own CAS precondition must equal the pointer's actual current tip); appending
+    // it directly to the ref-log container simulates what a crafted or damaged archive could still
+    // carry.
+    let fabricated_previous = prikk_object::ObjectId::from_bytes([0xEE; 32]);
+    let ref_state_2 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        Some(fabricated_previous),
+        root_block_id,
+        2,
+    );
+    let ref_state_2_id = ref_state_2.object_id();
+    object_store
+        .write_object(&ref_state_2)
+        .expect("write ref state 2");
+    let ref_update_2 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        Some(fabricated_previous),
+        ref_state_2_id,
+        root_block_id,
+        2,
+    );
+
+    let ref_name_key = crate::foundation::layout::ref_name_key_bytes("heads/main");
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let mut log_bytes = Vec::new();
+    log_bytes.extend_from_slice(
+        &crate::refs::encode_ref_container_record_for_test(ref_name_key, &ref_update_1)
+            .expect("encode record 1"),
+    );
+    log_bytes.extend_from_slice(
+        &crate::refs::encode_ref_container_record_for_test(ref_name_key, &ref_update_2)
+            .expect("encode record 2"),
+    );
+    std::fs::write(&log_path, &log_bytes).expect("write ref log container");
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_2_id)
+        .expect("write pointer entry");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a local chain whose second record names a fabricated previous id must be damage: \
+         {report:?}"
+    );
+    assert!(
+        report.damaged.iter().any(|line| line.contains("diverges")),
+        "damaged must name the chain divergence: {:?}",
+        report.damaged
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 2, control (b): round 1's own `classify_references` judged an
+/// `Attestation` against `required_attestation_ids` only if the `RefState` section had already
+/// streamed while pass 2 was *still in progress* (C1-2) -- the real exporter always writes RefState
+/// (wire code 2) before Attestation (wire code 4), so this was dormant, never caught by a test.
+/// `validate_manifest_shape` (`archive/verify.rs:1541-1559`) requires every manifest entry's own
+/// `offset` to equal the running sum of every section before it, in list order -- so a well-formed
+/// archive's manifest entries are *always* listed in the same order their sections physically sit in
+/// the file, and a genuinely adversarial reorder would mean physically relocating section bytes, not
+/// just swapping two manifest entries (which `validate_manifest_shape` itself then refuses as
+/// self-disagreeing, confirmed empirically against this exact case). The fix instead removes the
+/// order-dependence structurally: pass 2 now only builds `id_to_envelope` (one entry per carried
+/// object, regardless of which section it came from or when), and every ref check -- including
+/// `ensure_required_attestations_present` -- runs in a separate pass *after* pass 2 completes, against
+/// the finished map, through [`super::ArchiveObjectReader`]. This test proves that function directly,
+/// built from a map whose own construction order is exactly backwards from the real exporter's own
+/// section order (Attestation inserted before RefState) -- a `HashMap` carries no order at all, so
+/// this is the only way to state "this does not depend on order" as a reproducible test rather than
+/// an unverified claim about the exporter's own section order never changing.
+#[test]
+fn control_b_a_required_attestation_whose_target_is_missing_is_damage_regardless_of_insertion_order()
+ {
+    let missing_attestation_target = prikk_object::ObjectId::from_bytes([0xFA; 32]);
+    let attestation_envelope = {
+        let payload = prikk_object::AttestationPayload {
+            target_block_id: missing_attestation_target,
+            policy_version: "v1".to_string(),
+            plugin_set_hash: vec![0u8; 32],
+            results: Vec::new(),
+            status: prikk_object::AttestationStatus::Pass,
+            created_at: 0,
+            is_reproducible_offline: false,
+        };
+        let bytes = payload.to_canonical_bytes().expect("encode attestation");
+        let mut envelope =
+            prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Attestation, 1, bytes);
+        envelope
+            .add_signature(crate::test_gates::test_support::maintainer_signature())
+            .expect("sign");
+        envelope
+    };
+    let attestation_id = attestation_envelope.object_id();
+
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = root_block.object_id();
+
+    let ref_state = {
+        let payload = prikk_object::RefStatePayload {
+            ref_name: "heads/main".to_string(),
+            kind: prikk_object::RefKind::Branch,
+            target_object_id: root_block_id,
+            update_seq: 1,
+            previous_ref_state_id: None,
+            required_attestation_ids: vec![attestation_id],
+            closed: false,
+        };
+        let bytes = payload.to_canonical_bytes().expect("encode ref state");
+        let mut envelope =
+            prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::RefState, 1, bytes);
+        envelope
+            .add_signature(crate::test_gates::test_support::maintainer_signature())
+            .expect("sign");
+        envelope
+    };
+    let pointer_entry = crate::refs::PointerIndexEntry {
+        ref_name_key: crate::foundation::layout::ref_name_key_bytes("heads/main"),
+        ref_name: "heads/main".to_string(),
+        ref_state_id: ref_state.object_id(),
+    };
+
+    // Inserted in the exact opposite order from the real exporter's own section order (Attestation,
+    // then RefState, then Block) -- a `HashMap` is unordered regardless, which is itself the point:
+    // nothing about this check can depend on insertion order.
+    let mut envelopes = HashMap::new();
+    envelopes.insert(attestation_id, attestation_envelope);
+    envelopes.insert(ref_state.object_id(), ref_state);
+    envelopes.insert(root_block_id, root_block);
+    let reader = super::ArchiveObjectReader {
+        envelopes: &envelopes,
+    };
+
+    let outcome = crate::refs::verify::verify_one_pointer_entry(&reader, &pointer_entry);
+    assert!(
+        outcome.is_err(),
+        "a required attestation whose own target is missing must be damage, regardless of which \
+         order the archive's objects were decoded in: {outcome:?}"
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 2, control (c): the store's own `ensure_ref_target_valid` is
+/// kind-aware -- a `Branch` tip must resolve to a `Block` object specifically, by a *typed* read.
+/// Round 1's own `require_reference` checked only `ids.contains(&target)`, an untyped id-set
+/// membership test that cannot tell a `Block` from any other carried object (C1-3).
+#[test]
+fn control_c_a_branch_targeting_a_carried_non_block_is_damage() {
+    let dir = unique_temp_dir("c1r2-control-c");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let blob_envelope = signed_text_blob_envelope(b"not a block\n");
+    let blob_id = object_store
+        .write_object(&blob_envelope)
+        .expect("write blob");
+
+    let ref_state =
+        crate::test_gates::test_support::signed_ref_state_envelope("heads/main", None, blob_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_id,
+        blob_id,
+        1,
+    );
+    crate::RefStore::new(layout.clone())
+        .publish(&crate::RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state,
+            ref_update,
+        })
+        .expect("publish");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a Branch targeting a carried Blob, not a Block, must be damage: {report:?}"
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 2, control (e): the perturbation half of controls (a)-(c) above --
+/// proving the test fixture itself is sensitive to *which* check runs, not merely a passing shape
+/// (the same "a control that cannot fail is not a control" discipline `bundle_preview_write_nothing_
+/// control_can_fail` already applies). Reuses control (c)'s exact fixture: a Branch RefState whose
+/// carried target is a `Blob`, not a `Block`. The real, typed, shared check
+/// (`ensure_ref_target_valid`) correctly classifies this as damage. An untyped existence check over
+/// the same id set -- the shape round 1's own `require_reference` used, and the shape a second,
+/// re-derived copy of this check would plausibly still use -- would have wrongly accepted it: the
+/// blob is, after all, a carried object. Simulated directly here (not by editing
+/// `ensure_ref_target_valid` itself, which the assertion above already proves correct), the same way
+/// the bundle preview control's own perturbation is simulated rather than introduced into
+/// production code.
+#[test]
+fn control_e_perturbing_the_shared_check_to_an_untyped_one_would_wrongly_pass() {
+    let dir = unique_temp_dir("c1r2-control-e");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let blob_envelope = signed_text_blob_envelope(b"not a block\n");
+    let blob_id = object_store
+        .write_object(&blob_envelope)
+        .expect("write blob");
+
+    let ref_state =
+        crate::test_gates::test_support::signed_ref_state_envelope("heads/main", None, blob_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_id,
+        blob_id,
+        1,
+    );
+    crate::RefStore::new(layout.clone())
+        .publish(&crate::RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state,
+            ref_update,
+        })
+        .expect("publish");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "the real, typed, shared check must still catch this: {report:?}"
+    );
+
+    // The perturbation: an untyped `ids.contains(&target)` check, as round 1's own
+    // `require_reference` performed it, over the identical carried id set this archive holds.
+    let mut untyped_id_set = std::collections::HashSet::new();
+    untyped_id_set.insert(blob_id);
+    assert!(
+        untyped_id_set.contains(&blob_id),
+        "an untyped, re-derived copy of the old check would have wrongly accepted this archive -- \
+         proving why this part shares the real, typed function instead of re-deriving one"
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 2, control (d): the strict side. The store's own `ensure_ref_target_
+/// valid`/`ensure_required_attestations_present` are only ever reached *from a ref's own current
+/// tip* -- a `Tag` object no ref reaches is never read at all, and a received ref's own superseded
+/// (non-tip) `RefState` is never re-checked once a newer one lands (`reduce_received_index_entries`
+/// keeps only the latest per name). Both are carried, both name a missing target, and neither is
+/// damage -- matching the store's own rule, not a stricter one the archive invents.
+#[test]
+fn control_d_an_orphan_tag_and_a_superseded_received_target_are_not_damage() {
+    let dir = unique_temp_dir("c1r2-control-d-tag");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let missing_target = prikk_object::ObjectId::from_bytes([0x7A; 32]);
+    let digest = crate::patch_set_digest::compute_patch_set_digest(&[]).expect("digest");
+    let tag_payload = prikk_object::TagPayload {
+        name: "release".to_string(),
+        target_block_id: missing_target,
+        message: None,
+        created_at: 0,
+        author_key_id: "maintainer-key".to_string(),
+        patch_set_digest: digest,
+        patch_count: 0,
+    };
+    let bytes = tag_payload.to_canonical_bytes().expect("encode tag");
+    let mut tag_envelope =
+        prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Tag, 1, bytes);
+    tag_envelope
+        .add_signature(crate::test_gates::test_support::maintainer_signature())
+        .expect("sign");
+    object_store.write_object(&tag_envelope).expect("write tag");
+
+    let mut archive_bytes = Vec::new();
+    export_archive(&layout, &mut archive_bytes).expect("export");
+    let mut cursor = Cursor::new(archive_bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        report.reference_closure_sound,
+        "an orphan Tag no ref reaches must not be damage even with a missing target: {report:?}"
+    );
+    assert!(report.damaged.is_empty(), "damaged: {:?}", report.damaged);
+
+    let dir2 = unique_temp_dir("c1r2-control-d-received");
+    let layout2 = RepositoryLayout::init(&dir2).expect("init");
+    let mut object_store2 = FileObjectStore::new(layout2.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store2
+        .write_object(&root_block)
+        .expect("write block");
+    let missing_target2 = prikk_object::ObjectId::from_bytes([0x7B; 32]);
+    let superseded = crate::test_gates::test_support::signed_ref_state_envelope(
+        "remotes/origin/heads/main",
+        None,
+        missing_target2,
+        1,
+    );
+    let superseded_id = superseded.object_id();
+    object_store2
+        .write_object(&superseded)
+        .expect("write superseded ref state");
+    crate::received::write_received_pointer(&layout2, "remotes/origin/heads/main", superseded_id)
+        .expect("write received pointer");
+
+    let tip = crate::test_gates::test_support::signed_ref_state_envelope(
+        "remotes/origin/heads/main",
+        Some(superseded_id),
+        root_block_id,
+        2,
+    );
+    let tip_id = tip.object_id();
+    object_store2
+        .write_object(&tip)
+        .expect("write tip ref state");
+    crate::received::write_received_pointer(&layout2, "remotes/origin/heads/main", tip_id)
+        .expect("write received pointer");
+
+    let mut archive_bytes2 = Vec::new();
+    export_archive(&layout2, &mut archive_bytes2).expect("export");
+    let mut cursor2 = Cursor::new(archive_bytes2);
+    let report2 = verify_archive(&mut cursor2).expect("verify");
+    assert!(
+        report2.reference_closure_sound,
+        "a superseded received RefState's own missing target must not be damage: {report2:?}"
+    );
+    assert!(report2.damaged.is_empty(), "damaged: {:?}", report2.damaged);
 }
 
 /// Two real, unsigned-content `Blob` records in one container -- the minimum needed to test a

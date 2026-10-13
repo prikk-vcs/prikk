@@ -14,7 +14,10 @@ use crate::signature_diagnostics::{
 mod scan;
 
 pub use scan::{RefFileOutcome, RefFileStatus};
-pub(crate) use scan::{ensure_ref_target_valid, ensure_required_attestations_present};
+pub(crate) use scan::{
+    ensure_ref_target_valid, ensure_required_attestations_present, verify_one_pointer_entry,
+    verify_update,
+};
 
 use scan::{LogState, PointerState, read_logs, read_pointers};
 

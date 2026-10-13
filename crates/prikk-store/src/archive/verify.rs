@@ -29,8 +29,7 @@ use std::io::{Read, Seek, SeekFrom};
 use prikk_error::{PrikkError, Result};
 use prikk_hash::IncrementalSha256;
 use prikk_object::{
-    AttestationPayload, BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload,
-    SignerRole, TagPayload,
+    BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload, SignerRole,
 };
 
 use crate::author::author_key_index::{
@@ -46,15 +45,21 @@ use crate::foundation::frame_resync::{
     BoundedScan, ScanBudget, resync_to_next_magic, scan_budget_exceeded_message,
 };
 use crate::foundation::layout::persisted_object_types;
+use crate::object_store::ObjectReader;
 use crate::received::received_index::{
-    decode_received_index_entries_for_resolver, reduce_received_index_entries,
+    ReceivedIndexEntry, decode_received_index_entries_for_resolver, reduce_received_index_entries,
 };
-use crate::refs::{decode_pointer_index_entries_for_resolver, reduce_pointer_index_entries};
+use crate::refs::verify::{verify_one_pointer_entry, verify_update};
+use crate::refs::{
+    PointerIndexEntry, decode_pointer_index_entries_for_resolver,
+    decode_ref_log_records_from_bytes, reduce_pointer_index_entries,
+};
 use crate::trust::{
     AdoptedMaintainerKey, MaintainerTrustPolicy, verify_trusted_publication_envelope,
 };
 use crate::trust_index::{decode_trust_key_records, decode_trust_policy_records};
 use crate::verify::reachability::expand_frontier;
+use crate::verify::verify_received_ref_state;
 
 use super::{
     ARCHIVE_MAGIC, ArchiveSectionKind, END_TRAILER_MAGIC, MANIFEST_MAGIC, ManifestEntry,
@@ -89,6 +94,25 @@ pub struct CarriedMaintainerKeySummary {
     pub key_id: String,
     /// The key's own public key, lowercase hex.
     pub public_key_hex: String,
+}
+
+/// One `Block`'s own missing, reachability-exempt reference (0.52.0 step 0, Part C1 round 2, finding
+/// C1-4): structured, not a pre-formatted string, so a caller can print it with the store's own
+/// [`crate::verify`] warning shape instead of inventing a second wording. Harmless by construction --
+/// see [`ArchiveVerifyReport::unreferenced_remnants`]'s own doc for why.
+/// Field names match the store's own `crate::verify::UnreferencedRemnant` (same RFC 164 Rule E
+/// concept, carried by the archive instead of the live repository) so a caller already familiar
+/// with one reads the other without translation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnreferencedRemnant {
+    /// The `Block` that holds the missing reference.
+    pub owner_object_id: ObjectId,
+    /// Which of the `Block`'s own three reachability-gated reference kinds is missing: `"parent
+    /// block"`, `"block patch"`, or `"snapshot blob"`.
+    pub missing_role: String,
+    /// The id this `Block` names, that this archive does not carry.
+    pub missing_object_id: ObjectId,
 }
 
 /// Summary of an archive verify (§9.4). Never claims trust: see [`Self::note`] and
@@ -149,7 +173,7 @@ pub struct ArchiveVerifyReport {
     /// carried ref still needs it, so it is harmless, not damage. A killed `bundle import` is the
     /// standing example (§5): no command removes the remnant it leaves, and an honest export of
     /// that repository carries it forward, same as the store's own `verify` already does.
-    pub unreferenced_remnants: Vec<String>,
+    pub unreferenced_remnants: Vec<UnreferencedRemnant>,
     /// Every maintainer key this archive carries, listed for inspection -- never adopted by this
     /// call.
     pub maintainer_keys: Vec<CarriedMaintainerKeySummary>,
@@ -272,16 +296,18 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     let received_bytes = read_section_body_fully(source, received_entry)?;
     let decoded_received = decode_received_index_entries_for_resolver(&received_bytes)?;
     let mut reachability_roots: Vec<ObjectId> = Vec::new();
-    let mut received_tip_ids: HashSet<ObjectId> = HashSet::new();
+    let mut local_pointer_entries: Vec<PointerIndexEntry> = Vec::new();
+    let mut received_pointer_entries: Vec<ReceivedIndexEntry> = Vec::new();
     if !decoded_pointers.damaged {
-        for entry in reduce_pointer_index_entries(decoded_pointers.entries) {
+        local_pointer_entries = reduce_pointer_index_entries(decoded_pointers.entries);
+        for entry in &local_pointer_entries {
             reachability_roots.push(entry.ref_state_id);
         }
     }
     if !decoded_received.damaged {
-        for entry in reduce_received_index_entries(decoded_received.entries) {
+        received_pointer_entries = reduce_received_index_entries(decoded_received.entries);
+        for entry in &received_pointer_entries {
             reachability_roots.push(entry.ref_state_id);
-            received_tip_ids.insert(entry.ref_state_id);
         }
     }
     // A damaged resolved index is already named by pass 1's own opaque-section checksum check above
@@ -301,7 +327,15 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     let mut unresolvable_signatures = Vec::new();
     let mut not_checked_signatures = Vec::new();
     let mut id_to_expansion: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
-    let mut required_attestation_ids: HashSet<ObjectId> = HashSet::new();
+    // 0.52.0 step 0, Part C1 round 2: every non-`Blob` envelope decoded here is also kept, so the
+    // archive's own `ArchiveObjectReader` (below) can run the store's own ref-checking functions
+    // (`refs::verify::{verify_one_pointer_entry, verify_update}`, `crate::verify::
+    // verify_received_ref_state`) against the archive's own carried content, unmodified -- the same
+    // sharing discipline `expand_frontier` already established for the Block/reachability half.
+    // `Blob` bodies are the one thing ever large (up to the per-object bound); every other object
+    // type is small, bounded metadata, so holding all of them is still O(objects), never O(archive
+    // bytes) -- the §9.2 promise this module has always kept.
+    let mut id_to_envelope: HashMap<ObjectId, ObjectEnvelope> = HashMap::new();
     let mut block_candidates: Vec<(ObjectId, &'static str, ObjectId)> = Vec::new();
     for entry in &manifest.entries {
         let ArchiveSectionKind::ObjectContainer(object_type) = entry.kind else {
@@ -313,22 +347,9 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                 return Ok(());
             };
             id_to_expansion.insert(envelope.object_id(), expand_frontier(&envelope));
-            classify_references(
-                &envelope,
-                &ids,
-                &received_tip_ids,
-                &required_attestation_ids,
-                &mut damaged,
-                &mut reference_closure_sound,
-                &mut block_candidates,
-            )?;
-            if envelope.object_type == ObjectType::RefState {
-                if let Ok(payload) = RefStatePayload::decode_canonical(
-                    &envelope.canonical_payload,
-                    envelope.schema_version,
-                ) {
-                    required_attestation_ids.extend(payload.required_attestation_ids);
-                }
+            classify_references(&envelope, &ids, &mut block_candidates)?;
+            if envelope.object_type != ObjectType::Blob {
+                id_to_envelope.insert(envelope.object_id(), envelope.clone());
             }
             check_signatures(
                 &envelope,
@@ -347,19 +368,89 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     // order as the id set §9.2 already bounds.
     let reachable = compute_archive_reachability(&reachability_roots, &id_to_expansion);
     let mut unreferenced_remnants = Vec::new();
-    for (owner_block_id, missing_role, missing_object_id) in block_candidates {
-        if reachable.contains(&owner_block_id) {
+    for (owner_object_id, missing_role, missing_object_id) in block_candidates {
+        if reachable.contains(&owner_object_id) {
             reference_closure_sound = false;
             damaged.push(format!(
-                "block {owner_block_id} references {missing_object_id}, which this archive does \
+                "block {owner_object_id} references {missing_object_id}, which this archive does \
                  not carry"
             ));
         } else {
-            unreferenced_remnants.push(format!(
-                "block {owner_block_id} references missing {missing_role} {missing_object_id} -- \
-                 harmless, not damage: nothing reachable from the archive's own carried refs still \
-                 needs it"
-            ));
+            unreferenced_remnants.push(UnreferencedRemnant {
+                owner_object_id,
+                missing_role: missing_role.to_string(),
+                missing_object_id,
+            });
+        }
+    }
+
+    // 0.52.0 step 0, Part C1 round 2: the store's own ref-checking functions, run against the
+    // archive's own carried content through `ArchiveObjectReader` -- shared, not re-derived, exactly
+    // as the ruling in `0.52.0-step-0-C1-review-v1.md` requires. Each failure becomes a `damaged`
+    // line naming the ref, the same wording class the rest of this function already uses.
+    let object_reader = ArchiveObjectReader {
+        envelopes: &id_to_envelope,
+    };
+    for entry in &local_pointer_entries {
+        if let Err(error) = verify_one_pointer_entry(&object_reader, entry) {
+            reference_closure_sound = false;
+            damaged.push(format!("local ref {}: {error}", entry.ref_name));
+        }
+    }
+    for entry in &received_pointer_entries {
+        if let Err(error) =
+            verify_received_ref_state(&object_reader, &entry.ref_name, entry.ref_state_id)
+        {
+            reference_closure_sound = false;
+            damaged.push(format!("received ref {}: {error}", entry.ref_name));
+        }
+    }
+    let ref_log_entry = find_entry(&manifest, ArchiveSectionKind::RefLog)?;
+    let ref_log_bytes = read_section_body_fully(source, ref_log_entry)?;
+    let (ref_log_records, ref_log_damaged) = decode_ref_log_records_from_bytes(&ref_log_bytes)?;
+    if ref_log_damaged {
+        reference_closure_sound = false;
+        damaged.push("ref log has damaged record(s)".to_string());
+    } else {
+        // The same chain/sequence walk `refs::verify::scan::validate_log_replay` does (grouped by
+        // ref name, `old_ref_state_id` continuity, `update_seq` contiguous from 1) -- bookkeeping
+        // only; the actual security-relevant check per record is `verify_update`, called unmodified
+        // below. The store's own replay groups by the log's own `ref_name_key` header field before
+        // ever decoding a payload; the archive's carried section has no such per-record header to
+        // group by ahead of decode, so this groups by the decoded `RefUpdatePayload.ref_name`
+        // instead -- the identical partition once every record decodes, confirmed by control (e).
+        let mut by_ref: std::collections::BTreeMap<String, Vec<RefUpdatePayload>> =
+            std::collections::BTreeMap::new();
+        for record in &ref_log_records {
+            match RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload) {
+                Ok(update) => by_ref
+                    .entry(update.ref_name.clone())
+                    .or_default()
+                    .push(update),
+                Err(error) => {
+                    reference_closure_sound = false;
+                    damaged.push(format!("ref log record does not decode: {error}"));
+                }
+            }
+        }
+        for (ref_name, mut updates) in by_ref {
+            updates.sort_by_key(|update| update.update_seq);
+            let mut previous = None;
+            for (index, update) in updates.iter().enumerate() {
+                let expected_seq = u64::try_from(index)
+                    .ok()
+                    .and_then(|value| value.checked_add(1));
+                if expected_seq != Some(update.update_seq) || update.old_ref_state_id != previous {
+                    reference_closure_sound = false;
+                    damaged.push(format!("ref-log chain or sequence diverges for {ref_name}"));
+                    break;
+                }
+                if let Err(error) = verify_update(&object_reader, update) {
+                    reference_closure_sound = false;
+                    damaged.push(format!("ref log {ref_name}: {error}"));
+                }
+                previous = Some(update.new_ref_state_id);
+            }
         }
     }
 
@@ -461,135 +552,72 @@ fn check_signatures(
     }
 }
 
-/// 0.52.0 step 0, Part C1: the archive's own closure rule, sharing the store's real classification
-/// rather than a second, independently-derived list (the post-0.51.0 finding this part exists to
-/// fix: the archive used to require *every* reference of every object, stricter than the store's
-/// own standing design). Per type, matching the store's own rule exactly:
-/// - `Block`'s `parent_block_ids`/`patch_ids`/`snapshot_blob_ref`: **reachability-gated** (RFC 164
-///   Rule E) -- deferred into `block_candidates` for classification once the archive's own
-///   reachability is computed, after this pass completes. `merge_baseline_block_id` is never
-///   existence-checked at all (only used in a content/divergence comparison, `verify.rs`'s own
-///   `MergeBaselineDivergence`), so it is not classified here either way.
-/// - `Tag.target_block_id`: required unconditionally (`ensure_ref_target_valid`).
-/// - `RefState.target_object_id` and every id in `required_attestation_ids`: required
-///   unconditionally, at the tip the store scans (`ensure_ref_target_valid`/
-///   `ensure_required_attestations_present`).
-/// - `RefState.previous_ref_state_id`: required only when this `RefState` is a **received** ref's
-///   own current tip (`verify_received_refs`, one link) -- never for any other `RefState`, matching
-///   the store's own real rule, not the reachability module's now-corrected stale comment.
-/// - `Attestation.target_block_id`: required only when this attestation's own id was named by some
-///   `RefState`'s `required_attestation_ids` (`ensure_required_attestations_present`) -- dormant in
-///   practice today (no honest producer writes that list yet), but the store's own rule is
-///   conditional, so the archive's must be too.
-/// - `RecognitionClaim`'s own references, and a sealed `Patch`'s own blob references: never
-///   existence-checked, by standing design (R2-adjacent: a claim is "never trust-conferring and
-///   never existence-checked"; a sealed patch's blobs are not re-derived, DC-65) -- not classified
-///   at all.
+/// 0.52.0 step 0, Part C1 round 2: a random-access [`ObjectReader`] over pass 2's own
+/// `id_to_envelope` map, so the store's own ref-checking functions
+/// (`refs::verify::{verify_one_pointer_entry, verify_update}`, `crate::verify::
+/// verify_received_ref_state`) can run against the archive's own carried content directly, unmodified
+/// -- the ruling's own item 1 ("an object reader over the archive"). The ruling's own wording
+/// describes an id -> (type, section, offset) map with a seeking, per-read decode; this holds the
+/// already-decoded envelope instead (built once, during pass 2, which was already decoding every one
+/// of them to compute `id_to_expansion`). Still O(objects) memory, never O(archive bytes) -- the one
+/// thing ever large, a `Blob`'s own body, is never held (see `id_to_envelope`'s own doc note above)
+/// -- and avoids a second `R: Read + Seek` borrow living across this struct's own lifetime, which the
+/// seeking design would require threading through every one of pass 2's own closures. Declared here,
+/// not guessed past: if this simplification is wrong for this use, say so in review.
+struct ArchiveObjectReader<'a> {
+    envelopes: &'a HashMap<ObjectId, ObjectEnvelope>,
+}
+
+impl ObjectReader for ArchiveObjectReader<'_> {
+    fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
+        Ok(self.envelopes.get(&id).cloned())
+    }
+}
+
+/// 0.52.0 step 0, Part C1 round 2: the archive's own closure rule now classifies only `Block`'s own
+/// three reachability-gated references (RFC 164 Rule E) -- deferred into `block_candidates` for
+/// classification once the archive's own reachability is computed, after this pass completes.
+/// `merge_baseline_block_id` is never existence-checked at all (only used in a content/divergence
+/// comparison, `verify.rs`'s own `MergeBaselineDivergence`), so it is not classified here either way.
+///
+/// Every other reference this module used to classify here -- `Tag.target_block_id`,
+/// `RefState.target_object_id`/`required_attestation_ids`/`previous_ref_state_id`,
+/// `Attestation.target_block_id` -- is no longer classified in this pass at all. Those are exactly
+/// the references the store's own shared functions (`verify_one_pointer_entry`, `verify_update`,
+/// `verify_received_ref_state`, called below through [`ArchiveObjectReader`]) already check, at the
+/// places the store itself checks them: a pointer entry's own tip, a ref-log record, a received ref's
+/// own tip. Checking them here too, by this pass's own re-derived approximation, was exactly the
+/// post-0.51.0 and round-1 defect class this part exists to fix (the archive required *every*
+/// reference unconditionally, and round 1's re-derivation disagreed with the store on three more
+/// rows) -- so this pass now checks only what no shared function already covers.
+/// `RecognitionClaim`'s own references, and a sealed `Patch`'s own blob references: never
+/// existence-checked, by standing design (R2-adjacent: a claim is "never trust-conferring and never
+/// existence-checked"; a sealed patch's blobs are not re-derived, DC-65) -- not classified at all.
 fn classify_references(
     envelope: &ObjectEnvelope,
     ids: &HashSet<ObjectId>,
-    received_tip_ids: &HashSet<ObjectId>,
-    required_attestation_ids: &HashSet<ObjectId>,
-    damaged: &mut Vec<String>,
-    reference_closure_sound: &mut bool,
     block_candidates: &mut Vec<(ObjectId, &'static str, ObjectId)>,
 ) -> Result<()> {
-    match envelope.object_type {
-        ObjectType::Block => {
-            let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-            let block_id = envelope.object_id();
-            for parent in payload.parent_block_ids {
-                if !ids.contains(&parent) {
-                    block_candidates.push((block_id, "parent block", parent));
-                }
-            }
-            for patch in payload.patch_ids {
-                if !ids.contains(&patch) {
-                    block_candidates.push((block_id, "block patch", patch));
-                }
-            }
-            if let Some(blob) = payload.snapshot_blob_ref {
-                if !ids.contains(&blob) {
-                    block_candidates.push((block_id, "snapshot blob", blob));
-                }
+    if envelope.object_type == ObjectType::Block {
+        let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+        let block_id = envelope.object_id();
+        for parent in payload.parent_block_ids {
+            if !ids.contains(&parent) {
+                block_candidates.push((block_id, "parent block", parent));
             }
         }
-        ObjectType::Tag => {
-            let payload = TagPayload::decode_canonical(&envelope.canonical_payload)?;
-            require_reference(
-                ids,
-                payload.target_block_id,
-                envelope,
-                damaged,
-                reference_closure_sound,
-            );
-        }
-        ObjectType::Attestation => {
-            let payload = AttestationPayload::decode_canonical(&envelope.canonical_payload)?;
-            if required_attestation_ids.contains(&envelope.object_id()) {
-                require_reference(
-                    ids,
-                    payload.target_block_id,
-                    envelope,
-                    damaged,
-                    reference_closure_sound,
-                );
+        for patch in payload.patch_ids {
+            if !ids.contains(&patch) {
+                block_candidates.push((block_id, "block patch", patch));
             }
         }
-        ObjectType::RefState => {
-            let payload = RefStatePayload::decode_canonical(
-                &envelope.canonical_payload,
-                envelope.schema_version,
-            )?;
-            require_reference(
-                ids,
-                payload.target_object_id,
-                envelope,
-                damaged,
-                reference_closure_sound,
-            );
-            for attestation_id in &payload.required_attestation_ids {
-                require_reference(
-                    ids,
-                    *attestation_id,
-                    envelope,
-                    damaged,
-                    reference_closure_sound,
-                );
-            }
-            if received_tip_ids.contains(&envelope.object_id()) {
-                if let Some(previous) = payload.previous_ref_state_id {
-                    require_reference(ids, previous, envelope, damaged, reference_closure_sound);
-                }
+        if let Some(blob) = payload.snapshot_blob_ref {
+            if !ids.contains(&blob) {
+                block_candidates.push((block_id, "snapshot blob", blob));
             }
         }
-        ObjectType::Patch
-        | ObjectType::RefUpdate
-        | ObjectType::Blob
-        | ObjectType::BlockSummaryCache
-        | ObjectType::RecoveryNote
-        | ObjectType::RecognitionClaim => {}
     }
     Ok(())
-}
-
-/// One unconditionally-required reference, missing -- damage, named exactly as this module always
-/// has (preserved wording so every pre-existing test asserting on this message shape still passes).
-fn require_reference(
-    ids: &HashSet<ObjectId>,
-    referenced: ObjectId,
-    envelope: &ObjectEnvelope,
-    damaged: &mut Vec<String>,
-    reference_closure_sound: &mut bool,
-) {
-    if !ids.contains(&referenced) {
-        *reference_closure_sound = false;
-        damaged.push(format!(
-            "{} {} references {referenced}, which this archive does not carry",
-            envelope.object_type,
-            envelope.object_id()
-        ));
-    }
 }
 
 /// The archive's own reachability walk (0.52.0 step 0, Part C1): in-memory only, over

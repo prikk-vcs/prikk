@@ -2345,41 +2345,8 @@ fn verify_received_refs(
     let pointers = list_received_pointers(layout)?;
     let mut outcomes = Vec::with_capacity(pointers.len());
     for pointer in pointers {
-        let outcome = (|| -> Result<()> {
-            let envelope = object_store
-                .read_typed(pointer.ref_state_id, ObjectType::RefState)?
-                .ok_or_else(|| {
-                    PrikkError::Integrity(format!(
-                        "received pointer {} names missing RefState {}",
-                        pointer.ref_name, pointer.ref_state_id
-                    ))
-                })?;
-            let payload = RefStatePayload::decode_canonical(
-                &envelope.canonical_payload,
-                envelope.schema_version,
-            )?;
-            ensure_ref_target_valid(
-                object_store,
-                payload.kind,
-                payload.target_object_id,
-                pointer.ref_state_id,
-            )?;
-            ensure_required_attestations_present(object_store, &payload, pointer.ref_state_id)?;
-            // 0.49.0 step 5, round 2 item 1: one read of the tip's own previous state (defence in depth; the
-            // import refuses a chain whose link is absent, and no received ref has a RefUpdate log to check it).
-            if let Some(previous) = payload.previous_ref_state_id {
-                if object_store
-                    .read_typed(previous, ObjectType::RefState)?
-                    .is_none()
-                {
-                    return Err(PrikkError::Integrity(format!(
-                        "received RefState {} names missing previous RefState {previous}",
-                        pointer.ref_state_id
-                    )));
-                }
-            }
-            Ok(())
-        })();
+        let outcome =
+            verify_received_ref_state(object_store, &pointer.ref_name, pointer.ref_state_id);
         outcomes.push(RefItemOutcome {
             ref_name: pointer.ref_name,
             status: match outcome {
@@ -2391,6 +2358,45 @@ fn verify_received_refs(
         });
     }
     Ok(outcomes)
+}
+
+/// One received pointer's own check, factored out (0.52.0 step 0, Part C1 round 2) so the archive's
+/// own closure pass can share it, not re-derive it -- the same discipline `expand_frontier` already
+/// established for the Block/reachability half. Checks the pointer's own tip RefState: existence,
+/// target validity, required attestations, and (0.49.0 step 5, round 2 item 1) one read of the tip's
+/// own previous state, since no received ref has a RefUpdate log to check it otherwise.
+pub(crate) fn verify_received_ref_state(
+    object_store: &impl ObjectReader,
+    ref_name: &str,
+    ref_state_id: ObjectId,
+) -> Result<()> {
+    let envelope = object_store
+        .read_typed(ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "received pointer {ref_name} names missing RefState {ref_state_id}"
+            ))
+        })?;
+    let payload =
+        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
+    ensure_ref_target_valid(
+        object_store,
+        payload.kind,
+        payload.target_object_id,
+        ref_state_id,
+    )?;
+    ensure_required_attestations_present(object_store, &payload, ref_state_id)?;
+    if let Some(previous) = payload.previous_ref_state_id {
+        if object_store
+            .read_typed(previous, ObjectType::RefState)?
+            .is_none()
+        {
+            return Err(PrikkError::Integrity(format!(
+                "received RefState {ref_state_id} names missing previous RefState {previous}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// DC-78 verify-local-tag-publication-trust (v2 amendment, ruling on

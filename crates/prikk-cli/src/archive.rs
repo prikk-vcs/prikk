@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
-use crate::output::verification::escape_json_string;
+use crate::output::verification::{escape_json_string, remnant_warning};
 use crate::stdout::{print, println};
 use prikk_store::{ArchiveImportOptions, export_archive};
 
@@ -232,6 +232,18 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
     for line in &report.interrupted_appends {
         println!("warning: {line}");
     }
+    // RFC 164 Rule E, carried by the archive (0.52.0 step 0, Part C1 round 2, finding C1-4): the
+    // store's own warning shape, not a second wording.
+    for remnant in &report.unreferenced_remnants {
+        println!(
+            "{}",
+            remnant_warning(
+                &remnant.owner_object_id,
+                &remnant.missing_role,
+                &remnant.missing_object_id
+            )
+        );
+    }
     if let Some(note) = signature_not_checked_note(report.signatures_checked, not_checked_count) {
         println!("note: {note}");
     }
@@ -318,6 +330,24 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
     json.push_str(&format!(
         "  \"interrupted_appends\": [{}],\n",
         interrupted_appends.join(", ")
+    ));
+    // Additive key (0.52.0 step 0, Part C1 round 2, finding C1-4): RFC 164 Rule E's harmless case,
+    // carried by the archive, named structurally rather than left unreported.
+    let unreferenced_remnants: Vec<String> = report
+        .unreferenced_remnants
+        .iter()
+        .map(|remnant| {
+            format!(
+                "{{ \"owner_object_id\": {}, \"missing_role\": {}, \"missing_object_id\": {} }}",
+                escape_json_string(&remnant.owner_object_id.to_string()),
+                escape_json_string(&remnant.missing_role),
+                escape_json_string(&remnant.missing_object_id.to_string())
+            )
+        })
+        .collect();
+    json.push_str(&format!(
+        "  \"unreferenced_remnants\": [{}],\n",
+        unreferenced_remnants.join(", ")
     ));
     let maintainer_keys: Vec<String> = report
         .maintainer_keys

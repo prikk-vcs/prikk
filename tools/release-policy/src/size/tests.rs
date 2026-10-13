@@ -148,7 +148,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.52.0 step 0 Part C1: `reachability` widened to `pub(crate)`, so `archive::verify` can
         // share `expand_frontier` instead of re-deriving a second copy of the frontier-expansion
         // step, 2,780 -> 2,783.
-        detail.contains("2783"),
+        // 0.52.0 step 0 Part C1 round 2: `verify_received_ref_state` extracted out of
+        // `verify_received_refs` so `archive::verify` can share it too, 2,783 -> 2,789.
+        detail.contains("2789"),
         "the line count is in the message: {detail}"
     );
     assert!(

@@ -10,7 +10,7 @@ mod evidence;
 mod pointer_index;
 mod publication;
 mod rebuild_discovery;
-mod verify;
+pub(crate) mod verify;
 
 // `append_ref_container_record`'s own sole consumer via this re-export is `refs::tests`
 // (DC-71-gated to `target_os = "linux"`, real repository mutation) -- gated to match it exactly,

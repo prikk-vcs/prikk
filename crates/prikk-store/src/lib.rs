@@ -96,7 +96,7 @@ mod text_span;
 mod trust;
 mod trust_index;
 mod unlock;
-mod verify;
+pub(crate) mod verify;
 mod wal;
 // RFC 131 §2.2a: the `worktree` name family is NOT grouped -- measured to reconnect into the
 // coupling gate's own SCC (worktree_patch -> worktree -> active/patch_replay/lifecycle_cache ->

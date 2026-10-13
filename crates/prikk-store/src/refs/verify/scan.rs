@@ -158,6 +158,17 @@ pub(super) fn read_pointers(
     ))
 }
 
+/// 0.52.0 step 0, Part C1 round 2: the archive's own closure pass shares this exact check against
+/// its own carried pointer-index entries, not a second, independently-derived copy of it -- the same
+/// discipline `expand_frontier` already established for the Block/reachability half.
+/// `PointerState` itself stays `pub(super)`, so this wrapper returns only the pass/fail outcome.
+pub(crate) fn verify_one_pointer_entry(
+    objects: &impl ObjectReader,
+    entry: &PointerIndexEntry,
+) -> Result<()> {
+    read_one_pointer_entry(objects, entry).map(|_| ())
+}
+
 fn read_one_pointer_entry(
     objects: &impl ObjectReader,
     entry: &PointerIndexEntry,
@@ -368,7 +379,12 @@ fn validate_log_replay(
     )))
 }
 
-fn verify_update(objects: &impl ObjectReader, update: &RefUpdatePayload) -> Result<()> {
+/// 0.52.0 step 0, Part C1 round 2: `pub(crate)` so the archive's own closure pass can share this
+/// exact per-record check against its own carried `RefLog` section, not a second copy of it. The
+/// archive's own caller does its own sequence/chain-order walk (which record follows which, by
+/// `update_seq`), then calls this once per record for the identical RefState-agreement, target, and
+/// attestation checks the store's own `validate_log_replay` already makes.
+pub(crate) fn verify_update(objects: &impl ObjectReader, update: &RefUpdatePayload) -> Result<()> {
     let state = verified_ref_state_payload(objects, update.new_ref_state_id)?;
     if state.ref_name != update.ref_name
         || state.previous_ref_state_id != update.old_ref_state_id
