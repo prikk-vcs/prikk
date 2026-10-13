@@ -442,7 +442,11 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     // naming an uncarried previous RefState, with no log record at all for that ref, falls through
     // every named arm to `classify_ref_state`'s own catch-all `Err` -- the same source shape this
     // archive used to pass before this round (finding C1-6/C1-1).
-    let (ref_items, publication_issues) = classify_ref_items(&pointers, &logs);
+    // 0.52.0 step 0, Part C2, N1 (review v3): no read-failure skip here -- any read failure this
+    // pass already hit (a damaged pointer entry, a damaged ref-log record) was already folded into
+    // `damaged` above, before `pointers`/`logs` were even built, so every name in the union is
+    // classified, same as before this closure parameter existed.
+    let (ref_items, publication_issues) = classify_ref_items(&pointers, &logs, |_| None);
     for (ref_name, result) in ref_items {
         if let Err(error) = result {
             reference_closure_sound = false;

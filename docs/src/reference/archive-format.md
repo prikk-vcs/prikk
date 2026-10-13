@@ -6,11 +6,6 @@ every signature against the archive's own carried key material. `prikk archive i
 [--adopt]` reads the same file and lands it. This page documents the byte layout all three commands
 use — the format itself, not the command surface (see [commands](commands.md) for that).
 
-**Run `archive verify` on every export before relying on it.** In 0.51.0, a repository that has
-accepted a sync artifact, or where a text file was edited, sealed, and later deleted, can export a
-file that its own `archive verify` refuses — see [the known limitation](current-state.md) for the
-two shapes and why.
-
 ## Shape
 
 ```

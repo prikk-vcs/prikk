@@ -178,49 +178,44 @@ pub(crate) fn verify_refs_with(
         )?);
         ref_update_envelopes.push(record.envelope);
     }
-    let mut names = BTreeSet::new();
-    names.extend(pointers.keys().cloned());
-    names.extend(logs.keys().cloned());
     let mut publication_issues = candidate_issues(layout)?;
-    let mut ref_item_outcomes = Vec::with_capacity(names.len());
-    for ref_name in names {
-        let pointer = pointers.get(&ref_name);
-        let log = logs.get(&ref_name);
-        // DC-95 Stage 2 Level 2: a ref reached only through its log (or only through its pointer)
-        // might have a pointer (or log) that genuinely does not exist -- or might have one that
-        // exists but failed to read, which `read_pointers`/`read_logs` recorded as its own
-        // `ref_name_key -> message` entry rather than silently omitting it. These are different
-        // facts: the first is legitimate business logic `classify_ref_state`'s own match arms
-        // already handle; the second must not be reinterpreted as the first. RFC 102 Stage 4:
-        // cross-reference by `ref_name_key_bytes(ref_name)`, not by a per-ref file path -- a shared
-        // container has no such path, and `RefFileOutcome::path` is a display-only container
-        // locator now (see its own doc), not a stable key a failed entry can be found by.
-        let ref_name_key = crate::foundation::layout::ref_name_key_bytes(&ref_name);
-        let pointer_failure = pointer
+    // 0.52.0 step 0, Part C2, N1 (review v3): the union-and-dispatch loop itself now lives in
+    // `classify_ref_items`, shared with the archive's own closure pass -- not a second copy of it
+    // here. DC-95 Stage 2 Level 2's own distinction still holds, now expressed as the
+    // `read_failure` closure: a ref reached only through its log (or only through its pointer)
+    // might have a pointer (or log) that genuinely does not exist -- legitimate business logic
+    // `classify_ref_state`'s own match arms already handle -- or might have one that exists but
+    // failed to *read*, which `read_pointers`/`read_logs` recorded as its own
+    // `ref_name_key -> message` entry rather than silently omitting it; that must not be
+    // reinterpreted as the first. RFC 102 Stage 4: cross-reference by `ref_name_key_bytes(ref_name)`,
+    // not by a per-ref file path -- a shared container has no such path, and `RefFileOutcome::path`
+    // is a display-only container locator now (see its own doc), not a stable key a failed entry
+    // can be found by.
+    let (ref_items, classify_issues) = classify_ref_items(&pointers, &logs, |ref_name| {
+        let ref_name_key = crate::foundation::layout::ref_name_key_bytes(ref_name);
+        let pointer_failure = pointers
+            .get(ref_name)
             .is_none()
-            .then(|| pointer_failures_by_key.get(&ref_name_key).cloned());
-        let log_failure = log
+            .then(|| pointer_failures_by_key.get(&ref_name_key).cloned())
+            .flatten();
+        let log_failure = logs
+            .get(ref_name)
             .is_none()
-            .then(|| log_failures_by_key.get(&ref_name_key).cloned());
-        if let Some(message) = pointer_failure.flatten().or(log_failure.flatten()) {
-            ref_item_outcomes.push(RefItemOutcome {
-                ref_name,
-                status: RefItemStatus::Failed { message },
-            });
-            continue;
-        }
-        // This ref's own classification is caught here, at the item boundary, rather than
-        // propagated -- every other ref is still attempted.
-        match classify_ref_state(&ref_name, pointer, log, &mut publication_issues) {
+            .then(|| log_failures_by_key.get(&ref_name_key).cloned())
+            .flatten();
+        pointer_failure.or(log_failure)
+    });
+    publication_issues.extend(classify_issues);
+    let mut ref_item_outcomes = Vec::with_capacity(ref_items.len());
+    for (ref_name, result) in ref_items {
+        match result {
             Ok(()) => ref_item_outcomes.push(RefItemOutcome {
                 ref_name,
                 status: RefItemStatus::Evaluated,
             }),
-            Err(err) => ref_item_outcomes.push(RefItemOutcome {
+            Err(message) => ref_item_outcomes.push(RefItemOutcome {
                 ref_name,
-                status: RefItemStatus::Failed {
-                    message: err.to_string(),
-                },
+                status: RefItemStatus::Failed { message },
             }),
         }
     }
@@ -311,26 +306,44 @@ fn classify_ref_state(
 /// exactly the rule a live repository's `verify` would apply to the same state -- never a looser or
 /// stricter approximation of it.
 ///
-/// Returns one `(ref_name, Result<()>)` per name in the union, **and** every blocking
+/// Returns one `(ref_name, Result<(), String>)` per name in the union, **and** every blocking
 /// `RefPublicationIssue` `classify_ref_state` itself pushed along the way
 /// (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) separately: a live repository's own
 /// `VerificationReport::has_blocking_ref_publication_issues` folds these into its own overall
 /// `verify` failure even though `classify_ref_state` returns `Ok` for them (they are named,
 /// non-fatal conditions, not hard errors) -- the caller must fold every `blocking: true` issue into
 /// its own damage, not drop it on the floor as "not an `Err`".
+///
+/// 0.52.0 step 0, Part C2, N1 (review v3): `verify_refs_with` now calls this too, so there is one
+/// orchestration home, not two copies that happen to agree. Its own loop must skip classifying a
+/// ref whose pointer or log already failed to *read* (reporting that read failure instead of
+/// attempting `classify_ref_state` over an incomplete pair) -- `read_failure` supplies that per-ref
+/// check; the archive's own call site has no such per-key read-failure bookkeeping of its own at
+/// this point (it already folded any read failure into its own `damaged` list before building
+/// `pointers`/`logs`), so it passes `|_| None`, classifying every name in the union, as round 3 did.
+/// The error type is a plain `String`, not [`PrikkError`], so a read failure's own message (never
+/// wrapped in a `PrikkError` in `verify_refs_with`'s own pre-existing behavior) and a
+/// `classify_ref_state` failure's own `Display` text (captured via `.to_string()` once, here) reach
+/// both callers identically to before this function existed -- preserving the store's own `verify`
+/// output byte for byte (confirmed on the matrix after this change).
 pub(crate) fn classify_ref_items(
     pointers: &BTreeMap<String, PointerState>,
     logs: &BTreeMap<String, LogState>,
-) -> (Vec<(String, Result<()>)>, Vec<RefPublicationIssue>) {
+    read_failure: impl Fn(&str) -> Option<String>,
+) -> (Vec<(String, std::result::Result<(), String>)>, Vec<RefPublicationIssue>) {
     let mut names = BTreeSet::new();
     names.extend(pointers.keys().cloned());
     names.extend(logs.keys().cloned());
     let mut issues = Vec::new();
     let mut outcomes = Vec::with_capacity(names.len());
     for ref_name in names {
+        if let Some(message) = read_failure(&ref_name) {
+            outcomes.push((ref_name, Err(message)));
+            continue;
+        }
         let pointer = pointers.get(&ref_name);
         let log = logs.get(&ref_name);
-        let result = classify_ref_state(&ref_name, pointer, log, &mut issues);
+        let result = classify_ref_state(&ref_name, pointer, log, &mut issues).map_err(|error| error.to_string());
         outcomes.push((ref_name, result));
     }
     (outcomes, issues)

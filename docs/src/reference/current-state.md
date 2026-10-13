@@ -239,15 +239,16 @@ planned for.
   largest object's own size (an earlier version held a whole object type's own batch at once,
   measured at 2.25 times the archive's own size for 1 GiB concentrated in one type; fixed before
   0.51.0 shipped).
-- **In 0.51.0, an archive of a repository that has accepted a sync artifact (`sync accept`), or
-  where a text file was edited, sealed, and later deleted, fails its own `archive verify` and does
-  not import** — even though the source repository's own `prikk verify` passes cleanly. The
-  archive's own closure check requires every reference to resolve, more strictly than the store
-  itself does for a recognition claim's references or a sealed patch's blob references. Both
-  failures are fail-closed: nothing is written in either case, and the source repository itself is
-  untouched. **Run `prikk archive verify` on every export before relying on it**, and keep a
-  `bundle` export or a copy of `.prikk/` as the real backup until this is fixed. A candidate for
-  0.52.0.
+- **Fixed in 0.52.0: in 0.51.0, an archive of a repository that has accepted a sync artifact
+  (`sync accept`), or where a text file was edited, sealed, and later deleted, failed its own
+  `archive verify` and did not import** — even though the source repository's own `prikk verify`
+  passed cleanly. The archive's own closure check required every reference to resolve, more
+  strictly than the store itself does for an accepted-but-unsealed claim's own references or a
+  sealed patch's blob references. Both failures were fail-closed: nothing was written in either
+  case, and the source repository itself stayed untouched. The archive's own closure pass now
+  shares the store's own existence rules directly, so it checks exactly what, and exactly where,
+  the store itself checks — a 0.51.0-written archive of either shape imports cleanly under 0.52.0,
+  provided its own source repository verified clean.
 
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes

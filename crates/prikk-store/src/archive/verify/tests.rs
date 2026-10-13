@@ -1473,6 +1473,55 @@ fn a_pointer_that_authoritatively_leads_the_log_by_one_transition_is_damage_in_t
     );
 }
 
+/// 0.52.0 step 0, Part C2, item 4: a required reference removed is still damage, by name -- the
+/// RefState-target half (a Block's own required reference removed is already covered generically by
+/// `verify_detects_a_genuinely_dangling_reference` above: `parent_block_ids`, `patch_ids` and
+/// `snapshot_blob_ref` are all pushed into the identical `block_candidates` list by
+/// `classify_references`, judged by the identical `compute_archive_reachability` walk regardless of
+/// which of the three it is, so a second, patch-shaped or parent-shaped variant of that same test
+/// would prove nothing new). This control is the one shape no existing test reaches: a local tip's
+/// own `target_object_id` names a Block **never carried at all** (not merely carried as the wrong
+/// type, which control (c) already covers) -- `ensure_ref_target_valid`'s own `ensure_block_exists`
+/// must refuse this through `read_one_pointer_entry`, shared with the store.
+#[test]
+fn control_a_refstate_target_entirely_missing_is_damage() {
+    let dir = unique_temp_dir("c2-control-refstate-target-missing");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let missing_block_id = prikk_object::ObjectId::from_bytes([0xD1; 32]);
+
+    let ref_state = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        missing_block_id,
+        1,
+    );
+    let ref_state_id = ref_state.object_id();
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_id,
+        missing_block_id,
+        1,
+    );
+    crate::RefStore::new(layout.clone())
+        .publish(&crate::RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state,
+            ref_update,
+        })
+        .expect("publish");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a local tip whose own target Block is never carried at all must be damage: {report:?}"
+    );
+}
+
 /// 0.52.0 step 0, Part C1 round 3, finding C1-8: the reader's own envelope map must never hold a
 /// `Patch` -- its own body is not small (DC-65: an `EditText`'s own before/after span text can be as
 /// large as the file it edits), so holding every one would scale `archive verify`'s own memory with

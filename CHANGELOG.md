@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — `archive export` of a repository that accepted a sync artifact or deleted an edited text file wrote a file its own `archive verify`/`archive import` refused
+
+- **0.51.0's archive closure check required every stored object's own reference to resolve inside
+  the archive, more strictly than the store's own `prikk verify` ever does.** For anyone who used
+  `archive export` as a backup path on a repository that had run `sync accept` (a `RecognitionClaim`
+  naming a block, and the patches sealed into it, from another repository — the normal way work
+  arrives, before the claim is sealed locally) or on a repository where a text file was edited,
+  sealed, and later deleted (the sealed `Patch`'s own deletion preimage names a Blob the repository
+  never stored, DC-65): the export itself always succeeded, but that same archive's own
+  `archive verify` then failed with *"… references `<id>`, which this archive does not carry"*, and
+  `archive import` refused outright — even though the source repository's own `prikk verify` passed
+  cleanly throughout. Both failures were fail-closed (nothing written, source untouched), but a user
+  who exported without separately running `archive verify` held a file that would not import.
+- **The archive's own closure pass now follows exactly the store's own existence rules**, shared
+  with the store, not re-derived: a reference the store requires to resolve is still damage if
+  missing; a reference the store deliberately never checks (an accepted-but-unsealed claim's own
+  block and patch references; a sealed patch's own deletion preimage; a received ref's own previous
+  link before the one case `verify_received_refs` already checks) is not damage in the archive
+  either.
+- **A 0.51.0-written archive of either shape now imports cleanly under this fix**, provided its own
+  source repository's `prikk verify` passed — checked for real: an archive written by the published
+  `0.51.0` binary, of both the sync-accept (unsealed claim) and the edited-then-deleted shapes, was
+  verified and imported by the fixed binary without modification.
+
+### Output changes
+
+- `archive verify --format json` gains an additive `unreferenced_remnants` key: a carried object's
+  own reference to another object this archive genuinely does not carry, where nothing reachable
+  from a carried ref, received pointer, or queued patch root ever reaches the referencing object
+  (RFC 164 Rule E) — harmless by construction, named rather than silently dropped. `archive verify`'s
+  own prose gains the matching line, the store's own existing `remnant_warning` wording, unchanged
+  from what a live repository's own `prikk verify` already prints for the identical condition.
+
 ## 0.51.0 — 2026-10-13
 
 ### Upgrading
