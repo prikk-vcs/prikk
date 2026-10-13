@@ -97,3 +97,19 @@ commit, and the tag.
 **External review 024: nothing blocks the tag.** Part I-G (`3551fc92`, accepted) fixed one warning's wording, added both
 signature counts, and set the date to **2026-10-13**. **The candidate is this record commit**, pushed through the gate
 service. The tag goes on the owner's word, on the commit CI ran on. Nothing is open for the team.
+
+**0.51.0: RELEASED 2026-10-13.** The tag `0.51.0` is signed and sits on `41c0bd1d`, the commit CI ran on (the owner:
+*"Yes. Authorized."*).
+- **CI run `38321958923`: 16/16.** In the first attempt, the Windows mutation suite was cancelled at its 65-minute limit.
+  The runner was about twice as slow at every stage, and it was not a hang. The cancelled job was re-run on the same
+  commit and passed in 37 minutes.
+- **Release run `38330880100`:** all six jobs green.
+- **The architect verified the assets:**
+  - checksums, 6/6;
+  - build info, 4/4, naming `41c0bd1d`;
+  - the smoke on the published Linux binary, 317/317;
+  - the Release page carries the CHANGELOG section byte for byte, followed by the standard footer.
+
+**crates.io: PUBLISHED 2026-10-13** (the owner: *"You may also publish."*). All eight crates are at 0.51.0, published in
+dependency order from the tag's worktree, and each is confirmed on the crates.io index. **RFC 155 moved to `done/`.**
+**Letter 025** carries the release run's id; the owner sends it.
