@@ -17,6 +17,7 @@ use crate::archive::tests::{
     decode_manifest_for_test, insert_tail_bytes_into_section_for_test, seal_one_block,
 };
 use crate::maintainer_signing::MaintainerSigner;
+use crate::object_store::ObjectReader;
 use crate::test_gates::test_support::{signed_text_blob_envelope, unique_temp_dir};
 use crate::{FileObjectStore, ObjectWriter, RepositoryLayout};
 
@@ -920,7 +921,7 @@ fn control_b_a_required_attestation_whose_target_is_missing_is_damage_regardless
         envelopes: &envelopes,
     };
 
-    let outcome = crate::refs::verify::verify_one_pointer_entry(&reader, &pointer_entry);
+    let outcome = crate::refs::verify::read_one_pointer_entry(&reader, &pointer_entry);
     assert!(
         outcome.is_err(),
         "a required attestation whose own target is missing must be damage, regardless of which \
@@ -1120,6 +1121,384 @@ fn control_d_an_orphan_tag_and_a_superseded_received_target_are_not_damage() {
         "a superseded received RefState's own missing target must not be damage: {report2:?}"
     );
     assert!(report2.damaged.is_empty(), "damaged: {:?}", report2.damaged);
+}
+
+/// 0.52.0 step 0, Part C1 round 3, control (f): C1-6's own exact reproduction -- a local pointer
+/// names a RefState whose own `previous_ref_state_id` is not carried, and the log has **no record
+/// at all** for that ref (not even a broken one, unlike control (a)'s own two-record chain break).
+/// The pointer entry itself is perfectly valid in isolation (its own target block is real); only the
+/// pointer<->log tie (`classify_ref_state`'s own catch-all `Err` arm) can catch this.
+#[test]
+fn control_f_a_local_pointer_naming_an_uncarried_previous_with_no_log_record_is_damage() {
+    let dir = unique_temp_dir("c1r3-control-f");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store.write_object(&root_block).expect("write block");
+
+    let missing_previous = prikk_object::ObjectId::from_bytes([0xF6; 32]);
+    let ref_state = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        Some(missing_previous),
+        root_block_id,
+        2,
+    );
+    let ref_state_id = ref_state.object_id();
+    object_store
+        .write_object(&ref_state)
+        .expect("write ref state");
+    // No ref-log record written for this ref at all -- the shape control (a) never reached (a
+    // pointer with *no* log, not two log records whose own chain breaks).
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_id)
+        .expect("write pointer entry");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a local pointer naming an uncarried previous with no log record for that ref must be \
+         damage, the same shape the store's own `classify_ref_state` catch-all refuses: {report:?}"
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 3, control (g): the log carries a real, sound record -- but the
+/// pointer's own tip is a *different* RefState whose own `previous_ref_state_id` disagrees with the
+/// log's real tip. Neither the pointer-entry check nor the log-record check alone catches this; only
+/// the tie does.
+#[test]
+fn control_g_a_pointer_whose_previous_is_not_the_logs_own_tip_is_damage() {
+    let dir = unique_temp_dir("c1r3-control-g");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store.write_object(&root_block).expect("write block");
+
+    let ref_state_1 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_1_id = ref_state_1.object_id();
+    object_store
+        .write_object(&ref_state_1)
+        .expect("write ref state 1");
+    let ref_update_1 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_1_id,
+        root_block_id,
+        1,
+    );
+    let ref_name_key = crate::foundation::layout::ref_name_key_bytes("heads/main");
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let record = crate::refs::encode_ref_container_record_for_test(ref_name_key, &ref_update_1)
+        .expect("encode record");
+    std::fs::write(&log_path, &record).expect("write ref log container");
+
+    // The pointer names a *different* RefState (ref_state_2); its own previous link disagrees with
+    // the log's real tip (ref_state_1), even though ref_state_2's own target is a real, valid block.
+    let fabricated_previous = prikk_object::ObjectId::from_bytes([0xF7; 32]);
+    let ref_state_2 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        Some(fabricated_previous),
+        root_block_id,
+        2,
+    );
+    let ref_state_2_id = ref_state_2.object_id();
+    object_store
+        .write_object(&ref_state_2)
+        .expect("write ref state 2");
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_2_id)
+        .expect("write pointer entry");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a pointer whose own previous disagrees with the log's own real tip must be damage: \
+         {report:?}"
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 3, control (h): the same two real, signed records control (g)'s own
+/// sibling tests use -- individually sound, and forming a sound chain *by content* -- but written to
+/// the container in reversed physical order. The store's own `validate_log_replay` trusts container
+/// order positionally (`expected_seq == index + 1`); round 2's own reimplementation instead sorted by
+/// `update_seq` before walking, which would have silently accepted this.
+#[test]
+fn control_h_log_records_reordered_within_one_ref_is_damage() {
+    let dir = unique_temp_dir("c1r3-control-h");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store.write_object(&root_block).expect("write block");
+
+    let ref_state_1 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_1_id = ref_state_1.object_id();
+    object_store
+        .write_object(&ref_state_1)
+        .expect("write ref state 1");
+    let ref_update_1 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_1_id,
+        root_block_id,
+        1,
+    );
+
+    let ref_state_2 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        Some(ref_state_1_id),
+        root_block_id,
+        2,
+    );
+    let ref_state_2_id = ref_state_2.object_id();
+    object_store
+        .write_object(&ref_state_2)
+        .expect("write ref state 2");
+    let ref_update_2 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        Some(ref_state_1_id),
+        ref_state_2_id,
+        root_block_id,
+        2,
+    );
+
+    let ref_name_key = crate::foundation::layout::ref_name_key_bytes("heads/main");
+    // Reversed container order: record 2 (seq 2) physically precedes record 1 (seq 1).
+    let mut log_bytes = Vec::new();
+    log_bytes.extend_from_slice(
+        &crate::refs::encode_ref_container_record_for_test(ref_name_key, &ref_update_2)
+            .expect("encode record 2"),
+    );
+    log_bytes.extend_from_slice(
+        &crate::refs::encode_ref_container_record_for_test(ref_name_key, &ref_update_1)
+            .expect("encode record 1"),
+    );
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    std::fs::write(&log_path, &log_bytes).expect("write ref log container");
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_2_id)
+        .expect("write pointer entry");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "log records reordered within one ref's own subsequence must be damage, even though the \
+         same two records in container order would form a sound chain: {report:?}"
+    );
+    assert!(
+        report.damaged.iter().any(|line| line.contains("diverges")),
+        "damaged must name the chain/sequence divergence: {:?}",
+        report.damaged
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 3, control (i): a frame whose own header `ref_name_key` disagrees
+/// with its decoded payload's own `ref_name` -- round 2's own reimplementation grouped only by the
+/// decoded name, after decode, and so never noticed this; the store's own `validate_log_replay`
+/// checks header-vs-payload coherence before anything else, per record.
+#[test]
+fn control_i_a_frame_header_ref_name_key_disagreeing_with_its_payload_is_damage() {
+    let dir = unique_temp_dir("c1r3-control-i");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store.write_object(&root_block).expect("write block");
+
+    let ref_state_1 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_1_id = ref_state_1.object_id();
+    object_store
+        .write_object(&ref_state_1)
+        .expect("write ref state 1");
+    let ref_update_1 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_1_id,
+        root_block_id,
+        1,
+    );
+
+    // The frame's own header claims a different ref than the payload it actually carries:
+    // `encode_ref_container_record_for_test` takes `ref_name_key` independently of the envelope, for
+    // exactly this fixture shape.
+    let wrong_ref_name_key = crate::foundation::layout::ref_name_key_bytes("heads/other");
+    let record =
+        crate::refs::encode_ref_container_record_for_test(wrong_ref_name_key, &ref_update_1)
+            .expect("encode record");
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    std::fs::write(&log_path, &record).expect("write ref log container");
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_1_id)
+        .expect("write pointer entry");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a frame whose own header ref_name_key disagrees with its decoded payload's ref_name must \
+         be damage: {report:?}"
+    );
+    assert!(
+        report
+            .damaged
+            .iter()
+            .any(|line| line.contains("ref_name_key does not match")),
+        "damaged must name the header/payload coherence failure: {:?}",
+        report.damaged
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 3, the blocking-code table's own item 1: a local pointer that
+/// *authoritatively leads* its own committed log by exactly one transition (the pointer names a
+/// RefState whose own previous equals the log's real tip, with `update_seq` one past the log's own
+/// last record) -- the exact transient shape a real `publish` leaves between writing the pointer and
+/// committing the log's own second record. The store's own `classify_ref_state` returns `Ok` for
+/// this (a named, non-fatal `PRIKK-VERIFY-REF-POINTER-LEADS-LOG` issue, not a hard error), but a live
+/// repository's own overall `verify` still fails over it
+/// (`VerificationReport::has_blocking_ref_publication_issues`). `archive export` has no refusal tied
+/// to this state at all (confirmed from source: `refuse_on_queued_unsealed_work` only inspects a
+/// session's own WAL; `resolve_pointer_index_source` only checks for pointer-index interior damage or
+/// an ambiguous generation log -- neither condition this shape implies), so an honest archive can
+/// carry it verbatim, and this closure pass must classify it as damage too, not pass it because
+/// `classify_ref_state` itself did not return `Err`.
+#[test]
+fn a_pointer_that_authoritatively_leads_the_log_by_one_transition_is_damage_in_the_archive_too() {
+    let dir = unique_temp_dir("c1r3-pointer-leads-log");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let root_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+    let root_block_id = object_store.write_object(&root_block).expect("write block");
+
+    let ref_state_1 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_1_id = ref_state_1.object_id();
+    object_store
+        .write_object(&ref_state_1)
+        .expect("write ref state 1");
+    let ref_update_1 = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_1_id,
+        root_block_id,
+        1,
+    );
+    let ref_name_key = crate::foundation::layout::ref_name_key_bytes("heads/main");
+    let log_path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let record = crate::refs::encode_ref_container_record_for_test(ref_name_key, &ref_update_1)
+        .expect("encode record");
+    std::fs::write(&log_path, &record).expect("write ref log container");
+
+    // The pointer's own tip is one real transition ahead of the log's own last committed record --
+    // previous == the log's real tip, update_seq == the log's own next sequence number -- never
+    // appended to the log itself (simulating the window between a real `publish`'s own pointer write
+    // and its own log append committing).
+    let ref_state_2 = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        Some(ref_state_1_id),
+        root_block_id,
+        2,
+    );
+    let ref_state_2_id = ref_state_2.object_id();
+    object_store
+        .write_object(&ref_state_2)
+        .expect("write ref state 2");
+    crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_2_id)
+        .expect("write pointer entry");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a pointer authoritatively leading its own log by one transition must still be damage in \
+         the archive, the same way a live repository's own `verify` fails over this named, \
+         non-fatal issue: {report:?}"
+    );
+    assert!(
+        report
+            .damaged
+            .iter()
+            .any(|line| line.contains("PRIKK-VERIFY-REF-POINTER-LEADS-LOG")),
+        "damaged must name the specific blocking issue code: {:?}",
+        report.damaged
+    );
+}
+
+/// 0.52.0 step 0, Part C1 round 3, finding C1-8: the reader's own envelope map must never hold a
+/// `Patch` -- its own body is not small (DC-65: an `EditText`'s own before/after span text can be as
+/// large as the file it edits), so holding every one would scale `archive verify`'s own memory with
+/// the archive's own total patch volume, not the largest single object (§9.2). Calls the real
+/// production predicate directly (`super::reader_holds_type`), not a restated copy of it.
+#[test]
+fn control_reader_never_holds_a_patch_envelope() {
+    let patch_envelope = crate::test_gates::test_support::signed_patch_envelope();
+    assert!(
+        !super::reader_holds_type(patch_envelope.object_type),
+        "the reader's own predicate must exclude Patch"
+    );
+    let mut envelopes = HashMap::new();
+    if super::reader_holds_type(patch_envelope.object_type) {
+        envelopes.insert(patch_envelope.object_id(), patch_envelope.clone());
+    }
+    let reader = super::ArchiveObjectReader {
+        envelopes: &envelopes,
+    };
+    assert_eq!(
+        reader
+            .read_object(patch_envelope.object_id())
+            .expect("read"),
+        None,
+        "a Patch id must read as absent through the archive object reader"
+    );
 }
 
 /// Two real, unsigned-content `Blob` records in one container -- the minimum needed to test a

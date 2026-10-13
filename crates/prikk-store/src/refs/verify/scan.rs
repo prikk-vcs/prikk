@@ -21,14 +21,20 @@ use crate::refs::pointer_index::{
 };
 use prikk_object::ObjectType;
 
+/// 0.52.0 step 0, Part C1 round 3: `pub(crate)` at the struct level only (fields stay `pub(super)`)
+/// so the archive's own closure pass can hold a `BTreeMap<String, PointerState>` -- built from its
+/// own carried pointer-index entries via [`read_one_pointer_entry`] -- and pass it to
+/// [`crate::refs::verify::classify_ref_items`], without ever reading a field directly itself (that
+/// stays inside `refs::verify`, same as before this round).
 #[derive(Debug, Clone)]
-pub(super) struct PointerState {
+pub(crate) struct PointerState {
     pub(super) id: ObjectId,
     pub(super) payload: RefStatePayload,
 }
 
+/// As [`PointerState`]'s own doc: `pub(crate)` at the struct level only, for the same reason.
 #[derive(Debug, Clone)]
-pub(super) struct LogState {
+pub(crate) struct LogState {
     pub(super) tip: Option<ObjectId>,
     pub(super) previous_tip: Option<ObjectId>,
     pub(super) record_count: usize,
@@ -36,7 +42,11 @@ pub(super) struct LogState {
     pub(super) has_legacy_timestamp: bool,
 }
 
-pub(super) struct RefLogEnvelope {
+/// `pub(crate)` at the struct level only (0.52.0 step 0, Part C1 round 3): [`read_logs`] itself is
+/// now `pub(crate)` and returns `Vec<RefLogEnvelope>` -- Rust requires a function's return type be at
+/// least as visible as the function. The archive's own caller never reads a field; it drops this
+/// return value.
+pub(crate) struct RefLogEnvelope {
     pub(super) ref_name: String,
     pub(super) sequence: u64,
     pub(super) envelope: ObjectEnvelope,
@@ -78,7 +88,11 @@ fn pointer_locator(layout: &RepositoryLayout, offset: usize) -> PathBuf {
         .join(format!("#{offset}"))
 }
 
-fn log_locator(layout: &RepositoryLayout, offset: usize) -> PathBuf {
+/// `pub(super)` (0.52.0 step 0, Part C1 round 3): `verify_refs_with`'s own call site builds the
+/// closure [`read_logs`] now takes as its own `locator` parameter from this, unchanged -- the
+/// archive's own call site supplies a different closure instead (a section-relative label, not a
+/// live file path), since it has no [`RepositoryLayout`] of its own at all.
+pub(super) fn log_locator(layout: &RepositoryLayout, offset: usize) -> PathBuf {
     layout
         .ref_log_container_slot_path(ContainerSlot::A)
         .join(format!("#{offset}"))
@@ -158,18 +172,14 @@ pub(super) fn read_pointers(
     ))
 }
 
-/// 0.52.0 step 0, Part C1 round 2: the archive's own closure pass shares this exact check against
-/// its own carried pointer-index entries, not a second, independently-derived copy of it -- the same
-/// discipline `expand_frontier` already established for the Block/reachability half.
-/// `PointerState` itself stays `pub(super)`, so this wrapper returns only the pass/fail outcome.
-pub(crate) fn verify_one_pointer_entry(
-    objects: &impl ObjectReader,
-    entry: &PointerIndexEntry,
-) -> Result<()> {
-    read_one_pointer_entry(objects, entry).map(|_| ())
-}
-
-fn read_one_pointer_entry(
+/// 0.52.0 step 0, Part C1 round 3: `pub(crate)` (was private) -- the archive's own closure pass
+/// needs the resolved `PointerState` itself, so it can build the same
+/// `pointers: BTreeMap<String, PointerState>` shape [`classify_ref_items`] ties against a ref's own
+/// log state, not only a pass/fail outcome (round 2's own `verify_one_pointer_entry` wrapper, now
+/// retired: its only remaining caller, after round 3, called this function directly and discarded
+/// the state it did not need). The identical checks still run; this is the same function, not a
+/// second one.
+pub(crate) fn read_one_pointer_entry(
     objects: &impl ObjectReader,
     entry: &PointerIndexEntry,
 ) -> Result<(String, PointerState)> {
@@ -210,9 +220,19 @@ fn read_one_pointer_entry(
 /// subsequence is then replayed through `container::replay_ref_subsequence` -- the same function
 /// `RefStore::replay_log` itself uses -- so the ref-scoped `trailing_partial_bytes` attribution
 /// (design-v1.md §13.6) is computed exactly once, in one place, not re-derived here.
+///
+/// 0.52.0 step 0, Part C1 round 3: `pub(crate)` (was `pub(super)`), and `layout: &RepositoryLayout`
+/// is now `locator: &impl Fn(usize) -> PathBuf` -- its only use of `layout` was building a
+/// display-only [`RefFileOutcome::path`] per key (`log_locator`), never a security check (`_pointers`
+/// stays unread, as it already was). `verify_refs_with`'s own call site supplies `log_locator`
+/// unchanged, closed over its own live `layout`; the archive's own call site (`archive::verify`) has
+/// no `RepositoryLayout` of its own and supplies a section-relative label instead -- the review's own
+/// ruling: *"Pass the locator in, or factor `read_logs` so the archive supplies its own label; either
+/// is fine."* This is the one change that lets the archive call the *same* function over its own
+/// carried [`DecodedRefLog`], not a second, re-derived copy of the ref-log walk.
 #[allow(clippy::type_complexity)]
-pub(super) fn read_logs(
-    layout: &RepositoryLayout,
+pub(crate) fn read_logs(
+    locator: &impl Fn(usize) -> PathBuf,
     objects: &impl ObjectReader,
     _pointers: &BTreeMap<String, PointerState>,
     ref_log: &Result<Option<DecodedRefLog>>,
@@ -273,7 +293,7 @@ pub(super) fn read_logs(
             let message = format!("ref log has damaged record(s): {joined}");
             failures_by_key.insert(key, message.clone());
             outcomes.push(RefFileOutcome {
-                path: log_locator(layout, first_offset),
+                path: locator(first_offset),
                 status: RefFileStatus::Failed { message },
             });
             continue;
@@ -289,7 +309,7 @@ pub(super) fn read_logs(
                 envelopes.extend(record_envelopes);
                 logs.insert(ref_name.clone(), state);
                 outcomes.push(RefFileOutcome {
-                    path: log_locator(layout, first_offset),
+                    path: locator(first_offset),
                     status: RefFileStatus::Evaluated { ref_name },
                 });
             }
@@ -297,7 +317,7 @@ pub(super) fn read_logs(
             Err(err) => {
                 failures_by_key.insert(key, err.to_string());
                 outcomes.push(RefFileOutcome {
-                    path: log_locator(layout, first_offset),
+                    path: locator(first_offset),
                     status: RefFileStatus::Failed {
                         message: err.to_string(),
                     },

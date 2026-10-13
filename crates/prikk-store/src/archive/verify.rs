@@ -23,14 +23,13 @@
 //! makes this "not a new cryptographic mechanism" (§9.4's own framing), and is also why Part I-A's own
 //! stage 0 can reuse this module's own `verify_archive` directly, not a copy.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
 
 use prikk_error::{PrikkError, Result};
 use prikk_hash::IncrementalSha256;
-use prikk_object::{
-    BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload, SignerRole,
-};
+use prikk_object::{BlockPayload, ObjectEnvelope, ObjectId, ObjectType, SignerRole};
 
 use crate::author::author_key_index::{
     AuthorKeyEntry, decode_author_key_records, verify_author_signatures_with,
@@ -49,10 +48,10 @@ use crate::object_store::ObjectReader;
 use crate::received::received_index::{
     ReceivedIndexEntry, decode_received_index_entries_for_resolver, reduce_received_index_entries,
 };
-use crate::refs::verify::{verify_one_pointer_entry, verify_update};
+use crate::refs::verify::{PointerState, classify_ref_items, read_logs, read_one_pointer_entry};
 use crate::refs::{
-    PointerIndexEntry, decode_pointer_index_entries_for_resolver,
-    decode_ref_log_records_from_bytes, reduce_pointer_index_entries,
+    DecodedRefLog, PointerIndexEntry, decode_pointer_index_entries_for_resolver,
+    decode_ref_container_records, reduce_pointer_index_entries,
 };
 use crate::trust::{
     AdoptedMaintainerKey, MaintainerTrustPolicy, verify_trusted_publication_envelope,
@@ -327,14 +326,11 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     let mut unresolvable_signatures = Vec::new();
     let mut not_checked_signatures = Vec::new();
     let mut id_to_expansion: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
-    // 0.52.0 step 0, Part C1 round 2: every non-`Blob` envelope decoded here is also kept, so the
-    // archive's own `ArchiveObjectReader` (below) can run the store's own ref-checking functions
-    // (`refs::verify::{verify_one_pointer_entry, verify_update}`, `crate::verify::
-    // verify_received_ref_state`) against the archive's own carried content, unmodified -- the same
-    // sharing discipline `expand_frontier` already established for the Block/reachability half.
-    // `Blob` bodies are the one thing ever large (up to the per-object bound); every other object
-    // type is small, bounded metadata, so holding all of them is still O(objects), never O(archive
-    // bytes) -- the §9.2 promise this module has always kept.
+    // 0.52.0 step 0, Part C1 round 3 (finding C1-8): restricted to the four types the shared ref
+    // checks actually read (`reader_holds_type`'s own doc) -- round 2 held every non-`Blob` envelope,
+    // including `Patch`, whose own body is not small (an `EditText` carries its own before/after span
+    // text, DC-65), so a text-heavy history's `archive verify` memory used to scale with the
+    // archive's own total patch volume, not the largest single object (§9.2).
     let mut id_to_envelope: HashMap<ObjectId, ObjectEnvelope> = HashMap::new();
     let mut block_candidates: Vec<(ObjectId, &'static str, ObjectId)> = Vec::new();
     for entry in &manifest.entries {
@@ -348,7 +344,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
             };
             id_to_expansion.insert(envelope.object_id(), expand_frontier(&envelope));
             classify_references(&envelope, &ids, &mut block_candidates)?;
-            if envelope.object_type != ObjectType::Blob {
+            if reader_holds_type(envelope.object_type) {
                 id_to_envelope.insert(envelope.object_id(), envelope.clone());
             }
             check_signatures(
@@ -384,17 +380,28 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
         }
     }
 
-    // 0.52.0 step 0, Part C1 round 2: the store's own ref-checking functions, run against the
-    // archive's own carried content through `ArchiveObjectReader` -- shared, not re-derived, exactly
-    // as the ruling in `0.52.0-step-0-C1-review-v1.md` requires. Each failure becomes a `damaged`
-    // line naming the ref, the same wording class the rest of this function already uses.
+    // 0.52.0 step 0, Part C1 round 3: the store's own pointer-entry check, the real ref-log decode
+    // and replay (`refs::verify::read_logs`, over a `DecodedRefLog` built from the archive's own
+    // carried `RefLog` section bytes -- the identical decoder a live container read already uses,
+    // confirmed from source: `ArchiveSectionKind::RefLog` is that container's own slot `a` bytes,
+    // verbatim), and the pointer<->log tie (`refs::verify::classify_ref_items`) -- run against the
+    // archive's own carried content through `ArchiveObjectReader`, shared, not re-derived. Round 2's
+    // own reimplemented ref-log walk (sorted by `update_seq`, grouped by the decoded name rather than
+    // the frame's own header key, and silent about trailing partial bytes) is gone: it was a second
+    // copy of exactly the security-bearing logic this round shares instead (finding C1-7).
     let object_reader = ArchiveObjectReader {
         envelopes: &id_to_envelope,
     };
+    let mut pointers: BTreeMap<String, PointerState> = BTreeMap::new();
     for entry in &local_pointer_entries {
-        if let Err(error) = verify_one_pointer_entry(&object_reader, entry) {
-            reference_closure_sound = false;
-            damaged.push(format!("local ref {}: {error}", entry.ref_name));
+        match read_one_pointer_entry(&object_reader, entry) {
+            Ok((ref_name, state)) => {
+                pointers.insert(ref_name, state);
+            }
+            Err(error) => {
+                reference_closure_sound = false;
+                damaged.push(format!("local ref {}: {error}", entry.ref_name));
+            }
         }
     }
     for entry in &received_pointer_entries {
@@ -407,53 +414,59 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     }
     let ref_log_entry = find_entry(&manifest, ArchiveSectionKind::RefLog)?;
     let ref_log_bytes = read_section_body_fully(source, ref_log_entry)?;
-    let (ref_log_records, ref_log_damaged) = decode_ref_log_records_from_bytes(&ref_log_bytes)?;
-    if ref_log_damaged {
+    let ref_log_decoded: Result<Option<DecodedRefLog>> =
+        decode_ref_container_records(&ref_log_bytes).map(|replay| {
+            Some(DecodedRefLog {
+                bytes: ref_log_bytes,
+                replay,
+            })
+        });
+    let (logs, _log_record_count, _ref_log_envelopes, log_failures_by_key, _log_outcomes) =
+        read_logs(
+            &|offset| PathBuf::from(format!("archive:RefLog#{offset}")),
+            &object_reader,
+            &pointers,
+            &ref_log_decoded,
+        )?;
+    // Every damaged ref-log record (a frame whose checksum fails, whose payload does not decode, or
+    // whose own header `ref_name_key` disagrees with its decoded `ref_name`) is damage, regardless of
+    // whether the ref it belongs to is also named by a carried pointer -- `read_logs` only inserts a
+    // ref's own `LogState` once its full subsequence validates cleanly, so a damaged key is otherwise
+    // silent here.
+    for message in log_failures_by_key.values() {
         reference_closure_sound = false;
-        damaged.push("ref log has damaged record(s)".to_string());
-    } else {
-        // The same chain/sequence walk `refs::verify::scan::validate_log_replay` does (grouped by
-        // ref name, `old_ref_state_id` continuity, `update_seq` contiguous from 1) -- bookkeeping
-        // only; the actual security-relevant check per record is `verify_update`, called unmodified
-        // below. The store's own replay groups by the log's own `ref_name_key` header field before
-        // ever decoding a payload; the archive's carried section has no such per-record header to
-        // group by ahead of decode, so this groups by the decoded `RefUpdatePayload.ref_name`
-        // instead -- the identical partition once every record decodes, confirmed by control (e).
-        let mut by_ref: std::collections::BTreeMap<String, Vec<RefUpdatePayload>> =
-            std::collections::BTreeMap::new();
-        for record in &ref_log_records {
-            match RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload) {
-                Ok(update) => by_ref
-                    .entry(update.ref_name.clone())
-                    .or_default()
-                    .push(update),
-                Err(error) => {
-                    reference_closure_sound = false;
-                    damaged.push(format!("ref log record does not decode: {error}"));
-                }
-            }
-        }
-        for (ref_name, mut updates) in by_ref {
-            updates.sort_by_key(|update| update.update_seq);
-            let mut previous = None;
-            for (index, update) in updates.iter().enumerate() {
-                let expected_seq = u64::try_from(index)
-                    .ok()
-                    .and_then(|value| value.checked_add(1));
-                if expected_seq != Some(update.update_seq) || update.old_ref_state_id != previous {
-                    reference_closure_sound = false;
-                    damaged.push(format!("ref-log chain or sequence diverges for {ref_name}"));
-                    break;
-                }
-                if let Err(error) = verify_update(&object_reader, update) {
-                    reference_closure_sound = false;
-                    damaged.push(format!("ref log {ref_name}: {error}"));
-                }
-                previous = Some(update.new_ref_state_id);
-            }
+        damaged.push(format!("ref log: {message}"));
+    }
+    // The pointer<->log tie: the exact classification `verify_refs_with` runs over a live
+    // repository's own `pointers`/`logs` maps, shared through `classify_ref_items`. A local pointer
+    // naming an uncarried previous RefState, with no log record at all for that ref, falls through
+    // every named arm to `classify_ref_state`'s own catch-all `Err` -- the same source shape this
+    // archive used to pass before this round (finding C1-6/C1-1).
+    let (ref_items, publication_issues) = classify_ref_items(&pointers, &logs);
+    for (ref_name, result) in ref_items {
+        if let Err(error) = result {
+            reference_closure_sound = false;
+            damaged.push(format!("ref {ref_name}: {error}"));
         }
     }
-
+    // `classify_ref_state` returns `Ok` for `POINTER-LEADS-LOG`/`DIVERGENCE` (named, non-fatal
+    // conditions to a live repository's own ref-log scan), but a live repository's own overall
+    // `verify` still fails over either one (`VerificationReport::has_blocking_ref_publication_
+    // issues`) -- `archive export` never refuses on either state (neither is a queued-unsealed-work
+    // nor a slotted-container-ambiguity condition, confirmed from `archive.rs`'s own `refuse_on_
+    // queued_unsealed_work`/`resolve_pointer_index_source`), so an honest archive can carry this
+    // state verbatim, and this closure pass must classify it exactly as the source's own `verify`
+    // would, not silently pass it because `classify_ref_state` itself did not `Err`.
+    for issue in publication_issues {
+        if issue.blocking {
+            reference_closure_sound = false;
+            let ref_name = issue.ref_name.as_deref().unwrap_or("(repository-wide)");
+            damaged.push(format!(
+                "ref {ref_name}: {} ({})",
+                issue.message, issue.code
+            ));
+        }
+    }
     let maintainer_keys = maintainer_policy
         .keys
         .iter()
@@ -552,15 +565,30 @@ fn check_signatures(
     }
 }
 
-/// 0.52.0 step 0, Part C1 round 2: a random-access [`ObjectReader`] over pass 2's own
-/// `id_to_envelope` map, so the store's own ref-checking functions
-/// (`refs::verify::{verify_one_pointer_entry, verify_update}`, `crate::verify::
+/// 0.52.0 step 0, Part C1 round 3 (finding C1-8): the one predicate deciding whether
+/// [`ArchiveObjectReader`]'s own `id_to_envelope` map holds an envelope -- factored out so a test can
+/// call the exact production predicate, not a restated copy of it, to prove a `Patch` id reads as
+/// absent. `RefState`, `Tag`, `Attestation` and `Block` are the only types the shared checks below
+/// ever read (`verified_ref_state_payload`, `ensure_ref_target_valid`,
+/// `ensure_required_attestations_present`, `verify_received_ref_state`'s own previous-link read) --
+/// never `Patch` (DC-65: an `EditText`'s own before/after span text can be large) and never `Blob`
+/// (the one thing ever large, up to the per-object bound).
+const fn reader_holds_type(object_type: ObjectType) -> bool {
+    matches!(
+        object_type,
+        ObjectType::RefState | ObjectType::Tag | ObjectType::Attestation | ObjectType::Block
+    )
+}
+
+/// 0.52.0 step 0, Part C1 round 2 (restricted further in round 3, see [`reader_holds_type`]): a
+/// random-access [`ObjectReader`] over pass 2's own `id_to_envelope` map, so the store's own
+/// ref-checking functions (`refs::verify::{read_one_pointer_entry, read_logs}`, `crate::verify::
 /// verify_received_ref_state`) can run against the archive's own carried content directly, unmodified
 /// -- the ruling's own item 1 ("an object reader over the archive"). The ruling's own wording
 /// describes an id -> (type, section, offset) map with a seeking, per-read decode; this holds the
 /// already-decoded envelope instead (built once, during pass 2, which was already decoding every one
 /// of them to compute `id_to_expansion`). Still O(objects) memory, never O(archive bytes) -- the one
-/// thing ever large, a `Blob`'s own body, is never held (see `id_to_envelope`'s own doc note above)
+/// thing ever large, a `Blob`'s own body, is never held (see `reader_holds_type`'s own doc note above)
 /// -- and avoids a second `R: Read + Seek` borrow living across this struct's own lifetime, which the
 /// seeking design would require threading through every one of pass 2's own closures. Declared here,
 /// not guessed past: if this simplification is wrong for this use, say so in review.
@@ -583,8 +611,9 @@ impl ObjectReader for ArchiveObjectReader<'_> {
 /// Every other reference this module used to classify here -- `Tag.target_block_id`,
 /// `RefState.target_object_id`/`required_attestation_ids`/`previous_ref_state_id`,
 /// `Attestation.target_block_id` -- is no longer classified in this pass at all. Those are exactly
-/// the references the store's own shared functions (`verify_one_pointer_entry`, `verify_update`,
-/// `verify_received_ref_state`, called below through [`ArchiveObjectReader`]) already check, at the
+/// the references the store's own shared functions (`read_one_pointer_entry`, `read_logs`'s own
+/// `validate_log_replay`/`classify_ref_state` tie, `verify_received_ref_state`, called below through
+/// [`ArchiveObjectReader`]) already check, at the
 /// places the store itself checks them: a pointer entry's own tip, a ref-log record, a received ref's
 /// own tip. Checking them here too, by this pass's own re-derived approximation, was exactly the
 /// post-0.51.0 and round-1 defect class this part exists to fix (the archive required *every*

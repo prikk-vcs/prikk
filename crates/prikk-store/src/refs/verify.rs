@@ -1,6 +1,6 @@
 //! Joint ref pointer and ref-log verification.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use prikk_error::{PrikkError, Result};
 
@@ -13,13 +13,13 @@ use crate::signature_diagnostics::{
 
 mod scan;
 
-pub use scan::{RefFileOutcome, RefFileStatus};
 pub(crate) use scan::{
-    ensure_ref_target_valid, ensure_required_attestations_present, verify_one_pointer_entry,
-    verify_update,
+    LogState, PointerState, ensure_ref_target_valid, ensure_required_attestations_present,
+    read_logs, read_one_pointer_entry,
 };
+pub use scan::{RefFileOutcome, RefFileStatus};
 
-use scan::{LogState, PointerState, read_logs, read_pointers};
+use scan::read_pointers;
 
 /// One recognized interrupted-publication or local-debris condition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,8 +149,12 @@ pub(crate) fn verify_refs_with(
     let objects = ObjectReadSnapshot::open(layout)?;
     let (pointers, pointer_failures_by_key, pointer_outcomes, trailing_partial_pointer_index_bytes) =
         read_pointers(layout, &objects)?;
-    let (logs, log_record_count, ref_log_envelopes, log_failures_by_key, log_outcomes) =
-        read_logs(layout, &objects, &pointers, ref_log)?;
+    let (logs, log_record_count, ref_log_envelopes, log_failures_by_key, log_outcomes) = read_logs(
+        &|offset| scan::log_locator(layout, offset),
+        &objects,
+        &pointers,
+        ref_log,
+    )?;
     // DC-95 Stage 2 Level 2 handoff §7 Q4, ruled: stays a whole-set precheck. RFC 103: with format-1
     // retired, this is no longer "a format-2 repository contaminated by format-1 records" -- it is
     // simply malformed data, and the check is unconditional rather than format-gated. Still a claim
@@ -297,6 +301,39 @@ fn classify_ref_state(
             "unexplained pointer/log divergence for ref {ref_name}"
         ))),
     }
+}
+
+/// 0.52.0 step 0, Part C1 round 3: the archive's own closure pass shares this exact pointer<->log
+/// tie, not a second copy of it -- `classify_ref_state` itself stays private to this file; this is
+/// the one `pub(crate)` seam through it. Runs the identical per-ref dispatch `verify_refs_with` runs
+/// over a live repository's own `pointers`/`logs` maps (the union of both maps' own keys, `classify_
+/// ref_state` once per name), so the archive's own carried pointer and log state is classified by
+/// exactly the rule a live repository's `verify` would apply to the same state -- never a looser or
+/// stricter approximation of it.
+///
+/// Returns one `(ref_name, Result<()>)` per name in the union, **and** every blocking
+/// `RefPublicationIssue` `classify_ref_state` itself pushed along the way
+/// (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) separately: a live repository's own
+/// `VerificationReport::has_blocking_ref_publication_issues` folds these into its own overall
+/// `verify` failure even though `classify_ref_state` returns `Ok` for them (they are named,
+/// non-fatal conditions, not hard errors) -- the caller must fold every `blocking: true` issue into
+/// its own damage, not drop it on the floor as "not an `Err`".
+pub(crate) fn classify_ref_items(
+    pointers: &BTreeMap<String, PointerState>,
+    logs: &BTreeMap<String, LogState>,
+) -> (Vec<(String, Result<()>)>, Vec<RefPublicationIssue>) {
+    let mut names = BTreeSet::new();
+    names.extend(pointers.keys().cloned());
+    names.extend(logs.keys().cloned());
+    let mut issues = Vec::new();
+    let mut outcomes = Vec::with_capacity(names.len());
+    for ref_name in names {
+        let pointer = pointers.get(&ref_name);
+        let log = logs.get(&ref_name);
+        let result = classify_ref_state(&ref_name, pointer, log, &mut issues);
+        outcomes.push((ref_name, result));
+    }
+    (outcomes, issues)
 }
 
 fn next_log_sequence(log: Option<&LogState>) -> Result<u64> {

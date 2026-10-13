@@ -23,9 +23,13 @@ pub(crate) mod verify;
 pub(in crate::refs) use container::append_ref_container_record;
 #[cfg(test)]
 pub(crate) use container::{
-    append_torn_ref_log_tail_for_test, decode_ref_container_records,
-    encode_ref_container_record_for_test,
+    append_torn_ref_log_tail_for_test, encode_ref_container_record_for_test,
 };
+// 0.52.0 step 0, Part C1 round 3: unconditional (not `#[cfg(test)]`) -- `archive::verify`'s own
+// production code needs this to decode its own carried `RefLog` section's bytes into a real
+// `RefContainerReplay`/`DecodedRefLog`, the same decoder a live repository's container read already
+// uses, not a second one.
+pub(crate) use container::decode_ref_container_records;
 #[cfg(feature = "test-support")]
 pub use pointer_index::{
     force_ref_pointer_to_arbitrary_state_for_test_support,

@@ -232,3 +232,141 @@ fn an_edited_then_deleted_file_exports_verifies_and_imports_cleanly() {
 
     assert_archive_round_trips_cleanly(&repo, "edited-deleted");
 }
+
+/// 0.52.0 step 0, Part C1 round 3, finding C1-9: an archive carrying a genuine `UnreferencedRemnant`
+/// (RFC 164 Rule E), end to end, through the real compiled binary -- `archive export`, then `archive
+/// verify` (prose names the owner and the missing patch; `--format json` lists it under
+/// `unreferenced_remnants`), then `archive import`, then the destination's own `prikk verify` (the
+/// identical store-side classification, the same warning). No failpoint is wired into any bundle or
+/// archive import path (searched: no `anchored::failpoints` consumer anywhere under `archive/` or
+/// `bundle.rs`), so the remnant is built the same way the store's own `verify/tests/reachability.rs`
+/// builds one for the *live* repository's own tests: an orphan `Block` written directly through
+/// `FileObjectStore`, never reachable from any ref, received pointer, or queued patch.
+#[test]
+fn an_unreferenced_remnant_round_trips_with_its_warning_intact() {
+    let repo = support::unique_repo("0520-c1r3-remnant-source");
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "a.txt", b"first\n", "first");
+
+    let layout = prikk_store::RepositoryLayout::open(repo.clone()).expect("open layout");
+    let mut object_store = prikk_store::FileObjectStore::new(layout.clone());
+    let missing_patch_id = prikk_object::ObjectId::from_bytes([0xC1; 32]);
+    let state_root = prikk_store::compute_state_root(&[]).expect("state root");
+    let payload = prikk_object::BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: prikk_object::BlockKind::Root,
+        patch_ids: vec![missing_patch_id],
+        state_merkle_root: state_root,
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&payload).expect("encode block");
+    let mut orphan_envelope =
+        prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Block, 2, bytes);
+    let orphan_block_id = orphan_envelope.object_id();
+    let signer = prikk_store::Ed25519MaintainerSigner::from_seed(
+        support::MAINTAINER_KEY_ID,
+        &support::MAINTAINER_SEED,
+    )
+    .expect("build signer");
+    let signature = prikk_store::maintainer_signature(
+        &signer,
+        prikk_object::ObjectType::Block,
+        orphan_block_id,
+    )
+    .expect("sign");
+    orphan_envelope
+        .add_signature(signature)
+        .expect("attach signature");
+    prikk_store::ObjectWriter::write_object(&mut object_store, &orphan_envelope)
+        .expect("write orphan block");
+
+    let source_verify = support::prikk(&repo).arg("verify").output().unwrap();
+    assert!(
+        source_verify.status.success(),
+        "the source repository's own prikk verify must already pass (RFC 164 Rule E: an \
+         unreferenced remnant is never damage): {}\n{}",
+        stdout(&source_verify),
+        String::from_utf8_lossy(&source_verify.stderr)
+    );
+    assert!(
+        stdout(&source_verify).contains(&orphan_block_id.to_string()),
+        "the source's own verify must already show the remnant warning: {}",
+        stdout(&source_verify)
+    );
+
+    let path = archive_path("remnant");
+    let export = support::prikk(&repo)
+        .args(["archive", "export"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    support::ok(&export, "archive export");
+
+    let verify_text = support::prikk(&repo)
+        .args(["archive", "verify"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        verify_text.status.success(),
+        "archive verify must exit 0 -- a remnant is never damage: {}\n{}",
+        stdout(&verify_text),
+        String::from_utf8_lossy(&verify_text.stderr)
+    );
+    let verify_text_stdout = stdout(&verify_text);
+    assert!(
+        verify_text_stdout.contains(&orphan_block_id.to_string())
+            && verify_text_stdout.contains(&missing_patch_id.to_string()),
+        "prose must name both the owning block and the missing patch: {verify_text_stdout}"
+    );
+    assert!(
+        verify_text_stdout.contains("references missing block patch")
+            && verify_text_stdout.contains("harmless"),
+        "prose must use the store's own remnant_warning wording, not a second one: \
+         {verify_text_stdout}"
+    );
+
+    let verify_json = support::prikk(&repo)
+        .args(["archive", "verify", "--format", "json"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        verify_json.status.success(),
+        "archive verify --format json must also exit 0"
+    );
+    let verify_json_stdout = stdout(&verify_json);
+    assert!(
+        verify_json_stdout.contains("\"unreferenced_remnants\"")
+            && verify_json_stdout.contains(&orphan_block_id.to_string())
+            && verify_json_stdout.contains(&missing_patch_id.to_string()),
+        "--format json must list the remnant under unreferenced_remnants: {verify_json_stdout}"
+    );
+
+    let dest = support::unique_repo("0520-c1r3-remnant-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+    let import = support::prikk(&dest)
+        .args(["archive", "import"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    support::ok(&import, "archive import");
+
+    let dest_verify = support::prikk(&dest).arg("verify").output().unwrap();
+    assert!(
+        dest_verify.status.success(),
+        "the destination's own prikk verify must pass -- a remnant is never damage there either: \
+         {}\n{}",
+        stdout(&dest_verify),
+        String::from_utf8_lossy(&dest_verify.stderr)
+    );
+    assert!(
+        stdout(&dest_verify).contains(&orphan_block_id.to_string()),
+        "the destination's own verify must show the identical remnant warning, the same store-side \
+         classification applied after import: {}",
+        stdout(&dest_verify)
+    );
+}

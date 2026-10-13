@@ -507,3 +507,142 @@ fn archive_import_rss_at_one_gib_of_blob_content() {
     eprintln!("{report}");
     let _ = std::fs::remove_dir_all(&source_repo);
 }
+
+/// Deterministic, distinguishable (not all-zero) text content of `len` bytes -- real text, not a
+/// synthetic oversized payload, so a genuine `commit` sees it as an ordinary text file edit.
+fn text_content(len: usize, seed: u8) -> Vec<u8> {
+    let mut content = Vec::with_capacity(len);
+    let line = b"the quick brown fox jumps over the lazy dog 0123456789\n";
+    while content.len() < len {
+        content.push(line[(content.len().wrapping_add(seed as usize)) % line.len()]);
+    }
+    content
+}
+
+/// 0.52.0 step 0, Part C1 round 3, control (k): `archive verify`'s own peak RSS on a patch-heavy
+/// archive -- at least 512 MiB of real `EditText` payload (DC-65: an edited text file's own whole
+/// content lives in its own patch, before and after), built through genuine edited-text-file
+/// commits, never a synthetic oversized payload. Each file's own first commit writes a small
+/// placeholder (so the second commit is a genuine *edit*, not a create); kept under
+/// `DEFAULT_BUNDLE_MAX_OBJECT_BYTES` (256 MiB) per file, several files summing past 512 MiB total,
+/// the same per-object-bound reasoning `write_many_blobs_totaling`'s own doc note already explains
+/// for blobs.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "0.52.0 step 0, Part C1 round 3, control (k): measures archive verify's peak RSS on a \
+            patch-heavy archive; run deliberately"]
+fn archive_verify_rss_on_a_patch_heavy_archive() {
+    const FILE_COUNT: usize = 10;
+    const PER_FILE_BYTES: usize = 60 * 1024 * 1024; // 600 MiB combined, each well under the 256 MiB per-object bound
+    let repo = support::unique_repo("c1r3-archive-verify-rss-patch-heavy");
+    support::init(&repo);
+
+    for index in 0..FILE_COUNT {
+        std::fs::write(
+            repo.join(format!("big-{index}.txt")),
+            format!("placeholder {index}\n"),
+        )
+        .unwrap();
+    }
+    support::ok(
+        &support::commit(&repo, "heads/main", "create placeholders"),
+        "commit placeholders",
+    );
+    support::ok(&support::seal(&repo, "heads/main"), "seal placeholders");
+
+    // One edit per commit (not all five in one): a single commit's own edits to several files can
+    // coalesce into one Patch object, which would exceed `DEFAULT_BUNDLE_MAX_OBJECT_BYTES` (256
+    // MiB) well before reaching 512 MiB combined -- found directly by running this once. Separate
+    // commits keep each individual Patch under that bound, the same per-object-bound reasoning
+    // `write_many_blobs_totaling`'s own doc note already gives for blobs.
+    for index in 0..FILE_COUNT {
+        let content = text_content(PER_FILE_BYTES, index as u8);
+        std::fs::write(repo.join(format!("big-{index}.txt")), &content).unwrap();
+        support::ok(
+            &support::commit(&repo, "heads/main", &format!("edit file {index}")),
+            &format!("commit edit {index}"),
+        );
+        support::ok(
+            &support::seal(&repo, "heads/main"),
+            &format!("seal edit {index}"),
+        );
+    }
+
+    let archive_path = repo.join("patch-heavy.prepo");
+    let export_status = std::process::Command::new(env!("CARGO_BIN_EXE_prikk"))
+        .current_dir(&repo)
+        .args(["archive", "export", "patch-heavy.prepo"])
+        .status()
+        .expect("spawning archive export for the patch-heavy fixture");
+    assert!(
+        export_status.success(),
+        "archive export must succeed to build the patch-heavy fixture"
+    );
+    let archive_size_bytes = std::fs::metadata(&archive_path).unwrap().len();
+    let archive_size_kib = (archive_size_bytes / 1024) as i64;
+
+    let mut peaks = Vec::new();
+    let mut wall_ms = Vec::new();
+    for _ in 0..SAMPLES_PER_POINT {
+        let start = std::time::Instant::now();
+        let run = measure_rss(&repo, &["archive", "verify", "patch-heavy.prepo"], &[]);
+        wall_ms.push(start.elapsed().as_millis());
+        assert_eq!(
+            run.exit_code,
+            Some(0),
+            "verify must succeed: {}",
+            run.stderr
+        );
+        peaks.push(run.peak_rss_kib);
+    }
+    let median_kib = median(peaks.clone());
+    eprintln!(
+        "patch-heavy archive ({archive_size_bytes} bytes = {archive_size_kib} KiB, {FILE_COUNT} x \
+         {PER_FILE_BYTES} byte edits): verify peak RSS samples (KiB) = {peaks:?}, median = \
+         {median_kib}, wall (ms) = {wall_ms:?}"
+    );
+
+    // Before round 3's own fix (commit 8cd07c4a), the reader held every non-Blob envelope
+    // including every Patch -- memory scaled with total patch volume (here, ~600 MiB), not the
+    // largest single object. After the fix, the reader excludes Patch entirely, and peak RSS is
+    // dominated by decoding one container record at a time (transiently, the raw frame bytes, the
+    // decoded envelope, and a small number of further live copies along the way) -- bounded by a
+    // small constant times the largest single object, the same "close to 5x/6x the largest single
+    // object" multiplier this file's own import RSS test already measures and explains, never by
+    // the archive's own total patch volume.
+    const PER_FILE_KIB: i64 = (PER_FILE_BYTES / 1024) as i64;
+    const CEILING_KIB: i64 = PER_FILE_KIB * 6;
+    assert!(
+        median_kib < CEILING_KIB,
+        "median peak RSS {median_kib} KiB exceeds the {CEILING_KIB} KiB ceiling (6x the largest \
+         single edited file, {PER_FILE_KIB} KiB) -- expected bounded by the largest object, not \
+         by total patch volume (the pre-round-3 regression this control exists to catch)"
+    );
+    assert!(
+        median_kib < archive_size_kib / 2,
+        "median peak RSS {median_kib} KiB is not clearly independent of the archive's own size \
+         ({archive_size_kib} KiB)"
+    );
+
+    let report = format!(
+        "# 0.52.0 step 0, Part C1 round 3, control (k) -- archive verify peak RSS on a \
+         patch-heavy archive\n\n\
+         Generated by `cargo test -p prikk --release --locked --test rfc155_archive_export_memory \
+         -- --ignored --nocapture`. {SAMPLES_PER_POINT} samples, median shown. Archive size: \
+         {archive_size_bytes} bytes ({archive_size_kib} KiB), {FILE_COUNT} files x \
+         {PER_FILE_BYTES} bytes of real edited text content (~{} MiB combined).\n\n\
+         | peak RSS samples (KiB) | median (KiB) | wall samples (ms) |\n|---|---:|---|\n\
+         | {peaks:?} | {median_kib} | {wall_ms:?} |\n",
+        (FILE_COUNT * PER_FILE_BYTES) / (1024 * 1024)
+    );
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.git-exclude/measurements/rfc155");
+    std::fs::create_dir_all(&out_dir).expect("creating the measurement directory");
+    std::fs::write(
+        out_dir.join("0.52.0-step-0-C1-round-3-control-k-patch-heavy-rss.md"),
+        &report,
+    )
+    .unwrap();
+    eprintln!("{report}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
