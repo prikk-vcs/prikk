@@ -22,7 +22,7 @@ owner reads and accepts before any implementation.
 
 ## Read first
 
-- `rfcs/accepted/155-repository-complete-artifact.md`, all of it;
+- `rfcs/done/155-repository-complete-artifact.md`, all of it;
 - RFC 156 §4 (the same id under different signatures is merged);
 - RFC 154 (adoption);
 - RFC 114 §5.2 (carry-forward);

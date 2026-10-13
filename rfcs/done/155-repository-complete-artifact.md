@@ -1,7 +1,8 @@
 # RFC 155 — The repository-complete artifact: a whole repository, verbatim, in one file
 
-**Status.** **IMPLEMENTED 2026-10-11** (0.51.0 step 3: parts E, V/V2, I-A/I-A2, I-B/I-B2; the reviews are in
-`.git-exclude/reviewed/rfc155-impl-*`). It moves to `done/` when 0.51.0 is released.
+**Status.** **DONE 2026-10-13:** delivered in 0.51.0 (tag on `41c0bd1d`). Implemented in 0.51.0 step 3 (parts E,
+V/V2, I-A/I-A2, I-B/I-B2, then I-C to I-G after external reviews 023 and 024; the reviews are in
+`.git-exclude/reviewed/rfc155-impl-*`), with §9.1, §9.4 and §9.6 amended on the way.
 **ACCEPTED by the project owner 2026-09-16** (*"RFC 155 is accepted."*); proposed the same
 day by the architect. This is the "own RFC" that RFC 114 §5.2 (format carry-forward), RFC 115 §6.2 and
 RFC 116 §7 left open, and RFC 154 §6.2 needs it. planeter's requirements letter
