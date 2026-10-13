@@ -166,6 +166,12 @@ real local branch under `--adopt`, when it is absent locally, signed by a key th
 adopted (`trust maintainer add`), and verified — every other ref still lands under `remotes/`, with
 the reason named.
 
+**Run `archive verify` on every export before relying on it.** In 0.51.0, a repository that has
+accepted a sync artifact, or where a text file was edited, sealed, and later deleted, can export a
+file that its own `archive verify` refuses and `archive import` will not restore — see
+[the known limitation](../reference/current-state.md) for the two shapes and why. Both failures are
+fail-closed: nothing is written, and the source repository is untouched.
+
 **If the archive's own exported local ref and one of its own carried received pointers would land
 at the same `remotes/<ref>` name** — because the source repository itself once `bundle import`ed
 something for that same ref — the exporter's own ref wins the name; the colliding received pointer
