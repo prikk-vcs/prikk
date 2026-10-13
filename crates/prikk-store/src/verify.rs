@@ -296,7 +296,10 @@
 use std::path::PathBuf;
 
 mod objects;
-mod reachability;
+// 0.52.0 step 0, Part C1: `pub(crate)`, not private -- `archive::verify`'s own closure pass shares
+// this module's own `expand_frontier` step (the frontier-expansion rule), rather than re-deriving a
+// second copy of it.
+pub(crate) mod reachability;
 mod ref_publication;
 mod trust;
 

@@ -21,8 +21,18 @@
 //! `required_attestation_ids` *and*, once present, each required attestation's own
 //! `target_block_id` by `ensure_required_attestations_present` (0.49.0 step 5, round 2;
 //! `AttestationPayload::decode_canonical` and the target-block check added 0.50.0 step 2 Part B).
-//! **Disclosed gap:** a received ref's `previous_ref_state_id` is not checked (`import_bundle` does
-//! not require it; pending the owner's ruling). A `Patch`'s own referenced blobs are not re-derived
+//! **`previous_ref_state_id`, ruled (0.52.0 step 0, Part C1):** this comment used to call it a
+//! disclosed gap, "pending the owner's ruling" -- stale from the moment it was written.
+//! `verify_received_refs` (`verify.rs`) already requires it, directly, for a **received** ref's own
+//! current tip: one link, checked by reading the previous `RefState` and failing if it is absent.
+//! That check landed thirteen minutes after this comment did (0.49.0 step 5, round 2 item 1) and
+//! this doc was never updated. For a **local** ref, the same existence requirement holds
+//! transitively, through the ref log's own replay (`refs/verify/scan.rs`'s `verify_update`, which
+//! decodes every `new_ref_state_id` in sequence and checks each link's own `old_ref_state_id`
+//! against the previous record -- so every non-genesis tip's own previous link was itself already
+//! read and decoded, not merely compared by id). No other `RefState`'s own previous link is
+//! checked anywhere: a superseded received tip from before 0.49.0 may genuinely lack its own chain,
+//! and `verify` passes over it, by design. A `Patch`'s own referenced blobs are not re-derived
 //! here either, by the same reasoning: no existing check makes a *sealed* patch's blob references
 //! reachability-aware (only a *queued* one's, via the root case above, matching
 //! `verify_queued_patch_connectivity`'s own narrow walk). `RecognitionClaim`'s own references are
@@ -37,7 +47,9 @@
 use std::collections::BTreeSet;
 
 use prikk_error::Result;
-use prikk_object::{BlockPayload, ObjectId, ObjectType, RefStatePayload, TagPayload};
+use prikk_object::{
+    BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload, TagPayload,
+};
 
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::object_store::ObjectReader;
@@ -104,50 +116,62 @@ pub(super) fn compute_reachable_object_ids(
             continue;
         };
         reached.insert(id);
-        match envelope.object_type {
-            ObjectType::RefState => {
-                let Ok(payload) = RefStatePayload::decode_canonical(
-                    &envelope.canonical_payload,
-                    envelope.schema_version,
-                ) else {
-                    continue;
-                };
-                frontier.push(payload.target_object_id);
-                if let Some(previous) = payload.previous_ref_state_id {
-                    frontier.push(previous);
-                }
-            }
-            ObjectType::Tag => {
-                let Ok(payload) = TagPayload::decode_canonical(&envelope.canonical_payload) else {
-                    continue;
-                };
-                frontier.push(payload.target_block_id);
-            }
-            ObjectType::Block => {
-                let Ok(payload) = BlockPayload::decode_canonical(&envelope.canonical_payload)
-                else {
-                    continue;
-                };
-                frontier.extend(payload.parent_block_ids.iter().copied());
-                frontier.extend(payload.patch_ids.iter().copied());
-                if let Some(snapshot) = payload.snapshot_blob_ref {
-                    frontier.push(snapshot);
-                }
-                if let Some(mainline) = payload.mainline_parent_id {
-                    frontier.push(mainline);
-                }
-                if let Some(baseline) = payload.merge_baseline_block_id {
-                    frontier.push(baseline);
-                }
-            }
-            ObjectType::Patch
-            | ObjectType::RefUpdate
-            | ObjectType::Blob
-            | ObjectType::Attestation
-            | ObjectType::BlockSummaryCache
-            | ObjectType::RecoveryNote
-            | ObjectType::RecognitionClaim => {}
-        }
+        frontier.extend(expand_frontier(&envelope));
     }
     Ok(reached)
+}
+
+/// The frontier-expansion step (0.52.0 step 0, Part C1): given one already-decoded, already-reached
+/// object, which further ids does reachability extend to through it. A pure function over the
+/// envelope alone -- no object-store read, no layout -- so the archive's own closure pass (which
+/// builds its own id-to-references map from a streamed, already-decoded envelope, never a live
+/// `ObjectReader`) can share this exact step rather than re-deriving an approximation of it. A
+/// decode failure here means nothing is pushed, the same outcome the old inline `continue` gave:
+/// this object is still marked reached by the caller, but the walk builds no further than it.
+pub(crate) fn expand_frontier(envelope: &ObjectEnvelope) -> Vec<ObjectId> {
+    let mut next = Vec::new();
+    match envelope.object_type {
+        ObjectType::RefState => {
+            let Ok(payload) = RefStatePayload::decode_canonical(
+                &envelope.canonical_payload,
+                envelope.schema_version,
+            ) else {
+                return next;
+            };
+            next.push(payload.target_object_id);
+            if let Some(previous) = payload.previous_ref_state_id {
+                next.push(previous);
+            }
+        }
+        ObjectType::Tag => {
+            let Ok(payload) = TagPayload::decode_canonical(&envelope.canonical_payload) else {
+                return next;
+            };
+            next.push(payload.target_block_id);
+        }
+        ObjectType::Block => {
+            let Ok(payload) = BlockPayload::decode_canonical(&envelope.canonical_payload) else {
+                return next;
+            };
+            next.extend(payload.parent_block_ids.iter().copied());
+            next.extend(payload.patch_ids.iter().copied());
+            if let Some(snapshot) = payload.snapshot_blob_ref {
+                next.push(snapshot);
+            }
+            if let Some(mainline) = payload.mainline_parent_id {
+                next.push(mainline);
+            }
+            if let Some(baseline) = payload.merge_baseline_block_id {
+                next.push(baseline);
+            }
+        }
+        ObjectType::Patch
+        | ObjectType::RefUpdate
+        | ObjectType::Blob
+        | ObjectType::Attestation
+        | ObjectType::BlockSummaryCache
+        | ObjectType::RecoveryNote
+        | ObjectType::RecognitionClaim => {}
+    }
+    next
 }

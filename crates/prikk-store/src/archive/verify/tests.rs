@@ -689,6 +689,53 @@ fn verify_detects_a_genuinely_dangling_reference() {
     );
 }
 
+/// 0.52.0 step 0, Part C1: a Block that no carried ref reaches, whose own `patch_ids` names a patch
+/// id nobody ever wrote -- the same shape `verify_repository_detects_every_missing_referenced_
+/// object_as_a_remnant` (`verify/tests.rs`) already proves is a harmless remnant for a *live*
+/// repository (RFC 164 Rule E, §5's own standing example: a killed `bundle import` leaves exactly
+/// this). The archive's own export/verify/import must agree with the store, not refuse an archive
+/// of a repository whose own `prikk verify` already exits 0 over this.
+#[test]
+fn verify_names_an_unreferenced_remnant_instead_of_refusing_an_archive_over_it() {
+    let dir = unique_temp_dir("archive-verify-remnant");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let missing_patch_id = prikk_object::ObjectId::from_bytes([0xCD; 32]);
+    // Never published by any ref, received pointer, or queued patch -- by construction unreachable,
+    // the same way the store's own mirror test builds it.
+    let orphan_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        vec![missing_patch_id],
+        None,
+    );
+    let orphan_block_id = object_store
+        .write_object(&orphan_block)
+        .expect("write block");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        report.is_internally_consistent(),
+        "an unreachable block's own missing reference must not refuse the whole archive: {report:?}"
+    );
+    assert!(
+        report.damaged.is_empty(),
+        "a remnant is never damage: {:?}",
+        report.damaged
+    );
+    assert!(
+        report.unreferenced_remnants.iter().any(|line| {
+            line.contains(&orphan_block_id.to_string())
+                && line.contains(&missing_patch_id.to_string())
+        }),
+        "the remnant must name both the owning block and what it lacks: {:?}",
+        report.unreferenced_remnants
+    );
+}
+
 /// Two real, unsigned-content `Blob` records in one container -- the minimum needed to test a
 /// *middle* record's own damage with a sound record after it, never hand-assembled from scratch.
 /// Both carry the same placeholder MAINTAINER signature `signed_text_blob_envelope` always does
