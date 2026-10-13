@@ -12,9 +12,13 @@ use std::io::Cursor;
 use prikk_object::{BlockKind, ObjectId, ObjectType};
 
 use crate::archive::{ArchiveSectionKind, export_archive};
+use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test};
 use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME};
 use crate::lock::ActiveLock;
-use crate::test_gates::test_support::{signed_block, signed_patch_envelope, unique_temp_dir};
+use crate::test_gates::test_support::{
+    signed_block, signed_patch_envelope, signed_ref_state_envelope, signed_ref_update_envelope,
+    unique_temp_dir,
+};
 use crate::wal::Wal;
 use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryLayout};
 
@@ -424,6 +428,73 @@ fn export_refuses_queued_unsealed_work() {
     seal_queued_patch(&layout).expect("sealing the queued patch");
     let mut buffer2 = Vec::new();
     export_archive(&layout, &mut buffer2).expect("export succeeds once sealed");
+}
+
+/// 0.52.0 step 1 Part A, item 1 (external review 023): the scanning logic `export_archive` calls
+/// before writing anything, exercised directly against a small, test-chosen bound -- building a
+/// real over-256-MiB object just to prove the comparison works would be pure cost for no more
+/// signal. Shown red on the code before this part (there was no such function at all, so every
+/// record passed, however large its own declared body) and green after.
+#[test]
+fn first_over_bound_record_finds_a_record_whose_declared_body_exceeds_the_bound() {
+    let dir = unique_temp_dir("archive-export-over-bound-record");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    object_store
+        .write_object(&signed_patch_envelope())
+        .expect("write a real patch record");
+    let path = layout.container_slot_path(ObjectType::Patch, ContainerSlot::A);
+    let sound_len = std::fs::metadata(&path).expect("stat").len();
+    assert_eq!(
+        super::first_over_bound_record(&path, ObjectType::Patch, sound_len, u64::MAX)
+            .expect("scan"),
+        None,
+        "an enormous bound is never exceeded"
+    );
+    assert_eq!(
+        super::first_over_bound_record(&path, ObjectType::Patch, sound_len, 0).expect("scan"),
+        Some(0),
+        "a near-zero bound is exceeded by any real record"
+    );
+}
+
+/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2): the same `PointerLeading` crash shape
+/// `refs::tests::publication_recovery::state_matrix`'s own fixture names (interrupting a root
+/// publish's 4th `AppendWrite` -- after the object-container, object-index and pointer-index
+/// appends -- lands the pointer committed and the ref log not yet appended), built directly here
+/// with already-shared primitives rather than reaching into that private fixture module. Shown red
+/// on the code before this part (there was no such refusal at all, so this source exported
+/// successfully) and green after.
+#[test]
+fn export_refuses_a_source_with_a_blocking_ref_publication_state() {
+    let dir = unique_temp_dir("archive-export-pointer-leads-log");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let block_id = object_store
+        .write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))
+        .expect("write a real target block");
+    let ref_state = signed_ref_state_envelope("heads/main", None, block_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = signed_ref_update_envelope("heads/main", None, ref_state_id, block_id, 1);
+    let publication = RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    };
+
+    fail_after_for_test(TestFailPoint::AppendWrite, 3);
+    assert!(
+        RefStore::new(layout.clone()).publish(&publication).is_err(),
+        "the failpoint must interrupt this publish"
+    );
+
+    let mut buffer = Vec::new();
+    let err = export_archive(&layout, &mut buffer).expect_err("must refuse");
+    let message = err.to_string();
+    assert!(message.contains("`prikk ref complete"), "{message}");
+    assert!(message.contains("POINTER-LEADS-LOG"), "{message}");
+    assert!(buffer.is_empty(), "a refused export writes nothing");
 }
 
 /// Drain the active WAL exactly as `prikk seal` would -- the minimum needed to make the queued-work

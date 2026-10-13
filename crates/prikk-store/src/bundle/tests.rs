@@ -17,7 +17,8 @@ use crate::author::author_signing::{AuthorSigner, author_signature};
 use crate::bundle::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
     DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle, encode_bundle_v1_for_test,
-    encode_bundle_v2_for_test, export_bundle, import_bundle, verify_bundle,
+    encode_bundle_v2_for_test, export_bundle, first_over_bound_object_index, import_bundle,
+    verify_bundle,
 };
 use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 use crate::foundation::fsutil::len_to_u64;
@@ -251,6 +252,28 @@ fn export_of_missing_ref_fails() {
         assert!(export_bundle(&layout, "heads/main").is_err());
     }
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.52.0 step 1 Part A, item 1: the scanning logic `export_bundle` calls before encoding, exercised
+/// directly against a small, test-chosen bound -- building a real over-256-MiB object just to prove
+/// the comparison works would be pure cost for no more signal. Shown red on the code before this
+/// part (there was no such function at all, so every object passed, however large) and green after.
+#[test]
+#[allow(clippy::expect_used)]
+fn first_over_bound_object_index_finds_the_one_object_declaring_more_than_the_bound() {
+    let small = signed_patch_envelope();
+    let small_encoded_len = encode_envelope_file(&small).expect("encode small").len() as u64;
+    let objects = vec![small.clone(), small.clone(), small];
+    assert_eq!(
+        first_over_bound_object_index(&objects, small_encoded_len).expect("scan"),
+        None,
+        "every object is exactly at the bound, not over it"
+    );
+    assert_eq!(
+        first_over_bound_object_index(&objects, small_encoded_len - 1).expect("scan"),
+        Some((0, small_encoded_len)),
+        "every object is now one byte over a bound set just below its own size"
+    );
 }
 
 #[test]

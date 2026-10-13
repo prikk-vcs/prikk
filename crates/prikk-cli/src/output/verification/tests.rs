@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use super::{escape_json_string, print_verify_report_json, remnant_warning};
+use super::{display_bounded, escape_json_string, print_verify_report_json, remnant_warning};
 
 /// Windows hostile-test fix handoff Sec 2: the hostile-input proof used to live only in an
 /// integration test that planted a directory whose name carried these exact bytes -- a double
@@ -15,6 +15,44 @@ fn hostile_input_is_escaped_correctly() {
     assert_eq!(
         escaped,
         r#""quote\"back\\slash\nnewline\ttab\u0001control""#
+    );
+}
+
+/// 0.52.0 step 1 Part A, item 5: `tool_version` is read from a carried archive's own manifest, so a
+/// crafted archive can set it to anything -- a 60 KB string, or one full of control characters that
+/// would otherwise corrupt the terminal. A short, clean value must still print unchanged (no
+/// spurious truncation marker on the common case).
+#[test]
+fn a_short_clean_value_prints_unchanged() {
+    assert_eq!(display_bounded("0.51.0"), "0.51.0");
+}
+
+/// A value at exactly the bound is not truncated; one character over it is.
+#[test]
+fn the_bound_is_exact() {
+    let at_bound = "a".repeat(200);
+    assert_eq!(display_bounded(&at_bound), at_bound);
+    let one_over = "a".repeat(201);
+    let bounded = display_bounded(&one_over);
+    assert!(bounded.ends_with("... (201 bytes)"), "bounded: {bounded}");
+    assert_eq!(bounded.len(), 200 + "... (201 bytes)".len());
+}
+
+/// The reviewer's own hostile shape: a long, control-character-laden version string must neither
+/// print whole nor let a raw control character (a newline, here) reach the terminal.
+#[test]
+fn a_long_hostile_value_is_truncated_and_escaped() {
+    let hostile = format!("{}\n{}", "a".repeat(50), "z".repeat(500));
+    let bounded = display_bounded(&hostile);
+    assert!(!bounded.contains('\n'), "bounded: {bounded}");
+    assert!(bounded.contains("\\n"), "bounded: {bounded}");
+    assert!(
+        bounded.ends_with(&format!("... ({} bytes)", hostile.len())),
+        "bounded: {bounded}"
+    );
+    assert!(
+        !bounded.contains(&"z".repeat(500)),
+        "the trailing text past the bound must never print whole: {bounded}"
     );
 }
 

@@ -120,6 +120,59 @@ fn trailing_partial_bytes_are_tolerated_not_treated_as_corruption() -> Result<()
     Ok(())
 }
 
+/// 0.52.0 step 1 Part A, item 3: a frame whose header claims more bytes than remain, with a real
+/// sound record written right after it (the store's own append-only shape: a crash truncates the
+/// write, the store never notices, and its next write lands right after the torn bytes) -- the exact
+/// shape `foundation::frame_resync::partial_before_sound_frame_message`'s own text used to call
+/// *"damage, not a torn tail"* here too, contradicting the `InterruptedAppend` classification
+/// `verify/objects.rs` already gives it (`complete: false`, a warning, never failed). Shown red on
+/// the code before this part (the message said "damage") and green after.
+#[test]
+#[allow(clippy::expect_used)]
+fn an_overrun_torn_frame_reads_as_an_interrupted_append_never_damage() -> Result<()> {
+    let magic = container_magic(ObjectType::Blob)?;
+    let mut bytes = encode_container_record(ObjectType::Blob, &signed_patch_blob_envelope())?;
+    bytes.extend_from_slice(magic);
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // CONTAINER_VERSION
+    bytes.extend_from_slice(&999u64.to_be_bytes()); // a claimed body length far longer than what follows
+    bytes.extend_from_slice(&[0xABu8; 32]); // a checksum never reached, since the body never finishes
+    bytes.extend_from_slice(&[0u8; 10]); // only 10 of the claimed body bytes actually arrive
+    bytes.extend_from_slice(&encode_container_record(
+        ObjectType::Blob,
+        &signed_patch_blob_envelope(),
+    )?);
+
+    let replay = decode_container_records(ObjectType::Blob, &bytes)?;
+    assert_eq!(
+        replay.records.len(),
+        2,
+        "both sound records must still read"
+    );
+    let torn_message = replay
+        .record_outcomes
+        .iter()
+        .find_map(|outcome| match &outcome.status {
+            ContainerRecordStatus::Failed {
+                message,
+                complete: false,
+            } => Some(message.clone()),
+            _ => None,
+        })
+        .expect("the torn frame must be a non-complete Failed outcome");
+    assert!(
+        !torn_message.contains("damage, not a torn tail"),
+        "an object container's own overrun torn frame must never read as a live repository's \
+         damage wording: {torn_message:?}"
+    );
+    assert!(
+        torn_message.contains("an interrupted append, not damage")
+            && torn_message.contains("claims more bytes than remain")
+            && torn_message.contains("a sound frame starts at byte offset"),
+        "the message must read as an interrupted append: {torn_message:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn non_persisted_type_has_no_container_magic() {
     assert!(container_magic(ObjectType::RefUpdate).is_err());

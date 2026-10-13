@@ -23,12 +23,10 @@
   archive either.
 - **The archive now also checks the carried ref log, and each local ref against its log, the way
   the store does, with typed targets** — in 0.51.0 these were not checked at all, so an archive
-  taken from a source with a half-finished ref publication, or a ref whose own logged chain was
-  broken, used to pass `archive verify` and import cleanly into a repository whose own
-  `prikk verify` then failed. This is stricter than 0.51.0, where the first bullet above is looser:
-  an archive now fails `archive verify` over exactly the states the source's own `verify` would
-  already fail over, in either direction. A source caught in a half-finished ref publication fails
-  its own `verify` too, and `prikk ref complete` is the way out there, same as it always was.
+  whose refs disagreed with their own log passed `archive verify` regardless. It now fails, as the
+  source repository's own `prikk verify` already does over the identical state. A source caught in
+  a half-finished ref publication fails its own `verify` too, and `prikk ref complete` is the way
+  out there, same as it always was.
 - **A 0.51.0-written archive of either shape now imports cleanly under this fix**, provided its own
   source repository's `prikk verify` passed — checked for real: an archive written by the published
   `0.51.0` binary, of both the sync-accept (unsealed claim) and the edited-then-deleted shapes, was
@@ -42,6 +40,43 @@
   `archive verify`'s own prose gains the matching line, the store's own existing `remnant_warning`
   wording, unchanged from what a live repository's own `prikk verify` already prints for the
   identical condition.
+
+### Fixed — `archive export` and `bundle export` wrote a file their own import or verify refused
+
+- **An object over the per-object bound (`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`) used to export
+  successfully, and only `archive verify`/`archive import` (or a bundle's own `import`) refused it
+  afterward** (external review 023). Both `archive export` and `bundle export` now scan every
+  object before writing anything and refuse up front, naming the bound, the same one `import`
+  already enforces — nothing is written at the destination path, and no temporary file is left
+  behind.
+
+### Changed — `archive export` refuses a source caught in a blocking ref-publication state, up front
+
+- **A source repository whose own `prikk verify` already blocks on a ref's pointer-versus-log state
+  (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`, `PRIKK-VERIFY-REF-DIVERGENCE`) used to export successfully,
+  and only that archive's own `archive verify` refused it afterward** (0.52.0 step 0's own C1 review,
+  N2). `archive export` now shares the identical classification and refuses up front, naming
+  `prikk ref complete <ref>` as the way out — the same shape `refuse_on_queued_unsealed_work`
+  already names `prikk seal` for.
+
+### Output changes
+
+- **An object container's own interrupted-append warning no longer says *"damage, not a torn
+  tail"***: an object-type container (`Patch`, `Block`, `RefState`, `Tag`, `Attestation`, `Blob`,
+  `RecognitionClaim`) is append-only and never compacted, so a crash mid-append there is an ordinary,
+  harmless interrupted append — `prikk verify` already classified it that way (a warning, never a
+  failure), but the embedded text contradicted its own classification. It now reads as an
+  interrupted append, consistent with the wording `archive verify` already used for the identical
+  shape. Every other reader this message's own text still serves (the WAL, the trust policy, the
+  received index, the pointer index, the object index, the ref log, the author key index) is
+  unchanged: for those, this same byte shape usually does mean real damage.
+- **The signature-count note drops its trailing clause** (*"— not a weaker check, the step that was
+  always going to check them for real"*), redundant with the sentence immediately before it.
+- **`archive export`/`archive verify`'s own `tool version:` prose line no longer prints an archive's
+  own carried `tool_version` string whole** — a crafted archive can set it to anything. It now shows
+  the first 200 characters, control characters escaped, then `"... (N bytes)"` naming the real
+  total, when the value is longer than that. `--format json` is unaffected: the full value, already
+  escaped, still appears there.
 
 ## 0.51.0 — 2026-10-13
 

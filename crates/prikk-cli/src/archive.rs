@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
-use crate::output::verification::{escape_json_string, remnant_warning};
+use crate::output::verification::{display_bounded, escape_json_string, remnant_warning};
 use crate::stdout::{print, println};
 use prikk_store::{ArchiveImportOptions, export_archive};
 
@@ -85,7 +85,7 @@ fn run_export(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     } else {
         println!("exported {}", parsed.output.display());
         println!("repository format: {}", report.repository_format);
-        println!("tool version: {}", report.tool_version);
+        println!("tool version: {}", display_bounded(&report.tool_version));
         for (object_type, count) in &report.object_counts {
             println!("  {object_type}: {count}");
         }
@@ -203,7 +203,7 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
 
 fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
     println!("repository format: {}", report.repository_format);
-    println!("tool version: {}", report.tool_version);
+    println!("tool version: {}", display_bounded(&report.tool_version));
     println!("structurally sound: {}", report.structurally_sound);
     println!(
         "reference closure sound: {}",
@@ -266,8 +266,7 @@ fn signature_not_checked_note(checked: usize, not_checked: usize) -> Option<Stri
     Some(format!(
         "{checked} of {total} signatures were checked against this archive's own carried \
          material; the other {not_checked} are checked only by the receiving repository's own \
-         `prikk verify`, after import -- not a weaker check, the step that was always going to \
-         check them for real"
+         `prikk verify`, after import"
     ))
 }
 
@@ -700,5 +699,22 @@ mod tests {
             "note: {note}"
         );
         assert!(note.contains("the other 2 are checked"), "note: {note}");
+    }
+
+    /// 0.52.0 step 1 Part A, item 4: the trailing clause -- *"not a weaker check, the step that was
+    /// always going to check them for real"* -- is redundant with the sentence before it, which
+    /// already says the receiver's own `verify` is the real check. Shown red on the code before this
+    /// part (the clause was still there) and green after.
+    #[test]
+    fn note_drops_the_redundant_trailing_clause() {
+        let note = signature_not_checked_note(0, 1).expect("a note when not_checked > 0");
+        assert!(
+            !note.contains("not a weaker check"),
+            "the trailing clause must be gone: {note}"
+        );
+        assert!(
+            note.ends_with("after import"),
+            "the note must end with the sentence that already said it all: {note}"
+        );
     }
 }

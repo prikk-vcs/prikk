@@ -585,6 +585,25 @@ pub fn preview_bundle_reporting_anchor(
     ))
 }
 
+/// The index and own encoded length of the first object in `objects` whose own encoded frame
+/// exceeds `bound`, or `None` if every one is within it. Returns the length alongside the index so
+/// the caller never needs to re-index `objects` (and re-encode) just to report it. Parameterized on
+/// `bound` (rather than reading `DEFAULT_BUNDLE_MAX_OBJECT_BYTES` directly) so a test can exercise
+/// this against a small bound without building a real over-256-MiB object. `export_bundle`'s own
+/// call site always passes the real default.
+fn first_over_bound_object_index(
+    objects: &[ObjectEnvelope],
+    bound: u64,
+) -> Result<Option<(usize, u64)>> {
+    for (index, envelope) in objects.iter().enumerate() {
+        let encoded_len = len_to_u64(encode_envelope_file(envelope)?.len())?;
+        if encoded_len > bound {
+            return Ok(Some((index, encoded_len)));
+        }
+    }
+    Ok(None)
+}
+
 /// Export a genesis-complete, verifiable subset of objects for `ref_name` (DC-78 §D4/§D6). Walks the
 /// full Block ancestor closure (all parents, not mainline-only — ruling 2's "genesis-complete") plus
 /// every Patch and Blob those blocks reference, plus the exported RefState's own required
@@ -797,6 +816,19 @@ pub fn export_bundle(
         author_keys.push(AuthorKeyEntry {
             key_id: key_id.clone(),
             public_key: first,
+        });
+    }
+
+    // 0.52.0 step 1 Part A, item 1 (external review 023): refuse before encoding anything if any
+    // object this bundle would carry is itself over the same per-object bound `decode_bundle`
+    // enforces on import (`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`) -- otherwise export succeeds today and
+    // only that later read refuses, after the user already has a file they believe is a backup.
+    if let Some((_index, declared_bytes)) =
+        first_over_bound_object_index(&objects, DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64)?
+    {
+        return Err(PrikkError::ObjectOverBound {
+            declared_bytes,
+            bound_bytes: len_to_u64(DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?,
         });
     }
 

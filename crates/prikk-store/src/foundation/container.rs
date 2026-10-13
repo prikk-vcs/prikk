@@ -22,7 +22,7 @@ use crate::foundation::file_codec::{
     decode_envelope_file, encode_envelope_file, push_u16, push_u64,
 };
 use crate::foundation::frame_resync::{
-    BoundedScan, ScanBudget, partial_before_sound_frame_message, require_progress,
+    BoundedScan, ScanBudget, interrupted_append_before_sound_frame_message, require_progress,
     resync_to_next_magic, scan_budget_exceeded_message, sound_frame_after_partial_budgeted,
     tallied_sha256,
 };
@@ -442,7 +442,7 @@ pub(crate) fn decode_container_records(
                     }
                     BoundedScan::Sound(next) => next,
                 };
-                let message = partial_before_sound_frame_message(offset, next);
+                let message = interrupted_append_before_sound_frame_message(offset, next);
                 record_outcomes.push(ContainerRecordOutcome {
                     offset,
                     status: ContainerRecordStatus::Failed {

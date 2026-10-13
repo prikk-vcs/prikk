@@ -75,6 +75,27 @@ pub(crate) fn partial_before_sound_frame_message(
     )
 }
 
+/// 0.52.0 step 1 Part A, item 3: the object-container sibling of
+/// [`partial_before_sound_frame_message`] above, whose own text ends *"damage, not a torn tail"* --
+/// right for the WAL, the trust policy, the received index, the pointer index, the object index and
+/// the ref log, each periodically rewritten or compacted (RFC 102 Stage 6), where this exact shape
+/// usually does mean real tampering or corruption. An object-type container is append-only and never
+/// compacted; `verify/objects.rs`'s own `complete: false` arm already classifies this exact shape as
+/// an `InterruptedAppend`, a warning, never `ObjectItemStatus::Failed` -- the classification was
+/// always right, only the embedded text was wrong, contradicting the "interrupted append" line the
+/// CLI already wraps it in (`output/verification.rs`). Used by exactly one call site,
+/// `foundation::container::decode_container_records` -- the object-container decoder, parameterized
+/// on `ObjectType` and so never shared by the other, still-"damage" readers above.
+pub(crate) fn interrupted_append_before_sound_frame_message(
+    reported_offset: usize,
+    reported_next: usize,
+) -> String {
+    format!(
+        "frame at byte offset {reported_offset} claims more bytes than remain, but a sound frame starts at byte offset {reported_next}: \
+         an interrupted append, not damage"
+    )
+}
+
 /// RFC 167 D1: an explicit, per-decode work budget, passed through the call rather than tracked in
 /// a thread-local counter live in every build (the design round's prototype used the latter; the
 /// accepted design corrects it -- `rfc167-design-round-review-v1`, ruling 1). One instance is

@@ -12,10 +12,10 @@ use std::io::Cursor;
 
 use prikk_object::CanonicalEncode;
 
-use crate::archive::export_archive;
 use crate::archive::tests::{
     decode_manifest_for_test, insert_tail_bytes_into_section_for_test, seal_one_block,
 };
+use crate::archive::{export_archive, export_archive_bypassing_blocking_ref_publication_for_test};
 use crate::maintainer_signing::MaintainerSigner;
 use crate::object_store::ObjectReader;
 use crate::test_gates::test_support::{signed_text_blob_envelope, unique_temp_dir};
@@ -1447,8 +1447,15 @@ fn control_i_a_frame_header_ref_name_key_disagreeing_with_its_payload_is_damage(
     crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_1_id)
         .expect("write pointer entry");
 
+    // 0.52.0 step 1 Part A, item 2: this fixture's own pointer (update_seq 1, no previous) now
+    // reads as a live repository's own blocking `POINTER-LEADS-LOG` state, since the header/payload
+    // mismatch means no real log record attributes to "heads/main" at all -- `export_archive` itself
+    // now refuses this up front (the new behavior this same step adds), so this control uses the
+    // test-only seam that skips exactly that one precondition, to still prove the archive's own
+    // closure pass catches the header/payload mismatch as defense in depth.
     let mut bytes = Vec::new();
-    export_archive(&layout, &mut bytes).expect("export");
+    export_archive_bypassing_blocking_ref_publication_for_test(&layout, &mut bytes)
+        .expect("export");
     let mut cursor = Cursor::new(bytes);
     let report = verify_archive(&mut cursor).expect("verify");
     assert!(
@@ -1532,8 +1539,13 @@ fn a_pointer_that_authoritatively_leads_the_log_by_one_transition_is_damage_in_t
     crate::refs::write_ref_pointer_candidate_for_test(&layout, "heads/main", ref_state_2_id)
         .expect("write pointer entry");
 
+    // 0.52.0 step 1 Part A, item 2: `export_archive` itself now refuses exactly this source state
+    // up front (the new behavior this same step adds), so this control uses the test-only seam that
+    // skips that one precondition, to still prove the archive's own closure pass catches it too, as
+    // defense in depth for an archive written by an older build or assembled by some other means.
     let mut bytes = Vec::new();
-    export_archive(&layout, &mut bytes).expect("export");
+    export_archive_bypassing_blocking_ref_publication_for_test(&layout, &mut bytes)
+        .expect("export");
     let mut cursor = Cursor::new(bytes);
     let report = verify_archive(&mut cursor).expect("verify");
     assert!(

@@ -106,8 +106,12 @@ pub(super) fn log_locator(layout: &RepositoryLayout, offset: usize) -> PathBuf {
 /// offset now, not a per-ref file path — see the type's doc), so it can no longer be used to
 /// attribute a failed entry back to the ref name that owns it the way a per-ref filename could;
 /// `ref_name_key_bytes(ref_name)` is the only key both sides can compute independently.
+/// `pub(crate)` (0.52.0 step 1 Part A, item 2; was `pub(super)`) -- `archive::export_archive`'s own
+/// up-front refusal on a blocking ref-publication state needs the real `pointers` map this builds,
+/// to pass to [`crate::refs::verify::classify_ref_items`] the same way `verify_refs_with` itself
+/// does, rather than re-deriving the pointer read.
 #[allow(clippy::type_complexity)]
-pub(super) fn read_pointers(
+pub(crate) fn read_pointers(
     layout: &RepositoryLayout,
     objects: &impl ObjectReader,
 ) -> Result<(

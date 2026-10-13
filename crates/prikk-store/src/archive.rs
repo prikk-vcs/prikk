@@ -38,6 +38,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_hash::IncrementalSha256;
 use prikk_object::ObjectType;
 
+use crate::bundle::DEFAULT_BUNDLE_MAX_OBJECT_BYTES;
 use crate::foundation::fsutil::len_to_u64;
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{
@@ -226,7 +227,43 @@ pub fn export_archive(
     }
 
     refuse_on_queued_unsealed_work(layout)?;
+    refuse_on_over_bound_object(layout)?;
+    refuse_on_blocking_ref_publication(layout)?;
 
+    export_archive_body(layout, out)
+}
+
+/// 0.52.0 step 1 Part A, item 2: a test-only seam so `archive::verify::tests`' own
+/// `*_is_damage_in_the_archive_too` controls can still produce archive bytes carrying a blocking
+/// pointer<->log state, now that [`export_archive`] itself refuses one -- proving the archive's own
+/// closure pass still catches this state too, as defense in depth for an archive written by an
+/// older build or assembled by some other means, not only the export path this part now guards.
+/// Identical to [`export_archive`] except it skips [`refuse_on_blocking_ref_publication`]; every
+/// other precondition and the whole write itself are shared, not re-derived.
+#[cfg(test)]
+pub(crate) fn export_archive_bypassing_blocking_ref_publication_for_test(
+    layout: &RepositoryLayout,
+    out: &mut dyn Write,
+) -> Result<ArchiveExportReport> {
+    let _locks = acquire_container_locks(
+        layout,
+        &[
+            LockableContainer::ObjectStore,
+            LockableContainer::RefPointerIndex,
+            LockableContainer::RefLog,
+            LockableContainer::ReceivedIndex,
+            LockableContainer::TrustPolicy,
+        ],
+    )?;
+    refuse_on_queued_unsealed_work(layout)?;
+    refuse_on_over_bound_object(layout)?;
+    export_archive_body(layout, out)
+}
+
+fn export_archive_body(
+    layout: &RepositoryLayout,
+    out: &mut dyn Write,
+) -> Result<ArchiveExportReport> {
     // Resolved **before** any byte is written -- an `Err` here (an ambiguous lost generation log,
     // or genuine interior damage in the resolved content) must leave the destination untouched.
     let pointer_index_source = resolve_pointer_index_source(layout)?;
@@ -395,6 +432,115 @@ fn refuse_on_queued_unsealed_work(layout: &RepositoryLayout) -> Result<()> {
     for (name, count) in &queued {
         message.push_str(&format!(
             "\n  session {name:?}: {count} queued, unsealed commit(s)"
+        ));
+    }
+    Err(PrikkError::Precondition(message))
+}
+
+/// 0.52.0 step 1 Part A, item 1 (external review 023): refuse before writing anything if any
+/// carried object declares a body over the same per-object bound `archive import`/`archive verify`
+/// already enforce when reading one back (`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`,
+/// `archive/verify.rs:907`) -- otherwise export succeeds today and only that later read refuses,
+/// after the user already has a file they believe is a backup. Seek-only, the same scanning shape
+/// `count_object_records` (below) already uses to report sound record counts: a record's own
+/// declared `body_len` is read from its header and compared to the bound before any body byte is
+/// read, so an over-bound record is named by its type and position, never by reading the oversized
+/// body itself.
+fn refuse_on_over_bound_object(layout: &RepositoryLayout) -> Result<()> {
+    for object_type in persisted_object_types() {
+        let path = layout.container_slot_path(object_type, ContainerSlot::A);
+        let sound_len = stat_len(&path)?;
+        if let Some(position) = first_over_bound_record(
+            &path,
+            object_type,
+            sound_len,
+            DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64,
+        )? {
+            return Err(PrikkError::Precondition(format!(
+                "export refuses: the {} holds a record (position {position}) declaring more than \
+                 the per-object bound of {DEFAULT_BUNDLE_MAX_OBJECT_BYTES} bytes -- `archive \
+                 import` would refuse it too; this repository cannot be archived as is",
+                ArchiveSectionKind::ObjectContainer(object_type).label()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The zero-based position of the first record in one object-type container whose own declared
+/// body length exceeds `bound`, or `None` if every sound record is within it. Never reads a body:
+/// the same seek-only walk `count_object_records` uses, with one extra comparison per record.
+fn first_over_bound_record(
+    path: &Path,
+    object_type: ObjectType,
+    sound_len: u64,
+    bound: u64,
+) -> Result<Option<usize>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let magic = crate::foundation::container::container_magic(object_type)?;
+    let mut remaining = sound_len;
+    let mut position = 0usize;
+    while remaining >= crate::foundation::container::CONTAINER_HEADER_LEN as u64 {
+        let mut header = [0u8; crate::foundation::container::CONTAINER_HEADER_LEN];
+        if file.read_exact(&mut header).is_err() {
+            break;
+        }
+        remaining -= crate::foundation::container::CONTAINER_HEADER_LEN as u64;
+        let record_magic: [u8; 8] = header[0..8].try_into().unwrap_or([0u8; 8]);
+        let body_len = u64::from_be_bytes(header[10..18].try_into().unwrap_or([0u8; 8]));
+        if record_magic != *magic || body_len > remaining {
+            break;
+        }
+        if body_len > bound {
+            return Ok(Some(position));
+        }
+        if file
+            .seek(SeekFrom::Current(
+                i64::try_from(body_len).unwrap_or(i64::MAX),
+            ))
+            .is_err()
+        {
+            break;
+        }
+        remaining -= body_len;
+        position += 1;
+    }
+    Ok(None)
+}
+
+/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2): refuse before writing anything if the source
+/// repository sits in a ref-publication state the store's own `verify` already blocks on
+/// (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) -- shares the identical classification
+/// `verify_refs_with` itself runs (`crate::refs::verify::classify_live_pointer_log_issues`, which in
+/// turn shares `classify_ref_items`/`classify_ref_state`), never re-derived or re-tested here. An
+/// archive taken from a source in this state writes successfully today, and only `archive verify`'s
+/// own pointer<->log tie (shared since 0.52.0 step 0) refuses it later, after the user already has
+/// a file they believe is a backup.
+fn refuse_on_blocking_ref_publication(layout: &RepositoryLayout) -> Result<()> {
+    // "verify-scan" (`whole_read_guard::SCOPES`): this read is the same whole-ref-log classification
+    // `verify` itself does, shared rather than re-derived -- not a new, export-specific cost to
+    // declare its own scope row for.
+    let ref_log = crate::refs::read_and_decode_ref_log(layout, "verify-scan");
+    let issues = crate::refs::verify::classify_live_pointer_log_issues(layout, &ref_log)?;
+    let blocking: Vec<_> = issues.iter().filter(|issue| issue.blocking).collect();
+    if blocking.is_empty() {
+        return Ok(());
+    }
+    let mut message = String::from(
+        "export refuses: at least one ref has a publication state this repository's own `verify` \
+         already blocks on, which an archive taken now would carry and then refuse on import -- \
+         run `prikk ref complete <ref>` for each named ref first, then export again:",
+    );
+    for issue in blocking {
+        let ref_name = issue.ref_name.as_deref().unwrap_or("(repository-wide)");
+        message.push_str(&format!(
+            "\n  ref {ref_name}: {} ({})",
+            issue.message, issue.code
         ));
     }
     Err(PrikkError::Precondition(message))

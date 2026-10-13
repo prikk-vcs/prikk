@@ -88,6 +88,42 @@ pub(crate) fn escape_json_string(input: &str) -> String {
     escaped
 }
 
+/// 0.52.0 step 1 Part A, item 5: the bound a prose line gives an otherwise-unbounded string an
+/// archive's own manifest carries (`tool_version`) -- a crafted archive can set it to anything, so
+/// prose must never print it whole. The first [`DISPLAY_TRUNCATE_CHARS`] characters, with every C0
+/// control character escaped the same way [`escape_json_string`] escapes one (so a crafted newline
+/// or ANSI-escape-laden value cannot corrupt the terminal), then `"... (N bytes)"` naming the real
+/// total -- only when truncation actually happened; a short value with no control characters prints
+/// unchanged. `--format json` keeps the full, escaped value: `escape_json_string` already bounds
+/// nothing, by design, since a JSON string's own structural escaping is what makes an arbitrary
+/// length and arbitrary bytes safe to carry there.
+const DISPLAY_TRUNCATE_CHARS: usize = 200;
+
+pub(crate) fn display_bounded(input: &str) -> String {
+    let mut escaped_prefix = String::new();
+    let mut truncated = false;
+    for (shown_chars, character) in input.chars().enumerate() {
+        if shown_chars == DISPLAY_TRUNCATE_CHARS {
+            truncated = true;
+            break;
+        }
+        match character {
+            '\n' => escaped_prefix.push_str("\\n"),
+            '\r' => escaped_prefix.push_str("\\r"),
+            '\t' => escaped_prefix.push_str("\\t"),
+            other if (other as u32) < 0x20 => {
+                escaped_prefix.push_str(&format!("\\u{:04x}", other as u32));
+            }
+            other => escaped_prefix.push(other),
+        }
+    }
+    if truncated {
+        format!("{escaped_prefix}... ({} bytes)", input.len())
+    } else {
+        escaped_prefix
+    }
+}
+
 /// `prikk verify --format json` (RFC 118 stage 5): `verify-report-v1` -- named for the tool
 /// (`verify`), the shape (`report`), and versioned like this repository's other machine-readable
 /// schemas (`release-policy-boundary-v1` and its siblings), so a future breaking change to this
