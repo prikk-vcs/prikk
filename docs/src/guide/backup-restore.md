@@ -166,6 +166,9 @@ real local branch under `--adopt`, when it is absent locally, signed by a key th
 adopted (`trust maintainer add`), and verified — every other ref still lands under `remotes/`, with
 the reason named.
 
+**With prikk 0.51.0, run `archive verify` on every export before relying on it** (fixed in 0.52.0;
+see [the limitation](../reference/current-state.md) for the two shapes and why).
+
 **If the archive's own exported local ref and one of its own carried received pointers would land
 at the same `remotes/<ref>` name** — because the source repository itself once `bundle import`ed
 something for that same ref — the exporter's own ref wins the name; the colliding received pointer

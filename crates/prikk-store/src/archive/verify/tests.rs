@@ -691,6 +691,85 @@ fn verify_detects_a_genuinely_dangling_reference() {
     );
 }
 
+/// 0.52.0 step 0, Part C2 round 2 (C2-2): the mirror, on the archive side, of the store's own
+/// `a_block_missing_its_patch_reached_as_a_sealed_blocks_parent_is_damage`
+/// (`verify/tests/reachability.rs`) -- a defective block (missing its own `patch_ids` entry) is
+/// reached **only** through a healthy child block's `parent_block_ids` edge, the ref naming the
+/// child, not the defective block directly. Unlike `verify_detects_a_genuinely_dangling_reference`
+/// above (which reaches the dangling reference on the very block the ref names), this test exists so
+/// a perturbation of `expand_frontier`'s own `parent_block_ids` line turns **this** test red too, not
+/// only the store's: the ref's own reachability frontier must actually walk the parent edge to reach
+/// the defective block at all.
+#[test]
+fn verify_detects_a_dangling_reference_reached_only_through_a_parent_edge() {
+    let dir = unique_temp_dir("archive-verify-dangling-parent");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let mut object_store = crate::FileObjectStore::new(layout.clone());
+    let missing_patch_id = prikk_object::ObjectId::from_bytes([0xAC; 32]);
+    let defective_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Root,
+        Vec::new(),
+        vec![missing_patch_id],
+        None,
+    );
+    let defective_block_id = object_store
+        .write_object(&defective_block)
+        .expect("write defective block");
+
+    // A healthy child, no patches of its own, so only the parent-reachability edge is under test.
+    let child_block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Normal,
+        vec![defective_block_id],
+        Vec::new(),
+        None,
+    );
+    let child_block_id = object_store
+        .write_object(&child_block)
+        .expect("write child block");
+
+    let ref_store = crate::RefStore::new(layout.clone());
+    let ref_state = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        child_block_id,
+        1,
+    );
+    let ref_state_id = ref_state.object_id();
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_id,
+        child_block_id,
+        1,
+    );
+    ref_store
+        .publish(&crate::RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state,
+            ref_update,
+        })
+        .expect("publish");
+
+    let mut bytes = Vec::new();
+    export_archive(&layout, &mut bytes).expect("export");
+    let mut cursor = Cursor::new(bytes);
+    let report = verify_archive(&mut cursor).expect("verify");
+    assert!(
+        !report.reference_closure_sound,
+        "a block reached only through a healthy child's own parent edge, missing a patch of its \
+         own, must fail closure -- not read as an unreferenced remnant"
+    );
+    assert!(
+        report
+            .damaged
+            .iter()
+            .any(|line| line.contains(&missing_patch_id.to_string())),
+        "damaged: {:?}",
+        report.damaged
+    );
+}
+
 /// 0.52.0 step 0, Part C1: a Block that no carried ref reaches, whose own `patch_ids` names a patch
 /// id nobody ever wrote -- the same shape `verify_repository_detects_every_missing_referenced_
 /// object_as_a_remnant` (`verify/tests.rs`) already proves is a harmless remnant for a *live*
