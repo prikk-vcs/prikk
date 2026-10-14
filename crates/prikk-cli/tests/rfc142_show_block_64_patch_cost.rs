@@ -9,6 +9,8 @@
 //! not run it. Run deliberately: `cargo test --release -p prikk --test
 //! rfc142_show_block_64_patch_cost -- --ignored --nocapture`.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
+
 #[path = "support/mod.rs"]
 mod support;
 
@@ -25,7 +27,10 @@ fn show_on_a_64_patch_block_release_build() {
 
     for k in 1..=64 {
         std::fs::write(repo.join("f.txt"), format!("line {k}\n")).unwrap();
-        ok(&commit(&repo, "heads/main", &format!("patch {k}")), "commit");
+        ok(
+            &commit(&repo, "heads/main", &format!("patch {k}")),
+            "commit",
+        );
     }
     ok(&seal(&repo, "heads/main"), "seal");
 

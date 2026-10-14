@@ -240,9 +240,7 @@ fn block_starting_state(
 ) -> Result<NodeLifecycleState> {
     match mainline_or_sole_parent(block) {
         Some(None) => Ok(NodeLifecycleState::new()),
-        Some(Some(parent_id)) => {
-            Ok(lifecycle_state_at(object_store, parent_id)?.state().clone())
-        }
+        Some(Some(parent_id)) => Ok(lifecycle_state_at(object_store, parent_id)?.state().clone()),
         None => Err(PrikkError::UnsupportedObjectType(format!(
             "show requires a block whose state is its parent's state plus its own patches; \
              block {block_id} has {} parents",

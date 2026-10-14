@@ -188,13 +188,10 @@ fn create_raw_file(
 /// the test suite (per the ruling), not a runtime check.
 fn assert_fold_to_end_matches_lifecycle_state_at(layout: &RepositoryLayout, block_id: ObjectId) {
     let object_store = crate::object_store::ObjectReadSnapshot::open(layout).unwrap();
-    let envelope = crate::object_store::ObjectReader::read_typed(
-        &object_store,
-        block_id,
-        ObjectType::Block,
-    )
-    .unwrap()
-    .unwrap();
+    let envelope =
+        crate::object_store::ObjectReader::read_typed(&object_store, block_id, ObjectType::Block)
+            .unwrap()
+            .unwrap();
     let block = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap();
     let mut state = super::block_starting_state(&object_store, block_id, &block).unwrap();
     let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
@@ -1426,7 +1423,10 @@ fn show_block_form_resolves_rename_and_delete_cases_matching_queued_form_byte_fo
          sealed as they did queued, unaffected by patch 2's later rename and delete"
     );
     let [perm_a, perm_d] = sealed_patch1.operations.as_slice() else {
-        panic!("expected two operations, got {:?}", sealed_patch1.operations);
+        panic!(
+            "expected two operations, got {:?}",
+            sealed_patch1.operations
+        );
     };
     assert_eq!(
         perm_a.paths,
@@ -1546,10 +1546,7 @@ fn show_queued_equals_sealed_for_every_patch_in_a_three_patch_block() {
     // queued-patch-paths fold) must already show the renamed name -- otherwise the byte-for-byte
     // comparison below would pass by both sides being wrong the same way.
     let [queued_perm3] = queued_patch3.operations.as_slice() else {
-        panic!(
-            "expected one operation, got {:?}",
-            queued_patch3.operations
-        );
+        panic!("expected one operation, got {:?}", queued_patch3.operations);
     };
     assert_eq!(
         queued_perm3.paths,

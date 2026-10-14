@@ -127,7 +127,9 @@ fn merge_block_resolves_an_adopted_edit_patch_against_its_own_state_not_the_bloc
 
     let merged = show_lines(&repo, merged_block);
     assert!(
-        merged.iter().any(|line| line == "patch 1:" || line.contains("operation 1: edit-text")),
+        merged
+            .iter()
+            .any(|line| line == "patch 1:" || line.contains("operation 1: edit-text")),
         "expected the merged block's first adopted patch to carry the edit, got:\n{}",
         merged.join("\n")
     );
