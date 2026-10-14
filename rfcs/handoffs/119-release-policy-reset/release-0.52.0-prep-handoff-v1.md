@@ -84,3 +84,10 @@ naming it. `received_ref_item_outcomes` is counted in the verdict, and the prose
 received ref by name with its message, correct `main.rs`'s stale comment, add a CLI test shown red on `99bba962` (with
 no double report for a not-adopted ref), a CHANGELOG Fixed and Output line, then 14 gates and the smoke.
 **Then the candidate goes to the owner.**
+
+**P3b: the fix is ACCEPTED 2026-10-14** (`91b919bf`, `5b8f7c81`; review `release-0.52.0-prep-P3b-review-v1`). `verify`
+now names a failed received ref.
+**P3c (about 20 min, `release-0.52.0-prep-P3c-report.md`), next:** the new test lands its damaged shape through
+`/home/nabbisen/.pgtmp/rel-0.51.0-bin/prikk` and passes silently without it. So it checks nothing in CI, and it ships a
+local path in the crate. Build the destination's state in-process with the store's test support (a Blob, a branch
+RefState targeting it, the received pointer). No outside path, no early return. Red on `bde2e5bf`, then 14 gates.
