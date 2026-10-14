@@ -259,6 +259,13 @@ planned for.
   copy of this repository's own `.prikk/` directory is the real backup for a repository in this
   state.
 
+- **Content imported under a key this repository does not adopt (`bundle import`, `archive
+  import`) is stored, and `prikk verify` reports its publication trust until that key is adopted.**
+  Replacing a received pointer with a later, sound import of the same ref moves the pointer, but
+  does not remove the objects the earlier import wrote — there is no command that removes stored
+  objects. A copy of this repository's own `.prikk/` directory, taken before the import, is the way
+  back.
+
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes
   the damage, so the way out is a backup or a clone. (Reproduced with the hostile M5 repository at 256 KiB: `doctor` exits 1 with this

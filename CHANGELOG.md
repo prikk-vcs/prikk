@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.52.0 — 2026-10-14
+## 0.52.0 — 2026-10-15
 
 ### Security
 
@@ -15,8 +15,12 @@
   current state passed unchecked too. **No trust is conferred either way**: import never adopts a
   signing key on its own, and the destination's own, separately-adopted trust set — never this
   archive's own carried record — is what a later `prikk verify` checks a signature against.
-  Nothing outside the destination repository is affected. **Upgrade. No advisory.** See the
-  `### Fixed` entry below for the full fix.
+  Nothing outside the destination repository is affected. **A repository that imported such an
+  archive with 0.51.0 keeps what it wrote.** From 0.52.0 its `verify` names the received ref; a
+  later sound import of that ref replaces the pointer, but the objects stay, and one signed by a
+  key this repository never adopted keeps failing `verify`'s publication-trust check — prikk has
+  no command that removes stored objects. A copy of `.prikk/` taken before the import is the way
+  back. **Upgrade. No advisory.** See the `### Fixed` entry below for the full fix.
 
 ### Upgrading
 
