@@ -2,6 +2,12 @@
 //! `show` on a 64-patch block, release build, before and after per-patch resolution. Not a
 //! pass/fail assertion -- the report records the actual numbers from two separate runs of this
 //! same file (one per commit) under `--nocapture`.
+//!
+//! `#[ignore]`d like every other heavy measurement instrument in this crate (see
+//! `rfc155_archive_export_memory.rs`'s own doc comment): it needs a release build
+//! (`release_binary_path()` panics under a plain `cargo test`), so the ordinary gate suite must
+//! not run it. Run deliberately: `cargo test --release -p prikk --test
+//! rfc142_show_block_64_patch_cost -- --ignored --nocapture`.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -11,6 +17,7 @@ use std::time::Instant;
 use support::*;
 
 #[test]
+#[ignore]
 fn show_on_a_64_patch_block_release_build() {
     let bin = release_binary_path();
     let repo = unique_repo("rfc142-64-patch-cost");
