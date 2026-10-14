@@ -121,3 +121,9 @@ received pointer, but the old untrusted `RefState` stays in the store, and `veri
    source confirms;
 3. the date commit (`date` first);
 4. the 14 gates on the final commit.
+
+**P4b ACCEPTED 2026-10-15** (`59a3bcf9`; review `release-0.52.0-prep-P4b-review-v1`). The Security sentence and the
+limitation entry (`bundle import` and `archive import`; `sync accept` writes no `Block` or `RefState`) are in, and the
+release is dated 2026-10-15. **The final candidate is the architect's record commit on `59a3bcf9`.** It is pushed
+through the gate service, and the external architect re-runs on it after letter 027. **Nothing is open for the
+team.**
