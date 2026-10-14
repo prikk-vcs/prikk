@@ -6,6 +6,7 @@ pub(crate) mod byte_cursor;
 pub(crate) mod container;
 pub(crate) mod file_codec;
 pub(crate) mod frame_resync;
+pub(crate) mod frame_source;
 pub(crate) mod fsutil;
 pub(crate) mod generation;
 pub(crate) mod import_journal_marker;

@@ -13,6 +13,12 @@
 //!
 //! The byte-wise resync scan itself is `frame_resync::resync_to_next_magic`, shared with `wal.rs` and
 //! `refs/log.rs`, not a third copy of the same logic.
+//!
+//! **0.52.0 step 2 (RFC 155 §9.4):** the decode loop below is generic over [`FrameSource`]
+//! (`frame_source.rs`) rather than hand-written over `&[u8]` -- the one primitive the store's own
+//! slice reads and (from Part 2B) the archive's own streamed reads both go through, so the two
+//! stop being two hand-maintained copies of the identical classification rule. [`decode_container_records`]
+//! itself is a thin call into it, over [`SliceFrameSource`].
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectType};
@@ -23,9 +29,9 @@ use crate::foundation::file_codec::{
 };
 use crate::foundation::frame_resync::{
     BoundedScan, ScanBudget, interrupted_append_before_sound_frame_message, require_progress,
-    resync_to_next_magic, scan_budget_exceeded_message, sound_frame_after_partial_budgeted,
-    tallied_sha256,
+    scan_budget_exceeded_message, tallied_sha256,
 };
+use crate::foundation::frame_source::{FrameSource, SliceFrameSource};
 use crate::foundation::fsutil::len_to_u64;
 
 pub(crate) const CONTAINER_VERSION: u16 = 1;
@@ -156,7 +162,10 @@ fn frame_record(object_type: ObjectType, body: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Result of attempting to parse one frame at a given offset. Mirrors `wal::FrameAttempt`.
+/// Result of attempting to parse one frame at a given offset, over any [`FrameSource`] (0.52.0 step
+/// 2: the one shared primitive, RFC 155 §9.4). Mirrors `wal::FrameAttempt`, and mirrors what was
+/// `archive/verify.rs`'s own `StreamedFrameAttempt` before this step -- the two were already making
+/// the identical decision by hand in two places; this is that one place.
 enum FrameAttempt {
     Record {
         record: ContainerRecord,
@@ -185,90 +194,155 @@ enum FrameAttempt {
 /// frame was torn and a later write overran it, which is an interrupted append. Found by the same budgeted
 /// scan the short-read path uses, so exhaustion is damage (RFC 167 C3), never a tail. Nothing after the
 /// claimed body is always damage.
-fn checksum_mismatch_is_complete(
+fn checksum_mismatch_is_complete<S: FrameSource>(
     object_type: ObjectType,
     magic: &[u8; 8],
-    bytes: &[u8],
+    source: &mut S,
     offset: usize,
     body_end: usize,
+    max_body_len: Option<u64>,
     budget: &mut ScanBudget,
-) -> bool {
-    if body_end == bytes.len() {
-        return true;
+) -> Result<bool> {
+    if body_end == source.total_len() {
+        return Ok(true);
     }
-    match sound_frame_after_partial_budgeted(
-        bytes,
-        offset,
-        magic.as_slice(),
-        budget,
-        |candidate, budget| {
-            matches!(
-                parse_frame_at(object_type, magic, bytes, candidate, budget),
-                FrameAttempt::Record { .. }
-            )
+    Ok(
+        match sound_frame_after_partial(object_type, magic, source, offset, max_body_len, budget)?
+        {
+            BoundedScan::Sound(next) => next >= body_end,
+            BoundedScan::NoSoundFrame | BoundedScan::Undetermined => true,
         },
-    ) {
-        BoundedScan::Sound(next) => next >= body_end,
-        BoundedScan::NoSoundFrame | BoundedScan::Undetermined => true,
+    )
+}
+
+/// [`sound_frame_after_partial_budgeted`] (`frame_resync.rs`)'s own shape, specialized to this one
+/// format rather than left generic over an arbitrary "is this candidate sound" closure: both of
+/// this function's own two call sites (here, and inside the main decode loop below) always ask the
+/// identical question -- does a full [`parse_frame_at`] at this candidate offset come back
+/// `Record`? -- so a closure parameter would only forward straight back to this same call, never to
+/// anything else. `frame_resync::sound_frame_after_partial_budgeted` itself stays untouched for the
+/// WAL and the ref log, which still use it directly over `&[u8]` and never need a streamed source.
+fn sound_frame_after_partial<S: FrameSource>(
+    object_type: ObjectType,
+    magic: &[u8; 8],
+    source: &mut S,
+    offset: usize,
+    max_body_len: Option<u64>,
+    budget: &mut ScanBudget,
+) -> Result<BoundedScan> {
+    let Some(mut from) = offset.checked_add(1) else {
+        return Ok(BoundedScan::NoSoundFrame);
+    };
+    loop {
+        let Some(candidate) = source.scan_for_magic(from, magic.as_slice())? else {
+            return Ok(BoundedScan::NoSoundFrame);
+        };
+        if budget.exceeded() {
+            return Ok(BoundedScan::Undetermined);
+        }
+        let sound = matches!(
+            parse_frame_at_reporting(
+                object_type,
+                magic,
+                source,
+                candidate,
+                candidate,
+                max_body_len,
+                budget,
+            )?,
+            FrameAttempt::Record { .. }
+        );
+        if sound {
+            return Ok(BoundedScan::Sound(candidate));
+        }
+        from = match candidate.checked_add(1) {
+            Some(next) => next,
+            None => return Ok(BoundedScan::NoSoundFrame),
+        };
     }
 }
 
 /// Attempt to parse one container frame at `offset`. Never trusts a not-yet-checksum-validated
 /// header's own `body_len` for anything beyond locating where its claimed body would end.
-fn parse_frame_at(
+fn parse_frame_at<S: FrameSource>(
     object_type: ObjectType,
     magic: &[u8; 8],
-    bytes: &[u8],
+    source: &mut S,
     offset: usize,
+    max_body_len: Option<u64>,
     budget: &mut ScanBudget,
-) -> FrameAttempt {
-    parse_frame_at_reporting(object_type, magic, bytes, offset, offset, budget)
+) -> Result<FrameAttempt> {
+    parse_frame_at_reporting(object_type, magic, source, offset, offset, max_body_len, budget)
 }
 
-/// [`parse_frame_at`] over a buffer that is **not the whole container**: `report_offset` is where the frame sits in the container, so
-/// the messages that name a byte offset name the container's, not the buffer's (an object read decodes one record from a window read
-/// at its offset -- RFC 102, the append-length round -- and its errors must read as they always did).
-fn parse_frame_at_reporting(
+/// [`parse_frame_at`] over a source that may not start at the container's own byte 0:
+/// `report_offset` is where the frame sits in the container, so the messages that name a byte
+/// offset name the container's, not the source's (an object read decodes one record from a window
+/// read at its offset -- RFC 102, the append-length round -- and its errors must read as they
+/// always did).
+///
+/// `max_body_len`, `None` for the store's own commit-path reader (a local container has never
+/// bounded a single object's size, and this part does not start now): `Some(bound)` refuses a
+/// claim exceeding it with `PrikkError::ObjectOverBound`, **after** the claim is already known to
+/// fit entirely within `source`'s own real, present bytes (the past-the-end check below always
+/// runs first -- a corrupted length field read as a huge number must resync to the next *sound*
+/// frame, never be named "over bound" for a claim that was never real to begin with; I-E item
+/// 0(a)'s fix to the archive's own pre-2A streamed decoder, preserved here). This is a parameter,
+/// not a constant the primitive enforces unconditionally: the one caller that will ever pass
+/// `Some` is the archive (0.52.0 step 2 Part 2B, untrusted input, DC-86's own bound), and the
+/// store's own slice path must keep accepting an object of any size exactly as it always has.
+fn parse_frame_at_reporting<S: FrameSource>(
     object_type: ObjectType,
     magic: &[u8; 8],
-    bytes: &[u8],
+    source: &mut S,
     offset: usize,
     report_offset: usize,
+    max_body_len: Option<u64>,
     budget: &mut ScanBudget,
-) -> FrameAttempt {
-    let remaining = bytes.len().saturating_sub(offset);
+) -> Result<FrameAttempt> {
+    let total_len = source.total_len();
+    let remaining = total_len.saturating_sub(offset);
     if remaining < CONTAINER_HEADER_LEN {
-        return FrameAttempt::TrailingPartial { remaining };
+        return Ok(FrameAttempt::TrailingPartial { remaining });
     }
     let header_end = offset + CONTAINER_HEADER_LEN;
-    // In range by construction: `remaining >= CONTAINER_HEADER_LEN` was just checked above --
-    // `.get()` used anyway to satisfy `clippy::indexing_slicing`, not because this can fail.
-    let Some(header) = bytes.get(offset..header_end) else {
-        return FrameAttempt::TrailingPartial { remaining };
+    let Some(header) = source.read_at(offset, CONTAINER_HEADER_LEN)? else {
+        return Ok(FrameAttempt::TrailingPartial { remaining });
     };
     let header_values = match parse_header(magic, header) {
         Ok(values) => values,
         Err(err) => {
-            return FrameAttempt::Invalid {
+            return Ok(FrameAttempt::Invalid {
                 message: err.to_string(),
                 complete: false,
-            };
+            });
         }
     };
     let Ok(body_len) = usize::try_from(header_values.body_len) else {
-        return FrameAttempt::Invalid {
+        return Ok(FrameAttempt::Invalid {
             message: "container body length does not fit usize".to_string(),
             complete: false,
-        };
+        });
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
-        return FrameAttempt::Invalid {
+        return Ok(FrameAttempt::Invalid {
             message: "container body end overflow".to_string(),
             complete: false,
-        };
+        });
     };
-    let Some(body) = bytes.get(header_end..body_end) else {
-        return FrameAttempt::TrailingPartial { remaining };
+    if body_end > total_len {
+        return Ok(FrameAttempt::TrailingPartial { remaining });
+    }
+    if let Some(bound) = max_body_len {
+        if header_values.body_len > bound {
+            return Err(PrikkError::ObjectOverBound {
+                declared_bytes: header_values.body_len,
+                bound_bytes: bound,
+            });
+        }
+    }
+    let Some(body) = source.read_at(header_end, body_len)? else {
+        return Ok(FrameAttempt::TrailingPartial { remaining });
     };
     // The checksum hashes a preimage of the header's own 18 bytes plus the body, so a candidate costs its
     // header too: charging the body alone let a zero-length candidate hash 18 bytes for free (0.49.0 step 5,
@@ -276,18 +350,18 @@ fn parse_frame_at_reporting(
     budget.charge((body.len() + CONTAINER_HEADER_LEN) as u64);
     let expected = record_checksum(magic, header_values.body_len, body);
     if expected != header_values.checksum {
-        return FrameAttempt::ChecksumMismatch {
+        return Ok(FrameAttempt::ChecksumMismatch {
             message: format!("container checksum mismatch at byte offset {report_offset}"),
             body_end,
-        };
+        });
     }
     let envelope = match decode_envelope_file(body) {
         Ok(envelope) => envelope,
         Err(err) => {
-            return FrameAttempt::Invalid {
+            return Ok(FrameAttempt::Invalid {
                 message: err.to_string(),
                 complete: true,
-            };
+            });
         }
     };
     // The frame's magic only proves which *container* this byte range belongs to; nothing about the
@@ -297,20 +371,20 @@ fn parse_frame_at_reporting(
     // this container passes through, matching the pre-Stage-3 loose-file `verify_object_file`'s own
     // `envelope.object_type != object_type` check it replaces.
     if envelope.object_type != object_type {
-        return FrameAttempt::Invalid {
+        return Ok(FrameAttempt::Invalid {
             message: format!(
                 "container record at byte offset {report_offset} is under type {object_type} but \
                  envelope type is {}",
                 envelope.object_type
             ),
             complete: true,
-        };
+        });
     }
-    FrameAttempt::Record {
+    Ok(FrameAttempt::Record {
         record: ContainerRecord { envelope },
         next_offset: body_end,
         checksum: header_values.checksum,
-    }
+    })
 }
 
 /// The container header's own length in bytes (magic, version, body length, checksum): what an object read fetches first to learn how
@@ -343,7 +417,16 @@ pub(crate) fn decode_container_record_in_window(
     // budget is correct here: this call can never reach `Undetermined` (there is no loop to cut
     // short), so nothing downstream of it ever needs to know this budget existed.
     let mut budget = ScanBudget::for_input(window.len());
-    match parse_frame_at_reporting(object_type, magic, window, 0, container_offset, &mut budget) {
+    let mut source = SliceFrameSource::new(window);
+    match parse_frame_at_reporting(
+        object_type,
+        magic,
+        &mut source,
+        0,
+        container_offset,
+        None,
+        &mut budget,
+    )? {
         FrameAttempt::Record { record, .. } => Ok(Some(record)),
         FrameAttempt::TrailingPartial { .. } => Ok(None),
         FrameAttempt::Invalid { message, .. } | FrameAttempt::ChecksumMismatch { message, .. } => {
@@ -364,15 +447,41 @@ pub(crate) fn decode_container_records(
     object_type: ObjectType,
     bytes: &[u8],
 ) -> Result<ContainerReplay> {
+    let mut source = SliceFrameSource::new(bytes);
+    // `None`: the store's own commit-path reader has never bounded a single object's size, and
+    // this call keeps it that way -- see `parse_frame_at_reporting`'s own doc for why this is a
+    // parameter, not something the shared loop below decides on its own.
+    decode_frames(object_type, &mut source, None)
+}
+
+/// The one container-frame decode loop (0.52.0 step 2, RFC 155 §9.4): generic over [`FrameSource`]
+/// so the store's own slice reads and the archive's own streamed reads (from Part 2B) run the
+/// identical classification, not two hand-written copies of it. [`decode_container_records`] is
+/// this loop called with [`SliceFrameSource`] and `max_body_len: None`; the archive calls it with
+/// its own streamed source and `max_body_len: Some(DEFAULT_BUNDLE_MAX_OBJECT_BYTES)` (DC-86) from
+/// Part 2B onward.
+///
+/// Isolate-and-continue reading (RFC 102 Stage 2's reader, reused here per the Stage 3 handoff's
+/// explicit instruction, not re-derived): a frame that fails to validate no longer aborts replay --
+/// its offset and error are recorded as a `Failed` outcome, and [`FrameSource::scan_for_magic`]
+/// finds the next candidate frame so every subsequent sound record is still read. Corruption is
+/// therefore confined to the records it actually damaged, at container scale exactly as it already
+/// is for the WAL and ref log.
+pub(crate) fn decode_frames<S: FrameSource>(
+    object_type: ObjectType,
+    source: &mut S,
+    max_body_len: Option<u64>,
+) -> Result<ContainerReplay> {
     let magic = container_magic(object_type)?;
     let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
     // RFC 167 D1: one budget per decode call. This reader's own `Invalid` arm never calls the scan
-    // (below) at all -- it goes straight to a bare `resync_to_next_magic` -- so the broad placement,
-    // checked at the top of every iteration, is this reader's *only* guard against that arm's own
-    // cost; the design round measured the narrow placement alone leaving it fully quadratic.
-    let mut budget = ScanBudget::for_input(bytes.len());
+    // (below) at all -- it goes straight to a bare scan for the next magic -- so the broad
+    // placement, checked at the top of every iteration, is this reader's *only* guard against that
+    // arm's own cost; the design round measured the narrow placement alone leaving it fully
+    // quadratic.
+    let mut budget = ScanBudget::for_input(source.total_len());
     loop {
         if budget.exceeded() {
             record_outcomes.push(ContainerRecordOutcome {
@@ -388,7 +497,7 @@ pub(crate) fn decode_container_records(
                 record_outcomes,
             });
         }
-        match parse_frame_at(object_type, magic, bytes, offset, &mut budget) {
+        match parse_frame_at(object_type, magic, source, offset, max_body_len, &mut budget)? {
             FrameAttempt::Record {
                 record,
                 next_offset,
@@ -406,18 +515,8 @@ pub(crate) fn decode_container_records(
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after = sound_frame_after_partial_budgeted(
-                    bytes,
-                    offset,
-                    magic.as_slice(),
-                    &mut budget,
-                    |c, budget| {
-                        matches!(
-                            parse_frame_at(object_type, magic, bytes, c, budget),
-                            FrameAttempt::Record { .. }
-                        )
-                    },
-                );
+                let sound_after =
+                    sound_frame_after_partial(object_type, magic, source, offset, max_body_len, &mut budget)?;
                 let next = match sound_after {
                     BoundedScan::NoSoundFrame => {
                         return Ok(ContainerReplay {
@@ -457,7 +556,7 @@ pub(crate) fn decode_container_records(
                     offset,
                     status: ContainerRecordStatus::Failed { message, complete },
                 });
-                match resync_to_next_magic(bytes, offset + 1, magic.as_slice()) {
+                match source.scan_for_magic(offset + 1, magic.as_slice())? {
                     Some(next) => offset = next,
                     None => {
                         return Ok(ContainerReplay {
@@ -472,16 +571,17 @@ pub(crate) fn decode_container_records(
                 let complete = checksum_mismatch_is_complete(
                     object_type,
                     magic,
-                    bytes,
+                    source,
                     offset,
                     body_end,
+                    max_body_len,
                     &mut budget,
-                );
+                )?;
                 record_outcomes.push(ContainerRecordOutcome {
                     offset,
                     status: ContainerRecordStatus::Failed { message, complete },
                 });
-                match resync_to_next_magic(bytes, offset + 1, magic.as_slice()) {
+                match source.scan_for_magic(offset + 1, magic.as_slice())? {
                     Some(next) => offset = next,
                     None => {
                         return Ok(ContainerReplay {
