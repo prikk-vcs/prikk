@@ -23,25 +23,28 @@ path-addressed, so finding *where* they apply needs one replay of some lifecycle
 depends on what the target is (below). `show` pays that cost once per invocation, not once per
 operation, and there is no flag to skip it: a surface that named a 32-byte node id where a path
 belongs would have failed at the one thing it exists to do. If the state a node-addressed operation
-resolves against no longer has that node live — a block that edits a node and then deletes it, or a
-queued patch that does both — the edit's own path reports as unresolved rather than failing the
-command; every other operation still renders.
+resolves against no longer has that node live — **one patch** that edits a node and then deletes it
+— the edit's own path reports as unresolved rather than failing the command; every other operation
+still renders.
 
 **Which forms resolve a node-addressed path:**
 
 | Target | Resolves against | Node-addressed paths resolve? |
 |---|---|---|
-| A sealed block id | that block's own lifecycle state | Yes |
+| A patch in a sealed block | **that patch's own state**: the block's starting state (its parent's, or empty for the first block), folded with the block's own patches in canonical order **up to and including that patch** | Yes |
 | A queued (committed, unsealed) patch id | the folded baseline — the sealed tip with the queue folded on top, **truncated at that patch** — exactly the state a `seal` right now would give it | Yes |
 | A bare *sealed* patch id | nothing — a patch id alone carries no block context, and searching for a block that happens to contain it would make the answer depend on what else is sealed | No — reports `unresolved_node_id` |
 
 A block's output is the union of its patches, in the block's own canonical order.
 
-**Truncation matters.** A queued patch resolves against the state *at that patch*, not the queue's
-own end: if a later queued patch renames a path an earlier one edited, the earlier patch's own
-`edit-text` still names the path it had at the time, not the later name. This is also why the answer
-is identical before and after `seal` — sealing does not change what came before a given patch in the
-queue, only what comes after it.
+**Truncation matters, for a block's own patches too, not only a queue.** Every patch resolves
+against the state *at that patch*, not its block's end: if a later patch in the same block renames a
+path an earlier one edited, or deletes the node an earlier one edited, the earlier patch's own
+`edit-text` still names the path (or node) it had at the time — never the later name, and never
+`unresolved_node_id` just because a later patch in the same block went on to delete it. This is one
+fold, used both ways — the block form folds a block's own patches onto its parent's state, the queued
+form folds the active queue onto the sealed tip — so the answer is identical before and after `seal`
+by construction: sealing does not change what came before a given patch, only what comes after it.
 
 `show` renders `EditText`'s own before/after span — it does not synthesize a unified diff. prikk's
 edits are content-anchored spans, not line ranges, and a line-oriented rendering would assert a
@@ -106,7 +109,7 @@ from the patch's own record.
 
 | Claim | Source anchors |
 |---|---|
-| Content comes from the patch payload directly; only node-addressed operations need a replay, once per invocation, against the target block's own lifecycle state or (for a queued patch) the folded baseline truncated at that patch. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`patch_replay.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_replay.rs) |
+| Content comes from the patch payload directly; only node-addressed operations need a replay, once per invocation, against that patch's own state -- its block's starting state folded with the block's own patches up to that patch, or (for a queued patch) the folded baseline truncated at that patch. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`patch_replay.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_replay.rs) |
 | An unresolved node-addressed operation is reported, not fatal; every other operation still renders. A bare *sealed* patch id resolves nothing; a queued patch id resolves against its own truncated folded baseline. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs) |
 | `EditText` renders its own before/after span; `ReplaceBinary` and binary blobs report id and size only, never content. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`output/show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/output/show.rs) |
 | An absent blob reference degrades that one piece of content to a named "unavailable" state rather than failing the command; every other operation still renders and the command still exits `0`. A blob the object store reports as damaged (hash mismatch, type mismatch, malformed payload, or `SNAPSHOT`-kind) propagates instead — the command fails rather than rendering it unavailable. | [`show.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/show.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs) |

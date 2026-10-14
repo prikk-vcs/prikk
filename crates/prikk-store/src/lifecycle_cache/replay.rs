@@ -616,6 +616,36 @@ pub(crate) fn apply_candidate_patches(
     apply_patch_ids(reader, patch_ids, &blob_resolver, state, text_cache, true)
 }
 
+/// Fold exactly one already-sealed patch id onto an existing lifecycle state and carried
+/// `TextCache` (RFC 142, stikk 020: `show`'s per-patch block resolution). The same
+/// `apply_patch_ids` fold every other replay path uses, called with a one-element slice so a
+/// caller can take a snapshot of `state` *between* patches -- no existing block-at-a-time helper
+/// exposes that granularity (`apply_one_block`/`apply_one_block_carrying_text` fold a whole
+/// block's `patch_ids` at once, and are `pub(in crate::lifecycle_cache)` besides).
+///
+/// `StoreBackedResolver::new` with `require_schema_one = false`, not `::new_format2`/`true` the
+/// way [`apply_candidate_patches`] above resolves blobs: this call site stands in for the block's
+/// own patches inside the *existing* block-state derivation (`replay_chain_with_appended_patches`
+/// below, what `lifecycle_state_at` already calls), which has always used the plain resolver --
+/// reusing `apply_candidate_patches`'s schema-gated one here would silently narrow which object
+/// schema versions a sealed block's `show` can resolve a node-addressed path against.
+pub(crate) fn apply_one_patch(
+    reader: &impl ObjectReader,
+    patch_id: ObjectId,
+    state: &mut NodeLifecycleState,
+    text_cache: &mut TextCache,
+) -> Result<(), LifecycleReplayError> {
+    let blob_resolver = StoreBackedResolver::new(reader);
+    apply_patch_ids(
+        reader,
+        std::slice::from_ref(&patch_id),
+        &blob_resolver,
+        state,
+        text_cache,
+        false,
+    )
+}
+
 /// Fold a sequence of not-yet-sealed queued patch envelopes (DC-66) onto an already-resolved
 /// lifecycle state, using the same [`apply_state_effect`] fold every other replay path uses.
 ///

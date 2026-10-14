@@ -42,6 +42,23 @@
   behind. **A repository holding any such object now cannot be archived or bundled at all**, where
   before it could (incorrectly) be exported and would only fail later, at import.
 
+### Fixed — `show` on a sealed block resolved every patch's node-addressed path against the block's end, not that patch's own state
+
+- **In a block of two or more patches, an earlier patch's own `EditText`/`ChangePerm`/`ReplaceBinary`
+  path could render differently after `seal` than it did while queued** (stikk 020): `show` resolved
+  every patch in a sealed block against that block's *end* state, so a later patch's own rename or
+  delete of the same node changed what an *earlier* patch's path reported — a later rename made an
+  earlier edit show the new name, a name that patch never touched under, and a later delete turned an
+  earlier edit's own path into `unresolved_node_id`, removing a path the store had given it. Both our
+  guide and `show.rs`'s own comment said a patch renders identically before and after `seal`; this was
+  the one shape where it did not. Shipped since 0.47.0.
+- **Each patch in a sealed block now resolves against its own state** — the block's starting state
+  (its parent's, or empty for the first block in a ref's history) folded with the block's own patches
+  in canonical order up to and including that patch — the identical fold the queued form already used,
+  shared rather than duplicated, so "identical before and after `seal`" now holds by construction. The
+  still-genuinely-unresolvable shape is unchanged: one patch whose own operations both edit and delete
+  the same node.
+
 ### Changed — `archive export` refuses a source caught in a blocking ref-publication state, up front
 
 - **A source repository whose own `prikk verify` already blocks on a ref's pointer-versus-log state
@@ -76,6 +93,10 @@
   the first 200 characters, control characters escaped, then `"... (N bytes)"` naming the real
   total, when the value is longer than that. `--format json` is unaffected: the full value, already
   escaped, still appears there.
+- **In `show-report-v1`, a sealed block's earlier patch can now name a different path than before**
+  (stikk 020): a path where a later patch in the same block renames or deletes the node, where it
+  previously named the later name, or `unresolved_node_id`, respectively. See the `### Fixed` entry
+  above.
 
 ## 0.51.0 — 2026-10-13
 

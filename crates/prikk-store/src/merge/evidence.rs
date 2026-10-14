@@ -177,7 +177,11 @@ pub(crate) fn lifecycle_state_at(
 /// sole parent for `Normal`, none for `Root`. `Some(None)` is genesis, not an error; `None` is a
 /// shape this walk cannot follow — a non-`Merge` block with more than one parent, or a `Merge`
 /// block with no valid mainline parent.
-fn mainline_or_sole_parent(block: &BlockPayload) -> Option<Option<ObjectId>> {
+///
+/// `pub(crate)` (RFC 142, stikk 020): `show`'s per-patch block resolution needs the identical
+/// parent policy this lineage walk already uses, as its one starting point for a block's own
+/// patches -- shared, not re-derived, the same discipline `classify_ref_items` already follows.
+pub(crate) fn mainline_or_sole_parent(block: &BlockPayload) -> Option<Option<ObjectId>> {
     if block.kind == BlockKind::Merge {
         let mainline = block.mainline_parent_id?;
         if !block.parent_block_ids.contains(&mainline) {

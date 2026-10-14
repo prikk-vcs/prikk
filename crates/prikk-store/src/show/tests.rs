@@ -180,6 +180,42 @@ fn create_raw_file(
     blob_id
 }
 
+/// stikk 020, "the end must agree": after folding every one of `block_id`'s own patches onto its
+/// parent's state (the identical two primitives `show`'s own `Block` arm uses --
+/// `super::block_starting_state` and [`crate::lifecycle_cache::replay::apply_one_patch`]), the
+/// result must equal `lifecycle_state_at(block_id)`'s own state -- computed independently, by the
+/// *existing*, unmodified full-lineage replay that never calls either of those two. A control on
+/// the test suite (per the ruling), not a runtime check.
+fn assert_fold_to_end_matches_lifecycle_state_at(layout: &RepositoryLayout, block_id: ObjectId) {
+    let object_store = crate::object_store::ObjectReadSnapshot::open(layout).unwrap();
+    let envelope = crate::object_store::ObjectReader::read_typed(
+        &object_store,
+        block_id,
+        ObjectType::Block,
+    )
+    .unwrap()
+    .unwrap();
+    let block = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap();
+    let mut state = super::block_starting_state(&object_store, block_id, &block).unwrap();
+    let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
+    for patch_id in &block.patch_ids {
+        crate::lifecycle_cache::replay::apply_one_patch(
+            &object_store,
+            *patch_id,
+            &mut state,
+            &mut text_cache,
+        )
+        .unwrap();
+    }
+    let end_state = crate::merge::evidence::lifecycle_state_at(&object_store, block_id).unwrap();
+    assert_eq!(
+        &state,
+        end_state.state(),
+        "folding this block's own patches onto its parent's state must agree with \
+         lifecycle_state_at(block_id)'s own, independently-computed, full-lineage state"
+    );
+}
+
 /// Control 1: a text edit shows its before and after.
 #[test]
 fn show_reports_a_text_edits_before_and_after() {
@@ -252,10 +288,19 @@ fn show_resolves_a_node_addressed_operation_to_a_path() {
 /// mischaracterized as a `worktree_patch` defect (RFC 142 §3a: it is not one -- a text node's
 /// pre-edit `blob_id` is *deliberately* unbacked once the node has been edited, DC-65). **A
 /// control rebuilt to avoid the thing it tests has stopped being a control**, so this is the exact
-/// sequence: create `a.txt`, seal; edit it, seal; delete it, seal. Every operation still renders,
-/// the edit's own node id is unresolved (deleted later in the same block), and the delete's own
-/// preimage content degrades to [`ShowBlobContent::Unavailable`] (§6a) rather than failing the
-/// command -- exit `0`, not `1`.
+/// sequence: create `a.txt`, seal; edit it, seal; delete it, seal.
+///
+/// **stikk 020 (0.52.0 step 1 Part C):** the edit and the delete are two *separate* patches sealed
+/// into one block. Per the ruling, each patch resolves against its own state -- the block's
+/// starting state, folded with the block's own patches up to and including that patch -- so the
+/// edit patch's own node-addressed path resolves against the state *right after the edit*, where
+/// the node is still live: `Path("a.txt")`, not `Unresolved`. (Before this fix, the whole block
+/// resolved against its *end* state, where the node is already dead, and this assertion read
+/// `Unresolved` -- that was the defect, not a true "unresolvable" case: see
+/// [`show_degrades_when_one_patch_both_edits_and_deletes_the_same_node`] below for the case that is
+/// still genuinely unresolvable under the fix.) Every operation still renders, and the delete's own
+/// preimage content still degrades to [`ShowBlobContent::Unavailable`] (§6a) rather than failing
+/// the command -- exit `0`, not `1`.
 #[test]
 fn show_reports_unresolved_and_degrades_when_a_block_edits_and_deletes_the_same_node() {
     let root = unique_temp_dir("show-unresolved");
@@ -278,13 +323,12 @@ fn show_reports_unresolved_and_degrades_when_a_block_edits_and_deletes_the_same_
         panic!("expected one operation, got {:?}", edit_patch.operations);
     };
     assert_eq!(edit_op.kind, "edit-text");
-    let [edit_path] = edit_op.paths.as_slice() else {
-        panic!("expected one path, got {:?}", edit_op.paths);
-    };
-    match edit_path {
-        ShowPathResolution::Unresolved { .. } => {}
-        other => panic!("expected Unresolved for the edited-then-deleted node, got {other:?}"),
-    }
+    assert_eq!(
+        edit_op.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "stikk 020: the edit patch resolves against its OWN state (node still live), not the \
+         block's end state (node already dead by the later delete patch)"
+    );
 
     let [delete_op] = delete_patch.operations.as_slice() else {
         panic!("expected one operation, got {:?}", delete_patch.operations);
@@ -303,6 +347,81 @@ fn show_reports_unresolved_and_degrades_when_a_block_edits_and_deletes_the_same_
              backed by a stored object, DC-65), got {other:?}"
         ),
     }
+
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// stikk 020, item 3 of "what the round needs": the still-genuinely-unresolvable shape, now that
+/// cross-patch edit-then-delete no longer degrades. One patch whose own operations both change and
+/// delete the same node, sealed into its own block -- the block form's sibling of
+/// [`show_reports_unresolved_when_a_queued_patch_both_changes_and_deletes_the_same_node`], which
+/// already establishes this exact shape at the queued level. `ChangePerm` stands in for `EditText`
+/// for the same reason that test uses it: both are node-addressed and resolved by the identical
+/// `resolve_node_path` call, so this exercises the same resolution mechanism without `EditText`'s
+/// span-anchor construction.
+#[test]
+fn show_degrades_when_one_patch_both_edits_and_deletes_the_same_node() {
+    let root = unique_temp_dir("show-unresolved-same-patch");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0x61; 32]);
+    let blob_id = create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    append_raw_patch(
+        &layout,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::ChangePerm(ChangePerm {
+                    node_id,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_755,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::DeleteNode(DeleteNode {
+                    path: "a.txt".to_string(),
+                    node_id,
+                    old_node_kind: NodeKind::TextFile,
+                    preimage: DeleteNodePreimage::File {
+                        old_blob_id: blob_id,
+                        old_mode: 0o100_755,
+                    },
+                }),
+            },
+        ],
+    );
+    seal(&layout);
+
+    let block_id = current_block_id(&layout);
+    let patches = show(&layout, block_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    let [perm_op, delete_op] = patch.operations.as_slice() else {
+        panic!("expected two operations, got {:?}", patch.operations);
+    };
+    assert_eq!(perm_op.kind, "change-perm");
+    match perm_op.paths.as_slice() {
+        [ShowPathResolution::Unresolved { .. }] => {}
+        other => panic!(
+            "expected Unresolved for a node this same patch goes on to delete, got {other:?}"
+        ),
+    }
+    assert_eq!(delete_op.kind, "delete-node");
+    assert_eq!(
+        delete_op.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())]
+    );
+
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -574,6 +693,8 @@ fn show_renders_a_mixed_block_with_its_own_content_and_paths() {
             author_key_ids: vec!["show-author".to_string()],
         }
     );
+
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1203,6 +1324,259 @@ fn show_on_a_queued_patch_leaves_a_stale_lifecycle_cache_untouched() {
         "precondition: refreshing against the newer tip does change the cache, so the staleness \
          above was real"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// stikk 020's own repro, as "what the round needs" item 1: patch 1 changes `a.txt`'s mode and
+/// `d.txt`'s mode; patch 2 renames `a.txt` to `z.txt` and deletes `d.txt`; both sealed into one
+/// block. Before the fix, patch 1's own node-addressed paths resolved against the block's *end*
+/// state, so the renamed node showed `z.txt` (a name patch 1 never touched under) and the deleted
+/// node showed `unresolved_node_id` (removing a path prikk had given). Per the ruling, each patch
+/// now resolves against its own state: patch 1's two `ChangePerm` operations must still show
+/// `a.txt` and `d.txt`, matching **byte for byte** what `show` on patch 1's own queued id reported
+/// before patch 2 ever existed. `ChangePerm` stands in for stikk's own `EditText` example for the
+/// same reason used elsewhere in this file: same node-addressed resolution, no span-anchor
+/// construction.
+#[test]
+fn show_block_form_resolves_rename_and_delete_cases_matching_queued_form_byte_for_byte() {
+    let root = unique_temp_dir("show-stikk-020");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_a = NodeId::from_bytes([0x41; 32]);
+    let node_d = NodeId::from_bytes([0x44; 32]);
+    create_raw_file(&layout, node_a, "a.txt", BlobKind::Text, b"a content\n");
+    let blob_d = create_raw_file(&layout, node_d, "d.txt", BlobKind::Text, b"d content\n");
+
+    let patch1_id = append_raw_patch(
+        &layout,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::ChangePerm(ChangePerm {
+                    node_id: node_a,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_755,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::ChangePerm(ChangePerm {
+                    node_id: node_d,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_755,
+                }),
+            },
+        ],
+    );
+
+    // The queued form's own answer for patch 1, captured before patch 2 exists -- the reference
+    // "what the queued form reported" byte for byte.
+    let queued_patch1 = show(&layout, patch1_id).unwrap();
+    let [queued_patch1] = queued_patch1.as_slice() else {
+        panic!("expected exactly one patch, got {queued_patch1:?}");
+    };
+
+    let patch2_id = append_raw_patch(
+        &layout,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::RenamePath(RenamePath {
+                    node_id: node_a,
+                    old_path: "a.txt".to_string(),
+                    new_path: "z.txt".to_string(),
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::DeleteNode(DeleteNode {
+                    path: "d.txt".to_string(),
+                    node_id: node_d,
+                    old_node_kind: NodeKind::TextFile,
+                    preimage: DeleteNodePreimage::File {
+                        old_blob_id: blob_d,
+                        old_mode: 0o100_755,
+                    },
+                }),
+            },
+        ],
+    );
+    seal(&layout);
+
+    let block_id = current_block_id(&layout);
+    let patches = show(&layout, block_id).unwrap();
+    let [sealed_patch1, sealed_patch2] = patches.as_slice() else {
+        panic!("expected exactly two patches, got {patches:?}");
+    };
+    assert_eq!(sealed_patch1.patch_id, patch1_id);
+    assert_eq!(sealed_patch2.patch_id, patch2_id);
+
+    assert_eq!(
+        sealed_patch1.operations, queued_patch1.operations,
+        "the rename case and the delete case: patch 1's own operations must render identically \
+         sealed as they did queued, unaffected by patch 2's later rename and delete"
+    );
+    let [perm_a, perm_d] = sealed_patch1.operations.as_slice() else {
+        panic!("expected two operations, got {:?}", sealed_patch1.operations);
+    };
+    assert_eq!(
+        perm_a.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "the rename case: patch 1 never touched z.txt"
+    );
+    assert_eq!(
+        perm_d.paths,
+        vec![ShowPathResolution::Path("d.txt".to_string())],
+        "the delete case: patch 1's own edit is not unresolved just because a later patch deletes \
+         the node"
+    );
+
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// stikk 020's "what the round needs" item 2, extended past one patch: queued equals sealed for
+/// **every** patch in a block of three patches, not just the first and last. Patch 3 also proves
+/// the fold runs forward correctly, not just "unaffected backward": its own `ChangePerm` on `node_a`
+/// must resolve to `z.txt`, the name patch 2's rename gave it, since patch 3 comes *after* that
+/// rename.
+#[test]
+fn show_queued_equals_sealed_for_every_patch_in_a_three_patch_block() {
+    let root = unique_temp_dir("show-three-patch-block");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_a = NodeId::from_bytes([0x51; 32]);
+    let node_d = NodeId::from_bytes([0x54; 32]);
+    create_raw_file(&layout, node_a, "a.txt", BlobKind::Text, b"a content\n");
+    let blob_d = create_raw_file(&layout, node_d, "d.txt", BlobKind::Text, b"d content\n");
+
+    let patch1_id = append_raw_patch(
+        &layout,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::ChangePerm(ChangePerm {
+                    node_id: node_a,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_755,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::ChangePerm(ChangePerm {
+                    node_id: node_d,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_755,
+                }),
+            },
+        ],
+    );
+    let queued_patch1 = show(&layout, patch1_id).unwrap();
+    let [queued_patch1] = queued_patch1.as_slice() else {
+        panic!("expected exactly one patch, got {queued_patch1:?}");
+    };
+
+    let patch2_id = append_raw_patch(
+        &layout,
+        vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::RenamePath(RenamePath {
+                    node_id: node_a,
+                    old_path: "a.txt".to_string(),
+                    new_path: "z.txt".to_string(),
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::DeleteNode(DeleteNode {
+                    path: "d.txt".to_string(),
+                    node_id: node_d,
+                    old_node_kind: NodeKind::TextFile,
+                    preimage: DeleteNodePreimage::File {
+                        old_blob_id: blob_d,
+                        old_mode: 0o100_755,
+                    },
+                }),
+            },
+        ],
+    );
+    let queued_patch2 = show(&layout, patch2_id).unwrap();
+    let [queued_patch2] = queued_patch2.as_slice() else {
+        panic!("expected exactly one patch, got {queued_patch2:?}");
+    };
+
+    let patch3_id = append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id: node_a,
+                old_mode: 0o100_755,
+                new_mode: 0o100_644,
+            }),
+        }],
+    );
+    let queued_patch3 = show(&layout, patch3_id).unwrap();
+    let [queued_patch3] = queued_patch3.as_slice() else {
+        panic!("expected exactly one patch, got {queued_patch3:?}");
+    };
+    // Precondition on the fixture, not the fold under test: patch 3 addresses `node_a` *after*
+    // patch 2's own rename, so its own queued-form answer (computed by the independent
+    // queued-patch-paths fold) must already show the renamed name -- otherwise the byte-for-byte
+    // comparison below would pass by both sides being wrong the same way.
+    let [queued_perm3] = queued_patch3.operations.as_slice() else {
+        panic!(
+            "expected one operation, got {:?}",
+            queued_patch3.operations
+        );
+    };
+    assert_eq!(
+        queued_perm3.paths,
+        vec![ShowPathResolution::Path("z.txt".to_string())],
+        "precondition: the queued form must already see patch 2's rename"
+    );
+
+    seal(&layout);
+    let block_id = current_block_id(&layout);
+    let patches = show(&layout, block_id).unwrap();
+    let [sealed1, sealed2, sealed3] = patches.as_slice() else {
+        panic!("expected exactly three patches, got {patches:?}");
+    };
+    assert_eq!(
+        sealed1.operations, queued_patch1.operations,
+        "patch 1: queued equals sealed"
+    );
+    assert_eq!(
+        sealed2.operations, queued_patch2.operations,
+        "patch 2: queued equals sealed"
+    );
+    assert_eq!(
+        sealed3.operations, queued_patch3.operations,
+        "patch 3: queued equals sealed, including seeing patch 2's rename forward"
+    );
+
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
 
     let _ = std::fs::remove_dir_all(root);
 }

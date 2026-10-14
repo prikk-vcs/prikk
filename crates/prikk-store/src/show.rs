@@ -3,11 +3,15 @@
 //! Content comes straight from the patch payloads (RFC 142 §3 — no replay needed): `EditText`
 //! carries its own before/after span text, and every other kind carries its own path, mode, or
 //! blob reference inline. Only the three node-addressed kinds (`EditText`, `ChangePerm`,
-//! `ReplaceBinary`) carry no path and need resolving: at a sealed block, against that block's own
-//! lifecycle state (`merge_evidence::lifecycle_state_at`, RFC 142 §3/§4); at a queued patch, against
-//! the folded worktree baseline truncated at that patch (the queued-patch-paths handoff) -- one
-//! replay per invocation either way, not one per operation. Only a **bare sealed patch id**, with no
-//! block or queue to resolve against, reports every node-addressed operation unresolved.
+//! `ReplaceBinary`) carry no path and need resolving: at a sealed block's own patch, against that
+//! patch's own state -- the block's starting state (its parent's, via
+//! `merge_evidence::mainline_or_sole_parent` and `lifecycle_state_at`, RFC 142 §3/§4), folded with
+//! the block's own patches in canonical order **up to and including that patch** (stikk 020); at a
+//! queued patch, against the folded worktree baseline truncated at that patch (the
+//! queued-patch-paths handoff) -- the same fold either way, one replay per invocation, not one per
+//! operation, and identical before and after `seal` by construction. Only a **bare sealed patch
+//! id**, with no block or queue to resolve against, reports every node-addressed operation
+//! unresolved.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -17,7 +21,8 @@ use prikk_object::{
 use crate::RepositoryLayout;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
-use crate::merge::evidence::lifecycle_state_at;
+use crate::lifecycle_cache::replay::{TextCache, apply_one_patch};
+use crate::merge::evidence::{lifecycle_state_at, mainline_or_sole_parent};
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
@@ -33,9 +38,11 @@ pub enum ShowPathResolution {
     /// queued patch's lifecycle state.
     Path(String),
     /// A node-addressed operation whose node id is not live at the target — hex-encoded, matching
-    /// `prikk_hash::to_hex` (RFC 140's own format). Reachable when the target both edits and deletes
-    /// the same node before the node is deleted for good, and whenever the target is a bare sealed
-    /// patch id with no block or queue to resolve against.
+    /// `prikk_hash::to_hex` (RFC 140's own format). Reachable when **one patch** both edits and
+    /// deletes the same node before the node is deleted for good (a later patch in the same block
+    /// or queue no longer makes an earlier patch's own edit unresolved -- each patch resolves
+    /// against its own state, stikk 020), and whenever the target is a bare sealed patch id with no
+    /// block or queue to resolve against.
     Unresolved {
         /// Hex-encoded node id that failed to resolve.
         node_id: String,
@@ -180,13 +187,17 @@ pub struct ShowPatch {
 }
 
 /// `prikk show <block-id|patch-id>` (RFC 142): read the target, decode its patch(es), resolve
-/// node-addressed paths against the target block's own lifecycle state when the target is a
-/// block, or a queued patch's own truncated folded baseline when it is one (the queued-patch-paths
-/// handoff). A block's output is the union of its patches in canonical (`patch_ids`) order (control
-/// 5). **Only a bare sealed patch id** has no context to resolve node-addressed operations against
-/// -- those are reported unresolved rather than fatal, the same mechanism §3 already requires for
-/// the edit-then-delete-in-one-block case, applied here for a different reason (no target block at
-/// all, not a node missing from one). RFC 142 §1: a patch id alone carries no block context, and
+/// node-addressed paths against **that patch's own state** when the target is a block -- the
+/// block's starting state (its parent's, or empty for a root), folded with the block's own
+/// patches in canonical order up to and including that patch (stikk 020) -- or a queued patch's
+/// own truncated folded baseline when it is one (the queued-patch-paths handoff): one fold, two
+/// starting points, so a patch renders identically before and after `seal` by construction, not by
+/// two copies agreeing. A block's output is the union of its patches in canonical (`patch_ids`)
+/// order (control 5). **Only a bare sealed patch id** has no context to resolve node-addressed
+/// operations against -- those are reported unresolved rather than fatal, the same mechanism §3
+/// already requires for the edit-then-delete-in-one-patch case, applied here for a different
+/// reason (no target block at all, not a node missing from one). RFC 142 §1: a patch id alone
+/// carries no block context, and
 /// searching for a block that contains it would make the answer depend on what else happens to be
 /// sealed -- this is deliberate, not a gap the queued case's fix also closes.
 pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
@@ -197,16 +208,45 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     match envelope.object_type {
         ObjectType::Block => {
             let block = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-            let lifecycle = lifecycle_state_at(&object_store, id)?;
-            block
-                .patch_ids
-                .iter()
-                .map(|patch_id| show_patch(&object_store, *patch_id, Some(lifecycle.state())))
-                .collect()
+            let mut state = block_starting_state(&object_store, id, &block)?;
+            let mut text_cache = TextCache::new();
+            let mut patches = Vec::with_capacity(block.patch_ids.len());
+            for patch_id in &block.patch_ids {
+                apply_one_patch(&object_store, *patch_id, &mut state, &mut text_cache)?;
+                patches.push(show_patch(&object_store, *patch_id, Some(&state))?);
+            }
+            Ok(patches)
         }
         ObjectType::Patch => Ok(vec![show_patch(&object_store, id, None)?]),
         other => Err(PrikkError::UnsupportedObjectType(format!(
             "show requires a Block or Patch id; {id} is {other}"
+        ))),
+    }
+}
+
+/// The state a block's own patches fold onto (RFC 142, stikk 020): the mainline parent's state for
+/// a `Merge` block, the sole parent's for `Normal`, empty for `Root` -- the identical policy
+/// `lineage_horizon` already walks, shared through [`mainline_or_sole_parent`] rather than
+/// re-derived. One fold, two starting points: the queued form folds the active queue onto the
+/// sealed tip (`resolve_folded_worktree_baseline_up_to_queued_patch_with_own_cache`); this folds a
+/// block's own patches onto its parent's state, exactly as `lifecycle_state_at(block_id)` already
+/// does internally in one pass -- calling it on the *parent* gives everything up to but not
+/// including this block, so it is not a second implementation of block-state derivation, only a
+/// narrower call to the existing one.
+fn block_starting_state(
+    object_store: &impl ObjectReader,
+    block_id: ObjectId,
+    block: &BlockPayload,
+) -> Result<NodeLifecycleState> {
+    match mainline_or_sole_parent(block) {
+        Some(None) => Ok(NodeLifecycleState::new()),
+        Some(Some(parent_id)) => {
+            Ok(lifecycle_state_at(object_store, parent_id)?.state().clone())
+        }
+        None => Err(PrikkError::UnsupportedObjectType(format!(
+            "show requires a block whose state is its parent's state plus its own patches; \
+             block {block_id} has {} parents",
+            block.parent_block_ids.len()
         ))),
     }
 }
