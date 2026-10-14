@@ -878,7 +878,9 @@ impl<R: Read + Seek> FrameSource for SectionFrameSource<'_, R> {
             .seek(SeekFrom::Start(self.record_area_start + offset as u64))?;
         self.scratch.resize(read_len, 0);
         self.source.read_exact(&mut self.scratch)?;
-        Ok(Some(&self.scratch[..read_len]))
+        // `self.scratch` is exactly `read_len` bytes long after the `resize` above -- returned
+        // whole, not re-sliced, so clippy's `indexing_slicing` has nothing to flag.
+        Ok(Some(self.scratch.as_slice()))
     }
 }
 
