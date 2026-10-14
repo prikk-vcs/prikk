@@ -9,70 +9,74 @@
 //! review's own "trap to avoid": a received ref that fails only on publication trust, not yet
 //! adopted, is reported through the trust path, never as an item failure, and must not be printed
 //! twice or conflated with a genuine structural failure):
-//! - `remotes/heads/main`, landed via **0.51.0's own published binary** (the only route that will
-//!   still import this shape at all -- the candidate's own `archive import` now refuses it
-//!   outright, which is the whole point of this release's own Security fix), structurally damaged
-//!   (a branch `RefState` whose target is a carried `Blob`, not a `Block` -- the identical shape
-//!   step 0's `control_c_a_branch_targeting_a_carried_non_block_is_damage` builds), signed by a key
-//!   this destination never adopts;
+//! - `remotes/heads/main`, written **directly into the destination's own object store and received
+//!   index**, in-process, via `prikk_store::write_received_pointer_for_test` (`test-support`-gated):
+//!   structurally damaged (a branch `RefState` whose target is a carried `Blob`, not a `Block` --
+//!   the identical shape step 0's `control_c_a_branch_targeting_a_carried_non_block_is_damage`
+//!   builds), signed by a key this destination never adopts. **0.52.0 release prep P3c (review
+//!   `release-0.52.0-prep-P3b-review-v1`, finding P3b-1): this no longer goes through 0.51.0's own
+//!   published binary** -- that route depended on a path outside the test's own temporary
+//!   directory, and passed silently, checking nothing, wherever that binary is absent (every
+//!   machine but one, including CI). Recording the received pointer directly is also the more
+//!   honest construction: the historical gap this release's Security fix closes is specifically
+//!   that `archive import` used to *write* this shape; this test's own job is only to confirm the
+//!   *reader* (`verify`) names it correctly once a repository already holds it, by whatever route;
 //! - `remotes/heads/second`, landed via an ordinary, healthy `bundle export`/`bundle import` from a
 //!   second, genuinely separate source repository, signed by a key this destination **does** adopt
 //!   before importing it.
 //!
 //! The candidate's own `prikk verify` must name the first by its received-ref name with a message
-//! naming the real cause (an object type mismatch, since 0.51.0's own import genuinely writes the
-//! carried Blob into the destination under the id the ref claims is a Block), and must never print
-//! any such line for the second.
+//! naming the real cause (an object type mismatch -- the Blob is genuinely present under the id the
+//! ref claims is a Block), and must never print any such line for the second.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use std::path::Path;
-use std::process::{Command, Output};
-
 mod support;
 
-/// Build the identical fixture `control_c_a_branch_targeting_a_carried_non_block_is_damage`
-/// (`crates/prikk-store/src/archive/verify/tests.rs`) builds -- a branch `RefState` whose own
-/// target names a carried `Blob`, not a `Block` -- and export it to `output`. Lives here, not as a
-/// second copy inside `prikk-store`'s own test tree, so no throwaway test needs adding and removing
-/// there for this one CLI-level reproduction; the construction itself is small enough to inline.
-fn write_crafted_branch_targets_blob_archive(output: &Path) {
+/// Write a signed Blob and a signed branch `RefState` targeting it (the identical shape
+/// `control_c_a_branch_targeting_a_carried_non_block_is_damage`,
+/// `crates/prikk-store/src/archive/verify/tests.rs`, builds -- a `Blob` is never a `Block`, so this
+/// is damage the moment anything tries to resolve the ref's own target) directly into `layout`'s own
+/// object store, then records it as a received pointer under `ref_name` via
+/// `write_received_pointer_for_test` -- no `RefUpdate`, no `RefStore::publish`, no archive
+/// export/import: those are for building an *exportable source* whose own local ref a real
+/// `archive export` would carry; here the shape is written straight into the *destination*, the
+/// state a received ref is actually in once something (by any route) has landed it.
+fn write_damaged_received_ref(layout: &prikk_store::RepositoryLayout, ref_name: &str) {
     use prikk_object::{CanonicalEncode, ObjectEnvelope, ObjectId};
-    use prikk_store::{FileObjectStore, ObjectWriter, RefPublication, RefStore};
+    use prikk_store::{FileObjectStore, ObjectWriter};
 
-    let dir = support::unique_repo("p3b-crafted-source");
-    let layout = prikk_store::RepositoryLayout::init(&dir).expect("init layout");
     let mut object_store = FileObjectStore::new(layout.clone());
 
-    // A signed Blob, and a Branch RefState naming it as the target -- a Blob is never a Block, so
-    // this is damage the moment anything tries to resolve the ref's own target.
-    let blob_envelope = ObjectEnvelope::unsigned(
-        prikk_object::ObjectType::Blob,
-        1,
-        prikk_object::BlobPayload {
-            blob_kind: prikk_object::BlobKind::Text,
-            declared_size: 12,
-            content: b"not a block\n".to_vec(),
-        }
-        .to_canonical_bytes()
-        .unwrap(),
-    );
-    let mut blob_envelope = blob_envelope;
-    blob_envelope
-        .add_signature(prikk_object::Signature {
-            algorithm: prikk_object::SignatureAlgorithm::Ed25519,
-            key_id: "p3b-crafted-author".to_string(),
-            signature_bytes: vec![7; 64],
-            created_at: 1,
-            signer_role: prikk_object::SignerRole::Author,
-        })
-        .unwrap();
+    let blob_envelope = {
+        let mut envelope = ObjectEnvelope::unsigned(
+            prikk_object::ObjectType::Blob,
+            1,
+            prikk_object::BlobPayload {
+                blob_kind: prikk_object::BlobKind::Text,
+                declared_size: 12,
+                content: b"not a block\n".to_vec(),
+            }
+            .to_canonical_bytes()
+            .unwrap(),
+        );
+        envelope
+            .add_signature(prikk_object::Signature {
+                algorithm: prikk_object::SignatureAlgorithm::Ed25519,
+                key_id: "p3c-crafted-author".to_string(),
+                signature_bytes: vec![7; 64],
+                created_at: 1,
+                signer_role: prikk_object::SignerRole::Author,
+            })
+            .unwrap();
+        envelope
+    };
     let blob_id = object_store
         .write_object(&blob_envelope)
         .expect("write blob");
 
     let ref_state_payload = prikk_object::RefStatePayload {
-        ref_name: "heads/main".to_string(),
+        ref_name: ref_name.trim_start_matches("remotes/").to_string(),
         kind: prikk_object::RefKind::Branch,
         target_object_id: blob_id,
         update_seq: 1,
@@ -88,88 +92,23 @@ fn write_crafted_branch_targets_blob_archive(output: &Path) {
     ref_state
         .add_signature(prikk_object::Signature {
             algorithm: prikk_object::SignatureAlgorithm::Ed25519,
-            key_id: "p3b-crafted-maintainer".to_string(),
+            key_id: "p3c-crafted-maintainer".to_string(),
             signature_bytes: vec![5; 64],
             created_at: 1,
             signer_role: prikk_object::SignerRole::Maintainer,
         })
         .unwrap();
     let ref_state_id: ObjectId = ref_state.object_id();
+    object_store
+        .write_object(&ref_state)
+        .expect("write ref state");
 
-    let ref_update_payload = prikk_object::RefUpdatePayload {
-        ref_name: "heads/main".to_string(),
-        old_ref_state_id: None,
-        new_ref_state_id: ref_state_id,
-        new_target_object_id: blob_id,
-        update_seq: 1,
-        created_at: 0,
-        author_key_id: "p3b-crafted-maintainer".to_string(),
-    };
-    let mut ref_update = ObjectEnvelope::unsigned(
-        prikk_object::ObjectType::RefUpdate,
-        1,
-        ref_update_payload.to_canonical_bytes().unwrap(),
-    );
-    ref_update
-        .add_signature(prikk_object::Signature {
-            algorithm: prikk_object::SignatureAlgorithm::Ed25519,
-            key_id: "p3b-crafted-maintainer".to_string(),
-            signature_bytes: vec![5; 64],
-            created_at: 1,
-            signer_role: prikk_object::SignerRole::Maintainer,
-        })
-        .unwrap();
-
-    RefStore::new(layout.clone())
-        .publish(&RefPublication {
-            ref_name: "heads/main".to_string(),
-            expected_previous_ref_state_id: None,
-            ref_state,
-            ref_update,
-        })
-        .expect("publish");
-
-    let mut bytes = Vec::new();
-    prikk_store::export_archive(&layout, &mut bytes).expect("export archive");
-    std::fs::write(output, bytes).expect("write crafted archive");
-}
-
-/// Run `bin` with the identical key-environment isolation `support::prikk` gives the candidate's
-/// own binary -- required here because 0.51.0's own published binary is invoked directly, not
-/// through `support::prikk` (which always resolves `CARGO_BIN_EXE_prikk`, the candidate).
-fn run_isolated(bin: &Path, repo: &Path, args: &[&str]) -> Output {
-    let home = support::unique_repo("p3b-home");
-    Command::new(bin)
-        .current_dir(repo)
-        .env("HOME", &home)
-        .env("XDG_CONFIG_HOME", &home)
-        .env("APPDATA", &home)
-        .env_remove("PRIKK_AUTHOR_SEED")
-        .env_remove("PRIKK_AUTHOR_KEY_ID")
-        .env_remove("PRIKK_AUTHOR_SEED_FILE")
-        .env_remove("PRIKK_MAINTAINER_SEED")
-        .env_remove("PRIKK_MAINTAINER_KEY_ID")
-        .env_remove("PRIKK_MAINTAINER_SEED_FILE")
-        .args(args)
-        .output()
-        .unwrap()
+    prikk_store::write_received_pointer_for_test(layout, ref_name, ref_state_id)
+        .expect("write received pointer");
 }
 
 #[test]
 fn verify_names_a_failed_received_ref_and_never_the_healthy_adopted_one() {
-    let released_051 = Path::new("/home/nabbisen/.pgtmp/rel-0.51.0-bin/prikk");
-    if !released_051.exists() {
-        eprintln!(
-            "skipping: 0.51.0's published binary is not present at {}",
-            released_051.display()
-        );
-        return;
-    }
-
-    // The damaged archive, built once.
-    let crafted = support::unique_repo("p3b-crafted-archive").join("crafted.prepo");
-    write_crafted_branch_targets_blob_archive(&crafted);
-
     // A second, genuinely separate, healthy source -- a different local branch name
     // ("heads/second") so its own received pointer cannot collide with the crafted archive's own
     // "heads/main".
@@ -213,18 +152,9 @@ fn verify_names_a_failed_received_ref_and_never_the_healthy_adopted_one() {
         .unwrap();
     support::ok(&import_healthy, "bundle import (healthy, adopted key)");
 
-    let import_damaged = run_isolated(
-        released_051,
-        &destination,
-        &["archive", "import", crafted.to_str().unwrap()],
-    );
-    assert!(
-        import_damaged.status.success(),
-        "0.51.0's own archive import must still land this damaged shape (that is the historical \
-         gap this release fixes): stdout={} stderr={}",
-        String::from_utf8_lossy(&import_damaged.stdout),
-        String::from_utf8_lossy(&import_damaged.stderr)
-    );
+    let destination_layout =
+        prikk_store::RepositoryLayout::open(destination.clone()).expect("open destination layout");
+    write_damaged_received_ref(&destination_layout, "remotes/heads/main");
 
     // Precondition: exactly two received refs are present, under two distinct names.
     let verify_output = support::verify(&destination);
@@ -256,11 +186,11 @@ fn verify_names_a_failed_received_ref_and_never_the_healthy_adopted_one() {
         1,
         "expected exactly one failed-received-ref line, got {failed_lines:?} in: {stdout}"
     );
-    // The real, observed message for this exact construction: the blob genuinely lands in the
-    // destination's own object store (0.51.0's own import writes it), so resolving the ref's own
-    // target finds an object whose *type* disagrees, not one that is missing outright -- both are
-    // real "targets the wrong kind of object" shapes RFC 155/step 0's own typed-target check
-    // catches; this one happens to surface as a type mismatch rather than a bare absence.
+    // The real, observed message for this exact construction: the blob is genuinely present in the
+    // destination's own object store (written directly, above), so resolving the ref's own target
+    // finds an object whose *type* disagrees, not one that is missing outright -- both are real
+    // "targets the wrong kind of object" shapes RFC 155/step 0's own typed-target check catches;
+    // this one happens to surface as a type mismatch rather than a bare absence.
     assert!(
         failed_lines[0].contains("remotes/heads/main")
             && (failed_lines[0].contains("object type mismatch")

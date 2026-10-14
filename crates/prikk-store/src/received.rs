@@ -106,6 +106,20 @@ pub(crate) fn write_received_pointer(
     )
 }
 
+/// As [`write_received_pointer`], for a test that needs to construct a received pointer directly --
+/// without a real `sync accept`/`bundle import`/`archive import` round trip, which each apply their
+/// own validation on the way in and so cannot be used to reach every shape the received-ref *reader*
+/// (`verify_received_ref_state`) must still classify correctly. Re-exported at the crate root under
+/// `feature = "test-support"` so `prikk-cli`'s own tests can call it.
+#[cfg(feature = "test-support")]
+pub fn write_received_pointer_for_test(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    ref_state_id: ObjectId,
+) -> Result<()> {
+    write_received_pointer(layout, ref_name, ref_state_id)
+}
+
 /// As [`write_received_pointer`], but checked -- not assumed -- against a caller-supplied
 /// [`crate::lock::ContainerLockGuard`] that must already hold `ReceivedIndex` (RFC 155 Part I-B2,
 /// review `rfc155-impl-IB-review-v1` finding IB1(a)): `append_received_index_entry` itself never
