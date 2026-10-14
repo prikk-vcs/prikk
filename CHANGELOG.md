@@ -2,6 +2,101 @@
 
 ## Unreleased
 
+### Security
+
+- **A crafted or corrupted archive could carry a branch ref that resolved to the wrong kind of
+  object, or whose own ref log disagreed with its refs, and 0.51.0's `archive verify`/
+  `archive import` accepted it anyway** (affected: 0.51.0 only — the `archive` subsystem first
+  shipped there). Demonstrated on the published `0.51.0` binary: a branch `RefState` whose own
+  target names a carried `Blob`, not a `Block`, passes `archive verify` (`reference closure
+  sound: true`, exit 0) and `archive import --adopt` writes the carried blob and ref state into a
+  fresh destination, before that destination's own `prikk verify` catches the divergence
+  afterward. The carried ref log was never read at all, so a ref whose log disagreed with its own
+  current state passed unchecked too. **No trust is conferred either way**: import never adopts a
+  signing key on its own, and the destination's own, separately-adopted trust set — never this
+  archive's own carried record — is what a later `prikk verify` checks a signature against.
+  Nothing outside the destination repository is affected. **Upgrade. No advisory.** See the
+  `### Fixed` entry below for the full fix.
+
+### Upgrading
+
+- **`prikk trust maintainer check` now exits `1` when the key is not trusted, where it exited `0`
+  whichever way the question resolved before** (RFC 138 §7.2, amended). A script that only ran
+  `check` to print the trust answer under `set -e` now stops at an untrusted key instead of
+  continuing past it; `check && …` now proceeds only for a trusted key. `--format json` still
+  tells "not trusted" from "cannot answer" apart, via the answer object.
+- **A repository holding any object over 256 MiB can no longer be archived or bundled at all.**
+  `archive export`/`bundle export` now refuse up front, naming the bound, where before they wrote
+  a file that only `archive verify`/`archive import` (or a bundle's own `import`) would later
+  refuse. A copy of the repository's own `.prikk/` directory is the way to back up a repository in
+  this state (`docs/src/reference/current-state.md`).
+
+### Output changes
+
+- `archive verify --format json`'s own `closure.ok` (and the matching prose, `reference closure
+  sound:`) now reads `false`, and `damaged` gains entries, for two shapes 0.51.0's own untyped
+  check accepted: a branch ref whose target is not a `Block`, and a ref whose carried log
+  disagrees with it. See the `### Security` and `### Fixed` entries.
+- `archive verify --format json` gains an additive `unreferenced_remnants` key: a carried Block's
+  own missing parent, patch, or snapshot reference, when no carried local or received ref reaches
+  that Block (RFC 164 Rule E) — harmless by construction, named rather than silently dropped.
+  `archive verify`'s own prose gains the matching line, the store's own existing `remnant_warning`
+  wording, unchanged from what a live repository's own `prikk verify` already prints for the
+  identical condition.
+- **An object container's own interrupted-append warning no longer says *"damage, not a torn
+  tail"***: an object-type container (`Patch`, `Block`, `RefState`, `Tag`, `Attestation`, `Blob`,
+  `RecognitionClaim`) is append-only and never compacted, so a crash mid-append there is an ordinary,
+  harmless interrupted append — `prikk verify` already classified it that way (a warning, never a
+  failure), but the embedded text contradicted its own classification. It now reads as an
+  interrupted append, consistent with the wording `archive verify` already used for the identical
+  shape. Every other reader this message's own text still serves (the WAL, the trust policy, the
+  received index, the pointer index, the object index, the ref log, the author key index) is
+  unchanged: for those, this same byte shape usually does mean real damage.
+- **The signature-count note drops its trailing clause** (*"— not a weaker check, the step that was
+  always going to check them for real"*), redundant with the sentence immediately before it.
+- **`archive export`/`archive verify`'s own `tool version:` prose line no longer prints an archive's
+  own carried `tool_version` string whole** — a crafted archive can set it to anything. It now shows
+  the first 200 characters, control characters escaped, then `"... (N bytes)"` naming the real
+  total, when the value is longer than that. `--format json` is unaffected: the full value, already
+  escaped, still appears there.
+- **In `show-report-v1`, a sealed block's earlier patch can now name a different path than before**
+  (stikk 020): a path where a later patch in the same block renames or deletes the node, where it
+  previously named the later name, or `unresolved_node_id`, respectively. See the `### Fixed` entry
+  below.
+- **`prikk trust maintainer check` exits 1 when the key is not trusted (was 0)**; a script that ran
+  it only to print the answer under `set -e` now stops there. See the `### Changed` entry below.
+- **An object container's own checksum-mismatch message, when it is actually an interrupted append**
+  (a torn frame a later write genuinely finished past, RFC 162 rule 2) **no longer reads like
+  damage, and no longer loses the evidence that it is harmless.** Both a live repository's own
+  `prikk verify` and `archive verify` share the identical underlying text (0.52.0 step 2's shared
+  decode primitive); before this round, both printed the same sentence for this shape as for the
+  genuinely damaged case — before: `container checksum mismatch at byte offset N`. After: `the
+  frame at byte offset N claims bytes that a later sound frame at byte offset M already uses` —
+  naming the later sound frame's own offset as the proof, with the verdict ("not damage" / "a
+  harmless remnant") carried by each reader's own wrapper rather than baked into the shared text
+  (a release-prep wording pass: the earlier phrasing, ending its own text in *"…: an interrupted
+  append, not damage"*, read confusingly once each wrapper added its own verdict on top — "not
+  damage" beside "not a harmless remnant until repaired," or "interrupted append" printed twice).
+  The store's own `verify` line for a case where nothing still needs the object now reads:
+  `warning: interrupted append in Blob at <path>#N: the frame at byte offset N claims bytes that a
+  later sound frame at byte offset M already uses; connectivity finds nothing that still needs it,
+  so it is a harmless remnant, not damage`. The archive's own line now reads: `interrupted append:
+  the frame at byte offset N claims bytes that a later sound frame at byte offset M already uses;
+  not imported` — no doubled "interrupted append," and no doubled offset (the shared primitive
+  already names its own offset in every message it produces, so the archive no longer adds one of
+  its own on top).
+- **`archive verify`'s own damage/interrupted-append lines now always name the frame's own byte
+  offset, and the interrupted-append text is the identical base sentence a live repository's own
+  `prikk verify` would give the same shape** (0.52.0 step 2, RFC 155 §9.4): the archive's
+  object-container classification now runs through the same shared primitive the store's own
+  `prikk verify` does, rather than a second, hand-maintained copy of the identical rule. One shape's
+  own line changes in substance, not only in wording: a checksum-mismatched frame later overrun by a
+  sound write used to read *"interrupted append at byte offset N — a later write already completed
+  past this frame's own claimed end; not imported"*; it now reads *"interrupted append: byte offset
+  N: container checksum mismatch at byte offset N; not imported"* — the store's own base text for
+  that shape, with the archive's own offset and context layered on top, rather than an independently
+  invented sentence that could drift from what the store itself says about the identical bytes.
+
 ### Fixed — `archive export` of a repository that accepted a sync artifact or deleted an edited text file wrote a file its own `archive verify`/`archive import` refused
 
 - **0.51.0's archive closure check required every stored object's own reference to resolve inside
@@ -69,7 +164,7 @@
   store's own rule says the lead is completable, or the store's own divergence message otherwise, so
   the refusal never sends anyone to a command that would just refuse.
 
-### Changed — `prikk trust maintainer check` exits `1` for "not trusted" (was `0`)
+### Changed — breaking once: `prikk trust maintainer check` exits `1` for "not trusted" (was `0`)
 
 - **RFC 138 §7.2's original ruling made `check` exit `0` whichever way the question resolved**,
   since a negative answer is a successful query, not an operational failure. That was the riskier
@@ -82,68 +177,6 @@
   for "not trusted" — only a genuinely unreadable policy still reports one. A caller that must tell
   the two apart reads `--format json`: an answer object with `"trusted": false`, or no answer object
   at all.
-
-### Output changes
-
-- `archive verify --format json` gains an additive `unreferenced_remnants` key: a carried Block's
-  own missing parent, patch, or snapshot reference, when no carried local or received ref reaches
-  that Block (RFC 164 Rule E) — harmless by construction, named rather than silently dropped.
-  `archive verify`'s own prose gains the matching line, the store's own existing `remnant_warning`
-  wording, unchanged from what a live repository's own `prikk verify` already prints for the
-  identical condition.
-- **An object container's own interrupted-append warning no longer says *"damage, not a torn
-  tail"***: an object-type container (`Patch`, `Block`, `RefState`, `Tag`, `Attestation`, `Blob`,
-  `RecognitionClaim`) is append-only and never compacted, so a crash mid-append there is an ordinary,
-  harmless interrupted append — `prikk verify` already classified it that way (a warning, never a
-  failure), but the embedded text contradicted its own classification. It now reads as an
-  interrupted append, consistent with the wording `archive verify` already used for the identical
-  shape. Every other reader this message's own text still serves (the WAL, the trust policy, the
-  received index, the pointer index, the object index, the ref log, the author key index) is
-  unchanged: for those, this same byte shape usually does mean real damage.
-- **The signature-count note drops its trailing clause** (*"— not a weaker check, the step that was
-  always going to check them for real"*), redundant with the sentence immediately before it.
-- **`archive export`/`archive verify`'s own `tool version:` prose line no longer prints an archive's
-  own carried `tool_version` string whole** — a crafted archive can set it to anything. It now shows
-  the first 200 characters, control characters escaped, then `"... (N bytes)"` naming the real
-  total, when the value is longer than that. `--format json` is unaffected: the full value, already
-  escaped, still appears there.
-- **In `show-report-v1`, a sealed block's earlier patch can now name a different path than before**
-  (stikk 020): a path where a later patch in the same block renames or deletes the node, where it
-  previously named the later name, or `unresolved_node_id`, respectively. See the `### Fixed` entry
-  above.
-- **`prikk trust maintainer check` exits 1 when the key is not trusted (was 0)**; a script that ran
-  it only to print the answer under `set -e` now stops there. See the `### Changed` entry above.
-- **An object container's own checksum-mismatch message, when it is actually an interrupted append**
-  (a torn frame a later write genuinely finished past, RFC 162 rule 2) **no longer reads like
-  damage, and no longer loses the evidence that it is harmless.** Both a live repository's own
-  `prikk verify` and `archive verify` share the identical underlying text (0.52.0 step 2's shared
-  decode primitive); before this round, both printed the same sentence for this shape as for the
-  genuinely damaged case — before: `container checksum mismatch at byte offset N`. After: `the
-  frame at byte offset N claims bytes that a later sound frame at byte offset M already uses` —
-  naming the later sound frame's own offset as the proof, with the verdict ("not damage" / "a
-  harmless remnant") carried by each reader's own wrapper rather than baked into the shared text
-  (a release-prep wording pass: the earlier phrasing, ending its own text in *"…: an interrupted
-  append, not damage"*, read confusingly once each wrapper added its own verdict on top — "not
-  damage" beside "not a harmless remnant until repaired," or "interrupted append" printed twice).
-  The store's own `verify` line for a case where nothing still needs the object now reads:
-  `warning: interrupted append in Blob at <path>#N: the frame at byte offset N claims bytes that a
-  later sound frame at byte offset M already uses; connectivity finds nothing that still needs it,
-  so it is a harmless remnant, not damage`. The archive's own line now reads: `interrupted append:
-  the frame at byte offset N claims bytes that a later sound frame at byte offset M already uses;
-  not imported` — no doubled "interrupted append," and no doubled offset (the shared primitive
-  already names its own offset in every message it produces, so the archive no longer adds one of
-  its own on top).
-- **`archive verify`'s own damage/interrupted-append lines now always name the frame's own byte
-  offset, and the interrupted-append text is the identical base sentence a live repository's own
-  `prikk verify` would give the same shape** (0.52.0 step 2, RFC 155 §9.4): the archive's
-  object-container classification now runs through the same shared primitive the store's own
-  `prikk verify` does, rather than a second, hand-maintained copy of the identical rule. One shape's
-  own line changes in substance, not only in wording: a checksum-mismatched frame later overrun by a
-  sound write used to read *"interrupted append at byte offset N — a later write already completed
-  past this frame's own claimed end; not imported"*; it now reads *"interrupted append: byte offset
-  N: container checksum mismatch at byte offset N; not imported"* — the store's own base text for
-  that shape, with the archive's own offset and context layered on top, rather than an independently
-  invented sentence that could drift from what the store itself says about the identical bytes.
 
 ## 0.51.0 — 2026-10-13
 
