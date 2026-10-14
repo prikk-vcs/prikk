@@ -202,6 +202,7 @@ fn a_checksum_mismatch_whose_sound_frame_starts_inside_the_claimed_range_is_inte
     // overwritten, not any byte's position), which is `header_len + real_body_len`: strictly inside
     // the inflated claim `header_len + real_body_len + 10`. `record_b` is long enough on its own
     // that the inflated claim still fits entirely within real, present bytes (not a short read).
+    let sound_frame_offset = record_a.len();
     let mut bytes = record_a.clone();
     bytes.extend_from_slice(&record_b);
 
@@ -221,9 +222,27 @@ fn a_checksum_mismatch_whose_sound_frame_starts_inside_the_claimed_range_is_inte
             message,
             complete: false,
         } => {
+            // 2B-2: the message for this shape no longer says "checksum mismatch" (that text is
+            // reserved for the *complete*, genuinely-damage case) -- it says what this shape
+            // actually is, naming both the frame's own offset and the later sound frame's own
+            // offset as the evidence a later write finished past it.
             assert!(
-                message.contains("checksum mismatch"),
-                "the base classification is still a checksum mismatch, not a short read: {message:?}"
+                message.contains("interrupted append"),
+                "an incomplete checksum mismatch must say it is an interrupted append, not reuse \
+                 the damage-case wording: {message:?}"
+            );
+            assert!(
+                !message.contains("checksum mismatch"),
+                "the damage-case wording must not leak into the interrupted-append case: {message:?}"
+            );
+            assert!(
+                message.contains("byte offset 0"),
+                "must name the frame's own offset: {message:?}"
+            );
+            assert!(
+                message.contains(&format!("byte offset {sound_frame_offset}")),
+                "must name the later sound frame's own offset, the evidence this is harmless: \
+                 {message:?}"
             );
         }
         other => {

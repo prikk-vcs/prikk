@@ -2326,6 +2326,19 @@ mod differential_against_the_store {
             Err(err) => panic!("archive streamed classification: {err}"),
         };
         let real_replay = decode_container_records(object_type, bytes).expect("store decode");
+        // 2B-2 item 2: every message the primitive emits must name its own byte offset, run on
+        // every shape this helper is ever called with -- the six §A shapes (through
+        // `assert_pinned_verdict`) and the full differential proptest corpus (both proptests below
+        // call this same helper on every generated case), not a one-off check on a hand-picked
+        // fixture.
+        for outcome in &real_replay.record_outcomes {
+            if let ContainerRecordStatus::Failed { message, .. } = &outcome.status {
+                assert!(
+                    message.contains("byte offset"),
+                    "every message the primitive emits must name its own byte offset: {message:?}"
+                );
+            }
+        }
         let real_sound: std::collections::BTreeSet<_> = real_replay
             .records
             .iter()
@@ -2878,15 +2891,14 @@ mod differential_against_the_store {
                 archive_offset_class.0, store_message.0,
                 "the archive's own offset must agree with the store's"
             );
-            // The archive's own exposed text (`classify_section_records`'s translation,
-            // `archive/verify.rs`) is `interrupted_append_message(format!("byte offset {offset}:
-            // {message}"))`, where `message` is the identical string the store's own
-            // `record_outcomes` entry already carries -- reconstructed here, byte for byte, rather
-            // than assumed.
-            let expected_archive_line = format!(
-                "interrupted append: byte offset {}: {}; not imported",
-                store_message.0, store_message.1
-            );
+            // 2B-2: the archive's own exposed text (`classify_section_records`'s translation,
+            // `archive/verify.rs`) is `interrupted_append_message(message)`, with no archive-added
+            // offset prefix -- `message` already names its own offset (confirmed by
+            // `every_failed_message_names_its_own_byte_offset`), so adding a second one here would
+            // be exactly the doubled-offset bug 2B-2 found. Reconstructed byte for byte, not
+            // assumed.
+            let expected_archive_line =
+                format!("interrupted append: {}; not imported", store_message.1);
             // `archive_classification`'s own helper only recovers offsets, not full message text
             // (see `numbers_in`'s own doc comment) -- re-run `for_each_object_record` directly here
             // to read the real, full line this pinning test exists to check.

@@ -183,10 +183,27 @@ enum FrameAttempt {
     /// The header and its full claimed body are both present, and the checksum over that body fails. Whether this is
     /// damage or a torn frame that a later write overran is decided by the decode loop, which can scan (see
     /// [`checksum_mismatch_is_complete`]); this variant cannot, since the classifier below would then recurse.
+    ///
+    /// Carries no message of its own (2B-2): which text is right -- "damage" or "an interrupted append, naming the
+    /// later sound frame" -- depends entirely on what [`checksum_mismatch_is_complete`] finds, so building one here,
+    /// before that is known, is exactly the bug this round fixes (a pre-built "checksum mismatch" sentence used
+    /// unchanged for both the damage and the interrupted-append case).
     ChecksumMismatch {
-        message: String,
         body_end: usize,
     },
+}
+
+/// [`checksum_mismatch_is_complete`]'s own resolution (2B-2): a bare `bool` could not carry the one
+/// fact an incomplete resolution's own message needs -- the later sound frame's own offset, the
+/// evidence that this is a harmless overrun and not damage. `Complete` needs nothing further: its own
+/// message never changes. `Interrupted` carries the offset [`BoundedScan::Sound`] already found,
+/// rather than discarding it into a bare `true`/`false`.
+enum ChecksumMismatchResolution {
+    /// Damage: a fully-present, checksummed-wrong body with nothing sound genuinely after it.
+    Complete,
+    /// An interrupted append: a later write's own sound frame starts inside this frame's own claimed
+    /// range, at `sound_frame_offset` -- proof a later write finished past a torn one, never damage.
+    Interrupted { sound_frame_offset: usize },
 }
 
 /// 0.49.0 step 5, round 2 U2 (RFC 164 §9, RFC 160 F3 Addendum 1): a complete record whose checksum fails
@@ -202,15 +219,41 @@ fn checksum_mismatch_is_complete<S: FrameSource>(
     body_end: usize,
     max_body_len: Option<u64>,
     budget: &mut ScanBudget,
-) -> Result<bool> {
+) -> Result<ChecksumMismatchResolution> {
     if body_end == source.total_len() {
-        return Ok(true);
+        return Ok(ChecksumMismatchResolution::Complete);
     }
     Ok(
         match sound_frame_after_partial(object_type, magic, source, offset, max_body_len, budget)? {
-            BoundedScan::Sound(next) => next >= body_end,
-            BoundedScan::NoSoundFrame | BoundedScan::Undetermined => true,
+            BoundedScan::Sound(next) if next >= body_end => ChecksumMismatchResolution::Complete,
+            BoundedScan::Sound(sound_frame_offset) => {
+                ChecksumMismatchResolution::Interrupted { sound_frame_offset }
+            }
+            BoundedScan::NoSoundFrame | BoundedScan::Undetermined => {
+                ChecksumMismatchResolution::Complete
+            }
         },
+    )
+}
+
+/// 2B-2: the message for a checksum mismatch that is genuinely damage -- a fully-present body whose
+/// checksum simply does not match, with nothing sound after it to explain why.
+fn checksum_mismatch_message(report_offset: usize) -> String {
+    format!("container checksum mismatch at byte offset {report_offset}")
+}
+
+/// 2B-2: the message for a checksum mismatch that is an interrupted append, not damage -- naming
+/// both the frame's own offset and the later sound frame's own offset, the evidence a later write
+/// genuinely finished past a torn one. Mirrors `frame_resync::interrupted_append_before_sound_frame_
+/// message`'s own two-offset shape for the short-read case, for the identical reason: the evidence,
+/// not just the verdict, is what tells a reader this is harmless.
+fn checksum_mismatch_interrupted_message(
+    report_offset: usize,
+    sound_frame_offset: usize,
+) -> String {
+    format!(
+        "the frame at byte offset {report_offset} claims bytes that a later sound frame at byte \
+         offset {sound_frame_offset} already uses: an interrupted append, not damage"
     )
 }
 
@@ -320,20 +363,22 @@ fn parse_frame_at_reporting<S: FrameSource>(
         Ok(values) => values,
         Err(err) => {
             return Ok(FrameAttempt::Invalid {
-                message: err.to_string(),
+                message: format!("at byte offset {report_offset}: {err}"),
                 complete: false,
             });
         }
     };
     let Ok(body_len) = usize::try_from(header_values.body_len) else {
         return Ok(FrameAttempt::Invalid {
-            message: "container body length does not fit usize".to_string(),
+            message: format!(
+                "container body length does not fit usize at byte offset {report_offset}"
+            ),
             complete: false,
         });
     };
     let Some(body_end) = header_end.checked_add(body_len) else {
         return Ok(FrameAttempt::Invalid {
-            message: "container body end overflow".to_string(),
+            message: format!("container body end overflow at byte offset {report_offset}"),
             complete: false,
         });
     };
@@ -357,16 +402,13 @@ fn parse_frame_at_reporting<S: FrameSource>(
     budget.charge((body.len() + CONTAINER_HEADER_LEN) as u64);
     let expected = record_checksum(magic, header_values.body_len, body);
     if expected != header_values.checksum {
-        return Ok(FrameAttempt::ChecksumMismatch {
-            message: format!("container checksum mismatch at byte offset {report_offset}"),
-            body_end,
-        });
+        return Ok(FrameAttempt::ChecksumMismatch { body_end });
     }
     let envelope = match decode_envelope_file(body) {
         Ok(envelope) => envelope,
         Err(err) => {
             return Ok(FrameAttempt::Invalid {
-                message: err.to_string(),
+                message: format!("at byte offset {report_offset}: {err}"),
                 complete: true,
             });
         }
@@ -436,11 +478,17 @@ pub(crate) fn decode_container_record_in_window(
     )? {
         FrameAttempt::Record { record, .. } => Ok(Some(record)),
         FrameAttempt::TrailingPartial { .. } => Ok(None),
-        FrameAttempt::Invalid { message, .. } | FrameAttempt::ChecksumMismatch { message, .. } => {
-            Err(PrikkError::Integrity(format!(
-                "container record at offset {container_offset} failed to validate: {message}"
-            )))
-        }
+        FrameAttempt::Invalid { message, .. } => Err(PrikkError::Integrity(format!(
+            "container record at offset {container_offset} failed to validate: {message}"
+        ))),
+        // This one-shot, already-located read never scans for a later sound frame to decide
+        // "damage" vs. "interrupted append" (there is no decode loop here to resume) -- it only
+        // ever reports a failure, so the plain "checksum mismatch" text is the right one regardless
+        // of which this would have been in the full decode loop.
+        FrameAttempt::ChecksumMismatch { .. } => Err(PrikkError::Integrity(format!(
+            "container record at offset {container_offset} failed to validate: {}",
+            checksum_mismatch_message(container_offset)
+        ))),
     }
 }
 
@@ -604,8 +652,8 @@ pub(crate) fn decode_frames_with<S: FrameSource>(
                     }
                 }
             }
-            FrameAttempt::ChecksumMismatch { message, body_end } => {
-                let complete = checksum_mismatch_is_complete(
+            FrameAttempt::ChecksumMismatch { body_end } => {
+                let resolution = checksum_mismatch_is_complete(
                     object_type,
                     magic,
                     source,
@@ -614,6 +662,19 @@ pub(crate) fn decode_frames_with<S: FrameSource>(
                     max_body_len,
                     &mut budget,
                 )?;
+                // 2B-2: the message is built *after* the resolution is known, not before -- a
+                // checksum mismatch that is actually an interrupted append must say so, naming the
+                // later sound frame as its own evidence, never the plain "checksum mismatch" text
+                // that belongs to the damage case alone.
+                let (complete, message) = match resolution {
+                    ChecksumMismatchResolution::Complete => {
+                        (true, checksum_mismatch_message(offset))
+                    }
+                    ChecksumMismatchResolution::Interrupted { sound_frame_offset } => (
+                        false,
+                        checksum_mismatch_interrupted_message(offset, sound_frame_offset),
+                    ),
+                };
                 record_outcomes.push(ContainerRecordOutcome {
                     offset,
                     status: ContainerRecordStatus::Failed { message, complete },

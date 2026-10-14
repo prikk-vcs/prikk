@@ -893,19 +893,16 @@ impl<R: Read + Seek> FrameSource for SectionFrameSource<'_, R> {
 /// allocate past its own per-object bound, a parameter the store's own commit-path reader always
 /// passes `None` for instead (`parse_frame_at_reporting`'s own doc, `foundation/container.rs`).
 ///
-/// **The wording is now one wording** (0.52.0 step 2 item 2): every `Failed` outcome's own
-/// `message` comes from the primitive, unchanged. The archive's own added context is the frame's
-/// own byte offset (the store's own rendering already carries this separately, in the locator path
-/// `verify/objects.rs` builds, `container_path.join(format!("#{}", outcome.offset))` -- the archive
-/// has no equivalent locator field, so this is where that same fact has to live for it) and, for an
-/// incomplete frame, [`interrupted_append_message`]'s own wrapper. Not every one of the primitive's
-/// own messages already names its offset in its own text (a bad magic/version, a malformed length,
-/// or an envelope decode failure do not; a checksum mismatch or an object-type mismatch already do)
-/// -- prefixing it unconditionally here, rather than only where it is missing, keeps the archive's
-/// own invariant simple: every line it reports names its own offset, first, every time. Before this
-/// part, one branch (a checksum mismatch later overrun by a sound frame) built its own independent
-/// sentence instead of reusing the primitive's own text at all -- the two readers now say the
-/// identical thing about the identical shape, pinned by a test.
+/// **The wording is now one wording** (0.52.0 step 2 item 2, corrected 2B-2): every `Failed`
+/// outcome's own `message` comes from the primitive **unchanged, with no archive-added prefix** --
+/// the primitive now names its own byte offset in every message it ever produces (confirmed by
+/// `assert_held_equal_to_the_store`'s own per-message assertion, `archive/verify/tests.rs`, run on
+/// every one of the six §A shapes and every differential proptest case), so the archive no longer
+/// needs to add one itself. 2B's own first pass prefixed every line with `byte offset {}: `
+/// unconditionally, which was needed then (several of the primitive's own messages genuinely lacked
+/// an offset) but produced a doubled offset for the one case that already carried its own (a
+/// checksum mismatch, complete or interrupted) -- see 2B-2's own finding. The archive's own added
+/// context, for an incomplete frame, is only [`interrupted_append_message`]'s own wrapper.
 fn classify_section_records<R: Read + Seek>(
     source: &mut R,
     entry: &ManifestEntry,
@@ -926,11 +923,10 @@ fn classify_section_records<R: Read + Seek>(
     let mut interrupted_appends = Vec::new();
     for outcome in &summary.record_outcomes {
         if let ContainerRecordStatus::Failed { message, complete } = &outcome.status {
-            let located = format!("byte offset {}: {message}", outcome.offset);
             if *complete {
-                record_damage.push(located);
+                record_damage.push(message.clone());
             } else {
-                interrupted_appends.push(interrupted_append_message(located));
+                interrupted_appends.push(interrupted_append_message(message));
             }
         }
     }

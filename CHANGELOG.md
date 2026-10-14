@@ -113,6 +113,21 @@
   above.
 - **`prikk trust maintainer check` exits 1 when the key is not trusted (was 0)**; a script that ran
   it only to print the answer under `set -e` now stops there. See the `### Changed` entry above.
+- **An object container's own checksum-mismatch message, when it is actually an interrupted append**
+  (a torn frame a later write genuinely finished past, RFC 162 rule 2) **no longer reads like
+  damage, and no longer loses the evidence that it is harmless.** Both a live repository's own
+  `prikk verify` and `archive verify` share the identical underlying text (0.52.0 step 2's shared
+  decode primitive); before this round, both printed the same sentence for this shape as for the
+  genuinely damaged case — before: `container checksum mismatch at byte offset N`. After: `the
+  frame at byte offset N claims bytes that a later sound frame at byte offset M already uses: an
+  interrupted append, not damage` — naming the later sound frame's own offset as the proof. The
+  store's own `verify` line went from `warning: interrupted append in Blob at <path>#N: container
+  checksum mismatch at byte offset N; connectivity …` to `warning: interrupted append in Blob at
+  <path>#N: the frame at byte offset N claims bytes that a later sound frame at byte offset M
+  already uses: an interrupted append, not damage; connectivity …`. The archive's own line also
+  drops a redundant, doubled offset it had added on top (`byte offset N: container checksum
+  mismatch at byte offset N`) now that the shared primitive already names its own offset in every
+  message it produces.
 - **`archive verify`'s own damage/interrupted-append lines now always name the frame's own byte
   offset, and the interrupted-append text is the identical base sentence a live repository's own
   `prikk verify` would give the same shape** (0.52.0 step 2, RFC 155 §9.4): the archive's

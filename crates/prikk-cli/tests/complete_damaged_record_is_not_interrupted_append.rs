@@ -174,6 +174,85 @@ fn a_complete_record_with_a_bad_checksum_is_a_failed_item_not_an_interrupted_app
     let _ = std::fs::remove_dir_all(repo);
 }
 
+/// **Shape 3 (0.52.0 step 2 Part 2B round 2, 2B-2): a checksum-mismatched record whose claimed body
+/// overruns into a later, genuinely sound frame is an interrupted append, not damage** -- the
+/// complement of shape 2 above. Inflate the first record's own declared body length (bytes 10..18)
+/// without touching its real bytes or its stored checksum, so decoding reads past the real body into
+/// the next record's own header: the checksum no longer matches, but the real, sound next frame
+/// starts *inside* the inflated claim -- proof a later write genuinely finished past a torn one, per
+/// RFC 162 rule 2. This must print the store's own `verify` prose for an interrupted append, naming
+/// both the frame's own offset and the later sound frame's own offset as the evidence -- not the
+/// plain "checksum mismatch" wording shape 2 pins, which belongs to the complete, genuinely-damaged
+/// case alone.
+#[test]
+fn a_checksum_mismatch_overrun_by_a_later_sound_frame_is_an_interrupted_append() {
+    // Both commits run first, while the container is still pristine -- `commit`'s own lifecycle
+    // replay cross-checks each already-indexed frame's own length, so corrupting frame 1's header
+    // *before* a second commit (rather than after) makes the second commit itself refuse outright,
+    // not the thing this test wants to exercise. Corrupting only after every real write has already
+    // landed avoids that entirely, the same ordering `a_torn_tail_is_reported_as_an_interrupted_
+    // append` above uses (append the torn bytes, *then* commit past them -- never re-touch an
+    // already-committed frame's own header before a later commit reads it back).
+    let (repo, container, _first) = one_committed_blob("2b2-overrun-interrupted-append");
+    std::fs::write(repo.join("second.txt"), "a later, sound commit\n").unwrap();
+    support::ok(
+        &support::commit(&repo, "heads/main", "second"),
+        "second commit, while the container is still pristine",
+    );
+    let mut whole = std::fs::read(&container).unwrap();
+    let real_body_len = u64::from_be_bytes(whole[10..18].try_into().unwrap());
+    let sound_frame_offset = 50 + real_body_len as usize;
+    let inflated_len = real_body_len + 10;
+    whole[10..18].copy_from_slice(&inflated_len.to_be_bytes());
+    std::fs::write(&container, &whole).unwrap();
+    // The object index still records frame 1's own real, pre-corruption length -- a *second*,
+    // independent consistency check `verify` makes, unrelated to the container-frame classification
+    // this test exercises. Resync it first (`doctor --repair-index` rebuilds the index by scanning
+    // the container itself, so it picks up the inflated-but-still-readable claim), the same way a
+    // real operator would before asking `verify` to classify a frame shape. Its own exit is not
+    // asserted here: the blob this frame holds is still referenced by the active session's own
+    // queued patch (nothing has been sealed), so `doctor` itself still names an unresolved
+    // connectivity issue of its own -- a separate, correct finding this test does not need
+    // resolved, only the index entry it rebuilds along the way.
+    let _ = support::prikk(&repo)
+        .args(["doctor", "--repair-index"])
+        .output()
+        .unwrap();
+
+    let (code, text) = run(&repo, &["verify"]);
+    assert_eq!(
+        code,
+        Some(1),
+        "the blob this overrun frame holds is still referenced by a queued patch, so a report that \
+         connectivity needs it and cannot read it is a real failure, not a tolerated warning\n{text}"
+    );
+    assert!(
+        !text.contains("damaged record") && !text.contains("failed: container checksum mismatch"),
+        "an interrupted-append overrun must never be worded as a damaged checksum mismatch\n{text}"
+    );
+    let expected_detail = format!(
+        "the frame at byte offset 0 claims bytes that a later sound frame at byte offset \
+         {sound_frame_offset} already uses: an interrupted append, not damage"
+    );
+    assert!(
+        text.contains(&expected_detail),
+        "must name both offsets as the evidence this is an interrupted append, not damage, got:\n{text}"
+    );
+    assert!(
+        text.contains("warning: interrupted append in Blob at"),
+        "the archive-sibling wrapper text for an interrupted append\n{text}"
+    );
+    assert!(
+        text.contains("connectivity reports 1 missing Blob object(s)")
+            && text.contains("not a harmless remnant until repaired"),
+        "this shape's own blob is still needed (a queued patch references it), so the \
+         not-harmless variant of the store's own two-branch wording is the one actually reached \
+         here -- both branches share the identical `{{message}}` text this round fixes, only the \
+         wrapper clause differs by whether anything still needs the object\n{text}"
+    );
+    let _ = std::fs::remove_dir_all(repo);
+}
+
 /// **0.49.0 step 5, round 2 U2: an earlier object that rots, followed by later commits, is damage.** The first
 /// object's frame is complete and its checksum fails over a body that is fully present; the next, sound frame
 /// starts exactly at that frame's claimed end, not inside it, so nothing overran it -- it is a damaged record.
