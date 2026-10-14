@@ -48,3 +48,13 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 - crates.io;
 - the consumer letters. The owner sends them after the release: stikk (`show`, `trust maintainer check`, the archive)
   and planeter (the archive is now restorable).
+
+**P1 ACCEPTED 2026-10-14** (`a395ba96`, `9cad5d1f`; review `release-0.52.0-prep-P1-review-v1`). **`### Security`: one
+entry, "Upgrade. No advisory."** 0.51.0's `archive verify` and `import` accepted an archive whose branch ref targets a
+non-Block, or whose ref log disagrees with its refs, and import wrote it.
+**P3 gains item 0:**
+- one crafted archive (a branch RefState targeting a carried Blob). On 0.51.0's binary, verify exits 0 and import
+  lands it. On the candidate, verify names the damage and import refuses, with the destination untouched. Outputs kept;
+- then the entry, in RFC 161's shape, saying only what was shown.
+
+**Next: P2.**
