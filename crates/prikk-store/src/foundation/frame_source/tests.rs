@@ -9,8 +9,16 @@ fn slice_source_reads_in_range_and_refuses_out_of_range() {
     assert_eq!(source.total_len(), 10);
     assert_eq!(source.read_at(0, 4).unwrap(), Some(&b"0123"[..]));
     assert_eq!(source.read_at(6, 4).unwrap(), Some(&b"6789"[..]));
-    assert_eq!(source.read_at(7, 4).unwrap(), None, "fewer than 4 bytes remain from 7");
-    assert_eq!(source.read_at(10, 1).unwrap(), None, "nothing remains at the very end");
+    assert_eq!(
+        source.read_at(7, 4).unwrap(),
+        None,
+        "fewer than 4 bytes remain from 7"
+    );
+    assert_eq!(
+        source.read_at(10, 1).unwrap(),
+        None,
+        "nothing remains at the very end"
+    );
     assert_eq!(
         source.read_at(usize::MAX, 1).unwrap(),
         None,

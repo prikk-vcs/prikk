@@ -207,8 +207,7 @@ fn checksum_mismatch_is_complete<S: FrameSource>(
         return Ok(true);
     }
     Ok(
-        match sound_frame_after_partial(object_type, magic, source, offset, max_body_len, budget)?
-        {
+        match sound_frame_after_partial(object_type, magic, source, offset, max_body_len, budget)? {
             BoundedScan::Sound(next) => next >= body_end,
             BoundedScan::NoSoundFrame | BoundedScan::Undetermined => true,
         },
@@ -272,7 +271,15 @@ fn parse_frame_at<S: FrameSource>(
     max_body_len: Option<u64>,
     budget: &mut ScanBudget,
 ) -> Result<FrameAttempt> {
-    parse_frame_at_reporting(object_type, magic, source, offset, offset, max_body_len, budget)
+    parse_frame_at_reporting(
+        object_type,
+        magic,
+        source,
+        offset,
+        offset,
+        max_body_len,
+        budget,
+    )
 }
 
 /// [`parse_frame_at`] over a source that may not start at the container's own byte 0:
@@ -497,7 +504,14 @@ pub(crate) fn decode_frames<S: FrameSource>(
                 record_outcomes,
             });
         }
-        match parse_frame_at(object_type, magic, source, offset, max_body_len, &mut budget)? {
+        match parse_frame_at(
+            object_type,
+            magic,
+            source,
+            offset,
+            max_body_len,
+            &mut budget,
+        )? {
             FrameAttempt::Record {
                 record,
                 next_offset,
@@ -515,8 +529,14 @@ pub(crate) fn decode_frames<S: FrameSource>(
             }
             FrameAttempt::TrailingPartial { remaining } => {
                 // RFC 160 F3: a torn tail is a prefix of ONE frame. If a sound frame starts in the remainder, this is damage.
-                let sound_after =
-                    sound_frame_after_partial(object_type, magic, source, offset, max_body_len, &mut budget)?;
+                let sound_after = sound_frame_after_partial(
+                    object_type,
+                    magic,
+                    source,
+                    offset,
+                    max_body_len,
+                    &mut budget,
+                )?;
                 let next = match sound_after {
                     BoundedScan::NoSoundFrame => {
                         return Ok(ContainerReplay {

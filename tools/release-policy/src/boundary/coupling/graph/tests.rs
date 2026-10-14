@@ -154,7 +154,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // RFC 155 implementation Part I-A added `foundation::import_journal_marker`, the minimal
     // journal-presence read `lock.rs` itself needs without depending on `archive` (the layer rule
     // caught a first version's `archive -> lock` cycle): 162 -> 163.
-    assert_eq!(modules.len(), 163, "modules: {modules:?}");
+    // 0.52.0 step 2 Part 2A added `foundation::frame_source`, the one `FrameSource` primitive the
+    // store's container decode now runs through (RFC 155 §9.4): 163 -> 164.
+    assert_eq!(modules.len(), 164, "modules: {modules:?}");
     assert!(
         !modules
             .iter()
