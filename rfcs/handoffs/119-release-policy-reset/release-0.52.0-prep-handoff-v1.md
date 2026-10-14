@@ -58,3 +58,16 @@ non-Block, or whose ref log disagrees with its refs, and import wrote it.
 - then the entry, in RFC 161's shape, saying only what was shown.
 
 **Next: P2.**
+
+**P2: the measurements are ACCEPTED 2026-10-14** (review `release-0.52.0-prep-P2-review-v1`):
+- the ratio is 1.891× against 1.874×;
+- import is 5.03× the largest object, and flat at 2 GiB;
+- RFC 133's `verify` at 64,000 nodes is not slower than 0.51.0.
+
+**P2b (about 30 min, `release-0.52.0-prep-P2b-report.md`), next:**
+- 29b uses stikk's two-patch shape: patch 1 edits two files, patch 2 renames one and deletes the other. Each queued
+  patch must equal its entry in the block;
+- 29d imports and verifies the destination;
+- section 29 runs on 0.51.0's binary. Every line that passes there is named and explained.
+
+**Then P3.**
