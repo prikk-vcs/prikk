@@ -250,19 +250,32 @@ fn list_reports_two_adopted_keys_in_adoption_order() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Control 1 (negative half) and RFC 121's exit-code ruling: a negative answer is a successful
-/// query, exit `0`, not an operational failure.
+/// Control 1 (negative half), RFC 138 §7.2 as amended 2026-10-14: a negative answer is still a
+/// successful query, not an operational failure -- but it now exits `1`, the same as an unreadable
+/// policy, since both mean "do not proceed" (the original ruling's exit `0` let `check && …`
+/// proceed for an untrusted key). The exit must not travel as an `error:` line: the answer is on
+/// stdout and stderr stays empty, which is what tells this case apart from the unreadable-policy
+/// one below.
 #[test]
-fn check_reports_not_trusted_and_exits_zero() {
+fn check_reports_not_trusted_and_exits_one() {
     let repo = support::unique_repo("rfc138-check-negative");
     support::init(&repo);
     let out = support::prikk(&repo)
         .args(["trust", "maintainer", "check", "--key-id", "nobody"])
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(0), "a negative answer must exit 0");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a negative answer must exit 1 (RFC 138 §7.2, amended 2026-10-14)"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("not trusted: nobody"), "{stdout}");
+    assert!(
+        out.stderr.is_empty(),
+        "the exit must not travel as an error: no `error:` line for a negative answer, got {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let json_out = support::prikk(&repo)
         .args([
@@ -276,12 +289,17 @@ fn check_reports_not_trusted_and_exits_zero() {
         ])
         .output()
         .unwrap();
-    assert_eq!(json_out.status.code(), Some(0));
+    assert_eq!(json_out.status.code(), Some(1));
     let json_stdout = String::from_utf8_lossy(&json_out.stdout);
     assert_valid_json(&json_stdout);
     assert!(json_stdout.contains("\"schema_version\": \"trust-check-v1\""));
     assert!(json_stdout.contains("\"trusted\": false"));
     assert!(json_stdout.contains("\"public_key\": null"));
+    assert!(
+        json_out.stderr.is_empty(),
+        "no `error:` line for a negative answer in --format json either, got {:?}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -359,7 +377,11 @@ fn check_exits_two_on_missing_or_malformed_key_id() {
 }
 
 /// Control 2 (integrity half): an unreadable policy is `1` for both subcommands, not `0` and not
-/// `2` -- corruption is an operational failure, distinct from a valid negative answer.
+/// `2` -- corruption is an operational failure, distinct from a valid negative answer. RFC 138
+/// §7.2 as amended 2026-10-14 makes "not trusted" exit `1` too, so this is also the control that
+/// proves the two exit-`1` cases stay distinguishable: this one prints `error:` on stderr and
+/// nothing on stdout; a negative answer (`check_reports_not_trusted_and_exits_one`) prints the
+/// answer on stdout and nothing on stderr.
 #[test]
 fn check_and_list_exit_one_on_an_unreadable_policy() {
     let repo = support::unique_repo("rfc138-unreadable-policy");
@@ -375,6 +397,16 @@ fn check_and_list_exit_one_on_an_unreadable_policy() {
         check_out.status.code(),
         Some(1),
         "an unreadable policy must be an operational failure for check"
+    );
+    assert!(
+        check_out.stdout.is_empty(),
+        "an unreadable policy prints no answer object, got {:?}",
+        String::from_utf8_lossy(&check_out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&check_out.stderr).contains("error:"),
+        "an unreadable policy must still report on stderr, got {:?}",
+        String::from_utf8_lossy(&check_out.stderr)
     );
 
     let list_out = support::prikk(&repo)

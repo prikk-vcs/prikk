@@ -183,9 +183,13 @@ removes it out-of-band. There is no remote trust distribution.
 same set without changing it: `list` enumerates every currently adopted key and `check` answers
 whether one specific id is adopted, both with `--format json` for a machine-readable answer. Both
 answer *"whose signatures does this repository accept on objects"* — **object trust, not ref
-authority: adopting a key never lets it move a ref by itself.** `check` exits `0` whichever way the
-question resolves, since a negative answer is a successful query, not an operational failure — `1`
-and `2` are reserved for an unreadable policy and a missing or malformed `--key-id`, respectively.
+authority: adopting a key never lets it move a ref by itself.** `check` exits `0` when the key is
+trusted and `1` when it is not (amended 2026-10-14; the original ruling exited `0` either way,
+which let `check && …` proceed for an untrusted key — a misreading that fails open on a trust
+question). `1` also stays the exit for an unreadable policy, since both mean "do not proceed"; `2`
+is reserved for a missing or malformed `--key-id`. `check && …` now proceeds only for a trusted
+key, and `--format json` tells "not trusted" (an answer object with `"trusted": false`) from
+"cannot answer" (no answer object, an error on stderr).
 
 ## What Seal Checks
 
@@ -306,7 +310,7 @@ as distinct from everything on this list.
 | Tag adoption refuses on a name miss, a name collision among received tags, an unheld patch set, or an ambiguous patch-set resolution — it never picks. | [`tag_travel.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/tag_travel.rs), [`patch_set_digest.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_set_digest.rs) |
 | Maintainer trust is repository-local, held as a set of adopted keys, with `required = 1` meaning any one adopted key's signature suffices. | [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs), [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-11 FDD-04 handoff](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-11-maintainer-trust-store/fdd-04-update.md) |
 | Seal validates the maintainer signer against local trust before publication. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs) |
-| `prikk trust maintainer list`/`check` read the adopted-key set without changing it; `check` exits `0` for both a positive and a negative answer. | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`output/trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/output/trust.rs), [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs) (`load_maintainer_trust_policy_or_empty`) |
+| `prikk trust maintainer list`/`check` read the adopted-key set without changing it; `check` exits `0` for a trusted key and `1` for a key that is not (amended 2026-10-14; `1` also covers an unreadable policy). | [`main.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/main.rs), [`output/trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/output/trust.rs), [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs) (`load_maintainer_trust_policy_or_empty`) |
 | Verify checks publication trust for Block, RefState, RefUpdate, and locally-published Tag envelopes; a received, unadopted tag is deliberately exempt. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [`trust.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/trust.rs) |
 | Verify enforces repository-wide AUTHOR verification (DC-53): every reachable Patch's AUTHOR signature is checked against recorded key material, one `key_id` binds to one public key, and material travels with a bundle export (introduced at `PBNDL002`, still carried unchanged at the current `PBNDL003`). It remains trust-on-first-use — continuity, not identity. | [`verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/verify.rs), [`rollback_verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/rollback/verify.rs), [implementation status](https://github.com/prikk-vcs/prikk/blob/main/rfcs/IMPLEMENTATION-STATUS.md) |
 | Rollback-draft verification is structural and semantic for the supported subset only. | [`rollback_verify.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/rollback/verify.rs), [DC-14](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-14-ARBITRARY-SPAN-TEXT-INVERSE-ROLLBACK.md), [DC-14 FDD-04 handoff](https://github.com/prikk-vcs/prikk/blob/main/rfcs/handoffs/DC-14-arbitrary-span-text-inverse-rollback/fdd-04-update.md) |

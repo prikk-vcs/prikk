@@ -8,7 +8,9 @@
 //! `merge_evidence::mainline_or_sole_parent` and `lifecycle_state_at`, RFC 142 §3/§4), folded with
 //! the block's own patches in canonical order **up to and including that patch** (stikk 020); at a
 //! queued patch, against the folded worktree baseline truncated at that patch (the
-//! queued-patch-paths handoff) -- the same fold either way, one replay per invocation, not one per
+//! queued-patch-paths handoff) -- the same per-operation fold either way (`apply_state_effect`),
+//! through two different drivers (`apply_patch_ids` for a sealed block, `apply_queued_patch_envelopes`
+//! for the queue, DC-65's materialize-and-retry included), one replay per invocation, not one per
 //! operation, and identical before and after `seal` by construction. Only a **bare sealed patch
 //! id**, with no block or queue to resolve against, reports every node-addressed operation
 //! unresolved.
@@ -190,9 +192,12 @@ pub struct ShowPatch {
 /// node-addressed paths against **that patch's own state** when the target is a block -- the
 /// block's starting state (its parent's, or empty for a root), folded with the block's own
 /// patches in canonical order up to and including that patch (stikk 020) -- or a queued patch's
-/// own truncated folded baseline when it is one (the queued-patch-paths handoff): one fold, two
-/// starting points, so a patch renders identically before and after `seal` by construction, not by
-/// two copies agreeing. A block's output is the union of its patches in canonical (`patch_ids`)
+/// own truncated folded baseline when it is one (the queued-patch-paths handoff): the block's
+/// starting state comes from the one shared derivation (`block_starting_state`, built on
+/// `lifecycle_state_at`/`mainline_or_sole_parent`), and each patch's own path resolves through the
+/// same per-operation fold (`apply_state_effect`) either form uses, so a patch renders identically
+/// before and after `seal` by construction, not by two copies agreeing. A block's output is the
+/// union of its patches in canonical (`patch_ids`)
 /// order (control 5). **Only a bare sealed patch id** has no context to resolve node-addressed
 /// operations against -- those are reported unresolved rather than fatal, the same mechanism §3
 /// already requires for the edit-then-delete-in-one-patch case, applied here for a different
@@ -224,15 +229,15 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     }
 }
 
-/// The state a block's own patches fold onto (RFC 142, stikk 020): the mainline parent's state for
-/// a `Merge` block, the sole parent's for `Normal`, empty for `Root` -- the identical policy
-/// `lineage_horizon` already walks, shared through [`mainline_or_sole_parent`] rather than
-/// re-derived. One fold, two starting points: the queued form folds the active queue onto the
-/// sealed tip (`resolve_folded_worktree_baseline_up_to_queued_patch_with_own_cache`); this folds a
-/// block's own patches onto its parent's state, exactly as `lifecycle_state_at(block_id)` already
-/// does internally in one pass -- calling it on the *parent* gives everything up to but not
-/// including this block, so it is not a second implementation of block-state derivation, only a
-/// narrower call to the existing one.
+/// The starting state a block's own patches fold onto, not the fold itself -- `show()`'s own loop
+/// applies the block's patches afterward, one at a time, via `apply_one_patch` (RFC 142, stikk
+/// 020). The mainline parent's state for a `Merge` block, the sole parent's for `Normal`, empty
+/// for `Root` -- the identical policy `lineage_horizon` already walks, shared through
+/// [`mainline_or_sole_parent`] rather than re-derived. This is not a second implementation of
+/// block-state derivation: `lifecycle_state_at(block_id)` already derives a block's own end state
+/// internally, in one pass over this same parent chain; calling it on the *parent* here gives
+/// everything up to but not including this block, a narrower call to the existing one, not a new
+/// one.
 fn block_starting_state(
     object_store: &impl ObjectReader,
     block_id: ObjectId,

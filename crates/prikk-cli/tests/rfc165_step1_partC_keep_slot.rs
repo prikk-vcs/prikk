@@ -163,7 +163,13 @@ fn smoke_section_28_trust_policy_keep_slot_end_to_end() {
         .args(["trust", "maintainer", "check", "--key-id", "l"])
         .output()
         .unwrap();
-    ok(&check, "trust maintainer check l");
+    // RFC 138 §7.2, amended 2026-10-14: a negative answer now exits 1, not 0 -- `l` is genuinely
+    // not trusted here, so this is the expected answer, not a failure `ok()` would refuse.
+    assert_eq!(
+        check.status.code(),
+        Some(1),
+        "check l (not trusted) {check:?}"
+    );
     let check_text = String::from_utf8_lossy(&check.stdout);
     assert!(
         check_text.contains("not trusted: l"),

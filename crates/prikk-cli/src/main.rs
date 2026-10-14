@@ -492,10 +492,17 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
             }
             Ok(())
         }
-        // RFC 138 §3: exits `0` whichever way the question resolves -- "key X is not trusted" is
-        // an answer, not a failure or a refusal (RFC 121's exit-code vocabulary has no slot for a
-        // negative answer to a question that was successfully asked). `1`/`2` keep their ruled
-        // meanings: an unreadable policy is `1`, a missing or malformed `--key-id` is `2`.
+        // RFC 138 §7.2, amended 2026-10-14: a trusted key exits `0`; "not trusted" now exits `1`
+        // alongside an unreadable policy (both mean "do not proceed"), not `0` as §7.2 first ruled
+        // -- the original ruling let `check && …` proceed for an untrusted key, a misreading that
+        // fails open on a trust question. `2` is unchanged: a missing or malformed `--key-id`.
+        // "Not trusted" still prints its answer and never travels as an error: no `error:` line,
+        // and `main`'s own `warn_anchor_fallbacks` call is skipped by the early exit below exactly
+        // as it is for `stdout.rs`'s own closed-pipe/write-failure exits -- safe here because
+        // nothing on this command's own path (a trust-policy-container read) ever calls
+        // `record_anchor_fallback` (confirmed from source: its only callers are
+        // `lifecycle_cache/anchored_text.rs`, `worktree.rs`, and `block_state/anchored_parent.rs`,
+        // none reachable from `load_maintainer_trust_policy_or_empty`).
         (Some("maintainer"), Some("check")) => {
             let mut key_id = None;
             let mut format_json = false;
@@ -530,6 +537,14 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
                 print_trust_check_json(&key_id, found);
             } else {
                 print_trust_check(&key_id, found);
+            }
+            if found.is_none() {
+                // Deliberately bypasses the `Result<(), CliError>` channel, not a fourth
+                // `CliError` variant (`commands.rs`'s own "no fourth variant" rule): every `Err`
+                // reaching `main` prints an `error:` line, which a negative-but-successful answer
+                // must not get. The same idiom `stdout.rs::write_and_handle` already uses for its
+                // own exits that don't fit `Ok`/`Err(CliError)` either.
+                std::process::exit(1);
             }
             Ok(())
         }

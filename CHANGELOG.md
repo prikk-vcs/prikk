@@ -54,10 +54,10 @@
   the one shape where it did not. Shipped since 0.47.0.
 - **Each patch in a sealed block now resolves against its own state** — the block's starting state
   (its parent's, or empty for the first block in a ref's history) folded with the block's own patches
-  in canonical order up to and including that patch — the identical fold the queued form already used,
-  shared rather than duplicated, so "identical before and after `seal`" now holds by construction. The
-  still-genuinely-unresolvable shape is unchanged: one patch whose own operations both edit and delete
-  the same node.
+  in canonical order up to and including that patch — using the same per-operation fold
+  (`apply_state_effect`) the queued form and every sealed replay already use, so "identical before
+  and after `seal`" now holds by construction. The still-genuinely-unresolvable shape is unchanged:
+  one patch whose own operations both edit and delete the same node.
 
 ### Changed — `archive export` refuses a source caught in a blocking ref-publication state, up front
 
@@ -68,6 +68,20 @@
   naming each ref's own remedy exactly as `prikk verify` would — `prikk ref complete <ref>` when the
   store's own rule says the lead is completable, or the store's own divergence message otherwise, so
   the refusal never sends anyone to a command that would just refuse.
+
+### Changed — `prikk trust maintainer check` exits `1` for "not trusted" (was `0`)
+
+- **RFC 138 §7.2's original ruling made `check` exit `0` whichever way the question resolved**,
+  since a negative answer is a successful query, not an operational failure. Reviewed against this
+  project's own standing philosophy, that was the riskier choice: `check && …` proceeded even for an
+  untrusted key, a misreading that fails open on a trust question. **Amended, owner-accepted:**
+  `check` now exits `0` only when the key is trusted, and `1` when it is not — the same code an
+  unreadable policy already used, since both mean "do not proceed," so the shared code now fails
+  closed instead. `2` is unchanged (a missing or malformed `--key-id`). The exit still does not
+  travel as an error: the answer prints on stdout exactly as before, and there is no `error:` line
+  for "not trusted" — only a genuinely unreadable policy still reports one. A caller that must tell
+  the two apart reads `--format json`: an answer object with `"trusted": false`, or no answer object
+  at all.
 
 ### Output changes
 
@@ -97,6 +111,8 @@
   (stikk 020): a path where a later patch in the same block renames or deletes the node, where it
   previously named the later name, or `unresolved_node_id`, respectively. See the `### Fixed` entry
   above.
+- **`prikk trust maintainer check` exits 1 when the key is not trusted (was 0)**; a script that ran
+  it only to print the answer under `set -e` now stops there. See the `### Changed` entry above.
 
 ## 0.51.0 — 2026-10-13
 

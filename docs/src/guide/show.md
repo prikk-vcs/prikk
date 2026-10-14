@@ -41,10 +41,11 @@ A block's output is the union of its patches, in the block's own canonical order
 against the state *at that patch*, not its block's end: if a later patch in the same block renames a
 path an earlier one edited, or deletes the node an earlier one edited, the earlier patch's own
 `edit-text` still names the path (or node) it had at the time — never the later name, and never
-`unresolved_node_id` just because a later patch in the same block went on to delete it. This is one
-fold, used both ways — the block form folds a block's own patches onto its parent's state, the queued
-form folds the active queue onto the sealed tip — so the answer is identical before and after `seal`
-by construction: sealing does not change what came before a given patch, only what comes after it.
+`unresolved_node_id` just because a later patch in the same block went on to delete it. The block
+form folds a block's own patches onto its parent's state, and the queued form folds the active
+queue onto the sealed tip, through two different drivers — but both apply the same per-operation
+fold to resolve a path, so the answer is identical before and after `seal` by construction: sealing
+does not change what came before a given patch, only what comes after it.
 
 `show` renders `EditText`'s own before/after span — it does not synthesize a unified diff. prikk's
 edits are content-anchored spans, not line ranges, and a line-oriented rendering would assert a
