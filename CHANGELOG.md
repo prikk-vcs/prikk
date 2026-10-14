@@ -96,6 +96,30 @@
   N: container checksum mismatch at byte offset N; not imported"* — the store's own base text for
   that shape, with the archive's own offset and context layered on top, rather than an independently
   invented sentence that could drift from what the store itself says about the identical bytes.
+- **`prikk verify`'s prose now names a failed received ref, by name, with its real cause** — before,
+  a destination holding a damaged received ref (for example, after `archive import` lands one from a
+  crafted or corrupted archive, exactly the `### Security` shape above) exited `1` with *"see item
+  outcomes above"*, but no line anywhere said which ref failed or why: `received refs: N` never
+  distinguished a failed one from a sound one, and the generic verdict line pointed at nothing. It
+  now reads `received refs: N, M failed`, followed by `received ref <name>: failed: <message>` for
+  each one, the same way a failed local ref already names itself. See the `### Fixed` entry below.
+
+### Fixed — `verify` counted a failed received ref toward its own exit status without ever naming it
+
+- **A destination repository holding a structurally damaged received ref (its target resolving to
+  the wrong kind of object, or to nothing at all) already failed `prikk verify` — the failure was
+  counted correctly — but the prose never said which received ref it was, or why.** `ref items: N
+  scanned, M failed` stayed clean, because the check lived in a separate field
+  (`received_ref_item_outcomes`) the prose never read; the `received-ref <name>: <id>` lines came
+  from an unrelated loop that only ever listed pointers, carrying a comment (stale since RFC 115
+  Stage 3 added the check) claiming received refs were never read by `verify_repository` at all. A
+  user was left with *"repository verification found at least one failed object, block, or ref; see
+  item outcomes above"* and nothing above that actually said so.
+- **`verify` now prints each failed received ref by name**, alongside its existing pointer line, with
+  the same real message the check itself raised — for example: `received ref remotes/heads/main:
+  failed: object type mismatch: expected block, got blob`. A received ref that is merely not yet
+  trusted (its own signing key not adopted) is unaffected by this fix and continues to surface only
+  through the existing publication-trust reporting, never duplicated under this new line.
 
 ### Fixed — `archive export` of a repository that accepted a sync artifact or deleted an edited text file wrote a file its own `archive verify`/`archive import` refused
 

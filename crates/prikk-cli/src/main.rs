@@ -71,8 +71,9 @@ use prikk_object::Signature;
 use prikk_store::{
     ActiveRefMetadata, ActiveSessionRepairStatus, DEFAULT_ACTIVE_NAME, DEFAULT_ACTIVE_PATCH_LIMIT,
     DoctorRepairOptions, Ed25519AuthorSigner, Ed25519MaintainerSigner, MergeEvidenceTarget,
-    MoveHints, RefStore, RepositoryLayout, VerifyOptions, Wal, WorktreePatchCommitOptions,
-    add_trusted_maintainer, append_rollback_draft, commit_worktree_changes_signed,
+    MoveHints, RefItemStatus, RefStore, RepositoryLayout, VerifyOptions, Wal,
+    WorktreePatchCommitOptions, add_trusted_maintainer, append_rollback_draft,
+    commit_worktree_changes_signed,
     doctor_repository, enumerate_queued_patches, list_received_pointers,
     load_maintainer_trust_policy_or_empty, load_received_ref_history, load_ref_history,
     prepare_merge_evidence, prepare_merge_plan, prepare_patch_inverse_plan,
@@ -999,16 +1000,34 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
         if let Some(line) = prikk_store::recovery_verify_line(&layout) {
             println!("{line}");
         }
-        // Received refs (DC-78 ruling 4) are never read by verify_repository itself — every object
-        // they point at is already checked by the ordinary type-based object scan regardless of
-        // which ref (if any) points to it, so this is purely additive presentation, not a new check.
+        // RFC 115 Stage 3 §6: `verify_repository` does check each received ref (the pointer's own
+        // tip RefState: target validity, required attestations, and one read of its own previous
+        // link) and already counts a failure here toward the exit status
+        // (`RepositoryVerification::has_item_failure`) -- this loop only *lists* the received
+        // pointers by name and current target; it is not itself a check, and the comment that used
+        // to say received refs were never read by `verify_repository` at all was stale since that
+        // stage was added.
         let received = list_received_pointers(&layout).map_err(|err| err.to_string())?;
-        println!("received refs: {}", received.len());
+        let failed_received_refs: Vec<_> = report
+            .received_ref_item_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome.status, RefItemStatus::Failed { .. }))
+            .collect();
+        println!(
+            "received refs: {}, {} failed",
+            received.len(),
+            failed_received_refs.len()
+        );
         for pointer in &received {
             println!(
                 "received-ref {}: {}",
                 pointer.ref_name, pointer.ref_state_id
             );
+        }
+        for outcome in &failed_received_refs {
+            if let RefItemStatus::Failed { message } = &outcome.status {
+                println!("received ref {}: failed: {message}", outcome.ref_name);
+            }
         }
     }
     if let Some(observed) = provisional_before {
