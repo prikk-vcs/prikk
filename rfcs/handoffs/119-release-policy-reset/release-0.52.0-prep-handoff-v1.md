@@ -91,3 +91,7 @@ now names a failed received ref.
 `/home/nabbisen/.pgtmp/rel-0.51.0-bin/prikk` and passes silently without it. So it checks nothing in CI, and it ships a
 local path in the crate. Build the destination's state in-process with the store's test support (a Blob, a branch
 RefState targeting it, the received pointer). No outside path, no early return. Red on `bde2e5bf`, then 14 gates.
+
+**P3c ACCEPTED 2026-10-15** (`81f815fc`, `77ddc2dd`; review `release-0.52.0-prep-P3c-review-v1`). **The candidate is
+complete.** The architect pushes it through the gate service. The owner decides the external review, the advisory
+ruling and the tag. The CHANGELOG date is re-dated at the tag. **Nothing is open for the team.**
