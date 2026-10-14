@@ -75,3 +75,12 @@ non-Block, or whose ref log disagrees with its refs, and import wrote it.
 **P2b ACCEPTED, and P2 CLOSED, 2026-10-14** (review `release-0.52.0-prep-P2b-review-v1`). The architect re-ran the
 smoke on a current release build: exit 0, **330 ok**. Section 29 fails on 0.51.0 where it should, and every line that
 passes there is explained. **Next: P3, starting with item 0** (the Security demonstration).
+
+**P3 ACCEPTED 2026-10-14** (`8e7a5a8c`, `99bba962`; review `release-0.52.0-prep-P3-review-v1`). The Security
+demonstration is on the binary both ways. The CHANGELOG is in RFC 161's shape, with "breaking once" agreed. 14 gates;
+`matrix.py` v6 is byte-identical to 0.51.0, and the reason is traced.
+**P3b (about 30 min, `release-0.52.0-prep-P3b-report.md`), next:** `prikk verify` fails on a received ref without ever
+naming it. `received_ref_item_outcomes` is counted in the verdict, and the prose never prints it. Print each failed
+received ref by name with its message, correct `main.rs`'s stale comment, add a CLI test shown red on `99bba962` (with
+no double report for a not-adopted ref), a CHANGELOG Fixed and Output line, then 14 gates and the smoke.
+**Then the candidate goes to the owner.**
