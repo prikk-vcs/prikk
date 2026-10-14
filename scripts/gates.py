@@ -18,7 +18,9 @@ Usage: scripts/gates.py [--list]
 
 Exit status: 0 only when every gate below exits 0. Prints one "<name> <exit>" line per gate as it
 finishes, then the same lines again as a summary block, so a human scrolling back and a machine
-grepping the tail both get the same answer without re-running anything.
+grepping the tail both get the same answer without re-running anything. An argument this script does
+not recognize (anything other than `--list`) is refused outright, by name, at exit code 2 -- it is
+never silently ignored (0.52.0 step 1 Part B: `--only <gate-name>` used to run the full suite anyway).
 """
 
 import os
@@ -182,7 +184,23 @@ def run_gate(name, argv, env_overrides, tmpdir):
     return result.returncode, elapsed, r1
 
 
+# 0.52.0 step 1 Part B, item 2: the only argument this script understands. An unrecognized one
+# (a typo, or `--only <gate-name>`, which Part W's own report found silently ran the full 14-gate
+# suite anyway) used to be ignored outright by `main`'s own `if "--list" in sys.argv[1:]:` check,
+# which inspects argv for one known flag and never objects to anything else present. Refused instead,
+# by name, at exit code 2 -- the same "bad usage" code `prikk`'s own CLI uses for an unrecognized
+# argument (`CliError::Usage(_) => 2`, `crates/prikk-cli/src/commands.rs`), and the same message
+# shape `crates/prikk-cli/src/arg_scan.rs::unknown_argument` already uses there
+# ("unknown {command} argument: {argument}").
+KNOWN_ARGUMENTS = {"--list"}
+
+
 def main():
+    for argument in sys.argv[1:]:
+        if argument not in KNOWN_ARGUMENTS:
+            print(f"unknown gates.py argument: {argument}", file=sys.stderr)
+            return 2
+
     if "--list" in sys.argv[1:]:
         for name, argv, _ in GATES:
             print(f"{name}: {' '.join(argv)}")

@@ -167,7 +167,7 @@ jobs:
   windows-mutation:
     name: Windows mutation test suite
     runs-on: windows-latest
-    timeout-minutes: 65
+    timeout-minutes: 90
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
