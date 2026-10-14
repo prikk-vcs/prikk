@@ -275,11 +275,11 @@ pub use pointer_rebuild::{
     DroppedLead, RebuildPlan, RefRebuildEntry, RestoredRef, plan_pointer_index_rebuild,
     rebuild_pointer_index,
 };
+#[cfg(feature = "test-support")]
+pub use received::write_received_pointer_for_test;
 pub use received::{
     ReceivedPointer, list_received_pointers, read_received_pointer, validate_received_ref,
 };
-#[cfg(feature = "test-support")]
-pub use received::write_received_pointer_for_test;
 pub use recognition_claim::{
     RecognitionClaimConsistency, check_recognition_claim_consistency, order_claims_for_sealing,
 };
