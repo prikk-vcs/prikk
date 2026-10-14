@@ -123,6 +123,10 @@ pub use archive::{
     LandingOrigin, LandingOutcome, PlannedRefLanding, cancel_import, export_archive,
     import_archive, interrupted_import_short_id, verify_archive,
 };
+#[cfg(feature = "test-support")]
+pub use archive::{
+    clear_object_over_bound_threshold_for_test, lower_object_over_bound_threshold_for_test,
+};
 pub use author::author_key_index::{AuthorKeyBinding, author_key_binding};
 pub use author::author_signing::{AuthorSigner, Ed25519AuthorSigner, author_signature};
 #[cfg(feature = "test-support")]
@@ -138,6 +142,11 @@ pub use bundle::{
     BundlePreviewReport, BundleScope, BundleVerifyReport, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
     DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle,
     preview_bundle, preview_bundle_reporting_anchor, verify_bundle,
+};
+#[cfg(feature = "test-support")]
+pub use bundle::{
+    clear_bundle_object_over_bound_threshold_for_test,
+    lower_bundle_object_over_bound_threshold_for_test,
 };
 pub use checkout::{
     CheckoutMaterialization, CheckoutPlan, DEFAULT_CHECKOUT_REF, SnapshotCheckoutPlan,

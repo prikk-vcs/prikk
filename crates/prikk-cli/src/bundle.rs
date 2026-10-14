@@ -420,3 +420,216 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
         max_object_bytes,
     })
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::run_export;
+    use prikk_store::{MaintainerSigner, ObjectWriter};
+
+    /// 0.52.0 step 1 Part A round 2 (A-2): through the real `run_export` path, including the real
+    /// `durable_output::write_new_file_durably` call -- not the library-level `export_bundle`,
+    /// which never touches a path at all (it returns bytes to its caller). The bound is lowered on
+    /// this thread only (`feature = "test-support"`), so an over-bound object can be a tiny,
+    /// ordinary sealed `Patch` rather than a real 257 MiB one. The sealed history is built the same
+    /// way `archive::tests`' own completable-lead fixture builds one (a real signer, trusted, a
+    /// real Block/RefState/RefUpdate), since `export_bundle` requires a genuinely existing,
+    /// resolvable ref -- unlike `archive export`'s own over-bound scan, which reads every
+    /// persisted object regardless of ref reachability.
+    #[test]
+    fn bundle_export_writes_nothing_at_the_destination_when_an_object_is_over_bound() {
+        let dir = std::env::temp_dir().join(format!(
+            "cli-bundle-export-over-bound-nothing-written-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create the repo root dir");
+        let layout = prikk_store::RepositoryLayout::init(&dir).expect("init");
+
+        let signer =
+            prikk_store::Ed25519MaintainerSigner::from_seed("a2-bundle-maintainer", &[0x73; 32])
+                .expect("build signer");
+        let public_key_hex = signer
+            .public_key_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        prikk_store::add_trusted_maintainer(&layout, signer.key_id(), &public_key_hex)
+            .expect("trust the maintainer");
+
+        let mut object_store = prikk_store::FileObjectStore::new(layout.clone());
+        object_store
+            .write_object(&signed_blob(b"patch fixture\n"))
+            .expect("write the patch's own referenced blob");
+        let patch_payload = prikk_object::PatchPayload {
+            operations: vec![prikk_object::Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: prikk_object::OperationKind::CreateFile(prikk_object::CreateFile {
+                    path: "a.txt".to_string(),
+                    node_id: prikk_object::NodeId::from_bytes([0x61; 32]),
+                    blob_id: signed_blob_id(b"patch fixture\n"),
+                    mode: 0o100_644,
+                }),
+            }],
+            intent: None,
+            preconditions: Vec::new(),
+            purpose: prikk_object::PatchPurpose::Normal,
+            message: None,
+        };
+        let patch_bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&patch_payload)
+            .expect("encode patch");
+        let patch =
+            prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Patch, 1, patch_bytes);
+        let patch_id = object_store
+            .write_object(&patch)
+            .expect("write the patch object");
+
+        let block_payload = prikk_object::BlockPayload {
+            parent_block_ids: Vec::new(),
+            kind: prikk_object::BlockKind::Root,
+            patch_ids: vec![patch_id],
+            state_merkle_root: prikk_store::derive_next_state_root(
+                &object_store,
+                None,
+                &[patch_id],
+            )
+            .expect("derive state root"),
+            snapshot_blob_ref: None,
+            mainline_parent_id: None,
+            merge_baseline_block_id: None,
+        };
+        let block_bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&block_payload)
+            .expect("encode block");
+        let mut block_envelope =
+            prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Block, 2, block_bytes);
+        block_envelope
+            .add_signature(
+                prikk_store::maintainer_signature(
+                    &signer,
+                    prikk_object::ObjectType::Block,
+                    block_envelope.object_id(),
+                )
+                .expect("sign block"),
+            )
+            .expect("attach block signature");
+        let block_id = object_store
+            .write_object(&block_envelope)
+            .expect("write the block");
+
+        let state_payload = prikk_object::RefStatePayload {
+            ref_name: "heads/main".to_string(),
+            kind: prikk_object::RefKind::Branch,
+            target_object_id: block_id,
+            update_seq: 1,
+            previous_ref_state_id: None,
+            required_attestation_ids: Vec::new(),
+            closed: false,
+        };
+        let state_bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&state_payload)
+            .expect("encode ref state");
+        let mut ref_state = prikk_object::ObjectEnvelope::unsigned(
+            prikk_object::ObjectType::RefState,
+            1,
+            state_bytes,
+        );
+        let ref_state_id_for_sig = ref_state.object_id();
+        ref_state
+            .add_signature(
+                prikk_store::maintainer_signature(
+                    &signer,
+                    prikk_object::ObjectType::RefState,
+                    ref_state_id_for_sig,
+                )
+                .expect("sign ref state"),
+            )
+            .expect("attach ref state signature");
+        let ref_state_id = ref_state.object_id();
+
+        let update_payload = prikk_object::RefUpdatePayload {
+            ref_name: "heads/main".to_string(),
+            old_ref_state_id: None,
+            new_ref_state_id: ref_state_id,
+            new_target_object_id: block_id,
+            update_seq: 1,
+            created_at: 0,
+            author_key_id: signer.key_id().to_string(),
+        };
+        let update_bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&update_payload)
+            .expect("encode ref update");
+        let mut ref_update = prikk_object::ObjectEnvelope::unsigned(
+            prikk_object::ObjectType::RefUpdate,
+            1,
+            update_bytes,
+        );
+        let ref_update_id_for_sig = ref_update.object_id();
+        ref_update
+            .add_signature(
+                prikk_store::maintainer_signature(
+                    &signer,
+                    prikk_object::ObjectType::RefUpdate,
+                    ref_update_id_for_sig,
+                )
+                .expect("sign ref update"),
+            )
+            .expect("attach ref update signature");
+
+        prikk_store::RefStore::new(layout.clone())
+            .publish(&prikk_store::RefPublication {
+                ref_name: "heads/main".to_string(),
+                expected_previous_ref_state_id: None,
+                ref_state,
+                ref_update,
+            })
+            .expect("publish heads/main");
+
+        prikk_store::lower_bundle_object_over_bound_threshold_for_test(4);
+
+        let output = dir.join("out.bundle");
+        let result = run_export(
+            dir.clone(),
+            vec![
+                "--ref".to_string(),
+                "heads/main".to_string(),
+                "--output".to_string(),
+                output.to_str().unwrap().to_string(),
+            ],
+        );
+
+        prikk_store::clear_bundle_object_over_bound_threshold_for_test();
+
+        assert!(result.is_err(), "export must refuse over-bound objects");
+        assert!(
+            !output.exists(),
+            "a refused export must leave nothing at the destination path: {}",
+            output.display()
+        );
+        let siblings: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read the repo dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .collect();
+        assert!(
+            !siblings
+                .iter()
+                .any(|name| name.to_string_lossy().contains("out.bundle")),
+            "no temporary file naming the destination may remain: {siblings:?}"
+        );
+    }
+
+    fn signed_blob(content: &[u8]) -> prikk_object::ObjectEnvelope {
+        let payload =
+            prikk_object::BlobPayload::new(prikk_object::BlobKind::Text, content.to_vec());
+        let bytes =
+            prikk_object::CanonicalEncode::to_canonical_bytes(&payload).expect("encode blob");
+        prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Blob, 1, bytes)
+    }
+
+    fn signed_blob_id(content: &[u8]) -> prikk_object::ObjectId {
+        signed_blob(content).object_id()
+    }
+}

@@ -20,7 +20,11 @@ use crate::test_gates::test_support::{
     unique_temp_dir,
 };
 use crate::wal::Wal;
-use crate::{FileObjectStore, ObjectWriter, RefPublication, RefStore, RepositoryLayout};
+use crate::{
+    Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectWriter, RefPublication,
+    RefStore, RepositoryLayout, add_trusted_maintainer, derive_next_state_root,
+    maintainer_signature,
+};
 
 /// Seal a one-block `heads/main` into `layout`, returning the tip Block id -- the minimum history
 /// that gives every object container at least one real record. `pub(crate)`, not private:
@@ -458,16 +462,21 @@ fn first_over_bound_record_finds_a_record_whose_declared_body_exceeds_the_bound(
     );
 }
 
-/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2): the same `PointerLeading` crash shape
-/// `refs::tests::publication_recovery::state_matrix`'s own fixture names (interrupting a root
+/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2); round 2 (A-1): the same `PointerLeading` crash
+/// shape `refs::tests::publication_recovery::state_matrix`'s own fixture names (interrupting a root
 /// publish's 4th `AppendWrite` -- after the object-container, object-index and pointer-index
-/// appends -- lands the pointer committed and the ref log not yet appended), built directly here
-/// with already-shared primitives rather than reaching into that private fixture module. Shown red
-/// on the code before this part (there was no such refusal at all, so this source exported
-/// successfully) and green after.
+/// appends -- lands the pointer committed and the ref log not yet appended), built with
+/// `test_gates::test_support`'s own fixed, non-cryptographic placeholder signature (`"maintainer-
+/// key"`, never trusted via `add_trusted_maintainer` here) rather than a real signer. **This is the
+/// genuine divergence case, found empirically in round 2**: with no trusted maintainer and no
+/// matching active-WAL evidence of any kind, `require_retained_evidence`'s own `trust_is_valid` gate
+/// is false, so `mark_unproved` renames the issue to `PRIKK-VERIFY-REF-DIVERGENCE` -- the refusal
+/// must **not** send the user to `prikk ref complete`, since that command would simply refuse here
+/// too. Shown red on the code before this part (there was no such refusal at all, so this source
+/// exported successfully) and green after.
 #[test]
-fn export_refuses_a_source_with_a_blocking_ref_publication_state() {
-    let dir = unique_temp_dir("archive-export-pointer-leads-log");
+fn export_refuses_a_source_with_an_unprovable_ref_divergence() {
+    let dir = unique_temp_dir("archive-export-ref-divergence");
     let layout = RepositoryLayout::init(&dir).expect("init");
     let mut object_store = FileObjectStore::new(layout.clone());
     let block_id = object_store
@@ -492,9 +501,165 @@ fn export_refuses_a_source_with_a_blocking_ref_publication_state() {
     let mut buffer = Vec::new();
     let err = export_archive(&layout, &mut buffer).expect_err("must refuse");
     let message = err.to_string();
-    assert!(message.contains("`prikk ref complete"), "{message}");
+    assert!(
+        !message.contains("ref complete"),
+        "a non-completable divergence must not name `ref complete`: {message}"
+    );
+    assert!(message.contains("PRIKK-VERIFY-REF-DIVERGENCE"), "{message}");
+    assert!(buffer.is_empty(), "a refused export writes nothing");
+}
+
+/// 0.52.0 step 1 Part A round 2 (A-1): the companion to the divergence test above -- a genuinely
+/// **completable** `POINTER-LEADS-LOG` lead, proved by a real `Ed25519MaintainerSigner` trusted via
+/// `add_trusted_maintainer` rather than `test_support`'s fixed placeholder signature. **Built as a
+/// non-WAL-consuming lead deliberately, not a `seal`'s own WAL-backed one**: a real `seal`-consumed
+/// lead's own retained evidence is `ActiveWalMetadataStatus::ValidForNonEmptyWal` -- the active WAL
+/// *still holding* the queued records that built the Block -- which is exactly the same condition
+/// `refuse_on_queued_unsealed_work` (run earlier in `export_archive`, unconditionally) already
+/// refuses on; a `seal`-shaped completable lead can therefore never reach this part's own new
+/// refusal through `archive export` at all, since the older check wins first. RFC 165 R4's own
+/// design note (`ref_publication.rs`'s `require_retained_evidence`) says precisely this: conditions
+/// (a)/(c)/(e) alone complete a lead for a **non-WAL-consuming** publication (`branch create`,
+/// `tag create`, `merge`, `sync adopt-tag`); condition (d), the WAL-evidence match, applies "only
+/// when the active WAL's retained metadata claims this exact ref" -- never touched here, so it does
+/// not apply, and the lead is still genuinely completable from the pointer/log/signature state
+/// alone. The refusal must name `prikk ref complete <ref>`, and running that command for real must
+/// then let export through.
+#[test]
+fn export_refuses_a_completable_pointer_lead_naming_ref_complete_and_then_succeeds() {
+    let dir = unique_temp_dir("archive-export-pointer-lead-completable");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    let signer = Ed25519MaintainerSigner::from_seed("round-2-maintainer", &[0x72; 32])
+        .expect("build signer");
+    let public_key_hex = signer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    add_trusted_maintainer(&layout, signer.key_id(), &public_key_hex)
+        .expect("trust the maintainer");
+
+    let mut object_store = FileObjectStore::new(layout.clone());
+    object_store
+        .write_object(&crate::test_gates::test_support::signed_patch_blob_envelope())
+        .expect("write the patch's own referenced blob");
+    let patch = signed_patch_envelope();
+    let patch_id = object_store
+        .write_object(&patch)
+        .expect("write the patch object");
+    let block_payload = prikk_object::BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: vec![patch_id],
+        state_merkle_root: derive_next_state_root(&object_store, None, &[patch_id])
+            .expect("derive state root"),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes =
+        prikk_object::CanonicalEncode::to_canonical_bytes(&block_payload).expect("encode block");
+    let mut block_envelope =
+        prikk_object::ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    block_envelope
+        .add_signature(
+            maintainer_signature(&signer, ObjectType::Block, block_envelope.object_id())
+                .expect("sign block"),
+        )
+        .expect("attach block signature");
+    let block_id = object_store
+        .write_object(&block_envelope)
+        .expect("write the block");
+
+    let state_payload = prikk_object::RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: prikk_object::RefKind::Branch,
+        target_object_id: block_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let state_bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&state_payload)
+        .expect("encode ref state");
+    let mut ref_state =
+        prikk_object::ObjectEnvelope::unsigned(ObjectType::RefState, 1, state_bytes);
+    let ref_state_id_for_sig = ref_state.object_id();
+    ref_state
+        .add_signature(
+            maintainer_signature(&signer, ObjectType::RefState, ref_state_id_for_sig)
+                .expect("sign ref state"),
+        )
+        .expect("attach ref state signature");
+    let ref_state_id = ref_state.object_id();
+
+    let update_payload = prikk_object::RefUpdatePayload {
+        ref_name: "heads/main".to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: ref_state_id,
+        new_target_object_id: block_id,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: signer.key_id().to_string(),
+    };
+    let update_bytes = prikk_object::CanonicalEncode::to_canonical_bytes(&update_payload)
+        .expect("encode ref update");
+    let mut ref_update =
+        prikk_object::ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, update_bytes);
+    let ref_update_id_for_sig = ref_update.object_id();
+    ref_update
+        .add_signature(
+            maintainer_signature(&signer, ObjectType::RefUpdate, ref_update_id_for_sig)
+                .expect("sign ref update"),
+        )
+        .expect("attach ref update signature");
+
+    let publication = RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    };
+
+    fail_after_for_test(TestFailPoint::AppendWrite, 3);
+    assert!(
+        RefStore::new(layout.clone()).publish(&publication).is_err(),
+        "the failpoint must interrupt this publish"
+    );
+
+    let mut buffer = Vec::new();
+    let err = export_archive(&layout, &mut buffer).expect_err("must refuse");
+    let message = err.to_string();
+    assert!(
+        message.contains("`prikk ref complete heads/main`"),
+        "a completable lead must name `ref complete`: {message}"
+    );
     assert!(message.contains("POINTER-LEADS-LOG"), "{message}");
     assert!(buffer.is_empty(), "a refused export writes nothing");
+
+    let plan = crate::ref_completion::plan_ref_completion(&layout, "heads/main")
+        .expect("plan_ref_completion must not hard-fail")
+        .expect("the lead must actually be completable");
+    let active_lock =
+        ActiveLock::acquire_for_write(&layout, DEFAULT_ACTIVE_NAME).expect("acquire active lock");
+    let mut completion_store = FileObjectStore::new(layout.clone());
+    crate::ref_completion::complete_ref_publication(
+        &layout,
+        &mut completion_store,
+        &active_lock,
+        &plan,
+        &signer,
+    )
+    .expect("ref complete must succeed");
+    drop(active_lock);
+
+    let mut buffer_after = Vec::new();
+    export_archive(&layout, &mut buffer_after)
+        .expect("export must succeed once the lead is completed");
+    assert!(
+        !buffer_after.is_empty(),
+        "a successful export must write something"
+    );
 }
 
 /// Drain the active WAL exactly as `prikk seal` would -- the minimum needed to make the queued-work

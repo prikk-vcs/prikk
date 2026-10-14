@@ -15,9 +15,11 @@ mod scan;
 
 pub(crate) use scan::{
     LogState, PointerState, ensure_ref_target_valid, ensure_required_attestations_present,
-    read_logs, read_one_pointer_entry, read_pointers,
+    read_logs, read_one_pointer_entry,
 };
 pub use scan::{RefFileOutcome, RefFileStatus};
+
+use scan::read_pointers;
 
 /// One recognized interrupted-publication or local-debris condition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,51 +348,6 @@ pub(crate) fn classify_ref_items(
         outcomes.push((ref_name, result));
     }
     (outcomes, issues)
-}
-
-/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2): lets `archive::export_archive` refuse up front
-/// on exactly the blocking pointer<->log states `verify_refs_with` itself would block a live
-/// repository's own `verify` on -- `PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE` -- without
-/// re-deriving or re-testing the classification: this runs the identical `read_pointers`/
-/// `read_logs`/`classify_ref_items` construction `verify_refs_with`'s own body runs, read-failure
-/// closure included, and returns only the issues `classify_ref_items` itself pushes (the pointer<->
-/// log tie) -- not `candidate_issues`' own ref-candidate-debris finding, which this part does not
-/// ask export to refuse on, and not piped through `ref_publication::require_retained_evidence`
-/// (`verify.rs`'s own post-processing step, run by `verify_repository_with_options` after this
-/// function returns): that step only ever adjusts an issue's own code and message (appending "run
-/// `prikk ref complete <ref>`", or renaming to `DIVERGENCE` when retained evidence does not prove
-/// the divergence) -- `blocking` is `true` in every one of its own outcomes (confirmed by reading
-/// `mark_unproved` and the `Ok(_plan)` arm both), so skipping it here changes no refusal decision,
-/// only which exact code/message a second, later read might show for the same ref.
-pub(crate) fn classify_live_pointer_log_issues(
-    layout: &RepositoryLayout,
-    ref_log: &Result<Option<super::container::DecodedRefLog>>,
-) -> Result<Vec<RefPublicationIssue>> {
-    let objects = ObjectReadSnapshot::open(layout)?;
-    let (
-        pointers,
-        pointer_failures_by_key,
-        _pointer_outcomes,
-        _trailing_partial_pointer_index_bytes,
-    ) = read_pointers(layout, &objects)?;
-    let (logs, _log_record_count, _ref_log_envelopes, log_failures_by_key, _log_outcomes) =
-        read_logs(
-            &|offset| scan::log_locator(layout, offset),
-            &objects,
-            &pointers,
-            ref_log,
-        )?;
-    let (_ref_items, issues) = classify_ref_items(&pointers, &logs, |ref_name| {
-        let ref_name_key = crate::foundation::layout::ref_name_key_bytes(ref_name);
-        let pointer_failure = (!pointers.contains_key(ref_name))
-            .then(|| pointer_failures_by_key.get(&ref_name_key).cloned())
-            .flatten();
-        let log_failure = (!logs.contains_key(ref_name))
-            .then(|| log_failures_by_key.get(&ref_name_key).cloned())
-            .flatten();
-        pointer_failure.or(log_failure)
-    });
-    Ok(issues)
 }
 
 fn next_log_sequence(log: Option<&LogState>) -> Result<u64> {

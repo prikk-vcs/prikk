@@ -604,6 +604,41 @@ fn first_over_bound_object_index(
     Ok(None)
 }
 
+/// 0.52.0 step 1 Part A round 2 (A-2): the real per-object bound, except on this thread when a test
+/// has armed [`lower_bundle_object_over_bound_threshold_for_test`] -- the same end-to-end
+/// "nothing written" test seam `archive.rs`'s own `object_over_bound_threshold` uses, so a test can
+/// exercise `export_bundle`'s own real refusal path without a real 257 MiB object.
+fn bundle_object_over_bound_threshold() -> u64 {
+    #[cfg(feature = "test-support")]
+    {
+        if let Some(bound) = BUNDLE_OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST.with(|cell| *cell.borrow())
+        {
+            return bound;
+        }
+    }
+    DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64
+}
+
+#[cfg(feature = "test-support")]
+std::thread_local! {
+    static BUNDLE_OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST: std::cell::RefCell<Option<u64>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Arm a lowered per-object bound for `export_bundle`'s own refusal, on this thread only, until
+/// [`clear_bundle_object_over_bound_threshold_for_test`] runs. Re-exported at the crate root under
+/// `feature = "test-support"` so `prikk-cli`'s own tests can call it.
+#[cfg(feature = "test-support")]
+pub fn lower_bundle_object_over_bound_threshold_for_test(bound: u64) {
+    BUNDLE_OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST.with(|cell| *cell.borrow_mut() = Some(bound));
+}
+
+/// Disarm whatever [`lower_bundle_object_over_bound_threshold_for_test`] last armed on this thread.
+#[cfg(feature = "test-support")]
+pub fn clear_bundle_object_over_bound_threshold_for_test() {
+    BUNDLE_OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST.with(|cell| *cell.borrow_mut() = None);
+}
+
 /// Export a genesis-complete, verifiable subset of objects for `ref_name` (DC-78 §D4/§D6). Walks the
 /// full Block ancestor closure (all parents, not mainline-only — ruling 2's "genesis-complete") plus
 /// every Patch and Blob those blocks reference, plus the exported RefState's own required
@@ -823,12 +858,11 @@ pub fn export_bundle(
     // object this bundle would carry is itself over the same per-object bound `decode_bundle`
     // enforces on import (`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`) -- otherwise export succeeds today and
     // only that later read refuses, after the user already has a file they believe is a backup.
-    if let Some((_index, declared_bytes)) =
-        first_over_bound_object_index(&objects, DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64)?
-    {
+    let bound = bundle_object_over_bound_threshold();
+    if let Some((_index, declared_bytes)) = first_over_bound_object_index(&objects, bound)? {
         return Err(PrikkError::ObjectOverBound {
             declared_bytes,
-            bound_bytes: len_to_u64(DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?,
+            bound_bytes: bound,
         });
     }
 

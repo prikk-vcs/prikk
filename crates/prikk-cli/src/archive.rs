@@ -659,9 +659,9 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::signature_not_checked_note;
+    use super::{run_export, signature_not_checked_note};
 
     /// External review 024: when every signature was checked, there is nothing to explain.
     #[test]
@@ -715,6 +715,74 @@ mod tests {
         assert!(
             note.ends_with("after import"),
             "the note must end with the sentence that already said it all: {note}"
+        );
+    }
+
+    /// 0.52.0 step 1 Part A round 2 (A-2): through the real `run_export` path, including the real
+    /// `durable_output::write_new_file_durably_streaming` wrapper -- not the library-level
+    /// `export_archive`, which never touches a path at all (it writes to a caller-supplied
+    /// `Write`). The bound is lowered on this thread only (`feature = "test-support"`), so an over-
+    /// bound record can be a tiny, ordinary `Patch` rather than a real 257 MiB object.
+    #[test]
+    fn archive_export_writes_nothing_at_the_destination_when_an_object_is_over_bound() {
+        let dir = std::env::temp_dir().join(format!(
+            "cli-archive-export-over-bound-nothing-written-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create the repo root dir");
+        let layout = prikk_store::RepositoryLayout::init(&dir).expect("init");
+        let mut object_store = prikk_store::FileObjectStore::new(layout.clone());
+        let payload = prikk_object::PatchPayload {
+            operations: vec![prikk_object::Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: prikk_object::OperationKind::CreateFile(prikk_object::CreateFile {
+                    path: "a.txt".to_string(),
+                    node_id: prikk_object::NodeId::from_bytes([0x61; 32]),
+                    blob_id: prikk_object::ObjectId::from_bytes([0x62; 32]),
+                    mode: 0o100_644,
+                }),
+            }],
+            intent: None,
+            preconditions: Vec::new(),
+            purpose: prikk_object::PatchPurpose::Normal,
+            message: None,
+        };
+        let bytes =
+            prikk_object::CanonicalEncode::to_canonical_bytes(&payload).expect("encode patch");
+        let envelope =
+            prikk_object::ObjectEnvelope::unsigned(prikk_object::ObjectType::Patch, 1, bytes);
+        prikk_store::ObjectWriter::write_object(&mut object_store, &envelope)
+            .expect("write a real, ordinary-sized patch");
+
+        prikk_store::lower_object_over_bound_threshold_for_test(4);
+
+        let output = dir.join("out.archive");
+        let result = run_export(dir.clone(), vec![output.to_str().unwrap().to_string()]);
+
+        prikk_store::clear_object_over_bound_threshold_for_test();
+
+        assert!(result.is_err(), "export must refuse over-bound objects");
+        assert!(
+            !output.exists(),
+            "a refused export must leave nothing at the destination path: {}",
+            output.display()
+        );
+        let siblings: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read the repo dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .collect();
+        assert!(
+            !siblings
+                .iter()
+                .any(|name| name.to_string_lossy().contains("out.archive")),
+            "no temporary file naming the destination may remain: {siblings:?}"
         );
     }
 }

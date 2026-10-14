@@ -32,15 +32,6 @@
   `0.51.0` binary, of both the sync-accept (unsealed claim) and the edited-then-deleted shapes, was
   verified and imported by the fixed binary without modification.
 
-### Output changes
-
-- `archive verify --format json` gains an additive `unreferenced_remnants` key: a carried Block's
-  own missing parent, patch, or snapshot reference, when no carried local or received ref reaches
-  that Block (RFC 164 Rule E) — harmless by construction, named rather than silently dropped.
-  `archive verify`'s own prose gains the matching line, the store's own existing `remnant_warning`
-  wording, unchanged from what a live repository's own `prikk verify` already prints for the
-  identical condition.
-
 ### Fixed — `archive export` and `bundle export` wrote a file their own import or verify refused
 
 - **An object over the per-object bound (`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`) used to export
@@ -55,12 +46,19 @@
 - **A source repository whose own `prikk verify` already blocks on a ref's pointer-versus-log state
   (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`, `PRIKK-VERIFY-REF-DIVERGENCE`) used to export successfully,
   and only that archive's own `archive verify` refused it afterward** (0.52.0 step 0's own C1 review,
-  N2). `archive export` now shares the identical classification and refuses up front, naming
-  `prikk ref complete <ref>` as the way out — the same shape `refuse_on_queued_unsealed_work`
-  already names `prikk seal` for.
+  N2). `archive export` now shares the store's own fully-reclassified result and refuses up front,
+  naming each ref's own remedy exactly as `prikk verify` would — `prikk ref complete <ref>` when the
+  store's own rule says the lead is completable, or the store's own divergence message otherwise, so
+  the refusal never sends anyone to a command that would just refuse.
 
 ### Output changes
 
+- `archive verify --format json` gains an additive `unreferenced_remnants` key: a carried Block's
+  own missing parent, patch, or snapshot reference, when no carried local or received ref reaches
+  that Block (RFC 164 Rule E) — harmless by construction, named rather than silently dropped.
+  `archive verify`'s own prose gains the matching line, the store's own existing `remnant_warning`
+  wording, unchanged from what a live repository's own `prikk verify` already prints for the
+  identical condition.
 - **An object container's own interrupted-append warning no longer says *"damage, not a torn
   tail"***: an object-type container (`Patch`, `Block`, `RefState`, `Tag`, `Attestation`, `Blob`,
   `RecognitionClaim`) is append-only and never compacted, so a crash mid-append there is an ordinary,

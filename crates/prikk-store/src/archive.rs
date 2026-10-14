@@ -447,24 +447,59 @@ fn refuse_on_queued_unsealed_work(layout: &RepositoryLayout) -> Result<()> {
 /// read, so an over-bound record is named by its type and position, never by reading the oversized
 /// body itself.
 fn refuse_on_over_bound_object(layout: &RepositoryLayout) -> Result<()> {
+    let bound = object_over_bound_threshold();
     for object_type in persisted_object_types() {
         let path = layout.container_slot_path(object_type, ContainerSlot::A);
         let sound_len = stat_len(&path)?;
-        if let Some(position) = first_over_bound_record(
-            &path,
-            object_type,
-            sound_len,
-            DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64,
-        )? {
+        if let Some(position) = first_over_bound_record(&path, object_type, sound_len, bound)? {
             return Err(PrikkError::Precondition(format!(
                 "export refuses: the {} holds a record (position {position}) declaring more than \
-                 the per-object bound of {DEFAULT_BUNDLE_MAX_OBJECT_BYTES} bytes -- `archive \
-                 import` would refuse it too; this repository cannot be archived as is",
+                 the per-object bound of {bound} bytes -- `archive import` would refuse it too; \
+                 this repository cannot be archived as is",
                 ArchiveSectionKind::ObjectContainer(object_type).label()
             )));
         }
     }
     Ok(())
+}
+
+/// 0.52.0 step 1 Part A round 2 (A-2): the real per-object bound, except on this thread when a test
+/// has armed [`lower_object_over_bound_threshold_for_test`] -- so an end-to-end "nothing written"
+/// test (including one driven from `prikk-cli`'s own test binary, through its real
+/// `durable_output` write wrapper) can exercise the real refusal path without building a real
+/// 257 MiB object. `feature = "test-support"`, not `cfg(test)`: `prikk-cli`'s own tests build
+/// `prikk-store` as an ordinary dependency with that feature enabled (its own `Cargo.toml`), not as
+/// `prikk-store`'s own `cfg(test)` build, the same reason `anchor_uses_for_test_support` and this
+/// crate's other cross-crate test seams are gated the same way. Production code never arms this,
+/// and this function itself is always compiled, always returning the real bound outside tests.
+fn object_over_bound_threshold() -> u64 {
+    #[cfg(feature = "test-support")]
+    {
+        if let Some(bound) = OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST.with(|cell| *cell.borrow()) {
+            return bound;
+        }
+    }
+    DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64
+}
+
+#[cfg(feature = "test-support")]
+std::thread_local! {
+    static OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST: std::cell::RefCell<Option<u64>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Arm a lowered per-object bound for `refuse_on_over_bound_object`, on this thread only, until
+/// [`clear_object_over_bound_threshold_for_test`] runs. Re-exported at the crate root under
+/// `feature = "test-support"` so `prikk-cli`'s own tests can call it.
+#[cfg(feature = "test-support")]
+pub fn lower_object_over_bound_threshold_for_test(bound: u64) {
+    OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST.with(|cell| *cell.borrow_mut() = Some(bound));
+}
+
+/// Disarm whatever [`lower_object_over_bound_threshold_for_test`] last armed on this thread.
+#[cfg(feature = "test-support")]
+pub fn clear_object_over_bound_threshold_for_test() {
+    OBJECT_OVER_BOUND_THRESHOLD_FOR_TEST.with(|cell| *cell.borrow_mut() = None);
 }
 
 /// The zero-based position of the first record in one object-type container whose own declared
@@ -513,28 +548,40 @@ fn first_over_bound_record(
     Ok(None)
 }
 
-/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2): refuse before writing anything if the source
-/// repository sits in a ref-publication state the store's own `verify` already blocks on
-/// (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) -- shares the identical classification
-/// `verify_refs_with` itself runs (`crate::refs::verify::classify_live_pointer_log_issues`, which in
-/// turn shares `classify_ref_items`/`classify_ref_state`), never re-derived or re-tested here. An
-/// archive taken from a source in this state writes successfully today, and only `archive verify`'s
-/// own pointer<->log tie (shared since 0.52.0 step 0) refuses it later, after the user already has
-/// a file they believe is a backup.
+/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2); round 2 (A-1): refuse before writing anything
+/// if the source repository sits in a ref-publication state the store's own `verify` already blocks
+/// on (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) -- shares the real, fully-reclassified
+/// result `prikk verify` itself reports, not a narrower reconstruction of it. Round 1's own
+/// `classify_live_pointer_log_issues` deliberately skipped `ref_publication::require_retained_
+/// evidence`'s own post-processing step, which is right for the `blocking` flag (confirmed: every
+/// exit path of that function sets `blocking: true`, never clears it) but wrong for the issue's own
+/// final `code`/`message`: that step alone decides whether a `POINTER-LEADS-LOG` lead is actually
+/// completable (`ref_completion::plan_ref_completion` succeeds -- the message gains *"; run
+/// `prikk ref complete <ref>`"*) or not (refuses, or no retained evidence, or no `ref_name` at all --
+/// `mark_unproved` rewrites the code to `DIVERGENCE` and the message to say the divergence is not
+/// proved). Naming `prikk ref complete` unconditionally, as round 1 did, sent the user to a command
+/// that would just refuse for every non-completable case. `verify_repository` (`crate::verify`) runs
+/// the identical pointer/log classification **and** that post-processing, and its own
+/// `RepositoryVerification::ref_publication_issues` already carries the final, right code and
+/// message for every issue -- read it directly, never re-derive it. `verify_repository` takes no
+/// locks of its own (it is designed to run with none held, under `prikk verify`'s own usage), so
+/// calling it here, under `export_archive`'s own five already-held locks, introduces no new lock
+/// ordering or re-entrancy at all -- confirmed by reading its own call graph for any
+/// `acquire_container_locks` call: there is none.
 fn refuse_on_blocking_ref_publication(layout: &RepositoryLayout) -> Result<()> {
-    // "verify-scan" (`whole_read_guard::SCOPES`): this read is the same whole-ref-log classification
-    // `verify` itself does, shared rather than re-derived -- not a new, export-specific cost to
-    // declare its own scope row for.
-    let ref_log = crate::refs::read_and_decode_ref_log(layout, "verify-scan");
-    let issues = crate::refs::verify::classify_live_pointer_log_issues(layout, &ref_log)?;
-    let blocking: Vec<_> = issues.iter().filter(|issue| issue.blocking).collect();
+    let report = crate::verify::verify_repository(layout)?;
+    let blocking: Vec<_> = report
+        .ref_publication_issues
+        .iter()
+        .filter(|issue| issue.blocking)
+        .collect();
     if blocking.is_empty() {
         return Ok(());
     }
     let mut message = String::from(
         "export refuses: at least one ref has a publication state this repository's own `verify` \
          already blocks on, which an archive taken now would carry and then refuse on import -- \
-         run `prikk ref complete <ref>` for each named ref first, then export again:",
+         see the remedy named below for each ref, then export again:",
     );
     for issue in blocking {
         let ref_name = issue.ref_name.as_deref().unwrap_or("(repository-wide)");
