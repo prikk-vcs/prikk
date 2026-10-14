@@ -6,6 +6,11 @@
 the point of the RFC: `check` exits `0` whichever way the question resolves, so a negative answer is an
 answer and not an operational failure (RFC 121).
 
+**Amended 2026-10-14, accepted by the owner (*"Your recommendation is accepted."*), after reading
+`.git-exclude/scratch/rfc138-check-exit-status-amendment-draft-v1.md`: §7.2's exit status is reversed.** `check` exits
+`0` when the key is trusted and `1` when it is not. The original ruling let `check && …` proceed for an untrusted key, a
+misreading that fails open on a trust question. Delivered in 0.52.0 step 1 Part D.
+
 **What outlives this RFC, and it is not this RFC's work.** The implementing round found that
 `read_current_trust_policy_snapshot` (`prikk-store/src/trust_index.rs`) returns `Ok(None)` for two
 genuinely different states — a policy never configured, and a policy whose *very first* record is torn
@@ -150,6 +155,15 @@ reported to us in their first letter**, committed inside the command written to 
 
 **So: `check` exits `0` whenever it determines the answer**, and carries the answer in its output.
 `1` and `2` keep their ruled meanings — an unreadable policy, a bad argument.
+
+> **Amended 2026-10-14 (owner-accepted).** `check` exits **`0` when the key is trusted** and **`1` when it is not**.
+> `1` also remains the exit for an unreadable policy. Both mean "do not proceed", so the shared code fails closed. `2`
+> stays usage. A caller that must tell "not trusted" from "cannot answer" reads `--format json` (`trust-check-v1`): an
+> answer object with `"trusted": false`, or no answer object (an error on stderr). This follows RFC 121, which already
+> files a negative verification answer under `1` and keeps the three-valued detail in JSON. **The ruling above (exit
+> `0` either way) let `check && …` proceed for an untrusted key: a misreading that fails open, on a trust question.**
+> Its premise, stikk's first letter, no longer applies: stikk never calls `check`, and agreed to the change (letter
+> 019 §1).
 
 **And that is exactly why machine-readable output cannot be a follow-up.** Without it, a caller who
 must branch on the answer has only prose to parse, and the pressure to overload the exit code becomes
