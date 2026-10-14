@@ -71,3 +71,7 @@ non-Block, or whose ref log disagrees with its refs, and import wrote it.
 - section 29 runs on 0.51.0's binary. Every line that passes there is named and explained.
 
 **Then P3.**
+
+**P2b ACCEPTED, and P2 CLOSED, 2026-10-14** (review `release-0.52.0-prep-P2b-review-v1`). The architect re-ran the
+smoke on a current release build: exit 0, **330 ok**. Section 29 fails on 0.51.0 where it should, and every line that
+passes there is explained. **Next: P3, starting with item 0** (the Security demonstration).
