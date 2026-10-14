@@ -95,15 +95,9 @@ const ALLOWED: &[Allowed] = &[
     },
     Allowed {
         file: "archive/verify.rs",
-        expr: "body_len",
-        bound: "RFC 155 Part I-D2: one container record's own declared body length, in the streamed resync walk's own frame parser -- checked against `DEFAULT_BUNDLE_MAX_OBJECT_BYTES` before this allocation, the same bound Part V's own `record_body_len_usize` site already relies on",
-        witness: "ObjectOverBound",
-    },
-    Allowed {
-        file: "archive/verify.rs",
         expr: "read_len",
-        bound: "RFC 155 Part I-D2: the streamed resync scan's own bounded window, clamped to the fixed `WINDOW_BYTES` constant (1 MiB) by `.min()` before this allocation -- independent of the section's own size, however large",
-        witness: "const WINDOW_BYTES: usize",
+        bound: "0.52.0 step 2 (RFC 155 §9.4): `SectionFrameSource::read_at`'s one `resize`, the streamed half of the shared container-frame primitive. Its only two callers are outside this file: `FrameSource::scan_for_magic`'s own default windowed body (`foundation/frame_source.rs`) always clamps its request to the fixed `DEFAULT_SCAN_WINDOW_BYTES` constant first; `foundation::container::parse_frame_at_reporting`'s own body read only reaches this call once a claim over `max_body_len` (`Some(DEFAULT_BUNDLE_MAX_OBJECT_BYTES)`, DC-86) has already been refused",
+        witness: "DEFAULT_BUNDLE_MAX_OBJECT_BYTES",
     },
     Allowed {
         file: "archive/import.rs",

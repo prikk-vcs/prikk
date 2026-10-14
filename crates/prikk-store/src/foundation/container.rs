@@ -461,12 +461,33 @@ pub(crate) fn decode_container_records(
     decode_frames(object_type, &mut source, None)
 }
 
+/// [`decode_frames_with`]'s own summary, without the `Vec<ContainerRecord>` [`ContainerReplay`]
+/// collects every sound record into: a caller that streams records through a callback (the archive,
+/// Part 2B) must never hold more than one record's own envelope in memory at a time, and this type
+/// is what makes that possible -- `record_outcomes`/`trailing_partial_bytes` are small (offsets and
+/// short enums/strings), never a `Vec` of decoded envelopes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContainerReplaySummary {
+    /// Number of trailing bytes ignored as an incomplete final record. See [`ContainerReplay`]'s own
+    /// field of the same name.
+    pub(crate) trailing_partial_bytes: usize,
+    /// One outcome per attempted frame, in scan order. See [`ContainerReplay`]'s own field of the
+    /// same name.
+    pub(crate) record_outcomes: Vec<ContainerRecordOutcome>,
+}
+
 /// The one container-frame decode loop (0.52.0 step 2, RFC 155 §9.4): generic over [`FrameSource`]
-/// so the store's own slice reads and the archive's own streamed reads (from Part 2B) run the
-/// identical classification, not two hand-written copies of it. [`decode_container_records`] is
-/// this loop called with [`SliceFrameSource`] and `max_body_len: None`; the archive calls it with
-/// its own streamed source and `max_body_len: Some(DEFAULT_BUNDLE_MAX_OBJECT_BYTES)` (DC-86) from
-/// Part 2B onward.
+/// so the store's own slice reads and the archive's own streamed reads (Part 2B) run the identical
+/// classification, not two hand-written copies of it. [`decode_container_records`] calls this with
+/// [`SliceFrameSource`] and `max_body_len: None`; the archive's own `classify_section_records`
+/// (`archive/verify.rs`) calls it with a section-scoped streamed source and
+/// `max_body_len: Some(DEFAULT_BUNDLE_MAX_OBJECT_BYTES)` (DC-86).
+///
+/// `on_record` is called once per sound frame, in scan order, immediately -- never collected into a
+/// `Vec` here. [`decode_frames`] is the thin, `Vec`-collecting wrapper the store's own five
+/// production callers already depend on; this is the lower-level form a streaming caller (the
+/// archive) needs instead, so that caller never holds more than one record's own envelope at a time
+/// (RFC 155 §9.2's own memory bound -- see `archive/verify.rs`'s own doc on why this matters there).
 ///
 /// Isolate-and-continue reading (RFC 102 Stage 2's reader, reused here per the Stage 3 handoff's
 /// explicit instruction, not re-derived): a frame that fails to validate no longer aborts replay --
@@ -474,13 +495,13 @@ pub(crate) fn decode_container_records(
 /// finds the next candidate frame so every subsequent sound record is still read. Corruption is
 /// therefore confined to the records it actually damaged, at container scale exactly as it already
 /// is for the WAL and ref log.
-pub(crate) fn decode_frames<S: FrameSource>(
+pub(crate) fn decode_frames_with<S: FrameSource>(
     object_type: ObjectType,
     source: &mut S,
     max_body_len: Option<u64>,
-) -> Result<ContainerReplay> {
+    mut on_record: impl FnMut(&ContainerRecord) -> Result<()>,
+) -> Result<ContainerReplaySummary> {
     let magic = container_magic(object_type)?;
-    let mut records = Vec::new();
     let mut record_outcomes = Vec::new();
     let mut offset = 0_usize;
     // RFC 167 D1: one budget per decode call. This reader's own `Invalid` arm never calls the scan
@@ -498,8 +519,7 @@ pub(crate) fn decode_frames<S: FrameSource>(
                     complete: false,
                 },
             });
-            return Ok(ContainerReplay {
-                records,
+            return Ok(ContainerReplaySummary {
                 trailing_partial_bytes: 0,
                 record_outcomes,
             });
@@ -524,7 +544,7 @@ pub(crate) fn decode_frames<S: FrameSource>(
                         checksum,
                     },
                 });
-                records.push(record);
+                on_record(&record)?;
                 offset = require_progress("container", offset, next_offset)?;
             }
             FrameAttempt::TrailingPartial { remaining } => {
@@ -539,8 +559,7 @@ pub(crate) fn decode_frames<S: FrameSource>(
                 )?;
                 let next = match sound_after {
                     BoundedScan::NoSoundFrame => {
-                        return Ok(ContainerReplay {
-                            records,
+                        return Ok(ContainerReplaySummary {
                             trailing_partial_bytes: remaining,
                             record_outcomes,
                         });
@@ -553,8 +572,7 @@ pub(crate) fn decode_frames<S: FrameSource>(
                                 complete: false,
                             },
                         });
-                        return Ok(ContainerReplay {
-                            records,
+                        return Ok(ContainerReplaySummary {
                             trailing_partial_bytes: 0,
                             record_outcomes,
                         });
@@ -579,8 +597,7 @@ pub(crate) fn decode_frames<S: FrameSource>(
                 match source.scan_for_magic(offset + 1, magic.as_slice())? {
                     Some(next) => offset = next,
                     None => {
-                        return Ok(ContainerReplay {
-                            records,
+                        return Ok(ContainerReplaySummary {
                             trailing_partial_bytes: 0,
                             record_outcomes,
                         });
@@ -604,8 +621,7 @@ pub(crate) fn decode_frames<S: FrameSource>(
                 match source.scan_for_magic(offset + 1, magic.as_slice())? {
                     Some(next) => offset = next,
                     None => {
-                        return Ok(ContainerReplay {
-                            records,
+                        return Ok(ContainerReplaySummary {
                             trailing_partial_bytes: 0,
                             record_outcomes,
                         });
@@ -614,6 +630,28 @@ pub(crate) fn decode_frames<S: FrameSource>(
             }
         }
     }
+}
+
+/// [`decode_frames_with`], collecting every sound record into a `Vec` -- the shape the store's own
+/// five production callers (`decode_container_records`'s own callers) already depend on, which read
+/// a whole container into memory anyway and want every record back at once. A streaming caller (the
+/// archive, Part 2B) calls [`decode_frames_with`] directly instead, so it never pays this `Vec`'s
+/// own memory cost.
+pub(crate) fn decode_frames<S: FrameSource>(
+    object_type: ObjectType,
+    source: &mut S,
+    max_body_len: Option<u64>,
+) -> Result<ContainerReplay> {
+    let mut records = Vec::new();
+    let summary = decode_frames_with(object_type, source, max_body_len, |record| {
+        records.push(record.clone());
+        Ok(())
+    })?;
+    Ok(ContainerReplay {
+        records,
+        trailing_partial_bytes: summary.trailing_partial_bytes,
+        record_outcomes: summary.record_outcomes,
+    })
 }
 
 struct ContainerHeader {

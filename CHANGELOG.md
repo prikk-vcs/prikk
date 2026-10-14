@@ -113,6 +113,17 @@
   above.
 - **`prikk trust maintainer check` exits 1 when the key is not trusted (was 0)**; a script that ran
   it only to print the answer under `set -e` now stops there. See the `### Changed` entry above.
+- **`archive verify`'s own damage/interrupted-append lines now always name the frame's own byte
+  offset, and the interrupted-append text is the identical base sentence a live repository's own
+  `prikk verify` would give the same shape** (0.52.0 step 2, RFC 155 §9.4): the archive's
+  object-container classification now runs through the same shared primitive the store's own
+  `prikk verify` does, rather than a second, hand-maintained copy of the identical rule. One shape's
+  own line changes in substance, not only in wording: a checksum-mismatched frame later overrun by a
+  sound write used to read *"interrupted append at byte offset N — a later write already completed
+  past this frame's own claimed end; not imported"*; it now reads *"interrupted append: byte offset
+  N: container checksum mismatch at byte offset N; not imported"* — the store's own base text for
+  that shape, with the archive's own offset and context layered on top, rather than an independently
+  invented sentence that could drift from what the store itself says about the identical bytes.
 
 ## 0.51.0 — 2026-10-13
 

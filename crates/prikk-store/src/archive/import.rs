@@ -98,7 +98,6 @@ use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
 };
 use crate::bundle::{CarriedSignatureAdmitter, object_type_dependency_rank};
-use crate::foundation::file_codec::decode_envelope_file;
 use crate::foundation::fsutil::{
     create_new_file_required, ensure_directory_required, read_file_if_exists,
     remove_file_if_present_required, truncate_existing_file_required,
@@ -555,8 +554,7 @@ pub fn import_archive<R: Read + Seek>(
         let admitter = CarriedSignatureAdmitter::new(layout)?;
         let mut written = 0usize;
         let mut type_merged_count = 0usize;
-        for_each_object_record(source, entry, object_type, |body| {
-            let envelope = decode_envelope_file(body)?;
+        for_each_object_record(source, entry, object_type, |envelope| {
             // RFC 156 §4 rules 1-3: for every carried object of this type this repository already
             // holds, which of its signatures may join the stored record -- verified here, before
             // this one object is written, the same rule `import_bundle` already follows, over one
@@ -564,7 +562,7 @@ pub fn import_archive<R: Read + Seek>(
             // own doc comment). A format-6 repository's own store refuses a second envelope for an
             // id it holds instead of merging (`admit_one`'s own `!several_records` branch); nothing
             // here duplicates that rule.
-            let admitted = admitter.admit_one(&object_store, &envelope, |key_id| {
+            let admitted = admitter.admit_one(&object_store, envelope, |key_id| {
                 let mut entries = lookup_author_key_entries(layout, key_id)?;
                 if let Some(carried) = author_material.get(key_id) {
                     entries.extend(carried.iter().cloned());

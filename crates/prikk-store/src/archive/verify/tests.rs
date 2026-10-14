@@ -1869,7 +1869,7 @@ mod section_frame_classification {
                 .damaged
                 .iter()
                 .any(|line| line.contains("blob container")
-                    && line.contains("failed its own checksum")),
+                    && line.contains("checksum mismatch")),
             "the flipped record must be named as damage by its own section: {:?}",
             report.damaged
         );
@@ -1923,7 +1923,7 @@ mod section_frame_classification {
                 .damaged
                 .iter()
                 .any(|line| line.contains("blob container")
-                    && line.contains("failed its own checksum")),
+                    && line.contains("checksum mismatch")),
             "the flipped middle record must be named as damage: {:?}",
             report.damaged
         );
@@ -2114,20 +2114,26 @@ mod section_frame_classification {
         // External review 024's own exact finding, on this exact shape: the line used to read
         // "... but a sound frame starts at byte offset M: damage, not a torn tail" --
         // `foundation::frame_resync::partial_before_sound_frame_message`'s own prose, leaked
-        // through unchanged. It must now read as an interrupted append, in the archive's own
-        // words, never the store-reader-facing word "damage".
+        // through unchanged. 0.52.0 step 2: the archive now reuses the shared primitive's own
+        // text for this shape (`interrupted_append_before_sound_frame_message`, step 1 Part A's
+        // own fix), which literally says "an interrupted append, not damage" -- a reassurance, not
+        // the old alarm. The thing this control must still refuse is the old, dangerous live-
+        // repository-reader phrasing ("damage, not a torn tail"), not the word "damage" in any
+        // form.
         for line in &report.interrupted_appends {
             assert!(
-                !line.contains("damage"),
-                "the reviewer's own overrun shape must never print \"damage\": {line:?}"
+                !line.contains("damage, not a torn tail"),
+                "the reviewer's own overrun shape must never print the live-repository-reader \
+                 wording (\"damage, not a torn tail\"): {line:?}"
             );
             assert!(
                 line.contains("interrupted append")
                     && line.contains("claims more bytes than remain")
                     && line.contains("a sound frame starts at byte offset")
+                    && line.contains("not damage")
                     && line.ends_with("not imported"),
-                "the overrun line must read as an interrupted append, in the archive's own \
-                 words: {line:?}"
+                "the overrun line must read as an interrupted append, in the shared primitive's \
+                 own words, with the archive's own added context: {line:?}"
             );
         }
         assert!(
@@ -2173,7 +2179,7 @@ mod differential_against_the_store {
     use super::super::for_each_object_record;
     use super::super::{ArchiveSectionKind, ManifestEntry, SECTION_MAGIC};
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     enum RealClass {
         Sound,
         Damage,
@@ -2278,10 +2284,8 @@ mod differential_against_the_store {
         };
         let mut cursor = Cursor::new(buffer);
         let mut sound = Vec::new();
-        let outcome = for_each_object_record(&mut cursor, &entry, object_type, |body| {
-            if let Ok(envelope) = crate::foundation::file_codec::decode_envelope_file(body) {
-                sound.push(envelope.object_id());
-            }
+        let outcome = for_each_object_record(&mut cursor, &entry, object_type, |envelope| {
+            sound.push(envelope.object_id());
             Ok(())
         })?;
         let mut classified = Vec::new();
@@ -2308,7 +2312,14 @@ mod differential_against_the_store {
     }
 
     /// Assert the archive's own streamed walk and the real store's own decoder agree on every
-    /// offset classified as damage or an interrupted append, over the identical bytes.
+    /// offset classified as damage or an interrupted append, over the identical bytes -- **and**
+    /// (2B-1: "the proptests keep an independent oracle") that the store's own ground truth never
+    /// reports more sound records than the base, unmutated fixture actually has. After this part,
+    /// both readers run the identical shared primitive, so agreement between them alone no longer
+    /// proves correctness -- a bug in the primitive moves both answers together (2A's own
+    /// perturbation showed exactly this). SHA-256 collision is the only way a random byte mutation
+    /// could *manufacture* an additional valid frame rather than merely preserve or destroy one, so
+    /// this bound holds independently of whichever decoder computed it.
     fn assert_held_equal_to_the_store(object_type: ObjectType, bytes: &[u8]) {
         let real = real_classification(object_type, bytes);
         let (archive_classified, archive_sound) = match archive_classification(object_type, bytes) {
@@ -2322,6 +2333,11 @@ mod differential_against_the_store {
             .iter()
             .map(|record| record.envelope.object_id())
             .collect();
+        assert!(
+            real_sound.len() <= 3,
+            "a mutation of a 3-record base fixture can never leave more than 3 sound records \
+             without a SHA-256 collision -- store says: {real_sound:?}"
+        );
         let archive_sound_set: std::collections::BTreeSet<_> = archive_sound.into_iter().collect();
         assert_eq!(
             real_sound, archive_sound_set,
@@ -2578,5 +2594,333 @@ mod differential_against_the_store {
         torn.extend_from_slice(&[0u8; 32]);
         bytes.splice(10..10, torn);
         assert_held_equal_to_the_store(ObjectType::Blob, &bytes);
+    }
+
+    /// 0.52.0 step 2, Part 2B (2B-1): the six §A shapes from the external architect's own
+    /// `probe9b.sh`/`arch.py` (ack 025, `.git-exclude/upstream/external-architect/receive/
+    /// 025-ack-0-51-0-released-verified/reproduce/`), built directly as raw bytes (mirroring
+    /// `arch.py`'s own struct-packing exactly, not shelling out to Python), each asserting the
+    /// **expected verdict outright** -- not only that the archive agrees with the store, which after
+    /// this part both readers would get wrong together if the shared primitive itself regressed.
+    mod probe9b_section_a_shapes {
+        use super::{
+            ContainerRecordStatus, RealClass, archive_classification, decode_container_records,
+            one_real_blob_record, real_classification,
+        };
+        use prikk_object::ObjectType;
+
+        use super::super::super::{
+            ArchiveSectionKind, ManifestEntry, SECTION_MAGIC, for_each_object_record,
+        };
+
+        /// Mirrors `arch.py`'s own `frames()`: `(offset, header_len, body_len)` for every frame
+        /// boundary in `body`, read structurally from the header fields alone (no checksum/magic
+        /// validation) -- the identical boundary-finding the reviewer's own mutation script uses to
+        /// target each of the six shapes.
+        fn frame_boundaries(body: &[u8]) -> Vec<(usize, usize, usize)> {
+            let header = crate::foundation::container::CONTAINER_HEADER_LEN;
+            let mut out = Vec::new();
+            let mut offset = 0usize;
+            while offset + header <= body.len() {
+                let body_len = u64::from_be_bytes(
+                    body[offset + 10..offset + 18]
+                        .try_into()
+                        .expect("8 bytes"),
+                ) as usize;
+                if offset + header + body_len > body.len() {
+                    break;
+                }
+                out.push((offset, header, body_len));
+                offset += header + body_len;
+            }
+            out
+        }
+
+        /// Two real, sound frames -- the base every shape mutates.
+        fn two_real_frames() -> Vec<u8> {
+            let mut bytes = one_real_blob_record();
+            bytes.extend(one_real_blob_record());
+            bytes
+        }
+
+        /// Three real, sound frames -- `flip-middle-record` and `flip-last-then-sound` both need a
+        /// genuine middle/last distinct from the first.
+        fn three_real_frames() -> Vec<u8> {
+            let mut bytes = one_real_blob_record();
+            bytes.extend(one_real_blob_record());
+            bytes.extend(one_real_blob_record());
+            bytes
+        }
+
+        /// `arch.py`'s own `torn-end`: a torn copy of frame 0 (its header plus half its claimed
+        /// body) appended at the very end -- a crash tail, nothing sound after it.
+        fn torn_end(frames: &[u8]) -> Vec<u8> {
+            let (o, h, bl) = frame_boundaries(frames)[0];
+            let mut out = frames.to_vec();
+            out.extend_from_slice(&frames[o..o + h + bl / 2]);
+            out
+        }
+
+        /// `arch.py`'s own `zeros-blob-tail`: `n` zero bytes appended after the last real frame.
+        fn zeros_blob_tail(frames: &[u8], n: usize) -> Vec<u8> {
+            let mut out = frames.to_vec();
+            out.extend(std::iter::repeat_n(0u8, n));
+            out
+        }
+
+        /// `arch.py`'s own `torn-overrun`: a torn copy of frame 0 inserted immediately *before* the
+        /// last frame -- a torn frame a later, genuine write overran.
+        fn torn_overrun(frames: &[u8]) -> Vec<u8> {
+            let boundaries = frame_boundaries(frames);
+            let (o, h, bl) = boundaries[0];
+            let (last_offset, ..) = *boundaries.last().expect("at least one frame");
+            let torn = frames[o..o + h + bl / 2].to_vec();
+            let mut out = frames[..last_offset].to_vec();
+            out.extend_from_slice(&torn);
+            out.extend_from_slice(&frames[last_offset..]);
+            out
+        }
+
+        /// `arch.py`'s own `flip-middle-record`: a complete frame, not the last, fails its checksum
+        /// -- unambiguous damage, with a sound frame after it.
+        fn flip_middle_record(frames: &[u8]) -> Vec<u8> {
+            let boundaries = frame_boundaries(frames);
+            let (o, h, bl) = boundaries[boundaries.len() / 2];
+            let mut out = frames.to_vec();
+            out[o + h + bl / 2] ^= 0xFF;
+            out
+        }
+
+        /// `arch.py`'s own `flip-last-then-sound`: the last frame's own body flipped, then a sound
+        /// copy of frame 0 appended right after it -- a complete, checksummed frame failing,
+        /// overrun by a later sound one. RFC 162 rule 2: a **complete** frame that fails is damage
+        /// regardless of what follows it -- `checksum_mismatch_is_complete`'s own `next >= body_end`
+        /// is true here because nothing was ever torn; the frame's own real body is fully present.
+        fn flip_last_then_sound(frames: &[u8]) -> Vec<u8> {
+            let boundaries = frame_boundaries(frames);
+            let (o, h, bl) = boundaries[0];
+            let (last_offset, last_header, last_body_len) =
+                *boundaries.last().expect("at least one frame");
+            let mut out = frames.to_vec();
+            out[last_offset + last_header + last_body_len / 2] ^= 0xFF;
+            out.extend_from_slice(&frames[o..o + h + bl]);
+            out
+        }
+
+        /// `arch.py`'s own `hostile-blob-tail` (RFC 167's own M5 shape): a torn 30-byte header
+        /// prefix, then as many full, plausible-looking fake headers as needed to reach `size`
+        /// bytes, each claiming a huge remaining body.
+        ///
+        /// **Traced from the real decoder's own answer, not assumed**: the 30-byte prefix leaves
+        /// the real magic, version, and the frame's own *real* `body_len` field intact (only bytes
+        /// 30..50 of the assembled 50-byte header come from the first fake header, and that
+        /// boundary falls past the `body_len` field at bytes 10..18) -- so this does **not** reach
+        /// the `TrailingPartial` arm at all. It parses as a structurally valid header claiming the
+        /// *original* body length, whose checksum then fails against the garbage bytes now actually
+        /// there: a `ChecksumMismatch`. None of the dense run of fake headers after it ever
+        /// validates either, so `sound_frame_after_partial`'s own scan exhausts the RFC 167 budget
+        /// before ruling out a sound frame: `BoundedScan::Undetermined`.
+        /// `checksum_mismatch_is_complete`'s own `NoSoundFrame | Undetermined => true` maps this to
+        /// **damage** -- the opposite of the `TrailingPartial` arm's own `Undetermined` handling
+        /// (`complete: false`, step 1 Part A), and exactly RFC 167 D2's stated rule for this path:
+        /// "every reader treats `Undetermined` as damage, never as a tail."
+        fn hostile_blob_tail(frames: &[u8], size: usize) -> Vec<u8> {
+            let (o, h, _) = frame_boundaries(frames)[0];
+            let header = frames[o..o + h].to_vec();
+            let mut tail = header[..30.min(header.len())].to_vec();
+            while tail.len() < size {
+                let mut fake = header.clone();
+                let remaining = size.saturating_sub(tail.len()).saturating_sub(h);
+                fake[10..18].copy_from_slice(&(remaining as u64).to_be_bytes());
+                tail.extend_from_slice(&fake);
+            }
+            tail.truncate(size);
+            let mut out = frames.to_vec();
+            out.extend_from_slice(&tail);
+            out
+        }
+
+        /// Run both readers over `bytes` and assert: they agree with each other on every damaged or
+        /// interrupted offset (`assert_held_equal_to_the_store`'s own check -- it never compares
+        /// `Sound` entries, since `archive_classification`'s own `classified` list only ever reports
+        /// damage/interrupted lines, not sound ones), and neither one ever reports
+        /// `RealClass::Damage` when `expect_damage` is `false` -- the outright, pinned verdict 2B-1
+        /// asks for, not only mutual agreement.
+        fn assert_pinned_verdict(bytes: &[u8], expect_damage: bool) {
+            super::assert_held_equal_to_the_store(ObjectType::Blob, bytes);
+            let real = real_classification(ObjectType::Blob, bytes);
+            let real_has_damage = real.iter().any(|(_, class)| *class == RealClass::Damage);
+            assert_eq!(
+                real_has_damage, expect_damage,
+                "expected damage={expect_damage}, store says: {real:?}"
+            );
+            let (archive_classified, _sound) =
+                archive_classification(ObjectType::Blob, bytes).expect("archive classification");
+            let archive_has_damage = archive_classified
+                .iter()
+                .any(|(_, class)| *class == RealClass::Damage);
+            assert_eq!(
+                archive_has_damage, expect_damage,
+                "expected damage={expect_damage}, archive says: {archive_classified:?}"
+            );
+        }
+
+        #[test]
+        fn torn_end_is_a_tail_never_damage() {
+            let bytes = torn_end(&two_real_frames());
+            assert_pinned_verdict(&bytes, false);
+            // A genuine tail (`NoSoundFrame`) pushes no `record_outcomes` entry of its own -- only
+            // `trailing_partial_bytes`, confirmed structurally rather than assumed.
+            let replay = decode_container_records(ObjectType::Blob, &bytes).expect("store decode");
+            assert!(
+                replay.trailing_partial_bytes > 0,
+                "a torn-end frame with nothing sound after it must read as a trailing tail"
+            );
+        }
+
+        #[test]
+        fn zeros_blob_tail_100_is_a_tail_never_damage() {
+            let bytes = zeros_blob_tail(&two_real_frames(), 100);
+            assert_pinned_verdict(&bytes, false);
+            // 100 zero bytes is *more* than one header's worth (`CONTAINER_HEADER_LEN`, 50) -- this
+            // is not a short read (`TrailingPartial`); the all-zero magic simply never matches the
+            // real one, so this is `Invalid{complete:false}` (bad magic, resync finds nothing
+            // after it), structurally confirmed rather than assumed.
+            let replay = decode_container_records(ObjectType::Blob, &bytes).expect("store decode");
+            let non_complete_failed = replay.record_outcomes.iter().any(|outcome| {
+                matches!(
+                    outcome.status,
+                    ContainerRecordStatus::Failed {
+                        complete: false,
+                        ..
+                    }
+                )
+            });
+            assert!(
+                non_complete_failed,
+                "a run of zero bytes with nothing sound after it must be a non-complete, \
+                 recorded outcome: {:?}",
+                replay.record_outcomes
+            );
+        }
+
+        #[test]
+        fn torn_overrun_is_an_interrupted_append_never_damage() {
+            let bytes = torn_overrun(&two_real_frames());
+            assert_pinned_verdict(&bytes, false);
+            let replay = decode_container_records(ObjectType::Blob, &bytes).expect("store decode");
+            let interrupted = replay.record_outcomes.iter().any(|outcome| {
+                matches!(
+                    outcome.status,
+                    ContainerRecordStatus::Failed {
+                        complete: false,
+                        ..
+                    }
+                )
+            });
+            assert!(
+                interrupted,
+                "the torn-but-overrun frame must be a recorded, non-complete outcome: {:?}",
+                replay.record_outcomes
+            );
+        }
+
+        #[test]
+        fn flip_middle_record_is_damage() {
+            let bytes = flip_middle_record(&three_real_frames());
+            assert_pinned_verdict(&bytes, true);
+        }
+
+        #[test]
+        fn flip_last_then_sound_is_damage_not_an_interrupted_append() {
+            // RFC 162 rule 2, the shape this part's own CHANGELOG entry calls out explicitly: a
+            // complete, checksum-failed frame stays damage even when a sound frame follows it --
+            // the "overrun forgives a torn frame" exception applies only to a genuinely truncated
+            // claim, never to one that was fully present and simply wrong.
+            let bytes = flip_last_then_sound(&three_real_frames());
+            assert_pinned_verdict(&bytes, true);
+        }
+
+        #[test]
+        fn hostile_blob_tail_one_mebibyte_exhausts_the_budget_as_damage() {
+            // See `hostile_blob_tail`'s own doc comment: this construction's first header reads as
+            // a structurally valid, checksum-failed frame (not a short read), and the scan budget
+            // is spent ruling out a sound frame among the dense run of fakes after it --
+            // `Undetermined`, which this code path (unlike `TrailingPartial`'s own) maps to damage,
+            // per RFC 167 D2.
+            let bytes = hostile_blob_tail(&two_real_frames(), 1024 * 1024);
+            assert_pinned_verdict(&bytes, true);
+        }
+
+        /// Item 2 ("one wording"): the archive's own line for an interrupted append is the shared
+        /// primitive's own base text (the identical sentence a live repository's own `prikk verify`
+        /// would print for the same shape), with only the archive's own added context layered on
+        /// top -- not an independently-worded sentence. Pinned on the `torn-overrun` shape, whose
+        /// line it is now one function away from (`classify_section_records`'s own translation).
+        #[test]
+        fn the_archive_and_the_store_say_the_identical_base_sentence_for_an_interrupted_append() {
+            let bytes = torn_overrun(&two_real_frames());
+            let replay = decode_container_records(ObjectType::Blob, &bytes).expect("store decode");
+            let store_message = replay
+                .record_outcomes
+                .iter()
+                .find_map(|outcome| match &outcome.status {
+                    ContainerRecordStatus::Failed {
+                        message,
+                        complete: false,
+                    } => Some((outcome.offset, message.clone())),
+                    _ => None,
+                })
+                .expect("the torn-overrun frame must be a non-complete Failed outcome");
+            let (archive_classified, _) =
+                archive_classification(ObjectType::Blob, &bytes).expect("archive classification");
+            let archive_offset_class = archive_classified
+                .iter()
+                .find(|(_, class)| *class == RealClass::Interrupted)
+                .expect("the archive must also classify this as an interrupted append");
+            assert_eq!(
+                archive_offset_class.0, store_message.0,
+                "the archive's own offset must agree with the store's"
+            );
+            // The archive's own exposed text (`classify_section_records`'s translation,
+            // `archive/verify.rs`) is `interrupted_append_message(format!("byte offset {offset}:
+            // {message}"))`, where `message` is the identical string the store's own
+            // `record_outcomes` entry already carries -- reconstructed here, byte for byte, rather
+            // than assumed.
+            let expected_archive_line = format!(
+                "interrupted append: byte offset {}: {}; not imported",
+                store_message.0, store_message.1
+            );
+            // `archive_classification`'s own helper only recovers offsets, not full message text
+            // (see `numbers_in`'s own doc comment) -- re-run `for_each_object_record` directly here
+            // to read the real, full line this pinning test exists to check.
+            let kind = ArchiveSectionKind::ObjectContainer(ObjectType::Blob);
+            let wire_code = kind.wire_code().to_be_bytes();
+            let length = (bytes.len() as u64).to_be_bytes();
+            let checksum =
+                prikk_hash::sha256_parts(&[SECTION_MAGIC, &wire_code, &length, &bytes]);
+            let mut buffer = Vec::new();
+            buffer.extend_from_slice(SECTION_MAGIC);
+            buffer.extend_from_slice(&wire_code);
+            buffer.extend_from_slice(&length);
+            buffer.extend_from_slice(&bytes);
+            buffer.extend_from_slice(&checksum);
+            let entry = ManifestEntry {
+                kind,
+                offset: 0,
+                length: bytes.len() as u64,
+                checksum,
+            };
+            let mut cursor = std::io::Cursor::new(buffer);
+            let outcome =
+                for_each_object_record(&mut cursor, &entry, ObjectType::Blob, |_| Ok(()))
+                    .expect("read section");
+            assert_eq!(
+                outcome.interrupted_appends,
+                vec![expected_archive_line],
+                "the archive's own full line must be the store's base text, with only the \
+                 archive's own added context layered on top"
+            );
+        }
     }
 }

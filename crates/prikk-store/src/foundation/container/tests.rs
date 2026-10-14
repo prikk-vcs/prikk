@@ -173,6 +173,66 @@ fn an_overrun_torn_frame_reads_as_an_interrupted_append_never_damage() -> Result
     Ok(())
 }
 
+/// 0.52.0 step 2, Part 2B (review `0.52.0-step-2-A-review-v1`, finding 2B-1): once the archive moves
+/// onto the identical shared primitive, a differential comparison between the two readers can no
+/// longer catch a bug *inside* the primitive -- a bug there moves both readers' answers together.
+/// 2A's own perturbation ("treat an overrun as complete") was caught only by the then-still-separate
+/// archive twin; this store-side test is the pinned-expectation gap 2B-1 named: a
+/// **checksum-mismatched, fully-present** frame (not a short read -- `an_overrun_torn_frame_reads_
+/// as_an_interrupted_append_never_damage` above already covers that different shape) whose own
+/// claimed body is inflated just enough that a later, genuinely sound frame's own start position
+/// falls *inside* the inflated claim -- the one shape that actually exercises `checksum_mismatch_
+/// is_complete`'s own `next >= body_end` comparison with a real "no" answer, which this file's own
+/// test suite did not previously have. Must read red under 2A's own perturbation (`next >= body_end`
+/// forced to unconditional `true`), confirmed in the report.
+#[test]
+#[allow(clippy::expect_used)]
+fn a_checksum_mismatch_whose_sound_frame_starts_inside_the_claimed_range_is_interrupted_not_damage()
+-> Result<()> {
+    let mut record_a = encode_container_record(ObjectType::Blob, &signed_patch_blob_envelope())?;
+    let header_len = super::CONTAINER_HEADER_LEN;
+    let real_body_len = (record_a.len() - header_len) as u64;
+    // Inflate only the header's own declared body length (bytes 10..18, big-endian u64) by 10 --
+    // the checksum bytes and the real body are untouched, so decoding now reads 10 bytes too many
+    // (spilling into the next record's own header) and the checksum no longer matches.
+    let inflated_len = real_body_len + 10;
+    record_a[10..18].copy_from_slice(&inflated_len.to_be_bytes());
+    let record_b = encode_container_record(ObjectType::Blob, &signed_patch_blob_envelope())?;
+    // `record_b`'s own real magic sits at `record_a.len()` (unchanged -- only a header field was
+    // overwritten, not any byte's position), which is `header_len + real_body_len`: strictly inside
+    // the inflated claim `header_len + real_body_len + 10`. `record_b` is long enough on its own
+    // that the inflated claim still fits entirely within real, present bytes (not a short read).
+    let mut bytes = record_a.clone();
+    bytes.extend_from_slice(&record_b);
+
+    let replay = decode_container_records(ObjectType::Blob, &bytes)?;
+    assert_eq!(
+        replay.records.len(),
+        1,
+        "only the second, genuinely sound record reads -- the first's own claim was both wrong \
+         and overlapping"
+    );
+    let outcome = replay
+        .record_outcomes
+        .first()
+        .expect("the mutated first frame must produce an outcome");
+    match &outcome.status {
+        ContainerRecordStatus::Failed {
+            message,
+            complete: false,
+        } => {
+            assert!(
+                message.contains("checksum mismatch"),
+                "the base classification is still a checksum mismatch, not a short read: {message:?}"
+            );
+        }
+        other => panic!(
+            "expected a non-complete (interrupted append) Failed outcome, got {other:?}"
+        ),
+    }
+    Ok(())
+}
+
 #[test]
 fn non_persisted_type_has_no_container_magic() {
     assert!(container_magic(ObjectType::RefUpdate).is_err());
