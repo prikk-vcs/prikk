@@ -39,7 +39,8 @@
   afterward** (external review 023). Both `archive export` and `bundle export` now scan every
   object before writing anything and refuse up front, naming the bound, the same one `import`
   already enforces — nothing is written at the destination path, and no temporary file is left
-  behind.
+  behind. **A repository holding any such object now cannot be archived or bundled at all**, where
+  before it could (incorrectly) be exported and would only fail later, at import.
 
 ### Changed — `archive export` refuses a source caught in a blocking ref-publication state, up front
 

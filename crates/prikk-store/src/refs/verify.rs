@@ -350,6 +350,47 @@ pub(crate) fn classify_ref_items(
     (outcomes, issues)
 }
 
+/// 0.52.0 step 1 Part A round 3 (A-5): restores round 1's own function, removed by round 2 when
+/// `archive::export_archive`'s own blocking-publication refusal switched to the full
+/// `crate::verify::verify_repository` -- an O(store) regression (round 2's own review found it:
+/// 12 MiB/0.8s to 2.18 GiB/5.1s at 1 GiB). This narrow path is O(refs), not O(store): the identical
+/// `read_pointers`/`read_logs`/`classify_ref_items` construction `verify_refs_with` itself runs,
+/// read-failure closure included, returning only the issues `classify_ref_items` itself pushes (the
+/// pointer<->log tie) -- not `candidate_issues`' own ref-candidate-debris finding, which this part
+/// does not ask export to refuse on, and **not yet** piped through
+/// `ref_publication::require_retained_evidence` (`archive::export_archive`'s own caller does that
+/// separately now, with inputs it computes just as narrowly -- see `refuse_on_blocking_ref_publication`).
+pub(crate) fn classify_live_pointer_log_issues(
+    layout: &RepositoryLayout,
+    ref_log: &Result<Option<super::container::DecodedRefLog>>,
+) -> Result<Vec<RefPublicationIssue>> {
+    let objects = ObjectReadSnapshot::open(layout)?;
+    let (
+        pointers,
+        pointer_failures_by_key,
+        _pointer_outcomes,
+        _trailing_partial_pointer_index_bytes,
+    ) = read_pointers(layout, &objects)?;
+    let (logs, _log_record_count, _ref_log_envelopes, log_failures_by_key, _log_outcomes) =
+        read_logs(
+            &|offset| scan::log_locator(layout, offset),
+            &objects,
+            &pointers,
+            ref_log,
+        )?;
+    let (_ref_items, issues) = classify_ref_items(&pointers, &logs, |ref_name| {
+        let ref_name_key = crate::foundation::layout::ref_name_key_bytes(ref_name);
+        let pointer_failure = (!pointers.contains_key(ref_name))
+            .then(|| pointer_failures_by_key.get(&ref_name_key).cloned())
+            .flatten();
+        let log_failure = (!logs.contains_key(ref_name))
+            .then(|| log_failures_by_key.get(&ref_name_key).cloned())
+            .flatten();
+        pointer_failure.or(log_failure)
+    });
+    Ok(issues)
+}
+
 fn next_log_sequence(log: Option<&LogState>) -> Result<u64> {
     u64::try_from(log.map_or(0, |state| state.record_count))
         .ok()

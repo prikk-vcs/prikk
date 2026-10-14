@@ -9,7 +9,12 @@ use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::refs::{RefPublicationIssue, RefStore};
 use crate::wal::WalRecord;
 
-pub(super) fn require_retained_evidence(
+/// `pub(crate)` (0.52.0 step 1 Part A round 3, A-5): `archive::export_archive`'s own narrow
+/// blocking-ref-publication refusal calls this directly, on inputs it computes just as narrowly as
+/// `verify_repository_with_options` does (the active WAL's own replay, its metadata status, and the
+/// trust policy's own structural soundness) -- not a copy of this rule, sharing it. This module stays
+/// private (`mod ref_publication;` in `verify.rs`); `verify.rs` re-exports this one function.
+pub(crate) fn require_retained_evidence(
     layout: &RepositoryLayout,
     records: &[WalRecord],
     metadata: &ActiveWalMetadataStatus,

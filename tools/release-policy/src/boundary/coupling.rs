@@ -608,15 +608,19 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
     },
     DeclaredHub {
         module: "verify",
-        reason: "0.52.0 step 1 Part A round 2 (A-1): `archive::export_archive` now refuses up front \
-                  on a source repository caught in a blocking ref-publication state by calling \
-                  `verify::verify_repository` directly and reading its own already-fully- \
-                  reclassified `ref_publication_issues`, rather than re-deriving a narrower \
-                  classification that could name the wrong remedy (the defect the review that asked \
-                  for this round found). `doctor`, `format_upgrade` and `patch_exchange::accept` were \
-                  already callers, each reading `verify`'s own report rather than keeping a second \
-                  derivation of it -- one more real consumer sharing the one whole-repository check, \
-                  not reach that crept outward",
+        reason: "0.52.0 step 1 Part A round 2 (A-1), corrected in round 3 (A-5): `archive::\
+                  export_archive` refuses up front on a source repository caught in a blocking \
+                  ref-publication state, sharing `verify`'s own classification and post-processing \
+                  rule rather than re-deriving either. Round 2 called the whole `verify::\
+                  verify_repository`, which walks every persisted object (O(store)) just to read \
+                  one field off its report -- a measured regression (12 MiB/0.8s to 2.18 GiB/5.1s at \
+                  1 GiB). Round 3 shares three narrow, O(refs) pieces instead: \
+                  `verify::classify_active_wal_metadata`, `verify::require_retained_evidence` (a new \
+                  seam through the otherwise-private `ref_publication` submodule), and the public \
+                  `verify::ActiveWalMetadataStatus` type their signatures carry. `doctor`, \
+                  `format_upgrade` and `patch_exchange::accept` were already callers, each reading \
+                  `verify`'s own report rather than keeping a second derivation of it -- one more \
+                  real consumer sharing this module's own rules, not reach that crept outward",
     },
 ];
 

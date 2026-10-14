@@ -303,6 +303,11 @@ pub(crate) mod reachability;
 mod ref_publication;
 mod trust;
 
+// 0.52.0 step 1 Part A round 3 (A-5): `archive::export_archive`'s own narrow blocking-ref-publication
+// refusal shares this one post-processing function, not a copy of its rule -- `mod ref_publication`
+// itself stays private, this is the one seam through it.
+pub(crate) use ref_publication::require_retained_evidence;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockPayload, ObjectId, ObjectType, RefKind, RefStatePayload};
 

@@ -177,9 +177,19 @@ fn archive_export_rss_at_release_gate_node_counts() {
     eprintln!("{report}");
 }
 
-/// A real (not sparse) ~1 GiB blob, committed and sealed, then exported -- the byte-heavy case the
-/// design round measured for the streamed-copy path (D3's own 775 ms/flat-RSS figure, warm cache)
-/// but never through the real `archive export` command until now.
+/// About 1 GiB, spread across several blobs each under `DEFAULT_BUNDLE_MAX_OBJECT_BYTES` (256
+/// MiB), then exported -- the byte-heavy case the design round measured for the streamed-copy path
+/// (D3's own 775 ms/flat-RSS figure, warm cache) but never through the real `archive export`
+/// command until now.
+///
+/// 0.52.0 step 1 Part A round 3 (A-6): **was** a single real (not sparse) ~1 GiB blob. 0.52.0 step
+/// 0's own item 1 (`refuse_on_over_bound_object`) now correctly refuses any single object over the
+/// 256 MiB per-object bound before writing anything -- the exact shape external review 023 found
+/// (0.51.0 exported that single-blob archive successfully, but its own `archive verify`/`import`
+/// always refused it, so the old fixture measured an archive that could never be restored). Changed
+/// to the same `write_many_blobs_totaling` shape `archive_verify_rss_at_one_gib_of_blob_content`
+/// below already uses (128 MiB per blob, under the bound), so this instrument measures a real,
+/// importable archive again.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "RFC 155 implementation Part E: measures archive export's peak RSS on ~1 GiB of real blob content; run deliberately"]
@@ -187,16 +197,10 @@ fn archive_export_rss_at_one_gib_of_blob_content() {
     let repo = support::unique_repo("rfc155-archive-rss-1gib");
     support::init(&repo);
     const ONE_GIB: usize = 1024 * 1024 * 1024;
-    let mut content = vec![0_u8; ONE_GIB];
-    // Deterministic, non-trivial content -- not all-zero, so the OS cannot special-case it as a
-    // hole, and not so expensive to generate that this instrument's own setup dominates its cost.
-    for (index, byte) in content.iter_mut().enumerate() {
-        *byte = (index % 251) as u8;
-    }
-    std::fs::write(repo.join("big.bin"), &content).unwrap();
-    drop(content);
+    const PER_BLOB: usize = 128 * 1024 * 1024;
+    write_many_blobs_totaling(&repo, ONE_GIB, PER_BLOB);
     support::ok(
-        &support::commit(&repo, "heads/main", "1 GiB blob"),
+        &support::commit(&repo, "heads/main", "~1 GiB across several blobs"),
         "commit",
     );
     support::ok(&support::seal(&repo, "heads/main"), "seal");

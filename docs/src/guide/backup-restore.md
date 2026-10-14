@@ -169,6 +169,12 @@ the reason named.
 **With prikk 0.51.0, run `archive verify` on every export before relying on it** (fixed in 0.52.0;
 see [the limitation](../reference/current-state.md) for the two shapes and why).
 
+**A repository holding any file over 256 MiB cannot be archived.** `archive export` (and
+`bundle export`, for a ref that reaches such a file) refuses up front, naming the over-bound
+object, and writes nothing — the same per-object bound `archive import`/`bundle import` already
+enforce when reading one back. A copy of this repository's own `.prikk/` directory is the real
+backup for a repository in this state.
+
 **If the archive's own exported local ref and one of its own carried received pointers would land
 at the same `remotes/<ref>` name** — because the source repository itself once `bundle import`ed
 something for that same ref — the exporter's own ref wins the name; the colliding received pointer

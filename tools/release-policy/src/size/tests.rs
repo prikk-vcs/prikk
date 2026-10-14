@@ -150,7 +150,11 @@ fn removing_a_declaration_names_its_file() {
         // step, 2,780 -> 2,783.
         // 0.52.0 step 0 Part C1 round 2: `verify_received_ref_state` extracted out of
         // `verify_received_refs` so `archive::verify` can share it too, 2,783 -> 2,789.
-        detail.contains("2789"),
+        // 0.52.0 step 1 Part A round 3, A-5: `pub(crate) use ref_publication::require_retained_
+        // evidence;`, the one seam through the otherwise-private `ref_publication` submodule, so
+        // `archive::export_archive` can share this post-processing step narrowly instead of calling
+        // the whole `verify_repository` (a measured O(store) regression), 2,789 -> 2,794.
+        detail.contains("2794"),
         "the line count is in the message: {detail}"
     );
     assert!(

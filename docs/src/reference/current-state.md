@@ -250,6 +250,15 @@ planned for.
   the store itself checks — a 0.51.0-written archive of either shape imports cleanly under 0.52.0,
   provided its own source repository verified clean.
 
+- **A repository holding any file over 256 MiB cannot be archived or bundled** (the bound
+  `archive import`/`bundle import` already enforce on the way back in,
+  `DEFAULT_BUNDLE_MAX_OBJECT_BYTES`). `archive export` refuses up front for any over-bound object
+  anywhere in the repository; `bundle export` refuses up front for any over-bound object the one
+  exported ref reaches. Before 0.52.0, `archive export` wrote such a file successfully, and only a
+  later `archive verify`/`archive import` refused it — fixed alongside the closure defect above. A
+  copy of this repository's own `.prikk/` directory is the real backup for a repository in this
+  state.
+
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes
   the damage, so the way out is a backup or a clone. (Reproduced with the hostile M5 repository at 256 KiB: `doctor` exits 1 with this

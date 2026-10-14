@@ -42,7 +42,8 @@ use crate::bundle::DEFAULT_BUNDLE_MAX_OBJECT_BYTES;
 use crate::foundation::fsutil::len_to_u64;
 use crate::foundation::generation::resolve_live_slot;
 use crate::foundation::layout::{
-    ContainerSlot, LockableContainer, RepositoryFormat, RepositoryLayout, persisted_object_types,
+    ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
+    persisted_object_types,
 };
 use crate::lock::acquire_container_locks;
 use crate::wal::Wal;
@@ -548,33 +549,82 @@ fn first_over_bound_record(
     Ok(None)
 }
 
-/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2); round 2 (A-1): refuse before writing anything
-/// if the source repository sits in a ref-publication state the store's own `verify` already blocks
-/// on (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) -- shares the real, fully-reclassified
-/// result `prikk verify` itself reports, not a narrower reconstruction of it. Round 1's own
-/// `classify_live_pointer_log_issues` deliberately skipped `ref_publication::require_retained_
-/// evidence`'s own post-processing step, which is right for the `blocking` flag (confirmed: every
-/// exit path of that function sets `blocking: true`, never clears it) but wrong for the issue's own
-/// final `code`/`message`: that step alone decides whether a `POINTER-LEADS-LOG` lead is actually
-/// completable (`ref_completion::plan_ref_completion` succeeds -- the message gains *"; run
-/// `prikk ref complete <ref>`"*) or not (refuses, or no retained evidence, or no `ref_name` at all --
-/// `mark_unproved` rewrites the code to `DIVERGENCE` and the message to say the divergence is not
-/// proved). Naming `prikk ref complete` unconditionally, as round 1 did, sent the user to a command
-/// that would just refuse for every non-completable case. `verify_repository` (`crate::verify`) runs
-/// the identical pointer/log classification **and** that post-processing, and its own
-/// `RepositoryVerification::ref_publication_issues` already carries the final, right code and
-/// message for every issue -- read it directly, never re-derive it. `verify_repository` takes no
-/// locks of its own (it is designed to run with none held, under `prikk verify`'s own usage), so
-/// calling it here, under `export_archive`'s own five already-held locks, introduces no new lock
-/// ordering or re-entrancy at all -- confirmed by reading its own call graph for any
-/// `acquire_container_locks` call: there is none.
+/// 0.52.0 step 1 Part A, item 2 (C1 review v3, N2); round 2 (A-1); round 3 (A-5): refuse before
+/// writing anything if the source repository sits in a ref-publication state the store's own
+/// `verify` already blocks on (`PRIKK-VERIFY-REF-POINTER-LEADS-LOG`/`-DIVERGENCE`) -- shares the
+/// real classification and post-processing rule, never a re-derivation of either, and **never the
+/// whole `verify_repository`**: round 2 called it directly, and the architect measured the
+/// regression that caused -- `verify_repository`'s own `Objects` stage walks every persisted object
+/// across every type (`verify::objects::verify_objects`), O(store); at 1 GiB of blob content, export
+/// went from 12 MiB/0.8s to 2.18 GiB/5.1s peak. RFC 155 bounds export's own memory by the largest
+/// object, not the store.
+///
+/// **The narrow path, each input as cheap as `verify_repository_with_options` itself makes it:**
+/// - the issues themselves: `classify_live_pointer_log_issues` (restored from round 1, removed by
+///   round 2 when it switched to the whole verify) -- the identical `read_pointers`/`read_logs`/
+///   `classify_ref_items` construction `verify_refs_with` runs, O(refs);
+/// - `records`: the active WAL's own replay. By this point `refuse_on_queued_unsealed_work` has
+///   already refused on any session holding queued work, so the default session's own WAL is empty
+///   or nearly so -- a second, cheap read of a near-empty file, not a re-derivation of the refusal
+///   itself;
+/// - `metadata`: `crate::verify::classify_active_wal_metadata`, the identical function and call
+///   shape `verify_repository_with_options` uses (`DEFAULT_ACTIVE_NAME`, `records.is_empty()`);
+/// - `trust_is_valid`: **not** `verify_repository`'s own `objects_evaluated && trust_verifier.issues.
+///   is_empty()` (an O(store) accumulator across every object's own trust check) -- that answers a
+///   broader question this narrow path does not need an answer to. `ref_publication.rs`'s own doc
+///   on `trust_is_valid` names what it actually gates: whether `ref_completion::plan_ref_completion`
+///   even gets a chance to run for a lead (if false, `mark_unproved` fires without calling it at
+///   all). `plan_ref_completion` is itself a complete, self-contained, read-only rule (confirmed by
+///   reading it): condition (a) re-verifies the *specific* leading RefState's own signature against
+///   the *current* trust policy (`load_maintainer_trust_policy`/`verify_trusted_publication_
+///   envelope`), independently of anything this function computes -- and `prikk ref complete`'s own
+///   real write calls this same `plan_ref_completion` again, fresh, before ever touching the store.
+///   So a `trust_is_valid` that is too optimistic here never bypasses a real safety check: at worst
+///   it lets `plan_ref_completion` run when the broader, whole-store question would have said not to
+///   bother, and `plan_ref_completion`'s own fresh condition (a) still refuses if that specific
+///   lead's own signature does not verify. The narrow, correct, and cheap question this path asks
+///   instead is **whether a trust policy actually exists and replays without damage** --
+///   `crate::trust_index::read_current_trust_policy_snapshot(layout)` (already `pub(crate)`,
+///   already O(trust-key-container): it is `replay_trust_policy` plus the one fact this narrow path
+///   needs, `Ok(None)` meaning no maintainer key was ever adopted here), `.is_some()`. Found
+///   empirically, not assumed: `replay_trust_policy(layout)?.has_item_failure()` alone reads `false`
+///   for an empty, never-adopted policy too (zero entries is not damage), which let
+///   `plan_ref_completion` run and hard-fail on `load_maintainer_trust_policy`'s own "no maintainer
+///   key is adopted" precondition rather than this function cleanly marking the issue unproved --
+///   caught by `export_refuses_a_source_with_an_unprovable_ref_divergence`, which builds exactly
+///   this shape. A genuinely damaged trust-policy container still propagates as a real `Err` here
+///   (the same `?` any other precondition in this function already uses), consistent with
+///   `resolve_trust_policy_source` refusing on the identical condition later in this same function.
 fn refuse_on_blocking_ref_publication(layout: &RepositoryLayout) -> Result<()> {
-    let report = crate::verify::verify_repository(layout)?;
-    let blocking: Vec<_> = report
-        .ref_publication_issues
-        .iter()
-        .filter(|issue| issue.blocking)
-        .collect();
+    let ref_log = crate::refs::read_and_decode_ref_log(layout, "verify-scan");
+    let mut issues = crate::refs::verify::classify_live_pointer_log_issues(layout, &ref_log)?;
+
+    let records = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME)
+        .replay()?
+        .records;
+    let metadata = crate::verify::classify_active_wal_metadata(
+        layout,
+        DEFAULT_ACTIVE_NAME,
+        records.is_empty(),
+    )?;
+    // `read_current_trust_policy_snapshot` is `replay_trust_policy` plus the one extra fact this
+    // narrow path actually needs: `Ok(None)` means no maintainer key was ever adopted here -- a
+    // normal, common repository state, not damage (it already fails closed on real damage via its
+    // own `has_item_failure` check, propagated by `?` below exactly as `resolve_trust_policy_source`
+    // already does later in this same function). Found empirically: `replay_trust_policy(layout)?.
+    // has_item_failure()` alone reads `false` for an empty, never-adopted policy too, which let
+    // `plan_ref_completion` run and hard-fail on `load_maintainer_trust_policy`'s own "no maintainer
+    // key is adopted" precondition instead of this function cleanly marking the issue unproved.
+    let trust_is_valid = crate::trust_index::read_current_trust_policy_snapshot(layout)?.is_some();
+    crate::verify::require_retained_evidence(
+        layout,
+        &records,
+        &metadata,
+        trust_is_valid,
+        &mut issues,
+    )?;
+
+    let blocking: Vec<_> = issues.iter().filter(|issue| issue.blocking).collect();
     if blocking.is_empty() {
         return Ok(());
     }
