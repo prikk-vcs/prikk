@@ -67,7 +67,9 @@ fn write_crafted_branch_targets_blob_archive(output: &Path) {
             signer_role: prikk_object::SignerRole::Author,
         })
         .unwrap();
-    let blob_id = object_store.write_object(&blob_envelope).expect("write blob");
+    let blob_id = object_store
+        .write_object(&blob_envelope)
+        .expect("write blob");
 
     let ref_state_payload = prikk_object::RefStatePayload {
         ref_name: "heads/main".to_string(),
@@ -273,7 +275,8 @@ fn verify_names_a_failed_received_ref_and_never_the_healthy_adopted_one() {
     // The trap: the healthy ref's own adopted key must mean nothing about it needed the trust path
     // either -- its own objects' signatures are checked and trusted, not merely silent.
     assert!(
-        stdout.contains("publication trust issues:") && !stdout.contains("publication trust issues: 0"),
+        stdout.contains("publication trust issues:")
+            && !stdout.contains("publication trust issues: 0"),
         "the damaged ref's own untrusted key must still raise a nonzero publication trust count \
          (a separate, pre-existing mechanism this fix does not touch): {stdout}"
     );
