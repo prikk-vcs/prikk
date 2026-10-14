@@ -95,3 +95,18 @@ RefState targeting it, the received pointer). No outside path, no early return. 
 **P3c ACCEPTED 2026-10-15** (`81f815fc`, `77ddc2dd`; review `release-0.52.0-prep-P3c-review-v1`). **The candidate is
 complete.** The architect pushes it through the gate service. The owner decides the external review, the advisory
 ruling and the tag. The CHANGELOG date is re-dated at the tag. **Nothing is open for the team.**
+
+**External review 026 (on `39b5938c`, since the letter went out before the candidate was pushed): nothing blocks.**
+Reading: `.git-exclude/reviewed/external-review-026-reading-v1.md`.
+**P4 (about 30 min, `release-0.52.0-prep-P4-report.md`), next:**
+1. **The Security entry gains one sentence,** shown first on a real repository:
+   - a receiver that imported such an archive with 0.51.0 keeps the received pointer, and its `verify` fails on it;
+   - a later `bundle import` (or `archive import`) of that ref replaces the pointer, and `verify` then passes;
+   - prikk has no command that removes a received ref.
+
+   Build that receiver in-process as P3c did, import a sound bundle of the same ref, and run `verify`. Keep the output.
+   **If the replacement does not clear it, stop and report.**
+2. **The date commit:** `## 0.52.0 — <today>`, with `date` run first. One line.
+3. **The 14 gates** on that commit, alone.
+
+**Not the team's:** the push, letter 027, and the tag.
