@@ -606,6 +606,18 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   already call -- the same consolidation as `received::received_index` above, for \
                   this container's own resolver",
     },
+    DeclaredHub {
+        module: "verify",
+        reason: "0.52.0 step 1 Part A round 2 (A-1): `archive::export_archive` now refuses up front \
+                  on a source repository caught in a blocking ref-publication state by calling \
+                  `verify::verify_repository` directly and reading its own already-fully- \
+                  reclassified `ref_publication_issues`, rather than re-deriving a narrower \
+                  classification that could name the wrong remedy (the defect the review that asked \
+                  for this round found). `doctor`, `format_upgrade` and `patch_exchange::accept` were \
+                  already callers, each reading `verify`'s own report rather than keeping a second \
+                  derivation of it -- one more real consumer sharing the one whole-repository check, \
+                  not reach that crept outward",
+    },
 ];
 
 /// One module in the emitted graph.
