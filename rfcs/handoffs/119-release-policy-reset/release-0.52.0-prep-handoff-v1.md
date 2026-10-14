@@ -110,3 +110,14 @@ Reading: `.git-exclude/reviewed/external-review-026-reading-v1.md`.
 3. **The 14 gates** on that commit, alone.
 
 **Not the team's:** the push, letter 027, and the tag.
+
+**P4 stopped at item 1, correctly** (review `release-0.52.0-prep-P4-review-v1`). A sound import replaces the dangling
+received pointer, but the old untrusted `RefState` stays in the store, and `verify`'s trust check (over every stored
+`RefState` and `Block`) keeps failing. No command removes stored objects. The sentence "verify then passes" was false.
+**P4b (about 30 min, `release-0.52.0-prep-P4b-report.md`), next:**
+1. the Security entry's added sentence, in the review's exact wording (what remains, the pointer replaced, the objects
+   kept and still failing trust, no removal command, the `.prikk/` copy as the way back);
+2. one `current-state.md` limitation entry for content imported under an unadopted key, naming only the import paths
+   source confirms;
+3. the date commit (`date` first);
+4. the 14 gates on the final commit.
