@@ -20,9 +20,12 @@ scripts/gates.py
 ```
 
 It prints one `<name> <exit>` line per gate as it finishes (and again as a summary), and exits 0
-only when every one of the 14 does. Each gate runs under an R1 (`systemd-run --user`) scope when
-that is on `PATH`; otherwise the script says plainly that it ran without one, rather than silently
-skipping it. It is a `.py` file, not a `.sh` one, on purpose: this project's own governed-procedure
+only when every one of the 14 does. `scripts/gates.py --list` prints every gate's own name and
+exits 0 without running any of them; any other argument is refused at exit 2, naming the argument,
+rather than silently running the full suite. Each gate runs under an R1 (`systemd-run --user`)
+scope when that is on `PATH`; otherwise the script says plainly that it ran without one, rather
+than silently skipping it. It is a `.py` file, not a `.sh` one, on purpose: this project's own
+governed-procedure
 scanner (`tools/release-policy/src/command_scan/`) has no model of shell control flow, and
 `scripts/gates.py`'s orchestration (looping over the gates, wrapping each conditionally, aggregating
 exit codes) cannot be expressed as a `.sh` file without being read as a wall of unclassified

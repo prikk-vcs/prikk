@@ -72,9 +72,9 @@
 ### Changed — `prikk trust maintainer check` exits `1` for "not trusted" (was `0`)
 
 - **RFC 138 §7.2's original ruling made `check` exit `0` whichever way the question resolved**,
-  since a negative answer is a successful query, not an operational failure. Reviewed against this
-  project's own standing philosophy, that was the riskier choice: `check && …` proceeded even for an
-  untrusted key, a misreading that fails open on a trust question. **Amended, owner-accepted:**
+  since a negative answer is a successful query, not an operational failure. That was the riskier
+  choice: `check && …` proceeded even for an untrusted key, a misreading that fails open on a trust
+  question. **Amended, owner-accepted:**
   `check` now exits `0` only when the key is trusted, and `1` when it is not — the same code an
   unreadable policy already used, since both mean "do not proceed," so the shared code now fails
   closed instead. `2` is unchanged (a missing or malformed `--key-id`). The exit still does not
