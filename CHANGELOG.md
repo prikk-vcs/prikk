@@ -119,15 +119,20 @@
   `prikk verify` and `archive verify` share the identical underlying text (0.52.0 step 2's shared
   decode primitive); before this round, both printed the same sentence for this shape as for the
   genuinely damaged case — before: `container checksum mismatch at byte offset N`. After: `the
-  frame at byte offset N claims bytes that a later sound frame at byte offset M already uses: an
-  interrupted append, not damage` — naming the later sound frame's own offset as the proof. The
-  store's own `verify` line went from `warning: interrupted append in Blob at <path>#N: container
-  checksum mismatch at byte offset N; connectivity …` to `warning: interrupted append in Blob at
-  <path>#N: the frame at byte offset N claims bytes that a later sound frame at byte offset M
-  already uses: an interrupted append, not damage; connectivity …`. The archive's own line also
-  drops a redundant, doubled offset it had added on top (`byte offset N: container checksum
-  mismatch at byte offset N`) now that the shared primitive already names its own offset in every
-  message it produces.
+  frame at byte offset N claims bytes that a later sound frame at byte offset M already uses` —
+  naming the later sound frame's own offset as the proof, with the verdict ("not damage" / "a
+  harmless remnant") carried by each reader's own wrapper rather than baked into the shared text
+  (a release-prep wording pass: the earlier phrasing, ending its own text in *"…: an interrupted
+  append, not damage"*, read confusingly once each wrapper added its own verdict on top — "not
+  damage" beside "not a harmless remnant until repaired," or "interrupted append" printed twice).
+  The store's own `verify` line for a case where nothing still needs the object now reads:
+  `warning: interrupted append in Blob at <path>#N: the frame at byte offset N claims bytes that a
+  later sound frame at byte offset M already uses; connectivity finds nothing that still needs it,
+  so it is a harmless remnant, not damage`. The archive's own line now reads: `interrupted append:
+  the frame at byte offset N claims bytes that a later sound frame at byte offset M already uses;
+  not imported` — no doubled "interrupted append," and no doubled offset (the shared primitive
+  already names its own offset in every message it produces, so the archive no longer adds one of
+  its own on top).
 - **`archive verify`'s own damage/interrupted-append lines now always name the frame's own byte
   offset, and the interrupted-append text is the identical base sentence a live repository's own
   `prikk verify` would give the same shape** (0.52.0 step 2, RFC 155 §9.4): the archive's

@@ -230,13 +230,16 @@ fn a_checksum_mismatch_overrun_by_a_later_sound_frame_is_an_interrupted_append()
         !text.contains("damaged record") && !text.contains("failed: container checksum mismatch"),
         "an interrupted-append overrun must never be worded as a damaged checksum mismatch\n{text}"
     );
+    // W1 (0.52.0 release prep): the base message names only the two offsets now, with no verdict
+    // clause of its own -- the printed line's own "warning: interrupted append in ..." /
+    // "not a harmless remnant until repaired" wrapper (asserted below) is what carries the verdict.
     let expected_detail = format!(
         "the frame at byte offset 0 claims bytes that a later sound frame at byte offset \
-         {sound_frame_offset} already uses: an interrupted append, not damage"
+         {sound_frame_offset} already uses"
     );
     assert!(
         text.contains(&expected_detail),
-        "must name both offsets as the evidence this is an interrupted append, not damage, got:\n{text}"
+        "must name both offsets as the evidence this is an interrupted append, got:\n{text}"
     );
     assert!(
         text.contains("warning: interrupted append in Blob at"),

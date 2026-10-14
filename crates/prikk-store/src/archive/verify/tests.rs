@@ -2114,9 +2114,12 @@ mod section_frame_classification {
         // `foundation::frame_resync::partial_before_sound_frame_message`'s own prose, leaked
         // through unchanged. 0.52.0 step 2: the archive now reuses the shared primitive's own
         // text for this shape (`interrupted_append_before_sound_frame_message`, step 1 Part A's
-        // own fix), which literally says "an interrupted append, not damage" -- a reassurance, not
-        // the old alarm. The thing this control must still refuse is the old, dangerous live-
-        // repository-reader phrasing ("damage, not a torn tail"), not the word "damage" in any
+        // own fix). W1 (0.52.0 release prep) dropped that text's own trailing verdict clause (it
+        // collided with each caller's own wrapper, e.g. "interrupted append" printed twice here) --
+        // the base text now names only the two offsets, and the archive's own
+        // `interrupted_append_message` wrapper supplies the one "interrupted append ...; not
+        // imported" verdict. The thing this control must still refuse is the old, dangerous
+        // live-repository-reader phrasing ("damage, not a torn tail"), not the word "damage" in any
         // form.
         for line in &report.interrupted_appends {
             assert!(
@@ -2128,7 +2131,6 @@ mod section_frame_classification {
                 line.contains("interrupted append")
                     && line.contains("claims more bytes than remain")
                     && line.contains("a sound frame starts at byte offset")
-                    && line.contains("not damage")
                     && line.ends_with("not imported"),
                 "the overrun line must read as an interrupted append, in the shared primitive's \
                  own words, with the archive's own added context: {line:?}"

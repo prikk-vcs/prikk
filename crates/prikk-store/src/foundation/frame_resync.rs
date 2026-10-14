@@ -86,13 +86,20 @@ pub(crate) fn partial_before_sound_frame_message(
 /// CLI already wraps it in (`output/verification.rs`). Used by exactly one call site,
 /// `foundation::container::decode_container_records` -- the object-container decoder, parameterized
 /// on `ObjectType` and so never shared by the other, still-"damage" readers above.
+///
+/// **W1 (0.52.0 release prep):** describes the frame only, with no verdict clause of its own --
+/// every caller already wraps this in its own verdict (`output/verification.rs`'s own two
+/// connectivity branches; the archive's own `interrupted_append_message`), and a verdict baked in
+/// here collided with each wrapper's own, producing lines like *"...not damage; ... not a harmless
+/// remnant until repaired"* (confusing) or "interrupted append" printed twice (the archive's own
+/// line). The evidence -- both offsets -- is what tells a reader this is harmless; the verdict word
+/// belongs to the one wrapper that actually renders it.
 pub(crate) fn interrupted_append_before_sound_frame_message(
     reported_offset: usize,
     reported_next: usize,
 ) -> String {
     format!(
-        "frame at byte offset {reported_offset} claims more bytes than remain, but a sound frame starts at byte offset {reported_next}: \
-         an interrupted append, not damage"
+        "frame at byte offset {reported_offset} claims more bytes than remain, but a sound frame starts at byte offset {reported_next}"
     )
 }
 

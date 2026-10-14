@@ -165,10 +165,11 @@ fn an_overrun_torn_frame_reads_as_an_interrupted_append_never_damage() -> Result
          damage wording: {torn_message:?}"
     );
     assert!(
-        torn_message.contains("an interrupted append, not damage")
-            && torn_message.contains("claims more bytes than remain")
+        torn_message.contains("claims more bytes than remain")
             && torn_message.contains("a sound frame starts at byte offset"),
-        "the message must read as an interrupted append: {torn_message:?}"
+        "the message must name both offsets, the evidence a later write finished past this one \
+         (W1, 0.52.0 release prep: the base message describes the frame only, with no verdict \
+         clause of its own -- the caller's own wrapper gives the verdict): {torn_message:?}"
     );
     Ok(())
 }
@@ -225,15 +226,17 @@ fn a_checksum_mismatch_whose_sound_frame_starts_inside_the_claimed_range_is_inte
             // 2B-2: the message for this shape no longer says "checksum mismatch" (that text is
             // reserved for the *complete*, genuinely-damage case) -- it says what this shape
             // actually is, naming both the frame's own offset and the later sound frame's own
-            // offset as the evidence a later write finished past it.
-            assert!(
-                message.contains("interrupted append"),
-                "an incomplete checksum mismatch must say it is an interrupted append, not reuse \
-                 the damage-case wording: {message:?}"
-            );
+            // offset as the evidence a later write finished past it. W1 (0.52.0 release prep): the
+            // message itself carries no verdict word of its own any more (the caller's own wrapper
+            // supplies "interrupted append"/"not damage") -- this assertion checks the fact, not the
+            // verdict wording.
             assert!(
                 !message.contains("checksum mismatch"),
                 "the damage-case wording must not leak into the interrupted-append case: {message:?}"
+            );
+            assert!(
+                message.contains("already uses"),
+                "must read as a later sound frame already using the claimed bytes: {message:?}"
             );
             assert!(
                 message.contains("byte offset 0"),

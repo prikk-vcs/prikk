@@ -247,13 +247,19 @@ fn checksum_mismatch_message(report_offset: usize) -> String {
 /// genuinely finished past a torn one. Mirrors `frame_resync::interrupted_append_before_sound_frame_
 /// message`'s own two-offset shape for the short-read case, for the identical reason: the evidence,
 /// not just the verdict, is what tells a reader this is harmless.
+///
+/// **W1 (0.52.0 release prep):** describes the frame only, with no verdict clause of its own -- see
+/// `interrupted_append_before_sound_frame_message`'s own doc for why: each caller's own wrapper
+/// already supplies the verdict, and a verdict baked in here collided with it (the archive's own
+/// line read "interrupted append" twice; the store's own "missing object(s)" branch read "not
+/// damage" beside "not a harmless remnant until repaired").
 fn checksum_mismatch_interrupted_message(
     report_offset: usize,
     sound_frame_offset: usize,
 ) -> String {
     format!(
         "the frame at byte offset {report_offset} claims bytes that a later sound frame at byte \
-         offset {sound_frame_offset} already uses: an interrupted append, not damage"
+         offset {sound_frame_offset} already uses"
     )
 }
 
