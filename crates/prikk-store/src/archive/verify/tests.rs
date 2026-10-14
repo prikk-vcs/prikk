@@ -1868,8 +1868,7 @@ mod section_frame_classification {
             report
                 .damaged
                 .iter()
-                .any(|line| line.contains("blob container")
-                    && line.contains("checksum mismatch")),
+                .any(|line| line.contains("blob container") && line.contains("checksum mismatch")),
             "the flipped record must be named as damage by its own section: {:?}",
             report.damaged
         );
@@ -1922,8 +1921,7 @@ mod section_frame_classification {
             report
                 .damaged
                 .iter()
-                .any(|line| line.contains("blob container")
-                    && line.contains("checksum mismatch")),
+                .any(|line| line.contains("blob container") && line.contains("checksum mismatch")),
             "the flipped middle record must be named as damage: {:?}",
             report.damaged
         );
@@ -2622,11 +2620,9 @@ mod differential_against_the_store {
             let mut out = Vec::new();
             let mut offset = 0usize;
             while offset + header <= body.len() {
-                let body_len = u64::from_be_bytes(
-                    body[offset + 10..offset + 18]
-                        .try_into()
-                        .expect("8 bytes"),
-                ) as usize;
+                let body_len =
+                    u64::from_be_bytes(body[offset + 10..offset + 18].try_into().expect("8 bytes"))
+                        as usize;
                 if offset + header + body_len > body.len() {
                     break;
                 }
@@ -2897,8 +2893,7 @@ mod differential_against_the_store {
             let kind = ArchiveSectionKind::ObjectContainer(ObjectType::Blob);
             let wire_code = kind.wire_code().to_be_bytes();
             let length = (bytes.len() as u64).to_be_bytes();
-            let checksum =
-                prikk_hash::sha256_parts(&[SECTION_MAGIC, &wire_code, &length, &bytes]);
+            let checksum = prikk_hash::sha256_parts(&[SECTION_MAGIC, &wire_code, &length, &bytes]);
             let mut buffer = Vec::new();
             buffer.extend_from_slice(SECTION_MAGIC);
             buffer.extend_from_slice(&wire_code);
@@ -2912,9 +2907,8 @@ mod differential_against_the_store {
                 checksum,
             };
             let mut cursor = std::io::Cursor::new(buffer);
-            let outcome =
-                for_each_object_record(&mut cursor, &entry, ObjectType::Blob, |_| Ok(()))
-                    .expect("read section");
+            let outcome = for_each_object_record(&mut cursor, &entry, ObjectType::Blob, |_| Ok(()))
+                .expect("read section");
             assert_eq!(
                 outcome.interrupted_appends,
                 vec![expected_archive_line],

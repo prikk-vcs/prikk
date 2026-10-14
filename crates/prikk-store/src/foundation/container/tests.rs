@@ -226,9 +226,9 @@ fn a_checksum_mismatch_whose_sound_frame_starts_inside_the_claimed_range_is_inte
                 "the base classification is still a checksum mismatch, not a short read: {message:?}"
             );
         }
-        other => panic!(
-            "expected a non-complete (interrupted append) Failed outcome, got {other:?}"
-        ),
+        other => {
+            panic!("expected a non-complete (interrupted append) Failed outcome, got {other:?}")
+        }
     }
     Ok(())
 }
