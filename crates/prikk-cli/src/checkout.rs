@@ -70,9 +70,11 @@ pub(crate) fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliErro
         let queued = queued_commit_count(&layout, &ref_name)?;
         if queued > 0 {
             return Err(
-                prikk_error::PrikkError::Precondition(unpublished_branch_refusal(&ref_name, queued))
-                    .to_string()
-                    .into(),
+                prikk_error::PrikkError::Precondition(unpublished_branch_refusal(
+                    &ref_name, queued,
+                ))
+                .to_string()
+                .into(),
             );
         }
     }

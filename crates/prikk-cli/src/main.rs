@@ -1811,7 +1811,10 @@ mod tests {
     /// assumed from the error case above alone.
     #[test]
     fn an_ok_outcome_still_honors_a_silent_exit_or_plain_success() {
-        assert!(matches!(decide_main_outcome(Ok(()), None), MainDecision::Success));
+        assert!(matches!(
+            decide_main_outcome(Ok(()), None),
+            MainDecision::Success
+        ));
         assert!(matches!(
             decide_main_outcome(Ok(()), Some(1)),
             MainDecision::SilentExit(1)
