@@ -117,21 +117,54 @@ pub(crate) fn open_repository(
     RepositoryLayout::open(root).map_err(|err| err.to_string())
 }
 
+/// What `main` should actually do, given `run()`'s own outcome and whatever [`arm_silent_exit`]
+/// last armed (0.53.0 step 1 round 2, S1-2). **An armed code is honored only when `run()`
+/// succeeded.** Checked separately from `main` itself (which only adds the `eprintln!`/`ExitCode`
+/// side effects around this decision) so the decision itself -- not merely "it compiled" -- is
+/// directly testable: before this round, `main` checked the armed code *before* looking at
+/// `outcome` at all, so a future command that armed the seam and then genuinely failed would have
+/// exited with the armed code and never printed its own error -- the exact "hidden failure" shape
+/// this whole seam exists to prevent, reintroduced one layer up. An `Err` now always wins, and the
+/// armed value is simply discarded in that case (it has already been taken out of the thread-local
+/// by the time this function is called either way, so nothing is left armed for later).
+#[derive(Debug)]
+enum MainDecision {
+    /// `run()` succeeded, nothing was armed: ordinary success.
+    Success,
+    /// `run()` succeeded and a silent exit was armed: this code, no `error:` line.
+    SilentExit(u8),
+    /// `run()` failed: print the error, exit with its own code, regardless of what was armed.
+    Error(CliError),
+}
+
+fn decide_main_outcome(
+    outcome: std::result::Result<(), CliError>,
+    armed: Option<u8>,
+) -> MainDecision {
+    match outcome {
+        Ok(()) => match armed {
+            Some(code) => MainDecision::SilentExit(code),
+            None => MainDecision::Success,
+        },
+        Err(err) => MainDecision::Error(err),
+    }
+}
+
 fn main() -> ExitCode {
     let outcome = run();
     // RFC 136 increment 2c: a verified snapshot that could not supply a file's text (its manifest failed validation,
     // or the text it yielded failed its hash) sends the command back to a full replay, and that is named here, once,
     // whichever command it was and however it ended (§10.3b.4's rule: an anchor's failure is never swallowed).
     warn_anchor_fallbacks(prikk_store::take_anchor_fallbacks().iter());
-    // 0.53.0 step 1, item 1: checked after the epilogue above, so a negative-but-successful answer
-    // (`run_trust`'s own "not trusted" arm, today) still gets it -- unlike the `std::process::exit`
-    // this seam replaced, which skipped the epilogue entirely.
-    if let Some(code) = take_silent_exit() {
-        return ExitCode::from(code);
-    }
-    match outcome {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
+    // 0.53.0 step 1, item 1 (round 2, S1-2): `take_silent_exit` is read here, after the epilogue
+    // above, so a negative-but-successful answer (`run_trust`'s own "not trusted" arm, today) still
+    // gets it -- unlike the `std::process::exit` this seam replaced, which skipped the epilogue
+    // entirely. `decide_main_outcome` then decides what the armed value (if any) actually means,
+    // honoring it only when `outcome` is `Ok(())`.
+    match decide_main_outcome(outcome, take_silent_exit()) {
+        MainDecision::Success => ExitCode::SUCCESS,
+        MainDecision::SilentExit(code) => ExitCode::from(code),
+        MainDecision::Error(err) => {
             eprintln!("error: {}", err.message());
             ExitCode::from(err.exit_code())
         }
@@ -1734,7 +1767,7 @@ fn hex_nibble(c: u8, env_name: &str) -> Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{arm_silent_exit, take_silent_exit};
+    use super::{CliError, MainDecision, arm_silent_exit, decide_main_outcome, take_silent_exit};
 
     /// 0.53.0 step 1, item 1: the silent-exit seam's own take-after-arm semantics -- `main`'s own
     /// control flow (unconditionally calling `warn_anchor_fallbacks` before its one `take_silent_exit`
@@ -1751,5 +1784,37 @@ mod tests {
         arm_silent_exit(1);
         assert_eq!(take_silent_exit(), Some(1), "arming sets the code");
         assert_eq!(take_silent_exit(), None, "taking clears it");
+    }
+
+    /// 0.53.0 step 1 round 2 (S1-2): arming a silent exit and then genuinely failing must still
+    /// report the failure -- an armed code is never allowed to win over a real `Err`. Exercises
+    /// `decide_main_outcome` directly, the one function this round extracted specifically so this
+    /// property is testable without running the real binary end to end.
+    #[test]
+    fn an_armed_exit_never_overrides_a_real_error() {
+        let outcome: std::result::Result<(), CliError> =
+            Err(CliError::Failure("a genuine failure".to_string()));
+        match decide_main_outcome(outcome, Some(1)) {
+            MainDecision::Error(err) => {
+                assert_eq!(err.message(), "a genuine failure");
+                assert_eq!(err.exit_code(), 1);
+            }
+            other => panic!(
+                "an armed code must never override a real error, got a different decision \
+                 instead (variant not `Error`): {other:?}"
+            ),
+        }
+    }
+
+    /// The companion shape: `Ok(())` with nothing armed is ordinary success, and `Ok(())` with a
+    /// code armed is the silent exit this whole seam exists for -- both confirmed directly, not
+    /// assumed from the error case above alone.
+    #[test]
+    fn an_ok_outcome_still_honors_a_silent_exit_or_plain_success() {
+        assert!(matches!(decide_main_outcome(Ok(()), None), MainDecision::Success));
+        assert!(matches!(
+            decide_main_outcome(Ok(()), Some(1)),
+            MainDecision::SilentExit(1)
+        ));
     }
 }
