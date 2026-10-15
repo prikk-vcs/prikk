@@ -17,6 +17,13 @@
   changes wording to the user's own word, "seal": before, `note: publish a ref before checkout
   can target a block`; after, `` note: `prikk seal` publishes a ref before checkout can target a
   block ``.
+- **A cold `commit` no longer refuses over a historical blob damaged on disk, below the nearest
+  checkpoint, in a file it does not touch** (0.53.0 step 3A, F4; RFC 159 ruling C1, extended from
+  `seal` to `commit`): the cold baseline now derives from the nearest checkpoint this repository
+  has sealed or verified under an adopted maintainer key, and a state root (and a checkpoint's own
+  manifest) commits to a file's blob *id*, never its bytes. `verify` still reports the damage;
+  editing or replacing the damaged file still reads its blob and still refuses, unchanged. With no
+  such checkpoint in reach, today's refusal is unchanged.
 
 ## 0.52.0 — 2026-10-15
 

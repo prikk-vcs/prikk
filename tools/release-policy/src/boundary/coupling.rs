@@ -439,6 +439,39 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 decide), so this is not a real, scoped option the way the other \
                                 entries' alternatives are",
     },
+    DeclaredCycle {
+        edges: &[
+            ("lifecycle_cache::incremental", "anchor_trust"),
+            (
+                "lifecycle_cache::incremental",
+                "block_state::anchored_parent",
+            ),
+            ("block_state::anchored_parent", "anchor_trust"),
+            ("block_state::anchored_parent", "lifecycle_cache::replay"),
+            ("patch_replay", "lifecycle_cache::incremental"),
+        ],
+        reason: "0.53.0 step 3A (F4), RFC 159 stack B: the cold `commit` baseline now derives from \
+                  the nearest trusted checkpoint through the same anchored derivation \
+                  `seal`/`merge`/`seal-from-accepted` already use \
+                  (`block_state::anchored_parent::anchored_parent_state`, a new `AnchorSite::Baseline` \
+                  consulting the same `anchor_trust` admission rule), instead of duplicating it -- \
+                  the identical rationale RFC 122 already established for \
+                  `lifecycle_cache::replay <-> patch_replay` above: sharing a derivation necessarily \
+                  concentrates edges at the shared site. Two edges are new \
+                  (`lifecycle_cache::incremental -> anchor_trust`, \
+                  `lifecycle_cache::incremental -> block_state::anchored_parent`); the other three \
+                  (`anchored_parent`'s own pre-existing calls into `anchor_trust` and \
+                  `lifecycle_cache::replay`'s `id_only_tombstones`, and `patch_replay`'s own \
+                  pre-existing DC-64 call into `incremental`) are unchanged code that only now \
+                  closes a cycle because the two new edges complete the loop back through \
+                  `anchor_trust`'s own existing `-> trust` edge and `lifecycle_cache::replay`'s own \
+                  existing `<-> patch_replay` edge above",
+        what_would_remove_it: "giving `incremental`'s own cold-baseline rung its own copy of the \
+                                anchored derivation instead of calling `anchored_parent_state`, \
+                                reintroducing exactly the kind of duplication RFC 122 removed for \
+                                the sibling baseline-derivation cycle above -- worse, not better, \
+                                and not a change this gate should ever encourage",
+    },
 ];
 
 /// One declared hub: a module with high fan-in *and* high fan-out, and why that is consolidation

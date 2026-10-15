@@ -211,8 +211,21 @@ planned for.
   needed.
 - **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.
   Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule).
-- **A one-file `commit` reads every stored blob to learn its kind**: 1 MiB of stored content read 1.1 MB,
-  16 MiB read 16.8 MB, 64 MiB read 67.1 MB. Not yet fixed; deferred to 0.50.0 or later (ROADMAP.md).
+- **Fixed in 0.53.0 (F4): a one-file `commit` no longer reads every stored blob to learn its kind.**
+  Before 0.53.0, a cold baseline (the first commit of a session, after a branch switch, or every
+  64th resolution) replayed the whole lineage, reading every historical blob's frame to re-derive
+  its kind: 1 MiB of stored content read 1.1 MB, 16 MiB read 16.8 MB, 64 MiB read 67.1 MB. The cold
+  baseline now derives from the nearest checkpoint this repository has itself sealed or verified
+  under an adopted maintainer key (RFC 159's anchor-trust function, the same one `seal`/`merge`/
+  `sync seal` already use): about 8 KB, flat, at every size measured. With no such checkpoint in
+  reach (a repository that has only ever received history, before its first local `seal` or
+  `verify`), the full replay still runs, unchanged. **The residual, extending RFC 159 ruling C1 from
+  `seal` to `commit`:** a state root (and a checkpoint's own manifest) commits to a file's blob *id*,
+  never to its bytes, so neither `seal` nor a cold, anchored `commit` re-reads the content of a blob
+  no live file names or that the commit does not itself touch. A cold commit can therefore now
+  succeed over a historical blob damaged on disk, below the checkpoint, in a file it does not touch;
+  `verify` still reports the damage. Editing or replacing that file still reads its blob and still
+  refuses, as before.
 - **Fixed in 0.49.0 (RFC 165, M4): `verify` reports garbage bytes in the ref log.** Before 0.49.0, 100 zero bytes appended to the ref log
   container: `verify` and `doctor` exit 0 with no warning, a `seal` appends behind them, and `verify`
   stayed 0 with the garbage in the middle of the file. The state was harmless (ref-log records are signed

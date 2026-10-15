@@ -65,6 +65,10 @@ pub(crate) enum AnchorSite {
     WorktreeWrite,
     /// Whether `checkout --snapshot-materialize` may skip the provisional marker (`worktree.rs`).
     SnapshotMaterialize,
+    /// The `commit` baseline's cold start, a horizon change, or an ineligible incremental step
+    /// (0.53.0 step 3, F4; RFC 159 stack B): `lifecycle_cache::incremental::resolve_baseline_state_with`.
+    /// Never the forced reanchor and never `verify_divergence` (RFC 159 ruling 5).
+    Baseline,
 }
 
 impl AnchorSite {
@@ -76,6 +80,7 @@ impl AnchorSite {
             Self::SealFromAccepted => "seal-from-accepted",
             Self::WorktreeWrite => "worktree-write",
             Self::SnapshotMaterialize => "snapshot-materialize",
+            Self::Baseline => "baseline",
         }
     }
 }

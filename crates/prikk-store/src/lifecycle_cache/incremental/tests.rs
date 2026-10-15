@@ -485,3 +485,6 @@ fn reanchor_bound_forces_a_full_replay() {
 // RFC 136 increment 2c: the anchored-text controls on the ladder. Under `tests/` so the record-writer scan
 // (`verified_blocks::tests::only_seal_and_verify_write_the_record`) reads them as tests.
 mod anchored;
+
+// 0.53.0 step 3A (F4): the cold `commit` baseline's own anchored-derivation controls.
+mod baseline;

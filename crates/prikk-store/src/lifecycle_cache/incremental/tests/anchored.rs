@@ -58,18 +58,31 @@ fn full_replay(history: &AnchoredHistory, k: usize) -> ReplayDerivedLifecycleSta
 /// Control 1. The DC-65 miss becomes incremental: the tip (block 3, then block 7) edits text an earlier block
 /// edited, with the cache one block behind. **Perturb:** `try_incremental_step`'s
 /// `MissingBlobForLifecycleEffect` arm returns `Ok(None)` -- every assertion on `steps == 1` goes red.
+///
+/// **0.53.0 step 3 (F4) changed what "without anchoring" means here.** `without_anchoring_for_test` disables
+/// only the *text* anchor (RFC 136 2c); it does not disable the new *baseline* anchor
+/// (`AnchorSite::Baseline`), which this 9-block fixture always has available (`AnchoredHistory::standard`
+/// checkpoints genesis). So the DC-65 miss with text anchoring off no longer falls all the way to a full
+/// replay (`steps == 0`) -- it falls to the baseline anchor instead (`steps == 1`, the loaded cache's own
+/// counter + 1, same as a one-block step), and the state is still correct (RFC 159's identity). This is a
+/// genuine, intended consequence of 0.53.0 step 3, not a defect: **the fixture is still not vacuous**, since
+/// `uses == 0` still proves the text anchor itself was not consulted.
 #[test]
 fn a_dc65_miss_becomes_an_incremental_step() {
     let history = AnchoredHistory::standard("anchored-ladder-miss", 9);
     for k in [3_usize, 7] {
-        // The fixture is not vacuous: without anchoring the same step is a DC-65 miss and a full replay.
-        let (_, without, uses) = without_anchoring_for_test(|| step_to(&history, k));
+        let (without_state, without, uses) = without_anchoring_for_test(|| step_to(&history, k));
         assert_eq!(
             without,
-            Some(0),
-            "block {k} misses on DC-65 with anchoring off"
+            Some(1),
+            "block {k} misses on DC-65 with text anchoring off, and falls to the baseline anchor instead"
         );
-        assert_eq!(uses, 0);
+        assert_eq!(uses, 0, "the text anchor itself was not consulted");
+        assert_eq!(
+            without_state.state(),
+            full_replay(&history, k).state(),
+            "the baseline anchor still produces the correct state"
+        );
 
         let (state, with, uses) = step_to(&history, k);
         assert_eq!(
@@ -118,6 +131,13 @@ fn an_anchor_outside_the_verified_record_is_never_consulted() {
 /// node makes the step fall back, names the anchor, and leaves the answer right. The cache is poisoned so the
 /// true text cannot match: node A's cached content id is one no text has. **Perturb:** remove the hash check in
 /// `anchored_texts` (see `anchored_text/tests.rs` for the unit form, which goes red at once).
+///
+/// **0.53.0 step 3 (F4) changed what repairs the poisoned cache here.** This 9-block fixture always has an
+/// admitted baseline anchor (genesis is a checkpoint), so once the text-anchored step gives up (the hash
+/// mismatch below), the repair now comes from the baseline anchor (`steps == loaded counter + 1 == 1`), not
+/// a full replay (`steps == 0`) -- the baseline anchor's own derivation is independent of the poisoned
+/// in-memory cache state (it rebuilds live state from the checkpoint's own signed manifest), so the answer
+/// is still correct. The text-anchor fallback is still named exactly once, below, unaffected by this.
 #[test]
 fn a_text_that_fails_its_hash_falls_back_and_is_named() {
     let history = AnchoredHistory::standard("anchored-ladder-poisoned", 9);
@@ -147,7 +167,11 @@ fn a_text_that_fails_its_hash_falls_back_and_is_named() {
     let state = resolve_baseline_state(&history.layout, &history.store, history.blocks[2], horizon)
         .unwrap();
     assert_eq!(anchored_text_uses_for_test(), before, "no text was used");
-    assert_eq!(steps(&history), Some(0), "a full replay repaired the cache");
+    assert_eq!(
+        steps(&history),
+        Some(1),
+        "the baseline anchor repaired the cache (0.53.0 step 3): the loaded cache's own counter + 1, not a full replay's 0"
+    );
     assert_eq!(state.state(), full_replay(&history, 3).state());
     let named = take_anchor_fallbacks();
     assert_eq!(

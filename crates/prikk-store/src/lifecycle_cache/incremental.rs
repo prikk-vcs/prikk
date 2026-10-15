@@ -115,6 +115,38 @@ pub(crate) enum CacheWrite {
 }
 
 /// [`resolve_baseline_state`], with the choice of whether to refresh the cache.
+///
+/// **0.53.0 step 3, F4 (RFC 159 stack B).** Four rungs, tried in this order:
+/// 1. **The forced reanchor** (DC-64 §5, `steps_since_reanchor >= CHECKPOINT_CADENCE`): a full
+///    `replay_derived_state`, whatever the cache's horizon. Checked first, before the warm path and
+///    before the anchored attempt below, and never anchored (RFC 159 ruling 5: "the reanchor and
+///    `verify_divergence` are never anchored").
+/// 2. **Warm** (today's unmodified DC-64 path): same horizon, a same-baseline hit or an eligible
+///    incremental step.
+/// 3. **Anchored** (new): the cold start, a horizon change, or an ineligible step reach here. Derived
+///    from the nearest block the anchor-trust function admits (`anchored_parent::anchored_parent_state`,
+///    `AnchorSite::Baseline`), authenticated the same way stack A's `seal`/`merge`/`seal-from-accepted`
+///    already are: in the replay-verified record, signed by an adopted maintainer key, and its
+///    snapshot's state root recomputed and checked against the block's own signed `state_merkle_root`
+///    (`validate_snapshot_manifest`, `snapshot.rs`) -- each leaf of that root includes the node's kind
+///    (`StateRootEntry::kind`, `state_root.rs`), so every kind seeded from an admitted anchor is one an
+///    adopted maintainer signed, not merely one some reader happened to check.
+/// 4. **Otherwise:** today's unmodified full replay, resetting the counter to `0`.
+///
+/// **The counter rule (F4-4): it counts baseline resolutions since the last FULL derivation. Only
+/// `replay_derived_state` (rungs 1 and 4) ever persists `0`.** An anchored derivation (rung 3) persists
+/// the loaded cache's own counter + 1 (or `0` if nothing was loaded -- there is nothing to carry).
+/// Resetting it on an anchored derivation would let it silently extend the reanchor bound indefinitely
+/// (a user who switches branches, or seals twice between commits, more often than once every
+/// `CHECKPOINT_CADENCE` resolutions, would then never pay a full derivation again), defeating RFC 159
+/// ruling 5's own reason for never anchoring the reanchor itself.
+///
+/// **F4-2 (owner-approved exception, 2026-10-15):** below an admitted anchor, a cold baseline no longer
+/// reads a historical blob's content at all (RFC 159 ruling C1, extended from `seal` to `commit`: a
+/// state root commits to blob *ids*, never their content). So a cold `commit` no longer refuses over a
+/// file it does not touch whose blob is damaged on disk below the anchor; `verify` still reports it.
+/// This is the one exception to "every refusal today is still a refusal" this change makes; every other
+/// cell is unchanged (see the implementation report's case table).
 pub(crate) fn resolve_baseline_state_with(
     layout: &RepositoryLayout,
     reader: &impl ObjectReader,
@@ -122,9 +154,23 @@ pub(crate) fn resolve_baseline_state_with(
     horizon_id: ObjectId,
     cache_write: CacheWrite,
 ) -> Result<ReplayDerivedLifecycleState> {
-    if let Some(cached) = load(layout) {
-        if cached.horizon_id == horizon_id && cached.steps_since_reanchor < CHECKPOINT_CADENCE {
-            if let Some(state) = same_baseline_hit(&cached, baseline_block_id) {
+    let cached = load(layout);
+
+    // 1. Forced reanchor: checked first, whatever the cache's horizon.
+    if let Some(cached) = &cached {
+        if cached.steps_since_reanchor >= CHECKPOINT_CADENCE {
+            let result = replay_derived_state(reader, baseline_block_id, horizon_id)?;
+            if cache_write == CacheWrite::Refresh {
+                persist(layout, baseline_block_id, horizon_id, 0, result.state());
+            }
+            return Ok(result);
+        }
+    }
+
+    // 2. Warm: today's unmodified incremental path.
+    if let Some(cached) = &cached {
+        if cached.horizon_id == horizon_id {
+            if let Some(state) = same_baseline_hit(cached, baseline_block_id) {
                 // RFC 136 increment 2c, Addendum 2. A hit counts as a step, so DC-64 §5's independent full replay
                 // still happens within `CHECKPOINT_CADENCE` uses however they are made up.
                 let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
@@ -139,7 +185,7 @@ pub(crate) fn resolve_baseline_state_with(
                 }
                 return Ok(result);
             }
-            if let Some(state) = try_incremental_step(layout, reader, &cached, baseline_block_id)? {
+            if let Some(state) = try_incremental_step(layout, reader, cached, baseline_block_id)? {
                 let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, state)?;
                 if cache_write == CacheWrite::Refresh {
                     persist(
@@ -154,6 +200,31 @@ pub(crate) fn resolve_baseline_state_with(
             }
         }
     }
+
+    // 3. Anchored: the cold start, a horizon change, or an ineligible step.
+    if let Some(found) = crate::block_state::anchored_parent::anchored_parent_state(
+        layout,
+        reader,
+        baseline_block_id,
+        crate::anchor_trust::AnchorSite::Baseline,
+    ) {
+        let result = ReplayDerivedLifecycleState::from_replay(baseline_block_id, found.state)?;
+        if cache_write == CacheWrite::Refresh {
+            let next_steps = cached
+                .as_ref()
+                .map_or(0, |cached| cached.steps_since_reanchor + 1);
+            persist(
+                layout,
+                baseline_block_id,
+                horizon_id,
+                next_steps,
+                result.state(),
+            );
+        }
+        return Ok(result);
+    }
+
+    // 4. Otherwise: today's unmodified full replay.
     let result = replay_derived_state(reader, baseline_block_id, horizon_id)?;
     if cache_write == CacheWrite::Refresh {
         persist(layout, baseline_block_id, horizon_id, 0, result.state());
@@ -576,15 +647,19 @@ pub enum BaselineCacheRung {
     /// The request is for the cached baseline itself: the cached state is returned and counted as a step
     /// (RFC 136 increment 2c, Addendum 2).
     SameBaselineHit,
-    /// Full replay: no cache file, or it failed to load (checksum, decode, schema).
+    /// Full replay: whatever reached this rung (no cache file, a failed load, a horizon mismatch, or
+    /// an ineligible/failed step under a matching horizon) found no admitted anchor either (0.53.0
+    /// step 3, F4), so nothing short of a full replay is available.
     FullReplayNoUsableCache,
-    /// Full replay: the cache was derived under another lineage genesis.
-    FullReplayHorizonMismatch,
-    /// Full replay forced: the reanchor bound was reached.
+    /// Full replay forced: the reanchor bound was reached (RFC 159 ruling 5: never anchored).
     FullReplayReanchorDue {
         /// The cached step count.
         steps_since_reanchor: u32,
     },
+    /// The baseline derivation came from an admitted anchor (0.53.0 step 3, F4; RFC 159 stack B),
+    /// not a full replay -- the cold start, a horizon change, or an ineligible step, with an anchor in
+    /// reach.
+    Anchored,
     /// Full replay: the baseline block could not be read.
     FullReplayBlockUnreadable,
     /// Full replay: the baseline block's parents are not exactly the cached block.
@@ -595,7 +670,7 @@ pub enum BaselineCacheRung {
         parent_block_ids: Vec<ObjectId>,
     },
     /// Full replay: the baseline block needs a text file's materialized content that a one-block step
-    /// cannot supply (DC-65).
+    /// cannot supply (DC-65), and no admitted anchor either.
     FullReplayMissingBlobForLifecycleEffect {
         /// The replay error, as displayed.
         detail: String,
@@ -621,6 +696,8 @@ pub fn lifecycle_cache_header_for_test_support(
 }
 
 /// Which rung `resolve_baseline_state` would take for `baseline_block_id`/`horizon_id` now, and why.
+/// Reproduced step for step from `resolve_baseline_state_with` above, including the 0.53.0 step 3
+/// ordering (forced reanchor, then warm, then anchored, then full).
 #[cfg(feature = "test-support")]
 pub(crate) fn baseline_cache_rung_at_for_test_support(
     layout: &RepositoryLayout,
@@ -628,47 +705,69 @@ pub(crate) fn baseline_cache_rung_at_for_test_support(
     baseline_block_id: ObjectId,
     horizon_id: ObjectId,
 ) -> BaselineCacheRung {
-    let Some(cached) = load(layout) else {
-        return BaselineCacheRung::FullReplayNoUsableCache;
-    };
-    if cached.horizon_id != horizon_id {
-        return BaselineCacheRung::FullReplayHorizonMismatch;
-    }
-    if cached.steps_since_reanchor >= CHECKPOINT_CADENCE {
-        return BaselineCacheRung::FullReplayReanchorDue {
-            steps_since_reanchor: cached.steps_since_reanchor,
-        };
-    }
-    if same_baseline_hit(&cached, baseline_block_id).is_some() {
-        return BaselineCacheRung::SameBaselineHit;
-    }
-    let Ok(block) = replay::read_block(reader, baseline_block_id) else {
-        return BaselineCacheRung::FullReplayBlockUnreadable;
-    };
-    if block.parent_block_ids.as_slice() != [cached.baseline_block_id] {
-        return BaselineCacheRung::FullReplayParentMismatch {
-            cached_baseline_block_id: cached.baseline_block_id,
-            parent_block_ids: block.parent_block_ids.clone(),
-        };
-    }
-    let mut state = cached.state.clone();
-    match replay::apply_one_block(reader, &block, &mut state, false) {
-        Ok(()) => BaselineCacheRung::Incremental,
-        Err(err @ replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. }) => {
-            match anchored_text_retry(layout, reader, &cached, &block) {
-                Ok(Some(_)) => BaselineCacheRung::Incremental,
-                Ok(None) => BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
-                    detail: format!("{err}"),
-                },
-                Err(other) => BaselineCacheRung::StepError {
-                    detail: format!("{other}"),
-                },
-            }
+    let cached = load(layout);
+    if let Some(cached) = &cached {
+        if cached.steps_since_reanchor >= CHECKPOINT_CADENCE {
+            return BaselineCacheRung::FullReplayReanchorDue {
+                steps_since_reanchor: cached.steps_since_reanchor,
+            };
         }
-        Err(err) => BaselineCacheRung::StepError {
-            detail: format!("{err}"),
-        },
     }
+    if let Some(cached) = &cached {
+        if cached.horizon_id == horizon_id {
+            if same_baseline_hit(cached, baseline_block_id).is_some() {
+                return BaselineCacheRung::SameBaselineHit;
+            }
+            let rung = (|| {
+                let Ok(block) = replay::read_block(reader, baseline_block_id) else {
+                    return Some(BaselineCacheRung::FullReplayBlockUnreadable);
+                };
+                if block.parent_block_ids.as_slice() != [cached.baseline_block_id] {
+                    return Some(BaselineCacheRung::FullReplayParentMismatch {
+                        cached_baseline_block_id: cached.baseline_block_id,
+                        parent_block_ids: block.parent_block_ids.clone(),
+                    });
+                }
+                let mut state = cached.state.clone();
+                match replay::apply_one_block(reader, &block, &mut state, false) {
+                    Ok(()) => Some(BaselineCacheRung::Incremental),
+                    Err(
+                        err @ replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. },
+                    ) => match anchored_text_retry(layout, reader, cached, &block) {
+                        Ok(Some(_)) => Some(BaselineCacheRung::Incremental),
+                        Ok(None) => None,
+                        Err(other) => Some(BaselineCacheRung::StepError {
+                            detail: format!("{other}"),
+                        }),
+                    }
+                    .or(Some(
+                        BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
+                            detail: format!("{err}"),
+                        },
+                    )),
+                    Err(err) => Some(BaselineCacheRung::StepError {
+                        detail: format!("{err}"),
+                    }),
+                }
+            })();
+            if let Some(rung) = rung {
+                return rung;
+            }
+            // An ineligible/failed step under a matching horizon falls through to the anchored
+            // attempt below, exactly as `resolve_baseline_state_with` does.
+        }
+    }
+    if crate::block_state::anchored_parent::anchored_parent_state(
+        layout,
+        reader,
+        baseline_block_id,
+        crate::anchor_trust::AnchorSite::Baseline,
+    )
+    .is_some()
+    {
+        return BaselineCacheRung::Anchored;
+    }
+    BaselineCacheRung::FullReplayNoUsableCache
 }
 
 // Test-support instruments for RFC 136 increment 2c's design round. Read-only against the object

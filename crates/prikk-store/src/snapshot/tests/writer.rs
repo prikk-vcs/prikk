@@ -1074,25 +1074,17 @@ fn seal_rename_free_history(sealer: &mut Sealer, blocks: usize) -> Result<()> {
     Ok(())
 }
 
-/// **RFC 159 whole-state identity, on a history with every shape** (handoff §2 control 1, and the merge site of control
-/// 10): 130 blocks (checkpoints at 1, 65, 129) that create, edit (text and binary), rename (block 30), change a mode
-/// (block 40), delete a file whose tombstone must survive (block 20), **restore it exactly** (block 70), and hold **a
-/// merge block below the second checkpoint (block 26) and one above it (block 100)**. Every block is sealed again on
-/// its own parent by the anchored derivation and compared with an independent forward replay from genesis, and every
-/// 10th with the literal full walk (`rfc159_identity_probe`). The two `merge` operations that built the history must each
-/// have used an anchor at the merge site.
-///
-/// **Perturb (identity):** skip `seed_tombstone` in `anchored_parent_state`: the restoration at block 70 differs. Skip
-/// seeding the snapshot's mode or `seed_live_node`: block 41 onward differs. **Perturb (site):** `StateAnchoring::Never`
-/// at the merge call in `merge/execute.rs`: `uses["merge"]` is 0 and only this control is red.
-#[test]
-fn rfc159_identity_on_a_history_with_renames_restorations_and_merges() -> Result<()> {
-    use crate::{
-        anchor_uses_for_test_support, reset_anchor_uses_for_test_support, rfc159_identity_probe,
-    };
-
-    reset_anchor_uses_for_test_support();
-    let mut sealer = Sealer::new("rfc159-shapes", true)?;
+/// Builds the shared RFC 159 "every shape" history (handoff §2 control 1, and the merge site of control 10): 130
+/// blocks (checkpoints at 1, 65, 129) that create, edit (text and binary), rename (block 30), change a mode (block
+/// 40), delete a file whose tombstone must survive (block 20), restore it exactly (block 70), and hold a merge
+/// block below the second checkpoint (block 26) and one above it (block 100). Shared by the identity controls for
+/// stack A's own anchor sites (`rfc159_identity_on_a_history_with_renames_restorations_and_merges`) and for
+/// 0.53.0 step 3's F4 baseline anchor
+/// (`rfc159_identity_on_a_history_with_renames_restorations_and_merges_anchored_at_baseline`) -- the same corpus,
+/// checked against a different [`crate::anchor_trust::AnchorSite`] (confirmed site-indifferent at
+/// `anchor_trust.rs`'s own `admit`, which only counts the site; it never changes what is admitted).
+fn build_rfc159_shapes_history(name: &str) -> Result<Sealer> {
+    let mut sealer = Sealer::new(name, true)?;
     let (binary, mut binary_id) = create_binary(&mut sealer, "bin.dat", 0xB1, b"\0binary 0")?;
     let first = vec![
         sealer.create("a.txt", 0xA1, b"alpha 0\n")?,
@@ -1140,11 +1132,6 @@ fn rfc159_identity_on_a_history_with_renames_restorations_and_merges() -> Result
         sealer.seal(vec![op])?;
     }
     assert_eq!(sealer.checkpoint_positions()?, vec![1, 65, 129]);
-    assert_eq!(
-        anchor_uses_for_test_support("merge"),
-        2,
-        "each merge continued from an anchor at the merge site"
-    );
     let kinds: Vec<_> = sealer
         .blocks
         .iter()
@@ -1157,6 +1144,30 @@ fn rfc159_identity_on_a_history_with_renames_restorations_and_merges() -> Result
             .count(),
         2,
         "fixture sanity: two merge blocks on the mainline"
+    );
+    Ok(sealer)
+}
+
+/// **RFC 159 whole-state identity, on a history with every shape**, at the `seal` anchor site. Every block is
+/// sealed again on its own parent by the anchored derivation and compared with an independent forward replay from
+/// genesis, and every 10th with the literal full walk (`rfc159_identity_probe`). The two `merge` operations that
+/// built the history must each have used an anchor at the merge site.
+///
+/// **Perturb (identity):** skip `seed_tombstone` in `anchored_parent_state`: the restoration at block 70 differs. Skip
+/// seeding the snapshot's mode or `seed_live_node`: block 41 onward differs. **Perturb (site):** `StateAnchoring::Never`
+/// at the merge call in `merge/execute.rs`: `uses["merge"]` is 0 and only this control is red.
+#[test]
+fn rfc159_identity_on_a_history_with_renames_restorations_and_merges() -> Result<()> {
+    use crate::{
+        anchor_uses_for_test_support, reset_anchor_uses_for_test_support, rfc159_identity_probe,
+    };
+
+    reset_anchor_uses_for_test_support();
+    let sealer = build_rfc159_shapes_history("rfc159-shapes")?;
+    assert_eq!(
+        anchor_uses_for_test_support("merge"),
+        2,
+        "each merge continued from an anchor at the merge site"
     );
 
     let tip = sealer
@@ -1172,5 +1183,53 @@ fn rfc159_identity_on_a_history_with_renames_restorations_and_merges() -> Result
         "only the first block has nothing to anchor at"
     );
     assert!(report.literal_full_compared >= 13);
+    Ok(())
+}
+
+/// **0.53.0 step 3 (F4), control 1: the same identity at the new `Baseline` anchor site.** The identical history
+/// (renames, mode changes, a tombstoned-and-restored delete, two merge blocks, binary replaces, repeated text
+/// edits) is re-derived at every block using `AnchorSite::Baseline` instead of `AnchorSite::Seal`, and compared
+/// with the same independent forward replay. This proves `anchored_parent_state`'s own correctness does not depend
+/// on which production call site asks for it -- only `anchor_trust.rs`'s per-site counter differs.
+///
+/// **Perturb:** skip `id_only_tombstones`' own collection in `anchored_parent_state` (comment out the loop that
+/// seeds tombstones from the id-only walk, 0.53.0 step 3's own build confirmed this the same way stack A's sibling
+/// control above does): the restoration at block 70 and every block after it differ from the forward replay, and
+/// `report.differences` is no longer empty.
+#[test]
+fn rfc159_identity_on_a_history_with_renames_restorations_and_merges_anchored_at_baseline()
+-> Result<()> {
+    use crate::anchor_trust::AnchorSite;
+    use crate::block_state::anchored_parent::rfc159_identity_probe_at_site;
+    use crate::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
+
+    let sealer = build_rfc159_shapes_history("rfc159-shapes-baseline")?;
+
+    let tip = sealer
+        .blocks
+        .last()
+        .ok_or_else(|| integrity("no tip"))?
+        .to_hex();
+    // Reset only now: building the fixture above seals every block, which legitimately consults the
+    // `seal` site each time (stack A, unrelated to this probe). What this assertion isolates is what
+    // the *probe itself* consults.
+    reset_anchor_uses_for_test_support();
+    let report = rfc159_identity_probe_at_site(&sealer.layout, &tip, 10, AnchorSite::Baseline)?;
+    assert!(report.differences.is_empty(), "{:#?}", report.differences);
+    assert_eq!(report.blocks, sealer.blocks.len());
+    assert_eq!(
+        report.fell_back, 1,
+        "only the first block has nothing to anchor at"
+    );
+    assert!(report.literal_full_compared >= 13);
+    assert_eq!(
+        anchor_uses_for_test_support("seal"),
+        0,
+        "this probe never consulted the seal site"
+    );
+    assert!(
+        anchor_uses_for_test_support("baseline") > 0,
+        "the baseline site was consulted"
+    );
     Ok(())
 }

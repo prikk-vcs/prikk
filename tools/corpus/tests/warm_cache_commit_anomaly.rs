@@ -422,7 +422,11 @@ fn rung_class(rung: &BaselineCacheRung) -> &'static str {
         BaselineCacheRung::Incremental => "incremental",
         BaselineCacheRung::SameBaselineHit => "same-baseline",
         BaselineCacheRung::FullReplayNoUsableCache => "no-cache",
-        BaselineCacheRung::FullReplayHorizonMismatch => "horizon-mismatch",
+        // 0.53.0 step 3A (F4): a horizon mismatch no longer always means a full replay -- it now
+        // tries the anchored path first (`BaselineCacheRung::Anchored`), falling through to
+        // `FullReplayNoUsableCache` only when no anchor is admitted. This historical tool predates
+        // that change; the new rung reports as "other" (not one of `RUNG_CLASSES`'s first four).
+        BaselineCacheRung::Anchored => "anchored",
         BaselineCacheRung::FullReplayReanchorDue { .. } => "reanchor-due",
         BaselineCacheRung::FullReplayBlockUnreadable => "block-unreadable",
         BaselineCacheRung::FullReplayParentMismatch { .. } => "parent-mismatch",

@@ -44,13 +44,13 @@ use crate::object_store::ObjectReader;
 use crate::state_root::StateRootContent;
 
 /// What an anchored derivation produced.
-pub(super) struct AnchoredParent {
-    pub(super) state: NodeLifecycleState,
-    pub(super) text_cache: TextCache,
+pub(crate) struct AnchoredParent {
+    pub(crate) state: NodeLifecycleState,
+    pub(crate) text_cache: TextCache,
     /// The blocks after the anchor whose roots this derivation recomputed and matched.
-    pub(super) folded: Vec<ObjectId>,
+    pub(crate) folded: Vec<ObjectId>,
     /// Blocks the id-only walk read: the anchor and everything below it.
-    pub(super) id_only_blocks: usize,
+    pub(crate) id_only_blocks: usize,
 }
 
 /// A block read as `validate_v2_lineage` reads one: present, a Block, schema 2, decodes, shape-valid.
@@ -66,7 +66,7 @@ fn read_checked_block(reader: &impl ObjectReader, block_id: ObjectId) -> Option<
 
 /// See the module documentation. `parent` is the block a new block is sealed on (its state-derivation parent); `site`
 /// names the caller for the per-site controls.
-pub(super) fn anchored_parent_state(
+pub(crate) fn anchored_parent_state(
     layout: &crate::RepositoryLayout,
     reader: &impl ObjectReader,
     parent: ObjectId,
@@ -208,6 +208,21 @@ pub fn rfc159_identity_probe(
     tip_hex: &str,
     literal_stride: usize,
 ) -> prikk_error::Result<Rfc159IdentityReport> {
+    rfc159_identity_probe_at_site(layout, tip_hex, literal_stride, AnchorSite::Seal)
+}
+
+/// [`rfc159_identity_probe`], at a chosen [`AnchorSite`] (0.53.0 step 3: `AnchorSite::Baseline`'s own
+/// identity control reuses this same probe, since `anchored_parent_state`'s logic does not depend on
+/// which site calls it -- only the per-site control counter does, confirmed at `anchor_trust.rs`'s own
+/// `admit`). `pub(crate)`, not `pub`, because `AnchorSite` itself is crate-private; its own test lives
+/// inside this crate (`snapshot/tests/writer.rs`).
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn rfc159_identity_probe_at_site(
+    layout: &crate::RepositoryLayout,
+    tip_hex: &str,
+    literal_stride: usize,
+    site: AnchorSite,
+) -> prikk_error::Result<Rfc159IdentityReport> {
     use std::str::FromStr;
 
     use super::{
@@ -267,7 +282,7 @@ pub fn rfc159_identity_probe(
             &reader,
             parent,
             &payload.patch_ids,
-            StateAnchoring::Anchored(AnchorSite::Seal),
+            StateAnchoring::Anchored(site),
         )
         .map_err(|_| {
             prikk_error::PrikkError::Integrity(format!(
