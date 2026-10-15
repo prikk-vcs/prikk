@@ -127,3 +127,19 @@ limitation entry (`bundle import` and `archive import`; `sync accept` writes no 
 release is dated 2026-10-15. **The final candidate is the architect's record commit on `59a3bcf9`.** It is pushed
 through the gate service, and the external architect re-runs on it after letter 027. **Nothing is open for the
 team.**
+
+**External review 027 (on `6e5337d0`): nothing blocks the tag.** Reading: `.git-exclude/reviewed/external-review-027-reading-v1.md`.
+
+**0.52.0: RELEASED 2026-10-15.** The tag `0.52.0` is signed and sits on `6e5337d0`, the commit CI ran on (the owner:
+*"Yes. Authorized to cut 0.52.0."*).
+- **CI run `38645581515`:** 16/16.
+- **Release run `38663325609`:** all six jobs green.
+- **The architect verified the assets:**
+  - checksums, 6/6;
+  - build info, 4/4, naming `6e5337d0` and tag `0.52.0`;
+  - the smoke on the published Linux binary, 330/330;
+  - the Release page carries the CHANGELOG section byte for byte, followed by the standard footer.
+
+**crates.io: PUBLISHED 2026-10-15** (the owner: *"Yes. Authorized, too."*). All eight crates are at 0.52.0, published
+in dependency order from the tag's worktree, and each is confirmed on the crates.io index. **Letter 028** carries the
+release run's id; the owner sends it.
