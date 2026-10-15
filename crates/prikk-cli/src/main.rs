@@ -83,6 +83,34 @@ use prikk_store::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// 0.53.0 step 1, item 1: a negative-but-successful answer (today, only `trust maintainer check`'s
+// own "not trusted") must exit non-zero with no `error:` line, and `main`'s own epilogue
+// (`warn_anchor_fallbacks`) must still run on that path -- but `Command.run`'s fixed signature,
+// `fn(Vec<String>) -> Result<(), CliError>`, is shared by every command in `COMMANDS`
+// (`commands.rs`), and that file's own doc comment rules out a fourth `CliError` variant by design.
+// This thread-local is the seam instead: a command arm sets it and still returns an ordinary
+// `Ok(())` (so every other command, and `run()`'s own `Ok`/`Err` match, stays completely unaware
+// anything special happened), and `main` consults it once, *after* the epilogue has already run, to
+// override the exit code without ever printing an `error:` line. Race-free: this is a single-
+// threaded CLI process, and the one read happens immediately after `run()` returns, before anything
+// else executes.
+thread_local! {
+    static SILENT_EXIT_CODE: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
+}
+
+/// Arm a silent exit: `code`, with no `error:` line, overriding the ordinary `Ok(())` ->
+/// `ExitCode::SUCCESS` mapping once `main`'s own epilogue has run. The caller still returns `Ok(())`
+/// from its own `Command.run`-shaped function afterward.
+fn arm_silent_exit(code: u8) {
+    SILENT_EXIT_CODE.with(|cell| cell.set(Some(code)));
+}
+
+/// Take whatever [`arm_silent_exit`] last armed on this thread, clearing it. `main`'s own one call
+/// site.
+fn take_silent_exit() -> Option<u8> {
+    SILENT_EXIT_CODE.with(std::cell::Cell::take)
+}
+
 pub(crate) fn open_repository(
     root: impl Into<PathBuf>,
 ) -> std::result::Result<RepositoryLayout, String> {
@@ -95,6 +123,12 @@ fn main() -> ExitCode {
     // or the text it yielded failed its hash) sends the command back to a full replay, and that is named here, once,
     // whichever command it was and however it ended (§10.3b.4's rule: an anchor's failure is never swallowed).
     warn_anchor_fallbacks(prikk_store::take_anchor_fallbacks().iter());
+    // 0.53.0 step 1, item 1: checked after the epilogue above, so a negative-but-successful answer
+    // (`run_trust`'s own "not trusted" arm, today) still gets it -- unlike the `std::process::exit`
+    // this seam replaced, which skipped the epilogue entirely.
+    if let Some(code) = take_silent_exit() {
+        return ExitCode::from(code);
+    }
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -496,13 +530,11 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
         // alongside an unreadable policy (both mean "do not proceed"), not `0` as §7.2 first ruled
         // -- the original ruling let `check && …` proceed for an untrusted key, a misreading that
         // fails open on a trust question. `2` is unchanged: a missing or malformed `--key-id`.
-        // "Not trusted" still prints its answer and never travels as an error: no `error:` line,
-        // and `main`'s own `warn_anchor_fallbacks` call is skipped by the early exit below exactly
-        // as it is for `stdout.rs`'s own closed-pipe/write-failure exits -- safe here because
-        // nothing on this command's own path (a trust-policy-container read) ever calls
-        // `record_anchor_fallback` (confirmed from source: its only callers are
-        // `lifecycle_cache/anchored_text.rs`, `worktree.rs`, and `block_state/anchored_parent.rs`,
-        // none reachable from `load_maintainer_trust_policy_or_empty`).
+        // "Not trusted" still prints its answer and never travels as an error: no `error:` line.
+        // 0.53.0 step 1, item 1: arms `main`'s own silent-exit seam (`arm_silent_exit`) instead of
+        // calling `std::process::exit` directly, and returns an ordinary `Ok(())` below -- so
+        // `main`'s own epilogue (`warn_anchor_fallbacks`) runs on this path too, same as every other
+        // command, in case something is ever added there that this path should also see.
         (Some("maintainer"), Some("check")) => {
             let mut key_id = None;
             let mut format_json = false;
@@ -542,9 +574,10 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
                 // Deliberately bypasses the `Result<(), CliError>` channel, not a fourth
                 // `CliError` variant (`commands.rs`'s own "no fourth variant" rule): every `Err`
                 // reaching `main` prints an `error:` line, which a negative-but-successful answer
-                // must not get. The same idiom `stdout.rs::write_and_handle` already uses for its
-                // own exits that don't fit `Ok`/`Err(CliError)` either.
-                std::process::exit(1);
+                // must not get. Arms the silent-exit seam (see its own doc comment, near the top of
+                // this file) instead of calling `std::process::exit` directly, so `main`'s own
+                // epilogue still runs before the process actually exits.
+                arm_silent_exit(1);
             }
             Ok(())
         }
@@ -1696,5 +1729,27 @@ fn hex_nibble(c: u8, env_name: &str) -> Result<u8, String> {
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
         _ => Err(format!("{env_name} contains a non-hex character")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{arm_silent_exit, take_silent_exit};
+
+    /// 0.53.0 step 1, item 1: the silent-exit seam's own take-after-arm semantics -- `main`'s own
+    /// control flow (unconditionally calling `warn_anchor_fallbacks` before its one `take_silent_exit`
+    /// call, confirmed by reading `main()` itself) is what guarantees the epilogue runs on this path;
+    /// nothing here can observe that part black-box, since `warn_anchor_fallbacks`'s own only effect
+    /// (printing each fallback) is empty whenever the list is empty, which it always is for
+    /// `trust maintainer check`. This test is the part that *can* run: arming sets it, taking clears
+    /// it, and a second take (what `main`'s own single call site would see on a later, unrelated
+    /// invocation in the same process -- never true in the real binary, which runs once per process,
+    /// but the property the type must hold regardless) reads `None`, not a stale value.
+    #[test]
+    fn silent_exit_is_armed_once_and_cleared_by_taking() {
+        assert_eq!(take_silent_exit(), None, "starts disarmed");
+        arm_silent_exit(1);
+        assert_eq!(take_silent_exit(), Some(1), "arming sets the code");
+        assert_eq!(take_silent_exit(), None, "taking clears it");
     }
 }
