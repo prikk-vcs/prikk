@@ -15,6 +15,18 @@ Implementation handoff: `rfcs/handoffs/159-sealing-without-rewalking/implementat
 `seal` at depth 1,024 peaks at about 30 MiB (0.47.0: 1.8 GiB), and outputs are byte-identical at corpus scale. It ships in
 0.48.0. **Open in this RFC:** stack B (the cold baseline and `merge-evidence`'s baseline), a later increment.
 
+**Stack B's `commit` baseline scheduled for 0.53.0; the owner decided on 2026-10-15** (design review
+`.git-exclude/reviewed/0.53.0-step-2-A-f4-design-review-v2.md`; implementation handoff
+`rfcs/handoffs/160-costs-that-follow-the-store-and-lengths-read-from-disk/0.53.0-step-3-f4-m6-implementation-handoff-v1.md`):
+- **the cold `commit` baseline is anchored by this RFC's anchor-trust rule, with no blob-kind cache: *"Yes."*** Ruling 4
+  bars an unauthenticated input to a signed root;
+- **ruling C1 extends to that baseline: *"Yes."*** A cold `commit` no longer refuses over damaged bytes of a file it
+  does not touch below an admitted anchor. `verify` still reports them;
+- **the architect's added rule:** an anchored derivation never resets the reanchor counter. Only a full derivation does,
+  so ruling 5's full reanchor still happens once in every 64 baseline resolutions.
+
+**Still open:** `merge-evidence`'s baseline.
+
 *History:* **PROPOSED 2026-09-25 by the architect**, on the owner's instruction for history import's
 prerequisite: *"Schedule it and start the design when ready."*
 
