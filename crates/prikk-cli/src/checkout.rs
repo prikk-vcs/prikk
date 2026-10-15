@@ -203,10 +203,11 @@ fn queued_commit_count(
     ref_name: &str,
 ) -> std::result::Result<usize, CliError> {
     match prikk_store::read_active_ref_metadata(layout).map_err(|err| err.to_string())? {
-        prikk_store::ActiveRefMetadata::Valid(active) if active == ref_name => Ok(
-            prikk_store::enumerate_queued_patches(layout).map_err(|err| err.to_string())?
-                .len(),
-        ),
+        prikk_store::ActiveRefMetadata::Valid(active) if active == ref_name => {
+            Ok(prikk_store::enumerate_queued_patches(layout)
+                .map_err(|err| err.to_string())?
+                .len())
+        }
         _ => Ok(0),
     }
 }

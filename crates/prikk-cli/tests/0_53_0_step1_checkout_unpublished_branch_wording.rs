@@ -81,9 +81,15 @@ fn an_unpublished_branch_with_one_queued_commit_names_the_count_instead_of_does_
 
     // The implicit (no `--ref`) form answers identically, the same byte-for-byte expectation
     // RFC 147 §2i's own prior round already established for `--plan-only`.
-    let explicit = text(&run(&repo, &["checkout", "--patch-plan", "--ref", "heads/main"]));
+    let explicit = text(&run(
+        &repo,
+        &["checkout", "--patch-plan", "--ref", "heads/main"],
+    ));
     let implicit = text(&run(&repo, &["checkout", "--patch-plan"]));
-    assert_eq!(explicit, implicit, "explicit --ref must match the implicit default");
+    assert_eq!(
+        explicit, implicit,
+        "explicit --ref must match the implicit default"
+    );
 }
 
 /// Two queued commits: the count is exact, and pluralized correctly ("commits", not "commit").
@@ -96,7 +102,10 @@ fn an_unpublished_branch_with_two_queued_commits_pluralizes_the_count() {
     std::fs::write(repo.join("b.txt"), "b\n").unwrap();
     ok(&repo, &["commit", "-m", "b"]);
 
-    let message = text(&run(&repo, &["checkout", "--patch-plan", "--ref", "heads/main"]));
+    let message = text(&run(
+        &repo,
+        &["checkout", "--patch-plan", "--ref", "heads/main"],
+    ));
     assert!(
         message.contains("heads/main has no sealed block yet (2 commits queued)"),
         "{message}"
@@ -182,14 +191,19 @@ fn control_received_twin_keeps_the_more_specific_refusal() {
     // is nonzero and the received-pointer guard is the only thing left distinguishing the two
     // refusals.
     std::fs::write(dst.join("c.txt"), "c\n").unwrap();
-    support::ok(&support::commit(&dst, "heads/main", "local work"), "commit: local work");
+    support::ok(
+        &support::commit(&dst, "heads/main", "local work"),
+        "commit: local work",
+    );
 
     let output = run(&dst, &["checkout", "--patch-plan", "--ref", "heads/main"]);
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
     let message = text(&output);
     assert!(
-        message.contains("ref heads/main does not exist in this repository; remotes/heads/main exists"),
+        message.contains(
+            "ref heads/main does not exist in this repository; remotes/heads/main exists"
+        ),
         "{message}"
     );
     assert!(
@@ -218,7 +232,10 @@ fn control_zero_queued_stays_absent() {
     // `--plan-only` on the same zero-commit repository still answers non-refusing, as Addendum 3
     // already established, now with the "seal" wording.
     let output = run(&repo, &["checkout", "--plan-only", "--ref", "heads/main"]);
-    support::ok(&output, "checkout --plan-only --ref heads/main (zero queued)");
+    support::ok(
+        &output,
+        "checkout --plan-only --ref heads/main (zero queued)",
+    );
     assert!(
         text(&output).contains("materialization: unpublished-ref"),
         "{}",
