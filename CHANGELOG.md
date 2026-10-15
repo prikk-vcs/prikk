@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Output changes
+
+- **`checkout`'s refusing modes stop saying a branch with queued, unsealed commits "does not
+  exist"** (0.53.0 step 1, item 3; RFC 147 §2i): `--snapshot-plan`, `--snapshot-materialize`,
+  `--patch-plan`, `--patch-materialize`, `--patch-delete-plan` and `--patch-materialize-delete`
+  all still refuse — there is no sealed block yet to plan from or write — but now say so
+  accurately. Before: `error: precondition not met: ref heads/main does not exist in this
+  repository`. After: `error: heads/main has no sealed block yet (N commit(s) queued) —
+  \`prikk seal\` publishes it`. A ref that was never created at all still says "does not exist";
+  a destination holding only a received `remotes/` twin still gets that more specific refusal.
+  `--plan-only`'s own note, unaffected in substance (it already answered this state correctly),
+  changes wording to the user's own word, "seal": before, `note: publish a ref before checkout
+  can target a block`; after, `` note: `prikk seal` publishes a ref before checkout can target a
+  block ``.
+
 ## 0.52.0 — 2026-10-15
 
 ### Security

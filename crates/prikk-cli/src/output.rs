@@ -73,7 +73,9 @@ pub(crate) fn print_checkout_plan(layout: &RepositoryLayout, plan: &CheckoutPlan
     println!("materialization: {}", plan.materialization.as_str());
     match plan.materialization {
         CheckoutMaterialization::UnpublishedRef => {
-            println!("note: publish a ref before checkout can target a block");
+            // 0.53.0 step 1, item 3: the user's own word, "seal" -- not "publish a ref", which
+            // names the mechanism rather than the command a reader would actually run.
+            println!("note: `prikk seal` publishes a ref before checkout can target a block");
         }
         CheckoutMaterialization::NoWorktreeChanges => {
             println!("note: no worktree changes would be needed for this block");

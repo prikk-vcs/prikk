@@ -19,6 +19,59 @@ pub(crate) fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliErro
     let args = parse_checkout_args(args)?;
     let layout = open_repository(args.root)?;
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;
+    // 0.53.0 step 1, item 3 (RFC 147 §2i): an unpublished local branch **with queued, unsealed
+    // commits** is not absent. Every mode but `--plan-only` (whose own guarded arm below already
+    // answers this state correctly) still refuses here -- there is no sealed block to plan from or
+    // write -- but must say what is true, not the generic "does not exist"
+    // `require_existing_ref`/`resolve_point` give below (right only for a name that never existed,
+    // *or* has never had anything queued against it either -- see the zero-queued note just below).
+    //
+    // **The classifier is `current_branch::is_unpublished_current_branch`, the exact one
+    // `--plan-only`'s own guarded arm already calls, not the raw store-level
+    // `is_unpublished_local_branch` it wraps.** Confirmed from source, not assumed: the raw
+    // predicate only checks "no `RefState`, empty log" -- true both for a genuinely unpublished
+    // branch *and* for a name nobody ever created at all (a typo), since `branch create` always
+    // writes a `RefState` immediately (confirmed in `branch.rs::run_create`), so the only name that
+    // can ever be real *and* have empty state is the repository's own current branch, pre-seal. The
+    // wrapper's own first check -- "is `name` the current-branch pointer" -- is exactly the guard
+    // that tells the two cases apart; calling the raw predicate directly (an earlier draft of this
+    // change did) made `checkout --patch-plan --ref heads/nope` (a pure typo, never created) read as
+    // "unpublished" instead of "does not exist" -- caught by actually running it, not assumed
+    // correct from the raw predicate's own doc comment alone.
+    //
+    // **A second real gap, found by running the existing suite, not assumed safe**: a destination
+    // that received `remotes/heads/main` (via `bundle import`/`archive import`/`sync accept`) but
+    // never locally created `heads/main` at all is *also* "no `RefState`, empty log" for the local
+    // name, and also happens to have the current-branch pointer naming it (every repository's own
+    // default) -- so this new check, unguarded, pre-empted `require_existing_ref`'s own existing,
+    // more specific refusal for that exact shape (which correctly names the received-ref
+    // alternative: *"... remotes/heads/main exists: received refs are read by ..."*). That refusal
+    // is strictly more useful than this one's generic "no sealed block yet", so it must still win:
+    // skip this new check when a `remotes/<ref_name>` twin exists, the same condition
+    // `ref_resolution.rs::decide_ref_existence` already checks for the identical reason.
+    //
+    // **A third real gap, also found by running the existing suite**: a *truly* fresh repository
+    // (`init` alone, zero commits ever) is unpublished too, but `rfc132_absent_and_received_refs.rs`'s
+    // own `addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository` -- a prior, already-
+    // ruled ADDENDUM 3 control, RFC 147 §2i, not this handoff's own item to revisit -- pins exactly
+    // this shape still reading "does not exist" for the six refusing modes; only `--plan-only` gets
+    // the non-refusing treatment there. The handoff's own ruling and its own measured table are both
+    // specifically about a branch that has queued commits ("setup, one commit, no seal"; "an
+    // unpublished branch... has queued commits and nothing sealed") -- not the zero-queued shape.
+    // So this new wording only fires once the queued count is genuinely nonzero; zero queued falls
+    // through to the existing, unchanged "does not exist" path below, preserving Addendum 3's own
+    // ruling rather than silently overriding it.
+    if args.mode != CheckoutMode::PlanOnly
+        && current_branch::is_unpublished_current_branch(&layout, &ref_name)?
+        && prikk_store::read_received_pointer(&layout, &format!("remotes/{ref_name}"))
+            .map_err(|err| err.to_string())?
+            .is_none()
+    {
+        let queued = queued_commit_count(&layout, &ref_name)?;
+        if queued > 0 {
+            return Err(unpublished_branch_refusal(&ref_name, queued).into());
+        }
+    }
     // RFC 132 refusal sweep, rules 1-3: every checkout mode refuses an absent or received target first,
     // before any question of what the target holds (the snapshot modes' "not a checkpoint").
     match args.mode {
@@ -140,4 +193,31 @@ fn run_checkout_write(
         | CheckoutMode::PatchDeletePlan => {}
     }
     Ok(())
+}
+
+/// How many queued, unsealed commits `ref_name` currently holds. Only the repository's one
+/// currently-active ref can ever hold any (the single-active-session model) -- a name that is not
+/// the active ref reports 0, regardless of whether it has ever been touched at all.
+fn queued_commit_count(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> std::result::Result<usize, CliError> {
+    match prikk_store::read_active_ref_metadata(layout).map_err(|err| err.to_string())? {
+        prikk_store::ActiveRefMetadata::Valid(active) if active == ref_name => Ok(
+            prikk_store::enumerate_queued_patches(layout).map_err(|err| err.to_string())?
+                .len(),
+        ),
+        _ => Ok(0),
+    }
+}
+
+/// The one shared refusal text for a checkout mode that cannot proceed because `ref_name` has
+/// `queued` commits and nothing sealed yet (0.53.0 step 1, item 3; RFC 147 §2i). `queued` is always
+/// nonzero here -- the one caller only reaches this once [`queued_commit_count`] confirms that.
+fn unpublished_branch_refusal(ref_name: &str, queued: usize) -> String {
+    let plural = if queued == 1 { "" } else { "s" };
+    format!(
+        "{ref_name} has no sealed block yet ({queued} commit{plural} queued) — `prikk seal` \
+         publishes it"
+    )
 }

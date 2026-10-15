@@ -584,7 +584,7 @@ fn addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository() {
     support::assert_same_path(&printed, &fresh.join(".prikk"));
     assert_eq!(
         plan,
-        "checkout plan repository: <PATH>\nref: heads/main\nref-state: <not published>\ntarget block: <none>\nblock kind: <none>\nparents: 0\npatches: 0\nsnapshot blob: <none>\nmaterialization: unpublished-ref\nnote: publish a ref before checkout can target a block\n"
+        "checkout plan repository: <PATH>\nref: heads/main\nref-state: <not published>\ntarget block: <none>\nblock kind: <none>\nparents: 0\npatches: 0\nsnapshot blob: <none>\nmaterialization: unpublished-ref\nnote: `prikk seal` publishes a ref before checkout can target a block\n"
     );
     assert_refusal(
         &fresh,
