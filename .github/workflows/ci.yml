@@ -79,6 +79,8 @@ jobs:
         run: cargo run --locked -p prikk-release-policy -- reference-check
       - name: Size
         run: cargo run --locked -p prikk-release-policy -- size-check
+      - name: gates.py's own test (0.53.0 step 1, item 2)
+        run: python3 scripts/gates_test.py
 
   msrv-1-85-0:
     name: msrv-1.85.0

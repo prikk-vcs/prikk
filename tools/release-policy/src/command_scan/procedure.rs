@@ -17,6 +17,11 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
                     .is_some_and(|(command, arguments)| cargo(command, arguments))
         }
         "mdbook" => tail == ["build"],
+        // 0.53.0 step 1, item 2: `scripts/gates_test.py`, run by CI's own `policy` job
+        // (`ci.yml`) so a broken `gates.py` turns CI red. `python3` can in principle execute
+        // anything, so this gets the same exact-match treatment `tar`/`rustc`/`gh` already have
+        // below, not blanket approval -- only this one, specific invocation is allowed.
+        "python3" => tail == ["scripts/gates_test.py"],
         // DC-70, added per architect review (B1): `tar`, `rustc`, and `gh` can each execute
         // another program (tar via --to-command/-I, rustc via proc macros and build scripts,
         // gh as a general-purpose API client), so — unlike the inert set — they need an
