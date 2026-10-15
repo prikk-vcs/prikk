@@ -65,8 +65,14 @@ fn an_unpublished_branch_with_one_queued_commit_names_the_count_instead_of_does_
         );
         assert_eq!(output.status.code(), Some(1), "{mode}: {}", text(&output));
         let message = text(&output);
+        // 0.53.0 step 1 round 2 (S1-1): this refusal carries RFC 132's own precondition class, the
+        // same as its neighbors (the absent-ref and received-twin refusals just below it in
+        // `checkout.rs`) -- a plain `.contains` on the text after the prefix would keep passing even
+        // if the class were silently dropped, so this asserts the exact, full prefix.
         assert!(
-            message.contains("heads/main has no sealed block yet (1 commit queued)"),
+            message.contains(
+                "error: precondition not met: heads/main has no sealed block yet (1 commit queued)"
+            ),
             "{mode}: {message}"
         );
         assert!(

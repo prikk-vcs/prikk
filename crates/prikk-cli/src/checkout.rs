@@ -69,7 +69,11 @@ pub(crate) fn run_checkout(args: Vec<String>) -> std::result::Result<(), CliErro
     {
         let queued = queued_commit_count(&layout, &ref_name)?;
         if queued > 0 {
-            return Err(unpublished_branch_refusal(&ref_name, queued).into());
+            return Err(
+                prikk_error::PrikkError::Precondition(unpublished_branch_refusal(&ref_name, queued))
+                    .to_string()
+                    .into(),
+            );
         }
     }
     // RFC 132 refusal sweep, rules 1-3: every checkout mode refuses an absent or received target first,
