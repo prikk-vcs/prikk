@@ -212,8 +212,10 @@ planned for.
 - **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.
   Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule).
 - **Fixed in 0.53.0 (F4): a one-file `commit` no longer reads every stored blob to learn its kind.**
-  Before 0.53.0, a cold baseline (the first commit of a session, after a branch switch, or every
-  64th resolution) replayed the whole lineage, reading every historical blob's frame to re-derive
+  Before 0.53.0, a cold baseline — a missing or unreadable incremental cache (a fresh clone or
+  restore, or a deleted `.prikk/cache/`), a branch switch, a step the cache's own one-block fold
+  cannot take (two seals since the last resolution, or a merge block), or every 64th resolution (the
+  forced reanchor) — replayed the whole lineage, reading every historical blob's frame to re-derive
   its kind: 1 MiB of stored content read 1.1 MB, 16 MiB read 16.8 MB, 64 MiB read 67.1 MB. The cold
   baseline now derives from the nearest checkpoint this repository has itself sealed or verified
   under an adopted maintainer key (RFC 159's anchor-trust function, the same one `seal`/`merge`/

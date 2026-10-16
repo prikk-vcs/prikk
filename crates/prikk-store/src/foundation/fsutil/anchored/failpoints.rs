@@ -88,6 +88,20 @@ pub(crate) fn clear() {
 }
 
 #[cfg(test)]
+/// 0.53.0 step 3A round 2 (R-2). Whether whatever `fail_once`/`fail_after` last armed on this
+/// thread is still armed -- `check` clears it to `None` only in the branch where it actually
+/// fires (`*next = None` just before returning the injected error), so `true` here means the
+/// armed point was never reached by the operation just run, and `false` means it was (whether or
+/// not that operation also went on to fail, since a swallowed write can fire and be ignored). A
+/// kill sweep uses this to tell "recovered from a real crash" from "the arm never fired," which
+/// `fail_after`'s own ordinal count alone cannot: an operation's own write sequence is a fixed,
+/// finite length per failpoint family, so once an ordinal survives uninterrupted, every later
+/// ordinal in that family would too.
+pub(crate) fn armed() -> bool {
+    NEXT.with(|next| next.borrow().is_some())
+}
+
+#[cfg(test)]
 pub(in crate::foundation::fsutil) fn set_directory_create_barrier(barrier: Arc<Barrier>) {
     DIRECTORY_CREATE_BARRIER.with(|slot| *slot.borrow_mut() = Some(barrier));
 }

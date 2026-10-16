@@ -466,11 +466,15 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                   closes a cycle because the two new edges complete the loop back through \
                   `anchor_trust`'s own existing `-> trust` edge and `lifecycle_cache::replay`'s own \
                   existing `<-> patch_replay` edge above",
-        what_would_remove_it: "giving `incremental`'s own cold-baseline rung its own copy of the \
-                                anchored derivation instead of calling `anchored_parent_state`, \
-                                reintroducing exactly the kind of duplication RFC 122 removed for \
-                                the sibling baseline-derivation cycle above -- worse, not better, \
-                                and not a change this gate should ever encourage",
+        what_would_remove_it: "this cycle closes only through RFC 122's own declared \
+                                `lifecycle_cache::replay <-> patch_replay` cycle above: the two \
+                                new edges reach back to `trust` and to `patch_replay` only by \
+                                riding `anchor_trust`'s own existing `-> trust` edge and \
+                                `lifecycle_cache::replay`'s own existing `<-> patch_replay` edge. \
+                                Removing RFC 122's declared cycle would remove this one too; \
+                                giving `incremental` its own copy of `anchored_parent_state` would \
+                                not, since the edges that close the loop do not pass through \
+                                `anchored_parent_state` at all",
     },
 ];
 

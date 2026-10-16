@@ -698,6 +698,20 @@ pub fn lifecycle_cache_header_for_test_support(
 /// Which rung `resolve_baseline_state` would take for `baseline_block_id`/`horizon_id` now, and why.
 /// Reproduced step for step from `resolve_baseline_state_with` above, including the 0.53.0 step 3
 /// ordering (forced reanchor, then warm, then anchored, then full).
+///
+/// **0.53.0 step 3A round 2 (R-1): calling this counts as a consultation of the `"baseline"`
+/// per-site anchor counter** (`anchor_trust::anchor_uses_for_test_support`), exactly as a real
+/// `resolve_baseline_state_with` call that reaches the anchored rung does -- this function calls the
+/// identical `anchored_parent_state`, which increments that counter only when it actually admits an
+/// anchor (`anchor_trust.rs::count_use`, called only from `Admission::Usable`'s arm). Confirmed: no
+/// control in this crate calls this mirror and a counted production path in the same test and then
+/// reads the counter expecting a single consultation (the one production consumer,
+/// `patch_replay::baseline_cache_rung_for_test_support`, is read only by
+/// `tools/corpus/tests/warm_cache_commit_anomaly.rs`, which invokes the real `commit` in a separate
+/// child process -- a different process's thread-local counter, never shared with this one). A
+/// non-counting admission query was considered and rejected: it would need its own path through
+/// `anchor_trust::admit` that never calls `count_use`, duplicating the admission logic a mirror's
+/// whole purpose is to avoid duplicating.
 #[cfg(feature = "test-support")]
 pub(crate) fn baseline_cache_rung_at_for_test_support(
     layout: &RepositoryLayout,
@@ -718,43 +732,66 @@ pub(crate) fn baseline_cache_rung_at_for_test_support(
             if same_baseline_hit(cached, baseline_block_id).is_some() {
                 return BaselineCacheRung::SameBaselineHit;
             }
-            let rung = (|| {
+            // R-1: production's `try_incremental_step` returns `Ok(None)` -- ineligible, falls
+            // through to the anchored rung -- for an unreadable block, a parent mismatch, and a
+            // DC-65 miss with no text anchor. It takes `Ok(Some(_))`/`Err(_)` unconditionally,
+            // never trying the anchor. `StepOutcome::Ineligible` mirrors the first three (its own
+            // payload is the reason to report only if no anchor is admitted either);
+            // `StepOutcome::Terminal` mirrors the last two.
+            enum StepOutcome {
+                Terminal(BaselineCacheRung),
+                Ineligible(BaselineCacheRung),
+            }
+            let outcome = (|| {
                 let Ok(block) = replay::read_block(reader, baseline_block_id) else {
-                    return Some(BaselineCacheRung::FullReplayBlockUnreadable);
+                    return StepOutcome::Ineligible(BaselineCacheRung::FullReplayBlockUnreadable);
                 };
                 if block.parent_block_ids.as_slice() != [cached.baseline_block_id] {
-                    return Some(BaselineCacheRung::FullReplayParentMismatch {
+                    return StepOutcome::Ineligible(BaselineCacheRung::FullReplayParentMismatch {
                         cached_baseline_block_id: cached.baseline_block_id,
                         parent_block_ids: block.parent_block_ids.clone(),
                     });
                 }
                 let mut state = cached.state.clone();
                 match replay::apply_one_block(reader, &block, &mut state, false) {
-                    Ok(()) => Some(BaselineCacheRung::Incremental),
+                    Ok(()) => StepOutcome::Terminal(BaselineCacheRung::Incremental),
                     Err(
                         err @ replay::LifecycleReplayError::MissingBlobForLifecycleEffect { .. },
                     ) => match anchored_text_retry(layout, reader, cached, &block) {
-                        Ok(Some(_)) => Some(BaselineCacheRung::Incremental),
-                        Ok(None) => None,
-                        Err(other) => Some(BaselineCacheRung::StepError {
+                        Ok(Some(_)) => StepOutcome::Terminal(BaselineCacheRung::Incremental),
+                        Ok(None) => StepOutcome::Ineligible(
+                            BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
+                                detail: format!("{err}"),
+                            },
+                        ),
+                        Err(other) => StepOutcome::Terminal(BaselineCacheRung::StepError {
                             detail: format!("{other}"),
                         }),
-                    }
-                    .or(Some(
-                        BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect {
-                            detail: format!("{err}"),
-                        },
-                    )),
-                    Err(err) => Some(BaselineCacheRung::StepError {
+                    },
+                    Err(err) => StepOutcome::Terminal(BaselineCacheRung::StepError {
                         detail: format!("{err}"),
                     }),
                 }
             })();
-            if let Some(rung) = rung {
-                return rung;
+            match outcome {
+                StepOutcome::Terminal(rung) => return rung,
+                StepOutcome::Ineligible(reason) => {
+                    // Falls through to the anchored attempt below, exactly as
+                    // `resolve_baseline_state_with` does. `reason` is kept only for when no
+                    // anchor is admitted either.
+                    if crate::block_state::anchored_parent::anchored_parent_state(
+                        layout,
+                        reader,
+                        baseline_block_id,
+                        crate::anchor_trust::AnchorSite::Baseline,
+                    )
+                    .is_some()
+                    {
+                        return BaselineCacheRung::Anchored;
+                    }
+                    return reason;
+                }
             }
-            // An ineligible/failed step under a matching horizon falls through to the anchored
-            // attempt below, exactly as `resolve_baseline_state_with` does.
         }
     }
     if crate::block_state::anchored_parent::anchored_parent_state(

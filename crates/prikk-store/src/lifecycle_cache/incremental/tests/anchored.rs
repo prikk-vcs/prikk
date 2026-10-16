@@ -21,11 +21,15 @@ fn steps(history: &AnchoredHistory) -> Option<u32> {
 }
 
 /// Prime the cache at block `k - 1` (a full replay: `steps == 0`), then resolve block `k` through the ladder.
-/// Returns the state, the header's step count after, and how many texts came from an anchor.
+/// Returns the state, the header's step count after, how many texts came from an anchor, and (0.53.0 step
+/// 3A round 2, R-3) how much the `"baseline"` per-site anchor counter rose **during this second resolution
+/// specifically** -- not the priming one, which (now that `AnchoredHistory::standard`'s genesis is always an
+/// admitted anchor) may itself consult the baseline anchor and would otherwise pollute a plain before/after
+/// read taken around the whole function.
 fn step_to(
     history: &AnchoredHistory,
     k: usize,
-) -> (ReplayDerivedLifecycleState, Option<u32>, usize) {
+) -> (ReplayDerivedLifecycleState, Option<u32>, usize, usize) {
     let horizon = history.horizon();
     let _ = std::fs::remove_file(cache_path(&history.layout));
     resolve_baseline_state(
@@ -37,6 +41,7 @@ fn step_to(
     .unwrap();
     assert_eq!(steps(history), Some(0), "the priming step is a full replay");
     let before = anchored_text_uses_for_test();
+    let baseline_before = crate::anchor_trust::anchor_uses_for_test_support("baseline");
     let state = resolve_baseline_state(
         &history.layout,
         &history.store,
@@ -48,6 +53,7 @@ fn step_to(
         state,
         steps(history),
         anchored_text_uses_for_test() - before,
+        crate::anchor_trust::anchor_uses_for_test_support("baseline") - baseline_before,
     )
 }
 
@@ -71,26 +77,38 @@ fn full_replay(history: &AnchoredHistory, k: usize) -> ReplayDerivedLifecycleSta
 fn a_dc65_miss_becomes_an_incremental_step() {
     let history = AnchoredHistory::standard("anchored-ladder-miss", 9);
     for k in [3_usize, 7] {
-        let (without_state, without, uses) = without_anchoring_for_test(|| step_to(&history, k));
+        let (without_state, without, uses, baseline_uses) =
+            without_anchoring_for_test(|| step_to(&history, k));
         assert_eq!(
             without,
             Some(1),
             "block {k} misses on DC-65 with text anchoring off, and falls to the baseline anchor instead"
         );
         assert_eq!(uses, 0, "the text anchor itself was not consulted");
+        // R-1/R-3 (0.53.0 step 3A round 2): `uses == 0` alone only shows the text anchor was not
+        // consulted -- it does not show the baseline anchor is what answered instead of a plain
+        // one-block incremental step. This is the assertion that does.
+        assert_eq!(
+            baseline_uses, 1,
+            "block {k}'s own missed step was answered by the baseline anchor, not a plain incremental step"
+        );
         assert_eq!(
             without_state.state(),
             full_replay(&history, k).state(),
             "the baseline anchor still produces the correct state"
         );
 
-        let (state, with, uses) = step_to(&history, k);
+        let (state, with, uses, baseline_uses) = step_to(&history, k);
         assert_eq!(
             with,
             Some(1),
             "block {k} steps incrementally over the anchor"
         );
         assert_eq!(uses, 1, "and the text came from an anchor");
+        assert_eq!(
+            baseline_uses, 0,
+            "an ordinary one-block incremental step never consults the baseline anchor"
+        );
         assert_eq!(state.state(), full_replay(&history, k).state());
     }
     assert!(
@@ -117,9 +135,10 @@ fn an_anchor_outside_the_verified_record_is_never_consulted() {
     crate::verified_blocks::record_verified_blocks(&history.layout, [history.blocks[4]]);
     assert!(!crate::verified_blocks::load_verified_blocks(&history.layout).is_empty());
 
-    let (state, steps_after, uses) = step_to(&history, 3);
+    let (state, steps_after, uses, baseline_uses) = step_to(&history, 3);
     assert_eq!(steps_after, Some(0), "a full replay");
     assert_eq!(uses, 0, "no anchor was consulted");
+    assert_eq!(baseline_uses, 0, "no baseline anchor was consulted either");
     assert_eq!(state.state(), full_replay(&history, 3).state());
     assert!(
         take_anchor_fallbacks().is_empty(),
@@ -164,6 +183,7 @@ fn a_text_that_fails_its_hash_falls_back_and_is_named() {
     persist(&history.layout, history.blocks[1], horizon, 0, &poisoned);
 
     let before = anchored_text_uses_for_test();
+    let baseline_before = crate::anchor_trust::anchor_uses_for_test_support("baseline");
     let state = resolve_baseline_state(&history.layout, &history.store, history.blocks[2], horizon)
         .unwrap();
     assert_eq!(anchored_text_uses_for_test(), before, "no text was used");
@@ -171,6 +191,13 @@ fn a_text_that_fails_its_hash_falls_back_and_is_named() {
         steps(&history),
         Some(1),
         "the baseline anchor repaired the cache (0.53.0 step 3): the loaded cache's own counter + 1, not a full replay's 0"
+    );
+    // R-1/R-3 (0.53.0 step 3A round 2): the step count alone does not show *which* mechanism
+    // repaired the cache -- this does.
+    assert_eq!(
+        crate::anchor_trust::anchor_uses_for_test_support("baseline") - baseline_before,
+        1,
+        "the baseline anchor is what repaired the poisoned cache, not a plain incremental step"
     );
     assert_eq!(state.state(), full_replay(&history, 3).state());
     let named = take_anchor_fallbacks();
@@ -433,4 +460,112 @@ fn a_hit_that_must_not_write_leaves_the_cache_byte_identical() {
         before,
         "nothing was written"
     );
+}
+
+/// Control (0.53.0 step 3A round 2, R-1). `baseline_cache_rung_at_for_test_support` must report
+/// exactly what a real `resolve_baseline_state` call actually did, for every shape that can reach
+/// the anchored rung from a same-horizon cache (a parent mismatch, a DC-65 miss with the text
+/// anchor off) and from a horizon mismatch (a branch switch). **Perturb:** restore the pre-R-1
+/// `.or(Some(BaselineCacheRung::FullReplayMissingBlobForLifecycleEffect { .. }))` wrapping around
+/// the DC-65 arm's `Ok(None)` -- the parent-mismatch and DC-65 assertions below go red (the mirror
+/// reports a full-replay reason where production actually answered from the anchor); the
+/// horizon-change assertion does not, since that path was never broken (R-1's own analysis).
+#[test]
+fn the_rung_mirror_agrees_with_production_at_every_anchored_shape() {
+    let history = AnchoredHistory::standard("anchored-ladder-mirror-agreement", 9);
+    let horizon = history.horizon();
+
+    // Shape 1: a parent mismatch. Prime the cache at block 1 (steps == 0), then resolve block 3
+    // directly -- its parent is block 2, not the cached baseline (block 1).
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    resolve_baseline_state(&history.layout, &history.store, history.blocks[0], horizon).unwrap();
+    assert_eq!(
+        steps(&history),
+        Some(0),
+        "the priming step is a full replay"
+    );
+    let baseline_before = crate::anchor_trust::anchor_uses_for_test_support("baseline");
+    let mirror_rung = baseline_cache_rung_at_for_test_support(
+        &history.layout,
+        &history.store,
+        history.blocks[2],
+        horizon,
+    );
+    let real = resolve_baseline_state(&history.layout, &history.store, history.blocks[2], horizon)
+        .unwrap();
+    assert!(
+        crate::anchor_trust::anchor_uses_for_test_support("baseline") > baseline_before,
+        "a parent mismatch with an anchor available answers from the anchor in production"
+    );
+    assert!(
+        matches!(mirror_rung, BaselineCacheRung::Anchored),
+        "parent mismatch: the mirror must report Anchored, matching production; got {mirror_rung:?}"
+    );
+    assert_eq!(real.state(), full_replay(&history, 3).state());
+
+    // Shape 2: a DC-65 miss with the text anchor off.
+    let _ = std::fs::remove_file(cache_path(&history.layout));
+    resolve_baseline_state(&history.layout, &history.store, history.blocks[1], horizon).unwrap();
+    assert_eq!(
+        steps(&history),
+        Some(0),
+        "the priming step is a full replay"
+    );
+    let baseline_before = crate::anchor_trust::anchor_uses_for_test_support("baseline");
+    let (mirror_rung, real_state, baseline_rose) = without_anchoring_for_test(|| {
+        let mirror_rung = baseline_cache_rung_at_for_test_support(
+            &history.layout,
+            &history.store,
+            history.blocks[2],
+            horizon,
+        );
+        let real =
+            resolve_baseline_state(&history.layout, &history.store, history.blocks[2], horizon)
+                .unwrap();
+        (
+            mirror_rung,
+            real,
+            crate::anchor_trust::anchor_uses_for_test_support("baseline") > baseline_before,
+        )
+    });
+    assert!(
+        baseline_rose,
+        "a DC-65 miss with the text anchor off answers from the baseline anchor in production"
+    );
+    assert!(
+        matches!(mirror_rung, BaselineCacheRung::Anchored),
+        "DC-65 miss, text anchor off: the mirror must report Anchored, matching production; got {mirror_rung:?}"
+    );
+    assert_eq!(real_state.state(), full_replay(&history, 3).state());
+
+    // Shape 3: a horizon change (a branch switch's own shape). The cache above now represents
+    // block 3 at the real horizon; querying a later block with a *different* claimed horizon
+    // fails `cached.horizon_id == horizon_id` immediately, skipping the whole same-horizon branch
+    // (including `same_baseline_hit`) regardless of which block is cached. The anchor-admission
+    // walk never reads `horizon_id` (confirmed in the production diff's own doc comment), so it is
+    // unaffected and still finds the genesis checkpoint.
+    let wrong_horizon = ObjectId::from_bytes([0x59; 32]);
+    let baseline_before = crate::anchor_trust::anchor_uses_for_test_support("baseline");
+    let mirror_rung = baseline_cache_rung_at_for_test_support(
+        &history.layout,
+        &history.store,
+        history.blocks[4],
+        wrong_horizon,
+    );
+    let real = resolve_baseline_state(
+        &history.layout,
+        &history.store,
+        history.blocks[4],
+        wrong_horizon,
+    )
+    .unwrap();
+    assert!(
+        crate::anchor_trust::anchor_uses_for_test_support("baseline") > baseline_before,
+        "a horizon change with an anchor available answers from the anchor in production"
+    );
+    assert!(
+        matches!(mirror_rung, BaselineCacheRung::Anchored),
+        "horizon change: the mirror must report Anchored, matching production; got {mirror_rung:?}"
+    );
+    assert_eq!(real.state(), full_replay(&history, 5).state());
 }

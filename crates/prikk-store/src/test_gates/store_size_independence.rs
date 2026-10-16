@@ -264,10 +264,33 @@ fn store_of_count(count: usize) -> Result<(RepositoryLayout, std::path::PathBuf)
 enum Expectation {
     /// The operation's cost does not follow the store's size (`large <= small + allowance`).
     Flat,
+    /// **An open finding on the content axis** (0.53.0 step 3A round 2, R-5: restored from
+    /// `06ea56a4^`, where it was removed when F4 closed its one user -- 3B's own queue axis needs
+    /// the identical floor/ceiling mechanism, so it is re-added here rather than reinvented):
+    /// the operation reads more as the store's stored content grows (`large >= small + 8 MiB`).
+    /// **The floor** (this promotion check) catches a fix: once a finding's own row reads flat, the
+    /// row is promoted to `Flat` and the finding removed, never left as an open row with nothing
+    /// to catch. **The ceiling** (the ceiling field below) catches a regression instead: the
+    /// finding getting worse, not just failing to improve, which the floor alone would miss. Both
+    /// checks are the same promotion rule [`Expectation::FollowsHistory`]/[`Expectation::FollowsRefs`]/
+    /// the future queue axis apply to their own axis.
+    ///
+    /// **Not yet constructed anywhere in this table** (`#[allow(dead_code)]` below): 3B's own
+    /// sitting adds the queue axis and its one open row, the first (and for now only) caller. Left
+    /// in place, match arms included, rather than removed again, so 3B finds the exact mechanism
+    /// this report describes instead of re-deriving it.
+    #[allow(dead_code)]
+    FollowsContent {
+        finding: &'static str,
+        /// **RFC 160 §9's ceiling on P2's open rows** (the external review's D11): set to 1.5x
+        /// what the operation measured when this ceiling was written; the report gives the exact
+        /// numbers.
+        ceiling: u64,
+    },
     /// **An open finding on the history axis**: the operation reads more as the history grows (`large >= small + 16 KiB`), the ref log
-    /// and the object index being what grows. Same promotion rule as [`Expectation::Flat`]'s own content-axis sibling used to be,
-    /// before 0.53.0 step 3 (F4) closed it: a row is promoted to `Flat` and its open finding removed once the fix lands, never left
-    /// as a vestigial variant with nothing constructing it.
+    /// and the object index being what grows. **The floor** (this promotion check) catches a fix, promoting the row to `Flat` and
+    /// removing the finding; **the ceiling** (below) catches a regression instead -- the finding getting worse, not just failing to
+    /// improve, which the floor alone would miss. Same promotion rule as [`Expectation::FollowsContent`].
     FollowsHistory {
         finding: &'static str,
         /// Same ceiling, same reason, for the history axis.
@@ -566,6 +589,16 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
                 operation.name,
                 operation.allowance,
                 operation.why
+            )),
+            Expectation::FollowsContent { finding, ceiling } if large < small + (8 << 20) => failures.push(format!(
+                "{}: an open finding ({finding}) now reads {small} / {large} bytes on the small / large store: it is flat. Promote the \
+                 row to `Expectation::Flat` and remove the finding",
+                operation.name
+            )),
+            Expectation::FollowsContent { finding, ceiling } if large > *ceiling => failures.push(format!(
+                "{}: an open finding ({finding}) reads {large} bytes on the large store, over its {ceiling}-byte ceiling (1.5x what it \
+                 measured when the ceiling was set): the finding is getting worse, not just failing to improve",
+                operation.name
             )),
             Expectation::FollowsHistory { finding, ceiling } if large < small + (16 << 10) => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes at the shallow / deep history: it is flat. Promote the \

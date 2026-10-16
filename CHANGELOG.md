@@ -25,6 +25,25 @@
   editing or replacing the damaged file still reads its blob and still refuses, unchanged. With no
   such checkpoint in reach, today's refusal is unchanged.
 
+### Changed — a cold commit no longer reads every stored file
+
+A `commit` whose baseline could not be served from the incremental cache — a missing or unreadable cache (a fresh
+clone or restore, or a deleted `.prikk/cache/`), a branch switch, or a step the cache's own one-block fold cannot
+take (two seals since the last resolution, or the new block being a merge block) — derived that baseline by
+replaying the whole lineage from genesis, reading every historical file's blob just to re-derive its kind: 1 MiB of
+stored content read 1.06 MB, 16 MiB read 16.8 MB, 64 MiB read 67.1 MB. A cold `commit` now derives from the nearest
+checkpoint this repository has itself sealed or verified under an adopted maintainer key — the same anchor `seal`,
+`merge` and `sync seal` already use (0.48.0, RFC 159) — reading about 8 KB regardless of how much content the store
+holds.
+
+**What still runs in full:** every 64th baseline resolution (the forced reanchor, which always re-derives from the
+objects, never from an anchor, so a wrong entry is bounded and corrected); a repository with no admitted checkpoint
+in reach (one that has only ever received history, before its first local `seal` or `verify`); and `verify`, which
+never anchors.
+
+**One exception, stated separately below** (`### Output changes`): a cold, anchored `commit` can now succeed over a
+historical file's blob damaged on disk, below the checkpoint, in a file the commit does not touch.
+
 ## 0.52.0 — 2026-10-15
 
 ### Security

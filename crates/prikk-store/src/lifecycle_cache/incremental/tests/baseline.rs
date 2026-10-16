@@ -384,15 +384,93 @@ fn verify_never_consults_the_baseline_anchor() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// (0.53.0 step 3A round 2, R-2.) The shape of a healthy post-recovery (or never-crashed) queue
+/// for this fixture: two queued patches, `"warm"` then `"cold anchored commit"`, the second a
+/// single `create-file` of `killed.txt` and nothing else. Returns `None` on any read error, which
+/// the caller then fails on, same as any other broken post-condition.
+fn killed_file_queue_shape(layout: &RepositoryLayout) -> Option<(usize, bool)> {
+    let entries = crate::enumerate_queued_patches(layout).ok()?;
+    let killed_once_correctly = entries.iter().any(|entry| {
+        entry.message.as_deref() == Some("cold anchored commit")
+            && entry.operations.len() == 1
+            && entry.operations[0].kind == "create-file"
+            && entry.operations[0].paths.iter().any(
+                |path| matches!(path, crate::QueuedPathResolution::Path(p) if p == "killed.txt"),
+            )
+    });
+    Some((entries.len(), killed_once_correctly))
+}
+
 /// Control 9. A commit kill sweep: a cold, anchored commit crashed at every write ordinal of the
 /// failpoint families a commit's own write path can hit (the project's established convention,
-/// `commit_boundary::worktree_patch::ref_name_once_per_session_tests`). Afterward, either `verify`
-/// is clean or it names the interrupted state with its existing recovery; a rerun of the same
-/// commit gives the same live-file outcome as an uninterrupted one would.
+/// `commit_boundary::worktree_patch::ref_name_once_per_session_tests`). **0.53.0 step 3A round 2
+/// (R-2):** the architect's own probe found the round-1 version of this test counted every *armed*
+/// ordinal (100) as "recovered," including 86 that never actually reached their failpoint at all
+/// (each family's own write sequence is shorter than 20 steps) -- overstating the evidence by 7x.
+/// This version sweeps each family only up to the first ordinal that survives uninterrupted
+/// (`failpoint_armed_for_test()` still `true` afterward, meaning the point was never reached --
+/// every later ordinal in that fixed-length family would be the same), counts n/N over ordinals
+/// that genuinely fired, and checks a real post-condition against an independently-run,
+/// uninterrupted commit of the identical fixture: `verify` reports no failed item afterward, and
+/// the queue holds exactly `killed.txt`'s own commit, once, with the right content -- not merely
+/// that a retry's error message happened to mention a repair verb's name.
 #[test]
 fn a_cold_anchored_commit_kill_sweep_recovers_at_every_write_ordinal() {
-    let mut tested = 0_usize;
-    let mut recovered = 0_usize;
+    const MAX_ORDINAL: usize = 20;
+
+    // The ground truth this fixture is checked against: build the identical sequence once, never
+    // crashed, and capture its queue shape.
+    let reference_root = unique_temp_dir("step3a-kill-reference");
+    let reference_shape = {
+        let layout = RepositoryLayout::init(reference_root.clone()).unwrap();
+        let maintainer = maintainer();
+        add_trusted_maintainer(
+            &layout,
+            maintainer.key_id(),
+            &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+        )
+        .unwrap();
+        std::fs::write(layout.root().join("seed.txt"), b"seed\n").unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "seed",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        simulate_one_seal(&layout, REF_NAME, &maintainer).unwrap();
+        std::fs::write(layout.root().join("warm.txt"), b"warm\n").unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "warm",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        std::fs::write(layout.root().join("killed.txt"), b"killed\n").unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "cold anchored commit",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        killed_file_queue_shape(&layout).expect("the reference fixture reads back")
+    };
+    assert_eq!(
+        reference_shape,
+        (2, true),
+        "fixture sanity: the reference run queues warm and killed.txt exactly, uncrashed"
+    );
+    let _ = std::fs::remove_dir_all(&reference_root);
+
+    let mut fired_total = 0_usize;
+    let mut per_family = Vec::new();
+    let mut swallowed = Vec::new();
+
     for point in [
         TestFailPoint::AppendWrite,
         TestFailPoint::RequiredFileSync,
@@ -400,8 +478,11 @@ fn a_cold_anchored_commit_kill_sweep_recovers_at_every_write_ordinal() {
         TestFailPoint::MutableRename,
         TestFailPoint::Truncate,
     ] {
-        for ordinal in 0..20 {
-            tested += 1;
+        let mut armed_count = 0_usize;
+        let mut fired_count = 0_usize;
+        let mut failed_count = 0_usize;
+        for ordinal in 0..MAX_ORDINAL {
+            armed_count += 1;
             let root = unique_temp_dir(&format!("step3a-kill-{point:?}-{ordinal}"));
             let layout = RepositoryLayout::init(root.clone()).unwrap();
             let maintainer = maintainer();
@@ -449,18 +530,30 @@ fn a_cold_anchored_commit_kill_sweep_recovers_at_every_write_ordinal() {
                 WorktreePatchCommitOptions::default(),
                 &author(),
             );
+            let still_armed = crate::foundation::fsutil::failpoint_armed_for_test();
             clear_failpoint_for_test();
 
-            // `verify` is a read-only report: it must always complete (never itself error out),
-            // whatever the crash left behind -- reporting a problem is a value it returns, not a
-            // failure to run.
-            let verification = crate::verify_repository(&layout);
-            let verify_completed = verification.is_ok();
+            if still_armed {
+                // This ordinal's own write sequence never reached `point` -- a fixed, finite
+                // length per family, so every later ordinal would be the same. Stop here; this
+                // family's own n is `fired_count`, not `MAX_ORDINAL`.
+                let _ = std::fs::remove_dir_all(&root);
+                break;
+            }
+            fired_count += 1;
+            fired_total += 1;
+            if crashed.is_ok() {
+                // Fired, but the commit still succeeded: a swallowed write, not a required one.
+                swallowed.push(format!("{point:?}@{ordinal}"));
+            } else {
+                failed_count += 1;
+            }
 
             // The repository must not be left permanently stuck: either the crashed commit already
             // succeeded (nothing to retry), or retrying the identical commit now succeeds, or a
             // stale active lock is released through the existing recovery (`prikk unlock`'s own
-            // primitive, `unlock::clear_lock`) and *that* retry succeeds.
+            // primitive, `unlock::clear_lock`) and *that* retry succeeds, or a refusal that genuinely
+            // names a `doctor` repair is resolved by running that repair for real, then retrying.
             let mut retry = if crashed.is_ok() {
                 None
             } else {
@@ -487,7 +580,29 @@ fn a_cold_anchored_commit_kill_sweep_recovers_at_every_write_ordinal() {
                     &author(),
                 ));
             }
-            let recovers = crashed.is_ok()
+            if matches!(&retry, Some(Err(err)) if err.to_string().contains("doctor")) {
+                // A refusal that genuinely names a `doctor` repair: run the repair for real
+                // (RFC 166 D5's own verb), not merely accept the message as success.
+                let _ = crate::discard_damaged_commits(&layout);
+                retry = Some(commit_worktree_changes_signed(
+                    &layout,
+                    REF_NAME,
+                    "cold anchored commit",
+                    WorktreePatchCommitOptions::default(),
+                    &author(),
+                ));
+            }
+
+            // `verify` is a read-only report: it must always complete (never itself error out),
+            // whatever the crash left behind -- reporting a problem is a value it returns, not a
+            // failure to run.
+            let verification = crate::verify_repository(&layout);
+            let verify_clean = verification
+                .as_ref()
+                .map(|v| !v.has_stage_failure() && !v.has_item_failure())
+                .unwrap_or(false);
+
+            let commit_recovers = crashed.is_ok()
                 || match &retry {
                     Some(Ok(_)) => true,
                     // RFC 166 D3 row 2 (`Pending`): a crash between the WAL's durable append and
@@ -497,31 +612,37 @@ fn a_cold_anchored_commit_kill_sweep_recovers_at_every_write_ordinal() {
                     // documented, intended behaviour (RFC 166 §13 item 13), not a dead end.
                     Some(Err(err)) => {
                         let message = err.to_string();
-                        // "no node-addressed changes to commit": the crash happened after the
-                        // content was already durably written and witnessed (`commit_witness_verdict`
-                        // reads `Healthy` in this shape), so the retry correctly finds nothing new
-                        // to do -- the data is safe, not stuck.
-                        message.contains("doctor")
-                            || message.contains("nothing left to commit")
+                        message.contains("nothing left to commit")
                             || message.contains("not confirmed")
                             || message.contains("no node-addressed changes to commit")
                     }
                     None => true,
                 };
-            if verify_completed && recovers {
-                recovered += 1;
-            } else {
-                panic!(
-                    "{point:?}@{ordinal}: the repository did not recover (crashed={crashed:?}, \
-                     verify={verification:?}, retry={retry:?})"
-                );
-            }
+            let queue_shape = killed_file_queue_shape(&layout);
+            let queue_recovers = queue_shape == Some((2, true));
+
+            assert!(
+                verify_clean && commit_recovers && queue_recovers,
+                "{point:?}@{ordinal}: the repository did not recover cleanly (crashed={crashed:?}, \
+                 verify_clean={verify_clean} ({verification:?}), retry={retry:?}, \
+                 queue_shape={queue_shape:?}, expected (2, true))"
+            );
             let _ = std::fs::remove_dir_all(&root);
         }
+        per_family.push(format!(
+            "{point:?}: armed {armed_count}, fired {fired_count}, fired-and-failed {failed_count}"
+        ));
     }
-    assert!(tested >= 100, "swept {tested} ordinals");
-    assert_eq!(
-        recovered, tested,
-        "every ordinal must recover, {recovered}/{tested}"
+    assert!(
+        fired_total >= 1,
+        "the sweep must genuinely fire at least once; it fired {fired_total} times across {per_family:?}"
+    );
+    // Every ordinal counted in `fired_total` was confirmed to have actually fired (the loop only
+    // increments it right after `still_armed` reads false) and recovered cleanly (the `assert!`
+    // above panics on the first ordinal that does not) -- so reaching here means n/N = fired_total
+    // / fired_total, every one of them a genuine crash, not an un-fired arm.
+    eprintln!(
+        "kill sweep: {fired_total} ordinals genuinely fired and recovered, {per_family:?}, \
+         swallowed (fired but did not fail the commit): {swallowed:?}"
     );
 }
