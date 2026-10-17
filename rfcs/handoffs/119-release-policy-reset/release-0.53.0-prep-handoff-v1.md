@@ -55,3 +55,18 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 - the consumer letters. The owner sends them after the release:
   - stikk: the `checkout` wording (already announced), `trust maintainer check`, and a faster cold commit;
   - planeter and brygge: the cold commit, if relevant to their measurements.
+
+**P1 ACCEPTED 2026-10-17** (`645c505c`; review `release-0.53.0-prep-P1-review-v1`). The rulings: **no `### Security`
+block**, and **no `#[non_exhaustive]` on the `test-support` enum.**
+
+**`main`'s CI is red:** `msrv-1.85.0` was cancelled at 20 minutes on `6b553ce3` and `f13a0304`. The queue axis's
+3,200-commit fixture is quadratic in a debug build.
+
+**P1b (about 45 min, `release-0.53.0-prep-P1b-report.md`), next:**
+1. **Bound the fixture's debug cost**, for example `LARGE_QUEUE` = 800. Re-size the ceiling from control 2, and report the
+   debug times and the Windows suite.
+2. **Correct the M6 wording in the CHANGELOG and `current-state.md`:** four reads of the queue, now three, not "twice".
+   No "owner's decision". Use bytes re-measured on one fixed file.
+3. **14 gates.**
+
+**Then P2.**
