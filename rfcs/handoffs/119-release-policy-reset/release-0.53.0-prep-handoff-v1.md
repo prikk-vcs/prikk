@@ -75,3 +75,14 @@ block**, and **no `#[non_exhaustive]` on the `test-support` enum.**
 1,400,000, and the M6 wording is now four reads → three. **Next: P2,** whose commit also carries two text items:
 - `current-state.md`'s M6 entry drops its process words;
 - both M6 titles drop "for nothing".
+
+**P2 ACCEPTED 2026-10-18** (`980b1108`; review `release-0.53.0-prep-P2-review-v1`):
+- the ratio is 1.880× against 1.891×;
+- a cold commit is flat on the CLI (about 1 ms and 12 MiB at 1–64 MiB), against 0.52.0's 75 ms and 137 MiB;
+- the smoke has 347 ok.
+
+**P3 next, with two items first:**
+- **P2-1:** the F4 entries overstate the fast path. After a restore, a fresh clone or a deleted `.prikk/cache/`, the
+  checkpoint record is gone and a cold commit does the full replay until `verify` or `seal`. Measure it, then correct the
+  CHANGELOG and `current-state.md`;
+- **P2-2:** smoke 30b-interior, where a damaged record with sound ones after it still stops `commit`.
