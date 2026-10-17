@@ -134,6 +134,12 @@ enum Axis {
     /// (`current-state.md`'s own measured "a commit's cost follows the number of refs, roughly squared"). This table's job for this
     /// axis is to keep that fix fixed, not to re-discover it.
     Refs,
+    /// 0.53.0 step 3B (M6): the same lineage, with [`SMALL_QUEUE`] and [`LARGE_QUEUE`] already-queued, unsealed prior commits ahead
+    /// of the one this axis's own operation actually measures -- the axis the F4-equivalent `append_patch`/witness fold is
+    /// measured against: a commit's own pre-append integrity check (every queued record, re-read before another is stacked on it)
+    /// is kept by the owner's 2026-10-15 decision ("keep the full check"), so unlike [`Axis::Content`]'s F4 row, this one is not
+    /// expected to go flat -- it is the standing regression guard that the check still costs one replay, not two.
+    Queue,
 }
 
 const SMALL_HISTORY: usize = 4;
@@ -246,6 +252,40 @@ fn store_of_refs(refs: usize) -> Result<(RepositoryLayout, std::path::PathBuf)> 
     Ok((layout, root))
 }
 
+/// 0.53.0 step 3B (M6), the design round's own two end points (100 and 3,200 queued commits, `0.53.0-step-2-B-m6-design-report.md`).
+const SMALL_QUEUE: usize = 100;
+const LARGE_QUEUE: usize = 3200;
+
+/// DC-57's own default hard block (`DEFAULT_ACTIVE_PATCH_LIMIT`, 1,000) refuses the 1,001st queued commit under a repository's
+/// default configuration -- a real, shipped limit (RFC 166 §2), not an artifact of this fixture. [`LARGE_QUEUE`] (3,200) is past
+/// it on purpose, the same range the M6 design round measured, so this axis raises the limit the same way the CLI does from
+/// `PRIKK_ACTIVE_PATCH_LIMIT` (`WorktreePatchCommitOptions::with_active_patch_limit`) -- an administrative choice that already
+/// exists, not a bypass invented for this table.
+fn queue_axis_commit_options() -> WorktreePatchCommitOptions {
+    WorktreePatchCommitOptions::default().with_active_patch_limit(LARGE_QUEUE + 16)
+}
+
+/// A repository with one sealed commit on `heads/main`, then `queued` further commits authored and queued but never sealed --
+/// the same lineage and the same one sealed generation whatever `queued` is, so the axis is the queue's own depth alone, not
+/// history depth (`store_of_history`'s axis) or stored content (`store_of`'s).
+fn store_of_queue(queued: usize) -> Result<(RepositoryLayout, std::path::PathBuf)> {
+    let (layout, root) = store_of_history(1)?;
+    for index in 0..queued {
+        std::fs::write(
+            layout.root().join(format!("q{index}.txt")),
+            format!("queued {index}\n"),
+        )?;
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "p2 queued",
+            queue_axis_commit_options(),
+            &author(),
+        )?;
+    }
+    Ok((layout, root))
+}
+
 const SMALL_OBJECTS: usize = 16;
 const LARGE_OBJECTS: usize = 2048;
 
@@ -275,13 +315,22 @@ enum Expectation {
     /// checks are the same promotion rule [`Expectation::FollowsHistory`]/[`Expectation::FollowsRefs`]/
     /// the future queue axis apply to their own axis.
     ///
-    /// **Not yet constructed anywhere in this table** (`#[allow(dead_code)]` below): 3B's own
-    /// sitting adds the queue axis and its one open row, the first (and for now only) caller. Left
-    /// in place, match arms included, rather than removed again, so 3B finds the exact mechanism
-    /// this report describes instead of re-deriving it.
-    #[allow(dead_code)]
+    /// **0.53.0 step 3B (M6): generalized to carry its own floor** (the 3A round 2 review's own
+    /// carried-over item), rather than the hard-coded `8 << 20` the content axis alone needed --
+    /// the queue axis's own row (below) reads hundreds of KB to a few MB at 100 to 3,200 queued
+    /// commits, three orders below the content axis's 1-to-16-MiB range, so one hard-coded floor
+    /// cannot serve both. **The content axis's own behaviour is unchanged by this**: a future
+    /// content-axis row passing `floor: 8 << 20` reproduces exactly what the old hard-coded
+    /// constant checked, byte for byte -- confirmed by running this file's own full test before and
+    /// after this change and diffing its output (identical, since no content-axis row exists yet to
+    /// exercise the difference either way).
     FollowsContent {
         finding: &'static str,
+        /// The floor (this promotion check): below `small + floor`, the finding is closed and the
+        /// row is promoted to [`Expectation::Flat`]. Sized per axis from what a genuinely flat
+        /// version of the operation would read, so the floor catches a real fix without false-passing
+        /// one that only *looks* flat within the far-larger range a shared constant would allow.
+        floor: u64,
         /// **RFC 160 §9's ceiling on P2's open rows** (the external review's D11): set to 1.5x
         /// what the operation measured when this ceiling was written; the report gives the exact
         /// numbers.
@@ -389,6 +438,25 @@ fn one_block_seal(layout: &RepositoryLayout) -> Result<()> {
 fn status_check(layout: &RepositoryLayout) -> Result<()> {
     read_tally::reset();
     let _report = worktree_status(layout, REF_NAME)?;
+    Ok(())
+}
+
+/// **0.53.0 step 3B (M6): one more commit against an already-deep queue.** The queue itself
+/// (`store_of_queue`'s own setup) is already in place before the tally resets; this measures only
+/// the one additional commit's own pre-append integrity check over whatever was already queued.
+fn queued_commit(layout: &RepositoryLayout) -> Result<()> {
+    std::fs::write(
+        layout.root().join("one-more.txt"),
+        b"one more queued commit\n",
+    )?;
+    read_tally::reset();
+    commit_worktree_changes_signed(
+        layout,
+        REF_NAME,
+        "p2 one more queued",
+        queue_axis_commit_options(),
+        &author(),
+    )?;
     Ok(())
 }
 
@@ -515,6 +583,30 @@ const OPERATIONS: &[Operation] = &[
               commit/seal path, but the object index and pointer index it reads are shared",
         run: status_check,
     },
+    Operation {
+        name: "one-file commit (queue depth)",
+        axis: Axis::Queue,
+        expectation: Expectation::FollowsContent {
+            finding: "0.53.0 step 3B (M6), the owner's 2026-10-15 decision (\"keep the full check\"): `append_patch`'s own \
+                       pre-append integrity check re-reads every already-queued record before stacking one more on it, so this row \
+                       is linear in the queue's own depth by design, not an oversight -- measured at 193,099 -> 6,013,196 bytes \
+                       from 100 to 3,200 queued commits. 3B's own fix removed a second, redundant full decode this same check used \
+                       to also pay for the witness's running hash (M6's design round measured about 2.71 ms dropping to about \
+                       1.24 ms at 3,200 queued); this row's own ceiling is what still catches a regression back to two reads",
+            floor: 16 << 10,
+            // Not the usual 1.5x (9,019,794): restoring the second, redundant full replay this round removes was measured
+            // directly (0.53.0 step 3B, control 2) at 7,142,054 bytes on the large store -- about 1.19x, not 2x, since most of
+            // this operation's own total is fixed-size containers (the object index, the ref-state/pointer-index containers)
+            // that do not double; only the WAL portion of the read does. A 1.5x ceiling would not catch that real regression at
+            // all. 6,500,000 sits strictly between today's fixed figure (6,013,196) and the measured regression (7,142,054).
+            ceiling: 6_500_000,
+        },
+        allowance: 4096,
+        why: "one more commit against an already-queued fixture: the pre-append check's own cost follows the queue it re-checks, \
+              which is the design this row stands guard over, not a defect -- a return to two full reads (the pre-3B shape) is \
+              what the ceiling exists to catch",
+        run: queued_commit,
+    },
 ];
 
 /// The small and the large store of the operation's own axis: `(small, large)` are the two sizes on that axis.
@@ -524,6 +616,7 @@ fn sizes(axis: Axis) -> (usize, usize) {
         Axis::Count => (SMALL_OBJECTS, LARGE_OBJECTS),
         Axis::History => (SMALL_HISTORY, LARGE_HISTORY),
         Axis::Refs => (SMALL_REFS, LARGE_REFS),
+        Axis::Queue => (SMALL_QUEUE, LARGE_QUEUE),
     }
 }
 
@@ -537,6 +630,7 @@ fn measure(operation: &Operation, size: usize) -> Result<(u64, Tally)> {
         Axis::Count => store_of_count(size)?,
         Axis::History => store_of_history(size)?,
         Axis::Refs => store_of_refs(size)?,
+        Axis::Queue => store_of_queue(size)?,
     };
     read_tally::reset();
     (operation.run)(&layout)?;
@@ -590,12 +684,12 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
                 operation.allowance,
                 operation.why
             )),
-            Expectation::FollowsContent { finding, ceiling } if large < small + (8 << 20) => failures.push(format!(
+            Expectation::FollowsContent { finding, floor, ceiling: _ } if large < small + floor => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes on the small / large store: it is flat. Promote the \
                  row to `Expectation::Flat` and remove the finding",
                 operation.name
             )),
-            Expectation::FollowsContent { finding, ceiling } if large > *ceiling => failures.push(format!(
+            Expectation::FollowsContent { finding, ceiling, .. } if large > *ceiling => failures.push(format!(
                 "{}: an open finding ({finding}) reads {large} bytes on the large store, over its {ceiling}-byte ceiling (1.5x what it \
                  measured when the ceiling was set): the finding is getting worse, not just failing to improve",
                 operation.name

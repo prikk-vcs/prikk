@@ -267,10 +267,15 @@ pub fn append_patch_and_witness(
         WitnessState::Absent | WitnessState::Damaged(_) => ([0u8; 32], 0),
     };
     let wal = Wal::for_layout(layout, name);
-    let seq = wal.append_patch(envelope)?;
-    let replay = wal.replay()?;
+    // 0.53.0 step 3B (M6): `append_patch_reporting` already read the whole queue once, inside its
+    // own `replay()` call, to decide whether to append at all -- the records it hands back here
+    // are exactly what a second `wal.replay()` would have read, had one been made. Folding over
+    // them directly removes that second, redundant full decode without changing any of
+    // `append_patch`'s own four facts or refusals (still enforced entirely inside
+    // `append_patch_reporting`, unmodified).
+    let (seq, sound_records) = wal.append_patch_reporting(envelope)?;
     let running_hash =
-        fold_running_hash(previous_running_hash, &replay.records, covered_through, seq)?;
+        fold_running_hash(previous_running_hash, &sound_records, covered_through, seq)?;
     let ref_store = RefStore::new(layout.clone());
     let ref_tip_at_write = ref_store.read_current_ref_state_id(ref_name)?;
     let record = WitnessRecord {

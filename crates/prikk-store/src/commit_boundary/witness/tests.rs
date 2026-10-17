@@ -1,12 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
 use super::{WitnessState, clear_witness, read_witness};
-use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
+use crate::Ed25519AuthorSigner;
+use crate::commit_boundary::worktree_patch::{
+    WorktreePatchCommitOptions, commit_worktree_changes_signed,
+    commit_worktree_changes_with_generator,
+};
+use crate::foundation::fsutil::{
+    TestFailPoint, clear_failpoint_for_test, fail_after_for_test, failpoint_armed_for_test,
+};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::node::node_id_gen::NodeIdGenerator;
 use crate::test_gates::source_classification::is_test_source;
 use crate::test_gates::test_support::unique_temp_dir;
-use crate::{Ed25519AuthorSigner, WorktreePatchCommitOptions};
 
 fn signer() -> Ed25519AuthorSigner {
     Ed25519AuthorSigner::from_seed("rfc166-d2-witness", &[0x71_u8; 32]).unwrap()
@@ -310,6 +316,13 @@ fn repo_root() -> std::path::PathBuf {
 fn append_patch_and_witness_is_the_only_caller_of_wal_append_patch() {
     // RFC 166 §13 item 1: `Wal::append_patch` is reachable from nowhere else. A fourth appender
     // calling it directly, anywhere else in production (non-test) source, fails this test.
+    //
+    // 0.53.0 step 3B (M6): `append_patch_and_witness` now calls the lower-level
+    // `append_patch_reporting` directly (the sibling that also hands back the records its own
+    // `replay()` already read, so the witness's running hash never needs a second, redundant
+    // decode of the whole queue) -- `append_patch` itself survives only as a thin wrapper around
+    // it, kept for every other (test) caller. Either name reaching production code outside
+    // `witness.rs` would be the same bypass this test exists to catch, so both are checked.
     let src = repo_root().join("crates/prikk-store/src");
     let mut non_test_callers = Vec::new();
     visit_rs_files(&src, &mut |path, contents| {
@@ -317,8 +330,14 @@ fn append_patch_and_witness_is_the_only_caller_of_wal_append_patch() {
         if is_test_source(relative) {
             return;
         }
+        // `wal.rs` is where both methods are defined; `append_patch`'s own one-line delegation to
+        // `append_patch_reporting` is the method's own internal structure, not a second caller
+        // reaching it from elsewhere -- excluded from this scan for that reason, not to hide it.
+        if relative == std::path::Path::new("wal.rs") {
+            return;
+        }
         for (line_number, line) in contents.lines().enumerate() {
-            if line.contains(".append_patch(") {
+            if line.contains(".append_patch(") || line.contains(".append_patch_reporting(") {
                 non_test_callers.push(format!(
                     "{}:{}: {}",
                     path.display(),
@@ -331,8 +350,8 @@ fn append_patch_and_witness_is_the_only_caller_of_wal_append_patch() {
     assert_eq!(
         non_test_callers.len(),
         1,
-        "expected exactly one production caller of Wal::append_patch (inside witness.rs itself); \
-         found: {non_test_callers:#?}"
+        "expected exactly one production caller of Wal::append_patch/append_patch_reporting \
+         (inside witness.rs itself); found: {non_test_callers:#?}"
     );
     assert!(non_test_callers[0].contains("witness.rs"));
 }
@@ -448,4 +467,383 @@ fn a_lost_first_witness_creation_falls_back_to_rule_3_and_the_next_commit_recrea
         "verify is clean after the fall-back"
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+// 0.53.0 step 3B (M6): `append_patch_and_witness` now folds over the records its own, single
+// `append_patch_reporting` call already read, instead of a second, redundant `wal.replay()`
+// (`commit_boundary::witness::append_patch_and_witness`). Controls 1-4 below confirm this real
+// implementation change, not merely the design round's own prototype: the running hash it writes
+// is exactly what an independent, from-scratch replay computes, for every witness state the
+// handoff names, and the production code genuinely still folds every record a behind witness does
+// not cover (not only the newest one).
+
+/// An independent, from-scratch recomputation of the running hash over every sound record
+/// currently in the WAL, through `last_seq` -- the same check `verify_running_hash` performs
+/// internally, done here directly against the real WAL so a test can compare it to whatever the
+/// real `append_patch_and_witness` call just wrote, without relying on that function's own
+/// correctness to verify itself.
+fn independent_running_hash(layout: &RepositoryLayout, through_seq: u64) -> [u8; 32] {
+    let wal = crate::wal::Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
+    let replay = wal.replay().unwrap();
+    let mut running = [0u8; 32];
+    for record in &replay.records {
+        if record.seq > through_seq {
+            break;
+        }
+        let frame_hash = crate::wal::record_frame_checksum(record).unwrap();
+        let mut preimage = Vec::with_capacity(64);
+        preimage.extend_from_slice(&running);
+        preimage.extend_from_slice(&frame_hash);
+        running = prikk_hash::sha256(&preimage);
+    }
+    running
+}
+
+fn current_witness(layout: &RepositoryLayout) -> super::WitnessRecord {
+    match read_witness(layout, DEFAULT_ACTIVE_NAME).unwrap() {
+        WitnessState::Valid(record) => record,
+        other => panic!("expected Valid, got {other:?}"),
+    }
+}
+
+/// Control 1 (valid and current): the ordinary case every `commit()` call in this file already
+/// exercises -- stated explicitly here, once, as its own control rather than left implicit in
+/// every other test's own incidental use of `commit()`.
+#[test]
+fn m6_witness_valid_and_current_matches_an_independent_replay() {
+    let root = unique_temp_dir("m6-valid-current");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    commit(&layout, "b.txt", b"two");
+    commit(&layout, "c.txt", b"three");
+    let witness = current_witness(&layout);
+    assert_eq!(witness.last_seq, 3);
+    assert_eq!(
+        witness.running_hash,
+        independent_running_hash(&layout, 3),
+        "the witness the real, single-replay append path wrote must equal an independent, \
+         from-scratch replay's own running hash"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Control 1 (valid and behind): a witness that genuinely covers only a *prefix* of the queue (not
+/// absent, not damaged -- a real, checksummed record for an earlier seq), simulating a witness this
+/// binary wrote once and then fell behind by one record (for example, a `test-support` append that
+/// advanced the WAL without going through `append_patch_and_witness` at all -- the same shape an
+/// older binary's own commit leaves, one step short of the "no witness at all" legacy case the
+/// existing `a_commit_after_a_legacy_queue_with_no_witness_folds_the_whole_queue_never_a_false_alarm`
+/// test already covers). The next real commit must fold **both** the record the witness missed and
+/// its own new one, not just its own.
+#[test]
+fn m6_witness_valid_and_behind_folds_every_record_it_missed() {
+    let root = unique_temp_dir("m6-valid-behind");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    commit(&layout, "b.txt", b"two");
+    // Roll the witness back to claim only seq 1, as if this binary's own witness write for seq 2
+    // had never happened (a crash between the durable WAL append and the witness write, RFC 166
+    // D2's own documented gap -- "acknowledged" is decided by the witness, and seq 2 here is simply
+    // not yet acknowledged by it).
+    let witness_path = layout
+        .active_session_dir(DEFAULT_ACTIVE_NAME)
+        .join("witness");
+    let wal = crate::wal::Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let replay = wal.replay().unwrap();
+    let seq1 = replay.records.iter().find(|r| r.seq == 1).unwrap();
+    let mut record = super::decode_for_test(&std::fs::read(&witness_path).unwrap()).unwrap();
+    record.last_seq = 1;
+    record.patch_id = seq1.envelope.object_id();
+    record.frame_hash = crate::wal::record_frame_checksum(seq1).unwrap();
+    record.running_hash = independent_running_hash(&layout, 1);
+    std::fs::write(&witness_path, super::encode_for_test(&record)).unwrap();
+    assert_eq!(
+        current_witness(&layout).last_seq,
+        1,
+        "the witness is genuinely behind now, not absent or damaged"
+    );
+
+    commit(&layout, "c.txt", b"three");
+    let recovered = current_witness(&layout);
+    assert_eq!(recovered.last_seq, 3);
+    assert_eq!(
+        recovered.running_hash,
+        independent_running_hash(&layout, 3),
+        "the fold must cover seq 2 (missed by the behind witness) and seq 3 (the new commit), not \
+         only seq 3 alone"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Control 1 (idempotent retry): submitting the identical, already-queued envelope again must
+/// leave the witness untouched -- no new record, same seq, same running hash -- through the real,
+/// single-replay path.
+#[test]
+fn m6_witness_idempotent_retry_leaves_the_witness_unchanged() {
+    let root = unique_temp_dir("m6-idempotent-retry");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    commit(&layout, "b.txt", b"two");
+    let before = current_witness(&layout);
+    let wal = crate::wal::Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let envelope = wal
+        .replay()
+        .unwrap()
+        .records
+        .last()
+        .unwrap()
+        .envelope
+        .clone();
+    let seq =
+        super::append_patch_and_witness(&layout, DEFAULT_ACTIVE_NAME, "heads/main", &envelope)
+            .unwrap();
+    assert_eq!(
+        seq, before.last_seq,
+        "the retry returns the pre-existing seq, not a new one"
+    );
+    let after = current_witness(&layout);
+    assert_eq!(
+        after, before,
+        "an idempotent retry must not change the witness at all"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Control 3: a damaged record strictly inside the queue (not the tail) still refuses the next
+/// commit, with the message naming `doctor` and `--discard-damaged-commits`, exactly as before
+/// 0.53.0 step 3B -- `append_patch_reporting`'s own `has_item_failure()` check is unchanged, and
+/// this confirms it still fires correctly through the new wrapper, not merely by reading the diff.
+#[test]
+fn m6_interior_damage_in_an_800_deep_queue_still_refuses() {
+    let root = unique_temp_dir("m6-interior-damage-800");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    for index in 0..800 {
+        commit(
+            &layout,
+            &format!("f{index}.txt"),
+            format!("{index}").as_bytes(),
+        );
+    }
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    // Flip one byte inside record 3's own body -- far from the tail, deep in the queue's interior.
+    let target = bytes.len() / 800 * 3 + 40;
+    bytes[target] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+
+    std::fs::write(layout.root().join("one-more.txt"), b"one more\n").unwrap();
+    let result = commit_worktree_changes_with_generator(
+        &layout,
+        "heads/main",
+        "one more",
+        WorktreePatchCommitOptions::file_level(),
+        &mut NodeIdGenerator::production(),
+        &signer(),
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("doctor") && message.contains("damaged"),
+        "expected a refusal naming doctor over the damaged record, got: {message}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Control 4: if `append_patch_and_witness`'s own fold ever used a stale record set (not what it
+/// actually just appended), the witness it writes would disagree with an independent replay --
+/// `verify_running_hash` (RFC 166 D4, unchanged by this round) is what would catch that. Confirmed
+/// by a real perturbation: fold through `seq - 1` (as if the newest record itself had been left
+/// out of the fold -- a stale view of the queue), and show the resulting witness fails
+/// `verify_running_hash` against the real, genuine replay.
+#[test]
+fn m6_a_stale_fold_is_caught_by_verify_running_hash() {
+    let root = unique_temp_dir("m6-stale-fold");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    commit(&layout, "a.txt", b"one");
+    commit(&layout, "b.txt", b"two");
+    let witness = current_witness(&layout);
+    let wal = crate::wal::Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+    let genuine = wal.replay().unwrap();
+    assert!(
+        super::verify_running_hash(&witness, &genuine).unwrap(),
+        "the real, unperturbed witness must agree with a genuine replay"
+    );
+
+    // Simulate the fold having used a stale view: a witness claiming `last_seq` 2 but whose
+    // running hash was actually folded only through seq 1 (as `fold_running_hash` would produce if
+    // handed a stale record set that omitted the newest one).
+    let stale_running_hash = independent_running_hash(&layout, 1);
+    let mut stale = witness.clone();
+    stale.running_hash = stale_running_hash;
+    assert!(
+        !super::verify_running_hash(&stale, &genuine).unwrap(),
+        "a witness whose running hash was folded from a stale record set must fail verification \
+         against the real, genuine replay"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn m6_killed_file_queue_shape(layout: &RepositoryLayout) -> Option<(usize, bool)> {
+    let entries = crate::enumerate_queued_patches(layout).ok()?;
+    let killed_once_correctly = entries.iter().any(|entry| {
+        entry.message.as_deref() == Some("killed")
+            && entry.operations.len() == 1
+            && entry.operations[0].kind == "create-file"
+            && entry.operations[0].paths.iter().any(
+                |path| matches!(path, crate::QueuedPathResolution::Path(p) if p == "killed.txt"),
+            )
+    });
+    Some((entries.len(), killed_once_correctly))
+}
+
+/// Control 5: a commit kill sweep over `append_patch_and_witness`'s own write ordinals (the
+/// durable WAL append, then the witness write in place) -- the same families and the same honest
+/// evidence standard 3A round 2 had to learn the hard way (R-2): n/N counted only over ordinals
+/// that genuinely fired, each checked against a real post-condition (the queue's shape after
+/// recovery equals an independent, uninterrupted reference run; `verify` reports no failed item),
+/// never a vague "did not error" or a substring match accepted as success on its own.
+#[test]
+fn m6_commit_kill_sweep_recovers_at_every_write_ordinal() {
+    const MAX_ORDINAL: usize = 20;
+
+    let reference_root = unique_temp_dir("m6-kill-reference");
+    let reference_shape = {
+        let layout = RepositoryLayout::init(reference_root.clone()).unwrap();
+        commit(&layout, "warm.txt", b"warm");
+        std::fs::write(layout.root().join("killed.txt"), b"killed\n").unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            "heads/main",
+            "killed",
+            WorktreePatchCommitOptions::default(),
+            &signer(),
+        )
+        .unwrap();
+        m6_killed_file_queue_shape(&layout).expect("the reference fixture reads back")
+    };
+    assert_eq!(
+        reference_shape,
+        (2, true),
+        "fixture sanity: the reference run queues warm and killed.txt exactly, uncrashed"
+    );
+    let _ = std::fs::remove_dir_all(&reference_root);
+
+    let mut fired_total = 0_usize;
+    let mut per_family = Vec::new();
+    let mut swallowed = Vec::new();
+
+    for point in [
+        TestFailPoint::AppendWrite,
+        TestFailPoint::RequiredFileSync,
+        TestFailPoint::MutableFileSync,
+        TestFailPoint::MutableRename,
+        TestFailPoint::Truncate,
+    ] {
+        let mut fired_count = 0_usize;
+        let mut failed_count = 0_usize;
+        for ordinal in 0..MAX_ORDINAL {
+            let root = unique_temp_dir(&format!("m6-kill-{point:?}-{ordinal}"));
+            let layout = RepositoryLayout::init(root.clone()).unwrap();
+            commit(&layout, "warm.txt", b"warm");
+
+            std::fs::write(layout.root().join("killed.txt"), b"killed\n").unwrap();
+            fail_after_for_test(point, ordinal);
+            let crashed = commit_worktree_changes_signed(
+                &layout,
+                "heads/main",
+                "killed",
+                WorktreePatchCommitOptions::default(),
+                &signer(),
+            );
+            let still_armed = failpoint_armed_for_test();
+            clear_failpoint_for_test();
+
+            if still_armed {
+                let _ = std::fs::remove_dir_all(&root);
+                break;
+            }
+            fired_count += 1;
+            fired_total += 1;
+            if crashed.is_ok() {
+                swallowed.push(format!("{point:?}@{ordinal}"));
+            } else {
+                failed_count += 1;
+            }
+
+            let mut retry = if crashed.is_ok() {
+                None
+            } else {
+                Some(commit_worktree_changes_signed(
+                    &layout,
+                    "heads/main",
+                    "killed",
+                    WorktreePatchCommitOptions::default(),
+                    &signer(),
+                ))
+            };
+            if matches!(&retry, Some(Err(err)) if matches!(err, prikk_error::PrikkError::LockConflict(_)))
+            {
+                if let Ok(held) = crate::unlock::list_held_locks(&layout) {
+                    for lock in &held {
+                        let _ = crate::unlock::clear_lock(&layout, &lock.path);
+                    }
+                }
+                retry = Some(commit_worktree_changes_signed(
+                    &layout,
+                    "heads/main",
+                    "killed",
+                    WorktreePatchCommitOptions::default(),
+                    &signer(),
+                ));
+            }
+            if matches!(&retry, Some(Err(err)) if err.to_string().contains("doctor")) {
+                let _ = crate::discard_damaged_commits(&layout);
+                retry = Some(commit_worktree_changes_signed(
+                    &layout,
+                    "heads/main",
+                    "killed",
+                    WorktreePatchCommitOptions::default(),
+                    &signer(),
+                ));
+            }
+
+            let verification = crate::verify_repository(&layout);
+            let verify_clean = verification
+                .as_ref()
+                .map(|v| !v.has_stage_failure() && !v.has_item_failure())
+                .unwrap_or(false);
+
+            let commit_recovers = crashed.is_ok()
+                || match &retry {
+                    Some(Ok(_)) => true,
+                    Some(Err(err)) => {
+                        let message = err.to_string();
+                        message.contains("nothing left to commit")
+                            || message.contains("not confirmed")
+                            || message.contains("no node-addressed changes to commit")
+                    }
+                    None => true,
+                };
+            let queue_shape = m6_killed_file_queue_shape(&layout);
+            let queue_recovers = queue_shape == Some((2, true));
+
+            assert!(
+                verify_clean && commit_recovers && queue_recovers,
+                "{point:?}@{ordinal}: the repository did not recover cleanly (crashed={crashed:?}, \
+                 verify_clean={verify_clean} ({verification:?}), retry={retry:?}, \
+                 queue_shape={queue_shape:?}, expected (2, true))"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        per_family.push(format!(
+            "{point:?}: armed {MAX_ORDINAL}, fired {fired_count}, fired-and-failed {failed_count}"
+        ));
+    }
+    assert!(
+        fired_total >= 1,
+        "the sweep must genuinely fire at least once; it fired {fired_total} times across {per_family:?}"
+    );
+    eprintln!(
+        "M6 kill sweep: {fired_total} ordinals genuinely fired and recovered, {per_family:?}, \
+         swallowed (fired but did not fail the commit): {swallowed:?}"
+    );
 }

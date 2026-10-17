@@ -286,10 +286,17 @@ planned for.
   the damage, so the way out is a backup or a clone. (Reproduced with the hostile M5 repository at 256 KiB: `doctor` exits 1 with this
   recommendation.)
 
-- **Every commit replays the whole queued WAL (M6).** `append_patch` calls `replay()`, which reads and hashes every
-  queued record (`wal.rs`). The external review measured a commit at 6.2 ms with 800 small commits queued, against
-  4.0 ms at 100, on the 0.48.0 candidate. Small at this scale. Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0
-  schedule). Source: external review 014, `014-review.md:175-179`.
+- **Fixed in 0.53.0 (M6): a commit no longer reads the queue twice.** Before 0.53.0, every commit paid for two full
+  decodes of the queued WAL: `append_patch`'s own pre-append checks (the tail is clean, no record is damaged, the
+  next sequence number, an idempotent retry), then a second, redundant `replay()` purely to fold the commit witness's
+  running hash. The owner's decision of 2026-10-15 was to **keep the full check** (every queued record is still
+  re-read before another is stacked on it, by design, not an oversight), while removing the second, wasted read: the
+  witness now folds over the records the one real check already decoded. Measured at 100 / 800 / 3,200 queued
+  commits: 213,059 / 1,587,757 / 6,314,318 bytes before, 174,041 / 1,300,258 / 5,172,626 after -- about 18% fewer
+  bytes at every depth, still linear in the queue's own length, which is the design this round stands guard over, not
+  a defect left behind. The external review's own 6.2 ms at 800 / 4.0 ms at 100 (0.48.0) is unaffected by this
+  entry's own correction; those figures were never doubled by the bug this round fixed, since the second review
+  predates RFC 166's own witness fold entirely. Source: external review 014, `014-review.md:175-179`; 0.53.0 step 3B.
 - **One damaged blob makes every file at that point unreadable (M7).** The replay is whole-tree, so `prikk cat
   --path` fails for the intact files as well, and there is no salvage read that returns the sound files and names
   the damaged one. Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule). Source: external review 014,

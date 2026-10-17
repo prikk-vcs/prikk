@@ -41,8 +41,19 @@ objects, never from an anchor, so a wrong entry is bounded and corrected); a rep
 in reach (one that has only ever received history, before its first local `seal` or `verify`); and `verify`, which
 never anchors.
 
-**One exception, stated separately below** (`### Output changes`): a cold, anchored `commit` can now succeed over a
+**One exception, stated separately above** (`### Output changes`): a cold, anchored `commit` can now succeed over a
 historical file's blob damaged on disk, below the checkpoint, in a file the commit does not touch.
+
+### Changed — a commit no longer reads the queue twice
+
+Every commit paid for two full decodes of the already-queued WAL: `append_patch`'s own pre-append check (the tail is
+clean, no record is damaged anywhere in the queue, the next sequence number, an idempotent retry), then a second,
+redundant decode purely to fold the commit witness's own running hash (RFC 166). The owner's decision of
+2026-10-15 was to **keep the full check** — every queued record is still re-read before another is stacked on it, by
+design — while removing the second, wasted read: the witness now folds over the records the one real check already
+decoded. Measured at 100 / 800 / 3,200 queued commits: 213,059 / 1,587,757 / 6,314,318 bytes before, 174,041 /
+1,300,258 / 5,172,626 bytes after — about 18% fewer bytes at every depth, still linear in the queue's own length,
+which remains the design, not a defect.
 
 ## 0.52.0 — 2026-10-15
 

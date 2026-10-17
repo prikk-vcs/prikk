@@ -195,6 +195,22 @@ impl Wal {
 
     /// Append a signed patch envelope and fsync the WAL file.
     pub fn append_patch(&self, envelope: &ObjectEnvelope) -> Result<u64> {
+        Ok(self.append_patch_reporting(envelope)?.0)
+    }
+
+    /// [`Wal::append_patch`], plus the sound records this call's own, single `replay()` already
+    /// decoded (0.53.0 step 3B, M6): the queue exactly as it stands right after this call --
+    /// `replay.records` with the new record appended for a genuine append, or exactly
+    /// `replay.records` unchanged for an idempotent retry, where nothing new was appended. Exists
+    /// so `append_patch_and_witness` (`commit_boundary/witness.rs`) can fold the witness's running
+    /// hash over these same records without a second, redundant `replay()` of the whole queue --
+    /// the records this function returns are byte-for-byte what a caller's own subsequent
+    /// `self.replay()` would read, had one been made. `append_patch` itself is unchanged in
+    /// signature and behaviour for every other caller; this is a strict addition.
+    pub(crate) fn append_patch_reporting(
+        &self,
+        envelope: &ObjectEnvelope,
+    ) -> Result<(u64, Vec<WalRecord>)> {
         self.require_current_format()?;
         if envelope.object_type != ObjectType::Patch {
             return Err(PrikkError::ObjectTypeMismatch {
@@ -218,7 +234,7 @@ impl Wal {
                 envelope.schema_version
             )));
         }
-        let replay = self.replay()?;
+        let mut replay = self.replay()?;
         if replay.trailing_partial_bytes != 0 {
             return Err(PrikkError::Integrity(
                 "cannot append after an incomplete WAL tail".to_string(),
@@ -237,7 +253,8 @@ impl Wal {
         match replay.records.last() {
             Some(last) if last.envelope == *envelope => {
                 append_file_required(root, relative, &[])?;
-                return Ok(last.seq);
+                let seq = last.seq;
+                return Ok((seq, replay.records));
             }
             _ => {}
         }
@@ -264,7 +281,8 @@ impl Wal {
             });
         }
         append_file_required(root, relative, &bytes)?;
-        Ok(next_seq)
+        replay.records.push(record);
+        Ok((next_seq, replay.records))
     }
 
     /// Replay valid WAL records from the beginning.

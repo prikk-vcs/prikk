@@ -93,8 +93,11 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
     DeclaredScope {
         id: "wal-replay",
         status: ScopeStatus::Intentional,
-        reason: "`Wal::replay` (via `Wal::read_bytes`) decodes the whole active WAL: replaying a log means reading every record it                  holds, the same reasoning `index-whole-decode` already has for the object index",
-        reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1",
+        reason: "`Wal::replay` (via `Wal::read_bytes`) decodes the whole active WAL: replaying a log means reading every record it                  holds, the same reasoning `index-whole-decode` already has for the object index. 0.53.0 step 3B (M6) removed the one \
+                  redundant second read `append_patch_and_witness` used to make per commit -- what remains, and is declared here, is the \
+                  single read every append already needed: the append re-checks every queued record before stacking another on it, \
+                  never a second pass over the same queue to serve the witness",
+        reference: "RFC 167 M5 (0.49.0 step 4); RFC 160 §3.1; RFC 166 D2 (0.53.0 step 3B)",
     },
     DeclaredScope {
         id: "pointer-index-replay",
