@@ -265,14 +265,25 @@ fn queue_axis_commit_options() -> WorktreePatchCommitOptions {
     WorktreePatchCommitOptions::default().with_active_patch_limit(LARGE_QUEUE + 16)
 }
 
+/// 0.53.0 step 3B round 2 (Q-1): the one file every queued commit in [`store_of_queue`]/[`queued_commit`]
+/// rewrites, so the tracked tree never grows with the queue's own depth. The architect's review found
+/// the previous fixture (a new `q{index}.txt` per queued commit) made the "large" store also track 3,200
+/// distinct files against 100 in the "small" store, so the object index, the blob container and the
+/// commit-index cache all grew with the *tree*, not the queue -- conflating two different axes in one
+/// measured number.
+const QUEUE_AXIS_FILE: &str = "queued.txt";
+
 /// A repository with one sealed commit on `heads/main`, then `queued` further commits authored and queued but never sealed --
 /// the same lineage and the same one sealed generation whatever `queued` is, so the axis is the queue's own depth alone, not
-/// history depth (`store_of_history`'s axis) or stored content (`store_of`'s).
+/// history depth (`store_of_history`'s axis) or stored content (`store_of`'s). 0.53.0 step 3B round 2 (Q-1): every queued
+/// commit rewrites the same [`QUEUE_AXIS_FILE`], never a new file, so the tracked tree stays exactly one file's worth of size
+/// and count throughout -- only the queue's own depth (the count of queued, unsealed records in `queue.wal`) varies between
+/// the small and large fixture.
 fn store_of_queue(queued: usize) -> Result<(RepositoryLayout, std::path::PathBuf)> {
     let (layout, root) = store_of_history(1)?;
     for index in 0..queued {
         std::fs::write(
-            layout.root().join(format!("q{index}.txt")),
+            layout.root().join(QUEUE_AXIS_FILE),
             format!("queued {index}\n"),
         )?;
         commit_worktree_changes_signed(
@@ -444,9 +455,11 @@ fn status_check(layout: &RepositoryLayout) -> Result<()> {
 /// **0.53.0 step 3B (M6): one more commit against an already-deep queue.** The queue itself
 /// (`store_of_queue`'s own setup) is already in place before the tally resets; this measures only
 /// the one additional commit's own pre-append integrity check over whatever was already queued.
+/// 0.53.0 step 3B round 2 (Q-1): rewrites the same [`QUEUE_AXIS_FILE`] `store_of_queue` used, not a
+/// new file, so this measured commit adds nothing to the tracked tree either.
 fn queued_commit(layout: &RepositoryLayout) -> Result<()> {
     std::fs::write(
-        layout.root().join("one-more.txt"),
+        layout.root().join(QUEUE_AXIS_FILE),
         b"one more queued commit\n",
     )?;
     read_tally::reset();
@@ -587,19 +600,27 @@ const OPERATIONS: &[Operation] = &[
         name: "one-file commit (queue depth)",
         axis: Axis::Queue,
         expectation: Expectation::FollowsContent {
-            finding: "0.53.0 step 3B (M6), the owner's 2026-10-15 decision (\"keep the full check\"): `append_patch`'s own \
-                       pre-append integrity check re-reads every already-queued record before stacking one more on it, so this row \
-                       is linear in the queue's own depth by design, not an oversight -- measured at 193,099 -> 6,013,196 bytes \
-                       from 100 to 3,200 queued commits. 3B's own fix removed a second, redundant full decode this same check used \
-                       to also pay for the witness's running hash (M6's design round measured about 2.71 ms dropping to about \
-                       1.24 ms at 3,200 queued); this row's own ceiling is what still catches a regression back to two reads",
+            finding: "0.53.0 step 3B (M6), the owner's 2026-10-15 decision (\"keep the full check\"): one commit against an \
+                       already-queued fixture makes three full passes over `queue.wal` under the same held active-session lock \
+                       -- `refs::ensure_no_incomplete_publication`'s own `has_incomplete_active_cleanup` (`refs/evidence.rs`), \
+                       `author_inner`'s own `active_replay` (`node_authoring.rs`, feeding the tail/damage/active-patch-limit \
+                       checks, the RFC 166 witness classification and the worktree baseline fold over queued patches), and \
+                       `append_patch_reporting`'s own replay at the durable append (`wal.rs`, via `append_patch_and_witness`) \
+                       -- so this row is linear in the queue's own depth by design, not an oversight. 0.53.0 step 3B round 2 \
+                       (Q-1) fixed this fixture so every queued commit rewrites one file, never a new one, so only the queue's \
+                       own depth varies, not the tracked tree: measured at 157,046 -> 4,818,404 bytes from 100 to 3,200 queued \
+                       commits. Q-2's own inventory (the implementation report) lists all three passes and leaves them in \
+                       place -- the owner's decision kept the check, and removing any further pass is the architect's to rule \
+                       on, not this round's to choose. This row's own ceiling is what still catches a regression back to a \
+                       fourth pass (the shape 3B's own first commit removed, re-measured against this corrected fixture)",
             floor: 16 << 10,
-            // Not the usual 1.5x (9,019,794): restoring the second, redundant full replay this round removes was measured
-            // directly (0.53.0 step 3B, control 2) at 7,142,054 bytes on the large store -- about 1.19x, not 2x, since most of
-            // this operation's own total is fixed-size containers (the object index, the ref-state/pointer-index containers)
-            // that do not double; only the WAL portion of the read does. A 1.5x ceiling would not catch that real regression at
-            // all. 6,500,000 sits strictly between today's fixed figure (6,013,196) and the measured regression (7,142,054).
-            ceiling: 6_500_000,
+            // Not the usual 1.5x (7,227,606): reintroducing the second, redundant full replay 3B's own first commit removed
+            // (0.53.0 step 3B round 2, control 2, re-run against the corrected single-fixed-file fixture) was measured
+            // directly at 6,422,701 bytes on the large store, about 1.33x (4 passes against 3), not 1.5x -- a 1.5x ceiling
+            // would not catch that real regression either, for the identical reason the original ceiling's own note gave:
+            // most of a 1.5x margin is headroom this row's own fixed-size, non-WAL containers do not use. 5,500,000 sits
+            // strictly between today's figure (4,818,404) and the measured regression (6,422,701).
+            ceiling: 5_500_000,
         },
         allowance: 4096,
         why: "one more commit against an already-queued fixture: the pre-append check's own cost follows the queue it re-checks, \
