@@ -70,3 +70,8 @@ block**, and **no `#[non_exhaustive]` on the `test-support` enum.**
 3. **14 gates.**
 
 **Then P2.**
+
+**P1b ACCEPTED 2026-10-17** (`89ec1ee3`; review `release-0.53.0-prep-P1b-review-v1`). `LARGE_QUEUE` = 800, the ceiling
+1,400,000, and the M6 wording is now four reads → three. **Next: P2,** whose commit also carries two text items:
+- `current-state.md`'s M6 entry drops its process words;
+- both M6 titles drop "for nothing".
