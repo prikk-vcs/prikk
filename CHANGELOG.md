@@ -44,7 +44,7 @@ never anchors.
 **One exception, stated separately above** (`### Output changes`): a cold, anchored `commit` can now succeed over a
 historical file's blob damaged on disk, below the checkpoint, in a file the commit does not touch.
 
-### Changed — a commit no longer reads the queue a fourth time for nothing
+### Changed — a commit reads the queue three times, not four
 
 Every commit read the already-queued WAL in full, under one held lock, four times: the publication-cleanup check
 (is a prior `seal`'s own drain of this queue still incomplete?), the authoring read (feeding the tail/damage check,

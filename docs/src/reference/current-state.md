@@ -286,7 +286,7 @@ planned for.
   the damage, so the way out is a backup or a clone. (Reproduced with the hostile M5 repository at 256 KiB: `doctor` exits 1 with this
   recommendation.)
 
-- **Fixed in 0.53.0 (M6): a commit no longer reads the already-queued WAL a fourth time for nothing.** Before
+- **Fixed in 0.53.0 (M6): a commit reads the queue three times, not four.** Before
   0.53.0, every commit read the active WAL in full, under one held lock, four times: the publication-cleanup check
   (is a prior `seal`'s own drain of this queue still incomplete?), the authoring read (the tail/damage check, the
   active-queue limit, the commit-witness classification, and the baseline fold over already-queued patches, all off
@@ -298,9 +298,8 @@ planned for.
   purpose, so that a damaged queued commit is always noticed before more work is stacked on top of it. Measured at
   100 / 800 / 3,200 queued commits: 207,555 / 1,610,968 / 6,422,700 bytes before, 157,046 / 1,209,605 / 4,818,404
   after -- about 25% fewer bytes at every depth. The external review's own 6.2 ms at 800 / 4.0 ms at 100 (0.48.0) is
-  unaffected by this entry's own correction; those figures were never doubled by the bug this round fixed, since the
-  external review predates RFC 166's own witness fold entirely. Source: external review 014, `014-review.md:175-179`;
-  0.53.0 step 3B.
+  unaffected: those figures were never doubled by the redundant read removed here, since the external review predates
+  RFC 166's own witness fold entirely. Source: external review 014, `014-review.md:175-179`.
 - **One damaged blob makes every file at that point unreadable (M7).** The replay is whole-tree, so `prikk cat
   --path` fails for the intact files as well, and there is no salvage read that returns the sound files and names
   the damaged one. Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule). Source: external review 014,
