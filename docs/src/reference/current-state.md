@@ -286,17 +286,21 @@ planned for.
   the damage, so the way out is a backup or a clone. (Reproduced with the hostile M5 repository at 256 KiB: `doctor` exits 1 with this
   recommendation.)
 
-- **Fixed in 0.53.0 (M6): a commit no longer reads the queue twice.** Before 0.53.0, every commit paid for two full
-  decodes of the queued WAL: `append_patch`'s own pre-append checks (the tail is clean, no record is damaged, the
-  next sequence number, an idempotent retry), then a second, redundant `replay()` purely to fold the commit witness's
-  running hash. The owner's decision of 2026-10-15 was to **keep the full check** (every queued record is still
-  re-read before another is stacked on it, by design, not an oversight), while removing the second, wasted read: the
-  witness now folds over the records the one real check already decoded. Measured at 100 / 800 / 3,200 queued
-  commits: 213,059 / 1,587,757 / 6,314,318 bytes before, 174,041 / 1,300,258 / 5,172,626 after -- about 18% fewer
-  bytes at every depth, still linear in the queue's own length, which is the design this round stands guard over, not
-  a defect left behind. The external review's own 6.2 ms at 800 / 4.0 ms at 100 (0.48.0) is unaffected by this
-  entry's own correction; those figures were never doubled by the bug this round fixed, since the second review
-  predates RFC 166's own witness fold entirely. Source: external review 014, `014-review.md:175-179`; 0.53.0 step 3B.
+- **Fixed in 0.53.0 (M6): a commit no longer reads the already-queued WAL a fourth time for nothing.** Before
+  0.53.0, every commit read the active WAL in full, under one held lock, four times: the publication-cleanup check
+  (is a prior `seal`'s own drain of this queue still incomplete?), the authoring read (the tail/damage check, the
+  active-queue limit, the commit-witness classification, and the baseline fold over already-queued patches, all off
+  one pass), the pre-append check immediately before the durable write (the tail is clean, no record is damaged
+  anywhere in the queue, the next sequence number, an idempotent retry), and a fourth, redundant `replay()` that ran
+  no check of its own -- it existed only to fold the commit witness's own running hash from bytes the second read had
+  already decoded. That fourth read is gone: the witness now folds over the records the pre-append check already
+  holds. The three reads that remain each still do real work, and the cost stays linear in the queue's own length on
+  purpose, so that a damaged queued commit is always noticed before more work is stacked on top of it. Measured at
+  100 / 800 / 3,200 queued commits: 207,555 / 1,610,968 / 6,422,700 bytes before, 157,046 / 1,209,605 / 4,818,404
+  after -- about 25% fewer bytes at every depth. The external review's own 6.2 ms at 800 / 4.0 ms at 100 (0.48.0) is
+  unaffected by this entry's own correction; those figures were never doubled by the bug this round fixed, since the
+  external review predates RFC 166's own witness fold entirely. Source: external review 014, `014-review.md:175-179`;
+  0.53.0 step 3B.
 - **One damaged blob makes every file at that point unreadable (M7).** The replay is whole-tree, so `prikk cat
   --path` fails for the intact files as well, and there is no salvage read that returns the sound files and names
   the damaged one. Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule). Source: external review 014,

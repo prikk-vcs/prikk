@@ -44,16 +44,19 @@ never anchors.
 **One exception, stated separately above** (`### Output changes`): a cold, anchored `commit` can now succeed over a
 historical file's blob damaged on disk, below the checkpoint, in a file the commit does not touch.
 
-### Changed — a commit no longer reads the queue twice
+### Changed — a commit no longer reads the queue a fourth time for nothing
 
-Every commit paid for two full decodes of the already-queued WAL: `append_patch`'s own pre-append check (the tail is
-clean, no record is damaged anywhere in the queue, the next sequence number, an idempotent retry), then a second,
-redundant decode purely to fold the commit witness's own running hash (RFC 166). The owner's decision of
-2026-10-15 was to **keep the full check** — every queued record is still re-read before another is stacked on it, by
-design — while removing the second, wasted read: the witness now folds over the records the one real check already
-decoded. Measured at 100 / 800 / 3,200 queued commits: 213,059 / 1,587,757 / 6,314,318 bytes before, 174,041 /
-1,300,258 / 5,172,626 bytes after — about 18% fewer bytes at every depth, still linear in the queue's own length,
-which remains the design, not a defect.
+Every commit read the already-queued WAL in full, under one held lock, four times: the publication-cleanup check
+(is a prior `seal`'s own drain of this queue still incomplete?), the authoring read (feeding the tail/damage check,
+the active-queue limit, the commit-witness classification, and the baseline fold over already-queued patches), the
+pre-append check immediately before the durable write (the tail is clean, no record is damaged anywhere in the
+queue, the next sequence number, an idempotent retry), and a fourth, redundant decode that ran no check of its
+own — it existed only to fold the commit witness's own running hash (RFC 166) from bytes the second read had
+already decoded moments earlier. That fourth read is now gone: the witness folds over the records the pre-append
+check already holds. The three reads that remain each still do real work, and the cost stays linear in the queue's
+own length on purpose, so that a damaged queued commit is always noticed before more work is stacked on top of it.
+Measured at 100 / 800 / 3,200 queued commits: 207,555 / 1,610,968 / 6,422,700 bytes before, 157,046 / 1,209,605 /
+4,818,404 bytes after — about 25% fewer bytes at every depth.
 
 ## 0.52.0 — 2026-10-15
 

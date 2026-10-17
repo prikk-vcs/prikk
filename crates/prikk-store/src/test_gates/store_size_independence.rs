@@ -135,10 +135,11 @@ enum Axis {
     /// axis is to keep that fix fixed, not to re-discover it.
     Refs,
     /// 0.53.0 step 3B (M6): the same lineage, with [`SMALL_QUEUE`] and [`LARGE_QUEUE`] already-queued, unsealed prior commits ahead
-    /// of the one this axis's own operation actually measures -- the axis the F4-equivalent `append_patch`/witness fold is
-    /// measured against: a commit's own pre-append integrity check (every queued record, re-read before another is stacked on it)
-    /// is kept by the owner's 2026-10-15 decision ("keep the full check"), so unlike [`Axis::Content`]'s F4 row, this one is not
-    /// expected to go flat -- it is the standing regression guard that the check still costs one replay, not two.
+    /// of the one this axis's own operation actually measures. A commit's own pre-append integrity check re-reads every
+    /// already-queued record before stacking one more on it; that cost stays linear in the queue's own depth on purpose, so a
+    /// damaged queued commit is always noticed before more work is stacked on top of it. Unlike [`Axis::Content`]'s F4 row, this
+    /// one is not expected to go flat -- it is the standing regression guard that the check still costs three passes over the
+    /// queue, not four (the fourth, removed in 0.53.0, ran no check of its own).
     Queue,
 }
 
@@ -252,15 +253,21 @@ fn store_of_refs(refs: usize) -> Result<(RepositoryLayout, std::path::PathBuf)> 
     Ok((layout, root))
 }
 
-/// 0.53.0 step 3B (M6), the design round's own two end points (100 and 3,200 queued commits, `0.53.0-step-2-B-m6-design-report.md`).
+/// 0.53.0 step 3B (M6), the design round's own two end points (100 and 3,200 queued commits,
+/// `0.53.0-step-2-B-m6-design-report.md`). [`LARGE_QUEUE`] was 3,200 until release prep P1b: building that fixture is
+/// quadratic in its own depth by construction (every queued commit re-reads the whole queue so far), which took the
+/// release build to 17-18s but a CI debug build well past ten minutes, cancelling `msrv-1.85.0` at its own 20-minute
+/// job limit (release-0.53.0-prep-P1-review-v1). 800, the design round's own middle point, keeps about 16x less
+/// fixture-building work while still separating three full queue passes (today) from four (the regression control 2
+/// below still catches) at the same order of magnitude the design round itself measured.
 const SMALL_QUEUE: usize = 100;
-const LARGE_QUEUE: usize = 3200;
+const LARGE_QUEUE: usize = 800;
 
 /// DC-57's own default hard block (`DEFAULT_ACTIVE_PATCH_LIMIT`, 1,000) refuses the 1,001st queued commit under a repository's
-/// default configuration -- a real, shipped limit (RFC 166 §2), not an artifact of this fixture. [`LARGE_QUEUE`] (3,200) is past
-/// it on purpose, the same range the M6 design round measured, so this axis raises the limit the same way the CLI does from
+/// default configuration -- a real, shipped limit (RFC 166 §2), not an artifact of this fixture. [`LARGE_QUEUE`] no longer
+/// needs to pass it (800 is under 1,000), but this axis still raises the limit the same way the CLI does from
 /// `PRIKK_ACTIVE_PATCH_LIMIT` (`WorktreePatchCommitOptions::with_active_patch_limit`) -- an administrative choice that already
-/// exists, not a bypass invented for this table.
+/// exists, not a bypass invented for this table -- so this fixture stays independent of wherever that default is set.
 fn queue_axis_commit_options() -> WorktreePatchCommitOptions {
     WorktreePatchCommitOptions::default().with_active_patch_limit(LARGE_QUEUE + 16)
 }
@@ -600,27 +607,27 @@ const OPERATIONS: &[Operation] = &[
         name: "one-file commit (queue depth)",
         axis: Axis::Queue,
         expectation: Expectation::FollowsContent {
-            finding: "0.53.0 step 3B (M6), the owner's 2026-10-15 decision (\"keep the full check\"): one commit against an \
-                       already-queued fixture makes three full passes over `queue.wal` under the same held active-session lock \
-                       -- `refs::ensure_no_incomplete_publication`'s own `has_incomplete_active_cleanup` (`refs/evidence.rs`), \
-                       `author_inner`'s own `active_replay` (`node_authoring.rs`, feeding the tail/damage/active-patch-limit \
-                       checks, the RFC 166 witness classification and the worktree baseline fold over queued patches), and \
-                       `append_patch_reporting`'s own replay at the durable append (`wal.rs`, via `append_patch_and_witness`) \
-                       -- so this row is linear in the queue's own depth by design, not an oversight. 0.53.0 step 3B round 2 \
-                       (Q-1) fixed this fixture so every queued commit rewrites one file, never a new one, so only the queue's \
-                       own depth varies, not the tracked tree: measured at 157,046 -> 4,818,404 bytes from 100 to 3,200 queued \
-                       commits. Q-2's own inventory (the implementation report) lists all three passes and leaves them in \
-                       place -- the owner's decision kept the check, and removing any further pass is the architect's to rule \
-                       on, not this round's to choose. This row's own ceiling is what still catches a regression back to a \
-                       fourth pass (the shape 3B's own first commit removed, re-measured against this corrected fixture)",
+            finding: "a commit against an already-queued fixture makes three full passes over `queue.wal` under the same \
+                       held active-session lock -- `refs::ensure_no_incomplete_publication`'s own `has_incomplete_active_cleanup` \
+                       (`refs/evidence.rs`), `author_inner`'s own `active_replay` (`node_authoring.rs`, feeding the \
+                       tail/damage/active-patch-limit checks, the RFC 166 witness classification and the worktree baseline fold \
+                       over queued patches), and `append_patch_reporting`'s own replay at the durable append (`wal.rs`, via \
+                       `append_patch_and_witness`) -- so this row is linear in the queue's own depth on purpose, so that a \
+                       damaged queued commit is always noticed before more work is stacked on top of it. Before 0.53.0 there \
+                       was a fourth pass that ran no check of its own -- it only recomputed the commit witness's running hash \
+                       from bytes the second pass had already decoded moments earlier; that pass is gone. Every queued commit \
+                       in this fixture rewrites one file, never a new one, so only the queue's own depth varies, not the \
+                       tracked tree: measured at 157,046 -> 1,209,605 bytes from 100 to 800 queued commits (release-0.53.0-prep-\
+                       P1b-report.md; 800, not 3,200, bounds this fixture's own debug-build cost -- building it is quadratic in \
+                       its own depth by construction). This row's own ceiling is what still catches a regression back to the \
+                       fourth pass",
             floor: 16 << 10,
-            // Not the usual 1.5x (7,227,606): reintroducing the second, redundant full replay 3B's own first commit removed
-            // (0.53.0 step 3B round 2, control 2, re-run against the corrected single-fixed-file fixture) was measured
-            // directly at 6,422,701 bytes on the large store, about 1.33x (4 passes against 3), not 1.5x -- a 1.5x ceiling
-            // would not catch that real regression either, for the identical reason the original ceiling's own note gave:
-            // most of a 1.5x margin is headroom this row's own fixed-size, non-WAL containers do not use. 5,500,000 sits
-            // strictly between today's figure (4,818,404) and the measured regression (6,422,701).
-            ceiling: 5_500_000,
+            // Not the usual 1.5x (1,814,408): reintroducing the fourth, redundant full replay removed in 0.53.0 (release
+            // prep P1b, control 2, re-run against the corrected single-fixed-file fixture at the depth this row now uses)
+            // was measured directly at 1,610,968 bytes on the large store, about 1.33x (4 passes against 3), not 1.5x --
+            // the identical ratio measured at the old 3,200 depth, confirming the mechanism rather than the depth drives
+            // it. 1,400,000 sits strictly between today's figure (1,209,605) and the measured regression (1,610,968).
+            ceiling: 1_400_000,
         },
         allowance: 4096,
         why: "one more commit against an already-queued fixture: the pre-append check's own cost follows the queue it re-checks, \
