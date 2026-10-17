@@ -5,7 +5,7 @@
 ### Output changes
 
 - **`checkout`'s refusing modes stop saying a branch with queued, unsealed commits "does not
-  exist"** (0.53.0 step 1, item 3; RFC 147 §2i): `--snapshot-plan`, `--snapshot-materialize`,
+  exist"** (RFC 147 §2i): `--snapshot-plan`, `--snapshot-materialize`,
   `--patch-plan`, `--patch-materialize`, `--patch-delete-plan` and `--patch-materialize-delete`
   all still refuse — there is no sealed block yet to plan from or write — but now say so
   accurately, keeping the same precondition class. Before: `error: precondition not met: ref
@@ -18,7 +18,7 @@
   can target a block`; after, `` note: `prikk seal` publishes a ref before checkout can target a
   block ``.
 - **A cold `commit` no longer refuses over a historical blob damaged on disk, below the nearest
-  checkpoint, in a file it does not touch** (0.53.0 step 3A, F4; RFC 159 ruling C1, extended from
+  checkpoint, in a file it does not touch** (RFC 159 ruling C1, extended from
   `seal` to `commit`): the cold baseline now derives from the nearest checkpoint this repository
   has sealed or verified under an adopted maintainer key, and a state root (and a checkpoint's own
   manifest) commits to a file's blob *id*, never its bytes. `verify` still reports the damage;

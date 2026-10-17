@@ -213,6 +213,13 @@ block and patch is present, of the right type and schema, decodes, has the right
 its first block, and it still checks a restored file against what was deleted; it no longer re-reads the content
 of files no current file refers to, which `prikk verify` still checks.
 
+**A cold `commit`'s baseline, since 0.53.0 (F4), uses the identical checkpoint and the identical admission
+rule.** The same four conditions above decide which checkpoint a cold commit's baseline may start from, and a
+live file's kind, seeded from that checkpoint's own manifest, is therefore one an adopted maintainer signed,
+not merely one a reader happened to check. The residual is the same: a trusted maintainer who signed a wrong
+root, together with write access to `.prikk/cache/`. Below the checkpoint, a cold commit no longer re-reads the
+content of a file it does not itself touch; `prikk verify` still does.
+
 Current seal does not run audit plugins, evaluate attestation policy, perform semantic merge, publish
 multi-parent merge Blocks, or provide remote trust distribution.
 
