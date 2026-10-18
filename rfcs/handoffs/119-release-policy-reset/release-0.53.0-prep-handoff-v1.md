@@ -86,3 +86,13 @@ block**, and **no `#[non_exhaustive]` on the `test-support` enum.**
   checkpoint record is gone and a cold commit does the full replay until `verify` or `seal`. Measure it, then correct the
   CHANGELOG and `current-state.md`;
 - **P2-2:** smoke 30b-interior, where a damaged record with sound ones after it still stops `commit`.
+
+**P3 ACCEPTED 2026-10-18** (`b381e9bc`, `b1e98b27`, `edaa1724`; review `release-0.53.0-prep-P3-review-v1`).
+**`edaa1724` is the candidate:**
+- the smoke has 349 ok, re-run by the architect;
+- `matrix.py` v6 and `reproduce.sh` show no difference from 0.52.0 in any verdict.
+
+**The dev team's part is complete.** Next, the architect's:
+- the external review on the pushed candidate;
+- then the owner's word on the tag;
+- a re-dating commit on the tag day.
