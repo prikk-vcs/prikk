@@ -147,3 +147,6 @@ binary for every kind of change, a declared rename included, and each kind is pi
 - drop or correct "peak memory stays flat on the candidate", since 0.52.0 is flat in that table too.
 
 Then 14 gates. After P4b is pushed with CI green, the candidate goes to the owner for the cut.
+
+**P4b ACCEPTED 2026-10-18** (`7475bcfe`; review `release-0.53.0-prep-P4b-review-v1`). **The dev team's part is
+complete.** Next: the architect's push and CI, then the owner's word on the cut.
