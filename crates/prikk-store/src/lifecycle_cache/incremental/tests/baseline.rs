@@ -16,7 +16,7 @@ use crate::rfc111_seal_simulation::simulate_one_seal;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout,
-    add_trusted_maintainer,
+    add_trusted_maintainer, record_rename_declaration,
 };
 
 const REF_NAME: &str = "heads/main";
@@ -648,24 +648,24 @@ mod f4_2_operation_kinds {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 0.53.0 release prep P4: **measured, not assumed from the other four kinds** -- a rename of
-    /// the damaged file still refuses, cold and anchored, unlike replace/append/delete. Confirmed
-    /// directly: the authoring-level diagnostic that would fire if `plan_move_hints`'s own
-    /// simultaneous-content-change check (`node_authoring.rs`, the `content_hash != base.blob_id`
-    /// comparison after a confirmed rename) ever ran never printed, so the refusal happens earlier,
-    /// during this commit's own baseline/lifecycle-state resolution, before any rename-specific
-    /// authoring logic is reached at all -- the exact mechanism was not traced further within this
-    /// sitting's own budget, but the behaviour itself is confirmed, twice, not merely argued by
-    /// analogy to delete (which is also purely id-addressed yet behaves differently here). The
-    /// handoff's own hedge ("a rename if measured so") anticipated exactly this possibility.
+    /// 0.53.0 release prep P4, corrected: a bare `std::fs::rename` with no declaration is **not** a
+    /// `RenamePath` at all -- this system's own move/rename authoring is declaration-only (RFC 144
+    /// §4g: "content is never compared to decide anything"; `rename_declaration.rs`'s own module
+    /// doc), so an undeclared move falls through to some other path that re-derives content and
+    /// hits the damage, which is not evidence about `RenamePath` itself. The real, declared
+    /// mechanism -- `crate::record_rename_declaration`, exactly as `prikk mv` calls it
+    /// (`crates/prikk-cli/src/mv.rs`: the filesystem move, then the declaration) -- succeeds below
+    /// the anchor, cold, like replace/append/delete: it is purely path-addressed, confirmed from
+    /// source and now also from a real `prikk mv`-driven commit.
     #[test]
-    fn renaming_the_damaged_file_still_refuses_cold_and_anchored_and_with_no_anchor() {
+    fn declared_rename_of_the_damaged_file_succeeds_cold_and_anchored_but_refuses_with_no_anchor() {
         let (layout, root) = repo_with_damaged_binary_file("p4-rename-anchored");
         std::fs::rename(
             layout.root().join("damaged.bin"),
             layout.root().join("renamed.bin"),
         )
         .unwrap();
+        record_rename_declaration(&layout, "damaged.bin", "renamed.bin").unwrap();
         let result = commit_worktree_changes_signed(
             &layout,
             REF_NAME,
@@ -674,10 +674,14 @@ mod f4_2_operation_kinds {
             &author(),
         );
         assert!(
-            result.is_err(),
-            "measured (external review 029 did not cover this kind): unlike replace/append/\
-             delete, a rename of the damaged file still refuses even below an admitted anchor: \
-             {result:?}"
+            result.is_ok(),
+            "F4-2 (external review 029, corrected): a declared rename never reads the old blob's \
+             content, so it succeeds below the anchor: {result:?}"
+        );
+        let verification = crate::verify_repository(&layout).unwrap();
+        assert!(
+            verification.has_item_failure() || verification.has_stage_failure(),
+            "verify still reports the damage: {verification:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
 
@@ -687,6 +691,7 @@ mod f4_2_operation_kinds {
             layout.root().join("renamed.bin"),
         )
         .unwrap();
+        record_rename_declaration(&layout, "damaged.bin", "renamed.bin").unwrap();
         let result = commit_worktree_changes_signed(
             &layout,
             REF_NAME,

@@ -238,10 +238,11 @@ planned for.
   ruling C1 from `seal` to `commit`:** a state root (and a checkpoint's own manifest) commits to a
   file's blob *id*, never to its bytes, so neither `seal` nor a cold, anchored `commit` re-reads the
   content of a blob no live file names. **Measured, below the checkpoint:** a commit that edits the
-  damaged file as text, or renames it, still refuses (both read old content, for different
-  reasons); a commit that replaces it, appends to it (binary), deletes it, or touches a different
-  file entirely all succeed. `verify` still reports the damage in every succeeding case. With no
-  admitted checkpoint, every one of these still refuses, unchanged.
+  damaged file as text still refuses (it reads the old content to apply the edit); a commit that
+  replaces it, appends to it (binary), deletes it, renames it (a declared move never reads old
+  content either), or touches a different file entirely all succeed. `verify` still reports the
+  damage in every succeeding case. With no admitted checkpoint, every one of these still refuses,
+  unchanged.
 - **Fixed in 0.49.0 (RFC 165, M4): `verify` reports garbage bytes in the ref log.** Before 0.49.0, 100 zero bytes appended to the ref log
   container: `verify` and `doctor` exit 0 with no warning, a `seal` appends behind them, and `verify`
   stayed 0 with the garbage in the middle of the file. The state was harmless (ref-log records are signed

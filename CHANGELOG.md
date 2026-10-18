@@ -24,9 +24,8 @@
   state root (and a checkpoint's own manifest) commits to a file's blob *id*, never its bytes.
   **Measured, each below an admitted checkpoint**: a commit that edits that file as text still
   refuses (reading the old text to apply the edit); a commit that replaces it, appends to it
-  (binary), deletes it, renames it, or touches a different file entirely all succeed — except a
-  rename, which also still refuses (measured separately; its own authoring reads old content for a
-  reason distinct from a text edit's). `verify` reports the damage in every succeeding case. With no
+  (binary), deletes it, renames it (a declared move never reads old content either), or touches a
+  different file entirely all succeed. `verify` reports the damage in every succeeding case. With no
   admitted checkpoint in reach, every one of these still refuses, unchanged.
 
 ### Changed — a cold commit no longer reads every stored file
