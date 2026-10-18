@@ -138,3 +138,12 @@ ships.
 5. **The 14 gates** on the final commit.
 
 **Then:** the architect reviews, pushes and reads every CI job. The tag waits for the owner's word.
+
+**P4 ACCEPTED 2026-10-18** (`aeef9e6d`, `8053db71`; review `release-0.53.0-prep-P4-review-v1`). The notes now match the
+binary for every kind of change, a declared rename included, and each kind is pinned.
+
+**P4b (about 15 min, `release-0.53.0-prep-P4b-report.md`), next:** two phrases in the F4 `### Changed` entry:
+- "candidate" becomes "0.53.0";
+- drop or correct "peak memory stays flat on the candidate", since 0.52.0 is flat in that table too.
+
+Then 14 gates. After P4b is pushed with CI green, the candidate goes to the owner for the cut.
