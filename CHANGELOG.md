@@ -40,16 +40,16 @@ already use (0.48.0, RFC 159).
 
 **The cost is flat only exactly at a checkpoint; between checkpoints it follows the content added since the
 nearest one, up to 63 blocks.** Measured, one 1 MiB file rewritten and sealed each generation, a cold commit after
-each sealed generation shown (candidate against 0.52.0, release build, time in ms / peak RSS in KiB):
+each sealed generation shown (0.53.0 against 0.52.0, release build, time in ms / peak RSS in KiB):
 
 | generation | 1 | 32 | 63 | 64 | 65 (a new checkpoint) | 70 |
 |---|---:|---:|---:|---:|---:|---:|
-| candidate | 16 / 11,888 | 81 / 12,104 | 144 / 11,844 | 146 / 11,888 | 14 / 11,876 | 26 / 11,888 |
+| 0.53.0 | 16 / 11,888 | 81 / 12,104 | 144 / 11,844 | 146 / 11,888 | 14 / 11,876 | 26 / 11,888 |
 | 0.52.0 | 18 / 11,696 | 80 / 12,380 | 144 / 11,888 | 146 / 12,160 | 149 / 12,040 | 157 / 11,984 |
 
-Both binaries pay the same cost up to the next checkpoint (neither has one yet to anchor to); the candidate drops
-once a new checkpoint exists (generation 65), while 0.52.0 never does. Peak memory stays flat on the candidate
-throughout.
+Both binaries pay the same cost up to the next checkpoint (neither has one yet to anchor to); 0.53.0 drops once a
+new checkpoint exists (generation 65), while 0.52.0 never does. Peak memory is the same on both here, because
+neither ever holds more than one 1 MiB file at a time.
 
 **What still runs in full:** every 64th baseline resolution (the forced reanchor, which always re-derives from the
 objects, never from an anchor, so a wrong entry is bounded and corrected); a repository with no admitted checkpoint
