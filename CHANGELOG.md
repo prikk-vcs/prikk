@@ -27,19 +27,22 @@
 
 ### Changed — a cold commit no longer reads every stored file
 
-A `commit` whose baseline could not be served from the incremental cache — a missing or unreadable cache (a fresh
-clone or restore, or a deleted `.prikk/cache/`), a branch switch, or a step the cache's own one-block fold cannot
-take (two seals since the last resolution, or the new block being a merge block) — derived that baseline by
-replaying the whole lineage from genesis, reading every historical file's blob just to re-derive its kind: 1 MiB of
-stored content read 1.06 MB, 16 MiB read 16.8 MB, 64 MiB read 67.1 MB. A cold `commit` now derives from the nearest
-checkpoint this repository has itself sealed or verified under an adopted maintainer key — the same anchor `seal`,
-`merge` and `sync seal` already use (0.48.0, RFC 159) — reading about 8 KB regardless of how much content the store
-holds.
+A `commit` whose baseline could not be served from the incremental cache — a branch switch, a step the cache's own
+one-block fold cannot take (two seals since the last resolution, or the new block being a merge block), or a
+missing or damaged `lifecycle-state.v1` specifically — derived that baseline by replaying the whole lineage from
+genesis, reading every historical file's blob just to re-derive its kind: 1 MiB of stored content read 1.06 MB,
+16 MiB read 16.8 MB, 64 MiB read 67.1 MB. A cold `commit` now derives from the nearest checkpoint this repository
+has itself sealed or verified under an adopted maintainer key — the same anchor `seal`, `merge` and `sync seal`
+already use (0.48.0, RFC 159) — reading about 8 KB regardless of how much content the store holds.
 
 **What still runs in full:** every 64th baseline resolution (the forced reanchor, which always re-derives from the
 objects, never from an anchor, so a wrong entry is bounded and corrected); a repository with no admitted checkpoint
 in reach (one that has only ever received history, before its first local `seal` or `verify`); and `verify`, which
-never anchors.
+never anchors. **A restore, a fresh clone, or deleting the whole `.prikk/cache/` directory also removes the
+checkpoint record itself** (`.prikk/cache/replay-verified-blocks.v1`, not only the incremental cache this entry
+fixes), so a cold commit there costs what it did in 0.52.0 until the next `prikk verify` or `seal` rebuilds the
+record (measured: 32 ms at 16 MiB stored immediately after deleting `.prikk/cache/`, 1 ms on the commit right
+after a `verify` rebuilds the record).
 
 **One exception, stated separately above** (`### Output changes`): a cold, anchored `commit` can now succeed over a
 historical file's blob damaged on disk, below the checkpoint, in a file the commit does not touch.
