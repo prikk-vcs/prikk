@@ -150,3 +150,17 @@ Then 14 gates. After P4b is pushed with CI green, the candidate goes to the owne
 
 **P4b ACCEPTED 2026-10-18** (`7475bcfe`; review `release-0.53.0-prep-P4b-review-v1`). **The dev team's part is
 complete.** Next: the architect's push and CI, then the owner's word on the cut.
+
+**0.53.0: RELEASED 2026-10-18.** The tag `0.53.0` is signed and sits on `3f72b47f`, the commit CI ran on (the owner:
+*"Yes."* to the cut once CI was green).
+- **CI run `39129635586`:** 16/16.
+- **Release run `39132530425`:** all six jobs green.
+- **The architect verified the assets:**
+  - checksums, 6/6;
+  - build info, 4/4, naming `3f72b47f`;
+  - the smoke on the published Linux binary, 362/362;
+  - the Release page carries the CHANGELOG section byte for byte, followed by the standard footer.
+
+**crates.io: PUBLISHED 2026-10-19** (the owner: *"Also authorized."*). All eight crates are at 0.53.0, published in
+dependency order from the tag's worktree, and each is confirmed on the crates.io index. **Letter 030** to the external
+architect carries the release run's id; the owner sends it.
