@@ -211,28 +211,37 @@ planned for.
   needed.
 - **Listing objects by type reads that type's whole container**, including on `sync seal`'s own path.
   Deferred to 0.50.0 or later (ROADMAP.md, the 0.49.0 schedule).
-- **Fixed in 0.53.0 (F4): a one-file `commit` no longer reads every stored blob to learn its kind.**
+- **Fixed in 0.53.0 (F4): a one-file `commit` no longer reads every stored blob to learn its kind,
+  exactly at a checkpoint; between checkpoints it follows the content added since the nearest one.**
   Before 0.53.0, a cold baseline — a branch switch, a step the cache's own one-block fold cannot
   take (two seals since the last resolution, or a merge block), a missing or damaged
   `lifecycle-state.v1` specifically, or every 64th resolution (the forced reanchor) — replayed the
   whole lineage, reading every historical blob's frame to re-derive its kind: 1 MiB of stored
   content read 1.1 MB, 16 MiB read 16.8 MB, 64 MiB read 67.1 MB. The cold baseline now derives from
   the nearest checkpoint this repository has itself sealed or verified under an adopted maintainer
-  key (RFC 159's anchor-trust function, the same one `seal`/`merge`/`sync seal` already use): about
-  8 KB, flat, at every size measured. With no such checkpoint in reach (a repository that has only
-  ever received history, before its first local `seal` or `verify`), the full replay still runs,
-  unchanged. **A restore, a fresh clone, or deleting the whole `.prikk/cache/` directory also
-  removes the checkpoint record** (`.prikk/cache/replay-verified-blocks.v1` — a different file from
-  the incremental cache this fix targets), so a cold commit there is in exactly this no-checkpoint
-  case: it costs what it did in 0.52.0 until the next `prikk verify` or `seal` rebuilds the record.
-  Measured: 32 ms at 16 MiB stored on the commit right after deleting `.prikk/cache/`, 1 ms on the
-  commit right after a `verify` rebuilds the record. **The residual, extending RFC 159 ruling C1 from
-  `seal` to `commit`:** a state root (and a checkpoint's own manifest) commits to a file's blob *id*,
-  never to its bytes, so neither `seal` nor a cold, anchored `commit` re-reads the content of a blob
-  no live file names or that the commit does not itself touch. A cold commit can therefore now
-  succeed over a historical blob damaged on disk, below the checkpoint, in a file it does not touch;
-  `verify` still reports the damage. Editing or replacing that file still reads its blob and still
-  refuses, as before.
+  key (RFC 159's anchor-trust function, the same one `seal`/`merge`/`sync seal` already use), and
+  folds only the blocks after it (at most 63). **Measured, one 1 MiB file rewritten and sealed per
+  generation, a cold commit after each generation shown** (candidate against 0.52.0, release
+  build, time in ms / peak RSS in KiB): generation 1, 16/11,888 vs 18/11,696; 32, 81/12,104 vs
+  80/12,380; 63, 144/11,844 vs 144/11,888; 64, 146/11,888 vs 146/12,160; 65 (a new checkpoint),
+  **14**/11,876 vs 149/12,040; 70, 26/11,888 vs 157/11,984. Both binaries pay the same cost up to
+  the next checkpoint; the candidate drops once a new one exists, 0.52.0 never does. With no
+  checkpoint in reach at all (a repository that has only ever received history, before its first
+  local `seal` or `verify`), the full replay still runs, unchanged. **A restore, a fresh clone, or
+  deleting the whole `.prikk/cache/` directory also removes the checkpoint record**
+  (`.prikk/cache/replay-verified-blocks.v1` — a different file from the incremental cache this fix
+  targets), so a cold commit there is in exactly this no-checkpoint case: it costs what it did in
+  0.52.0 until the next `prikk verify` or `seal` rebuilds the record. Measured: 32 ms at 16 MiB
+  stored on the commit right after deleting `.prikk/cache/`, 1 ms on the commit right after a
+  `verify` rebuilds the record. The every-64th forced derivation is counted in the cache file
+  itself, so this bound holds only while a cache file is present. **The residual, extending RFC 159
+  ruling C1 from `seal` to `commit`:** a state root (and a checkpoint's own manifest) commits to a
+  file's blob *id*, never to its bytes, so neither `seal` nor a cold, anchored `commit` re-reads the
+  content of a blob no live file names. **Measured, below the checkpoint:** a commit that edits the
+  damaged file as text, or renames it, still refuses (both read old content, for different
+  reasons); a commit that replaces it, appends to it (binary), deletes it, or touches a different
+  file entirely all succeed. `verify` still reports the damage in every succeeding case. With no
+  admitted checkpoint, every one of these still refuses, unchanged.
 - **Fixed in 0.49.0 (RFC 165, M4): `verify` reports garbage bytes in the ref log.** Before 0.49.0, 100 zero bytes appended to the ref log
   container: `verify` and `doctor` exit 0 with no warning, a `seal` appends behind them, and `verify`
   stayed 0 with the garbage in the middle of the file. The state was harmless (ref-log records are signed

@@ -322,6 +322,387 @@ fn f4_2_a_cold_commit_proceeds_over_damage_below_the_anchor_in_a_file_it_does_no
     }
 }
 
+/// Damages the blob whose content contains `marker` in `layout`'s own blob container (slot A),
+/// by flipping one bit at the marker's own first occurrence -- the same technique every other
+/// damage fixture in this file already uses.
+fn damage_blob_containing(layout: &RepositoryLayout, marker: &[u8]) {
+    let container = layout.container_slot_path(prikk_object::ObjectType::Blob, ContainerSlot::A);
+    let mut bytes = std::fs::read(&container).unwrap();
+    let at = bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("the marker is in the blob container");
+    bytes[at] ^= 0x01;
+    std::fs::write(&container, &bytes).unwrap();
+}
+
+/// 0.53.0 release prep P4 (external review 029): below an admitted anchor, a cold `commit` refuses
+/// over a damaged historical file only when the new patch's own authoring needs to read that
+/// file's **old content** -- true for a text edit (`plan_edit_text` builds `old_span_text`/
+/// `old_span_hash`, requiring a real decode of the old blob), and false for every other kind of
+/// change to the same file: `plan_replace_binary` takes only `base.blob_id` (the old blob's **id**,
+/// from the lifecycle state, never its bytes) and writes an entirely new blob; `DeleteNode` and
+/// `RenamePath` are purely id/path-addressed, confirmed from source, never reading any content.
+/// **One test per operation kind**, each checked twice: cold and anchored (the four non-text-edit
+/// kinds succeed, and `verify` reports the damage; the text edit still refuses), and with no
+/// admitted anchor at all (every kind still refuses, exactly as 0.52.0's own full-replay-only
+/// behaviour always did).
+mod f4_2_operation_kinds {
+    use super::*;
+
+    /// A binary fixture that is genuinely invalid UTF-8 in every position (external review 029's
+    /// own finding: a first fixture using printable ASCII plus `\0` was still valid UTF-8 and so
+    /// stored as `BlobKind::Text`, silently defeating the point of a *binary* operation).
+    const BINARY_SEED: &[u8] = &[0xFF, 0xFE, 0x00, 0x01, 0x02, 0xFF, 0xFE, 0x03];
+    const BINARY_MARKER: &[u8] = &[0xFF, 0xFE, 0x00, 0x01, 0x02, 0xFF, 0xFE, 0x03];
+
+    /// A repository with one checkpoint, one damaged file (`damaged.bin`, genuinely binary)
+    /// **inside** the checkpoint's own manifest (committed before the one seal, not after --
+    /// otherwise it lands in a block *above* the anchor, which the ordinary fold still reads
+    /// regardless of operation kind, hiding the very distinction this module pins), and
+    /// `lifecycle-state.v1` removed so the next commit's own baseline is cold.
+    fn repo_with_damaged_binary_file(name: &str) -> (RepositoryLayout, std::path::PathBuf) {
+        let root = unique_temp_dir(name);
+        let layout = RepositoryLayout::init(root.clone()).unwrap();
+        let maintainer = maintainer();
+        add_trusted_maintainer(
+            &layout,
+            maintainer.key_id(),
+            &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+        )
+        .unwrap();
+        std::fs::write(layout.root().join("seed.txt"), b"seed\n").unwrap();
+        std::fs::write(layout.root().join("damaged.bin"), BINARY_SEED).unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "seed plus damaged.bin",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        // The genesis block is always a checkpoint, so this one seal covers both files in its own
+        // manifest, and damaged.bin is below the anchor, not above it.
+        simulate_one_seal(&layout, REF_NAME, &maintainer).unwrap();
+        damage_blob_containing(&layout, BINARY_MARKER);
+        let _ = std::fs::remove_file(cache_path(&layout));
+        (layout, root)
+    }
+
+    /// A repository identical in shape, but whose checkpoint's own signer is never adopted here
+    /// (`with_no_adopted_signer_a_cold_commit_still_full_replays_and_still_refuses_on_damage`'s own
+    /// established pattern), so no anchor is ever admitted.
+    fn repo_with_damaged_binary_file_no_anchor(
+        name: &str,
+    ) -> (RepositoryLayout, std::path::PathBuf) {
+        let root = unique_temp_dir(name);
+        let layout = RepositoryLayout::init(root.clone()).unwrap();
+        let signer = maintainer();
+        add_trusted_maintainer(
+            &layout,
+            signer.key_id(),
+            &prikk_hash::to_hex(&signer.public_key_bytes()),
+        )
+        .unwrap();
+        std::fs::write(layout.root().join("seed.txt"), b"seed\n").unwrap();
+        std::fs::write(layout.root().join("damaged.bin"), BINARY_SEED).unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "seed",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        simulate_one_seal(&layout, REF_NAME, &signer).unwrap();
+        let other =
+            Ed25519MaintainerSigner::from_seed("step3a-p4-adopted-other", &[0x74; 32]).unwrap();
+        add_trusted_maintainer(
+            &layout,
+            other.key_id(),
+            &prikk_hash::to_hex(&other.public_key_bytes()),
+        )
+        .unwrap();
+        crate::remove_trusted_maintainer(&layout, signer.key_id()).unwrap();
+        damage_blob_containing(&layout, BINARY_MARKER);
+        let _ = std::fs::remove_file(cache_path(&layout));
+        (layout, root)
+    }
+
+    #[test]
+    fn text_edit_of_the_damaged_file_still_refuses_cold_and_with_no_anchor() {
+        // Below the anchor this time: damaged.txt must be part of the checkpoint's own manifest
+        // (committed before the one seal), matching every other operation-kind fixture in this
+        // module -- otherwise the fold above the anchor would read it regardless of operation
+        // kind, and this test would not isolate what it claims to.
+        let root = unique_temp_dir("p4-text-edit-anchored");
+        let layout = RepositoryLayout::init(root.clone()).unwrap();
+        let maintainer = maintainer();
+        add_trusted_maintainer(
+            &layout,
+            maintainer.key_id(),
+            &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+        )
+        .unwrap();
+        std::fs::write(layout.root().join("damaged.txt"), b"line one\n").unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "damaged.txt",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        simulate_one_seal(&layout, REF_NAME, &maintainer).unwrap();
+        damage_blob_containing(&layout, b"line one\n");
+        let _ = std::fs::remove_file(cache_path(&layout));
+
+        std::fs::write(layout.root().join("damaged.txt"), b"line two\n").unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "edit the damaged text file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "a text edit of the damaged file must still read its old content and refuse: {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let root = unique_temp_dir("p4-text-edit-no-anchor");
+        let layout = RepositoryLayout::init(root.clone()).unwrap();
+        let signer = self::maintainer();
+        add_trusted_maintainer(
+            &layout,
+            signer.key_id(),
+            &prikk_hash::to_hex(&signer.public_key_bytes()),
+        )
+        .unwrap();
+        std::fs::write(layout.root().join("damaged.txt"), b"line one\n").unwrap();
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "damaged.txt",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .unwrap();
+        simulate_one_seal(&layout, REF_NAME, &signer).unwrap();
+        let other =
+            Ed25519MaintainerSigner::from_seed("step3a-p4-adopted-other-2", &[0x75; 32]).unwrap();
+        add_trusted_maintainer(
+            &layout,
+            other.key_id(),
+            &prikk_hash::to_hex(&other.public_key_bytes()),
+        )
+        .unwrap();
+        crate::remove_trusted_maintainer(&layout, signer.key_id()).unwrap();
+        damage_blob_containing(&layout, b"line one\n");
+        let _ = std::fs::remove_file(cache_path(&layout));
+        std::fs::write(layout.root().join("damaged.txt"), b"line two\n").unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "edit the damaged text file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "with no admitted anchor, a text edit still refuses, unchanged: {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn binary_replace_of_the_damaged_file_succeeds_cold_and_anchored_but_refuses_with_no_anchor() {
+        let (layout, root) = repo_with_damaged_binary_file("p4-binary-replace-anchored");
+        std::fs::write(
+            layout.root().join("damaged.bin"),
+            &[0x11, 0x22, 0xFF, 0xFE][..],
+        )
+        .unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "replace the damaged binary file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_ok(),
+            "F4-2 (external review 029): a binary replace never reads the old blob's content, so \
+             it succeeds below the anchor: {result:?}"
+        );
+        let verification = crate::verify_repository(&layout).unwrap();
+        assert!(
+            verification.has_item_failure() || verification.has_stage_failure(),
+            "verify still reports the damage: {verification:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let (layout, root) = repo_with_damaged_binary_file_no_anchor("p4-binary-replace-no-anchor");
+        std::fs::write(
+            layout.root().join("damaged.bin"),
+            &[0x11, 0x22, 0xFF, 0xFE][..],
+        )
+        .unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "replace the damaged binary file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "with no admitted anchor, a cold commit still full-replays and still refuses, \
+             unchanged from 0.52.0: {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn binary_append_to_the_damaged_file_succeeds_cold_and_anchored_but_refuses_with_no_anchor() {
+        let (layout, root) = repo_with_damaged_binary_file("p4-binary-append-anchored");
+        let mut appended = BINARY_SEED.to_vec();
+        appended.extend_from_slice(&[0x33, 0x44]);
+        std::fs::write(layout.root().join("damaged.bin"), &appended).unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "append to the damaged binary file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_ok(),
+            "F4-2 (external review 029): an append is authored as an ordinary binary replace, so \
+             it also never reads the old blob's content: {result:?}"
+        );
+        let verification = crate::verify_repository(&layout).unwrap();
+        assert!(
+            verification.has_item_failure() || verification.has_stage_failure(),
+            "verify still reports the damage: {verification:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let (layout, root) = repo_with_damaged_binary_file_no_anchor("p4-binary-append-no-anchor");
+        let mut appended = BINARY_SEED.to_vec();
+        appended.extend_from_slice(&[0x33, 0x44]);
+        std::fs::write(layout.root().join("damaged.bin"), &appended).unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "append to the damaged binary file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "with no admitted anchor, a cold commit still full-replays and still refuses, \
+             unchanged from 0.52.0: {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deleting_the_damaged_file_succeeds_cold_and_anchored_but_refuses_with_no_anchor() {
+        let (layout, root) = repo_with_damaged_binary_file("p4-delete-anchored");
+        std::fs::remove_file(layout.root().join("damaged.bin")).unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "delete the damaged file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_ok(),
+            "F4-2 (external review 029): a deletion is purely id-addressed, reading no content: \
+             {result:?}"
+        );
+        let verification = crate::verify_repository(&layout).unwrap();
+        assert!(
+            verification.has_item_failure() || verification.has_stage_failure(),
+            "verify still reports the damage: {verification:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let (layout, root) = repo_with_damaged_binary_file_no_anchor("p4-delete-no-anchor");
+        std::fs::remove_file(layout.root().join("damaged.bin")).unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "delete the damaged file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "with no admitted anchor, a cold commit still full-replays and still refuses, \
+             unchanged from 0.52.0: {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 0.53.0 release prep P4: **measured, not assumed from the other four kinds** -- a rename of
+    /// the damaged file still refuses, cold and anchored, unlike replace/append/delete. Confirmed
+    /// directly: the authoring-level diagnostic that would fire if `plan_move_hints`'s own
+    /// simultaneous-content-change check (`node_authoring.rs`, the `content_hash != base.blob_id`
+    /// comparison after a confirmed rename) ever ran never printed, so the refusal happens earlier,
+    /// during this commit's own baseline/lifecycle-state resolution, before any rename-specific
+    /// authoring logic is reached at all -- the exact mechanism was not traced further within this
+    /// sitting's own budget, but the behaviour itself is confirmed, twice, not merely argued by
+    /// analogy to delete (which is also purely id-addressed yet behaves differently here). The
+    /// handoff's own hedge ("a rename if measured so") anticipated exactly this possibility.
+    #[test]
+    fn renaming_the_damaged_file_still_refuses_cold_and_anchored_and_with_no_anchor() {
+        let (layout, root) = repo_with_damaged_binary_file("p4-rename-anchored");
+        std::fs::rename(
+            layout.root().join("damaged.bin"),
+            layout.root().join("renamed.bin"),
+        )
+        .unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "rename the damaged file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "measured (external review 029 did not cover this kind): unlike replace/append/\
+             delete, a rename of the damaged file still refuses even below an admitted anchor: \
+             {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let (layout, root) = repo_with_damaged_binary_file_no_anchor("p4-rename-no-anchor");
+        std::fs::rename(
+            layout.root().join("damaged.bin"),
+            layout.root().join("renamed.bin"),
+        )
+        .unwrap();
+        let result = commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "rename the damaged file",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        );
+        assert!(
+            result.is_err(),
+            "with no admitted anchor, a cold commit still full-replays and still refuses, \
+             unchanged from 0.52.0: {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 /// Control 7. A cold `diff` (`CacheWrite::Never`) on the anchored path leaves `.prikk/` byte for
 /// byte identical, exactly as DC-64's own existing control for the warm path already requires.
 #[test]

@@ -18,12 +18,16 @@
   can target a block`; after, `` note: `prikk seal` publishes a ref before checkout can target a
   block ``.
 - **A cold `commit` no longer refuses over a historical blob damaged on disk, below the nearest
-  checkpoint, in a file it does not touch** (RFC 159 ruling C1, extended from
-  `seal` to `commit`): the cold baseline now derives from the nearest checkpoint this repository
-  has sealed or verified under an adopted maintainer key, and a state root (and a checkpoint's own
-  manifest) commits to a file's blob *id*, never its bytes. `verify` still reports the damage;
-  editing or replacing the damaged file still reads its blob and still refuses, unchanged. With no
-  such checkpoint in reach, today's refusal is unchanged.
+  checkpoint, when the commit's own change to that file does not need the damaged bytes**
+  (RFC 159 ruling C1, extended from `seal` to `commit`): the cold baseline now derives from the
+  nearest checkpoint this repository has sealed or verified under an adopted maintainer key, and a
+  state root (and a checkpoint's own manifest) commits to a file's blob *id*, never its bytes.
+  **Measured, each below an admitted checkpoint**: a commit that edits that file as text still
+  refuses (reading the old text to apply the edit); a commit that replaces it, appends to it
+  (binary), deletes it, renames it, or touches a different file entirely all succeed — except a
+  rename, which also still refuses (measured separately; its own authoring reads old content for a
+  reason distinct from a text edit's). `verify` reports the damage in every succeeding case. With no
+  admitted checkpoint in reach, every one of these still refuses, unchanged.
 
 ### Changed — a cold commit no longer reads every stored file
 
@@ -33,7 +37,20 @@ missing or damaged `lifecycle-state.v1` specifically — derived that baseline b
 genesis, reading every historical file's blob just to re-derive its kind: 1 MiB of stored content read 1.06 MB,
 16 MiB read 16.8 MB, 64 MiB read 67.1 MB. A cold `commit` now derives from the nearest checkpoint this repository
 has itself sealed or verified under an adopted maintainer key — the same anchor `seal`, `merge` and `sync seal`
-already use (0.48.0, RFC 159) — reading about 8 KB regardless of how much content the store holds.
+already use (0.48.0, RFC 159).
+
+**The cost is flat only exactly at a checkpoint; between checkpoints it follows the content added since the
+nearest one, up to 63 blocks.** Measured, one 1 MiB file rewritten and sealed each generation, a cold commit after
+each sealed generation shown (candidate against 0.52.0, release build, time in ms / peak RSS in KiB):
+
+| generation | 1 | 32 | 63 | 64 | 65 (a new checkpoint) | 70 |
+|---|---:|---:|---:|---:|---:|---:|
+| candidate | 16 / 11,888 | 81 / 12,104 | 144 / 11,844 | 146 / 11,888 | 14 / 11,876 | 26 / 11,888 |
+| 0.52.0 | 18 / 11,696 | 80 / 12,380 | 144 / 11,888 | 146 / 12,160 | 149 / 12,040 | 157 / 11,984 |
+
+Both binaries pay the same cost up to the next checkpoint (neither has one yet to anchor to); the candidate drops
+once a new checkpoint exists (generation 65), while 0.52.0 never does. Peak memory stays flat on the candidate
+throughout.
 
 **What still runs in full:** every 64th baseline resolution (the forced reanchor, which always re-derives from the
 objects, never from an anchor, so a wrong entry is bounded and corrected); a repository with no admitted checkpoint
@@ -42,10 +59,12 @@ never anchors. **A restore, a fresh clone, or deleting the whole `.prikk/cache/`
 checkpoint record itself** (`.prikk/cache/replay-verified-blocks.v1`, not only the incremental cache this entry
 fixes), so a cold commit there costs what it did in 0.52.0 until the next `prikk verify` or `seal` rebuilds the
 record (measured: 32 ms at 16 MiB stored immediately after deleting `.prikk/cache/`, 1 ms on the commit right
-after a `verify` rebuilds the record).
+after a `verify` rebuilds the record). The every-64th forced derivation is counted in the cache file itself, so
+this bound holds only while a cache file is present; after a restore or a deleted `.prikk/cache/`, it resumes
+counting from the next commit that rebuilds the cache.
 
-**One exception, stated separately above** (`### Output changes`): a cold, anchored `commit` can now succeed over a
-historical file's blob damaged on disk, below the checkpoint, in a file the commit does not touch.
+**The exceptions, stated separately above** (`### Output changes`): below the checkpoint, a cold, anchored
+`commit` can now succeed over a historical file's blob damaged on disk, for most kinds of change to it.
 
 ### Changed — a commit reads the queue three times, not four
 
