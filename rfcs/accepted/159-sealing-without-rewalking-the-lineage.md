@@ -22,6 +22,11 @@ Implementation handoff: `rfcs/handoffs/159-sealing-without-rewalking/implementat
   bars an unauthenticated input to a signed root;
 - **ruling C1 extends to that baseline: *"Yes."*** A cold `commit` no longer refuses over damaged bytes of a file it
   does not touch below an admitted anchor. `verify` still reports them;
+  - **widened, owner-accepted 2026-10-18 (*"Yes."*),** after external review 029 showed the candidate does more than the
+    first wording said. A cold commit that **replaces, appends to (binary) or deletes** the damaged file also succeeds,
+    because none of those reads the old bytes. **Only a text edit of the damaged file still refuses,** because it applies
+    to the old content. 0.52.0's warm commit already let a replacement or deletion through.
+    Reading: `.git-exclude/reviewed/external-review-029-reading-v1.md`;
 - **the architect's added rule:** an anchored derivation never resets the reanchor counter. Only a full derivation does,
   so ruling 5's full reanchor still happens once in every 64 baseline resolutions.
 

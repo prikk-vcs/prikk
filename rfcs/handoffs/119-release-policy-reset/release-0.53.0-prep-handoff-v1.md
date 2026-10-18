@@ -96,3 +96,45 @@ block**, and **no `#[non_exhaustive]` on the `test-support` enum.**
 - the external review on the pushed candidate;
 - then the owner's word on the tag;
 - a re-dating commit on the tag day.
+
+## P4 — the notes external review 029 corrected, and the pins (live 2026-10-18, about 75 min, `release-0.53.0-prep-P4-report.md`)
+
+**External review 029: nothing blocks the tag** (reading `.git-exclude/reviewed/external-review-029-reading-v1.md`). Two
+release-note sentences are false. **The owner accepted F4-2's real scope, 2026-10-18 (*"Yes."*):** below an admitted
+checkpoint, a cold commit refuses over a damaged file only when it **edits that file as text**. It succeeds when it
+touches another file, **replaces** the damaged file, **appends to it (binary)** or **deletes** it. `verify` reports the
+damage in every case.
+
+**The architect's reading, stated so it can be corrected:** no code changes. P4 corrects text and pins the behaviour that
+ships.
+
+1. **Measure first, on a release build of the candidate and on 0.52.0's binary** (idle machine, 3 samples, `.prikk/cache/
+   lifecycle-state.v1` removed before each measured commit, never the whole directory):
+   - **the cadence:** one 1 MiB random file per seal, then a cold one-file commit after seals 1, 32, 63, 64, 65 and 70;
+     time and peak RSS. The external architect measured 1 / 35 / 69 / **1** / 3 / 9 ms on the candidate, against
+     2 / 36 / 68 / 70 / 70 / 75 on 0.52.0. The architect measured 44 ms at 32;
+   - **the F4-2 shapes**, both binaries, cold, and on 0.52.0 also warm: a text edit; a binary replacement; a binary
+     append; a deletion; a rename; another file. Commit outcome and `verify`'s exit. **Binary fixtures must be invalid
+     UTF-8** (for example `\377`): `\0` alone is stored as text.
+2. **Correct the text** in `CHANGELOG.md` (the F4 `### Changed` entry and the F4-2 `### Output changes` bullet),
+   `docs/src/reference/current-state.md` and `docs/src/reference/trust-threat-model.md` (P1's paragraph):
+   - **5.1:** the cold commit is flat at a checkpoint and otherwise follows the content added since the nearest one, up
+     to 63 blocks. Peak memory stays flat. Give the cadence table. Drop "regardless of how much content the store holds";
+   - **5.2:** which commits refuse over damage below a checkpoint (a text edit of that file) and which succeed (another
+     file, a replacement, a binary append, a deletion, and a rename if measured so), with `verify` reporting in every case.
+     Remove *"editing or replacing the damaged file still reads its blob and still refuses"*;
+   - **5.3:** one clause: the every-64th full derivation is counted in the cache file, so it bounds a present cache.
+
+   **No process words.** Every figure is one you measured in item 1.
+3. **Pin the behaviour,** each control shown red by a perturbation:
+   - **library tests** in `lifecycle_cache/incremental/tests/baseline.rs`, one per operation kind (text edit, binary
+     replace, binary append, delete, rename), cold and anchored: the text edit refuses, the others succeed and `verify`
+     reports. The same shapes with no admitted anchor all refuse, as in 0.52.0. Perturb, for example, by making the
+     anchored path unavailable: the succeeding cases turn red;
+   - **smoke:** section 30a gains a row per operation kind, plus **30a-unadopted** (the checkpoint's signer no longer
+     adopted, so the cold commit refuses). Run on the candidate and on 0.52.0, and name every line that passes on 0.52.0.
+4. **The CHANGELOG date:** the heading is dated in P4's last commit (the tag day, if it is today; otherwise the architect
+   re-dates on the tag day).
+5. **The 14 gates** on the final commit.
+
+**Then:** the architect reviews, pushes and reads every CI job. The tag waits for the owner's word.
