@@ -272,14 +272,16 @@ pub fn ensure_may_publish(layout: &RepositoryLayout, ref_name: &str) -> Result<(
     ensure_publication_precondition_with_replay(layout, Some(ref_name), true, None)
 }
 
-/// The publication precondition, with an optional already-decoded active-WAL replay for the one place this reads it (0.54.0
-/// step 1: `author_inner`, holding the lock with a replay already in hand, is the one caller outside this module with
-/// `Some`); every other caller passes `None`, decoding fresh -- the original, unscoped behaviour, unchanged.
+/// The publication precondition. `replay_out`, when `Some`, receives the active-WAL decode this
+/// function takes internally at its own fifth and final check (0.54.0 step 1 round 2: kept exactly
+/// where it was pre-0.54.0 -- after the ref-log-damage, agreement, object-index and candidate-debris
+/// checks -- so a decode failure never outruns an earlier, more specific refusal). `author_inner`
+/// passes `Some(&mut slot)` and reuses the decode; every other caller passes `None`, discarded here.
 pub(crate) fn ensure_publication_precondition_with_replay(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
     check_ref_log_tail: bool,
-    replay: Option<&crate::wal::WalReplay>,
+    replay_out: Option<&mut Option<crate::wal::WalReplay>>,
 ) -> Result<()> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -384,7 +386,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     if !verify::candidate_issues(layout)?.is_empty() {
         return Err(incomplete_publication_refusal());
     }
-    if evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay)? {
+    if evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay_out)? {
         return Err(incomplete_publication_refusal());
     }
 

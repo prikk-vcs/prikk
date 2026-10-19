@@ -507,6 +507,76 @@ fn a_damaged_ref_log_record_refuses() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 0.54.0 step 1 round 2, R1's library-level row: ref-log damage *and* a queued record the active
+/// WAL cannot decode at all (a schema `validate_read_schema` rejects, the one thing besides an I/O
+/// error that makes `Wal::replay()` itself return `Err` rather than an item finding -- the CLI-level
+/// row, review `0.54.0-step-1-review-v1`, uses `chmod 000 queue.wal` instead, not reproducible
+/// portably at the library level). The ref-log damage refusal must still speak first, exactly as it
+/// did before 0.54.0 step 1 and as the CLI row shows: the precondition's own fifth check (the queue
+/// decode) must never be reached ahead of its first four.
+#[test]
+fn a_damaged_ref_log_record_wins_over_an_undecodable_queue() {
+    let root = unique_temp_dir("rfc165-r2-ref-log-damage-and-undecodable-queue");
+    let layout = setup(&root);
+    let signer = maintainer();
+    let target = root_block(&layout);
+    let open = build_branch_create_publication("heads/main", target, &signer);
+    let ref_store = RefStore::new(layout.clone());
+    {
+        let mut object_store = ObjectWriteSession::open(&layout).unwrap();
+        ref_store
+            .publish_with_object_store(&mut object_store, &open)
+            .unwrap();
+    }
+
+    let path = layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xff;
+    std::fs::write(&path, &bytes).unwrap();
+
+    // Confirm the fixture's first half in isolation: the ref log's own sole record now reads as
+    // damaged.
+    let replay = ref_store.replay_log("heads/main").unwrap();
+    assert!(
+        replay.has_item_failure(),
+        "fixture bug: the ref log's own record must now read as damaged"
+    );
+
+    // 0.54.0 step 1 round 2: the same `schema_version = 99` technique
+    // `doctor_reports_an_unreadable_wal_for_a_non_default_active_session` (`doctor/tests.rs`) uses,
+    // hand-planted into the *default* active queue instead of a non-default one -- this is the one
+    // queue `ensure_no_incomplete_publication`'s own decode (inside `has_incomplete_active_cleanup_
+    // with_replay`) ever reads.
+    let mut envelope = crate::test_gates::test_support::signed_patch_envelope();
+    envelope.schema_version = 99;
+    let record = crate::wal::WalRecord { seq: 1, envelope };
+    std::fs::write(
+        layout.active_queue_wal_path(crate::DEFAULT_ACTIVE_NAME),
+        crate::wal::encode_record_for_test(&record).unwrap(),
+    )
+    .unwrap();
+
+    // Confirm the fixture's second half in isolation: `Wal::replay()` on this queue alone really
+    // does return `Err` (the schema check, not an item finding) -- otherwise a pass below would
+    // prove nothing about which check won.
+    assert!(
+        crate::wal::Wal::for_layout(&layout, crate::DEFAULT_ACTIVE_NAME)
+            .replay()
+            .is_err(),
+        "fixture bug: the queued record's schema must make replay() itself fail"
+    );
+
+    let err = ensure_no_incomplete_publication(&layout)
+        .expect_err("ref-log damage and an undecodable queue must still refuse");
+    let message = err.to_string();
+    assert!(
+        message.contains("the ref log has a damaged record"),
+        "the ref-log damage refusal must still speak first, got: {message}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A settled publication whose active WAL has not drained (`has_incomplete_active_cleanup`) refuses
 /// -- for both implementations.
 #[test]

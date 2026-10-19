@@ -56,7 +56,6 @@ use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::RepoPath;
 use crate::rename_declaration::{clear_rename_declarations, read_rename_declarations};
 use crate::text_span;
-use crate::wal::Wal;
 use crate::worktree_marker::worktree_is_dirty;
 use crate::{
     ActiveRefMetadata, read_active_ref_metadata, remove_active_ref_metadata,
@@ -341,22 +340,29 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // raw WAL under this held lock (not `ActiveSession::append_patch`, which would re-acquire).
     let active_lock =
         ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME).map_err(AuthorError::Store)?;
-    // 0.54.0 step 1: one decode of the active WAL, shared by the publication-cleanup check below
-    // and everything `active_replay` fed further down (the tail/damage check, the active-patch
-    // limit, the RFC 166 witness classification, the worktree baseline fold) -- previously two
-    // separate full decodes under the same held lock. Moved ahead of the publication-cleanup call
-    // (itself unchanged in substance: pass 1's own damage-detection still runs, and still speaks,
-    // before anything below it, since nothing between here and that call can have changed the WAL
-    // -- the active-session lock above is already held).
-    let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
-    let active_replay = wal.replay().map_err(AuthorError::Store)?;
+    // 0.54.0 step 1 round 2: the precondition decodes the active WAL itself, at the same point it
+    // always has (its own fifth and last sequential check, after ref-log damage, agreement,
+    // object-index and candidate-debris) -- round 1 decoded here first, which let a decode failure
+    // (an I/O error, or a newer schema) outrun one of those four earlier, more specific refusals.
+    // The slot below receives that one decode, shared by everything `active_replay` feeds further
+    // down (the tail/damage check, the active-patch limit, the RFC 166 witness classification, the
+    // worktree baseline fold) -- one decode under the held lock, not two, taken at the original
+    // point, not moved ahead of it.
+    let mut active_replay_slot: Option<crate::wal::WalReplay> = None;
     crate::refs::ensure_publication_precondition_with_replay(
         layout,
         None,
         false,
-        Some(&active_replay),
+        Some(&mut active_replay_slot),
     )
     .map_err(AuthorError::Store)?;
+    let active_replay = active_replay_slot.ok_or_else(|| {
+        AuthorError::Store(PrikkError::Integrity(
+            "ensure_publication_precondition_with_replay returned Ok(()) without filling the \
+             replay slot"
+                .to_string(),
+        ))
+    })?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout).map_err(AuthorError::Store)?;
 
@@ -375,8 +381,8 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         ))));
     }
 
-    // 0.54.0 step 1: `active_replay` (and `wal`) is the single decode taken above, before the
-    // publication-cleanup check -- not re-decoded here.
+    // 0.54.0 step 1 round 2: `active_replay` is the single decode the precondition above took and
+    // handed back through the slot -- not re-decoded here.
     // RFC 166 round 2 §0 (review v1's own required fix): the commit-witness classification speaks
     // *first*, before the older tail/damage checks below -- round 1 wired it in after ownership was
     // already confirmed, which let the tail check's own generic text answer first for rows 4-7, 9 and

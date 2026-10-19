@@ -16,22 +16,24 @@ use crate::wal::Wal;
 /// excludes it from the pointer/log agreement check -- otherwise a `seal` retry would refuse behind
 /// the very state its own retry exists to resolve.
 ///
-/// `replay`: an already-decoded active-WAL replay from a caller that holds the active-session lock
-/// and has one in hand (0.54.0 step 1: `author_inner`'s own one decode, shared with this check
-/// instead of a second one). `None` reproduces the original behaviour exactly, a fresh decode here
-/// -- every caller but `author_inner` passes `None`.
+/// `replay_out`: 0.54.0 step 1 round 2 -- this function always decodes the active WAL itself, at the
+/// exact point it always has (the fifth and last of the precondition's own sequential checks); it
+/// never accepts an already-decoded replay as input, only ever produces one. When `replay_out` is
+/// `Some(slot)`, the decode taken here is written into `*slot` before returning, whether the cleanup
+/// check below then refuses or succeeds -- `author_inner` is the one caller passing `Some`, taking
+/// its own `active_replay` from the slot afterwards instead of decoding a second time; every other
+/// caller passes `None` and the decode is discarded here, the original, unscoped behaviour.
 pub(super) fn has_incomplete_active_cleanup_with_replay(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
-    replay: Option<&crate::wal::WalReplay>,
+    replay_out: Option<&mut Option<crate::wal::WalReplay>>,
 ) -> Result<bool> {
-    match replay {
-        Some(replay) => has_incomplete_active_cleanup_from(layout, exclude_ref_name, replay),
-        None => {
-            let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
-            has_incomplete_active_cleanup_from(layout, exclude_ref_name, &replay)
-        }
+    let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+    let result = has_incomplete_active_cleanup_from(layout, exclude_ref_name, &replay);
+    if let Some(slot) = replay_out {
+        *slot = Some(replay);
     }
+    result
 }
 
 fn has_incomplete_active_cleanup_from(

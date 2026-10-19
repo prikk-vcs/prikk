@@ -249,9 +249,12 @@ fn an_inline_test_module_is_not_production() {
         // `cargo fmt`; its own case-table/kill-sweep tests moved to the sibling
         // `step1_merged_decode_tests.rs`, following `ref_name_once_per_session_tests.rs`'s own
         // convention, so this file's line count is production only, net of that one inline
-        // `mode_change_tests` module it already carried).
+        // `mode_change_tests` module it already carried). 0.54.0 step 1 round 2, R1: the
+        // precondition now takes the decode itself, so `author_inner` declares a slot and takes
+        // the decode back out of it (with a fail-closed `ok_or_else`, not `expect`, to keep
+        // `clippy::expect-used` clean) instead of decoding before the call, 1494 -> 1500.
         physical,
-        1494,
+        1500,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -261,7 +264,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1445);
+    assert_eq!(counted.production_lines, 1451);
     assert_eq!(
         physical - counted.production_lines,
         49,

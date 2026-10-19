@@ -241,60 +241,12 @@ fn the_case_table_today() {
     }
 }
 
-/// 0.54.0 step 1 item 1's own kill sweep: every write ordinal of a one-file commit that a
-/// failpoint family can reach, crashed -- the commit must fail safely (an `Err`, never a
-/// panic or an unhandled state) at every one of them, confirming the shared decode changed
-/// nothing about this commit's own fault behaviour (the same families and the same sweep
-/// shape as `ref_name_once_per_session_tests.rs`'s own commit-path sweep). This does **not**
-/// assert that a same-session retry then succeeds: a lock whose own creation-sync fails
-/// leaks its physical file with nothing to steal it (`lock.rs`'s own `acquire_lock_file` doc,
-/// "PR-007 lock has no stale-lock stealing yet") -- a pre-existing, documented property of
-/// `ActiveLock` with nothing to do with this decode merge (confirmed: it reproduces
-/// identically whether `RequiredFileSync` is crashed under the merged or the restored,
-/// separate-decode shape, since it fires during lock acquisition itself, before either
-/// decode runs), so asserting it here would be testing an unrelated mechanism, not this
-/// item's own change. Counts only the ordinals that actually fired (3B's own honest-evidence
-/// convention): `failpoint_armed_for_test()` still `true` after an attempt means that ordinal
-/// was never reached -- and since a given commit's own write sequence has a fixed, finite
-/// length per failpoint family, no higher ordinal in that family would be reached either, so
-/// the sweep stops there instead of running out to some arbitrary, possibly-inflated width.
-#[test]
-fn a_commit_fails_safely_at_every_fired_write_ordinal() {
-    use crate::foundation::fsutil::{
-        TestFailPoint, clear_failpoint_for_test, fail_after_for_test, failpoint_armed_for_test,
-    };
-
-    let mut fired_total = 0usize;
-    for point in [
-        TestFailPoint::AppendWrite,
-        TestFailPoint::RequiredFileSync,
-        TestFailPoint::MutableFileSync,
-        TestFailPoint::MutableRename,
-        TestFailPoint::Truncate,
-    ] {
-        let mut ordinal = 0usize;
-        loop {
-            let (layout, root) = setup(&format!("step1-kill-sweep-{point:?}-{ordinal}"));
-            fail_after_for_test(point, ordinal);
-            let crashed = commit_one(&layout, "a.txt", b"one\n");
-            let fired = !failpoint_armed_for_test();
-            clear_failpoint_for_test();
-            let _ = std::fs::remove_dir_all(&root);
-            if !fired {
-                break;
-            }
-            fired_total += 1;
-            assert!(
-                crashed.is_err(),
-                "{point:?}@{ordinal}: armed and fired but reported Ok"
-            );
-            ordinal += 1;
-        }
-        eprintln!("STEP1 KILL SWEEP | {point:?} | fired {ordinal} ordinal(s)");
-    }
-    eprintln!("STEP1 KILL SWEEP | total fired {fired_total}");
-    assert!(
-        fired_total > 0,
-        "the sweep must exercise at least one real crash, or it is testing nothing"
-    );
-}
+// 0.54.0 step 1 round 2, R2: the kill sweep that used to live here
+// (`a_commit_fails_safely_at_every_fired_write_ordinal`) asserted only `crashed.is_err()` -- it
+// never retried, never cleared a held lock, never checked `verify` afterward, and never compared
+// the queue's own shape against an uncrashed reference run. `witness::tests::m6_commit_kill_
+// sweep_recovers_at_every_write_ordinal` already exercises this identical, now-merged
+// `author_inner` path with all of that, and is the established, stronger standard (review
+// `0.54.0-step-1-review-v1`, R2: "one sweep, the stronger one, with no second test claiming
+// less"). Removed outright rather than built up to that standard, per the review's own stated
+// preference.

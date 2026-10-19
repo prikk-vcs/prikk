@@ -6,12 +6,12 @@
 
 - **A commit reads the queue twice, not three times.** `commit` held the active-session lock
   across three full decodes of `queue.wal`: the publication-cleanup precondition's own replay, the
-  commit's own `active_replay`, and the append's own replay (which stays — it reads the file as it
-  stands immediately after the new record is appended, not before). The first two now share one
-  decode, taken once and passed to the precondition check before anything that runs after it
-  today — the same checks, in the same order, producing the same refusal text. Measured (one-file
-  commit, `queue.wal` fully decoded): 100 queued commits, 107,074 bytes (was 157,046); 800 queued
-  commits, 808,781 bytes (was 1,209,605).
+  commit's own `active_replay`, and the append's own replay (which stays — the pre-append check
+  immediately before the durable write). The first two now share one decode, taken at the
+  precondition's own existing decode point — the same checks, in the same order, producing the
+  same refusal text — and handed back to the commit instead of taken a second time. Measured
+  (one-file commit, `queue.wal` fully decoded): 100 queued commits, 107,074 bytes (was 157,046);
+  800 queued commits, 808,781 bytes (was 1,209,605).
 
 ## 0.53.0 — 2026-10-18
 
