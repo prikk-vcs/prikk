@@ -335,3 +335,6 @@ mod tests;
 // need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
 #[cfg(test)]
 mod ref_name_once_per_session_tests;
+
+#[cfg(test)]
+mod step1_merged_decode_tests;

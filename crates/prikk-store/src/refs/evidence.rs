@@ -15,11 +15,30 @@ use crate::wal::Wal;
 /// publication excludes its own ref the same way [`super::ensure_no_incomplete_publication_except`]
 /// excludes it from the pointer/log agreement check -- otherwise a `seal` retry would refuse behind
 /// the very state its own retry exists to resolve.
-pub(super) fn has_incomplete_active_cleanup(
+///
+/// `replay`: an already-decoded active-WAL replay from a caller that holds the active-session lock
+/// and has one in hand (0.54.0 step 1: `author_inner`'s own one decode, shared with this check
+/// instead of a second one). `None` reproduces the original behaviour exactly, a fresh decode here
+/// -- every caller but `author_inner` passes `None`.
+pub(super) fn has_incomplete_active_cleanup_with_replay(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
+    replay: Option<&crate::wal::WalReplay>,
 ) -> Result<bool> {
-    let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+    match replay {
+        Some(replay) => has_incomplete_active_cleanup_from(layout, exclude_ref_name, replay),
+        None => {
+            let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+            has_incomplete_active_cleanup_from(layout, exclude_ref_name, &replay)
+        }
+    }
+}
+
+fn has_incomplete_active_cleanup_from(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+    replay: &crate::wal::WalReplay,
+) -> Result<bool> {
     let ActiveRefMetadata::Valid(ref_name) = read_active_ref_metadata(layout)? else {
         return Ok(false);
     };

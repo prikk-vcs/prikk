@@ -141,6 +141,14 @@ enum Axis {
     /// one is not expected to go flat -- it is the standing regression guard that the check still costs three passes over the
     /// queue, not four (the fourth, removed in 0.53.0, ran no check of its own).
     Queue,
+    /// 0.54.0 step 1 item 2 (external review 029, 5.1): a fixed, sealed lineage [`CHECKPOINT_GAP`] blocks past its one checkpoint
+    /// (genesis, always one -- `checkpoint_due`, `block_state.rs`, returns `Ok(true)` unconditionally when a new block's parent is
+    /// `None`), with [`SMALL_SINCE_CHECKPOINT`] and [`LARGE_SINCE_CHECKPOINT`] the *total* content split across those
+    /// [`CHECKPOINT_GAP`] generations -- the same checkpoint distance in both, so the axis is the content added since the
+    /// checkpoint alone, not the gap's own depth (that would be [`Axis::History`]'s job). Unlike [`Axis::Content`]'s `one-file
+    /// commit` row (measured *at* a checkpoint, the flat best case), this fixture's own tip is cold and the nearest checkpoint is
+    /// always [`CHECKPOINT_GAP`] blocks behind it.
+    CheckpointGap,
 }
 
 const SMALL_HISTORY: usize = 4;
@@ -301,6 +309,75 @@ fn store_of_queue(queued: usize) -> Result<(RepositoryLayout, std::path::PathBuf
             &author(),
         )?;
     }
+    Ok((layout, root))
+}
+
+/// Well under [`CHECKPOINT_CADENCE`] (64, `block_state.rs`'s own constant for the second checkpoint's own distance, confirmed by
+/// hand-tracing `checkpoint_due` 0.53.0 P4: counting the Root as block 0, the second checkpoint is due at block 64, not 63) -- so
+/// this fixture's own tip has exactly one checkpoint behind it, genesis, [`CHECKPOINT_GAP`] blocks back, never a second one.
+const CHECKPOINT_GAP: usize = 32;
+
+/// Genesis's own content (`store_of_checkpoint_gap`'s first commit), identical in both the small and large store -- large enough
+/// that a full replay from genesis (the "perturb the anchor away" control) reads well past 1.5x either store's own anchored
+/// figure, so losing the checkpoint is a measurable regression, not noise.
+const CHECKPOINT_GAP_GENESIS_CONTENT: usize = 24 << 20;
+
+/// The two stores' own total content added across [`CHECKPOINT_GAP`] further sealed generations past genesis -- 1 MiB and 16
+/// MiB, external review 029's own "1 MiB against 16 MiB" suggestion (`0.54.0-step-1-small-items-handoff-v1.md` item 2).
+const SMALL_SINCE_CHECKPOINT: usize = 1 << 20;
+const LARGE_SINCE_CHECKPOINT: usize = 16 << 20;
+
+/// A sealed lineage whose nearest checkpoint is genesis, exactly [`CHECKPOINT_GAP`] blocks behind the tip: genesis holds
+/// [`CHECKPOINT_GAP_GENESIS_CONTENT`] (the same in both stores), and each of the [`CHECKPOINT_GAP`] generations since it rewrites
+/// one ever-growing file by `since_checkpoint_bytes / CHECKPOINT_GAP` more bytes -- the *only* thing that varies between the
+/// small and large store on this axis is `since_checkpoint_bytes`'s own total, never the checkpoint's own distance. The
+/// incremental lifecycle-state cache (DC-64, `lifecycle_cache/incremental.rs::CACHE_FILE_NAME`) is removed at the end, so the
+/// next commit this fixture feeds `one_file_commit` cannot reuse a resolved baseline and must derive cold, from the nearest
+/// checkpoint forward -- the admitted-checkpoint cache (`.prikk/cache/replay-verified-blocks.v1`) stays, which is what lets that
+/// cold derivation anchor at genesis instead of replaying the whole lineage (RFC 159 stack B, F4).
+fn store_of_checkpoint_gap(
+    since_checkpoint_bytes: usize,
+) -> Result<(RepositoryLayout, std::path::PathBuf)> {
+    let root = unique_temp_dir(&format!("p2-checkpoint-gap-{since_checkpoint_bytes}"));
+    let layout = RepositoryLayout::init(root.clone())?;
+    let maintainer = maintainer();
+    add_trusted_maintainer(
+        &layout,
+        maintainer.key_id(),
+        &prikk_hash::to_hex(&maintainer.public_key_bytes()),
+    )?;
+    std::fs::write(
+        layout.root().join("genesis.bin"),
+        content(CHECKPOINT_GAP_GENESIS_CONTENT, 1),
+    )?;
+    commit_worktree_changes_signed(
+        &layout,
+        REF_NAME,
+        "p2 checkpoint genesis",
+        WorktreePatchCommitOptions::default(),
+        &author(),
+    )?;
+    simulate_one_seal(&layout, REF_NAME, &maintainer)?;
+    let per_generation = since_checkpoint_bytes / CHECKPOINT_GAP;
+    for index in 0..CHECKPOINT_GAP {
+        std::fs::write(
+            layout.root().join("growing.bin"),
+            // Odd and strictly increasing: `content`'s own `seed | 1` collapses any two seeds that
+            // differ only in their lowest bit (2 and 3 alike become 3) to the identical stream --
+            // harmless for `store_of`'s own seeds (each writes a distinct file), fatal here, where
+            // consecutive generations rewrite the *same* file and a collision reads as "no change".
+            content(per_generation, (index as u64) * 2 + 101),
+        )?;
+        commit_worktree_changes_signed(
+            &layout,
+            REF_NAME,
+            "p2 since checkpoint",
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )?;
+        simulate_one_seal(&layout, REF_NAME, &maintainer)?;
+    }
+    let _ = std::fs::remove_file(layout.cache_dir().join("lifecycle-state.v1"));
     Ok((layout, root))
 }
 
@@ -607,33 +684,52 @@ const OPERATIONS: &[Operation] = &[
         name: "one-file commit (queue depth)",
         axis: Axis::Queue,
         expectation: Expectation::FollowsContent {
-            finding: "a commit against an already-queued fixture makes three full passes over `queue.wal` under the same \
-                       held active-session lock -- `refs::ensure_no_incomplete_publication`'s own `has_incomplete_active_cleanup` \
-                       (`refs/evidence.rs`), `author_inner`'s own `active_replay` (`node_authoring.rs`, feeding the \
-                       tail/damage/active-patch-limit checks, the RFC 166 witness classification and the worktree baseline fold \
-                       over queued patches), and `append_patch_reporting`'s own replay at the durable append (`wal.rs`, via \
-                       `append_patch_and_witness`) -- so this row is linear in the queue's own depth on purpose, so that a \
-                       damaged queued commit is always noticed before more work is stacked on top of it. Before 0.53.0 there \
-                       was a fourth pass that ran no check of its own -- it only recomputed the commit witness's running hash \
-                       from bytes the second pass had already decoded moments earlier; that pass is gone. Every queued commit \
-                       in this fixture rewrites one file, never a new one, so only the queue's own depth varies, not the \
-                       tracked tree: measured at 157,046 -> 1,209,605 bytes from 100 to 800 queued commits (release-0.53.0-prep-\
-                       P1b-report.md; 800, not 3,200, bounds this fixture's own debug-build cost -- building it is quadratic in \
-                       its own depth by construction). This row's own ceiling is what still catches a regression back to the \
-                       fourth pass",
+            finding: "a commit against an already-queued fixture makes two full passes over `queue.wal` under the same \
+                       held active-session lock -- `refs::ensure_publication_precondition_with_replay`'s own \
+                       `has_incomplete_active_cleanup_with_replay` (`refs/evidence.rs`) and `author_inner`'s own \
+                       `active_replay` (`node_authoring.rs`, feeding the tail/damage/active-patch-limit checks, the \
+                       RFC 166 witness classification and the worktree baseline fold over queued patches) now share one \
+                       decode, and `append_patch_reporting`'s own replay at the durable append (`wal.rs`, via \
+                       `append_patch_and_witness`) stays separate, by the owner's own kept decision -- so this row is \
+                       linear in the queue's own depth on purpose, so that a damaged queued commit is always noticed \
+                       before more work is stacked on top of it. Before 0.54.0 the publication-cleanup check paid for \
+                       its own, third, separate decode; that pass is gone. Every queued commit in this fixture rewrites \
+                       one file, never a new one, so only the queue's own depth varies, not the tracked tree: measured \
+                       at 107,074 -> 808,781 bytes from 100 to 800 queued commits (0.54.0-step-1-report.md). This row's \
+                       own ceiling is what still catches a regression back to the third pass",
             floor: 16 << 10,
-            // Not the usual 1.5x (1,814,408): reintroducing the fourth, redundant full replay removed in 0.53.0 (release
-            // prep P1b, control 2, re-run against the corrected single-fixed-file fixture at the depth this row now uses)
-            // was measured directly at 1,610,968 bytes on the large store, about 1.33x (4 passes against 3), not 1.5x --
-            // the identical ratio measured at the old 3,200 depth, confirming the mechanism rather than the depth drives
-            // it. 1,400,000 sits strictly between today's figure (1,209,605) and the measured regression (1,610,968).
-            ceiling: 1_400_000,
+            // Not 1.5x (1,213,172): restoring the publication-cleanup check's own separate decode (0.54.0 step 1,
+            // measured directly on this build by reintroducing it) reproduces the pre-0.54.0 three-pass figure almost
+            // exactly, 1,209,604 bytes on the large store -- about 1.50x, but a literal 1.5x ceiling (1,213,172) sits
+            // just *above* that regression and would not catch it. 1,000,000 sits strictly between today's figure
+            // (808,781) and the measured regression (1,209,604).
+            ceiling: 1_000_000,
         },
         allowance: 4096,
         why: "one more commit against an already-queued fixture: the pre-append check's own cost follows the queue it re-checks, \
-              which is the design this row stands guard over, not a defect -- a return to two full reads (the pre-3B shape) is \
-              what the ceiling exists to catch",
+              which is the design this row stands guard over, not a defect -- a return to three full reads (the pre-0.54.0 \
+              shape) is what the ceiling exists to catch",
         run: queued_commit,
+    },
+    Operation {
+        name: "one-file commit (since checkpoint)",
+        axis: Axis::CheckpointGap,
+        expectation: Expectation::FollowsContent {
+            finding: "external review 029, 5.1: a cold commit between checkpoints costs as much as the content added since the \
+                       nearest one, up to 63 blocks -- the `one-file commit` row above is measured right at a checkpoint, the \
+                       best case this one is not. Fixed checkpoint distance (genesis, 32 blocks behind the tip, both stores), \
+                       `lifecycle-state.v1` removed so the commit is cold: measured at 2,199,724 -> 33,165,486 bytes from 1 to \
+                       16 MiB added since the checkpoint (0.54.0-step-1-report.md)",
+            floor: 8 << 20,
+            ceiling: 49_748_229, // 1.5x the 33,165,486 bytes measured when this ceiling was written
+        },
+        allowance: 4096,
+        why: "a cold commit's baseline derivation walks forward from the nearest checkpoint through every generation since -- \
+              reading each one's own patch and blob to re-derive the files it touched -- so its cost follows the content added \
+              since the checkpoint on purpose, not the store's own total content (the row above, measured at a checkpoint, \
+              stays flat); a cost that instead followed the *whole* lineage (the anchor lost) is what the ceiling exists to \
+              catch",
+        run: one_file_commit,
     },
 ];
 
@@ -645,6 +741,7 @@ fn sizes(axis: Axis) -> (usize, usize) {
         Axis::History => (SMALL_HISTORY, LARGE_HISTORY),
         Axis::Refs => (SMALL_REFS, LARGE_REFS),
         Axis::Queue => (SMALL_QUEUE, LARGE_QUEUE),
+        Axis::CheckpointGap => (SMALL_SINCE_CHECKPOINT, LARGE_SINCE_CHECKPOINT),
     }
 }
 
@@ -659,6 +756,7 @@ fn measure(operation: &Operation, size: usize) -> Result<(u64, Tally)> {
         Axis::History => store_of_history(size)?,
         Axis::Refs => store_of_refs(size)?,
         Axis::Queue => store_of_queue(size)?,
+        Axis::CheckpointGap => store_of_checkpoint_gap(size)?,
     };
     read_tally::reset();
     (operation.run)(&layout)?;
@@ -749,6 +847,76 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
         failures.is_empty(),
         "operations whose cost follows the store's size:\n{}\n(all rows: name, small, large, difference, allowance)\n{report}",
         failures.join("\n")
+    );
+    Ok(())
+}
+
+/// 0.54.0 step 1 item 2's own control: losing the checkpoint anchor (`replay-verified-blocks.v1`
+/// removed, alongside `lifecycle-state.v1`) forces the cold commit to full-replay from genesis
+/// instead of anchoring [`CHECKPOINT_GAP`] blocks back -- genesis's own
+/// [`CHECKPOINT_GAP_GENESIS_CONTENT`] (24 MiB, identical in both stores) now joins whatever the
+/// content added since the checkpoint; the "since checkpoint" row's own ceiling must fail here, or
+/// it is not sensitive to the thing it is meant to catch.
+#[test]
+fn losing_the_checkpoint_anchor_fails_the_since_checkpoint_ceiling() -> Result<()> {
+    fn measure_without_anchor(size: usize) -> Result<u64> {
+        let (layout, root) = store_of_checkpoint_gap(size)?;
+        std::fs::remove_file(layout.cache_dir().join("replay-verified-blocks.v1"))?;
+        read_tally::reset();
+        one_file_commit(&layout)?;
+        let total = read_tally::snapshot().values().sum();
+        let _ = std::fs::remove_dir_all(root);
+        Ok(total)
+    }
+    let large = measure_without_anchor(LARGE_SINCE_CHECKPOINT)?;
+    let row = OPERATIONS
+        .iter()
+        .find(|op| op.name == "one-file commit (since checkpoint)")
+        .expect("the row exists");
+    let Expectation::FollowsContent { ceiling, .. } = &row.expectation else {
+        panic!("the row's own expectation must be FollowsContent");
+    };
+    let ceiling = *ceiling;
+    assert!(
+        large > ceiling,
+        "losing the checkpoint anchor must read past the row's own {ceiling}-byte ceiling (full \
+         replay from genesis, {CHECKPOINT_GAP_GENESIS_CONTENT} bytes of its own plus the content \
+         since it), got {large} -- or the ceiling is not sensitive to losing the anchor"
+    );
+    Ok(())
+}
+
+/// 0.54.0 step 1 item 2's own other control: the same, small amount of content added since the
+/// checkpoint on both sides (so there is nothing for a cost that follows it to differ by) reads
+/// within the row's own floor of itself -- demonstrating the floor would promote the real row once
+/// a future fix stops following the since-checkpoint content, the same way
+/// [`the_table_reports_a_read_that_follows_the_stores_size`] demonstrates the table can see a read
+/// that does not stay flat.
+#[test]
+fn a_flat_since_checkpoint_reading_would_promote_the_row() -> Result<()> {
+    let op = Operation {
+        name: "one-file commit (since checkpoint), held flat for this control",
+        axis: Axis::CheckpointGap,
+        expectation: Expectation::Flat,
+        allowance: 0,
+        why: "",
+        run: one_file_commit,
+    };
+    let (first, _) = measure(&op, 1024)?;
+    let (second, _) = measure(&op, 1024)?;
+    let row = OPERATIONS
+        .iter()
+        .find(|candidate| candidate.name == "one-file commit (since checkpoint)")
+        .expect("the row exists");
+    let Expectation::FollowsContent { floor, .. } = &row.expectation else {
+        panic!("the row's own expectation must be FollowsContent");
+    };
+    let floor = *floor;
+    assert!(
+        second < first + floor,
+        "the same since-checkpoint content on both sides ({first} / {second}) must read within \
+         the row's own {floor}-byte floor of each other, or the floor would not promote a \
+         genuinely flat future reading"
     );
     Ok(())
 }

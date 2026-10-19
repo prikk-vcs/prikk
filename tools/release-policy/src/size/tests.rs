@@ -245,9 +245,13 @@ fn an_inline_test_module_is_not_production() {
         // tail check, with a single fresh ownership read shared by the empty-queue branch below it,
         // 1473 -> 1471. Round 2 Addendum 1, A2: `write_refusal_reason`'s own call here now passes a
         // `RestoreRefusalContext` (§14 item 6's enriched row-9 text), 1471 -> 1479 (after `cargo
-        // fmt`).
+        // fmt`). 0.54.0 step 1 item 1: `author_inner`'s shared-decode merge, 1479 -> 1494 (after
+        // `cargo fmt`; its own case-table/kill-sweep tests moved to the sibling
+        // `step1_merged_decode_tests.rs`, following `ref_name_once_per_session_tests.rs`'s own
+        // convention, so this file's line count is production only, net of that one inline
+        // `mode_change_tests` module it already carried).
         physical,
-        1479,
+        1494,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -257,7 +261,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1430);
+    assert_eq!(counted.production_lines, 1445);
     assert_eq!(
         physical - counted.production_lines,
         49,

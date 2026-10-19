@@ -341,7 +341,22 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // raw WAL under this held lock (not `ActiveSession::append_patch`, which would re-acquire).
     let active_lock =
         ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME).map_err(AuthorError::Store)?;
-    crate::refs::ensure_no_incomplete_publication(layout).map_err(AuthorError::Store)?;
+    // 0.54.0 step 1: one decode of the active WAL, shared by the publication-cleanup check below
+    // and everything `active_replay` fed further down (the tail/damage check, the active-patch
+    // limit, the RFC 166 witness classification, the worktree baseline fold) -- previously two
+    // separate full decodes under the same held lock. Moved ahead of the publication-cleanup call
+    // (itself unchanged in substance: pass 1's own damage-detection still runs, and still speaks,
+    // before anything below it, since nothing between here and that call can have changed the WAL
+    // -- the active-session lock above is already held).
+    let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
+    let active_replay = wal.replay().map_err(AuthorError::Store)?;
+    crate::refs::ensure_publication_precondition_with_replay(
+        layout,
+        None,
+        false,
+        Some(&active_replay),
+    )
+    .map_err(AuthorError::Store)?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout).map_err(AuthorError::Store)?;
 
@@ -360,8 +375,8 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         ))));
     }
 
-    let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
-    let active_replay = wal.replay().map_err(AuthorError::Store)?;
+    // 0.54.0 step 1: `active_replay` (and `wal`) is the single decode taken above, before the
+    // publication-cleanup check -- not re-decoded here.
     // RFC 166 round 2 §0 (review v1's own required fix): the commit-witness classification speaks
     // *first*, before the older tail/damage checks below -- round 1 wired it in after ownership was
     // already confirmed, which let the tail check's own generic text answer first for rows 4-7, 9 and

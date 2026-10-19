@@ -245,7 +245,7 @@ pub fn ensure_no_incomplete_publication_except(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
 ) -> Result<()> {
-    ensure_publication_precondition(layout, exclude_ref_name, false)
+    ensure_publication_precondition_with_replay(layout, exclude_ref_name, false, None)
 }
 
 /// RFC 165 Addendum 1 §1: [`ensure_no_incomplete_publication_except`], plus RFC 164 Rule D's "a writer
@@ -254,32 +254,32 @@ pub fn ensure_no_incomplete_publication_except(
 /// read of the ref log container total: the tail check reuses the same `discovery`/bytes the
 /// precondition above already read, not a second whole read.
 ///
-/// **Why this is not the same question as an incomplete publication**: `publish_locked` writes the
-/// pointer before the log, so a genuine crash mid-publication always leaves a pointer lead, which the
-/// precondition's own agreement check (above) catches regardless of whether the ref log also has a
-/// tail -- enforced by the order the checks below run in (0.51.0 step 1 Part A, 020's grade): the
-/// agreement check, the object-index lookup, candidate debris and pending active cleanup all run
-/// before this tail is ever turned into a refusal, so a non-excluded ref's own lead is named
-/// `IncompletePublication` (and so `ref complete <ref>`) before the tail guard gets a chance to answer
-/// `--repair-tails` for the very same crash. A tail with **no** pointer lead -- zeros, random bytes,
-/// or a torn prefix the crash left behind
-/// for reasons unrelated to any pending write -- is not an interrupted publication at all (RFC 165 R5
-/// names exactly this shape), and must not block `commit` or any other writer that does not append to
-/// the ref log; `ensure_no_incomplete_publication_except` alone (no tail check) is what those callers
-/// use. But a *publishing* command is about to append past that tail, which Rule D forbids regardless
-/// of why the tail is there -- hence this separate, additive check, named and worded differently (the
-/// tail's own offset and byte count, and that its repair arrives with R5 -- never "incomplete
-/// publication," never "seal retry," since neither applies to a lead-free tail). `ref_name`'s own
-/// attributable tail is let through, the same as the precondition's own exclusion: a retry of `ref_name`
-/// itself is DC-38's business, not Rule D's.
+/// **Why this is not the same question as an incomplete publication**: `publish_locked` writes the pointer before the log, so
+/// a genuine crash mid-publication always leaves a pointer lead, which the precondition's own agreement check (above) catches
+/// regardless of whether the ref log also has a tail -- enforced by the order the checks below run in (0.51.0 step 1 Part A,
+/// 020's grade): the agreement check, the object-index lookup, candidate debris and pending active cleanup all run before
+/// this tail is ever turned into a refusal, so a non-excluded ref's own lead is named `IncompletePublication` (and so `ref
+/// complete <ref>`) before the tail guard gets a chance to answer `--repair-tails` for the very same crash. A tail with **no**
+/// pointer lead -- zeros, random bytes, or a torn prefix the crash left behind for reasons unrelated to any pending write --
+/// is not an interrupted publication at all (RFC 165 R5 names exactly this shape), and must not block `commit` or any other
+/// writer that does not append to the ref log; `ensure_no_incomplete_publication_except` alone (no tail check) is what those
+/// callers use. But a *publishing* command is about to append past that tail, which Rule D forbids regardless of why the tail
+/// is there -- hence this separate, additive check, named and worded differently (the tail's own offset and byte count, and
+/// that its repair arrives with R5 -- never "incomplete publication," never "seal retry," since neither applies to a
+/// lead-free tail). `ref_name`'s own attributable tail is let through, the same as the precondition's own exclusion: a retry
+/// of `ref_name` itself is DC-38's business, not Rule D's.
 pub fn ensure_may_publish(layout: &RepositoryLayout, ref_name: &str) -> Result<()> {
-    ensure_publication_precondition(layout, Some(ref_name), true)
+    ensure_publication_precondition_with_replay(layout, Some(ref_name), true, None)
 }
 
-fn ensure_publication_precondition(
+/// The publication precondition, with an optional already-decoded active-WAL replay for the one place this reads it (0.54.0
+/// step 1: `author_inner`, holding the lock with a replay already in hand, is the one caller outside this module with
+/// `Some`); every other caller passes `None`, decoding fresh -- the original, unscoped behaviour, unchanged.
+pub(crate) fn ensure_publication_precondition_with_replay(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
     check_ref_log_tail: bool,
+    replay: Option<&crate::wal::WalReplay>,
 ) -> Result<()> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -384,7 +384,7 @@ fn ensure_publication_precondition(
     if !verify::candidate_issues(layout)?.is_empty() {
         return Err(incomplete_publication_refusal());
     }
-    if evidence::has_incomplete_active_cleanup(layout, exclude_ref_name)? {
+    if evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay)? {
         return Err(incomplete_publication_refusal());
     }
 
@@ -500,7 +500,7 @@ pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
     let verification = verify_refs_with(layout, &ref_log)?;
     if verification.publication_issues.is_empty()
         && !verification.has_item_failure()
-        && !evidence::has_incomplete_active_cleanup(layout, None)?
+        && !evidence::has_incomplete_active_cleanup_with_replay(layout, None, None)?
     {
         return Ok(());
     }
