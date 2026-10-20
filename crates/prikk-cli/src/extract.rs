@@ -275,17 +275,24 @@ fn write_plan(
             }
         };
         total_content_bytes += bytes.len() as u64;
-        write_file_durably(&destination, &bytes)?;
-        set_mode(&destination, entry.mode)?;
+        write_file_durably(&destination, &bytes, entry.mode)?;
     }
     Ok(total_content_bytes)
 }
 
-/// Write `bytes` to the freshly-created `destination` and `fsync` it before returning -- the file's
-/// own content is durable before this function returns, independent of whatever directory syncing
-/// happens afterward (0.54.0 step 3 Part 2b R1). `destination`'s parent is assumed to already exist
-/// ([`write_plan`]'s own `fs::create_dir_all` call, just above its own call to this function).
-fn write_file_durably(destination: &Path, bytes: &[u8]) -> std::result::Result<(), CliError> {
+/// Write `bytes` to the freshly-created `destination`, set its mode on the still-open handle, and
+/// `fsync` it before returning -- both the file's content and its mode are durable before this
+/// function returns (0.54.0 step 3 Part 2b, the architect's own start-of-Part-3 correction: setting
+/// the mode *after* `sync_all`, as an earlier round did, left a crash window where the content
+/// landed durably but the mode bit did not -- `extract` promises the output equals the point, and a
+/// mode that isn't covered by the same sync as its file isn't kept durably). `destination`'s parent
+/// is assumed to already exist ([`write_plan`]'s own `fs::create_dir_all` call, just above its own
+/// call to this function).
+fn write_file_durably(
+    destination: &Path,
+    bytes: &[u8],
+    mode: u32,
+) -> std::result::Result<(), CliError> {
     use std::io::Write as _;
 
     let mut file = fs::File::create_new(destination).map_err(|err| {
@@ -294,6 +301,7 @@ fn write_file_durably(destination: &Path, bytes: &[u8]) -> std::result::Result<(
     file.write_all(bytes).map_err(|err| {
         CliError::Failure(format!("failed to write {}: {err}", destination.display()))
     })?;
+    set_mode(&file, destination, mode)?;
     file.sync_all().map_err(|err| {
         CliError::Failure(format!(
             "failed to sync {} before moving the extract into place: {err}",
@@ -302,18 +310,30 @@ fn write_file_durably(destination: &Path, bytes: &[u8]) -> std::result::Result<(
     })
 }
 
+/// Set `mode` on the still-open `file` -- the same handle [`write_file_durably`] is about to
+/// `sync_all`, so the mode change is covered by that one sync rather than needing a second.
+/// `destination` is used only for error messages (`File::set_permissions` takes no path of its
+/// own).
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> std::result::Result<(), CliError> {
+fn set_mode(file: &fs::File, destination: &Path, mode: u32) -> std::result::Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o7777)).map_err(|err| {
-        CliError::Failure(format!("failed to set mode on {}: {err}", path.display()))
-    })
+    file.set_permissions(fs::Permissions::from_mode(mode & 0o7777))
+        .map_err(|err| {
+            CliError::Failure(format!(
+                "failed to set mode on {}: {err}",
+                destination.display()
+            ))
+        })
 }
 
 /// No observable POSIX mode on this platform (DC-87 §3.3/§4.3): a documented no-op, the same
 /// reasoning `worktree.rs`'s own mode-aware materializer already applies.
 #[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> std::result::Result<(), CliError> {
+fn set_mode(
+    _file: &fs::File,
+    _destination: &Path,
+    _mode: u32,
+) -> std::result::Result<(), CliError> {
     Ok(())
 }
 
