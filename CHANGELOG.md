@@ -27,7 +27,11 @@
   RenameFlags::NOREPLACE)` on Linux/macOS, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on
   Windows), so an existing target is never silently replaced. `provisional: yes|no` is worded exactly
   as `checkout --snapshot-materialize` words it. Never writes into the repository: no lock, cache,
-  marker, or worktree write anywhere in the command.
+  marker, or worktree write anywhere in the command. A binary file created or replaced after the
+  anchor has its new content's kind checked once, during replay, the same validation `cat`/`tree`'s
+  own shared replay always makes — a patch's own claim about a blob's kind is not proof, and
+  `extract`'s streamed replay must refuse history that fails this exactly as the shared replay does,
+  not silently stream the wrong bytes.
 
 ### Output changes
 

@@ -10,15 +10,15 @@
 use std::collections::BTreeMap;
 
 use prikk_object::{
-    BlockKind, CanonicalEncode, CreateFile, NodeKind, ObjectEnvelope, ObjectType, Operation,
-    OperationKind, PatchPayload, PatchPurpose,
+    BlockKind, CanonicalEncode, CreateFile, NodeKind, ObjectEnvelope, ObjectId, ObjectType,
+    Operation, OperationKind, PatchPayload, PatchPurpose, ReplaceBinary,
 };
 
 use super::*;
 use crate::state_root::StateRootEntry;
 use crate::test_gates::test_support::{
     AnchoredHistory, Signing, anchored_node, dummy_signature, publish_binary_create_then_replace,
-    signed_block_with_state_root, unique_temp_dir, write_blob, write_snapshot,
+    signed_block_with_state_root, unique_temp_dir, write_binary_blob, write_blob, write_snapshot,
 };
 use crate::{FileObjectStore, ObjectReadSnapshot, ObjectWriter, RepositoryLayout};
 
@@ -87,10 +87,12 @@ fn edits_deletes_and_untouched_files_after_the_anchor() {
     let _ = &mut history;
 }
 
-/// `ReplaceBinary` after the anchor never reads the new content during replay: the node's content
-/// simply becomes `Blob(new_blob_id)`, streamed fresh only when `extract` actually writes it.
+/// `ReplaceBinary` after the anchor reads the new blob exactly once, to confirm it is actually
+/// binary (the same check `apply.rs`'s own `apply_replace_binary` makes), then discards the bytes:
+/// the node's content becomes `Blob(new_blob_id)`, streamed fresh only when `extract` actually
+/// writes it, never held resident past this one validating read.
 #[test]
-fn replace_binary_after_the_anchor_never_reads_the_new_blob_during_replay() {
+fn replace_binary_after_the_anchor_validates_then_never_holds_the_new_blob_resident() {
     let root = unique_temp_dir("extract-replace-binary");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     let new_blob_id =
@@ -262,4 +264,100 @@ fn pre_walk_refuses_past_the_bound_without_an_admitted_anchor() {
     let allowed = replay_for_extract(&reader, &block_ids, &trust, true).unwrap();
     assert!(allowed.provisional);
     assert!(!allowed.files.is_empty());
+}
+
+/// `ReplaceBinary` must not accept a `new_blob_id` whose actual, stored kind is not binary -- a
+/// patch's own claim is not proof (the same reasoning the trust-rule test above applies to a
+/// forged snapshot, applied here to a forged operation instead). `apply.rs`'s shared replay
+/// (`cat`/`tree`/`checkout`) already refuses this; `extract`'s own parallel replay must refuse it
+/// identically, not silently stream the wrong content. **Red**: before this check existed,
+/// `replay_for_extract` returned `Ok`, producing `asset.bin` from a blob that is actually text,
+/// while the shared replay correctly refused -- a real output divergence from the `cat`/`tree`
+/// oracle on malformed history. **Green**, pinned here.
+#[test]
+fn replace_binary_refuses_a_new_blob_whose_real_kind_is_not_binary() {
+    let root = unique_temp_dir("extract-replace-binary-wrong-kind");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let mut store = FileObjectStore::new(layout.clone());
+    let node_id = anchored_node(0x77);
+    let old_blob = write_binary_blob(&mut store, b"old binary bytes").unwrap();
+    let wrong_kind_blob: ObjectId = write_blob(&mut store, b"actually a TEXT blob").unwrap();
+
+    let create_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "asset.bin".to_string(),
+                node_id,
+                blob_id: old_blob,
+                mode: 0o100644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut create_patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        create_payload.to_canonical_bytes().unwrap(),
+    );
+    create_patch.add_signature(dummy_signature()).unwrap();
+    let create_patch_id = store.write_object(&create_patch).unwrap();
+    let root_state = crate::derive_next_state_root(&store, None, &[create_patch_id]).unwrap();
+    let root_block = signed_block_with_state_root(
+        BlockKind::Root,
+        Vec::new(),
+        vec![create_patch_id],
+        None,
+        root_state,
+    );
+    let root_block_id = store.write_object(&root_block).unwrap();
+
+    let replace_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ReplaceBinary(ReplaceBinary {
+                node_id,
+                old_blob_id: old_blob,
+                new_blob_id: wrong_kind_blob,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut replace_patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        replace_payload.to_canonical_bytes().unwrap(),
+    );
+    replace_patch.add_signature(dummy_signature()).unwrap();
+    let replace_patch_id = store.write_object(&replace_patch).unwrap();
+    // Not re-derived via `derive_next_state_root`: that helper itself replays the patch and would
+    // (rightly) refuse to build this malformed block in the first place. Reusing `root_state` is
+    // fine since this block carries no snapshot (`None`), so nothing ever reads this field.
+    let second_block = signed_block_with_state_root(
+        BlockKind::Normal,
+        vec![root_block_id],
+        vec![replace_patch_id],
+        None,
+        root_state,
+    );
+    let second_block_id = store.write_object(&second_block).unwrap();
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let block_ids = super::super::read::single_parent_chain(&reader, second_block_id).unwrap();
+    let trust = crate::anchor_trust::AnchorTrust::load(&layout);
+    let err = replay_for_extract(&reader, &block_ids, &trust, false).unwrap_err();
+    assert!(
+        err.to_string().contains("is not a binary-file blob"),
+        "{err}"
+    );
 }

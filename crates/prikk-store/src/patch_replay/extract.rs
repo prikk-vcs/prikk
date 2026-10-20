@@ -15,7 +15,10 @@
 //!   unread until the caller actually writes this file. True for every file at the admitted anchor
 //!   (ruling 1: a snapshot's own entries are Blob ids, text included) and for any binary file
 //!   created or replaced after it (`CreateFile`, `ReplaceBinary` never hold binary bytes resident
-//!   here -- they just update which Blob id the node now names).
+//!   here -- they just update which Blob id the node now names). Both still pay one bounded read of
+//!   the new blob during replay, to confirm the patch's own claim about its kind is actually true
+//!   (`apply.rs`'s own `apply_replace_binary` makes the identical check); the bytes are discarded
+//!   immediately rather than kept, since only the id is ever needed again.
 //! - [`ExtractContent::Resident`]: the node's current content cannot be named by one Blob id any
 //!   more -- a text file `EditText` has touched since the anchor (DC-65: the pre-edit blob is
 //!   deliberately never rewritten, so a text node's *tracked* id goes stale the moment an edit
@@ -442,6 +445,18 @@ fn apply_one_for_extract(
                          {old_blob_id}, got {other:?}"
                     )));
                 }
+            }
+            // The new blob is read once, here, to confirm it is actually binary content -- the
+            // same validation `apply.rs`'s own `apply_replace_binary` always pays (it holds every
+            // node resident so the read is free there; here it is the same bounded, one-time cost
+            // `CreateFile`'s own binary case already accepts above, for the identical reason: a
+            // patch's own claim about a blob's kind is not proof). The bytes are discarded
+            // immediately; only the id is kept, so this never holds binary content resident.
+            let (new_kind, _) = read_blob_bytes_with_kind(reader, new_blob_id)?;
+            if new_kind != NodeKind::BinaryFile {
+                return Err(PrikkError::Integrity(format!(
+                    "ReplaceBinary new blob {new_blob_id} is not a binary-file blob"
+                )));
             }
             if let Some(node) = live.get_mut(&node_id) {
                 node.content = ExtractContent::Blob(new_blob_id);
