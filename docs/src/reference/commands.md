@@ -192,16 +192,22 @@ name, before the first byte is written — learning the point's own total size t
 *pre-walk's* own bound (refusing a point whose nearest admitted snapshot is unreachably far back) is the
 separate, cheap guard against unbounded history depth, checked before a single Patch or Blob is read,
 never relaxed by these flags. **`--format json`** (`extract-report-v1`) carries `file_count`, `total_bytes`,
-`provisional`, `written` (whether this call actually wrote the target), and the resolved point (`ref` or
-`claim`, and `target_block_id`) — the same hand-rolled, `schema_version`-named convention `tree`'s own
-`tree-listing-v1` uses. **`--claim <claim-id>`** (mutually exclusive with `--ref`) previews a pending
-`RecognitionClaim` — the same id `sync seal --claim` takes — as if its own patches were sealed onto its
-own declared parent, without sealing anything: useful to inspect what a claim would produce (its size, or
-its content) before deciding to accept it. A claim naming more than one parent (one built from an ancestor
-`Merge` block) is refused by name — there is no field in the claim saying which parent is mainline, so
-this is refused rather than guessed. `extract`'s own peak memory tracks the largest single file it
-actually reads (roughly twice that file's own size, not once — see
-[Current State](current-state.md)), not the point's own total content size.
+`provisional`, `written` (whether this call actually wrote the target), `point` (the ref name or the
+block/claim id given, the one fixed key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` both
+use), `point_kind` (`"ref"`, `"block"`, or `"claim"`), and `target_block_id` — the same hand-rolled,
+`schema_version`-named convention those commands already use. **`--claim <claim-id>`** (mutually exclusive
+with `--ref`) previews a pending `RecognitionClaim` — the same id `sync seal --claim` takes — as if its
+own patches were sealed onto its own declared parent, without sealing anything: useful to inspect what a
+claim would produce (its size, or its content) before deciding to accept it. A claim naming more than one
+parent (one built from an ancestor `Merge` block) is refused by name — there is no field in the claim
+saying which parent is mainline, so this is refused rather than guessed. `--claim` takes the identical
+pre-walk bound as `--ref`/a bare block id: past the trusted distance from the claimed parent's own nearest
+admitted checkpoint, it refuses by name unless `--allow-full-replay` is given. `extract`'s own peak memory
+over a ref or a bare block id tracks the largest single file it actually reads (roughly twice that file's
+own size, not once — see [Current State](current-state.md)), not the point's own total content size;
+**`--claim`'s own peak memory is measurably higher for the same shapes and is not yet explained by that
+same rule alone** — see [Current State](current-state.md) for the measured figures and what is known so
+far about why.
 See [Reading a point](../guide/tree-and-cat.md).
 
 **Comparing: `diff`.** `diff` shows what changed between two states. A bare `prikk diff` compares the current

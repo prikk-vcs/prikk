@@ -284,7 +284,7 @@ fn prepare_extract_plan_for_claim_builds_a_plan_from_an_admitted_parent() {
     );
 
     let reader = ObjectReadSnapshot::open(&layout).unwrap();
-    let plan = prepare_extract_plan_for_claim(&layout, &reader, claim_id).unwrap();
+    let plan = prepare_extract_plan_for_claim(&layout, &reader, claim_id, false).unwrap();
 
     assert!(!plan.provisional, "genesis is a real, admitted checkpoint");
     assert_eq!(plan.target_block_id, genesis_block);
@@ -349,7 +349,7 @@ fn prepare_extract_plan_for_claim_refuses_a_claim_with_more_than_one_parent() {
     );
 
     let reader = ObjectReadSnapshot::open(&layout).unwrap();
-    let err = prepare_extract_plan_for_claim(&layout, &reader, claim_id).unwrap_err();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, claim_id, false).unwrap_err();
     let message = err.to_string();
     assert!(message.contains("2 parents"), "{message}");
     assert!(
@@ -417,7 +417,7 @@ fn prepare_extract_plan_for_claim_refuses_case_colliding_paths() {
     );
 
     let reader = ObjectReadSnapshot::open(&layout).unwrap();
-    let err = prepare_extract_plan_for_claim(&layout, &reader, claim_id).unwrap_err();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, claim_id, false).unwrap_err();
     let message = err.to_string();
     assert!(
         message.contains("case-insensitive") || message.contains("collision"),

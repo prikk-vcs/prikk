@@ -389,6 +389,11 @@ fn extract_format_json_reports_written_true_for_a_real_extract() {
     assert_eq!(json.get("schema_version").as_str(), "extract-report-v1");
     assert!(json.get("written").as_bool());
     assert!(report.contains("\"file_count\": 1"), "{report}");
+    // 0.54.0 step 3 Part 3b (R3): one fixed key, "point", across every point-reading command's own
+    // JSON -- the same shape `tree-listing-v1`/`path-content-v1` already use -- with the third kind
+    // `extract` alone has (a claim) named by a second field, "point_kind", rather than by the key.
+    assert_eq!(json.get("point").as_str(), "heads/main");
+    assert_eq!(json.get("point_kind").as_str(), "ref");
     assert!(out.join("a.txt").exists());
 
     let _ = std::fs::remove_dir_all(&repo);

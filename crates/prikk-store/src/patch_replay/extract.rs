@@ -112,22 +112,14 @@ pub(crate) fn replay_for_extract(
     trust: &AnchorTrust,
     allow_full_replay: bool,
 ) -> Result<ExtractReplayOutcome> {
-    let (anchor, provisional) = match search_admitted_anchor(reader, block_ids, trust)? {
-        AnchorSearch::Admitted { index, manifest } => (Some((index, manifest)), false),
-        AnchorSearch::GaveUp => {
-            if !allow_full_replay && block_ids.len() > MAX_ANCHOR_DISTANCE + 1 {
-                return Err(PrikkError::Precondition(format!(
-                    "no admitted snapshot within {MAX_ANCHOR_DISTANCE} blocks of this point; its own \
-                     history reaches back {} blocks without one -- older or crafted history, per this \
-                     repository's own checkpoint cadence; refusing before reading a single patch, to \
-                     avoid an unbounded replay from genesis -- pass --allow-full-replay to read it \
-                     anyway",
-                    block_ids.len()
-                )));
+    let (anchor, provisional) =
+        match search_admitted_anchor(reader, block_ids, trust, AnchorSite::Extract)? {
+            AnchorSearch::Admitted { index, manifest } => (Some((index, manifest)), false),
+            AnchorSearch::GaveUp => {
+                refuse_past_the_bound_unless_allowed(block_ids.len(), allow_full_replay)?;
+                (None, true)
             }
-            (None, true)
-        }
-    };
+        };
 
     let mut live: BTreeMap<NodeId, ExtractLiveNode> = BTreeMap::new();
     let mut by_path: BTreeMap<String, NodeId> = BTreeMap::new();
@@ -174,15 +166,20 @@ enum AnchorSearch {
     GaveUp,
 }
 
-/// [`super::anchor::find_anchor`]'s own decision (same site, `AnchorSite::Extract`; same walk,
-/// Block envelopes first, admission only for a candidate that carries a snapshot), **without**
-/// that function's own `snapshot_files_from_manifest` call on success -- this is exactly the extra
-/// cost the pre-walk exists to never pay before the bound is checked. A manifest Blob (bounded,
-/// fixed-size) is still read to validate a candidate; no file-content Blob ever is.
+/// [`super::anchor::find_anchor`]'s own decision (same walk, Block envelopes first, admission only
+/// for a candidate that carries a snapshot), **without** that function's own
+/// `snapshot_files_from_manifest` call on success -- this is exactly the extra cost the pre-walk
+/// exists to never pay before the bound is checked. A manifest Blob (bounded, fixed-size) is still
+/// read to validate a candidate; no file-content Blob ever is. `site` is threaded through by the
+/// caller (0.54.0 step 3 Part 3b) rather than hardcoded, the same reason `anchor.rs`'s own
+/// `find_anchor` threads one: the ref/block-id path (`AnchorSite::Extract`) and the `--claim` path
+/// (`AnchorSite::ExtractClaim`) share this identical search, but each must count and diagnose
+/// itself under its own name (`anchor_trust.rs`'s own top-of-file doc).
 fn search_admitted_anchor(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
     trust: &AnchorTrust,
+    site: AnchorSite,
 ) -> Result<AnchorSearch> {
     for (index, block_id) in block_ids.iter().enumerate().rev() {
         let block = read_block(reader, *block_id)?;
@@ -190,7 +187,7 @@ fn search_admitted_anchor(
             continue;
         }
         let distance = block_ids.len() - 1 - index;
-        match trust.admit(reader, *block_id, distance, AnchorSite::Extract) {
+        match trust.admit(reader, *block_id, distance, site) {
             Admission::Usable(manifest) => return Ok(AnchorSearch::Admitted { index, manifest }),
             Admission::NotUsable if distance > MAX_ANCHOR_DISTANCE => {
                 return Ok(AnchorSearch::GaveUp);
@@ -200,6 +197,23 @@ fn search_admitted_anchor(
         }
     }
     Ok(AnchorSearch::GaveUp)
+}
+
+/// The pre-walk's own bound check (0.54.0 step 3 Part 3b, factored out so the `--claim` path can
+/// share it exactly): past `MAX_ANCHOR_DISTANCE` blocks of history with no admitted anchor found
+/// anywhere in it, refuse by name unless `allow_full_replay` is set -- the same refusal
+/// `replay_for_extract`'s own inline check already gave, now shared verbatim with
+/// `replay_for_extract_claim`'s own pre-walk over the claimed parent's chain.
+fn refuse_past_the_bound_unless_allowed(chain_len: usize, allow_full_replay: bool) -> Result<()> {
+    if !allow_full_replay && chain_len > MAX_ANCHOR_DISTANCE + 1 {
+        return Err(PrikkError::Precondition(format!(
+            "no admitted snapshot within {MAX_ANCHOR_DISTANCE} blocks of this point; its own \
+             history reaches back {chain_len} blocks without one -- older or crafted history, per \
+             this repository's own checkpoint cadence; refusing before reading a single patch, to \
+             avoid an unbounded replay from genesis -- pass --allow-full-replay to read it anyway"
+        )));
+    }
+    Ok(())
 }
 
 /// Seed `live`/`by_path` from an admitted anchor's own validated manifest entries -- never their
@@ -601,7 +615,23 @@ pub(crate) fn replay_for_extract_claim(
     reader: &impl ObjectReader,
     parent: Option<ObjectId>,
     patch_ids: &[ObjectId],
+    allow_full_replay: bool,
 ) -> Result<ExtractReplayOutcome> {
+    // 0.54.0 step 3 Part 3b (R1): ruling 2's own depth bound applies to the whole command, not only
+    // the ref/block-id path -- a claim's declared parent with no admitted checkpoint within reach
+    // must refuse the same way, before a single Patch or Blob is read. A root claim (`parent` is
+    // `None`) has no chain to walk and nothing to bound.
+    if let Some(parent_id) = parent {
+        let chain = super::read::single_parent_chain(reader, parent_id)?;
+        let trust = crate::anchor_trust::AnchorTrust::load(layout);
+        if matches!(
+            search_admitted_anchor(reader, &chain, &trust, AnchorSite::ExtractClaim)?,
+            AnchorSearch::GaveUp
+        ) {
+            refuse_past_the_bound_unless_allowed(chain.len(), allow_full_replay)?;
+        }
+    }
+
     let derived = crate::block_state::derive_candidate(
         layout,
         reader,

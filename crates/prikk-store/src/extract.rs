@@ -145,14 +145,18 @@ pub fn prepare_extract_plan(
 ///
 /// `claim_id` does not name a `RecognitionClaim`, or it does not decode; it declares more than one
 /// parent; the parent's own lineage does not resolve, or the claim's own patches do not apply cleanly to
-/// it; an entry names a symlink; or two of the claimed state's own paths collide under ASCII case
+/// it; an entry names a symlink; two of the claimed state's own paths collide under ASCII case
 /// folding (`validate_no_path_collisions`, exactly as the ref/block-id path already enforces it -- named
 /// here because an unsealed claim's own patches have never passed through `seal`'s own collision check,
-/// unlike most sealed history this command otherwise reads).
+/// unlike most sealed history this command otherwise reads); or (0.54.0 step 3 Part 3b) the claimed
+/// parent's own chain reaches back past the trusted distance bound with no admitted checkpoint in
+/// reach and `allow_full_replay` is `false` -- the identical bound the ref/block-id path already
+/// enforces, naming the distance.
 pub fn prepare_extract_plan_for_claim(
     layout: &RepositoryLayout,
     reader: &impl ObjectReader,
     claim_id: ObjectId,
+    allow_full_replay: bool,
 ) -> Result<ExtractPlan> {
     let envelope = reader
         .read_typed(claim_id, ObjectType::RecognitionClaim)?
@@ -174,7 +178,8 @@ pub fn prepare_extract_plan_for_claim(
         }
     };
 
-    let outcome = replay_for_extract_claim(layout, reader, parent, &claim.patch_ids)?;
+    let outcome =
+        replay_for_extract_claim(layout, reader, parent, &claim.patch_ids, allow_full_replay)?;
 
     let paths = outcome
         .files

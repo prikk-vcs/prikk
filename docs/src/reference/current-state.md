@@ -285,6 +285,32 @@ planned for.
   24 MiB file dominates its own measurement (about 2x its own size, not the point's own 24.5 MiB
   total); a damaged blob anywhere at the point still refuses the whole extraction, the same
   all-or-nothing guarantee every other patch-replay reader gives.
+- **`--claim`'s own peak memory does not yet fit the same "roughly twice the largest file" rule,
+  and is measurably higher than the ref/block-id path's own equivalent shapes** (0.54.0 step 3 Part
+  3b): `--claim` derives its state through `derive_next_state_for_candidate` (the identical
+  mechanism `seal`/`merge`/`seal-from-accepted` already share), not through `patch_replay::
+  extract`'s own block-chain replay — a genuinely different code path, measured separately.
+  Measured the same way (release build, fresh process per sample, `/proc/self/status`'s own
+  `VmHWM`, process-floor baseline subtracted): a claim (one `CreateFile` plus one further new file)
+  on a parent shaped like the figure above (64 files, ~64 MiB, sitting on a checkpoint, no file
+  larger than 1 MiB) peaks at about 12 MiB over the floor — already above the roughly-2-MiB "twice
+  the largest file" the same rule would predict; a claim on a parent shaped like the since-checkpoint
+  figure above (a 24 MiB checkpoint plus 16 MiB more added across 32 further generations, confirmed
+  genuinely binary, not merely all-ASCII-and-so-misclassified-as-text) peaks at **about 242 MiB over
+  the floor** — roughly six times the parent's own 40 MiB total content, far past what either the
+  ref/block-id path's own ~50 MiB for a similarly-shaped point or the "twice the largest file" rule
+  would predict. **The mechanism is not fully pinned down in this round**: `StoreBackedResolver::
+  blob_kind` (`lifecycle_cache/store_resolvers.rs:80-94`, confirmed by reading it), called once per
+  `CreateFile`/`ReplaceBinary` operation this derivation folds forward, decodes the **entire** Blob
+  payload (the same `BlobPayload::decode_canonical` double-buffer named above) just to read one
+  field, `blob_kind` — every folded operation pays this cost, not only the derivation's own final
+  state, unlike `patch_replay::extract`'s own careful per-operation handling. This is confirmed,
+  real, and almost certainly a real contributor, but does not obviously account for the full
+  measured multiple on its own, and a later round should instrument `anchored_parent_state`'s own
+  fold loop directly to find the rest rather than guess further here. **Not fixed in 0.54.0**: the
+  streaming design itself is unaffected (nothing above changes what `prepare_extract_plan`/the
+  ref-or-block-id path do), and `--claim`'s own correctness (what it produces) is unaffected either
+  — only its own peak memory is worse than documented until this is investigated further.
 - **Fixed in 0.52.0: in 0.51.0, an archive of a repository that has accepted a sync artifact
   (`sync accept`), or where a text file was edited, sealed, and later deleted, failed its own
   `archive verify` and did not import** — even though the source repository's own `prikk verify`

@@ -267,6 +267,59 @@ fn pre_walk_refuses_past_the_bound_without_an_admitted_anchor() {
     assert!(!allowed.files.is_empty());
 }
 
+/// The claim path (`--claim`) takes the identical pre-walk bound as the ref/block-id path (0.54.0
+/// step 3 Part 3b, R1): a claim whose own declared parent reaches back 70 blocks, every one signed
+/// but never admitted (`Signing::Unadopted`), refuses by name without `--allow-full-replay`, and
+/// succeeds (fully provisional) with it set -- the identical shape
+/// `pre_walk_refuses_past_the_bound_without_an_admitted_anchor` already pins for the ref/block-id
+/// path, reused here for the claim path instead.
+#[test]
+fn claim_pre_walk_refuses_past_the_bound_without_an_admitted_anchor() {
+    let mut history =
+        AnchoredHistory::standard_signed("extract-claim-prewalk-bound", 70, Signing::Unadopted);
+    let parent = *history.blocks.last().unwrap();
+
+    let blob = write_blob(&mut history.store, b"claimed content").unwrap();
+    let patch_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "claimed.txt".to_string(),
+                node_id: anchored_node(0xEE),
+                blob_id: blob,
+                mode: 0o100644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        patch_payload.to_canonical_bytes().unwrap(),
+    );
+    patch.add_signature(dummy_signature()).unwrap();
+    let patch_id = history.store.write_object(&patch).unwrap();
+
+    let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
+
+    let refused =
+        replay_for_extract_claim(&history.layout, &reader, Some(parent), &[patch_id], false);
+    let message = refused.unwrap_err().to_string();
+    assert!(message.contains("no admitted snapshot within"), "{message}");
+    assert!(message.contains("--allow-full-replay"), "{message}");
+
+    let allowed =
+        replay_for_extract_claim(&history.layout, &reader, Some(parent), &[patch_id], true)
+            .unwrap();
+    assert!(allowed.provisional);
+    assert!(!allowed.files.is_empty());
+}
+
 /// `ReplaceBinary` must not accept a `new_blob_id` whose actual, stored kind is not binary -- a
 /// patch's own claim is not proof (the same reasoning the trust-rule test above applies to a
 /// forged snapshot, applied here to a forged operation instead). `apply.rs`'s shared replay

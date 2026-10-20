@@ -194,10 +194,13 @@ pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), 
             prikk_store::prepare_extract_plan(&layout, &reader, point, args.allow_full_replay)
                 .map_err(|err| err.to_string())?
         }
-        ExtractSource::Claim(claim_id) => {
-            prikk_store::prepare_extract_plan_for_claim(&layout, &reader, *claim_id)
-                .map_err(|err| err.to_string())?
-        }
+        ExtractSource::Claim(claim_id) => prikk_store::prepare_extract_plan_for_claim(
+            &layout,
+            &reader,
+            *claim_id,
+            args.allow_full_replay,
+        )
+        .map_err(|err| err.to_string())?,
     };
 
     // `--max-bytes`/`--max-files` and `--plan-only`/`--format json` all need the point's own file
@@ -590,10 +593,10 @@ fn print_json_report(
     json.push_str(&escape_json_string(
         &layout.prikk_dir().display().to_string(),
     ));
-    json.push_str(",\n  \"");
-    json.push_str(source_label(source));
-    json.push_str("\": ");
+    json.push_str(",\n  \"point\": ");
     json.push_str(&escape_json_string(&plan.point));
+    json.push_str(",\n  \"point_kind\": ");
+    json.push_str(&escape_json_string(source_label(source)));
     json.push_str(",\n  \"target_block_id\": ");
     json.push_str(&escape_json_string(&plan.target_block_id.to_string()));
     json.push_str(",\n  \"provisional\": ");
