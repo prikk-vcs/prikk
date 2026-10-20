@@ -566,5 +566,80 @@ fn apply_rename_batch_for_extract(
     Ok(())
 }
 
+/// `prikk extract --claim` (0.54.0 step 3 Part 3): the files a `RecognitionClaim` would produce if
+/// its own `patch_ids` were sealed onto its own declared `parent` -- read-only, never sealing
+/// anything. `parent`/`patch_ids` are already resolved by the caller (`prikk_store::extract`'s own
+/// claim-decoding; this module stays a lower layer and never reads a `RecognitionClaimPayload`
+/// itself, the same separation `replay_for_extract` already keeps from `Point` resolution).
+///
+/// **The adapter, stated precisely**: [`crate::block_state::derive_candidate`] (Stack A's own
+/// function, reused rather than re-implemented -- `AnchorSite::ExtractClaim` is its own site, but
+/// the derivation itself is the identical one `seal`/`merge`/`seal-from-accepted` already share)
+/// returns a path-keyed [`crate::state_root::StateRootEntry`] list and a node-id-keyed [`TextCache`]
+/// of every text node the derivation actually materialized (an edit, or a fresh text `CreateFile`).
+/// Every entry's own [`crate::state_root::StateRootContent::Blob`] id is exactly
+/// [`ExtractContent::Blob`]'s own shape already -- ruling 1 extended to a candidate state rather
+/// than a sealed one -- so a node the cache does *not* hold streams from its blob id unread, the
+/// identical streaming property the block-chain path already gives every untouched or
+/// binary-touched file. A node the cache *does* hold is [`ExtractContent::Resident`], already
+/// materialized by the derivation itself -- no second read.
+///
+/// `provisional` mirrors [`crate::block_state::CandidateDerivation::anchored`] exactly: an admitted
+/// anchor was found and used (`anchored == true`, `provisional == false`), or the full walk ran from
+/// genesis (`anchored == false`, `provisional == true`) -- the identical meaning the ref/block-id
+/// path's own `provisional` already carries, just derived from the candidate path's own flag rather
+/// than re-discovered here.
+///
+/// # Errors
+///
+/// The parent's own lineage does not resolve (this repository's own sealed history is broken), the
+/// claim's own patches do not apply cleanly to that parent's state, or an entry names a symlink
+/// (`extract` supports the file-level subset only, the same refusal `seed_from_manifest` already
+/// gives the block-chain path).
+pub(crate) fn replay_for_extract_claim(
+    layout: &crate::RepositoryLayout,
+    reader: &impl ObjectReader,
+    parent: Option<ObjectId>,
+    patch_ids: &[ObjectId],
+) -> Result<ExtractReplayOutcome> {
+    let derived = crate::block_state::derive_candidate(
+        layout,
+        reader,
+        parent,
+        patch_ids,
+        crate::block_state::StateAnchoring::Anchored(AnchorSite::ExtractClaim),
+    )
+    .map_err(|err| match err {
+        crate::block_state::CandidateStateDerivationError::Lineage(err) => err,
+        crate::block_state::CandidateStateDerivationError::Patch(err) => PrikkError::Integrity(
+            format!("extract --claim refused: the claim's own patches do not apply cleanly to its declared parent's state ({err})"),
+        ),
+    })?;
+
+    let mut files = Vec::with_capacity(derived.entries.len());
+    for entry in derived.entries {
+        let StateRootContent::Blob(blob_id) = entry.content else {
+            return Err(PrikkError::UnsupportedObjectType(format!(
+                "claimed state holds symlink {}; extract supports the file-level subset only",
+                entry.path.as_str()
+            )));
+        };
+        let content = match derived.text_cache.get(&entry.node_id) {
+            Some(bytes) => ExtractContent::Resident(bytes.clone()),
+            None => ExtractContent::Blob(blob_id),
+        };
+        files.push(ExtractFile {
+            path: entry.path.as_str().to_string(),
+            mode: entry.mode,
+            content,
+        });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(ExtractReplayOutcome {
+        provisional: !derived.anchored,
+        files,
+    })
+}
+
 #[cfg(test)]
 mod tests;

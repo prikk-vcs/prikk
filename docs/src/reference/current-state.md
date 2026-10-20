@@ -269,6 +269,22 @@ planned for.
   largest object's own size (an earlier version held a whole object type's own batch at once,
   measured at 2.25 times the archive's own size for 1 GiB concentrated in one type; fixed before
   0.51.0 shipped).
+- **`prikk extract`'s own peak memory tracks the largest single file it actually reads, not the
+  point's own total content size** (0.54.0 step 3): every file whose content has not changed since
+  the admitted anchor streams straight from its stored blob id, one at a time, and only a text file
+  edited since the anchor (at most 63 blocks of edits) is held resident. Measured against the real,
+  shipped implementation (release build, fresh process per sample, `/proc/self/status`'s own
+  `VmHWM`): a 64-file, ~62.6 MiB mixed text/binary point sitting on a checkpoint (no file larger than
+  about 1.6 MiB) peaks at about 4.5 MiB over the process floor; a since-checkpoint point whose
+  largest single file is a 24 MiB binary (16 MiB more added across 32 further generations) peaks at
+  about 50 MiB; a 30-generation, checkpoint-free lineage whose largest single file is about 1 MiB
+  peaks at about 3 MiB. **The real figure is closer to twice the largest single file's own size, not
+  once**: decoding any Blob's canonical payload (`BlobPayload::decode_canonical`) copies its content
+  into a fresh `Vec` rather than reusing the envelope's own already-read bytes, so the envelope and
+  the decoded content are both resident for a moment. This is why the since-checkpoint point's own
+  24 MiB file dominates its own measurement (about 2x its own size, not the point's own 24.5 MiB
+  total); a damaged blob anywhere at the point still refuses the whole extraction, the same
+  all-or-nothing guarantee every other patch-replay reader gives.
 - **Fixed in 0.52.0: in 0.51.0, an archive of a repository that has accepted a sync artifact
   (`sync accept`), or where a text file was edited, sealed, and later deleted, failed its own
   `archive verify` and did not import** — even though the source repository's own `prikk verify`

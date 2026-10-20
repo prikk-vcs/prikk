@@ -230,23 +230,31 @@ pub(crate) fn derive_next_state_for_candidate(
         .map(|derived| (derived.entries, derived.text_cache, derived.verified))
 }
 
-/// A candidate derivation with everything a control compares.
-#[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+/// A candidate derivation with everything a control compares -- and, since 0.54.0 step 3 Part 3,
+/// everything `patch_replay::extract`'s own claim path needs too (`anchored`, to report
+/// `provisional` honestly for a claim-derived point, the same way the ref/block-id path already
+/// does for an ordinary one).
 pub(crate) struct CandidateDerivation {
     pub(crate) entries: Vec<StateRootEntry>,
     pub(crate) text_cache: TextCache,
     /// Every block whose root this derivation confirmed by replay: the whole lineage for the full walk, the blocks
     /// folded after the anchor for an anchored one.
     pub(crate) verified: Vec<ObjectId>,
+    /// Read only by a `cfg(test)`/`test-support` control; the extract-claim adapter (production)
+    /// needs `entries`/`text_cache`/`anchored` only.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     pub(crate) state: NodeLifecycleState,
     /// The anchored derivation was used (otherwise the full walk ran).
     pub(crate) anchored: bool,
     /// Blocks folded after the anchor, and blocks the id-only walk read (both 0 for the full walk).
+    /// Read only by a `cfg(test)`/`test-support` control.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     pub(crate) folded: usize,
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     pub(crate) id_only_blocks: usize,
 }
 
-fn derive_candidate(
+pub(crate) fn derive_candidate(
     layout: &crate::RepositoryLayout,
     reader: &impl ObjectReader,
     parent: Option<ObjectId>,

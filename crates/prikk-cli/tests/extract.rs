@@ -288,3 +288,140 @@ fn extract_accepts_the_allow_full_replay_flag() {
     let _ = std::fs::remove_dir_all(&repo);
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// `--plan-only` (0.54.0 step 3 Part 3): reports file count, total bytes and `provisional`, and
+/// writes nothing -- no target, no temporary sibling either.
+#[test]
+fn extract_plan_only_writes_nothing() {
+    let repo = support::unique_repo("extract-plan-only");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::unique_repo("extract-plan-only-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = extract(&repo, "heads/main", &out, &["--plan-only"]);
+    support::ok(&output, "extract --plan-only");
+    let report = stdout(&output);
+    assert!(
+        report.contains("plan only: nothing was written"),
+        "{report}"
+    );
+    assert!(report.contains("files: 1"), "{report}");
+    assert!(report.contains("total content bytes: 6"), "{report}");
+    assert!(!out.exists(), "--plan-only must not create the target");
+    let sibling = out.with_file_name(format!(
+        "{}.prikk-extract-tmp",
+        out.file_name().unwrap().to_str().unwrap()
+    ));
+    assert!(
+        !sibling.exists(),
+        "--plan-only must not create a temporary sibling either"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `--max-files`/`--max-bytes` (0.54.0 step 3 Part 3): refuse the whole point, by name, before the
+/// first byte is written -- the target and its temporary sibling are both absent afterward.
+#[test]
+fn extract_refuses_over_max_files_and_max_bytes() {
+    let repo = support::unique_repo("extract-max-limits");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    std::fs::write(repo.join("b.txt"), b"world\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out_files = support::unique_repo("extract-max-files-out");
+    std::fs::remove_dir_all(&out_files).unwrap();
+    let output = extract(&repo, "heads/main", &out_files, &["--max-files", "1"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("over --max-files 1"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!out_files.exists());
+
+    let out_bytes = support::unique_repo("extract-max-bytes-out");
+    std::fs::remove_dir_all(&out_bytes).unwrap();
+    let output = extract(&repo, "heads/main", &out_bytes, &["--max-bytes", "5"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("over --max-bytes 5"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!out_bytes.exists());
+
+    // A limit that is not exceeded still extracts normally.
+    let out_ok = support::unique_repo("extract-max-limits-ok-out");
+    std::fs::remove_dir_all(&out_ok).unwrap();
+    let output = extract(
+        &repo,
+        "heads/main",
+        &out_ok,
+        &["--max-files", "2", "--max-bytes", "1000"],
+    );
+    support::ok(&output, "extract within the limits");
+    assert!(out_ok.join("a.txt").exists());
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `--format json` (0.54.0 step 3 Part 3): `extract-report-v1`, `written: true` for a real write.
+#[test]
+fn extract_format_json_reports_written_true_for_a_real_extract() {
+    let repo = support::unique_repo("extract-json-written");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::unique_repo("extract-json-written-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = extract(&repo, "heads/main", &out, &["--format", "json"]);
+    support::ok(&output, "extract --format json");
+    let report = stdout(&output);
+    let json = support::json::parse(&report);
+    assert_eq!(json.get("schema_version").as_str(), "extract-report-v1");
+    assert!(json.get("written").as_bool());
+    assert!(report.contains("\"file_count\": 1"), "{report}");
+    assert!(out.join("a.txt").exists());
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `--ref` and `--claim` are mutually exclusive (0.54.0 step 3 Part 3).
+#[test]
+fn extract_refuses_both_ref_and_claim() {
+    let repo = support::unique_repo("extract-ref-and-claim");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::unique_repo("extract-ref-and-claim-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = support::prikk(&repo)
+        .args([
+            "extract",
+            "--ref",
+            "heads/main",
+            "--claim",
+            &"0".repeat(64),
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not both"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}

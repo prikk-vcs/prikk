@@ -35,7 +35,7 @@ prikk checkout --patch-materialize-delete [path] [--ref REF]
 prikk show <block-id|patch-id> [--format json]
 prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]
 prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]
-prikk extract --ref <ref|block-id> <dir> [--allow-full-replay]
+prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only] [--max-bytes N] [--max-files N] [--format json]
 prikk diff [path] [--from <ref|block-id>] [--to <ref|block-id>] [--path <p>]... [--format json]
 prikk merge-evidence --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
 prikk merge-plan --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]
@@ -184,6 +184,24 @@ anchor still streams from that same id, at its new path. The target must not alr
 whole write is atomic (a temporary sibling, then one no-replace rename), and every file and directory is
 synced before it, so a crash never leaves a target with missing or partial content. `provisional: yes|no`
 says whether an admitted anchor was actually found and used, or the replay fell back to genesis instead.
+
+**`--plan-only`** reports the point's own file count, total bytes and `provisional`, and writes nothing at
+all — no target, no temporary sibling. **`--max-bytes N`/`--max-files N`** refuse the whole point, by
+name, before the first byte is written — learning the point's own total size this way costs what it costs
+(each file not already resident is read once to measure it), the same cost a real write already pays; the
+*pre-walk's* own bound (refusing a point whose nearest admitted snapshot is unreachably far back) is the
+separate, cheap guard against unbounded history depth, checked before a single Patch or Blob is read,
+never relaxed by these flags. **`--format json`** (`extract-report-v1`) carries `file_count`, `total_bytes`,
+`provisional`, `written` (whether this call actually wrote the target), and the resolved point (`ref` or
+`claim`, and `target_block_id`) — the same hand-rolled, `schema_version`-named convention `tree`'s own
+`tree-listing-v1` uses. **`--claim <claim-id>`** (mutually exclusive with `--ref`) previews a pending
+`RecognitionClaim` — the same id `sync seal --claim` takes — as if its own patches were sealed onto its
+own declared parent, without sealing anything: useful to inspect what a claim would produce (its size, or
+its content) before deciding to accept it. A claim naming more than one parent (one built from an ancestor
+`Merge` block) is refused by name — there is no field in the claim saying which parent is mainline, so
+this is refused rather than guessed. `extract`'s own peak memory tracks the largest single file it
+actually reads (roughly twice that file's own size, not once — see
+[Current State](current-state.md)), not the point's own total content size.
 See [Reading a point](../guide/tree-and-cat.md).
 
 **Comparing: `diff`.** `diff` shows what changed between two states. A bare `prikk diff` compares the current

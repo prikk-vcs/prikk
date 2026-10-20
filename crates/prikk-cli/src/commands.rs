@@ -262,7 +262,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "extract",
         run: crate::run_extract,
         help_lines: &[
-            "  prikk extract --ref <ref|block-id> <dir> [--allow-full-replay]  Write the files at a point into a brand-new, empty, external directory; anchors only where a writer would (never cat/tree's own anchoring), refusing a point whose nearest admitted snapshot is unreachably far back unless --allow-full-replay is given",
+            "  prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only] [--max-bytes N] [--max-files N] [--format json]  Write the files at a point into a brand-new, empty, external directory; anchors only where a writer would (never cat/tree's own anchoring), refusing a point whose nearest admitted snapshot is unreachably far back unless --allow-full-replay is given; --plan-only reports the point's own size and writes nothing; --max-bytes/--max-files refuse the whole point by name before the first byte is written; --claim previews a pending RecognitionClaim instead of a ref or block id",
         ],
     },
     Command {

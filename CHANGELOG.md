@@ -4,7 +4,8 @@
 
 ### Added
 
-- **`prikk extract --ref <ref|block-id> <dir> [--allow-full-replay]`** (0.54.0 step 3 Part 2): writes
+- **`prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only]
+  [--max-bytes N] [--max-files N] [--format json]`** (0.54.0 step 3, Parts 2–3): writes
   every file at a point into a brand-new, empty, external directory — no repository history, no
   worktree state. Unlike `cat`/`tree`, which may display any snapshot that merely decodes correctly,
   `extract` **anchors only where a writer would** — the identical admitted-anchor rule
@@ -39,7 +40,20 @@
   confirms, over a range of histories including renames, merges and a two-file swap, that
   `extract`'s own replay produces exactly the state the shared replay (`cat`/`tree`'s own) does, and
   that every malformed-operation shape the shared replay refuses (one per operation kind) is refused
-  by `extract` too.
+  by `extract` too. **Part 3** adds: `--plan-only`, reporting the point's own file count, total bytes
+  and `provisional` without writing anything; `--max-bytes`/`--max-files`, refusing the whole point
+  by name before the first byte is written (learning the point's own size this way costs what it
+  costs — the pre-walk's own cheap bound against unbounded history depth is unchanged and unrelated);
+  `--format json` (`extract-report-v1`), following `tree`'s own hand-rolled JSON convention; and
+  `--claim <claim-id>` (mutually exclusive with `--ref`), previewing a pending `RecognitionClaim` —
+  the same id `sync seal --claim` takes — as if its own patches were sealed onto its own declared
+  parent, through `derive_next_state_for_candidate` (read-only, under its own new
+  `AnchorSite::ExtractClaim`), never sealing anything; a claim declaring more than one parent (built
+  from an ancestor `Merge` block) is refused by name, since nothing in the claim itself says which
+  parent is mainline. Measured against the real, shipped implementation: peak memory tracks roughly
+  twice the largest single file actually read (`BlobPayload::decode_canonical` copies a blob's
+  content into a fresh buffer rather than reusing the envelope's own already-read bytes), not the
+  point's own total content size (`docs/src/reference/current-state.md`).
 
 ### Output changes
 

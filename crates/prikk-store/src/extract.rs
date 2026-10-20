@@ -17,13 +17,13 @@
 //! the **same** `reader` the plan itself was built from, so both phases read one consistent view of
 //! the store.
 
-use prikk_error::Result;
-use prikk_object::ObjectId;
+use prikk_error::{PrikkError, Result};
+use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload};
 
 use crate::anchor_trust::AnchorTrust;
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReader;
-use crate::patch_replay::extract::{ExtractContent, replay_for_extract};
+use crate::patch_replay::extract::{ExtractContent, replay_for_extract, replay_for_extract_claim};
 use crate::patch_replay::read::single_parent_chain;
 use crate::path::{RepoPath, validate_no_path_collisions};
 use crate::point::Point;
@@ -55,7 +55,7 @@ pub struct ExtractPlanEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ExtractPlan {
-    /// The point exactly as named: a ref name, or a block id.
+    /// The point exactly as named: a ref name, a block id, or (0.54.0 step 3 Part 3) a claim id.
     pub point: String,
     /// The Block read.
     pub target_block_id: ObjectId,
@@ -117,6 +117,89 @@ pub fn prepare_extract_plan(
     Ok(ExtractPlan {
         point: point.name.clone(),
         target_block_id: point.block_id,
+        provisional: outcome.provisional,
+        entries,
+    })
+}
+
+/// **`prikk extract --claim <claim-id>`** (0.54.0 step 3 Part 3): the same [`ExtractPlan`] shape, built
+/// from a `RecognitionClaim`'s own declared parent and patches instead of a resolved [`Point`]'s block
+/// chain -- a preview of what the claim would produce if its own patches were sealed onto its own
+/// declared parent, never sealing anything itself.
+///
+/// **The parent-resolution question, answered plainly rather than guessed**: a `RecognitionClaimPayload`
+/// (`prikk_object::payload::recognition_claim`) carries `parent_block_ids` verbatim from the real Block
+/// it describes -- zero entries for a root, one for an ordinary block, or **two** for a claim built from
+/// an ancestor that happens to be a `Merge` block (confirmed: `sync_negotiation::sender` builds a
+/// claim's own `parent_block_ids` directly from `block.parent_block_ids.clone()`). The claim itself
+/// carries no `BlockKind` or `mainline_parent_id` field to say which of two parents is mainline, and the
+/// one real production consumer of a claim's own lineage concept (`seal_from_accepted_claim`) does not
+/// use `parent_block_ids` for this at all -- it anchors on *this repository's own current ref tip*
+/// instead, which is the wrong parent for a read-only preview of the claim's own declared lineage
+/// (this function's own job). Without a trustworthy way to name a merge claim's own mainline parent from
+/// the claim object alone, **a claim with more than one declared parent is refused by name** rather than
+/// guessed at (sorted-first, declared-first, or any other silent pick) -- this is the honest answer the
+/// architect asked for, not a placeholder for one.
+///
+/// # Errors
+///
+/// `claim_id` does not name a `RecognitionClaim`, or it does not decode; it declares more than one
+/// parent; the parent's own lineage does not resolve, or the claim's own patches do not apply cleanly to
+/// it; an entry names a symlink; or two of the claimed state's own paths collide under ASCII case
+/// folding (`validate_no_path_collisions`, exactly as the ref/block-id path already enforces it -- named
+/// here because an unsealed claim's own patches have never passed through `seal`'s own collision check,
+/// unlike most sealed history this command otherwise reads).
+pub fn prepare_extract_plan_for_claim(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    claim_id: ObjectId,
+) -> Result<ExtractPlan> {
+    let envelope = reader
+        .read_typed(claim_id, ObjectType::RecognitionClaim)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!("recognition claim {claim_id} does not exist"))
+        })?;
+    let claim = RecognitionClaimPayload::decode_canonical(&envelope.canonical_payload)?;
+
+    let parent = match claim.parent_block_ids.as_slice() {
+        [] => None,
+        [single] => Some(*single),
+        many => {
+            return Err(PrikkError::Precondition(format!(
+                "recognition claim {claim_id} declares {} parents; a merge claim's own mainline \
+                 parent cannot be named from the claim object alone, so this is refused rather \
+                 than guessed -- extract --claim does not yet support a claim about a merge block",
+                many.len()
+            )));
+        }
+    };
+
+    let outcome = replay_for_extract_claim(layout, reader, parent, &claim.patch_ids)?;
+
+    let paths = outcome
+        .files
+        .iter()
+        .map(|file| RepoPath::parse(&file.path))
+        .collect::<Result<Vec<_>>>()?;
+    validate_no_path_collisions(&paths)?;
+
+    let entries = outcome
+        .files
+        .into_iter()
+        .zip(paths)
+        .map(|(file, path)| ExtractPlanEntry {
+            path,
+            mode: file.mode,
+            content: match file.content {
+                ExtractContent::Blob(blob_id) => ExtractPlanContent::Blob(blob_id),
+                ExtractContent::Resident(bytes) => ExtractPlanContent::Bytes(bytes),
+            },
+        })
+        .collect();
+
+    Ok(ExtractPlan {
+        point: claim_id.to_string(),
+        target_block_id: claim.block_id,
         provisional: outcome.provisional,
         entries,
     })

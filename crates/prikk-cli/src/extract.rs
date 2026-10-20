@@ -26,12 +26,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use prikk_object::ObjectId;
 use prikk_store::{ExtractPlan, ExtractPlanContent, ObjectReadSnapshot, Point, RepoPath};
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 use crate::durable_output::destination_exists;
 use crate::output::point_label;
+use crate::output::verification::escape_json_string;
 use crate::stdout::println;
 use crate::{current_branch, open_repository};
 
@@ -39,7 +41,12 @@ struct ExtractArgs {
     root: PathBuf,
     target: PathBuf,
     ref_name: Option<String>,
+    claim_id: Option<ObjectId>,
     allow_full_replay: bool,
+    plan_only: bool,
+    max_bytes: Option<u64>,
+    max_files: Option<usize>,
+    format_json: bool,
 }
 
 fn parse_extract_args(
@@ -47,7 +54,12 @@ fn parse_extract_args(
     args: Vec<String>,
 ) -> std::result::Result<ExtractArgs, CliError> {
     let mut ref_name = None;
+    let mut claim_id = None;
     let mut allow_full_replay = false;
+    let mut plan_only = false;
+    let mut max_bytes = None;
+    let mut max_files = None;
+    let mut format_json = false;
     let mut target = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -63,7 +75,42 @@ fn parse_extract_args(
                 }
                 ref_name.set_once("--ref", value)?;
             }
+            "--claim" => {
+                let value = flag_value(&mut iter, "extract --claim")?;
+                let parsed = value.parse::<ObjectId>().map_err(|err| {
+                    CliError::Usage(format!("--claim {value:?} is not a valid object id: {err}"))
+                })?;
+                claim_id.set_once("--claim", parsed)?;
+            }
             "--allow-full-replay" => mark_seen(&mut allow_full_replay, "--allow-full-replay")?,
+            "--plan-only" => mark_seen(&mut plan_only, "--plan-only")?,
+            "--format" => {
+                let value = flag_value(&mut iter, "extract --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "extract --format {value:?} is not supported -- only \"json\" is"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
+            "--max-bytes" => {
+                let value = flag_value(&mut iter, "extract --max-bytes")?;
+                let parsed = value.parse::<u64>().map_err(|err| {
+                    CliError::Usage(format!(
+                        "--max-bytes {value:?} is not a valid number: {err}"
+                    ))
+                })?;
+                max_bytes.set_once("--max-bytes", parsed)?;
+            }
+            "--max-files" => {
+                let value = flag_value(&mut iter, "extract --max-files")?;
+                let parsed = value.parse::<usize>().map_err(|err| {
+                    CliError::Usage(format!(
+                        "--max-files {value:?} is not a valid number: {err}"
+                    ))
+                })?;
+                max_files.set_once("--max-files", parsed)?;
+            }
             other if other.starts_with('-') => return Err(unknown_argument("extract", other)),
             _ => {
                 if target.is_some() {
@@ -77,35 +124,127 @@ fn parse_extract_args(
     }
     let Some(target) = target else {
         return Err(CliError::Usage(
-            "extract requires an output directory: prikk extract --ref <ref|block-id> <dir>"
+            "extract requires an output directory: prikk extract (--ref <ref|block-id>|--claim \
+             <claim-id>) <dir>"
                 .to_string(),
         ));
     };
+    if ref_name.is_some() && claim_id.is_some() {
+        return Err(CliError::Usage(
+            "extract accepts --ref or --claim, not both".to_string(),
+        ));
+    }
     Ok(ExtractArgs {
         root,
         target,
         ref_name,
+        claim_id,
         allow_full_replay,
+        plan_only,
+        max_bytes,
+        max_files,
+        format_json,
     })
 }
 
-/// `prikk extract --ref <ref|block-id> <dir> [--allow-full-replay]`.
+/// Either a resolved [`Point`] (a ref or a bare block id) or a `RecognitionClaim` id -- `extract`'s
+/// own two ways to name what to read (0.54.0 step 3 Part 3). `point_label`/`target_block_id`'s own
+/// reporting already treats both uniformly through the shared [`ExtractPlan`] this produces.
+enum ExtractSource {
+    Point(Point),
+    Claim(ObjectId),
+}
+
+/// `prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay]
+/// [--plan-only] [--max-bytes N] [--max-files N] [--format json]`.
 pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_extract_args(root, args)?;
     let layout = open_repository(args.root)?;
-    let name = current_branch::resolve_ref(&layout, args.ref_name)?;
-    // Same rule as `cat`/`tree` (RFC 157 §2, RFC 147 §2i): a received ref is read, never adopted;
-    // an unpublished current branch has nothing to extract yet.
-    let unpublished_current_branch = current_branch::is_unpublished_current_branch(&layout, &name)?;
-    let point = match prikk_store::resolve_point(&layout, &name, prikk_store::ReceivedRefs::Read) {
-        Ok(point) => point,
-        Err(prikk_error::PrikkError::Precondition(_)) if unpublished_current_branch => {
-            return Err(CliError::Failure(format!(
-                "precondition not met: {name} has no published history yet -- nothing to extract"
-            )));
+
+    let source = match args.claim_id {
+        Some(claim_id) => ExtractSource::Claim(claim_id),
+        // `parse_extract_args` already refuses both `--ref` and `--claim` together; omitting
+        // both defaults to the current branch, exactly as `cat`/`tree`'s own `--ref` already does
+        // (`current_branch::resolve_ref`'s own doc: "explicit when given, otherwise the current
+        // branch").
+        None => {
+            let name = current_branch::resolve_ref(&layout, args.ref_name)?;
+            // Same rule as `cat`/`tree` (RFC 157 §2, RFC 147 §2i): a received ref is read, never
+            // adopted; an unpublished current branch has nothing to extract yet.
+            let unpublished_current_branch =
+                current_branch::is_unpublished_current_branch(&layout, &name)?;
+            let point =
+                match prikk_store::resolve_point(&layout, &name, prikk_store::ReceivedRefs::Read) {
+                    Ok(point) => point,
+                    Err(prikk_error::PrikkError::Precondition(_)) if unpublished_current_branch => {
+                        return Err(CliError::Failure(format!(
+                            "precondition not met: {name} has no published history yet -- \
+                             nothing to extract"
+                        )));
+                    }
+                    Err(err) => return Err(err.to_string().into()),
+                };
+            ExtractSource::Point(point)
         }
-        Err(err) => return Err(err.to_string().into()),
     };
+
+    let reader = ObjectReadSnapshot::open(&layout).map_err(|err| err.to_string())?;
+    let plan = match &source {
+        ExtractSource::Point(point) => {
+            prikk_store::prepare_extract_plan(&layout, &reader, point, args.allow_full_replay)
+                .map_err(|err| err.to_string())?
+        }
+        ExtractSource::Claim(claim_id) => {
+            prikk_store::prepare_extract_plan_for_claim(&layout, &reader, *claim_id)
+                .map_err(|err| err.to_string())?
+        }
+    };
+
+    // `--max-bytes`/`--max-files` and `--plan-only`/`--format json` all need the point's own file
+    // count and total content bytes -- the documentation states plainly that these limits hold
+    // *before the write*, not before the cost of learning what the write would be: a `Blob` entry's
+    // own size is learned by reading it once here (the identical read `write_plan` would make
+    // anyway for a real write), discarded immediately rather than held. An ordinary extract with
+    // none of these flags given pays none of this: `summary` stays `None`, and `write_plan`'s own
+    // single read per file is the only one that ever happens.
+    let needs_summary =
+        args.plan_only || args.format_json || args.max_bytes.is_some() || args.max_files.is_some();
+    let summary = if needs_summary {
+        Some(plan_summary(&reader, &plan)?)
+    } else {
+        None
+    };
+
+    if let Some((file_count, total_bytes)) = summary {
+        if let Some(max_files) = args.max_files {
+            if file_count > max_files {
+                return Err(CliError::Failure(format!(
+                    "precondition not met: this point has {file_count} files, over --max-files \
+                     {max_files} -- refusing the whole point, nothing was written"
+                )));
+            }
+        }
+        if let Some(max_bytes) = args.max_bytes {
+            if total_bytes > max_bytes {
+                return Err(CliError::Failure(format!(
+                    "precondition not met: this point holds {total_bytes} bytes of content, over \
+                     --max-bytes {max_bytes} -- refusing the whole point, nothing was written"
+                )));
+            }
+        }
+    }
+
+    if args.plan_only {
+        // `needs_summary` is `true` whenever `plan_only` is, so this is always populated; the
+        // fallback is unreachable, not a real default.
+        let (file_count, total_bytes) = summary.unwrap_or((plan.entries.len(), 0));
+        if args.format_json {
+            print_json_report(&layout, &source, &plan, file_count, total_bytes, false);
+        } else {
+            print_plan_only_report(&layout, &source, &plan, file_count, total_bytes);
+        }
+        return Ok(());
+    }
 
     refuse_existing_target(&args.target)?;
     let temp_sibling = temp_sibling_path(&args.target)?;
@@ -118,10 +257,6 @@ pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), 
             temp_sibling.display()
         )));
     }
-
-    let reader = ObjectReadSnapshot::open(&layout).map_err(|err| err.to_string())?;
-    let plan = prikk_store::prepare_extract_plan(&layout, &reader, &point, args.allow_full_replay)
-        .map_err(|err| err.to_string())?;
 
     let total_content_bytes = match write_plan(&reader, &plan, &temp_sibling) {
         Ok(total) => total,
@@ -164,8 +299,42 @@ pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), 
         )));
     }
 
-    print_report(&layout, &point, &args.target, &plan, total_content_bytes);
+    if args.format_json {
+        print_json_report(
+            &layout,
+            &source,
+            &plan,
+            plan.entries.len(),
+            total_content_bytes,
+            true,
+        );
+    } else {
+        print_report(&layout, &source, &args.target, &plan, total_content_bytes);
+    }
     Ok(())
+}
+
+/// `file_count`/`total_bytes` for `plan`: each `Bytes` entry's own `len()` (already resident, no
+/// read), each `Blob` entry read once to learn its size and discarded immediately -- the one real
+/// cost `--max-bytes`/`--max-files`/`--plan-only`/`--format json` accept paying, per the
+/// documentation's own wording (0.54.0 step 3 Part 3, item 2).
+fn plan_summary(
+    reader: &ObjectReadSnapshot,
+    plan: &ExtractPlan,
+) -> std::result::Result<(usize, u64), CliError> {
+    let mut total_bytes = 0_u64;
+    for entry in &plan.entries {
+        let len = match &entry.content {
+            ExtractPlanContent::Bytes(bytes) => bytes.len(),
+            ExtractPlanContent::Blob(blob_id) => {
+                prikk_store::read_extract_blob_content(reader, *blob_id)
+                    .map_err(|err| CliError::Failure(err.to_string()))?
+                    .len()
+            }
+        };
+        total_bytes += len as u64;
+    }
+    Ok((plan.entries.len(), total_bytes))
 }
 
 /// `fsync` every directory under (and including) `root`, deepest first -- so a crash partway
@@ -337,27 +506,23 @@ fn set_mode(
     Ok(())
 }
 
-fn print_report(
-    layout: &prikk_store::RepositoryLayout,
-    point: &Point,
-    target: &Path,
-    plan: &ExtractPlan,
-    total_content_bytes: u64,
-) {
-    println!("extract repository: {}", layout.prikk_dir().display());
-    println!(
-        "{}: {}",
-        point_label(point.kind == prikk_store::PointKind::Block),
-        plan.point
-    );
-    println!("target block: {}", plan.target_block_id);
-    println!("output directory: {}", target.display());
+/// `point_label`'s own label, extended to a claim source (0.54.0 step 3 Part 3): `"claim"` for one,
+/// `point_label`'s own `"block"`/`"ref"` otherwise.
+fn source_label(source: &ExtractSource) -> &'static str {
+    match source {
+        ExtractSource::Point(point) => point_label(point.kind == prikk_store::PointKind::Block),
+        ExtractSource::Claim(_) => "claim",
+    }
+}
+
+fn print_provisional_line(provisional: bool) {
     // 0.54.0 step 3 Part 2b R4: `checkout --snapshot-materialize`'s own wording ("this snapshot's
     // block") does not fit `extract` -- a point up to 63 blocks past its anchor has no single
     // snapshot of its own to name. This instead says what `extract` actually checked: whether an
-    // admitted anchor (`AnchorTrust`, under `AnchorSite::Extract`) was found and used, or the
-    // replay fell back to genesis because none was.
-    if plan.provisional {
+    // admitted anchor was found and used, or the replay fell back to genesis because none was (for
+    // a ref/block point, `AnchorTrust` under `AnchorSite::Extract`; for a claim, the identical rule
+    // under `AnchorSite::ExtractClaim`, through `derive_next_state_for_candidate`).
+    if provisional {
         println!(
             "provisional: yes -- no replay-verified, adopted-key checkpoint was found within this \
              repository's trusted distance of this point; every file was replayed from genesis \
@@ -369,8 +534,78 @@ fn print_report(
              itself replay-verified and whose signer it has adopted"
         );
     }
+}
+
+fn print_report(
+    layout: &prikk_store::RepositoryLayout,
+    source: &ExtractSource,
+    target: &Path,
+    plan: &ExtractPlan,
+    total_content_bytes: u64,
+) {
+    println!("extract repository: {}", layout.prikk_dir().display());
+    println!("{}: {}", source_label(source), plan.point);
+    println!("target block: {}", plan.target_block_id);
+    println!("output directory: {}", target.display());
+    print_provisional_line(plan.provisional);
     println!("files written: {}", plan.entries.len());
     println!("total content bytes: {total_content_bytes}");
+}
+
+/// `--plan-only`: the point's own file count, total bytes and `provisional` -- planeter's
+/// size-first report (0.54.0 step 3 Part 3, item 1). Writes nothing; there is no `output
+/// directory`/`files written` line, since nothing was written.
+fn print_plan_only_report(
+    layout: &prikk_store::RepositoryLayout,
+    source: &ExtractSource,
+    plan: &ExtractPlan,
+    file_count: usize,
+    total_bytes: u64,
+) {
+    println!("extract repository: {}", layout.prikk_dir().display());
+    println!("{}: {}", source_label(source), plan.point);
+    println!("target block: {}", plan.target_block_id);
+    println!("plan only: nothing was written");
+    print_provisional_line(plan.provisional);
+    println!("files: {file_count}");
+    println!("total content bytes: {total_bytes}");
+}
+
+/// `--format json` (0.54.0 step 3 Part 3, item 3): follows `tree`'s own hand-rolled-JSON,
+/// `schema_version`-named convention (`tree_listing_json`, `crates/prikk-cli/src/tree.rs`) -- no
+/// `serde_json` here either, the same long-standing rule `durable_output.rs`'s own module doc
+/// states. `written` tells a consumer, without having to infer it from `total_bytes` alone, whether
+/// this call actually wrote `target` to disk (`false` for `--plan-only`, or for a refused run that
+/// never reaches this point at all).
+fn print_json_report(
+    layout: &prikk_store::RepositoryLayout,
+    source: &ExtractSource,
+    plan: &ExtractPlan,
+    file_count: usize,
+    total_bytes: u64,
+    written: bool,
+) {
+    let mut json = String::new();
+    json.push_str("{\n  \"schema_version\": \"extract-report-v1\",\n  \"extract_repository\": ");
+    json.push_str(&escape_json_string(
+        &layout.prikk_dir().display().to_string(),
+    ));
+    json.push_str(",\n  \"");
+    json.push_str(source_label(source));
+    json.push_str("\": ");
+    json.push_str(&escape_json_string(&plan.point));
+    json.push_str(",\n  \"target_block_id\": ");
+    json.push_str(&escape_json_string(&plan.target_block_id.to_string()));
+    json.push_str(",\n  \"provisional\": ");
+    json.push_str(if plan.provisional { "true" } else { "false" });
+    json.push_str(",\n  \"written\": ");
+    json.push_str(if written { "true" } else { "false" });
+    json.push_str(",\n  \"file_count\": ");
+    json.push_str(&file_count.to_string());
+    json.push_str(",\n  \"total_bytes\": ");
+    json.push_str(&total_bytes.to_string());
+    json.push_str("\n}");
+    println!("{json}");
 }
 
 #[cfg(test)]

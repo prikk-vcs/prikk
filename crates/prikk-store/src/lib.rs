@@ -195,7 +195,7 @@ pub use doctor::{
 };
 pub use extract::{
     ExtractPlan, ExtractPlanContent, ExtractPlanEntry, prepare_extract_plan,
-    read_extract_blob_content, rename_new_directory_no_replace,
+    prepare_extract_plan_for_claim, read_extract_blob_content, rename_new_directory_no_replace,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;

@@ -26,7 +26,11 @@
 //! increment 2b's anchored worktree writes (`patch_replay::anchor`'s `VerifiedWorktreeWrite`, and
 //! `worktree::materialize_snapshot_checkout`'s provisional marker), and 0.54.0 step 3 Part 2's `prikk extract`
 //! (`patch_replay::anchor`'s `VerifiedExtract`, `AnchorSite::Extract`) -- a fourth caller of the one function, under
-//! its own site name (`extract` never writes a worktree, so it is not folded into `WorktreeWrite`). 2c's anchored
+//! its own site name (`extract` never writes a worktree, so it is not folded into `WorktreeWrite`). **A fifth,
+//! 0.54.0 step 3 Part 3's `prikk extract --claim`** (`AnchorSite::ExtractClaim`, through
+//! `block_state::anchored_parent_state`, Stack A's own function, reused rather than re-implemented): a claim is read
+//! against its own declared parent, never this repository's own current ref tip (`SealFromAccepted`'s own choice),
+//! so it needs its own site name even though it shares Stack A's own function. 2c's anchored
 //! *text* is not one of them: it is hash-checked against the content id the caller expects, so it certifies itself. A
 //! read-only report (`Anchoring::ReadOnlyReport`) shows state as its block signs it and is not one of them either
 //! (§10.3c ruling 1).
@@ -78,6 +82,15 @@ pub(crate) enum AnchorSite {
     /// shared site name would let `extract`'s own control and `WorktreeWrite`'s own control pass or
     /// fail together for reasons that have nothing to do with each other.
     Extract,
+    /// `prikk extract --claim` (0.54.0 step 3 Part 3): a different site again from both
+    /// [`Self::Extract`] (a ref or a bare block id, read through [`crate::patch_replay::extract`]'s own
+    /// block-chain replay) and [`Self::SealFromAccepted`] (which anchors on *this repository's own
+    /// current ref tip*, not a claim's own declared parent) -- this site anchors on the
+    /// `RecognitionClaim`'s own claimed parent, through `derive_next_state_for_candidate`, a third,
+    /// independent shape even though the trust rule itself is identical at every site. Honest
+    /// per-site diagnostics (this module's own top-of-file doc) need the name kept separate, not
+    /// folded into either of the other two.
+    ExtractClaim,
 }
 
 impl AnchorSite {
@@ -91,6 +104,7 @@ impl AnchorSite {
             Self::SnapshotMaterialize => "snapshot-materialize",
             Self::Baseline => "baseline",
             Self::Extract => "extract",
+            Self::ExtractClaim => "extract-claim",
         }
     }
 }
@@ -195,9 +209,9 @@ fn count_use(site: AnchorSite) {
 fn count_use(_site: AnchorSite) {}
 
 /// How many times this thread's anchor-trust function admitted an anchor for `site` (`"seal"`, `"merge"`,
-/// `"seal-from-accepted"`, `"worktree-write"`, `"snapshot-materialize"`, `"baseline"` or `"extract"`), since the
-/// thread started or the last [`reset_anchor_uses_for_test_support`]. The per-call-site controls read it; nothing in
-/// a shipped build does.
+/// `"seal-from-accepted"`, `"worktree-write"`, `"snapshot-materialize"`, `"baseline"`, `"extract"` or
+/// `"extract-claim"`), since the thread started or the last [`reset_anchor_uses_for_test_support`]. The
+/// per-call-site controls read it; nothing in a shipped build does.
 #[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub fn anchor_uses_for_test_support(site: &str) -> usize {
