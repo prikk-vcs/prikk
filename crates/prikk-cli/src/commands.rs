@@ -259,6 +259,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "extract",
+        run: crate::run_extract,
+        help_lines: &[
+            "  prikk extract --ref <ref|block-id> <dir> [--allow-full-replay]  Write the files at a point into a brand-new, empty, external directory; anchors only where a writer would (never cat/tree's own anchoring), refusing a point whose nearest admitted snapshot is unreachably far back unless --allow-full-replay is given",
+        ],
+    },
+    Command {
         name: "show",
         run: crate::run_show,
         help_lines: &[

@@ -47,6 +47,16 @@ pub(crate) enum Anchoring<'a> {
     /// maintainer key, passing the loader, and at most 63 blocks back. A snapshot on a block it does not admit is
     /// skipped; a recorded one whose manifest or signature fails is named and the replay runs from genesis.
     VerifiedWorktreeWrite(&'a AnchorTrust),
+    /// `prikk extract`'s own site, under [`AnchorSite::Extract`] -- **not** `extract`'s own production
+    /// anchoring (0.54.0 step 3 Part 2): `extract` never holds a point's files resident (streaming,
+    /// `patch_replay::extract`'s own module doc), so it cannot use this variant in production, which
+    /// seeds `ChainReplay.files` fully materialized the same as every other `Anchoring` variant. This
+    /// exists only so `patch_replay::extract`'s own parallel, independent admission search
+    /// (never materializing a file) can be **cross-checked** against the identical, already-proven
+    /// mechanism every other verified site shares, under `extract`'s own site name -- confirmed by
+    /// `patch_replay::extract::tests`, never reached by the shipped binary.
+    #[cfg(test)]
+    VerifiedExtract(&'a AnchorTrust),
 }
 
 /// The replayed chain: state, the whole chain's history fields, and any fallback.
@@ -102,7 +112,13 @@ pub(crate) fn replay_chain_capturing(
     let (anchor, fallback) = match anchoring {
         Anchoring::Never => (None, None),
         Anchoring::ReadOnlyReport => find_anchor(reader, block_ids, None)?,
-        Anchoring::VerifiedWorktreeWrite(trust) => find_anchor(reader, block_ids, Some(trust))?,
+        Anchoring::VerifiedWorktreeWrite(trust) => {
+            find_anchor(reader, block_ids, Some((trust, AnchorSite::WorktreeWrite)))?
+        }
+        #[cfg(test)]
+        Anchoring::VerifiedExtract(trust) => {
+            find_anchor(reader, block_ids, Some((trust, AnchorSite::Extract)))?
+        }
     };
     chain.fallback = fallback;
     let replay_from = match anchor {
@@ -144,14 +160,17 @@ pub(crate) fn replay_chain_capturing(
 /// anchor and the finding.
 ///
 /// **A read-only report** (`trust` is `None`) uses the nearest snapshot that passes the loader (§10.3c ruling 1).
-/// **A worktree write** (`trust` is `Some`) uses the nearest one the anchor-trust function admits: candidates it
-/// finds not usable are skipped silently, back to the distance bound (an older one is farther still); a *recorded*
-/// candidate whose manifest or signature fails ends the search with the finding.
+/// **A verified caller** (`trust` is `Some((trust, site))`) uses the nearest one the anchor-trust function admits for
+/// its own `site`: candidates it finds not usable are skipped silently, back to the distance bound (an older one is
+/// farther still); a *recorded* candidate whose manifest or signature fails ends the search with the finding.
+/// `site` is threaded through from the caller (0.54.0 step 3 Part 2) rather than hardcoded here, so a worktree write
+/// and `extract` -- the identical rule, two different callers -- each count and control their own site
+/// (`anchor_trust.rs`'s own top-of-file doc: "which site consulted it is a name").
 #[allow(clippy::type_complexity)]
 fn find_anchor(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
-    trust: Option<&AnchorTrust>,
+    trust: Option<(&AnchorTrust, AnchorSite)>,
 ) -> Result<(
     Option<(usize, Vec<SnapshotFile>)>,
     Option<SnapshotAnchorFallback>,
@@ -165,9 +184,9 @@ fn find_anchor(
         if block.snapshot_blob_ref.is_none() {
             continue;
         }
-        if let Some(trust) = trust {
+        if let Some((trust, site)) = trust {
             let distance = block_ids.len() - 1 - index;
-            match trust.admit(reader, *block_id, distance, AnchorSite::WorktreeWrite) {
+            match trust.admit(reader, *block_id, distance, site) {
                 Admission::Usable(manifest) => {
                     // A snapshot was loaded (a candidate the function did not admit was skipped without being read).
                     #[cfg(test)]

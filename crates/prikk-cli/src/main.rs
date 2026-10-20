@@ -34,6 +34,7 @@ mod config;
 mod current_branch;
 mod diff;
 mod durable_output;
+mod extract;
 mod key;
 mod key_material;
 mod key_status;
@@ -368,6 +369,12 @@ fn run_tag(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_bundle(args: Vec<String>) -> std::result::Result<(), CliError> {
     let root = current_dir()?;
     bundle::run_bundle(root, args)?;
+    Ok(())
+}
+
+fn run_extract(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let root = current_dir()?;
+    extract::run_extract(root, args)?;
     Ok(())
 }
 

@@ -299,6 +299,44 @@ impl Drop for OwnedProcessHandle {
     }
 }
 
+/// Rename `from` onto `to`, refusing if `to` already exists (`prikk extract`'s own write-safety
+/// ruling, 0.54.0 step 3 Part 2) -- the platform's own no-replace default: `MoveFileExW` without
+/// `MOVEFILE_REPLACE_EXISTING` already refuses when the target exists, for both files and
+/// directories (Microsoft's own documented contract), so this passes no flags at all rather than
+/// adding one. The Linux/macOS counterpart is `rustix::fs::renameat_with(..., RenameFlags::
+/// NOREPLACE)`, in `prikk-store`, which already depends on `rustix`; this crate is the one
+/// workspace member allowed to reach Win32 directly (DC-90), so the Windows half of the same
+/// write-safety rule lives here instead.
+///
+/// # Errors
+///
+/// `to` already exists, or the rename otherwise fails (the OS error, via `GetLastError`).
+#[cfg(windows)]
+pub fn rename_no_replace(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+    fn wide_null(path: &std::path::Path) -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    let from_wide = wide_null(from);
+    let to_wide = wide_null(to);
+    // SAFETY: `from_wide`/`to_wide` are each a valid, NUL-terminated UTF-16 string the OS may read
+    // for the duration of this call only -- both buffers outlive the call (they are not dropped
+    // until this function returns). `dwFlags = 0` passes none of `MoveFileExW`'s own flags, so this
+    // is exactly the platform's own no-replace default, not a flag this function adds.
+    let succeeded = unsafe { MoveFileExW(from_wide.as_ptr(), to_wide.as_ptr(), 0) };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::{
@@ -516,6 +554,45 @@ mod tests {
             path_before, path_after,
             "the rename must actually have been observed, not silently ignored"
         );
+        Ok(())
+    }
+
+    /// `prikk extract`'s own write-safety ruling (0.54.0 step 3 Part 2), pinned directly: an
+    /// existing target directory is never silently replaced. A plain `std::fs::rename` over an
+    /// existing empty directory succeeds on Windows too (the TOCTOU risk `rename_no_replace` exists
+    /// to close is real on every platform, not only Linux -- the design round's own R-A4 confirmed
+    /// this for Linux/macOS by direct test; this is that same confirmation for Windows), so this
+    /// test shows the real control: `rename_no_replace` itself refuses where a plain rename would
+    /// not.
+    #[test]
+    fn rename_no_replace_refuses_an_existing_target_directory() -> std::io::Result<()> {
+        let temporary_root = std::env::temp_dir();
+        let suffix = std::process::id();
+        let source = temporary_root.join(format!("prikk-ffi-norep-src-{suffix}"));
+        let target = temporary_root.join(format!("prikk-ffi-norep-dst-{suffix}"));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::create_dir(&source)?;
+        std::fs::create_dir(&target)?;
+        std::fs::write(source.join("marker.txt"), b"from the source")?;
+
+        let result = super::rename_no_replace(&source, &target);
+
+        assert!(
+            result.is_err(),
+            "rename_no_replace must refuse an existing target, not silently replace it"
+        );
+        assert!(
+            source.join("marker.txt").exists(),
+            "the source must be untouched after a refused rename"
+        );
+        assert!(
+            !target.join("marker.txt").exists(),
+            "the target must be untouched after a refused rename -- never partially overwritten"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&target);
         Ok(())
     }
 }

@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 pub(crate) mod anchor;
 pub(crate) mod apply;
 pub(crate) mod decode;
+pub(crate) mod extract;
 pub(crate) mod read;
 
 pub use anchor::SnapshotAnchorFallback;

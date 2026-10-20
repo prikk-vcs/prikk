@@ -1,0 +1,199 @@
+//! `prikk extract` (0.54.0 step 3 Part 2, design review v2 ruling 2): the files at a point, written
+//! into a brand-new, external, history-free directory. An upper-layer module (RFC 149, the same role
+//! `point_reading.rs` plays for `cat`/`tree`): built on the point resolver and
+//! [`crate::patch_replay::extract`]'s own streamed replay.
+//!
+//! **The one anchoring rule this command uses, stated once more for the reader of this file**:
+//! `extract` anchors only where a writer would (`AnchorTrust::admit`, under its own
+//! [`crate::anchor_trust::AnchorSite::Extract`]) -- never at any snapshot that merely "passes the
+//! loader" the way `cat`/`tree`'s own `Anchoring::ReadOnlyReport` does. Past the admitted-anchor
+//! distance bound, with no admitted anchor in reach, this refuses by name before reading a single
+//! patch unless `allow_full_replay` is set.
+//!
+//! **Streaming, for the caller**: [`ExtractPlan`] never holds a streamed file's bytes -- only its
+//! Blob id ([`ExtractPlanContent::Blob`]) -- so building the plan costs no more than this module's
+//! own replay does (module doc, `patch_replay/extract.rs`). A caller writes each file one at a time,
+//! calling [`read_extract_blob_content`] only when it is actually about to write that one file, over
+//! the **same** `reader` the plan itself was built from, so both phases read one consistent view of
+//! the store.
+
+use prikk_error::Result;
+use prikk_object::ObjectId;
+
+use crate::anchor_trust::AnchorTrust;
+use crate::foundation::layout::RepositoryLayout;
+use crate::object_store::ObjectReader;
+use crate::patch_replay::extract::{ExtractContent, replay_for_extract};
+use crate::patch_replay::read::single_parent_chain;
+use crate::path::{RepoPath, validate_no_path_collisions};
+use crate::point::Point;
+
+/// Where one planned file's content comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractPlanContent {
+    /// Stream straight from this Blob id, read fresh with [`read_extract_blob_content`] only when
+    /// the caller is about to write this one file.
+    Blob(ObjectId),
+    /// Already resident (a text file edited since the admitted anchor, or since genesis).
+    Bytes(Vec<u8>),
+}
+
+/// One file `extract` will write, at its final (possibly renamed) path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExtractPlanEntry {
+    /// Validated repository-relative path, already checked for collisions against every other
+    /// entry in the same plan (case-insensitively).
+    pub path: RepoPath,
+    /// Mode bits.
+    pub mode: u32,
+    /// The content itself.
+    pub content: ExtractPlanContent,
+}
+
+/// What `extract` will write at a point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExtractPlan {
+    /// The point exactly as named: a ref name, or a block id.
+    pub point: String,
+    /// The Block read.
+    pub target_block_id: ObjectId,
+    /// Whether a real admitted anchor was used (`false`) or the replay fell back to a full replay
+    /// from genesis (`true`) -- worded for the CLI exactly as `checkout --snapshot-materialize`
+    /// words its own `provisional:` line.
+    pub provisional: bool,
+    /// Files to write, in canonical path order, with no two colliding under ASCII case folding.
+    pub entries: Vec<ExtractPlanEntry>,
+}
+
+/// **Build the plan for `point`** (RFC 157-style, extended to extract's own admitted-anchor rule):
+/// the pre-walk and the streamed replay (`patch_replay::extract::replay_for_extract`), then
+/// the same case-collision check every write safety checklist in this project reuses
+/// ([`validate_no_path_collisions`]), over the point's own resolved paths, before the caller writes a
+/// single file.
+///
+/// `reader` is a parameter, not opened here, so a caller can read each file's content afterward
+/// (streaming, one at a time) over the identical read-only view this plan was built from
+/// ([`read_extract_blob_content`]).
+///
+/// # Errors
+///
+/// `Precondition` when no admitted anchor exists within the trusted distance bound and
+/// `allow_full_replay` is `false` (naming the distance), or when two of the point's own paths
+/// collide under ASCII case folding; otherwise, the replay's own failures (an unsupported
+/// operation, a missing object, or an integrity mismatch).
+pub fn prepare_extract_plan(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    point: &Point,
+    allow_full_replay: bool,
+) -> Result<ExtractPlan> {
+    let block_ids = single_parent_chain(reader, point.block_id)?;
+    let trust = AnchorTrust::load(layout);
+    let outcome = replay_for_extract(reader, &block_ids, &trust, allow_full_replay)?;
+
+    let paths = outcome
+        .files
+        .iter()
+        .map(|file| RepoPath::parse(&file.path))
+        .collect::<Result<Vec<_>>>()?;
+    validate_no_path_collisions(&paths)?;
+
+    let entries = outcome
+        .files
+        .into_iter()
+        .zip(paths)
+        .map(|(file, path)| ExtractPlanEntry {
+            path,
+            mode: file.mode,
+            content: match file.content {
+                ExtractContent::Blob(blob_id) => ExtractPlanContent::Blob(blob_id),
+                ExtractContent::Resident(bytes) => ExtractPlanContent::Bytes(bytes),
+            },
+        })
+        .collect();
+
+    Ok(ExtractPlan {
+        point: point.name.clone(),
+        target_block_id: point.block_id,
+        provisional: outcome.provisional,
+        entries,
+    })
+}
+
+/// Read one Blob's content, fresh, for `extract`'s own per-file streaming write
+/// ([`ExtractPlanContent::Blob`]). A thin, crate-boundary wrapper: the decoding itself is the same
+/// one every patch-replay reader already uses.
+///
+/// # Errors
+///
+/// The Blob is missing, is not a file-content Blob, or does not decode.
+pub fn read_extract_blob_content(reader: &impl ObjectReader, blob_id: ObjectId) -> Result<Vec<u8>> {
+    Ok(crate::patch_replay::read::read_blob_bytes_with_kind(reader, blob_id)?.1)
+}
+
+/// Rename `from` onto `to`, refusing with the platform's own no-replace default if `to` already
+/// exists, rather than silently replacing it (`prikk extract`'s own write-safety ruling, 0.54.0 step
+/// 3 Part 2, design round 2 R-A4). `to`'s parent directory must already exist.
+///
+/// This is the one all-or-nothing boundary between `extract`'s own temporary sibling directory and
+/// its real target: every file has already been written into the sibling by the time this is
+/// called, so this single rename either makes the whole write visible atomically or fails leaving
+/// neither the sibling renamed nor the target touched.
+///
+/// Placed here, in `prikk-store`, rather than in `prikk-cli` alongside `durable_output.rs`'s own
+/// single-file write: this crate already carries both platform dependencies this needs (`rustix` for
+/// Linux/macOS, `prikk-ffi` for Windows), and adding either as a fresh dependency of `prikk-cli`
+/// would duplicate what is already here for no reason.
+///
+/// # Errors
+///
+/// `to` already exists, or the rename otherwise fails.
+pub fn rename_new_directory_no_replace(
+    from: &std::path::Path,
+    to: &std::path::Path,
+) -> std::io::Result<()> {
+    rename_no_replace_platform(from, to)
+}
+
+/// `renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS -- one call site covers
+/// both (design round 2, R-A4): `rustix::fs::renameat_with` is `cfg(any(apple, linux_kernel,
+/// target_os = "redox"))`, and `RenameFlags::NOREPLACE` maps to the right flag on each. `CWD` as both
+/// directory arguments: `from`/`to` are always absolute (the caller's own target/sibling paths), and
+/// an absolute path argument ignores its paired directory fd under POSIX `*at` semantics either way.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_no_replace_platform(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        from,
+        rustix::fs::CWD,
+        to,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+/// `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` -- the platform's own no-replace default
+/// (design round 2 ruling 4), pinned by `prikk-ffi`'s own Windows test rather than assumed from
+/// documentation alone.
+#[cfg(windows)]
+fn rename_no_replace_platform(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    prikk_ffi::rename_no_replace(from, to)
+}
+
+/// No mechanism is wired for any other target. Refused by name rather than silently falling back to
+/// a replacing rename, which would defeat the whole write-safety rule this function exists to
+/// enforce.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn rename_no_replace_platform(
+    _from: &std::path::Path,
+    _to: &std::path::Path,
+) -> std::io::Result<()> {
+    Err(std::io::Error::other(
+        "no-replace rename has no implementation on this platform",
+    ))
+}
+
+#[cfg(test)]
+mod tests;

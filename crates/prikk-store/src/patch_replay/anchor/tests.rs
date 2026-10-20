@@ -132,3 +132,59 @@ fn only_worktree_writes_use_the_verified_anchor() {
         "callers of the verified worktree-write replay"
     );
 }
+
+/// The mirror control for `extract`'s own site (0.54.0 step 3 Part 2): only `patch_replay/anchor.rs`
+/// names `Anchoring::VerifiedExtract` in production source -- `patch_replay::extract`'s own
+/// `search_admitted_anchor` is a parallel, independent implementation of the identical trust walk
+/// (never holding file content resident, module doc), cross-checked against this shared mechanism
+/// by `patch_replay/extract/tests.rs`'s own trust-rule test rather than calling into it. A new file
+/// naming the variant fails here, naming the file -- the same shape
+/// `only_worktree_writes_use_the_verified_anchor` already gives `VerifiedWorktreeWrite`, so each
+/// site's own control stays independent (`anchor_trust.rs`'s own top-of-file doc).
+#[test]
+fn only_anchor_rs_names_the_extract_verified_anchor_in_production_source() {
+    fn files_naming(needle: &str) -> Vec<PathBuf> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src.clone()];
+        let mut found = Vec::new();
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if path.extension().and_then(|e| e.to_str()) != Some("rs")
+                    || name == "tests.rs"
+                    || path.components().any(|c| c.as_os_str() == "tests")
+                {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if text
+                    .lines()
+                    .any(|line| !line.trim_start().starts_with("//") && line.contains(needle))
+                {
+                    found.push(path.strip_prefix(&src).unwrap_or(&path).to_path_buf());
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+    assert_eq!(
+        files_naming("Anchoring::VerifiedExtract"),
+        [Path::new("patch_replay/anchor.rs")],
+        "only the shared anchoring module may name extract's own verified-anchor variant in \
+         production source"
+    );
+}

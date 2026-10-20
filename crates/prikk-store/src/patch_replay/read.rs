@@ -143,7 +143,7 @@ pub(crate) fn files_to_replay_manifest(
     Ok(ReplayManifest { files: entries })
 }
 
-pub(super) fn read_blob_bytes_with_kind(
+pub(crate) fn read_blob_bytes_with_kind(
     object_store: &impl ObjectReader,
     blob_id: ObjectId,
 ) -> Result<(NodeKind, Vec<u8>)> {

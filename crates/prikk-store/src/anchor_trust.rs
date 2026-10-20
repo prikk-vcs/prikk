@@ -22,11 +22,14 @@
 //! signal: [`Admission::Signal`] carries the finding, and the caller names it (`record_anchor_fallback`, or the finding a
 //! replay already returns) and runs the full derivation.
 //!
-//! **Two users, one rule.** Stack A (`block_state::anchored_parent`: `seal`, `merge`, seal-from-accepted) and RFC 136
+//! **Three users, one rule.** Stack A (`block_state::anchored_parent`: `seal`, `merge`, seal-from-accepted), RFC 136
 //! increment 2b's anchored worktree writes (`patch_replay::anchor`'s `VerifiedWorktreeWrite`, and
-//! `worktree::materialize_snapshot_checkout`'s provisional marker). 2c's anchored *text* is not one of them: it is
-//! hash-checked against the content id the caller expects, so it certifies itself. A read-only report
-//! (`Anchoring::ReadOnlyReport`) shows state as its block signs it and is not one of them either (§10.3c ruling 1).
+//! `worktree::materialize_snapshot_checkout`'s provisional marker), and 0.54.0 step 3 Part 2's `prikk extract`
+//! (`patch_replay::anchor`'s `VerifiedExtract`, `AnchorSite::Extract`) -- a fourth caller of the one function, under
+//! its own site name (`extract` never writes a worktree, so it is not folded into `WorktreeWrite`). 2c's anchored
+//! *text* is not one of them: it is hash-checked against the content id the caller expects, so it certifies itself. A
+//! read-only report (`Anchoring::ReadOnlyReport`) shows state as its block signs it and is not one of them either
+//! (§10.3c ruling 1).
 //!
 //! **Which site consulted it** is a name, counted under `cfg(any(test, feature = "test-support"))` so each call site's
 //! control can show that removing the anchoring *there* turns *its* test red and no other.
@@ -69,6 +72,12 @@ pub(crate) enum AnchorSite {
     /// (0.53.0 step 3, F4; RFC 159 stack B): `lifecycle_cache::incremental::resolve_baseline_state_with`.
     /// Never the forced reanchor and never `verify_divergence` (RFC 159 ruling 5).
     Baseline,
+    /// `prikk extract` (0.54.0 step 3 Part 2, `patch_replay::extract`): a different site from
+    /// [`Self::WorktreeWrite`], even though the rule is identical, because `extract` never writes into
+    /// this repository's own worktree -- it writes a brand-new, external, history-free directory. A
+    /// shared site name would let `extract`'s own control and `WorktreeWrite`'s own control pass or
+    /// fail together for reasons that have nothing to do with each other.
+    Extract,
 }
 
 impl AnchorSite {
@@ -81,6 +90,7 @@ impl AnchorSite {
             Self::WorktreeWrite => "worktree-write",
             Self::SnapshotMaterialize => "snapshot-materialize",
             Self::Baseline => "baseline",
+            Self::Extract => "extract",
         }
     }
 }
@@ -185,8 +195,9 @@ fn count_use(site: AnchorSite) {
 fn count_use(_site: AnchorSite) {}
 
 /// How many times this thread's anchor-trust function admitted an anchor for `site` (`"seal"`, `"merge"`,
-/// `"seal-from-accepted"`, `"worktree-write"` or `"snapshot-materialize"`), since the thread started or the last
-/// [`reset_anchor_uses_for_test_support`]. The per-call-site controls read it; nothing in a shipped build does.
+/// `"seal-from-accepted"`, `"worktree-write"`, `"snapshot-materialize"`, `"baseline"` or `"extract"`), since the
+/// thread started or the last [`reset_anchor_uses_for_test_support`]. The per-call-site controls read it; nothing in
+/// a shipped build does.
 #[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub fn anchor_uses_for_test_support(site: &str) -> usize {

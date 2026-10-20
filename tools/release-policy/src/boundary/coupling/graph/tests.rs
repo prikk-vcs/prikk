@@ -156,7 +156,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // caught a first version's `archive -> lock` cycle): 162 -> 163.
     // 0.52.0 step 2 Part 2A added `foundation::frame_source`, the one `FrameSource` primitive the
     // store's container decode now runs through (RFC 155 §9.4): 163 -> 164.
-    assert_eq!(modules.len(), 164, "modules: {modules:?}");
+    // 0.54.0 step 3 Part 2 added `extract` (upper layer) and `patch_replay::extract` (lower,
+    // `prikk extract`'s own streamed replay): 164 -> 166.
+    assert_eq!(modules.len(), 166, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

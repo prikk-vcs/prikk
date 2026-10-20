@@ -590,11 +590,9 @@ pub(crate) fn print_verify_report(
     // 0.54.0 B1 (RFC 164 Rule E, applied to the object itself): a stored Block or RefState that
     // nothing in committed state reaches never has its publication trust checked -- a harmless,
     // non-blocking warning, never failing `verify`. The bytes stay; no command removes them yet.
-    println!(
-        "unreached objects: {} (reached by no ref, received pointer, queued patch, or sealed \
-         block descending from them; warning, not a trust failure)",
-        report.unreached_objects.len()
-    );
+    // Part 1b: terse, like `unreferenced remnants` above -- the explanation lives on the
+    // per-object warning line below, which already carries it.
+    println!("unreached objects: {}", report.unreached_objects.len());
     for unreached in &report.unreached_objects {
         println!(
             "warning: {} {} is reached by nothing in this repository -- its publication trust was \

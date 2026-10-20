@@ -37,6 +37,7 @@ mod compact;
 mod declaration_resolution;
 mod diff;
 mod doctor;
+mod extract;
 mod format_upgrade;
 mod signature_admission;
 // RFC 131 §2 / RFC 130 §2.3's "foundation" grouping: layout, fsutil, byte_cursor, file_codec,
@@ -191,6 +192,10 @@ pub use doctor::{
     discard_damaged_commits, doctor_repository, plan_discard_damaged_commits, plan_repair_tails,
     plan_restore_queue_target, repair_object_index, repair_pointer_index_tail, repair_repository,
     repair_tails, restore_queue_target,
+};
+pub use extract::{
+    ExtractPlan, ExtractPlanContent, ExtractPlanEntry, prepare_extract_plan,
+    read_extract_blob_content, rename_new_directory_no_replace,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;

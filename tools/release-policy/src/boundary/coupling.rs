@@ -63,7 +63,7 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 28] = [
+const UPPER_LAYER: [&str; 29] = [
     // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
     // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
     // nothing lower reaches it, and it reaches nothing that reaches back into it.
@@ -75,6 +75,10 @@ const UPPER_LAYER: [&str; 28] = [
     // `point_reading` and `line_diff`; reached only by the CLI.
     "diff",
     "doctor",
+    // 0.54.0 step 3 Part 2: `prikk extract`, writing a resolved point's files into a brand-new external
+    // directory through `patch_replay::extract`'s own streamed replay (lower). Built on `patch_replay`,
+    // `point`, `anchor_trust` and `path` (all lower); reached only by the CLI.
+    "extract",
     // RFC 156 §5b: runs `verify` and takes `ActiveLock` before changing the format marker.
     "format_upgrade",
     "history",

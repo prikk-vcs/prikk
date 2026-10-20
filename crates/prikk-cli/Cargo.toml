@@ -37,5 +37,12 @@ pkg-url = "{ repo }/releases/download/{ version }/prikk-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
+# stikk letter 022: the Windows release asset is a .zip with `prikk.exe` at its root, not a .tar.gz
+# -- measured 2026-10-20, `cargo binstall --dry-run --disable-strategies compile,quick-install
+# --targets x86_64-pc-windows-msvc prikk@0.53.0` fails without this override.
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/{ version }/prikk-{ target }.zip"
+pkg-fmt = "zip"
+
 [lints]
 workspace = true

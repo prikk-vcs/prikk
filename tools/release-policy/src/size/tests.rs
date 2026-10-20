@@ -331,7 +331,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // fix for a first version's `archive -> lock` cycle): 163 -> 164.
     // 0.52.0 step 2 Part 2A added `foundation/frame_source.rs`; its own `frame_source/tests.rs` is
     // `cfg(test)`-invisible: 164 -> 165.
-    assert_eq!(store.production_files, 165);
+    // 0.54.0 step 3 Part 2 added `extract.rs` and `patch_replay/extract.rs`; their own `extract/tests.rs`
+    // and `patch_replay/extract/tests.rs` are both `cfg(test)`-invisible: 165 -> 167.
+    assert_eq!(store.production_files, 167);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- **`prikk extract --ref <ref|block-id> <dir> [--allow-full-replay]`** (0.54.0 step 3 Part 2): writes
+  every file at a point into a brand-new, empty, external directory — no repository history, no
+  worktree state. Unlike `cat`/`tree`, which may display any snapshot that merely decodes correctly,
+  `extract` **anchors only where a writer would** — the identical admitted-anchor rule
+  (`AnchorTrust::admit`) `checkout`'s own worktree writes already use, under its own new
+  `AnchorSite::Extract` — because its own output is what a CI job tests and what a forge serves for
+  download. A `remotes/…` ref under a key this repository has not adopted therefore always replays
+  fully from its own genesis; a cheap pre-walk over Block envelopes alone (never a Patch, never a
+  file-content Blob) measures the distance to the nearest admitted snapshot first, and refuses by
+  name — naming the distance found — once that distance exceeds this repository's own checkpoint
+  cadence (63 blocks), unless `--allow-full-replay` is given. Every file whose content has not
+  changed since the admitted anchor is streamed straight from its stored blob id, one file at a time,
+  never held resident past that one file's own size; only a text file an `EditText` has touched since
+  the anchor is held resident, from its first such edit onward; a path renamed after the anchor still
+  streams from its unchanged content, at its new path, tracked by node identity rather than path.
+  Write safety: the point's own resolved paths are refused together on any case-insensitive
+  collision, before the first byte is written; the target directory must not already exist; every
+  file is written into a temporary sibling (`<dir>.prikk-extract-tmp`) first, which refuses by name
+  rather than reusing or deleting one left by an interrupted earlier run; the sibling becomes the
+  real target only through one no-replace rename (`rustix::fs::renameat_with(...,
+  RenameFlags::NOREPLACE)` on Linux/macOS, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on
+  Windows), so an existing target is never silently replaced. `provisional: yes|no` is worded exactly
+  as `checkout --snapshot-materialize` words it. Never writes into the repository: no lock, cache,
+  marker, or worktree write anywhere in the command.
+
 ### Output changes
 
 - **`verify` no longer fails forever on a stored `Block`/`RefState` that nothing in committed
@@ -16,12 +43,25 @@
   *reference*, now applied to the object itself. `verify`'s own exit code stays `0` on this alone.
   **Nothing is deleted** — the bytes stay, and no command removes them yet. Before, with an
   unadopted-key import whose pointer has been replaced: `error: repository has publication-trust
-  issues` (exit `1`). After: exit `0`, with `unreached objects: N (...)` and one warning line per
+  issues` (exit `1`). After: exit `0`, with `unreached objects: N` and one warning line per
   object. `--format json` gains an additive `unreached_objects` array (`object_id`/`object_type`
   per entry); `unreferenced_remnants` is not retroactively added to the JSON schema by this change.
   While a received pointer is still present, everything it reaches stays reached and `verify`
   keeps failing on it exactly as before — this changes nothing for an import that has not yet been
-  superseded.
+  superseded. **`verify` prints the `unreached objects: N` count line on every run, the same as
+  `unreferenced remnants: N`** — including `N = 0` — with the explanation carried only on the
+  per-object warning lines below it, not repeated on the count line itself (Part 1b polish).
+
+### Fixed
+
+- **`cargo binstall` could not install prikk's Windows release** (found by stikk's letter 022).
+  `[package.metadata.binstall]` named `prikk-{ target }.tar.gz`/`pkg-fmt = "tgz"` for every target,
+  but the Windows release asset is a `.zip` holding `prikk.exe` at its root. Measured 2026-10-20:
+  `cargo binstall --dry-run --disable-strategies compile,quick-install --targets
+  x86_64-pc-windows-msvc prikk@0.53.0` failed ("Fallback to cargo-install is disabled"); the Linux
+  target already succeeded. Fixed by a
+  `[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]` section naming the `.zip` asset
+  and `pkg-fmt = "zip"`; confirmed green with the same dry-run command.
 
 ### Changed
 
