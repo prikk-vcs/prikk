@@ -43,7 +43,11 @@ use prikk_object::{
 use crate::commit_boundary::worktree_patch::{
     WorktreePatchCommitOptions, commit_worktree_changes_signed,
 };
+use crate::extract::{ExtractPlanContent, prepare_extract_plan, read_extract_blob_content};
 use crate::foundation::fsutil::read_tally;
+use crate::object_store::ObjectReadSnapshot;
+use crate::point::{Point, PointKind};
+use crate::refs::read_current_ref_tip_block;
 use crate::rfc111_seal_simulation::simulate_one_seal;
 use crate::test_gates::test_support::{dummy_signature, unique_temp_dir};
 use crate::worktree_status::worktree_status;
@@ -557,6 +561,32 @@ fn queued_commit(layout: &RepositoryLayout) -> Result<()> {
     Ok(())
 }
 
+/// **0.54.0 step 3 Part 4: `prikk extract`'s own whole, real cost** -- not planning alone (Part
+/// 3c's own correction: a planning-only figure, presented without saying so, reads as the whole
+/// command's own cost, which it is not). This mirrors `crates/prikk-cli/src/extract.rs`'s own
+/// `write_plan` exactly: `prepare_extract_plan` builds the plan (never reading a `Blob` entry's own
+/// content, by the streaming design `patch_replay::extract` keeps), then every `Blob` entry is read
+/// once via `read_extract_blob_content`, the identical read `write_plan` makes before writing each
+/// file -- a `Bytes` entry (a text file edited since the admitted anchor) is already resident and
+/// needs no further read, so it is skipped here exactly as `write_plan` skips it.
+fn extract_check(layout: &RepositoryLayout) -> Result<()> {
+    let reader = ObjectReadSnapshot::open(layout)?;
+    let tip = read_current_ref_tip_block(layout, &reader, REF_NAME)?;
+    let point = Point {
+        name: REF_NAME.to_string(),
+        kind: PointKind::LocalBranch,
+        block_id: tip,
+    };
+    read_tally::reset();
+    let plan = prepare_extract_plan(layout, &reader, &point, false)?;
+    for entry in &plan.entries {
+        if let ExtractPlanContent::Blob(blob_id) = &entry.content {
+            let _ = read_extract_blob_content(&reader, *blob_id)?;
+        }
+    }
+    Ok(())
+}
+
 const OPERATIONS: &[Operation] = &[
     Operation {
         name: "object append",
@@ -731,6 +761,30 @@ const OPERATIONS: &[Operation] = &[
               catch",
         run: one_file_commit,
     },
+    Operation {
+        name: "extract (since checkpoint)",
+        axis: Axis::CheckpointGap,
+        expectation: Expectation::FollowsContent {
+            finding: "0.54.0 step 3 Part 4: extract's own whole command (the plan plus every Blob \
+                       entry's one write-time read, mirroring `write_plan`) streams every file \
+                       whose content has not changed since the admitted anchor straight from its \
+                       stored blob id -- so its cost follows the content added since the checkpoint \
+                       (the one file this fixture rewrites each generation) on purpose, not the \
+                       store's own total content: measured at 26,303,721 -> 42,523,881 bytes from 1 \
+                       to 16 MiB added since the checkpoint (this report)",
+            floor: 8 << 20,
+            ceiling: 63_785_822, // 1.5x the 42,523,881 bytes measured when this ceiling was written
+        },
+        allowance: 4096,
+        why: "0.54.0 step 3 Part 4: extract's own whole command (plan plus every Blob entry's one \
+              read, mirroring `write_plan`) streams every file whose content has not changed since \
+              the admitted anchor straight from its stored blob id, one at a time, by design -- so \
+              its cost follows the content added since the checkpoint (the single growing file this \
+              fixture rewrites) on purpose, not the store's own total content; a cost that instead \
+              followed the *whole* lineage (the admitted anchor lost, every binary held resident \
+              again) is what the ceiling exists to catch",
+        run: extract_check,
+    },
 ];
 
 /// The small and the large store of the operation's own axis: `(small, large)` are the two sizes on that axis.
@@ -882,6 +936,44 @@ fn losing_the_checkpoint_anchor_fails_the_since_checkpoint_ceiling() -> Result<(
         "losing the checkpoint anchor must read past the row's own {ceiling}-byte ceiling (full \
          replay from genesis, {CHECKPOINT_GAP_GENESIS_CONTENT} bytes of its own plus the content \
          since it), got {large} -- or the ceiling is not sensitive to losing the anchor"
+    );
+    Ok(())
+}
+
+/// 0.54.0 step 3 Part 4's own control, the identical shape as the row above, for `extract`
+/// instead of a commit: losing the checkpoint anchor forces a full replay from genesis, reading
+/// every one of `CHECKPOINT_GAP`'s own `ReplaceBinary` operations' new blob in full (to validate its
+/// kind, 0.54.0 step 3 Part 2's own `953ae32c` fix) rather than streaming only the final content
+/// once from an admitted anchor -- the "since checkpoint" row's own ceiling must fail here, or it is
+/// not sensitive to the thing it is meant to catch.
+#[test]
+fn losing_the_checkpoint_anchor_fails_the_extract_since_checkpoint_ceiling() -> Result<()> {
+    fn measure_without_anchor(size: usize) -> Result<u64> {
+        let (layout, root) = store_of_checkpoint_gap(size)?;
+        std::fs::remove_file(layout.cache_dir().join("replay-verified-blocks.v1"))?;
+        let total = {
+            read_tally::reset();
+            extract_check(&layout)?;
+            read_tally::snapshot().values().sum()
+        };
+        let _ = std::fs::remove_dir_all(root);
+        Ok(total)
+    }
+    let large = measure_without_anchor(LARGE_SINCE_CHECKPOINT)?;
+    let row = OPERATIONS
+        .iter()
+        .find(|op| op.name == "extract (since checkpoint)")
+        .expect("the row exists");
+    let Expectation::FollowsContent { ceiling, .. } = &row.expectation else {
+        panic!("the row's own expectation must be FollowsContent");
+    };
+    let ceiling = *ceiling;
+    assert!(
+        large > ceiling,
+        "losing the checkpoint anchor must read past the row's own {ceiling}-byte ceiling (every \
+         ReplaceBinary's own new blob read in full to validate its kind, {CHECKPOINT_GAP} times, \
+         plus {CHECKPOINT_GAP_GENESIS_CONTENT} bytes for genesis's own CreateFile), got {large} -- \
+         or the ceiling is not sensitive to losing the anchor"
     );
     Ok(())
 }
