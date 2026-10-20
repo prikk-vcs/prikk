@@ -236,6 +236,23 @@ pub(crate) fn print_verify_report_json(
     if !prikk_store::VerificationStage::ALL.is_empty() {
         json.push_str("\n  ");
     }
+    json.push_str("],\n");
+    // 0.54.0 B1: a new field only -- `unreferenced_remnants` has no JSON field today either, and
+    // backfilling that pre-existing gap is out of this change's own scope.
+    json.push_str("  \"unreached_objects\": [");
+    for (index, unreached) in report.unreached_objects.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"object_id\": ");
+        json.push_str(&escape_json_string(&unreached.object_id.to_string()));
+        json.push_str(", \"object_type\": ");
+        json.push_str(&escape_json_string(&unreached.object_type.to_string()));
+        json.push('}');
+    }
+    if !report.unreached_objects.is_empty() {
+        json.push_str("\n  ");
+    }
     json.push_str("]\n}");
     println!("{json}");
     Ok(())
@@ -568,6 +585,21 @@ pub(crate) fn print_verify_report(
                 &remnant.missing_role,
                 &remnant.missing_object_id
             )
+        );
+    }
+    // 0.54.0 B1 (RFC 164 Rule E, applied to the object itself): a stored Block or RefState that
+    // nothing in committed state reaches never has its publication trust checked -- a harmless,
+    // non-blocking warning, never failing `verify`. The bytes stay; no command removes them yet.
+    println!(
+        "unreached objects: {} (reached by no ref, received pointer, queued patch, or sealed \
+         block descending from them; warning, not a trust failure)",
+        report.unreached_objects.len()
+    );
+    for unreached in &report.unreached_objects {
+        println!(
+            "warning: {} {} is reached by nothing in this repository -- its publication trust was \
+             not checked; the bytes stay, and no command removes them yet",
+            unreached.object_type, unreached.object_id
         );
     }
     for append in &report.object_interrupted_appends {

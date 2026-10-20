@@ -1347,6 +1347,21 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     "re-run the import if you still have the bundle; otherwise it is harmless",
                 ));
             }
+            // 0.54.0 B1 (RFC 164 Rule E, applied to the object itself): a stored Block or RefState
+            // that nothing in committed state reaches never has its publication trust checked --
+            // never repaired or removed, the bytes stay, mirroring unreferenced_remnants's own
+            // mapping immediately above for the sibling consumption site.
+            for unreached in &verification.unreached_objects {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-UNREACHED-OBJECT",
+                    format!(
+                        "{} {} is reached by nothing in this repository; its publication trust was \
+                         not checked",
+                        unreached.object_type, unreached.object_id
+                    ),
+                    "the bytes stay; no command removes them yet",
+                ));
+            }
             for path in &verification.object_temp_paths {
                 let name = path
                     .file_name()

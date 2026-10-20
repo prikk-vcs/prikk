@@ -15,6 +15,7 @@ mod root_authority;
 mod row10_substituted_earlier_record;
 mod stage_containment;
 mod trust;
+mod unreached_objects;
 mod wal_cluster;
 
 use prikk_error::{PrikkError, Result};
@@ -29,14 +30,14 @@ use crate::wal::{WalRecord, encode_record_for_test};
 use crate::{
     ActiveWalMetadataStatus, AuthorSignatureVerification, AuthorSigner, BlockStateStatus,
     DEFAULT_ACTIVE_NAME, Ed25519AuthorSigner, FileObjectStore, ObjectItemStatus,
-    ObjectVerification, ObjectWriter, RepositoryLayout, RepositoryVerification, StageStatus,
-    VerificationStage, Wal, author_signature, derive_next_state_root, verify_repository,
-    write_active_ref_metadata,
+    ObjectVerification, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
+    RepositoryVerification, StageStatus, VerificationStage, Wal, author_signature,
+    derive_next_state_root, verify_repository, write_active_ref_metadata,
 };
 
 use crate::test_gates::test_support::{
     dummy_signature, maintainer_signature, rollback_patch_envelope, sample_object_id,
-    signed_patch_envelope, signed_ref_state_envelope, unique_temp_dir,
+    signed_patch_envelope, signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
 };
 
 /// DC-95 Stage 2 Level 1: assert that `stage` resolved to `Failed` with a message containing
@@ -106,6 +107,35 @@ pub(super) fn assert_unreferenced_remnant(
         found,
         "expected an unreferenced remnant for owner {owner} with role {expected_role:?}, got: {:?}",
         report.unreferenced_remnants
+    );
+}
+
+/// 0.54.0 B1 (RFC 164 Rule E, applied to the object itself): assert that `report.unreached_objects`
+/// names `object_id` with the given `object_type`, and that `verify` does not fail publication
+/// trust over it (mirrors [`assert_unreferenced_remnant`] for the new, sibling consumption site).
+pub(super) fn assert_unreached_object(
+    report: &RepositoryVerification,
+    object_id: ObjectId,
+    object_type: ObjectType,
+) {
+    assert!(
+        !report.has_publication_trust_issues()
+            || report
+                .publication_trust_issues
+                .iter()
+                .all(|issue| !issue.message.contains(&object_id.to_string())),
+        "an unreached object must never itself be named in a publication-trust issue: {object_id}, \
+         got: {:?}",
+        report.publication_trust_issues
+    );
+    let found = report
+        .unreached_objects
+        .iter()
+        .any(|unreached| unreached.object_id == object_id && unreached.object_type == object_type);
+    assert!(
+        found,
+        "expected an unreached object {object_id} of type {object_type:?}, got: {:?}",
+        report.unreached_objects
     );
 }
 
@@ -545,6 +575,31 @@ fn write_signed_block(store: &mut FileObjectStore, payload: &BlockPayload) -> Re
     let mut block = ObjectEnvelope::unsigned(ObjectType::Block, 2, payload_bytes);
     block.add_signature(maintainer_signature())?;
     store.write_object(&block)
+}
+
+/// 0.54.0 B1: publishes `ref_name` at `target_object_id`, signed with the same zero-trust
+/// `test_support::maintainer_signature()` this file's own fixtures already use -- reaches a Block
+/// the same way a real branch would, without adopting any key (so a fixture testing a missing or
+/// malformed trust *policy* keeps that intent: there is still no adopted key, only now a reachable
+/// object for the policy check to actually run against). Many of this file's pre-B1 fixtures relied
+/// on `verify_objects` checking every persisted object's trust regardless of reachability; B1 made
+/// that reachability-gated, so a fixture asserting a trust finding on an otherwise-unpublished
+/// object now needs this to keep reaching it.
+fn publish_root_branch(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    target_object_id: ObjectId,
+) -> Result<()> {
+    let ref_state = signed_ref_state_envelope(ref_name, None, target_object_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = signed_ref_update_envelope(ref_name, None, ref_state_id, target_object_id, 1);
+    RefStore::new(layout.clone()).publish(&RefPublication {
+        ref_name: ref_name.to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    })?;
+    Ok(())
 }
 
 /// Seals a child block over `parent` with one `CreateFile` patch at `path` — real, replayable
@@ -1463,6 +1518,9 @@ fn verify_repository_flags_untrusted_block_signer_and_clears_once_trusted() -> R
         merge_baseline_block_id: None,
     };
     let untrusted_block_id = write_signed_block(&mut store, &untrusted_payload)?;
+    // 0.54.0 B1: reached, so its trust is actually checked -- an unreached object's signature is
+    // no longer checked at all, which would otherwise make this fixture assert nothing.
+    publish_root_branch(&layout, "heads/untrusted", untrusted_block_id)?;
 
     // A second, independent Root block (no relationship to the first needed -- verify_objects scans
     // every persisted object regardless of any ref pointing to it, matching every other block-only
@@ -1496,6 +1554,9 @@ fn verify_repository_flags_untrusted_block_signer_and_clears_once_trusted() -> R
         trusted_id,
     )?)?;
     store.write_object(&trusted_envelope)?;
+    // 0.54.0 B1: reached too, so this is a genuine "checked and trusted" control, not merely
+    // "never checked."
+    publish_root_branch(&layout, "heads/trusted", trusted_id)?;
 
     let report = verify_repository(&layout)?;
     assert!(report.has_publication_trust_issues());
@@ -1532,7 +1593,6 @@ fn verify_repository_flags_untrusted_block_signer_and_clears_once_trusted() -> R
 fn verify_repository_flags_untrusted_ref_state_signer_and_clears_once_trusted() -> Result<()> {
     let root = unique_temp_dir("verify-untrusted-refstate-signer");
     let layout = RepositoryLayout::init(root.clone())?;
-    let mut store = FileObjectStore::new(layout.clone());
 
     let trusted_signer =
         crate::Ed25519MaintainerSigner::from_seed("verify-trust-maintainer-rs", &[0x64; 32])?;
@@ -1549,7 +1609,18 @@ fn verify_repository_flags_untrusted_ref_state_signer_and_clears_once_trusted() 
         sample_object_id("untrusted-target"),
         1,
     );
-    let untrusted_id = store.write_object(&untrusted_envelope)?;
+    let untrusted_id = untrusted_envelope.object_id();
+    // 0.54.0 B1: publish it as a real, live ref pointer, not an orphaned write -- reaches it, so
+    // its trust is actually checked (an unreached RefState's signature is no longer checked at
+    // all). `publish_root_branch` builds the identical envelope from the same four inputs
+    // (deterministic signing: `signed_ref_state_envelope`'s own placeholder signature), so this is
+    // the same object `untrusted_id` already names, now registered as `heads/untrusted`'s own live
+    // pointer instead of merely written.
+    publish_root_branch(
+        &layout,
+        "heads/untrusted",
+        sample_object_id("untrusted-target"),
+    )?;
 
     let trusted_payload = prikk_object::RefStatePayload {
         ref_name: "heads/trusted".to_string(),
@@ -1568,7 +1639,18 @@ fn verify_repository_flags_untrusted_ref_state_signer_and_clears_once_trusted() 
         ObjectType::RefState,
         trusted_id,
     )?)?;
-    store.write_object(&trusted_envelope)?;
+    // 0.54.0 B1: published as a real, live ref pointer (a matching RefUpdate's own signer is not
+    // under test here, so the zero-trust placeholder suffices), so this is a genuine "checked and
+    // trusted" control, not merely "never checked."
+    let trusted_target = sample_object_id("trusted-target");
+    let trusted_update =
+        signed_ref_update_envelope("heads/trusted", None, trusted_id, trusted_target, 1);
+    RefStore::new(layout.clone()).publish(&RefPublication {
+        ref_name: "heads/trusted".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state: trusted_envelope,
+        ref_update: trusted_update,
+    })?;
 
     let report = verify_repository(&layout)?;
     assert!(report.has_publication_trust_issues());
@@ -1688,7 +1770,7 @@ fn verify_repository_detects_invalid_trust_policy() -> Result<()> {
     let layout = RepositoryLayout::init(missing_root.clone())?;
     let mut store = FileObjectStore::new(layout.clone());
     let state_merkle_root = derive_next_state_root(&store, None, &[])?;
-    write_signed_block(
+    let block_id = write_signed_block(
         &mut store,
         &BlockPayload {
             parent_block_ids: Vec::new(),
@@ -1700,6 +1782,9 @@ fn verify_repository_detects_invalid_trust_policy() -> Result<()> {
             merge_baseline_block_id: None,
         },
     )?;
+    // 0.54.0 B1: reached, so the policy check still runs against it -- an unreached object's trust
+    // is no longer checked at all, which would otherwise make this fixture assert nothing.
+    publish_root_branch(&layout, "heads/main", block_id)?;
     let report = verify_repository(&layout)?;
     assert!(report.has_publication_trust_issues());
     assert!(
@@ -1720,7 +1805,7 @@ fn verify_repository_detects_invalid_trust_policy() -> Result<()> {
     )?;
     let mut store = FileObjectStore::new(layout.clone());
     let state_merkle_root = derive_next_state_root(&store, None, &[])?;
-    write_signed_block(
+    let block_id = write_signed_block(
         &mut store,
         &BlockPayload {
             parent_block_ids: Vec::new(),
@@ -1732,6 +1817,8 @@ fn verify_repository_detects_invalid_trust_policy() -> Result<()> {
             merge_baseline_block_id: None,
         },
     )?;
+    // 0.54.0 B1: same reason as the missing-policy half above.
+    publish_root_branch(&layout, "heads/main", block_id)?;
     let report = verify_repository(&layout)?;
     assert!(report.has_publication_trust_issues());
     assert!(

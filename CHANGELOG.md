@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Output changes
+
+- **`verify` no longer fails forever on a stored `Block`/`RefState` that nothing in committed
+  state reaches any more (RFC 164 Rule E, B1).** Before this round, every `Block` and `RefState`
+  had its publication trust checked regardless of reachability, so content imported under a key
+  this repository never adopted kept failing `verify`'s publication-trust check even after the
+  received pointer that named it was replaced by a later, sound import (0.52.0's own documented
+  Security limitation, `docs/src/reference/current-state.md`). Now, an object reachable through no
+  local ref, received pointer, queued patch, or sealed block descending from them has its trust
+  check skipped and is reported instead as a counted, non-blocking **unreached object** warning —
+  the identical "nothing reaches it" test `UnreferencedRemnant` already applies to a dangling
+  *reference*, now applied to the object itself. `verify`'s own exit code stays `0` on this alone.
+  **Nothing is deleted** — the bytes stay, and no command removes them yet. Before, with an
+  unadopted-key import whose pointer has been replaced: `error: repository has publication-trust
+  issues` (exit `1`). After: exit `0`, with `unreached objects: N (...)` and one warning line per
+  object. `--format json` gains an additive `unreached_objects` array (`object_id`/`object_type`
+  per entry); `unreferenced_remnants` is not retroactively added to the JSON schema by this change.
+  While a received pointer is still present, everything it reaches stays reached and `verify`
+  keeps failing on it exactly as before — this changes nothing for an import that has not yet been
+  superseded.
+
 ### Changed
 
 - **A commit reads the queue twice, not three times.** `commit` held the active-session lock

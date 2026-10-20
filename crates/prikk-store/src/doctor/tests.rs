@@ -397,27 +397,23 @@ fn doctor_reports_a_required_directory_occupied_by_a_file() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// DC-95 Stage 2 Level 1: a hard error inside a verification stage no longer aborts
-/// `verify_repository` itself -- it's contained as a `Failed` outcome for that stage, so
-/// `doctor_repository` still gets a full `RepositoryVerification` to report against (`verification`
-/// is `Some`, not `None`), and the stage-outcome loop is what makes doctor refuse to call the
-/// repository healthy, not the absence of a report.
+/// DC-95 Stage 2 Level 1's own containment machinery (independent findings on the same object both
+/// surviving, `verification` staying `Some`) is proven generally by `verify/tests/stage_containment.rs`
+/// -- this fixture is not that proof, only an illustration of it that happened to use two reachability-
+/// sensitive findings on the same, deliberately unreferenced Block.
 ///
-/// **One error, one warning -- not two errors.** This fixture's Block is signed by `maintainer_
-/// signature()` (aliased `legacy_maintainer_signature` here), never adopted via `add_trusted_
-/// maintainer` -- the DC-95 Stage 1 "fake signer" hazard, deliberately reused here -- which is the
-/// one error (`PRIKK-TRUST-POLICY-INVALID`/`PRIKK-TRUST-PUBLICATION-UNTRUSTED`, pushed into the
-/// shared `PublicationTrustVerifier`, which is what makes `doctor` refuse to call the repository
-/// healthy). **RFC 164 Rule E (0.49.0): the missing-patch defect is no longer a second error.** This
-/// Block is never published by any ref, received pointer, or queued patch -- an unreferenced
-/// remnant, not damage -- so it surfaces as a warning (`PRIKK-DOCTOR-UNREFERENCED-REMNANT`) instead
-/// of the `Failed` stage outcome the missing patch used to produce (both in Phase A's own check and,
-/// before that fix, redundantly in Phase B's topological replay too). Before DC-95 Stage 2 Level 1,
-/// only one of the (then two) errors was ever visible at all -- the first hard error any object hit
-/// aborted everything after it; that containment property is what this test still exists to prove,
-/// unchanged by Rule E's own reclassification of which finding is an error versus a warning.
+/// **0.54.0 B1 (RFC 164 Rule E, applied to the object itself) changed this fixture's own outcome, on
+/// purpose.** Before B1: this Block's untrusted signature (`maintainer_signature()`, aliased
+/// `legacy_maintainer_signature` here, never adopted via `add_trusted_maintainer` -- the DC-95 Stage 1
+/// "fake signer" hazard) was a hard error regardless of reachability, coexisting with its own missing-
+/// patch reference's own warning (`PRIKK-DOCTOR-UNREFERENCED-REMNANT`, since this Block is never
+/// published by any ref, received pointer, or queued patch -- RFC 164 Rule E, 0.49.0). **After B1:** an
+/// unreached Block's publication trust is not checked at all -- the untrusted signature is now *also* a
+/// warning (`PRIKK-DOCTOR-UNREACHED-OBJECT`), not an error, so this exact fixture now has zero errors and
+/// `doctor` correctly calls the repository healthy. This is the intended behavior change, demonstrated
+/// here with the one pre-existing fixture that happened to exercise it, not a regression.
 #[test]
-fn doctor_reports_verification_error() {
+fn doctor_reports_an_unreached_untrusted_signature_as_a_warning_not_an_error() {
     let root = unique_temp_dir("doctor-bad-block");
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
@@ -440,15 +436,27 @@ fn doctor_reports_verification_error() {
             assert!(block.add_signature(legacy_maintainer_signature()).is_ok());
             assert!(store.write_object(&block).is_ok());
             let report = doctor_repository(&layout);
-            assert!(!report.is_healthy());
-            assert_eq!(report.count_by_severity(DoctorSeverity::Error), 1);
-            assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 1);
+            assert!(
+                report.is_healthy(),
+                "an unreached Block's untrusted signature must no longer be an error: {:?}",
+                report.issues
+            );
+            assert_eq!(report.count_by_severity(DoctorSeverity::Error), 0);
+            assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 2);
             assert!(
                 report
                     .issues
                     .iter()
                     .any(|issue| issue.code == "PRIKK-DOCTOR-UNREFERENCED-REMNANT"),
                 "expected the missing-patch defect to surface as a remnant warning: {:?}",
+                report.issues
+            );
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.code == "PRIKK-DOCTOR-UNREACHED-OBJECT"),
+                "expected the untrusted signature to surface as an unreached-object warning: {:?}",
                 report.issues
             );
             assert!(report.verification.is_some());
@@ -777,8 +785,9 @@ fn repair_repository_refusal_message_does_not_blame_verify_for_a_doctor_level_ch
 /// stage-outcome loop in `doctor_repository` mapping every non-`Evaluated` stage to
 /// `DoctorSeverity::Error` uniformly, not from `verify_repository` itself returning `Err`.
 ///
-/// Covers two stages deliberately not the one `doctor_reports_verification_error` above already
-/// exercises (`Objects`), to demonstrate the refusal holds regardless of which stage failed --
+/// Covers two stages deliberately not the one `doctor_reports_an_unreached_untrusted_signature_as_a_
+/// warning_not_an_error` above already exercises (`Objects`), to demonstrate the refusal holds
+/// regardless of which stage failed --
 /// `Refs` (a dangling ref target) and `WalReplay` (a checksum-corrupted active record).
 ///
 /// **Function name now describes Level 1's framing, not Level 2's.** DC-95 Stage 2 Level 2 (refs

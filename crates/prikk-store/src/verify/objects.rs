@@ -114,6 +114,10 @@ pub(super) struct ObjectSummary {
     /// RFC 164 Rule E: a stored object's own dangling reference, when the object making it is not
     /// itself reachable from committed state.
     pub(super) unreferenced_remnants: Vec<super::UnreferencedRemnant>,
+    /// 0.54.0 B1: a stored `Block` or `RefState` that nothing in committed state reaches -- the
+    /// identical reachability test above, applied to the object itself rather than one of its
+    /// references.
+    pub(super) unreached_objects: Vec<super::UnreachedObject>,
 }
 
 impl ObjectSummary {
@@ -130,6 +134,7 @@ impl ObjectSummary {
             index_interior_damage: false,
             object_container_tails: Vec::new(),
             unreferenced_remnants: Vec::new(),
+            unreached_objects: Vec::new(),
         }
     }
 
@@ -144,6 +149,7 @@ impl ObjectSummary {
         self.interrupted_appends.extend(other.interrupted_appends);
         self.object_container_tails
             .extend(other.object_container_tails);
+        self.unreached_objects.extend(other.unreached_objects);
         self.unreferenced_remnants
             .extend(other.unreferenced_remnants);
     }
@@ -407,6 +413,7 @@ fn verify_object_type_container(
             classifier: super::ReachabilityClassifier {
                 reachable,
                 remnants: &mut summary.unreferenced_remnants,
+                unreached: &mut summary.unreached_objects,
             },
         };
         match verify_object_record(
@@ -490,7 +497,22 @@ fn verify_object_record(
         },
     )?;
     let sealed_by_key_id = if matches!(object_type, ObjectType::Block | ObjectType::RefState) {
-        trust_verifier.verify(envelope)?
+        // 0.54.0 B1 (RFC 164 Rule E, a second consumption site of the same `reachable` set
+        // `verify_block_payload` already reads below): an object nothing in committed state
+        // reaches never had its publication trust checked by anyone before this object itself was
+        // reached, so a crafted or abandoned signature on it is not this repository's problem to
+        // flag -- it is recorded as an unreached object (a warning) instead of a trust issue. An
+        // object that *is* reached is checked exactly as before this change; nothing here weakens
+        // that.
+        if ctx.classifier.reachable.contains(&object_id) {
+            trust_verifier.verify(envelope)?
+        } else {
+            ctx.classifier.unreached.push(super::UnreachedObject {
+                object_id,
+                object_type,
+            });
+            None
+        }
     } else {
         None
     };

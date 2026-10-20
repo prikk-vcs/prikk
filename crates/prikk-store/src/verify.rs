@@ -676,6 +676,11 @@ pub struct RepositoryVerification {
     /// itself reachable from committed state -- a harmless remnant, not damage. Empty when the
     /// objects stage did not evaluate.
     pub unreferenced_remnants: Vec<UnreferencedRemnant>,
+    /// 0.54.0 B1 (RFC 164 Rule E, applied to the object itself rather than one of its references): a
+    /// stored `Block` or `RefState` that nothing in committed state reaches. Its publication trust
+    /// is not checked, so it cannot contribute to `publication_trust_issues`; reported here as a
+    /// counted, non-blocking warning instead. Empty when the objects stage did not evaluate.
+    pub unreached_objects: Vec<UnreachedObject>,
     /// Number of trailing bytes in the active WAL that look like an incomplete final record. `None`
     /// when the WAL-replay stage did not evaluate to completion.
     pub trailing_partial_wal_bytes: Option<usize>,
@@ -1159,12 +1164,39 @@ pub struct UnreferencedRemnant {
     pub missing_object_id: ObjectId,
 }
 
-/// RFC 164 Rule E: `reachable` and `remnants` threaded together purely to keep the surrounding
-/// functions' own argument counts low (`clippy::too_many_arguments`). `reachable` is shared,
-/// read-only state computed once per `verify` run; `remnants` accumulates this run's own findings.
+/// 0.54.0 B1 (RFC 164 Rule E, a second consumption site of the same `reachable` computation): a
+/// stored `Block` or `RefState` that nothing in committed state reaches -- the identical "nothing
+/// reaches it" test `UnreferencedRemnant` already uses for a *reference*, now applied to the
+/// object itself. Its own publication-trust check is skipped (nothing is pushed into
+/// `PublicationTrustVerifier::issues`), so it no longer fails `verify`; its bytes stay, and no
+/// command removes them yet.
+///
+/// The security property this preserves, in one sentence: trust never becomes "unreachable, so
+/// ignored" through a crafted pointer (`reachable` is built forward from this repository's own
+/// committed roots only -- `verify/reachability.rs`'s own module doc), and never becomes
+/// "reachable" through an object's own claims (expansion only ever follows a field read out of an
+/// object already in `reached`). An object recorded here is reclassified as reachable (and its
+/// trust checked again) on the very next run if something starts naming it, the same as
+/// `UnreferencedRemnant`'s own reachability is recomputed fresh every time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnreachedObject {
+    /// The unreached object's own id.
+    pub object_id: ObjectId,
+    /// The unreached object's own type (always `Block` or `RefState` -- the two types publication
+    /// trust applies to; see `trust.rs`'s own DC-78 §D2 doc).
+    pub object_type: ObjectType,
+}
+
+/// RFC 164 Rule E: `reachable`, `remnants` and `unreached` threaded together purely to keep the
+/// surrounding functions' own argument counts low (`clippy::too_many_arguments`). `reachable` is
+/// shared, read-only state computed once per `verify` run; `remnants` and `unreached` each
+/// accumulate this run's own findings, at their own, separate consumption sites (a dangling
+/// *reference*, and the object itself).
 pub(crate) struct ReachabilityClassifier<'a> {
     pub(crate) reachable: &'a std::collections::BTreeSet<ObjectId>,
     pub(crate) remnants: &'a mut Vec<UnreferencedRemnant>,
+    pub(crate) unreached: &'a mut Vec<UnreachedObject>,
 }
 
 /// A `Merge` block (DC-75) whose recorded `merge_baseline_block_id` is not a common ancestor of its
@@ -1814,6 +1846,10 @@ pub fn verify_repository_with_options(
         .as_ref()
         .map(|summary| summary.unreferenced_remnants.clone())
         .unwrap_or_default();
+    let unreached_objects = object_summary
+        .as_ref()
+        .map(|summary| summary.unreached_objects.clone())
+        .unwrap_or_default();
     let trailing_partial_object_index_bytes = object_summary
         .as_ref()
         .map(|summary| summary.trailing_partial_index_bytes);
@@ -2224,6 +2260,7 @@ pub fn verify_repository_with_options(
         object_interrupted_appends,
         object_container_tails,
         unreferenced_remnants,
+        unreached_objects,
         // 0.51.0 step 1 Part B item 1 (020's grade): a record the commit witness explains as
         // acknowledged damage is not a tail -- it is complete, written, and already named by the
         // witness, not an unresolved crash shape -- so it is not counted as trailing partial bytes.

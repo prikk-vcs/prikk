@@ -154,7 +154,10 @@ fn removing_a_declaration_names_its_file() {
         // evidence;`, the one seam through the otherwise-private `ref_publication` submodule, so
         // `archive::export_archive` can share this post-processing step narrowly instead of calling
         // the whole `verify_repository` (a measured O(store) regression), 2,789 -> 2,794.
-        detail.contains("2794"),
+        // 0.54.0 step 3 Part 1, B1: `UnreachedObject`, `ReachabilityClassifier`'s new third field
+        // (`unreached`), and the `unreached_objects` field threaded from `ObjectSummary` through to
+        // `RepositoryVerification`, 2,794 -> 2,831.
+        detail.contains("2831"),
         "the line count is in the message: {detail}"
     );
     assert!(
