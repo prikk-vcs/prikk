@@ -131,6 +131,20 @@ pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), 
         }
     };
 
+    // 0.54.0 step 3 Part 2b R1: every file underneath is already synced (`write_file_durably`);
+    // sync every directory in the tree -- the sibling root included -- before the one rename that
+    // makes the whole tree visible at its real target, so a crash between here and the rename
+    // leaves only the (still-incomplete-looking) temporary sibling, never a target whose directory
+    // entries outran their own files' durability.
+    if let Err(err) = sync_tree_directories(&temp_sibling) {
+        let _ = fs::remove_dir_all(&temp_sibling);
+        return Err(CliError::Failure(format!(
+            "failed to sync the temporary sibling directory tree at {} before moving it into \
+             place: {err}",
+            temp_sibling.display()
+        )));
+    }
+
     if let Err(err) = prikk_store::rename_new_directory_no_replace(&temp_sibling, &args.target) {
         let _ = fs::remove_dir_all(&temp_sibling);
         return Err(CliError::Failure(format!(
@@ -139,7 +153,44 @@ pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), 
         )));
     }
 
+    // The rename is itself the durable, atomic boundary on Windows (`MOVEFILE_WRITE_THROUGH`,
+    // `prikk_ffi::rename_no_replace`); on Unix, the directory entry it just created still needs its
+    // own parent synced, the same step `durable_output.rs`'s own single-file writes already take.
+    if let Err(err) = crate::durable_output::sync_parent_directory(&args.target) {
+        return Err(CliError::Failure(format!(
+            "extract completed at {}, but failed to sync its parent directory afterward -- its \
+             durability across a crash is not confirmed: {err}",
+            args.target.display()
+        )));
+    }
+
     print_report(&layout, &point, &args.target, &plan, total_content_bytes);
+    Ok(())
+}
+
+/// `fsync` every directory under (and including) `root`, deepest first -- so a crash partway
+/// through this walk never leaves an already-synced directory whose own, not-yet-synced parent
+/// could still lose the directory entry that names it (0.54.0 step 3 Part 2b R1). A no-op on
+/// non-Unix platforms ([`crate::durable_output::sync_directory`]'s own doc).
+fn sync_tree_directories(root: &Path) -> std::io::Result<()> {
+    let mut directories = vec![root.to_path_buf()];
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                directories.push(path.clone());
+                stack.push(path);
+            }
+        }
+    }
+    // Deepest first: longest path components sort last among comparable prefixes, and no sibling
+    // subtree's ordering matters here (two directories only need relative ordering when one is the
+    // other's ancestor).
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for directory in directories {
+        crate::durable_output::sync_directory(&directory)?;
+    }
     Ok(())
 }
 
@@ -186,6 +237,14 @@ fn join_repo_path(root: &Path, path: &RepoPath) -> PathBuf {
 /// content immediately before writing it and dropping it right after -- never holding more than one
 /// file resident past what the plan itself already held. Returns the total bytes written (a free
 /// by-product of writing them, not a second pass).
+///
+/// **Durability (0.54.0 step 3 Part 2b R1).** Each file is `sync_all`'d here, right after its
+/// content and mode are both written -- the same point `durable_output.rs`'s own
+/// `write_and_sync_temp_file` syncs a single file, before anything depends on it being durable.
+/// Every directory this builds (the sibling root and every subdirectory a nested path needs) is
+/// synced afterward, as a whole tree, by [`run_extract`]'s own `sync_tree_directories` call, once
+/// every file underneath is already synced -- a directory's own durability only needs to follow its
+/// entries', not precede each one.
 fn write_plan(
     reader: &ObjectReadSnapshot,
     plan: &ExtractPlan,
@@ -216,12 +275,31 @@ fn write_plan(
             }
         };
         total_content_bytes += bytes.len() as u64;
-        fs::write(&destination, &bytes).map_err(|err| {
-            CliError::Failure(format!("failed to write {}: {err}", destination.display()))
-        })?;
+        write_file_durably(&destination, &bytes)?;
         set_mode(&destination, entry.mode)?;
     }
     Ok(total_content_bytes)
+}
+
+/// Write `bytes` to the freshly-created `destination` and `fsync` it before returning -- the file's
+/// own content is durable before this function returns, independent of whatever directory syncing
+/// happens afterward (0.54.0 step 3 Part 2b R1). `destination`'s parent is assumed to already exist
+/// ([`write_plan`]'s own `fs::create_dir_all` call, just above its own call to this function).
+fn write_file_durably(destination: &Path, bytes: &[u8]) -> std::result::Result<(), CliError> {
+    use std::io::Write as _;
+
+    let mut file = fs::File::create_new(destination).map_err(|err| {
+        CliError::Failure(format!("failed to write {}: {err}", destination.display()))
+    })?;
+    file.write_all(bytes).map_err(|err| {
+        CliError::Failure(format!("failed to write {}: {err}", destination.display()))
+    })?;
+    file.sync_all().map_err(|err| {
+        CliError::Failure(format!(
+            "failed to sync {} before moving the extract into place: {err}",
+            destination.display()
+        ))
+    })
 }
 
 #[cfg(unix)]
@@ -254,14 +332,22 @@ fn print_report(
     );
     println!("target block: {}", plan.target_block_id);
     println!("output directory: {}", target.display());
-    // RFC 136 increment 2b's own wording, verbatim (`checkout --snapshot-materialize`'s report).
+    // 0.54.0 step 3 Part 2b R4: `checkout --snapshot-materialize`'s own wording ("this snapshot's
+    // block") does not fit `extract` -- a point up to 63 blocks past its anchor has no single
+    // snapshot of its own to name. This instead says what `extract` actually checked: whether an
+    // admitted anchor (`AnchorTrust`, under `AnchorSite::Extract`) was found and used, or the
+    // replay fell back to genesis because none was.
     if plan.provisional {
         println!(
-            "provisional: yes -- this snapshot's block is not replay-verified in this repository; \
-             run `prikk verify` before committing"
+            "provisional: yes -- no replay-verified, adopted-key checkpoint was found within this \
+             repository's trusted distance of this point; every file was replayed from genesis \
+             instead; run `prikk verify` before committing"
         );
     } else {
-        println!("provisional: no -- this snapshot's block is replay-verified in this repository");
+        println!(
+            "provisional: no -- every file was reached from a checkpoint this repository has \
+             itself replay-verified and whose signer it has adopted"
+        );
     }
     println!("files written: {}", plan.entries.len());
     println!("total content bytes: {total_content_bytes}");

@@ -10,8 +10,9 @@
 use std::collections::BTreeMap;
 
 use prikk_object::{
-    BlockKind, CanonicalEncode, CreateFile, NodeKind, ObjectEnvelope, ObjectId, ObjectType,
-    Operation, OperationKind, PatchPayload, PatchPurpose, ReplaceBinary,
+    BlockKind, CanonicalEncode, ChangePerm, CreateFile, DeleteNode, EditText, NodeKind,
+    ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
+    ReplaceBinary,
 };
 
 use super::*;
@@ -360,4 +361,718 @@ fn replace_binary_refuses_a_new_blob_whose_real_kind_is_not_binary() {
         err.to_string().contains("is not a binary-file blob"),
         "{err}"
     );
+}
+
+// ---- 0.54.0 step 3 Part 2b R3: a standing differential test against the shared replay ----------
+//
+// `apply_one_for_extract` is a parallel reimplementation of `apply.rs`'s own per-operation
+// semantics. A one-time review cannot prove there is no divergence beyond the `ReplaceBinary` one
+// already found and fixed (above); this section is the permanent, standing check: over a range of
+// histories, `extract`'s own materialized state must equal the shared replay's
+// (`Anchoring::ReadOnlyReport`, the identical path `cat`/`tree` use), and every malformed-operation
+// shape the shared replay refuses must be refused by `extract` too.
+
+use prikk_object::{RefKind, RenamePath};
+
+use crate::{MaintainerSigner, maintainer_signature};
+
+/// The shared replay's own materialized state for `block_ids` -- the same `Anchoring::
+/// ReadOnlyReport` path `cat`/`tree` use.
+fn shared_replay_files(
+    reader: &impl ObjectReader,
+    block_ids: &[ObjectId],
+) -> BTreeMap<String, Vec<u8>> {
+    super::super::anchor::replay_chain(
+        reader,
+        block_ids,
+        super::super::anchor::Anchoring::ReadOnlyReport,
+    )
+    .unwrap()
+    .files
+}
+
+/// `extract`'s own outcome, with every file's content actually read (`Blob` streamed fresh,
+/// `Resident` already in hand) -- what the CLI's own `write_plan` would have written to disk.
+fn materialize_extract_files(
+    reader: &impl ObjectReader,
+    outcome: &ExtractReplayOutcome,
+) -> BTreeMap<String, Vec<u8>> {
+    outcome
+        .files
+        .iter()
+        .map(|file| {
+            let bytes = match &file.content {
+                ExtractContent::Blob(id) => read_blob_bytes_with_kind(reader, *id).unwrap().1,
+                ExtractContent::Resident(bytes) => bytes.clone(),
+            };
+            (file.path.clone(), bytes)
+        })
+        .collect()
+}
+
+/// `extract`'s own outcome's mode per path, for the same-state comparison (content alone cannot
+/// show a `ChangePerm` divergence).
+fn extract_modes(outcome: &ExtractReplayOutcome) -> BTreeMap<String, u32> {
+    outcome
+        .files
+        .iter()
+        .map(|file| (file.path.clone(), file.mode))
+        .collect()
+}
+
+/// Assert `extract`'s own replay of `block_ids` matches the shared replay's, path for path, byte
+/// for byte, mode for mode -- the standing same-state check (R3). `context` names the fixture in
+/// any failure message.
+fn assert_extract_matches_shared_replay(
+    reader: &impl ObjectReader,
+    block_ids: &[ObjectId],
+    trust: &crate::anchor_trust::AnchorTrust,
+    context: &str,
+) {
+    let shared = shared_replay_files(reader, block_ids);
+    let outcome = replay_for_extract(reader, block_ids, trust, true)
+        .unwrap_or_else(|err| panic!("{context}: extract's own replay failed: {err}"));
+    let extracted = materialize_extract_files(reader, &outcome);
+    assert_eq!(
+        extracted, shared,
+        "{context}: extract's own output must equal the shared replay's, path for path and byte \
+         for byte"
+    );
+
+    // Mode agreement: the shared replay's own `live_nodes` carries it too, keyed by node id rather
+    // than path, so compare by resolving each shared path's own live node.
+    let shared_chain = super::super::anchor::replay_chain(
+        reader,
+        block_ids,
+        super::super::anchor::Anchoring::ReadOnlyReport,
+    )
+    .unwrap();
+    let shared_modes: BTreeMap<String, u32> = shared_chain
+        .live_nodes
+        .values()
+        .map(|node| (node.path.clone(), node.mode))
+        .collect();
+    assert_eq!(
+        extract_modes(&outcome),
+        shared_modes,
+        "{context}: extract's own modes must equal the shared replay's"
+    );
+}
+
+/// Same state, anchored through a real admitted checkpoint: `AnchoredHistory::standard`'s own
+/// history (creates, edits, a delete, a restoration -- module doc, `anchored_history.rs`), at its
+/// tip, genesis sealed as a real checkpoint.
+#[test]
+fn same_state_as_shared_replay_anchored_history() {
+    let mut history = AnchoredHistory::standard("extract-differential-anchored", 9);
+    let tip = *history.blocks.last().unwrap();
+    let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
+    let block_ids = super::super::read::single_parent_chain(&reader, tip).unwrap();
+    let trust = crate::anchor_trust::AnchorTrust::load(&history.layout);
+    assert_extract_matches_shared_replay(
+        &reader,
+        &block_ids,
+        &trust,
+        "AnchoredHistory::standard at its tip",
+    );
+    let _ = &mut history;
+}
+
+/// Same state, from genesis (no admitted anchor at all): a text file, a binary file, an edit, a
+/// `ReplaceBinary`, and a delete, all in one small from-scratch history -- the shape
+/// `publish_binary_create_then_replace` already builds, replayed through both engines.
+#[test]
+fn same_state_as_shared_replay_text_and_binary_from_genesis() {
+    let root = unique_temp_dir("extract-differential-genesis");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let new_blob_id =
+        publish_binary_create_then_replace(&layout, b"old bytes", b"new bytes").unwrap();
+    let _ = new_blob_id;
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let tip = crate::refs::read_current_ref_tip_block(&layout, &reader, "heads/main").unwrap();
+    let block_ids = super::super::read::single_parent_chain(&reader, tip).unwrap();
+    let trust = crate::anchor_trust::AnchorTrust::load(&layout);
+    assert_extract_matches_shared_replay(
+        &reader,
+        &block_ids,
+        &trust,
+        "publish_binary_create_then_replace from genesis",
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A true swap: two files exchange names in one patch, batched (`apply_rename_batch`'s own
+/// vacate-then-claim two-phase algorithm, mirrored by `apply_rename_batch_for_extract`) -- neither
+/// rename is valid read in isolation, since each one's own destination is the other's current,
+/// not-yet-vacated path.
+#[test]
+fn same_state_on_a_two_file_swap_in_one_patch() {
+    let root = unique_temp_dir("extract-differential-swap");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let mut store = FileObjectStore::new(layout.clone());
+    let node_a = anchored_node(0x0A);
+    let node_b = anchored_node(0x0B);
+    let blob_a = write_blob(&mut store, b"content of a").unwrap();
+    let blob_b = write_blob(&mut store, b"content of b").unwrap();
+
+    let genesis_payload = PatchPayload {
+        operations: vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "a.txt".to_string(),
+                    node_id: node_a,
+                    blob_id: blob_a,
+                    mode: 0o100644,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "b.txt".to_string(),
+                    node_id: node_b,
+                    blob_id: blob_b,
+                    mode: 0o100644,
+                }),
+            },
+        ],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut genesis_patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        genesis_payload.to_canonical_bytes().unwrap(),
+    );
+    genesis_patch.add_signature(dummy_signature()).unwrap();
+    let genesis_patch_id = store.write_object(&genesis_patch).unwrap();
+    let genesis_root = crate::derive_next_state_root(&store, None, &[genesis_patch_id]).unwrap();
+    let genesis_block = signed_block_with_state_root(
+        BlockKind::Root,
+        Vec::new(),
+        vec![genesis_patch_id],
+        None,
+        genesis_root,
+    );
+    let genesis_block_id = store.write_object(&genesis_block).unwrap();
+
+    let swap_payload = PatchPayload {
+        operations: vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::RenamePath(RenamePath {
+                    node_id: node_a,
+                    old_path: "a.txt".to_string(),
+                    new_path: "b.txt".to_string(),
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::RenamePath(RenamePath {
+                    node_id: node_b,
+                    old_path: "b.txt".to_string(),
+                    new_path: "a.txt".to_string(),
+                }),
+            },
+        ],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut swap_patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        swap_payload.to_canonical_bytes().unwrap(),
+    );
+    swap_patch.add_signature(dummy_signature()).unwrap();
+    let swap_patch_id = store.write_object(&swap_patch).unwrap();
+    let swap_root =
+        crate::derive_next_state_root(&store, Some(genesis_block_id), &[swap_patch_id]).unwrap();
+    let swap_block = signed_block_with_state_root(
+        BlockKind::Normal,
+        vec![genesis_block_id],
+        vec![swap_patch_id],
+        None,
+        swap_root,
+    );
+    let swap_block_id = store.write_object(&swap_block).unwrap();
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let block_ids = super::super::read::single_parent_chain(&reader, swap_block_id).unwrap();
+    let trust = crate::anchor_trust::AnchorTrust::load(&layout);
+
+    // Fixture sanity: the swap actually happened (the shared replay's own oracle, not extract's).
+    let shared = shared_replay_files(&reader, &block_ids);
+    assert_eq!(shared.get("a.txt"), Some(&b"content of b".to_vec()));
+    assert_eq!(shared.get("b.txt"), Some(&b"content of a".to_vec()));
+
+    assert_extract_matches_shared_replay(&reader, &block_ids, &trust, "a two-file swap");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Same state across a real merge: `AnchoredHistory`'s own trusted maintainer seals a side branch
+/// and `execute_merge` folds it into `heads/main` -- `prepare_extract_plan`'s own block chain comes
+/// from the identical `single_parent_chain` `cat`/`tree` use (`read.rs`'s own `mainline_or_sole_
+/// parent`, mainline only for a `Merge` block), so this confirms that shared chain-selection
+/// combined with `apply_one_for_extract`'s own duplicated per-operation logic still agrees with the
+/// shared replay on a real merge tip -- not a claim that `extract` does anything special for merges
+/// itself (it does not; there is no merge-specific code in `patch_replay::extract` at all).
+#[test]
+fn same_state_across_a_merge() {
+    let mut history = AnchoredHistory::new("extract-differential-merge");
+    let genesis_op = history.create("a.txt", 0x0A, b"alpha\n");
+    history.seal(vec![genesis_op]);
+    let baseline = *history.blocks.last().unwrap();
+
+    // An independent maintainer key, trusted alongside `AnchoredHistory`'s own one (the policy
+    // supports more than one, the same shape `retro_sign(Signing::Unadopted)` already relies on)
+    // -- avoids borrowing `history`'s own private signer while also needing `&mut history.store`
+    // below, and keeps this fixture's own signing self-contained.
+    let signer =
+        crate::Ed25519MaintainerSigner::from_seed("extract-differential-merge-signer", &[0x5D; 32])
+            .unwrap();
+    crate::add_trusted_maintainer(
+        &history.layout,
+        signer.key_id(),
+        &prikk_hash::to_hex(&signer.public_key_bytes()),
+    )
+    .unwrap();
+
+    // Publish `heads/side` at the baseline, then queue and seal one commit on it -- the same shape
+    // `every_publication_refuses_first.rs`'s own `build_branch_create_publication` uses, inlined
+    // here rather than shared across modules (this project's own standing practice: each fixture
+    // site keeps its own small construction).
+    let side_ref = "heads/side";
+    let state = prikk_object::RefStatePayload {
+        ref_name: side_ref.to_string(),
+        kind: RefKind::Branch,
+        target_object_id: baseline,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let mut state_env =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, state.to_canonical_bytes().unwrap());
+    let state_id = state_env.object_id();
+    state_env
+        .add_signature(maintainer_signature(&signer, ObjectType::RefState, state_id).unwrap())
+        .unwrap();
+    let update = prikk_object::RefUpdatePayload {
+        ref_name: side_ref.to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: state_id,
+        new_target_object_id: baseline,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: signer.key_id().to_string(),
+    };
+    let mut update_env = ObjectEnvelope::unsigned(
+        ObjectType::RefUpdate,
+        1,
+        update.to_canonical_bytes().unwrap(),
+    );
+    let update_id = update_env.object_id();
+    update_env
+        .add_signature(maintainer_signature(&signer, ObjectType::RefUpdate, update_id).unwrap())
+        .unwrap();
+    crate::RefStore::new(history.layout.clone())
+        .publish(&crate::RefPublication {
+            ref_name: side_ref.to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: state_env,
+            ref_update: update_env,
+        })
+        .unwrap();
+
+    // One commit on the side branch, authored (not maintainer-signed) the same way
+    // `AnchoredHistory::append` signs its own patches.
+    let author =
+        crate::Ed25519AuthorSigner::from_seed("extract-differential-merge-author", &[0x5E; 32])
+            .unwrap();
+    let side_blob = write_blob(&mut history.store, b"side content\n").unwrap();
+    let side_node = anchored_node(0x5D);
+    let side_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "side.txt".to_string(),
+                node_id: side_node,
+                blob_id: side_blob,
+                mode: 0o100644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut side_patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        prikk_object::PATCH_TEXT_SPAN_V2_SCHEMA,
+        side_payload.to_canonical_bytes().unwrap(),
+    );
+    let side_patch_id = side_patch.object_id();
+    side_patch
+        .add_signature(crate::author_signature(&author, side_patch_id).unwrap())
+        .unwrap();
+    crate::write_active_ref_metadata(&history.layout, side_ref).unwrap();
+    crate::Wal::for_layout(&history.layout, crate::DEFAULT_ACTIVE_NAME)
+        .append_patch(&side_patch)
+        .unwrap();
+    crate::rfc111_seal_simulation::simulate_one_seal(&history.layout, side_ref, &signer).unwrap();
+
+    // Merge `heads/side` into `heads/main`.
+    let report =
+        crate::execute_merge(&history.layout, baseline, "heads/main", side_ref, &signer).unwrap();
+
+    let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
+    let block_ids = super::super::read::single_parent_chain(&reader, report.block_id).unwrap();
+    let trust = crate::anchor_trust::AnchorTrust::load(&history.layout);
+
+    // Fixture sanity: both files are really there after the merge, in the shared replay's own view.
+    let shared = shared_replay_files(&reader, &block_ids);
+    assert!(shared.contains_key("a.txt"));
+    assert!(shared.contains_key("side.txt"));
+
+    assert_extract_matches_shared_replay(&reader, &block_ids, &trust, "a real merge tip");
+}
+
+// ---- R3: the "same refusals" table -- one malformed row per operation kind --------------------
+
+use prikk_object::DeleteNodePreimage;
+
+/// A genesis-only chain carrying one well-formed `CreateFile` and one further, malformed patch on
+/// top of it -- never through `derive_next_state_root` for the second block (which would itself
+/// replay the malformed patch and refuse to build the fixture at all, as it should): the second
+/// block's own signed root is a meaningless, never-admitted placeholder (it carries no snapshot,
+/// so nothing ever reads or validates it).
+fn write_patch(store: &mut FileObjectStore, ops: Vec<OperationKind>) -> ObjectId {
+    let payload = PatchPayload {
+        operations: ops
+            .into_iter()
+            .zip(1_u32..)
+            .map(|(kind, op_seq)| Operation {
+                op_seq,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind,
+            })
+            .collect(),
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, payload.to_canonical_bytes().unwrap());
+    patch.add_signature(dummy_signature()).unwrap();
+    store.write_object(&patch).unwrap()
+}
+
+/// A genesis-only chain carrying one well-formed `CreateFile` and one further, malformed patch on
+/// top of it -- never through `derive_next_state_root` for the second block (which would itself
+/// replay the malformed patch and refuse to build the fixture at all, as it should): the second
+/// block's own signed root is a meaningless, never-admitted placeholder (it carries no snapshot,
+/// so nothing ever reads or validates it). Both op builders take the real store, so any blob they
+/// write lands in the same repository the chain itself reads from.
+fn malformed_second_block_chain(
+    label: &str,
+    genesis_ops: impl FnOnce(&mut FileObjectStore) -> Vec<OperationKind>,
+    malformed_ops: impl FnOnce(&mut FileObjectStore) -> Vec<OperationKind>,
+) -> (RepositoryLayout, Vec<ObjectId>) {
+    let root = unique_temp_dir(label);
+    let layout = RepositoryLayout::init(root).unwrap();
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let genesis_kinds = genesis_ops(&mut store);
+    let genesis_patch_id = write_patch(&mut store, genesis_kinds);
+    let genesis_root = crate::derive_next_state_root(&store, None, &[genesis_patch_id]).unwrap();
+    let genesis_block = signed_block_with_state_root(
+        BlockKind::Root,
+        Vec::new(),
+        vec![genesis_patch_id],
+        None,
+        genesis_root,
+    );
+    let genesis_block_id = store.write_object(&genesis_block).unwrap();
+
+    let malformed_kinds = malformed_ops(&mut store);
+    let malformed_patch_id = write_patch(&mut store, malformed_kinds);
+    let malformed_block = signed_block_with_state_root(
+        BlockKind::Normal,
+        vec![genesis_block_id],
+        vec![malformed_patch_id],
+        None,
+        genesis_root, // never read: this block carries no snapshot.
+    );
+    let malformed_block_id = store.write_object(&malformed_block).unwrap();
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let block_ids = super::super::read::single_parent_chain(&reader, malformed_block_id).unwrap();
+    (layout, block_ids)
+}
+
+/// Both engines must refuse -- not necessarily with the same words, but neither may silently
+/// accept what the other refuses.
+fn assert_both_engines_refuse(label: &str, layout: &RepositoryLayout, block_ids: &[ObjectId]) {
+    let reader = ObjectReadSnapshot::open(layout).unwrap();
+    let shared = super::super::anchor::replay_chain(
+        &reader,
+        block_ids,
+        super::super::anchor::Anchoring::ReadOnlyReport,
+    );
+    assert!(
+        shared.is_err(),
+        "{label}: fixture sanity -- the shared replay must refuse this row"
+    );
+    let trust = crate::anchor_trust::AnchorTrust::load(layout);
+    let extracted = replay_for_extract(&reader, block_ids, &trust, true);
+    assert!(
+        extracted.is_err(),
+        "{label}: extract's own replay must refuse this row too, matching the shared replay"
+    );
+}
+
+/// The standing "same refusals" table (R3): one malformed-operation row per kind. Every row the
+/// shared replay refuses, `extract` must refuse too -- shown red against the pre-fix code by
+/// temporarily reverting `953ae32c`'s own `ReplaceBinary` kind check (the report's own addendum
+/// documents the manual red run; restored here, this row (and the whole table) is green).
+#[test]
+fn same_refusals_table() {
+    let node_a = anchored_node(0x01);
+    let node_b = anchored_node(0x02);
+
+    // Row 1 -- CreateFile: a path that already exists (a different node id, same path).
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-createfile",
+            |store| {
+                let blob = write_blob(store, b"first").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "dup.txt".to_string(),
+                    node_id: node_a,
+                    blob_id: blob,
+                    mode: 0o100644,
+                })]
+            },
+            |store| {
+                let other_blob = write_blob(store, b"second").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "dup.txt".to_string(),
+                    node_id: node_b,
+                    blob_id: other_blob,
+                    mode: 0o100644,
+                })]
+            },
+        );
+        assert_both_engines_refuse("CreateFile (duplicate path)", &layout, &block_ids);
+    }
+
+    // Row 2 -- EditText: targets a node id that was never created.
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-edittext",
+            |store| {
+                let blob = write_blob(store, b"alpha").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "a.txt".to_string(),
+                    node_id: node_a,
+                    blob_id: blob,
+                    mode: 0o100644,
+                })]
+            },
+            |_store| {
+                vec![OperationKind::EditText(EditText {
+                    node_id: node_b, // never created
+                    span_id: [0u8; 32],
+                    old_span_hash: text_span_hash(b"y"),
+                    left_anchor_hash: [0u8; 32],
+                    right_anchor_hash: [0u8; 32],
+                    replacement_text: b"x".to_vec(),
+                    presentation_hint_line: None,
+                    presentation_hint_column: None,
+                    old_span_text: b"y".to_vec(),
+                    left_anchor_len: None,
+                    right_anchor_len: None,
+                })]
+            },
+        );
+        assert_both_engines_refuse("EditText (node never live)", &layout, &block_ids);
+    }
+
+    // Row 3 -- ReplaceBinary: new blob's real kind is not binary (953ae32c's own fix).
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-replacebinary",
+            |store| {
+                let binary_blob = write_binary_blob(store, b"old binary").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "asset.bin".to_string(),
+                    node_id: node_a,
+                    blob_id: binary_blob,
+                    mode: 0o100644,
+                })]
+            },
+            |store| {
+                // The anchor id must match what genesis actually wrote -- recomputed identically,
+                // since `write_binary_blob` is deterministic over the same bytes.
+                let binary_blob = write_binary_blob(store, b"old binary").unwrap();
+                let text_blob = write_blob(store, b"actually text").unwrap();
+                vec![OperationKind::ReplaceBinary(ReplaceBinary {
+                    node_id: node_a,
+                    old_blob_id: binary_blob,
+                    new_blob_id: text_blob,
+                })]
+            },
+        );
+        assert_both_engines_refuse(
+            "ReplaceBinary (new blob is not binary)",
+            &layout,
+            &block_ids,
+        );
+    }
+
+    // Row 4 -- DeleteNode: `old_blob_id` does not match the live node's actual current blob.
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-deletenode",
+            |store| {
+                let real_blob = write_blob(store, b"real content").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "d.txt".to_string(),
+                    node_id: node_a,
+                    blob_id: real_blob,
+                    mode: 0o100644,
+                })]
+            },
+            |store| {
+                let wrong_blob = write_blob(store, b"wrong content").unwrap();
+                vec![OperationKind::DeleteNode(DeleteNode {
+                    path: "d.txt".to_string(),
+                    node_id: node_a,
+                    old_node_kind: NodeKind::TextFile,
+                    preimage: DeleteNodePreimage::File {
+                        old_blob_id: wrong_blob,
+                        old_mode: 0o100644,
+                    },
+                })]
+            },
+        );
+        assert_both_engines_refuse("DeleteNode (old_blob_id mismatch)", &layout, &block_ids);
+    }
+
+    // Row 5 -- ChangePerm: `old_mode` does not match the live node's actual current mode.
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-changeperm",
+            |store| {
+                let blob = write_blob(store, b"e").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "e.txt".to_string(),
+                    node_id: node_a,
+                    blob_id: blob,
+                    mode: 0o100644,
+                })]
+            },
+            |_store| {
+                vec![OperationKind::ChangePerm(ChangePerm {
+                    node_id: node_a,
+                    old_mode: 0o100755, // wrong: the live node is 0o100644
+                    new_mode: 0o100644,
+                })]
+            },
+        );
+        assert_both_engines_refuse("ChangePerm (old_mode mismatch)", &layout, &block_ids);
+    }
+
+    // Row 6 -- RenamePath batch: two sources named the same destination in one run.
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-renamepath",
+            |store| {
+                let blob_f = write_blob(store, b"f").unwrap();
+                let blob_g = write_blob(store, b"g").unwrap();
+                vec![
+                    OperationKind::CreateFile(CreateFile {
+                        path: "f.txt".to_string(),
+                        node_id: node_a,
+                        blob_id: blob_f,
+                        mode: 0o100644,
+                    }),
+                    OperationKind::CreateFile(CreateFile {
+                        path: "g.txt".to_string(),
+                        node_id: node_b,
+                        blob_id: blob_g,
+                        mode: 0o100644,
+                    }),
+                ]
+            },
+            |_store| {
+                vec![
+                    OperationKind::RenamePath(RenamePath {
+                        node_id: node_a,
+                        old_path: "f.txt".to_string(),
+                        new_path: "z.txt".to_string(),
+                    }),
+                    OperationKind::RenamePath(RenamePath {
+                        node_id: node_b,
+                        old_path: "g.txt".to_string(),
+                        new_path: "z.txt".to_string(), // duplicate destination
+                    }),
+                ]
+            },
+        );
+        assert_both_engines_refuse(
+            "RenamePath batch (duplicate destination)",
+            &layout,
+            &block_ids,
+        );
+    }
+
+    // Row 7 -- a symlink preimage: unsupported at `ensure_apply_supported`, the one check shared
+    // verbatim by both engines (so this row is refused for the identical reason, not merely both
+    // refusing independently).
+    {
+        let (layout, block_ids) = malformed_second_block_chain(
+            "extract-refusal-row-symlink",
+            |store| {
+                let blob = write_blob(store, b"unrelated").unwrap();
+                vec![OperationKind::CreateFile(CreateFile {
+                    path: "unrelated.txt".to_string(),
+                    node_id: node_b,
+                    blob_id: blob,
+                    mode: 0o100644,
+                })]
+            },
+            |_store| {
+                vec![OperationKind::DeleteNode(DeleteNode {
+                    path: "link".to_string(),
+                    node_id: node_a,
+                    old_node_kind: NodeKind::Symlink,
+                    preimage: DeleteNodePreimage::Symlink {
+                        old_target: "target".to_string(),
+                    },
+                })]
+            },
+        );
+        assert_both_engines_refuse(
+            "DeleteNode (symlink preimage, unsupported)",
+            &layout,
+            &block_ids,
+        );
+    }
 }

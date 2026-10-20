@@ -107,49 +107,66 @@ fn prepare_extract_plan_builds_a_plan_from_an_admitted_anchor() {
     let _ = &mut history;
 }
 
-/// The no-replace rename control, the real risk first (R-A4): a plain rename silently replaces an
-/// existing target directory -- confirmed directly here, not assumed -- and
-/// `rename_new_directory_no_replace` refuses the identical shape instead.
+/// The no-replace rename control itself (0.54.0 step 3 Part 2b R2): the real, shipped shape, on
+/// every platform including Windows. `std::fs::rename`'s own cross-platform behavior for an
+/// existing directory target differs (Unix silently clobbers an empty one; Windows refuses one
+/// regardless of emptiness -- see the Linux/macOS-only demonstration test below for that risk
+/// stated directly), but `rename_new_directory_no_replace`'s own contract does not: it refuses an
+/// existing target everywhere, which is the one fact this test pins across platforms.
 #[test]
-fn rename_new_directory_no_replace_refuses_where_a_plain_rename_would_silently_clobber() {
+fn rename_new_directory_no_replace_refuses_an_existing_target() {
     let root = unique_temp_dir("extract-rename-control");
-    let source_a = root.join("source-a");
-    let source_b = root.join("source-b");
+    let source = root.join("source");
     let target = root.join("target");
-    std::fs::create_dir(&source_a).unwrap();
-    std::fs::create_dir(&source_b).unwrap();
-    // R-A4's own empirically-confirmed shape: a plain `rename(2)` replaces an existing *empty*
-    // target directory (a non-empty one already refuses with `DirectoryNotEmpty`, which would make
-    // this control look safe when it is not -- the whole risk is specific to the empty case, which
-    // is exactly the state a freshly-created, still-empty extract target is in before its first
-    // file is written).
+    std::fs::create_dir(&source).unwrap();
     std::fs::create_dir(&target).unwrap();
-    std::fs::write(source_a.join("marker.txt"), b"from source a").unwrap();
+    std::fs::write(source.join("marker.txt"), b"from source").unwrap();
 
-    // RED: a plain `std::fs::rename` silently claims the existing empty target.
-    std::fs::rename(&source_a, &target).expect("a plain rename over an empty directory succeeds");
-    assert!(
-        target.join("marker.txt").exists(),
-        "fixture sanity: the plain rename must have actually replaced the target"
-    );
-
-    // Restore the scenario and show the real fix, GREEN: refuses, leaving both sides untouched.
-    std::fs::remove_dir_all(&target).unwrap();
-    std::fs::create_dir(&target).unwrap();
-    std::fs::write(source_b.join("marker.txt"), b"from source b").unwrap();
-
-    let result = rename_new_directory_no_replace(&source_b, &target);
+    let result = rename_new_directory_no_replace(&source, &target);
     assert!(
         result.is_err(),
         "rename_new_directory_no_replace must refuse an existing target"
     );
     assert!(
-        source_b.join("marker.txt").exists(),
+        source.join("marker.txt").exists(),
         "the source must be untouched after a refused rename"
     );
     assert!(
         !target.join("marker.txt").exists(),
         "the target must never pick up the source's content on a refused rename"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The real risk `rename_new_directory_no_replace` exists to close (R-A4), stated directly: on
+/// Linux and macOS, a *plain* `rename(2)` silently replaces an existing **empty** target directory
+/// (a non-empty one already refuses with `DirectoryNotEmpty`, which would make a plain rename look
+/// safe when it is not -- the whole risk is specific to the empty case, which is exactly the state
+/// a freshly-created, still-empty extract target is in before its first file is written).
+///
+/// **Windows-gated out, not merely skipped silently**: a plain `std::fs::rename` there refuses
+/// whenever the destination is an existing directory at all (Rust's own documentation: the
+/// destination must not be a directory), empty or not -- a different fact from the POSIX one this
+/// test demonstrates, and one that would make this exact demonstration panic in CI's own
+/// `windows-mutation` job rather than show anything real about this platform's own risk. The
+/// cross-platform pin above (`rename_new_directory_no_replace_refuses_an_existing_target`) is what
+/// actually matters on every platform; this test exists only to show *why* that pin matters on
+/// Linux/macOS specifically.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_plain_rename_would_have_silently_clobbered_an_empty_target() {
+    let root = unique_temp_dir("extract-rename-control-posix-risk");
+    let source = root.join("source");
+    let target = root.join("target");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(source.join("marker.txt"), b"from source").unwrap();
+
+    std::fs::rename(&source, &target).expect("a plain rename over an empty directory succeeds");
+    assert!(
+        target.join("marker.txt").exists(),
+        "fixture sanity: the plain rename must have actually replaced the target"
     );
 
     let _ = std::fs::remove_dir_all(root);

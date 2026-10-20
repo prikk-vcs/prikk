@@ -188,18 +188,12 @@ fn temporary_sibling_path(destination: &Path) -> Result<PathBuf, String> {
 /// treatment of directory durability) -- see the `#[cfg(not(unix))]` sibling below for why this
 /// is a no-op on Windows instead, not merely a weaker version of the same thing.
 #[cfg(unix)]
-fn sync_parent_directory(destination: &Path) -> Result<(), String> {
+pub(crate) fn sync_parent_directory(destination: &Path) -> Result<(), String> {
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty());
     let parent = parent.unwrap_or_else(|| Path::new("."));
-    let directory = File::open(parent).map_err(|err| {
-        format!(
-            "failed to open the destination directory {} to sync it after the rename: {err}",
-            parent.display()
-        )
-    })?;
-    directory.sync_all().map_err(|err| {
+    sync_directory(parent).map_err(|err| {
         format!(
             "failed to sync the destination directory {} after the rename -- the new file is in \
              place, but its durability across a crash is not confirmed: {err}",
@@ -213,7 +207,23 @@ fn sync_parent_directory(destination: &Path) -> Result<(), String> {
 /// for why this is believed to matter less on Windows than it would on Unix, and why it is stated
 /// as a real gap rather than silently worked around.
 #[cfg(not(unix))]
-fn sync_parent_directory(_destination: &Path) -> Result<(), String> {
+pub(crate) fn sync_parent_directory(_destination: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// `fsync` the directory at `path` itself (not its parent) -- the same `File::open(dir).sync_all()`
+/// shape [`sync_parent_directory`] uses, factored out so `extract`'s own whole-tree durability
+/// (0.54.0 step 3 Part 2b R1) can sync the temporary sibling directory and every subdirectory it
+/// creates, not only one destination's parent. Unix only: see [`sync_parent_directory`]'s own doc
+/// for why there is no portable Windows equivalent via `std` alone.
+#[cfg(unix)]
+pub(crate) fn sync_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+/// No portable Windows equivalent (see [`sync_parent_directory`]'s own `#[cfg(not(unix))]` sibling).
+#[cfg(not(unix))]
+pub(crate) fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

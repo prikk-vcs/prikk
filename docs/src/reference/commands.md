@@ -181,8 +181,10 @@ read it anyway. Every file whose content has not changed since the admitted anch
 its stored blob id, nothing is held resident past the one file's own size, and a path renamed after the
 anchor still streams from that same id, at its new path. The target must not already exist; a leftover
 `<dir>.prikk-extract-tmp` from an interrupted run refuses by name rather than being reused or deleted; the
-whole write is atomic (a temporary sibling, then one no-replace rename). `provisional: yes|no` is worded
-exactly as `checkout --snapshot-materialize` words it. See [Reading a point](../guide/tree-and-cat.md).
+whole write is atomic (a temporary sibling, then one no-replace rename), and every file and directory is
+synced before it, so a crash never leaves a target with missing or partial content. `provisional: yes|no`
+says whether an admitted anchor was actually found and used, or the replay fell back to genesis instead.
+See [Reading a point](../guide/tree-and-cat.md).
 
 **Comparing: `diff`.** `diff` shows what changed between two states. A bare `prikk diff` compares the current
 branch's tip (with any queued commits) against the **worktree** — exactly what `commit` would author, so `commit`

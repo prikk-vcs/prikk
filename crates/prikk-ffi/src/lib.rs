@@ -302,11 +302,17 @@ impl Drop for OwnedProcessHandle {
 /// Rename `from` onto `to`, refusing if `to` already exists (`prikk extract`'s own write-safety
 /// ruling, 0.54.0 step 3 Part 2) -- the platform's own no-replace default: `MoveFileExW` without
 /// `MOVEFILE_REPLACE_EXISTING` already refuses when the target exists, for both files and
-/// directories (Microsoft's own documented contract), so this passes no flags at all rather than
-/// adding one. The Linux/macOS counterpart is `rustix::fs::renameat_with(..., RenameFlags::
+/// directories (Microsoft's own documented contract), so this passes no replace flag at all rather
+/// than adding one. The Linux/macOS counterpart is `rustix::fs::renameat_with(..., RenameFlags::
 /// NOREPLACE)`, in `prikk-store`, which already depends on `rustix`; this crate is the one
 /// workspace member allowed to reach Win32 directly (DC-90), so the Windows half of the same
 /// write-safety rule lives here instead.
+///
+/// **`MOVEFILE_WRITE_THROUGH`** (Part 2b R1): Microsoft's own documentation states the call does
+/// not return success until the move is written through to disk, closing the same durability gap
+/// `durable_output.rs`'s own module doc already names for a single-file rename on this platform.
+/// Still never `MOVEFILE_REPLACE_EXISTING` -- this flag only changes when the function returns, not
+/// whether it replaces an existing target.
 ///
 /// # Errors
 ///
@@ -315,7 +321,7 @@ impl Drop for OwnedProcessHandle {
 pub fn rename_no_replace(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt as _;
 
-    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
 
     fn wide_null(path: &std::path::Path) -> Vec<u16> {
         path.as_os_str()
@@ -328,9 +334,11 @@ pub fn rename_no_replace(from: &std::path::Path, to: &std::path::Path) -> std::i
     let to_wide = wide_null(to);
     // SAFETY: `from_wide`/`to_wide` are each a valid, NUL-terminated UTF-16 string the OS may read
     // for the duration of this call only -- both buffers outlive the call (they are not dropped
-    // until this function returns). `dwFlags = 0` passes none of `MoveFileExW`'s own flags, so this
-    // is exactly the platform's own no-replace default, not a flag this function adds.
-    let succeeded = unsafe { MoveFileExW(from_wide.as_ptr(), to_wide.as_ptr(), 0) };
+    // until this function returns). `dwFlags = MOVEFILE_WRITE_THROUGH` passes none of
+    // `MoveFileExW`'s own replace flags, so this is still exactly the platform's own no-replace
+    // default, only waiting for the move to be durable before returning.
+    let succeeded =
+        unsafe { MoveFileExW(from_wide.as_ptr(), to_wide.as_ptr(), MOVEFILE_WRITE_THROUGH) };
     if succeeded == 0 {
         return Err(std::io::Error::last_os_error());
     }

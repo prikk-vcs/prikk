@@ -24,14 +24,22 @@
   file is written into a temporary sibling (`<dir>.prikk-extract-tmp`) first, which refuses by name
   rather than reusing or deleting one left by an interrupted earlier run; the sibling becomes the
   real target only through one no-replace rename (`rustix::fs::renameat_with(...,
-  RenameFlags::NOREPLACE)` on Linux/macOS, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on
-  Windows), so an existing target is never silently replaced. `provisional: yes|no` is worded exactly
-  as `checkout --snapshot-materialize` words it. Never writes into the repository: no lock, cache,
-  marker, or worktree write anywhere in the command. A binary file created or replaced after the
-  anchor has its new content's kind checked once, during replay, the same validation `cat`/`tree`'s
-  own shared replay always makes — a patch's own claim about a blob's kind is not proof, and
-  `extract`'s streamed replay must refuse history that fails this exactly as the shared replay does,
-  not silently stream the wrong bytes.
+  RenameFlags::NOREPLACE)` on Linux/macOS, `MoveFileExW` with `MOVEFILE_WRITE_THROUGH` and without
+  `MOVEFILE_REPLACE_EXISTING` on Windows), so an existing target is never silently replaced. Every
+  file is `fsync`'d as it is written, and on Linux/macOS every directory in the temporary sibling's
+  own tree is synced before the rename and the target's parent directory is synced after it, so a
+  crash either leaves only the (incomplete) temporary sibling or the complete target, never
+  something in between. `provisional: yes|no` says whether an admitted anchor was actually found and
+  used, or the replay fell back to a full genesis replay instead. Never writes into the repository:
+  no lock, cache, marker, or worktree write anywhere in the command. A binary file created or
+  replaced after the anchor has its new content's kind checked once, during replay, the same
+  validation `cat`/`tree`'s own shared replay always makes — a patch's own claim about a blob's kind
+  is not proof, and `extract`'s streamed replay must refuse history that fails this exactly as the
+  shared replay does, not silently stream the wrong bytes. A standing differential test now
+  confirms, over a range of histories including renames, merges and a two-file swap, that
+  `extract`'s own replay produces exactly the state the shared replay (`cat`/`tree`'s own) does, and
+  that every malformed-operation shape the shared replay refuses (one per operation kind) is refused
+  by `extract` too.
 
 ### Output changes
 
