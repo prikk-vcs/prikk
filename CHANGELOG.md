@@ -57,11 +57,16 @@
   identical pre-walk distance bound as `--ref`/a bare block id** (over the claimed parent's own
   chain, under its own `AnchorSite::ExtractClaim`), refusing by name past the trusted distance
   unless `--allow-full-replay` is given — not wired through when `--claim` first shipped. **`--claim`'s
-  own peak memory is a modest, bounded amount higher than the ref/block-id path's own equivalent
-  shapes (about 1.1–1.3x, measured)** (`docs/src/reference/current-state.md`); a plausible, bounded
-  reason: `StoreBackedResolver::blob_kind` fully decodes a Blob's payload once per folded
-  `CreateFile`/`ReplaceBinary`, the same double-buffer, and the claim's own one extra `CreateFile`
-  pays it once more than the ref/block-id path's own equivalent read does. `--format json`'s own point
+  own whole-command peak memory follows the identical "roughly twice the largest file read" rule as
+  `--ref`/a bare block id — no anomaly** (`docs/src/reference/current-state.md`): its own derivation
+  step alone (`prepare_extract_plan_for_claim`, not `patch_replay::extract`'s own block-chain replay)
+  costs a modest amount more than the ref/block-id path's own equivalent planning step (about
+  1.1–1.3x, measured — `StoreBackedResolver::blob_kind` fully decodes a Blob's payload once per
+  folded `CreateFile`/`ReplaceBinary`, the same double-buffer, and the claim's own one extra
+  `CreateFile` pays it once more), but that is small next to the one dominant cost every path shares:
+  streaming the point's own largest file once. **`--plan-only` costs the same as a real write, not
+  less** — it reads every file once to measure it, matching a real write's own cost, and only skips
+  the write itself; worth stating plainly since it is meant as a size-first report. `--format json`'s own point
   is now carried under one fixed key, `point` (with a new `point_kind` field for `"ref"`/`"block"`/
   `"claim"`), the same key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` already use,
   rather than a dynamic key.

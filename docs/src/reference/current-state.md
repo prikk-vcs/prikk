@@ -285,24 +285,43 @@ planned for.
   24 MiB file dominates its own measurement (about 2x its own size, not the point's own 24.5 MiB
   total); a damaged blob anywhere at the point still refuses the whole extraction, the same
   all-or-nothing guarantee every other patch-replay reader gives.
-- **`--claim`'s own peak memory is a modest, bounded amount higher than the ref/block-id path's own
-  equivalent shapes, not a serious anomaly** (0.54.0 step 3 Part 3b, re-measured after an earlier
-  draft's own fixture-construction mistake was caught and corrected — see the review record): `--claim`
-  derives its state through `derive_next_state_for_candidate` (the identical mechanism `seal`/
-  `merge`/`seal-from-accepted` already share), not through `patch_replay::extract`'s own block-chain
-  replay — a genuinely different code path, measured separately, on the identical fixture as its own
-  ref/block-id comparison (release build, fresh process per sample, `/proc/self/status`'s own
-  `VmHWM`, process-floor baseline subtracted, ~7.0 MiB). On a parent shaped like the figure above (64
-  files, ~64 MiB, sitting on a checkpoint, no file larger than 1 MiB): ref/block-id peaks about
-  2.2 MiB over the floor, `--claim` about 2.9 MiB — about 1.26x. On a parent shaped like the
-  since-checkpoint figure above (a 24 MiB file, never touched again, plus a separate `growing.bin`
-  reaching ~1.7 MiB across 32 further generations): ref/block-id peaks about 6.9 MiB over the floor,
-  `--claim` about 7.5 MiB — about 1.08x. A plausible, bounded reason for the small remaining gap:
-  `StoreBackedResolver::blob_kind` (`lifecycle_cache/store_resolvers.rs:80-94`) decodes a Blob's
-  entire payload (the same `BlobPayload::decode_canonical` double-buffer named above) just to read
-  one field, once per `CreateFile`/`ReplaceBinary` operation this derivation folds forward — the
-  claim's own one extra `CreateFile` (its own new file) pays this once more than the ref/block-id
-  path's own equivalent read does. Nothing here needs further investigation before 0.54.0.
+- **`--plan-only` costs the same as a real write, not less** (0.54.0 step 3 Part 3): it reads every
+  file's content once to measure it (`plan_summary`, `crates/prikk-cli/src/extract.rs`), the
+  identical read a real write already pays, and only skips the write itself. Measured: on the
+  since-checkpoint shape below (a 24 MiB file, a separate `growing.bin` reaching ~1.7 MiB across 32
+  further generations), a whole `extract --ref` run peaks at about 55,250 KiB (`ru_maxrss`, two
+  samples: 55,400 / 55,100 KiB) and `extract --ref --plan-only` peaks at about 54,994 KiB
+  (55,052 / 54,936 KiB) — functionally the same cost, over a process floor (`prikk log --limit 1`)
+  of about 12,376 KiB (12,368 / 12,384 KiB). **This matters for planeter's own size report**: asking
+  only for the size is not a cheap operation here, and the text must not imply otherwise.
+- **`--claim`'s own *whole-command* peak memory follows the identical "roughly twice the largest
+  file read" rule as the ref/block-id path — there is no anomaly** (0.54.0 step 3 Part 3b/3c).
+  An earlier measurement compared `--claim`'s own *planning phase alone* (`prepare_extract_plan_for_claim`,
+  which derives state through `derive_next_state_for_candidate` — the identical mechanism `seal`/
+  `merge`/`seal-from-accepted` already share, not `patch_replay::extract`'s own block-chain replay)
+  against a page that otherwise describes the *whole command's* own cost, which reads as one
+  property when it was two: a first draft of that planning-only figure also had a
+  fixture-construction mistake (32 distinct new files instead of one file repeatedly replaced),
+  caught and corrected before it reached the architect — see the review record for the full account.
+  **The planning phase alone, corrected, costs little** (release build, fresh process per sample,
+  `/proc/self/status`'s own `VmHWM`, process-floor baseline subtracted, ~7.0 MiB): on a parent
+  shaped like the figure above (64 files, ~64 MiB, sitting on a checkpoint), ref/block-id peaks
+  about 2.2 MiB over the floor during planning alone, `--claim` about 2.9 MiB; on the
+  since-checkpoint shape, ref/block-id peaks about 6.9 MiB over the floor during planning alone,
+  `--claim` about 7.5 MiB — both about 1.1–1.3x, not a scaling anomaly (a plausible, bounded reason:
+  `StoreBackedResolver::blob_kind`, `lifecycle_cache/store_resolvers.rs:80-94`, decodes a Blob's
+  entire payload just to read one field, once per `CreateFile`/`ReplaceBinary` the derivation folds
+  forward, and the claim's own one extra `CreateFile` pays this once more than the ref/block-id
+  path's own equivalent planning step does).
+  **The whole command, measured end to end** (a real `extract --claim <id> <dir>` subprocess, on the
+  identical since-checkpoint repository the ref/block-id figures above were measured against,
+  `ru_maxrss`, two samples: 54,200 / 54,212 KiB): about 54,206 KiB, against the whole `extract --ref`
+  run's own 55,250 KiB over the identical ~12,376 KiB floor — the same order of magnitude, not a
+  multiple of it, because both commands are dominated by the same final step: streaming the
+  repository's own largest file (here, the untouched 24 MiB `genesis.bin`) once, through the
+  identical `BlobPayload::decode_canonical` double-buffer named above. `--claim`'s own small
+  planning-phase overhead is real but negligible next to that one shared, dominant cost. Nothing
+  here needs further investigation before 0.54.0.
 - **Fixed in 0.52.0: in 0.51.0, an archive of a repository that has accepted a sync artifact
   (`sync accept`), or where a text file was edited, sealed, and later deleted, failed its own
   `archive verify` and did not import** — even though the source repository's own `prikk verify`

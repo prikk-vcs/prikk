@@ -202,12 +202,15 @@ claim would produce (its size, or its content) before deciding to accept it. A c
 parent (one built from an ancestor `Merge` block) is refused by name — there is no field in the claim
 saying which parent is mainline, so this is refused rather than guessed. `--claim` takes the identical
 pre-walk bound as `--ref`/a bare block id: past the trusted distance from the claimed parent's own nearest
-admitted checkpoint, it refuses by name unless `--allow-full-replay` is given. `extract`'s own peak memory
-over a ref or a bare block id tracks the largest single file it actually reads (roughly twice that file's
-own size, not once — see [Current State](current-state.md)), not the point's own total content size;
-`--claim`'s own peak memory is a modest amount higher for the same shapes (about 1.1–1.3x the
-ref/block-id path's own equivalent, measured) — see [Current State](current-state.md) for the figures.
-See [Reading a point](../guide/tree-and-cat.md).
+admitted checkpoint, it refuses by name unless `--allow-full-replay` is given. `extract`'s own peak memory,
+whole command, tracks the largest single file it actually reads (roughly twice that file's own size, not
+once — see [Current State](current-state.md)), not the point's own total content size; this holds the
+same way whether the point is named by `--ref`, a bare block id, or `--claim` — `--claim`'s own own
+derivation step (`prepare_extract_plan_for_claim`) costs a little more than the ref/block-id path's own
+equivalent planning step (about 1.1–1.3x, measured), but that planning cost is small next to the one
+shared, dominant cost every path pays: streaming the point's own largest file once. See
+[Current State](current-state.md) for the measured figures, both the planning-only comparison and the
+whole command. See [Reading a point](../guide/tree-and-cat.md).
 
 **Comparing: `diff`.** `diff` shows what changed between two states. A bare `prikk diff` compares the current
 branch's tip (with any queued commits) against the **worktree** — exactly what `commit` would author, so `commit`
