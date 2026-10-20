@@ -57,11 +57,11 @@
   identical pre-walk distance bound as `--ref`/a bare block id** (over the claimed parent's own
   chain, under its own `AnchorSite::ExtractClaim`), refusing by name past the trusted distance
   unless `--allow-full-replay` is given — not wired through when `--claim` first shipped. **`--claim`'s
-  own peak memory is measurably higher than the ref/block-id path's own equivalent shapes and not
-  yet fully explained** (`docs/src/reference/current-state.md`); a real, confirmed contributor is
-  named (`StoreBackedResolver::blob_kind` fully decodes a Blob's payload once per folded
-  `CreateFile`/`ReplaceBinary`, the same double-buffer, paid far more often than the ref/block-id
-  path pays it), but the full multiple is not pinned down this round. `--format json`'s own point
+  own peak memory is a modest, bounded amount higher than the ref/block-id path's own equivalent
+  shapes (about 1.1–1.3x, measured)** (`docs/src/reference/current-state.md`); a plausible, bounded
+  reason: `StoreBackedResolver::blob_kind` fully decodes a Blob's payload once per folded
+  `CreateFile`/`ReplaceBinary`, the same double-buffer, and the claim's own one extra `CreateFile`
+  pays it once more than the ref/block-id path's own equivalent read does. `--format json`'s own point
   is now carried under one fixed key, `point` (with a new `point_kind` field for `"ref"`/`"block"`/
   `"claim"`), the same key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` already use,
   rather than a dynamic key.

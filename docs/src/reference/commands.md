@@ -205,9 +205,8 @@ pre-walk bound as `--ref`/a bare block id: past the trusted distance from the cl
 admitted checkpoint, it refuses by name unless `--allow-full-replay` is given. `extract`'s own peak memory
 over a ref or a bare block id tracks the largest single file it actually reads (roughly twice that file's
 own size, not once — see [Current State](current-state.md)), not the point's own total content size;
-**`--claim`'s own peak memory is measurably higher for the same shapes and is not yet explained by that
-same rule alone** — see [Current State](current-state.md) for the measured figures and what is known so
-far about why.
+`--claim`'s own peak memory is a modest amount higher for the same shapes (about 1.1–1.3x the
+ref/block-id path's own equivalent, measured) — see [Current State](current-state.md) for the figures.
 See [Reading a point](../guide/tree-and-cat.md).
 
 **Comparing: `diff`.** `diff` shows what changed between two states. A bare `prikk diff` compares the current
