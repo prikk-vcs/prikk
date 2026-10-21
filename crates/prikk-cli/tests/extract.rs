@@ -636,6 +636,70 @@ fn extract_refusal_ids_for_the_write_safety_and_limit_refusals() {
     let _ = std::fs::remove_dir_all(&out_existing);
 }
 
+/// `not-a-repository` (0.54.0 step 3 Part 5e, review C1): `open_repository`'s own "no prikk
+/// repository here" failure, previously exiting 1 under `--format json` with nothing on stdout at
+/// all (the gap the review confirmed real) -- now classified explicitly at its own call site in
+/// `run_extract_inner` (`crates/prikk-cli/src/extract.rs`), before any of extract's own logic runs.
+#[test]
+fn extract_refuses_not_a_repository_with_refusal_v1() {
+    // `support::unique_repo` creates the directory itself but never calls `support::init` on it --
+    // a plain directory with no `.prikk/` underneath, exactly `open_repository`'s own refusal shape.
+    let not_a_repo = support::unique_repo("extract-not-a-repository");
+
+    let out = support::unique_repo("extract-not-a-repository-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = extract(&not_a_repo, "heads/main", &out, &["--format", "json"]);
+    assert_refusal_json(&output, "not-a-repository", None, "no prikk repository at");
+    assert!(!out.exists(), "a refused extract must write nothing");
+
+    let _ = std::fs::remove_dir_all(&not_a_repo);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+/// The structural boundary catch itself (0.54.0 step 3 Part 5e, review C1): "a refusal raised
+/// outside the eleven [now thirteen] sites still yields a document." A malformed
+/// `.prikk/current-branch` pointer fails inside `current_branch::resolve_ref`
+/// (`crates/prikk-cli/src/current_branch.rs`), a real code path that never calls this module's own
+/// `refuse()` at all -- confirmed from source: `resolve_ref` maps its own error straight to a
+/// `CliError` via `.to_string()` (`current_branch.rs:20`), with no `extract`-local classification in
+/// between, so by the time it reaches `run_extract_inner` there is no richer `PrikkError` left to
+/// classify by variant any more. Getting a `refusal-v1` document here at all proves `run_extract`'s
+/// own boundary catch is what printed it, not one of the already-classified call sites -- and the
+/// review's own explicit ruling is that this shape is `damaged-repository`, which this also checks.
+#[test]
+fn extract_boundary_catch_prints_refusal_v1_for_an_unreadable_current_branch_pointer() {
+    let repo = support::unique_repo("extract-boundary-catch");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    // No trailing newline: malformed by name, the identical shape
+    // `rfc151_current_branch.rs`'s own `a_malformed_pointer_is_refused_naming_the_file` already pins
+    // for `worktree-status`.
+    std::fs::write(repo.join(".prikk/current-branch"), b"heads/main").unwrap();
+
+    let out = support::unique_repo("extract-boundary-catch-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    // Deliberately no `--ref`: the default path reads the (now malformed) current-branch pointer,
+    // the one way this test reaches `current_branch::resolve_ref` at all (an explicit `--ref` never
+    // touches the pointer, `resolve_ref`'s own doc).
+    let output = support::prikk(&repo)
+        .args(["extract", "--format", "json", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_refusal_json(
+        &output,
+        "damaged-repository",
+        None,
+        "current-branch is malformed",
+    );
+    assert!(!out.exists(), "a refused extract must write nothing");
+
+    let _ = std::fs::remove_dir_all(&repo);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
 /// `largest_file_bytes`/`claim_parent_block_id` (0.54.0 step 3 Part 5d, items 1-2): always present.
 /// A ref point has no claim parent (`null`); the largest single file's own length is reported
 /// alongside the total, in both the JSON report and the plain-text one (`--plan-only`'s own

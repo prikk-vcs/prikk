@@ -23,6 +23,7 @@
 //! (`prikk_store::rename_new_directory_no_replace`) -- an ordinary refusal or error cleans the
 //! sibling up; only a hard crash can leave it behind.
 
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -40,11 +41,11 @@ use crate::output::verification::escape_json_string;
 use crate::stdout::println;
 use crate::{current_branch, open_repository};
 
-/// `refusal-v1`'s own eleven ids (0.54.0 step 3 Part 5d) -- this project's first machine-readable
-/// refusal document, designed as a precedent other commands adopt when next touched. **Exhaustive
-/// by construction**: no `match` over this enum anywhere in this module has a wildcard arm, so a
-/// twelfth refusal `extract` grows later, without updating this enum, is a compile error here, not
-/// a silently missing id in the document.
+/// `refusal-v1`'s own thirteen ids (0.54.0 step 3 Part 5d, `not-a-repository` added in Part 5e) --
+/// this project's first machine-readable refusal document, designed as a precedent other commands
+/// adopt when next touched. **Exhaustive by construction**: no `match` over this enum anywhere in
+/// this module has a wildcard arm, so a fourteenth refusal `extract` grows later, without updating
+/// this enum, is a compile error here, not a silently missing id in the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtractRefusalId {
     OverMaxBytes,
@@ -59,6 +60,7 @@ enum ExtractRefusalId {
     NoCheckpointInReach,
     DamagedRepository,
     IoFailure,
+    NotARepository,
 }
 
 impl ExtractRefusalId {
@@ -76,6 +78,7 @@ impl ExtractRefusalId {
             Self::NoCheckpointInReach => "no-checkpoint-in-reach",
             Self::DamagedRepository => "damaged-repository",
             Self::IoFailure => "io-failure",
+            Self::NotARepository => "not-a-repository",
         }
     }
 }
@@ -166,10 +169,24 @@ fn print_refusal_json(id: ExtractRefusalId, reason: Option<&'static str>, messag
     println!("{json}");
 }
 
+thread_local! {
+    /// Whether this run of `extract` has already printed a `refusal-v1` document for its own
+    /// current `Err` (0.54.0 step 3 Part 5e, review C1) -- set by [`refuse`] itself whenever it
+    /// actually prints one, read and cleared by [`run_extract`]'s own structural boundary catch.
+    /// The same seam `main.rs`'s own `SILENT_EXIT_CODE` thread-local already uses for an analogous
+    /// problem: `Command.run`'s fixed signature has nowhere else to carry this one bit out of
+    /// `run_extract_inner` without changing every one of its own call sites' signatures. Race-free
+    /// for the identical reason `SILENT_EXIT_CODE` is: a single-threaded CLI process, one run per
+    /// process, read immediately after `run_extract_inner` returns.
+    static REFUSAL_PRINTED: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Print `refusal-v1`'s own document, when `format_json` is set, then return `cli_error` unchanged
-/// -- the one seam every refusal in this module passes through on its way out, so stderr and the
-/// exit code stay exactly what `cli_error` already carries (RFC: a usage error, exit 2, never
-/// reaches this function at all -- every call site below is on the exit-1 refusal path only).
+/// -- the one seam every already-classified refusal in this module passes through on its way out,
+/// so stderr and the exit code stay exactly what `cli_error` already carries (RFC: a usage error,
+/// exit 2, never reaches this function at all -- every call site below is on the exit-1 refusal
+/// path only). Marks [`REFUSAL_PRINTED`] so [`run_extract`]'s own boundary catch does not print a
+/// second, less-specific document over this one.
 fn refuse(
     format_json: bool,
     id: ExtractRefusalId,
@@ -178,6 +195,7 @@ fn refuse(
 ) -> CliError {
     if format_json {
         print_refusal_json(id, reason, cli_error.message());
+        REFUSAL_PRINTED.with(|cell| cell.set(true));
     }
     cli_error
 }
@@ -302,9 +320,49 @@ enum ExtractSource {
 
 /// `prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay]
 /// [--plan-only] [--max-bytes N] [--max-files N] [--format json]`.
+///
+/// **The structural boundary catch (0.54.0 step 3 Part 5e, review C1).** The real work is
+/// [`run_extract_inner`]; this function is a thin wrapper around it that makes "exit 1 under
+/// `--format json` always means a `refusal-v1` document" a guarantee about this function's own
+/// boundary, not a property every call site inside it must each remember to uphold. A usage error
+/// (exit 2) is unaffected -- `parse_extract_args` returning `Err` here returns straight through,
+/// before `--format json` itself is even known, exactly as before this round.
 pub fn run_extract(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let args = parse_extract_args(root, args)?;
-    let layout = open_repository(args.root)?;
+    let format_json = args.format_json;
+    REFUSAL_PRINTED.with(|cell| cell.set(false));
+    let result = run_extract_inner(args);
+    if let Err(err) = &result {
+        let already_printed = REFUSAL_PRINTED.with(Cell::get);
+        if format_json && !already_printed {
+            // Reached without ever calling `refuse()` -- a refusal not yet classified at its own
+            // raise site (today, only `current_branch::resolve_ref`'s own failure, already a
+            // `CliError` with no `PrikkError` left to inspect by the time it gets here; the review's
+            // own explicit ruling is that this one is `damaged-repository`). The fallback has no
+            // richer type to classify by at this boundary -- by construction, every call site that
+            // *can* distinguish `io-failure` from `damaged-repository` already does so itself, via
+            // `refuse()`, before this catch is ever reached.
+            print_refusal_json(ExtractRefusalId::DamagedRepository, None, err.message());
+        }
+    }
+    result
+}
+
+/// `run_extract`'s own real logic, unchanged by the Part 5e boundary catch around it: every one of
+/// the already-classified refusals below still calls [`refuse`] at its own raise site, exactly as
+/// before this round.
+fn run_extract_inner(args: ExtractArgs) -> std::result::Result<(), CliError> {
+    let layout = match open_repository(args.root) {
+        Ok(layout) => layout,
+        Err(err) => {
+            return Err(refuse(
+                args.format_json,
+                ExtractRefusalId::NotARepository,
+                None,
+                CliError::Failure(err),
+            ));
+        }
+    };
 
     let source = match args.claim_id {
         Some(claim_id) => ExtractSource::Claim(claim_id),
