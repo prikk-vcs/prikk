@@ -173,9 +173,22 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp, the same fix measured on
+      # windows-mutation (see that job's own comment) -- set unconditionally on this shared
+      # Windows/macOS matrix rather than conditioned on `matrix.os`, since neither cargo nor any
+      # Unix tool this job runs reads TMP/TEMP on macOS (std::env::temp_dir and the Unix `TMPDIR`
+      # convention both read `TMPDIR`, never `TMP`/`TEMP`, on a Unix target) -- the values are set
+      # but simply go unread there, harmless rather than conditional YAML for a difference that
+      # does not matter.
       - name: Clippy
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Build
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo build --workspace --locked
 
   # DC-81: repository mutation is Linux-and-macOS now (DC-76's contract ported), but this is the
@@ -187,7 +200,10 @@ jobs:
   macos-mutation:
     name: macOS mutation test suite
     runs-on: macos-latest
-    timeout-minutes: 20
+    # 0.54.0 Part G1c item 2: since Part G1's own dev-profile opt-level change for the workspace's
+    # own crates, this job runs 16-18 minutes on GitHub's 3-core macOS runners -- too thin a margin
+    # against the old 20-minute limit -- was 20.
+    timeout-minutes: 30
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
@@ -231,36 +247,27 @@ jobs:
   # run Windows locally as part of this project's own environment. A green run here proves prikk's
   # own path-resolution and failure-handling behaviour on Windows; criterion 2 (every guarantee held
   # or documented weaker) is not provable from a compile alone — this job exercises it.
-  # 0.54.0 Part G1c (temporary, item 1 of 3 only -- see the Part G1c handoff): Part G1's own
-  # measurement found windows-mutation's test step now ~14x the same tests' time on Linux
-  # (`0.54.0-g1b-review-v1.md` "G1 on CI"). This matrix measures four candidate fixes side by side
-  # instead of guessing: (a) tmp_redirect=false/defender_exclusion=false is today's behaviour
-  # unchanged, (b) tmp_redirect=true redirects TMP/TEMP to the work drive for the Test step only,
-  # (c) defender_exclusion=true adds a Microsoft Defender exclusion before the build, (d) both. The
-  # architect reads all four runs and a later, separate commit keeps the best variant (or none) and
-  # removes this matrix -- this round does not pick a winner.
+  # 0.54.0 Part G1c: Part G1's own measurement found this job's Test step now ~14x the same tests'
+  # time on Linux (`0.54.0-g1b-review-v1.md` "G1 on CI"). Item 1 measured four candidate fixes side
+  # by side on a temporary matrix (CI run 39618167557, `0.54.0-g1c-item1-review-v1`): redirecting
+  # TMP/TEMP to `runner.temp` took the Test step from 52.8 to 14.5 minutes (compile 11.8->9.1, run
+  # 40.9->5.3, prikk-store unit tests 28.6->3.5 minutes); a Microsoft Defender exclusion alone
+  # gained nothing (48.1 minutes) and made the combined variant worse than the redirect alone (26.9
+  # vs 14.5). Item 2 (this commit) keeps the TMP/TEMP redirect permanently below, drops the
+  # Defender exclusion entirely (it cost a privileged `Add-MpPreference` call for no measured
+  # benefit), and removes the matrix.
   windows-mutation:
-    strategy:
-      fail-fast: false
-      matrix:
-        tmp_redirect: [false, true]
-        defender_exclusion: [false, true]
-    name: Windows mutation test suite (tmp_redirect=${{ matrix.tmp_redirect }}, defender_exclusion=${{ matrix.defender_exclusion }})
+    name: Windows mutation test suite
     runs-on: windows-latest
-    timeout-minutes: 90
+    # 0.54.0 Part G1c item 2: about 2.5x the new, permanent TMP/TEMP-redirect Test step runtime
+    # (~14.5 min), plus this job's own checkout/toolchain/cache overhead -- was 90.
+    timeout-minutes: 40
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
       - uses: actions/checkout@v7
         with:
           fetch-tags: true
-      # 0.54.0 Part G1c (temporary): variants (c)/(d)'s Defender exclusion. Added here, before the
-      # toolchain install and before `cargo fetch`/`cargo test` below, so the exclusion is in place
-      # before Defender starts scanning the files the build creates -- not merely before the Test
-      # step. Skipped entirely (not merely a no-op) for variants (a)/(b), via `if:`.
-      - name: Exclude workspace and runner temp from Microsoft Defender scanning
-        if: ${{ matrix.defender_exclusion }}
-        run: Add-MpPreference -ExclusionPath ${{ github.workspace }}, ${{ runner.temp }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Compiler version
         id: rustc-version
@@ -283,17 +290,9 @@ jobs:
       # full CI cycle per newly-reachable layer for three runs straight; --no-fail-fast gets the whole
       # inventory in one.
       #
-      # 0.54.0 Part G1c (temporary): variants (a)/(c) (TMP/TEMP untouched) and variants (b)/(d)
-      # (TMP/TEMP redirected to runner.temp) are two separate steps, each gated by
-      # `matrix.tmp_redirect` via `if:`, rather than one step whose `env:` value is conditionally
-      # empty -- so the unredirected variant genuinely does not have TMP/TEMP set, instead of having
-      # them set to an empty string. The `cargo test` command itself, and every assertion it runs, is
-      # identical between the two.
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp permanently (variant (b) above,
+      # measured 52.8 -> 14.5 minutes for this step).
       - name: Test
-        if: ${{ !matrix.tmp_redirect }}
-        run: cargo test --workspace --locked --no-fail-fast
-      - name: Test (TMP/TEMP redirected to runner.temp)
-        if: ${{ matrix.tmp_redirect }}
         env:
           TMP: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
@@ -433,7 +432,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp -- see non-linux-build's own
+      # comment above for why this is set unconditionally on this shared Windows/macOS matrix.
       - name: Build
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
         with:
@@ -451,6 +455,9 @@ jobs:
       # the ambiguity that made the first B2 report unable to isolate which of these three failed.
       - name: Run the read-only command set against the fixture
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           cd fixture-repo
           echo "=== prikk log ==="
@@ -535,7 +542,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp -- see windows-mutation's own
+      # comment above for the measurement that justifies this.
       - name: Build
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
         with:
@@ -551,6 +563,9 @@ jobs:
       # job exists to check.
       - name: Mutate the fixture on Windows
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           cd fixture-repo
           echo "cross-platform history check" >> readme.txt
@@ -558,6 +573,9 @@ jobs:
           ../target/debug/prikk seal --allow-no-audit
       - name: Record the resulting object ids
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           cd fixture-repo
           ../target/debug/prikk log | grep "^block " | sort > ../windows-object-ids.txt
@@ -747,13 +765,21 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp -- see windows-mutation's own
+      # comment above for the measurement that justifies this.
       - name: Build
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
         with:
           name: fixture-sync-summary
       - name: Init the receiver and negotiate against the sender's summary
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           mkdir -p receiver-repo
           target/debug/prikk init receiver-repo
@@ -862,7 +888,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp -- see windows-mutation's own
+      # comment above for the measurement that justifies this.
       - name: Build
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
         with:
@@ -881,6 +912,9 @@ jobs:
       # exchange is finished, not merely accepted.
       - name: Accept the exchange artifact and finish the exchange
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           cd receiver-repo
           ../target/debug/prikk sync accept ../exchange.pexch002 --claims-out ../claims.txt
@@ -892,6 +926,9 @@ jobs:
           ../target/debug/prikk sync pending
       - name: Verify the receiver holds the sender's history
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           cd receiver-repo
           ../target/debug/prikk verify
