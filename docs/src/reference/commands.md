@@ -220,12 +220,15 @@ removes one received ref's own pointer from the received-index container — the
 or `RefState` nothing else reaches any more is reported by `prikk verify` as an **unreached
 object**, a non-blocking warning, not a failure (see `verify`'s own entry above). `--plan-only`
 reports what would be removed — the pointer's own current target, or that there is nothing named —
-without taking the container's lock or writing anything. A real run saves the removal to the
-recovery log unconditionally, naming the run id so `prikk doctor --recovery-restore <id>` can undo
-it, as long as nothing has since written to the same slot (a later, sound re-import of the
-identical name makes the restore refuse, rather than silently discarding it). Refuses a name that
-does not start with `remotes/`, a name with no received pointer, and a damaged received index, the
-same way `compact --received-index` already does.
+writing nothing, but it still takes the container's lock for the duration of the read: the same
+reason `compact`'s own `--plan-only` variants do — an operator acts on what a preview reports, and
+the read should not go stale against a concurrent writer before it reaches the terminal; the lock
+is released once the read is done. A real run saves the removal to the recovery log
+unconditionally, naming the run id so `prikk doctor --recovery-restore <id>` can undo it, as long
+as nothing has since written to the same slot (a later, sound re-import of the identical name makes
+the restore refuse, rather than silently discarding it). Refuses a name that does not start with
+`remotes/`, a name with no received pointer, and a damaged received index, the same way `compact
+--received-index` already does.
 
 **Comparing: `diff`.** `diff` shows what changed between two states. A bare `prikk diff` compares the current
 branch's tip (with any queued commits) against the **worktree** — exactly what `commit` would author, so `commit`
