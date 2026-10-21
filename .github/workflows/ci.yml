@@ -231,8 +231,21 @@ jobs:
   # run Windows locally as part of this project's own environment. A green run here proves prikk's
   # own path-resolution and failure-handling behaviour on Windows; criterion 2 (every guarantee held
   # or documented weaker) is not provable from a compile alone — this job exercises it.
+  # 0.54.0 Part G1c (temporary, item 1 of 3 only -- see the Part G1c handoff): Part G1's own
+  # measurement found windows-mutation's test step now ~14x the same tests' time on Linux
+  # (`0.54.0-g1b-review-v1.md` "G1 on CI"). This matrix measures four candidate fixes side by side
+  # instead of guessing: (a) tmp_redirect=false/defender_exclusion=false is today's behaviour
+  # unchanged, (b) tmp_redirect=true redirects TMP/TEMP to the work drive for the Test step only,
+  # (c) defender_exclusion=true adds a Microsoft Defender exclusion before the build, (d) both. The
+  # architect reads all four runs and a later, separate commit keeps the best variant (or none) and
+  # removes this matrix -- this round does not pick a winner.
   windows-mutation:
-    name: Windows mutation test suite
+    strategy:
+      fail-fast: false
+      matrix:
+        tmp_redirect: [false, true]
+        defender_exclusion: [false, true]
+    name: Windows mutation test suite (tmp_redirect=${{ matrix.tmp_redirect }}, defender_exclusion=${{ matrix.defender_exclusion }})
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -241,6 +254,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-tags: true
+      # 0.54.0 Part G1c (temporary): variants (c)/(d)'s Defender exclusion. Added here, before the
+      # toolchain install and before `cargo fetch`/`cargo test` below, so the exclusion is in place
+      # before Defender starts scanning the files the build creates -- not merely before the Test
+      # step. Skipped entirely (not merely a no-op) for variants (a)/(b), via `if:`.
+      - name: Exclude workspace and runner temp from Microsoft Defender scanning
+        if: ${{ matrix.defender_exclusion }}
+        run: Add-MpPreference -ExclusionPath ${{ github.workspace }}, ${{ runner.temp }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Compiler version
         id: rustc-version
@@ -262,7 +282,21 @@ jobs:
       # DC-87 Stage 2, fourth CI run: see macos-mutation's own comment above -- fail-fast has cost one
       # full CI cycle per newly-reachable layer for three runs straight; --no-fail-fast gets the whole
       # inventory in one.
+      #
+      # 0.54.0 Part G1c (temporary): variants (a)/(c) (TMP/TEMP untouched) and variants (b)/(d)
+      # (TMP/TEMP redirected to runner.temp) are two separate steps, each gated by
+      # `matrix.tmp_redirect` via `if:`, rather than one step whose `env:` value is conditionally
+      # empty -- so the unredirected variant genuinely does not have TMP/TEMP set, instead of having
+      # them set to an empty string. The `cargo test` command itself, and every assertion it runs, is
+      # identical between the two.
       - name: Test
+        if: ${{ !matrix.tmp_redirect }}
+        run: cargo test --workspace --locked --no-fail-fast
+      - name: Test (TMP/TEMP redirected to runner.temp)
+        if: ${{ matrix.tmp_redirect }}
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo test --workspace --locked --no-fail-fast
 
   # A fixture repository is authored on Linux and handed to the non-linux-verify job below, which

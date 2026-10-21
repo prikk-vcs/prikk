@@ -78,6 +78,13 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
         "Compress-Archive" => windows_compress_archive(tail),
         "Set-Content" => windows_set_content(tail),
         "Add-Content" => windows_add_content(tail),
+        // 0.54.0 Part G1c (temporary measurement matrix): one of windows-mutation's four candidate
+        // fixes for its ~14x-Linux test-step time is a Microsoft Defender exclusion. `Add-MpPreference`
+        // gets the same exact-match treatment as the other PowerShell cmdlets above, for the identical
+        // DC-70 reason (it can reach outside `github.workspace`/`runner.temp` under other arguments,
+        // so it is not an `inert_head` primitive) -- not added there, per that list's own "cannot
+        // execute another program under any arguments" test.
+        "Add-MpPreference" => windows_add_mp_preference(tail),
         _ => inert_head(head),
     }
 }
@@ -140,6 +147,29 @@ fn windows_add_content(tail: &[String]) -> bool {
                 "-Value",
                 "build: cargo build -p prikk --release --target x86_64-pc-windows-msvc --locked",
             ]
+}
+
+/// `Add-MpPreference -ExclusionPath ${{ github.workspace }}, ${{ runner.temp }}` --
+/// `windows-mutation`'s temporary Defender-exclusion variant. This is the first `run:` line
+/// anywhere in this repository's workflows to use the `${{ ... }}` GitHub Actions expression form,
+/// so its exact tail was confirmed against the real lexer before this production was written
+/// (`cargo test -p prikk-release-policy`, a throwaway probe calling `lexer::commands` directly on
+/// this exact candidate line), not assumed to parse the way the braces read on the page. The
+/// lexer's separator-splitting (whitespace/`,`/`:` end a token; `{`/`}` are trimmed from a token's
+/// own edges by `normalize_token`, same rule that trims `tar`'s trailing `.`) reduces each
+/// `${{ <expr> }}` to two tokens, not one: a lone `"$"` (from `${{`, whose trailing `{{` trims
+/// away) and the bare dotted expression (`"github.workspace"`/`"runner.temp"`, whose own trailing
+/// `}}` trims to nothing and is dropped as an empty token) -- the comma between the two expressions
+/// is consumed as a token separator and contributes no token of its own. The tail below is that
+/// confirmed shape, not a guess from the source line's own punctuation.
+fn windows_add_mp_preference(tail: &[String]) -> bool {
+    tail == [
+        "-ExclusionPath",
+        "$",
+        "github.workspace",
+        "$",
+        "runner.temp",
+    ]
 }
 
 fn tar(tail: &[String]) -> bool {

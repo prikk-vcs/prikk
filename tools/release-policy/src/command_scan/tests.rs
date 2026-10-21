@@ -393,6 +393,36 @@ fn recognizes_rfc107_windows_package_procedure() {
     }
 }
 
+/// 0.54.0 Part G1c: `windows-mutation`'s temporary Defender-exclusion variant. `${{ github.workspace }}`
+/// and `${{ runner.temp }}` are the first `${{ ... }}` GitHub Actions expressions inside any `run:`
+/// line in this repository, so the exact tail here reflects the lexer's actual tokenization
+/// (confirmed with a throwaway probe against `lexer::commands` before this line was written, not
+/// assumed) -- each `${{ <expr> }}` becomes a `"$"` token and a bare dotted-expression token, with
+/// the comma and both pairs of braces consumed as separators/trimmed to nothing and contributing no
+/// token. A different argument order, a missing path, an extra one, or a different flag must all
+/// still be refused -- `Add-MpPreference` can reach outside these two paths under other arguments,
+/// so (DC-70 B1 precedent) it is exact-match, not blanket-approved.
+#[test]
+fn recognizes_g1c_windows_defender_exclusion_procedure() {
+    let command = "Add-MpPreference -ExclusionPath ${{ github.workspace }}, ${{ runner.temp }}";
+    for scan in [scan_shell(command), scan_yaml(&format!("- run: {command}"))] {
+        assert!(scan.errors.is_empty(), "{command}: {:?}", scan.errors);
+    }
+
+    for command in [
+        // Swapped order.
+        "Add-MpPreference -ExclusionPath ${{ runner.temp }}, ${{ github.workspace }}",
+        // Missing the second path.
+        "Add-MpPreference -ExclusionPath ${{ github.workspace }}",
+        // Extra argument beyond the two paths.
+        "Add-MpPreference -ExclusionPath ${{ github.workspace }}, ${{ runner.temp }}, /tmp/evil",
+        // A different flag entirely -- still reaches outside the two named paths.
+        "Add-MpPreference -ExclusionProcess cargo.exe",
+    ] {
+        assert!(!scan_shell(command).errors.is_empty(), "{command}");
+    }
+}
+
 /// RFC 107 Stage 2: the two new release-binary builds, same exact-entry shape as the existing
 /// Linux ones -- deliberately `aarch64-apple-darwin` and `x86_64-pc-windows-msvc` only, not
 /// `x86_64-apple-darwin`, per the target-list finding
