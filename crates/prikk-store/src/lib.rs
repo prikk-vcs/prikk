@@ -14,6 +14,13 @@
 //! conservative rollback draft append to an empty active WAL, rollback draft verification, sealed
 //! rollback block classification, and an internal patch-algebra foundation. Production confluence,
 //! plugin execution, and remote sync remain separate increments.
+//!
+//! **This crate's own Rust API is not a stability promise, before or after 1.0.** It is published so
+//! `prikk`'s own binary crate can depend on it and so its types are reachable from documentation, not
+//! because its function signatures, module layout, or public items are a supported interface in their
+//! own right -- they may change in any release, including a patch release, with no deprecation period.
+//! The `prikk` CLI's own stdout/stderr text and `--format json` output are the supported interface;
+//! see [the project's `README`](https://github.com/prikk-vcs/prikk#readme) for how prikk releases.
 
 // RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
 mod anchor_fallback;

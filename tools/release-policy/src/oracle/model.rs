@@ -148,7 +148,12 @@ impl Case {
             digest.update(format!("byte_length={}\n", input.byte_length));
             digest.update(format!("sha256={}\n", input.sha256));
         }
-        format!("{:x}", digest.finalize())
+        // sha2 0.11's digest output has no `LowerHex` impl; hex-encoded byte-by-byte instead.
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 

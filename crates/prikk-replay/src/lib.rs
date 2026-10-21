@@ -3,9 +3,9 @@
 
 //! Workspace-internal replay and lifecycle semantics for Prikk.
 //!
-//! During replay-boundary stabilization this crate is not a public API commitment. It owns semantic
-//! replay/lifecycle substrate types while repository layout, refs, WAL, object storage,
-//! verification, doctor, and store-backed resolver construction remain in `prikk-store`.
+//! This crate is not a public API commitment. It owns semantic replay/lifecycle substrate types
+//! while repository layout, refs, WAL, object storage, verification, doctor, and store-backed
+//! resolver construction remain in `prikk-store`.
 
 mod node_lifecycle;
 mod path;

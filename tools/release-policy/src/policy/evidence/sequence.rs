@@ -48,7 +48,14 @@ pub(super) fn reason(
         || link
             .and_then(|value| value.get("sha256"))
             .and_then(Value::as_str)
-            != Some(format!("{:x}", Sha256::digest(prior_bytes)).as_str())
+            // sha2 0.11's digest output has no `LowerHex` impl; hex-encoded byte-by-byte instead.
+            != Some(
+                Sha256::digest(prior_bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+                    .as_str(),
+            )
     {
         return Some("evidence-byte-identity-or-link");
     }

@@ -59,7 +59,10 @@ fn pair(old_status: &str, new_status: &str) -> (Value, Value, Vec<u8>, Vec<u8>) 
     let mut new = snapshot("002", new_status);
     new["prior_snapshot"] = json!({
         "name": "prikk-0.19.0-release-evidence-001.json",
-        "sha256": format!("{:x}", Sha256::digest(&old_bytes))
+        "sha256": Sha256::digest(&old_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
     });
     new["attempts"] = json!([{"attempt": "next"}]);
     let new_bytes = serde_json::to_vec(&new).expect("new bytes");
@@ -98,7 +101,12 @@ fn attempt_history_requires_strict_prefix_growth() {
     old["attempts"] = json!([{"attempt": "old"}]);
     new["attempts"] = json!([{"attempt": "changed"}]);
     let old_bytes = serde_json::to_vec(&old).expect("old bytes");
-    new["prior_snapshot"]["sha256"] = json!(format!("{:x}", Sha256::digest(&old_bytes)));
+    new["prior_snapshot"]["sha256"] = json!(
+        Sha256::digest(&old_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
     let new_bytes = serde_json::to_vec(&new).expect("new bytes");
     assert_eq!(
         reason(&old, &new, &old_bytes, &new_bytes),
@@ -122,7 +130,12 @@ fn observed_pages_object_is_fully_immutable() {
             json!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         };
         let old_bytes = serde_json::to_vec(&old).expect("old bytes");
-        new["prior_snapshot"]["sha256"] = json!(format!("{:x}", Sha256::digest(&old_bytes)));
+        new["prior_snapshot"]["sha256"] = json!(
+            Sha256::digest(&old_bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
         let new_bytes = serde_json::to_vec(&new).expect("new bytes");
         assert_eq!(
             reason(&old, &new, &old_bytes, &new_bytes),
@@ -154,7 +167,12 @@ fn observed_publication_fields_are_monotonic() {
             }
         }
         let old_bytes = serde_json::to_vec(&old).expect("old bytes");
-        new["prior_snapshot"]["sha256"] = json!(format!("{:x}", Sha256::digest(&old_bytes)));
+        new["prior_snapshot"]["sha256"] = json!(
+            Sha256::digest(&old_bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
         let new_bytes = serde_json::to_vec(&new).expect("new bytes");
         assert_eq!(
             reason(&old, &new, &old_bytes, &new_bytes),

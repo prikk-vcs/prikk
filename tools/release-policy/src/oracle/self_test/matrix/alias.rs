@@ -87,7 +87,13 @@ pub(super) fn coordinated_pack_alias(
     set_field(
         identity,
         "sha256",
-        json!(format!("{:x}", Sha256::digest(&bytes))),
+        // sha2 0.11's digest output has no `LowerHex` impl; hex-encoded byte-by-byte instead.
+        json!(
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
     )?;
     fs::write(
         candidate.path().join(MANIFEST),

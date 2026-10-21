@@ -69,6 +69,12 @@ checksum beside each download proves integrity of transport; there is no support
 promise before 1.0 — see
 [how prikk releases](./docs/src/reference/release-compatibility.md#how-prikk-releases).
 
+**Separately from that product-level promise, the Rust library crates below (`prikk-store` and the
+rest) are never the supported interface, before or after 1.0.** They exist so `prikk`'s own binary can
+depend on them and so their types are reachable from documentation; their APIs may change in any
+release with no deprecation period. The `prikk` CLI's own output — stdout/stderr text and `--format
+json` — is the supported interface.
+
 The [install guide](./docs/src/guide/install.md) covers pinning a version, verifying checksums by
 hand, building from source, uninstalling, and the per-platform detail; the [platform support
 reference](./docs/src/reference/platform-support.md) has the exact command-by-command matrix.

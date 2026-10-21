@@ -24,7 +24,13 @@ pub(super) fn verify_bytes(label: &str, bytes: &[u8], length: u64, digest: &str)
     if bytes.len() as u64 != length {
         return Err(Error::new(format!("input-identity:length:{label}")));
     }
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    // sha2 0.11's `Digest::digest` returns `Array<u8, _>`, which (unlike 0.10's generic-array
+    // type) does not implement `LowerHex` -- hex-encoded byte-by-byte instead, the same pattern
+    // `release_evidence.rs`'s own `hex_sha256` already uses.
+    let actual: String = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     if actual != digest {
         return Err(Error::new(format!("input-identity:sha256:{label}")));
     }

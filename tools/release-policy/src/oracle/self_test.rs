@@ -192,7 +192,13 @@ fn mutate_auxiliary(
     if let Some(field) = identity_field {
         let identity = member_mut(&mut manifest, field)?;
         *member_mut(identity, "byte_length")? = json!(bytes.len());
-        *member_mut(identity, "sha256")? = json!(format!("{:x}", Sha256::digest(&bytes)));
+        // sha2 0.11's digest output has no `LowerHex` impl; hex-encoded byte-by-byte instead.
+        *member_mut(identity, "sha256")? = json!(
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
         fs::write(
             temporary.path().join(MANIFEST),
             serde_json::to_vec_pretty(&manifest)?,
