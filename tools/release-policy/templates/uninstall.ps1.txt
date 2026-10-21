@@ -16,8 +16,82 @@
 # where to look:
 #   $env:PRIKK_INSTALL_DIR = "C:\custom\path"
 #   irm https://github.com/REPO_SLUG/releases/latest/download/uninstall.ps1 | iex
-
+#
+# Windows installer/uninstaller handoff v1 Part 6a2 (review 0.54.0-step-3-part-6a-review-v1,
+# condition C1): wrapped in one script block (`& { ... }`), the same fix and for the same reason as
+# install.ps1 -- see that script's own comment for the citations (about_Operators's Call operator
+# section and about_Scopes). This script never called `exit`, but its own working variables
+# ($installDir, $binaryPath, $markerPath, ...) and $ErrorActionPreference were still assigned at top
+# level, so they leaked into the caller's own session under the one-line `iex` form exactly the same
+# way install.ps1's did.
+& {
 $ErrorActionPreference = 'Stop'
+
+# C3: see install.ps1's identical line for why this is printed from inside the run itself.
+Write-Host "prikk-uninstall: running under PowerShell $($PSVersionTable.PSVersion)"
+
+# C2: see install.ps1's own comment above these same two functions for the full citations
+# (RegistryKey.GetValue's default-expansion behavior, RegistryValueOptions.DoNotExpandEnvironmentNames,
+# RegistryValueKind, and Environment.SetEnvironmentVariable's own signature taking no
+# RegistryValueKind parameter). uninstall.ps1 removes only its own one PATH entry from the raw,
+# unexpanded string and preserves whatever registry kind (String/REG_SZ or ExpandString/REG_EXPAND_SZ)
+# the value already had -- the same principle this script already followed for *which* entry to
+# touch (only the one its own marker says install.ps1 added), now applied to *how* the value itself
+# is read and written back.
+function Get-RawUserPathEntry {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+  if ($null -eq $key) {
+    return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+  }
+  try {
+    $exists = $false
+    foreach ($name in $key.GetValueNames()) {
+      if ($name -eq 'Path') { $exists = $true; break }
+    }
+    if (-not $exists) {
+      return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+    }
+    $kind = $key.GetValueKind('Path')
+    $raw = $key.GetValue('Path', "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    return @{ Value = [string]$raw; Kind = $kind }
+  } finally {
+    $key.Close()
+  }
+}
+
+function Set-RawUserPathEntry([string]$Value, [Microsoft.Win32.RegistryValueKind]$Kind) {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+  try {
+    $key.SetValue('Path', $Value, $Kind)
+  } finally {
+    $key.Close()
+  }
+  Send-EnvironmentChangeBroadcast
+}
+
+# See install.ps1's own comment above its identical Add-Type block for the SendMessageTimeout
+# signature citation and the PSTypeName idempotency-guard citation (Add-Type's own documentation).
+if (-not ([System.Management.Automation.PSTypeName]'PrikkInstaller.NativeMethods').Type) {
+  Add-Type -Namespace PrikkInstaller -Name NativeMethods -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(
+    IntPtr hWnd,
+    uint Msg,
+    UIntPtr wParam,
+    string lParam,
+    uint fuFlags,
+    uint uTimeout,
+    out UIntPtr lpdwResult);
+'@
+}
+
+function Send-EnvironmentChangeBroadcast {
+  $hwndBroadcast = [IntPtr]0xffff
+  $wmSettingChange = 0x1A
+  $smtoAbortIfHung = 0x0002
+  $result = [UIntPtr]::Zero
+  [PrikkInstaller.NativeMethods]::SendMessageTimeout($hwndBroadcast, $wmSettingChange, [UIntPtr]::Zero, "Environment", $smtoAbortIfHung, 5000, [ref]$result) | Out-Null
+}
 
 $installDir = if ($env:PRIKK_INSTALL_DIR) { $env:PRIKK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\prikk" }
 $binaryPath = Join-Path $installDir "prikk.exe"
@@ -37,12 +111,12 @@ if (Test-Path -Path $binaryPath -PathType Leaf) {
 # to it and is left untouched, exactly as the handoff requires.
 $removedPathEntry = $false
 if (Test-Path -Path $markerPath -PathType Leaf) {
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if ($userPath) {
-    $entries = $userPath -split ';' | Where-Object { $_ -ne '' }
+  $rawPath = Get-RawUserPathEntry
+  if ($rawPath.Value) {
+    $entries = $rawPath.Value -split ';' | Where-Object { $_ -ne '' }
     if ($entries -contains $installDir) {
       $kept = $entries | Where-Object { $_ -ne $installDir }
-      [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')
+      Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind
       $removedPathEntry = $true
       Write-Host "prikk-uninstall: removed the PATH entry for $installDir"
     }
@@ -60,3 +134,4 @@ if ((Test-Path -Path $installDir -PathType Container) -and ((Get-ChildItem -Path
 
 Write-Host "prikk-uninstall: done. Repositories under .prikk are untouched -- delete them yourself if you"
 Write-Host "prikk-uninstall: no longer want that history tracked."
+}

@@ -19,8 +19,145 @@
 #   PRIKK_INSTALL_VERSION   version tag to install, default "latest"
 #   PRIKK_INSTALL_DIR       install directory, default "$env:LOCALAPPDATA\Programs\prikk"
 #   PRIKK_INSTALL_BASE_URL  override the download base URL (undocumented, test-only)
-
+#
+# Windows installer/uninstaller handoff v1 Part 6a2 (review 0.54.0-step-3-part-6a-review-v1,
+# condition C1): the entire body below is wrapped in one script block invoked once with the call
+# operator (`& { ... }`). `about_Operators`'s own Call operator section states plainly: "The call
+# operator executes in a child scope" -- and `about_Scopes` states the general rule a child scope
+# follows: "Items that you create or change in a child scope don't affect the parent scope, unless
+# you explicitly specify the scope when you create the items." Confirmed from both pages before
+# relying on it, not assumed. That is what makes this safe to run as `irm ... | iex`: today,
+# `$ErrorActionPreference` and every working variable ($repo, $version, $installDir, $workDir, ...)
+# are assigned at top level, which under `iex` means the *caller's own current scope* -- so they
+# leak into, and stay in, the interactive session that ran the one-line form. Moving every one of
+# those assignments inside `& { ... }` (with `$ErrorActionPreference = 'Stop'` as the first
+# statement in the block, per the review) keeps them local to the block's own child scope; nothing
+# escapes back to the caller, whether the caller is an interactive session (`iex`) or the top-level
+# scope of a `-File` invocation (where the block's parent scope is the script scope, which is
+# discarded when the script file itself finishes either way).
+#
+# The same condition also replaces every `exit N` with `throw`. `exit` (about_Language_Keywords:
+# "Causes PowerShell to exit a script or a PowerShell instance") is a host/process-level operation:
+# typed or evaluated in an interactive session, it closes that session, not just "this script" --
+# there is no per-script `exit` in PowerShell the way there is no equivalent in, say, a piped-in
+# shell script read by `sh -s` being any different from a saved one. `throw`, by contrast
+# (about_Throw: "the throw keyword unwinds the entire call stack. Execution stops completely unless
+# the error is caught by a try/catch block or trap statement") only unwinds the call stack -- it
+# does not exit the host process on its own. Under `-File`, an uncaught throw still exits the host
+# non-zero: about_Language_Keywords's own `exit` section states "If the script has no exit
+# statement, the exit code is always 0 when the script completes without error or 1 when the script
+# terminates from an unhandled exception" -- so `$LASTEXITCODE`/the process exit code keep working
+# exactly as before for every existing test and every saved-file user. Under `iex` in an interactive
+# session, the same uncaught throw is reported as an ordinary error at the top of the call stack and
+# returns control to the prompt -- it does not invoke `exit`'s own process-level behavior, so the
+# session survives. See the report for the citations and the child-session test that exercises this.
+& {
 $ErrorActionPreference = 'Stop'
+
+# C3 (review 0.54.0-step-3-part-6a-review-v1): printed once near the start of every run so a CI log
+# (or a user's own terminal) shows which engine actually executed this script, not just which engine
+# launched it -- `scripts/windows-installer-test.ps1` relies on this line's own text, not merely on
+# which engine ran the test script itself, since Windows PowerShell 5.1 and PowerShell 7 are
+# different hosts with no other obvious marker in this script's own stdout.
+Write-Host "prikk-install: running under PowerShell $($PSVersionTable.PSVersion)"
+
+# C2 (review 0.54.0-step-3-part-6a-review-v1): read/write HKCU\Environment's Path value through the
+# raw registry API (Microsoft.Win32.RegistryKey), never through [Environment]::Get/SetEnvironmentVariable.
+# `RegistryKey.GetValue`'s own documentation (the default overload, no options) states: "When the
+# GetValue method retrieves expandable string values (RegistryValueKind.ExpandString), it expands
+# environment strings using data from the local environment" -- confirmed from that page, not
+# assumed -- and `Environment.SetEnvironmentVariable(string, string, EnvironmentVariableTarget)`'s
+# own signature takes no `RegistryValueKind` parameter at all, so it cannot write back a value as
+# `REG_EXPAND_SZ` even if that is what was there before; its own Remarks document only that it
+# stores the User target "in the HKEY_CURRENT_USER\Environment key". The combination means a plain
+# read-modify-write through `[Environment]::...` silently expands any `%VAR%`-style entry someone
+# else added to that literal expansion it happened to have at read time, and silently downgrades the
+# value's own registry kind from `REG_EXPAND_SZ` (`RegistryValueKind.ExpandString`, "a null-terminated
+# string that contains unexpanded references to environment variables... equivalent to the Windows
+# API registry data type REG_EXPAND_SZ" -- `RegistryValueKind`'s own documentation) to `REG_SZ`
+# (`RegistryValueKind.String`) on write. `RegistryKey.GetValue(name, defaultValue, options)` with
+# `RegistryValueOptions.DoNotExpandEnvironmentNames` is documented for exactly this: "you can specify
+# ... DoNotExpandEnvironmentNames when retrieving a registry value of type
+# RegistryValueKind.ExpandString to retrieve the string without expanding embedded environment
+# variables" -- confirmed from that page's own Remarks, with a worked example showing the unexpanded
+# read side by side with the expanded one.
+function Get-RawUserPathEntry {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+  if ($null -eq $key) {
+    return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+  }
+  try {
+    $exists = $false
+    foreach ($name in $key.GetValueNames()) {
+      if ($name -eq 'Path') { $exists = $true; break }
+    }
+    if (-not $exists) {
+      return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+    }
+    $kind = $key.GetValueKind('Path')
+    $raw = $key.GetValue('Path', "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    return @{ Value = [string]$raw; Kind = $kind }
+  } finally {
+    $key.Close()
+  }
+}
+
+function Set-RawUserPathEntry([string]$Value, [Microsoft.Win32.RegistryValueKind]$Kind) {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+  try {
+    $key.SetValue('Path', $Value, $Kind)
+  } finally {
+    $key.Close()
+  }
+  Send-EnvironmentChangeBroadcast
+}
+
+# `Environment.SetEnvironmentVariable`'s own Remarks state: "If target is User or Machine, other
+# applications are notified of the set operation by a Windows WM_SETTINGCHANGE message" -- that
+# notification is a side effect of calling through `[Environment]::...`, not of the registry write
+# itself, so a direct `RegistryKey.SetValue` call (above) does not send it; already-running processes
+# (Explorer, other open shells) keep whatever PATH they read at their own startup until something
+# broadcasts the change. `SendMessageTimeoutW`'s own Win32 signature (confirmed from its own
+# documentation page): `LRESULT SendMessageTimeoutW(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam,
+# UINT fuFlags, UINT uTimeout, PDWORD_PTR lpdwResult)` -- broadcasting with `hWnd = HWND_BROADCAST`
+# ("the message is sent to all top-level windows in the system"), `Msg = WM_SETTINGCHANGE`, and
+# `lParam` pointing at the literal string "Environment" is the standard mechanism every real Windows
+# installer (NSIS, WiX, ...) uses to announce an environment-variable change; this P/Invoke signature
+# below marshals the Win32 `LPARAM` as a `string` (the common idiom for this exact call, since
+# .NET/PowerShell interop marshals a `string` parameter to a native wide-character pointer by
+# default) and the out `PDWORD_PTR` result as `UIntPtr` (pointer-sized, matching `DWORD_PTR`/`PDWORD_PTR`
+# on both 32- and 64-bit).
+#
+# `Add-Type`'s own documentation: "Type names and namespaces must be unique within a session. You
+# can't unload a type or change it ... Otherwise, the command fails" -- and, separately, "Beginning
+# in PowerShell 7, Add-Type doesn't compile a type if a type with the same name already exists",
+# which by its own wording implies Windows PowerShell 5.1 has no such built-in guard and fails on a
+# second `Add-Type` for the same name. The `PSTypeName` existence check below is the standard
+# PowerShell idiom to make `Add-Type` idempotent across repeat invocations in the same process (for
+# example, a user who runs `irm ... | iex` more than once in the same interactive session) on both
+# engines, since the one-line form's own session-leakage fix (the `& { }` wrapper, see above) does
+# not and cannot un-load a type that a prior run already compiled into the process.
+if (-not ([System.Management.Automation.PSTypeName]'PrikkInstaller.NativeMethods').Type) {
+  Add-Type -Namespace PrikkInstaller -Name NativeMethods -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(
+    IntPtr hWnd,
+    uint Msg,
+    UIntPtr wParam,
+    string lParam,
+    uint fuFlags,
+    uint uTimeout,
+    out UIntPtr lpdwResult);
+'@
+}
+
+function Send-EnvironmentChangeBroadcast {
+  $hwndBroadcast = [IntPtr]0xffff
+  $wmSettingChange = 0x1A
+  $smtoAbortIfHung = 0x0002
+  $result = [UIntPtr]::Zero
+  [PrikkInstaller.NativeMethods]::SendMessageTimeout($hwndBroadcast, $wmSettingChange, [UIntPtr]::Zero, "Environment", $smtoAbortIfHung, 5000, [ref]$result) | Out-Null
+}
 
 # Windows PowerShell 5.1's default TLS negotiation can fall short of the TLS 1.2 GitHub's release
 # CDN requires, depending on the machine's own .NET/OS defaults -- this is a documented Windows
@@ -53,10 +190,9 @@ try {
 }
 
 if (-not $isX64) {
-  Write-Error "prikk-install: no prebuilt binary for Windows/$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) (only x86_64 ships one)"
   Write-Host "prikk-install: download prikk-x86_64-pc-windows-msvc.zip from the release page by hand," -ForegroundColor Yellow
   Write-Host "prikk-install: or run 'cargo install prikk'" -ForegroundColor Yellow
-  exit 1
+  throw "prikk-install: no prebuilt binary for Windows/$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) (only x86_64 ships one)"
 }
 $target = "x86_64-pc-windows-msvc"
 
@@ -94,8 +230,7 @@ try {
   $expectedHash = ($expectedLine -split '\s+')[0].ToLowerInvariant()
   $actualHash = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actualHash -ne $expectedHash) {
-    Write-Error "prikk-install: checksum verification failed; refusing to install"
-    exit 1
+    throw "prikk-install: checksum verification failed; refusing to install"
   }
 
   Write-Host "prikk-install: extracting"
@@ -103,8 +238,7 @@ try {
 
   $extractedExe = Join-Path $workDir "prikk.exe"
   if (-not (Test-Path -Path $extractedExe -PathType Leaf)) {
-    Write-Error "prikk-install: extracted archive did not contain a prikk.exe binary"
-    exit 1
+    throw "prikk-install: extracted archive did not contain a prikk.exe binary"
   }
 
   New-Item -ItemType Directory -Force -Path $installDir | Out-Null
@@ -115,19 +249,23 @@ try {
   Write-Host "prikk-install: installed to $installDir\prikk.exe"
 
   $markerPath = Join-Path $installDir "path-added-by-install.marker"
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $rawPath = Get-RawUserPathEntry
   $pathEntries = @()
-  if ($userPath) {
-    $pathEntries = $userPath -split ';' | Where-Object { $_ -ne '' }
+  if ($rawPath.Value) {
+    $pathEntries = $rawPath.Value -split ';' | Where-Object { $_ -ne '' }
   }
   $alreadyOnPath = $pathEntries -contains $installDir
 
   if (-not $alreadyOnPath) {
-    # User Path only, never the machine's -- [Environment]::SetEnvironmentVariable(..., 'Machine')
-    # requires administrator rights and would affect every account on the machine; install.sh has
-    # no such distinction to mirror since a shell rc file is already per-user.
-    $newPath = if ($userPath) { "$userPath;$installDir" } else { $installDir }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    # User Path only, never the machine's -- writing the machine's PATH requires administrator
+    # rights and would affect every account on the machine; install.sh has no such distinction to
+    # mirror since a shell rc file is already per-user. $installDir is always a concrete, already-
+    # resolved path (either $env:LOCALAPPDATA's own expanded value, or a literal override the caller
+    # set in $env:PRIKK_INSTALL_DIR) -- comparing and appending it as a literal string against the
+    # *unexpanded* existing entries above is correct either way: it never needs to match or produce
+    # a %VAR%-style entry of its own.
+    $newPath = ($pathEntries + $installDir) -join ';'
+    Set-RawUserPathEntry -Value $newPath -Kind $rawPath.Kind
     # install.sh does not prompt before appending to a shell rc file; this script follows the same
     # rule and does not prompt before this PATH change either -- see the report for the open
     # question of whether both should.
@@ -143,4 +281,5 @@ try {
   Write-Host "prikk-install: tag; release-signers.toml is empty because no multi-signer policy exists yet."
 } finally {
   Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 }
