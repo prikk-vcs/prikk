@@ -376,6 +376,16 @@ These apply to all work above and are not restated in each handoff.
    sized for scratch space, not build output. The split matters for both reasons at once: disk space for the large, durable
    artifact, and speed for the small, disposable one.**
 
+   **0.54.0 Part G1b, C1: `scripts/gates.py` now makes a fresh, short-named subdirectory under the chosen `TMPDIR` for
+   every gate run, and cleans it up itself** -- removed after a run where all 14 gates exit 0, kept (with its path
+   printed) after any run with a failure. This is new, gate-run-specific cleanup; it is not a property of `TMPDIR` or of
+   `cargo test` in general. **A plain `cargo test` invoked directly, outside `gates.py`** -- the normal case while
+   iterating on a change -- **still writes its own temp fixtures straight into `TMPDIR`, uncleaned, same as always.**
+   Nothing in this project's own tooling reaps those; they are covered by `/tmp`'s own existing cleanup instead
+   (confirmed on this machine: `/usr/lib/tmpfiles.d/tmp.conf` carries `q /tmp 1777 root root 10d`, i.e. **10 days**).
+   This is exactly why `gates.py`'s own per-run cleanup matters specifically for gate runs: a gate run is the one case
+   this project can make leave nothing behind on its own, without waiting on the OS's own reaping window.
+
    **Run as one script: `scripts/gates.py`** (0.49.0 step 5, D8 — added 2026-10-05). All 14 gates below
    (the twelve above, plus the two cross-target Clippy rows next), each under an R1 scope when
    `systemd-run` is on `PATH` (stated plainly when it is not), with one machine-readable `<name> <exit>`
