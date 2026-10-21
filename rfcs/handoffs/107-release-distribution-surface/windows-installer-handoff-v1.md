@@ -109,3 +109,32 @@ The step 3 handoff's rule applies:
   `install.ps1` is the one the 0.54.0 release publishes.** The architect verifies its checksum against the release
   and reads the Windows CI test that ran the same template.
 - **stikk's letter 026** (draft) tells stikk that prikk ships its own Windows installer in 0.54.0.
+
+## Progress, 2026-10-22: Part 6a pushed for CI; Part 6a2 before 6b
+
+**Part 6a is pushed** (`2e3675ad`) so its `windows-installer` job runs on a real Windows runner. **It is not yet
+accepted** (review `0.54.0-step-3-part-6a-review-v1`).
+
+## Part 6a2 — the installer on a real user's machine (about 60 min, report `0.54.0-step-3-part-6a2-report.md`)
+
+The review's C1–C3, in full there. In short:
+1. **C1:**
+   - wrap each script's body in one script block and fail with `throw`, never `exit`, so the one-line `irm | iex` form
+     leaves nothing in the user's session;
+   - test that form in a child session: `$ErrorActionPreference` unchanged, no script variables left, and the session
+     still alive after a failed install.
+2. **C2:**
+   - read and write `HKCU\Environment`'s `Path` raw (no expansion), keeping its value kind, and touch only our entry;
+   - announce the change;
+   - test that a seeded `%USERPROFILE%\prikk-keep` `ExpandString` entry survives install and uninstall byte for byte.
+3. **C3:** run the installer under the same engine the test runs under, and log `$PSVersionTable.PSVersion` from inside
+   each run.
+
+**Rulings for Part 6b:**
+- **`install.md` says** the installer adds its folder to the user PATH, without a prompt, and that `uninstall` removes
+  it only if install added it.
+- **`install.md` covers** execution policy for a saved `install.ps1`.
+- **`install.sh`'s Windows refusal** points to `install.ps1`.
+
+**Also into Part 6b:** raise the macOS suite's timeout from 30 to 45 minutes. A degraded macOS runner needed about 36
+(run `39676219682`: compile 15 m 46 s, against 7 normally).
