@@ -3,9 +3,10 @@
 use std::collections::BTreeSet;
 
 use super::{
-    DECLARED_CYCLES, DECLARED_HUBS, LOWER_LAYER, UPPER_LAYER, check,
-    check_allowlists_are_well_formed, check_declared_entries_still_exist, check_layer,
-    check_with_layers, graph_report, layer_report, top_level,
+    DECLARED_CYCLES, DECLARED_HUBS, EXCHANGE_ALLOWED_CALLERS, EXCHANGE_SUBSYSTEM, LOWER_LAYER,
+    UPPER_LAYER, check, check_allowlists_are_well_formed, check_declared_entries_still_exist,
+    check_exchange_subsystem, check_layer, check_with_layers, exchange_report, graph_report,
+    layer_report, top_level,
 };
 use crate::boundary::BoundaryError;
 
@@ -375,5 +376,61 @@ fn the_gate_itself_applies_the_layer_rule() {
             .iter()
             .any(|error| error.category == "layer" && error.detail.contains("worktree -> checkout")),
         "{errors:?}"
+    );
+}
+
+// 0.54.0 Part G1, item 7a: the exchange-subsystem restricted-caller rule.
+
+/// The real tree: nothing outside the subsystem itself, `doctor`, or test code reaches into
+/// `archive`, `bundle`, `patch_exchange`, `sync_negotiation` or `seal_from_accepted`.
+#[test]
+fn the_real_tree_has_no_exchange_subsystem_violation() {
+    let report = exchange_report(
+        &real_graph(),
+        &EXCHANGE_SUBSYSTEM,
+        &EXCHANGE_ALLOWED_CALLERS,
+    );
+    assert_eq!(report.violations.len(), 0, "{:?}", report.violations);
+}
+
+/// **Perturbation, shown red** (the same style as [`the_gate_itself_applies_the_layer_rule`]: the
+/// real graph, a perturbed allowlist, not a hand-edited or synthetic graph): with `doctor` removed
+/// from the allowed-caller list, `doctor`'s own real, production edge into `archive`
+/// (`archive::interrupted_import_short_id`, called at `doctor.rs:836`) must be reported. The control
+/// first confirms that edge actually exists in the real graph, so this is not a vacuous pass.
+#[test]
+fn removing_doctor_from_the_allowed_callers_reports_its_real_edge() {
+    let graph = real_graph();
+    assert!(
+        graph
+            .edges
+            .contains(&("doctor".to_string(), "archive".to_string())),
+        "doctor -> archive not found in the real graph -- this control would be vacuous"
+    );
+    let allowed: [&str; 0] = [];
+    let mut errors = Vec::new();
+    check_exchange_subsystem(&graph, &EXCHANGE_SUBSYSTEM, &allowed, &mut errors);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.category == "exchange-subsystem"
+                && error.detail.contains("doctor -> archive")),
+        "{errors:?}"
+    );
+}
+
+/// The whole gate, not only `check_exchange_subsystem` called directly: proves `check`'s own call
+/// into the exchange-subsystem check is really wired in (the companion to the red control above,
+/// which already proves the checker itself fires when miscalled with a narrower allowlist) --
+/// mirrors `the_gate_itself_applies_the_layer_rule`'s own reason for existing.
+#[test]
+fn the_gate_itself_runs_the_exchange_subsystem_check() {
+    let mut errors = Vec::new();
+    check(&repo_root(), &mut errors);
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.category == "exchange-subsystem"),
+        "the real tree must be clean under the gate's own wiring: {errors:?}"
     );
 }

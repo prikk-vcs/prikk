@@ -188,6 +188,92 @@ const LOWER_LAYER: [&str; 37] = [
     "worktree",
 ];
 
+/// 0.54.0 Part G1, item 7a: the exchange subsystem -- five top-level modules exchanging serialized
+/// artifacts across a repository boundary (archive export/import, bundle encode/decode, the queued-
+/// patch exchange format, sync negotiation, and sealing a received exchange's accepted claims). All
+/// five already sit in [`UPPER_LAYER`] above -- the layer rule alone only says nothing *below* them
+/// reaches in -- but nothing in that rule stops another upper-layer sibling (`show`, `extract`,
+/// `checkout`, ...) from reaching into them too, the same way nothing stopped `doctor` from needing
+/// to. This is a narrower rule layered on top of the layer rule: a **restricted-caller allowlist**,
+/// not a two-sided partition -- these five modules may be reached only by each other (the
+/// subsystem's own internal wiring is unrestricted: `bundle` is called from `archive` and
+/// `patch_exchange`, `patch_exchange` from `seal_from_accepted` and `sync_negotiation`, by design,
+/// confirmed against the real graph by [`tests::the_real_tree_has_no_exchange_subsystem_violation`]),
+/// by [`EXCHANGE_ALLOWED_CALLERS`] (today, only `doctor`'s one need,
+/// `archive::interrupted_import_short_id`, read at its call site, `doctor.rs:836`), and by test code
+/// (`test_gates`, which is `#[cfg(test)]` at its own `mod` declaration in `lib.rs` and so is never a
+/// node in this graph at all -- `graph::walk`'s own doc comment -- so it needs no separate allowance
+/// here; named in this doc for the reader, not in the constant below, since a name that can never
+/// appear as an edge's `from` would be untestable dead weight in `EXCHANGE_ALLOWED_CALLERS` itself).
+/// `lib.rs`'s own `pub use` re-exports are likewise not edges in this graph (the crate root is never
+/// a node -- `graph::walk`'s own comment again), so a crate-external caller (the CLI) reaching one of
+/// these five through a re-exported name is outside what this rule, or this graph, can see at all --
+/// consistent with the rule's own "within prikk-store" scope.
+const EXCHANGE_SUBSYSTEM: [&str; 5] = [
+    "archive",
+    "bundle",
+    "patch_exchange",
+    "sync_negotiation",
+    "seal_from_accepted",
+];
+
+/// The one production module, outside the exchange subsystem itself, allowed to call into it.
+const EXCHANGE_ALLOWED_CALLERS: [&str; 1] = ["doctor"];
+
+/// What [`check_exchange_subsystem`] found: every edge whose target's top-level module is in
+/// `subsystem`, whose source is neither inside `subsystem` itself nor in `allowed_callers`.
+struct ExchangeReport {
+    violations: Vec<[String; 2]>,
+}
+
+fn exchange_report(
+    graph: &graph::ModuleGraph,
+    subsystem: &[&str],
+    allowed_callers: &[&str],
+) -> ExchangeReport {
+    let subsystem_set: BTreeSet<&str> = subsystem.iter().copied().collect();
+    let allowed_set: BTreeSet<&str> = allowed_callers.iter().copied().collect();
+    ExchangeReport {
+        violations: graph
+            .edges
+            .iter()
+            .filter(|(from, to)| {
+                let from_top = top_level(from);
+                let to_top = top_level(to);
+                subsystem_set.contains(to_top)
+                    && !subsystem_set.contains(from_top)
+                    && !allowed_set.contains(from_top)
+            })
+            .map(|(from, to)| [from.clone(), to.clone()])
+            .collect(),
+    }
+}
+
+/// 0.54.0 Part G1, item 7a's rule, as gate errors in their own `exchange-subsystem` category.
+/// A standalone function, mirroring [`check_layer`]'s own shape, so a control can run it directly
+/// against a constructed or perturbed graph/allowlist without editing the constants.
+fn check_exchange_subsystem(
+    graph: &graph::ModuleGraph,
+    subsystem: &[&str],
+    allowed_callers: &[&str],
+    errors: &mut Vec<BoundaryError>,
+) {
+    let report = exchange_report(graph, subsystem, allowed_callers);
+    for [from, to] in &report.violations {
+        push(
+            errors,
+            "exchange-subsystem",
+            format!(
+                "exchange-subsystem violation: {from} -> {to} -- {to}'s top-level module is part \
+                 of the exchange subsystem (archive, bundle, patch_exchange, sync_negotiation, \
+                 seal_from_accepted), reachable only from within the subsystem itself, from \
+                 `doctor`, or from test code; remove the edge, or route it through doctor's own \
+                 narrow call"
+            ),
+        );
+    }
+}
+
 /// A module pair is a hub if it has at least this much fan-in *and* fan-out (`min(fan_in,
 /// fan_out) >= HUB_THRESHOLD`). Derived from the measured distribution, not asserted -- sorted by
 /// `min(fan_in, fan_out)` under RFC 131 §6c's qualified-node graph, the ranking before RFC 163 was 7
@@ -913,6 +999,12 @@ fn check_with_layers(root: &Path, upper: &[&str], lower: &[&str], errors: &mut V
     }
 
     check_layer(&graph, upper, lower, errors);
+    check_exchange_subsystem(
+        &graph,
+        &EXCHANGE_SUBSYSTEM,
+        &EXCHANGE_ALLOWED_CALLERS,
+        errors,
+    );
 
     check_declared_entries_still_exist(&graph, &declared_edges, &subtree_cycle_edges, errors);
 }
