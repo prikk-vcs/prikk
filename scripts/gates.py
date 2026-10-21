@@ -24,6 +24,7 @@ never silently ignored (0.52.0 step 1 Part B: `--only <gate-name>` used to run t
 """
 
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -178,6 +179,19 @@ def choose_tmpdir():
     return local, "the repository-local directory (last resort)"
 
 
+# 0.54.0 Part G1b, C1: the folder leak lives here, in one place, instead of at each of the ~1,270
+# fixture call sites across the two test crates (the wide conversion G1 tried and reverted). Every
+# gate run gets its own fresh, short-named subdirectory under the chosen base -- short so a deep
+# `choose_tmpdir()` base plus this name still cannot push a Unix socket path past SUN_LEN (the same
+# concern that already keeps the repo-local base out of the default path). `secrets.token_hex(4)` is
+# 8 hex characters: enough to make two concurrent runs' directories distinct, short enough to stay
+# well under any socket-path limit next to a short base like `/tmp`.
+def make_run_tmpdir(base):
+    run_dir = os.path.join(base, f"prikk-gates-{secrets.token_hex(4)}")
+    os.makedirs(run_dir, exist_ok=False)
+    return run_dir
+
+
 def run_gate(name, argv, env_overrides, tmpdir):
     env = dict(os.environ)
     env["TMPDIR"] = tmpdir
@@ -214,8 +228,9 @@ def main():
             print(f"{name}: {' '.join(argv)}")
         return 0
 
-    tmpdir, why = choose_tmpdir()
-    print(f"TMPDIR for every gate: {tmpdir} ({why})", flush=True)
+    base_tmpdir, why = choose_tmpdir()
+    tmpdir = make_run_tmpdir(base_tmpdir)
+    print(f"TMPDIR base: {base_tmpdir} ({why}); this run's TMPDIR: {tmpdir}", flush=True)
 
     results = []
     any_without_r1 = False
@@ -235,6 +250,15 @@ def main():
         print(f"{name} {exit_code}")
 
     failed = [name for name, exit_code in results if exit_code != 0]
+
+    # 0.54.0 Part G1b, C1: a passing run leaves nothing behind; a failing one keeps everything,
+    # named, for a human to go look at. Only this run's own subdirectory is ever removed or named
+    # here -- never `base_tmpdir`, which this script did not create and must not touch.
+    if failed:
+        print(f"gate run failed -- TMPDIR kept for inspection: {tmpdir}", flush=True)
+    else:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
     return len(failed)
 
 
