@@ -41,6 +41,7 @@ mod key_status;
 mod merge;
 mod mv;
 mod output;
+mod received;
 mod ref_complete;
 mod seal;
 mod setup;
@@ -460,6 +461,12 @@ fn run_format(args: Vec<String>) -> std::result::Result<(), CliError> {
 fn run_compact(args: Vec<String>) -> std::result::Result<(), CliError> {
     let root = current_dir()?;
     compact::run_compact(root, args)?;
+    Ok(())
+}
+
+fn run_received(args: Vec<String>) -> std::result::Result<(), CliError> {
+    let root = current_dir()?;
+    received::run_received(root, args)?;
     Ok(())
 }
 

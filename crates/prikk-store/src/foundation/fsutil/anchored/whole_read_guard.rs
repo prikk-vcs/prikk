@@ -142,6 +142,12 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         reference: "RFC 165 Q2 (0.50.0)",
     },
     DeclaredScope {
+        id: "received-remove-recovery-save",
+        status: ScopeStatus::Intentional,
+        reason: "`received remove` (0.54.0 step 3 Part 5, B2a) reads the whole target slot and generation log once, on                  every real run, not only a deduced one, to save both to the recovery log before overwriting them -- it                  discards a pointer a read path depends on, unlike ordinary compaction, so every run must be restorable,                  and the saved copy is the way back, so it must be the whole file, not a range",
+        reference: "0.54.0-step-2-B-design-round-2-report.md question 1, step 4",
+    },
+    DeclaredScope {
         id: "archive-import-cancel-save",
         status: ScopeStatus::Intentional,
         reason: "`archive::import::cancel_import` reads an object container or the ref log container whole, once per container                  that grew, only on a real cancel, to save the bytes past the import's own journaled starting length to the                  recovery log before truncating back -- the same reasoning `pointer-index-rebuild-recovery-save` already has:                  the saved copy is the way back, so it must be the whole file, not a range",

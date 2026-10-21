@@ -24,6 +24,7 @@
 //! family's, so it is the group's root; `received_index` is its child, below.
 
 pub(crate) mod received_index;
+pub(crate) mod remove;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;

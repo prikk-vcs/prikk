@@ -385,6 +385,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "received",
+        run: crate::run_received,
+        help_lines: &[
+            "  prikk received remove <remotes/…> [--plan-only]  Remove a received ref's own pointer; the objects it reached stay, reported as unreached by verify",
+        ],
+    },
+    Command {
         name: "sync",
         run: crate::run_sync,
         help_lines: &[

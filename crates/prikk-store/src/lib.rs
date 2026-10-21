@@ -280,6 +280,9 @@ pub use pointer_rebuild::{
     DroppedLead, RebuildPlan, RefRebuildEntry, RestoredRef, plan_pointer_index_rebuild,
     rebuild_pointer_index,
 };
+pub use received::remove::{
+    ReceivedRemoveReport, plan_remove_received_pointer, remove_received_pointer,
+};
 #[cfg(feature = "test-support")]
 pub use received::write_received_pointer_for_test;
 pub use received::{

@@ -70,6 +70,28 @@
   is now carried under one fixed key, `point` (with a new `point_kind` field for `"ref"`/`"block"`/
   `"claim"`), the same key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` already use,
   rather than a dynamic key.
+- **`prikk received remove <remotes/…> [--plan-only]`** (0.54.0 step 3 Part 5, B2a): removes one
+  received ref's own pointer from the received-index container that `bundle import`/`archive
+  import` write and `cat`/`tree`/`checkout`/`extract` read at a bare `remotes/…` point — the
+  objects the pointer reached are not removed, only the pointer. Modeled directly on `compact
+  --received-index`'s own write sequence (the identical container lock, live-slot resolution,
+  reduction, and final truncate/append/generation-record writes), with the reduction's own one
+  added step (drop the target's own surviving entry) and the recovery-log save made
+  **unconditional**, not gated on whether the live slot had to be deduced the way ordinary
+  compaction's own save is — this operation discards a pointer `verify`, `reachability`'s own roots
+  list, and a bare `remotes/…` point all currently depend on, so every run must be restorable, not
+  only a rare one. `--plan-only` reports what would be removed without taking the lock or writing
+  anything; a real run reports the recovery-log run id it saved under. Refuses a name that does not
+  start with `remotes/`, a name with no received pointer, a damaged received index (the identical
+  text `compact --received-index` already gives), an unclean generation-log or received-index
+  tail, and while any other writer of the same container (`compact`, `bundle import`, `archive
+  import`, `archive export`, `doctor --repair-tails`, or a recovery-log restore) holds its lock. A
+  later, sound re-import of the identical name after a removal makes a recovery-log restore of that
+  removal refuse, rather than silently discarding the re-import's own newer data — the restore
+  contract's own existing "only if the file is still byte-identical to its state after the repair"
+  check, not new logic. The bytes the pointer once reached still stay either way; a stored `Block`
+  or `RefState` nothing reaches any more is reported as an unreached object, 0.54.0 step 3 Part 1's
+  own warning (B1), the next time `prikk verify` runs.
 
 ### Output changes
 

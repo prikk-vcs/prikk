@@ -354,7 +354,11 @@ planned for.
   publication-trust check. While the received pointer is still present, everything it reaches
   stays reached, and `verify` keeps failing on it exactly as before — this changes nothing for an
   import whose pointer has not yet been superseded. The bytes stay either way; no command removes
-  them yet.
+  them yet. **0.54.0 (B2a) adds a second way the pointer itself can go, on purpose**: `prikk
+  received remove <remotes/…>` removes the pointer directly, the same consequence as replacing it
+  (everything it alone reached becomes an unreached-object warning on the next `verify`), without
+  waiting for a later, sound import to happen to supersede it. The objects themselves are still not
+  removed by this or any command.
 
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes
