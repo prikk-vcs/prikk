@@ -47,6 +47,7 @@ mod declaration_resolution;
 mod diff;
 mod doctor;
 mod extract;
+mod extract_refusal;
 mod format_upgrade;
 mod signature_admission;
 // RFC 131 §2 / RFC 130 §2.3's "foundation" grouping: layout, fsutil, byte_cursor, file_codec,
@@ -206,6 +207,7 @@ pub use extract::{
     ExtractPlan, ExtractPlanContent, ExtractPlanEntry, prepare_extract_plan,
     prepare_extract_plan_for_claim, read_extract_blob_content, rename_new_directory_no_replace,
 };
+pub use extract_refusal::{ExtractError, ExtractRefusalKind, NoCheckpointReason};
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;
 pub use foundation::layout::{

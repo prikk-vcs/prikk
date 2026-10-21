@@ -117,7 +117,7 @@ fn snapshot_state_is_authenticated(layout: &RepositoryLayout, block_id: ObjectId
     };
     match AnchorTrust::load(layout).admit(&reader, block_id, 0, AnchorSite::SnapshotMaterialize) {
         Admission::Usable(_) => true,
-        Admission::NotUsable => false,
+        Admission::NotUsable(_) => false,
         Admission::Signal(finding) => {
             crate::anchor_fallback::record_anchor_fallback(
                 crate::anchor_fallback::SnapshotAnchorFallback::for_state(block_id, finding),

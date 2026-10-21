@@ -93,7 +93,7 @@ pub(crate) fn anchored_parent_state(
                     record_anchor_fallback(SnapshotAnchorFallback::for_state(current, finding));
                     return None;
                 }
-                Admission::NotUsable => {}
+                Admission::NotUsable(_) => {}
             }
         }
         if after_anchor.len() >= MAX_ANCHOR_DISTANCE {

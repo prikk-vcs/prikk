@@ -21,6 +21,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload};
 
 use crate::anchor_trust::AnchorTrust;
+use crate::extract_refusal::{ExtractError, ExtractRefusalKind};
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReader;
 use crate::patch_replay::extract::{ExtractContent, replay_for_extract, replay_for_extract_claim};
@@ -63,6 +64,13 @@ pub struct ExtractPlan {
     /// from genesis (`true`) -- worded for the CLI exactly as `checkout --snapshot-materialize`
     /// words its own `provisional:` line.
     pub provisional: bool,
+    /// (0.54.0 step 3 Part 5d) `claim`'s own declared parent -- `None` for a root claim or a
+    /// ref/block-id point (`prepare_extract_plan` always sets this to `None`), `Some(parent)` for a
+    /// claim with exactly one declared parent (`prepare_extract_plan_for_claim`'s own already-computed
+    /// `parent` local). **Not the same thing as [`Self::target_block_id`]**: for a claim,
+    /// `target_block_id` is the block the claim *recognizes* (`claim.block_id`); this is the block the
+    /// claim's own patches would be sealed *onto* -- no command printed this before this round.
+    pub claim_parent_block_id: Option<ObjectId>,
     /// Files to write, in canonical path order, with no two colliding under ASCII case folding.
     pub entries: Vec<ExtractPlanEntry>,
 }
@@ -79,16 +87,17 @@ pub struct ExtractPlan {
 ///
 /// # Errors
 ///
-/// `Precondition` when no admitted anchor exists within the trusted distance bound and
-/// `allow_full_replay` is `false` (naming the distance), or when two of the point's own paths
-/// collide under ASCII case folding; otherwise, the replay's own failures (an unsupported
-/// operation, a missing object, or an integrity mismatch).
+/// `Precondition` (`no-checkpoint-in-reach`) when no admitted anchor exists within the trusted
+/// distance bound and `allow_full_replay` is `false` (naming the distance), or `InvalidName`
+/// (`case-collision`) when two of the point's own paths collide under ASCII case folding;
+/// otherwise, the replay's own failures (an unsupported operation, a missing object, or an
+/// integrity mismatch), carried with no classification (`ExtractError::kind` is `None`).
 pub fn prepare_extract_plan(
     layout: &RepositoryLayout,
     reader: &impl ObjectReader,
     point: &Point,
     allow_full_replay: bool,
-) -> Result<ExtractPlan> {
+) -> std::result::Result<ExtractPlan, ExtractError> {
     let block_ids = single_parent_chain(reader, point.block_id)?;
     let trust = AnchorTrust::load(layout);
     let outcome = replay_for_extract(reader, &block_ids, &trust, allow_full_replay)?;
@@ -98,7 +107,8 @@ pub fn prepare_extract_plan(
         .iter()
         .map(|file| RepoPath::parse(&file.path))
         .collect::<Result<Vec<_>>>()?;
-    validate_no_path_collisions(&paths)?;
+    validate_no_path_collisions(&paths)
+        .map_err(|err| ExtractError::classified(ExtractRefusalKind::CaseCollision, err))?;
 
     let entries = outcome
         .files
@@ -118,6 +128,7 @@ pub fn prepare_extract_plan(
         point: point.name.clone(),
         target_block_id: point.block_id,
         provisional: outcome.provisional,
+        claim_parent_block_id: None,
         entries,
     })
 }
@@ -157,24 +168,50 @@ pub fn prepare_extract_plan_for_claim(
     reader: &impl ObjectReader,
     claim_id: ObjectId,
     allow_full_replay: bool,
-) -> Result<ExtractPlan> {
-    let envelope = reader
-        .read_typed(claim_id, ObjectType::RecognitionClaim)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!("recognition claim {claim_id} does not exist"))
-        })?;
+) -> std::result::Result<ExtractPlan, ExtractError> {
+    // 0.54.0 step 3 Part 5d, item 4: this used to be `PrikkError::Integrity` (an unknown claim id
+    // is a caller precondition, not stored damage) and let `PrikkError::ObjectTypeMismatch` bubble
+    // straight through from `read_typed`'s own shared default (`object_store.rs`'s own
+    // `read_typed`, untouched by this round -- every other caller still gets the generic mismatch).
+    // Both are now `Precondition`, classified here, at the one call site that can tell them apart.
+    let envelope = match reader.read_typed(claim_id, ObjectType::RecognitionClaim) {
+        Ok(Some(envelope)) => envelope,
+        Ok(None) => {
+            return Err(ExtractError::classified(
+                ExtractRefusalKind::ClaimNotFound,
+                PrikkError::Precondition(format!("recognition claim {claim_id} does not exist")),
+            ));
+        }
+        Err(PrikkError::ObjectTypeMismatch { expected, actual }) => {
+            return Err(ExtractError::classified(
+                ExtractRefusalKind::NotAClaim {
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                },
+                PrikkError::Precondition(format!(
+                    "{claim_id} is not a recognition claim (expected {expected}, got {actual}) -- \
+                     extract --claim takes a RecognitionClaim id"
+                )),
+            ));
+        }
+        Err(err) => return Err(err.into()),
+    };
     let claim = RecognitionClaimPayload::decode_canonical(&envelope.canonical_payload)?;
 
     let parent = match claim.parent_block_ids.as_slice() {
         [] => None,
         [single] => Some(*single),
         many => {
-            return Err(PrikkError::Precondition(format!(
-                "recognition claim {claim_id} declares {} parents; a merge claim's own mainline \
-                 parent cannot be named from the claim object alone, so this is refused rather \
-                 than guessed -- extract --claim does not yet support a claim about a merge block",
-                many.len()
-            )));
+            return Err(ExtractError::classified(
+                ExtractRefusalKind::ClaimHasSeveralParents { count: many.len() },
+                PrikkError::Precondition(format!(
+                    "recognition claim {claim_id} declares {} parents; a merge claim's own \
+                     mainline parent cannot be named from the claim object alone, so this is \
+                     refused rather than guessed -- extract --claim does not yet support a claim \
+                     about a merge block",
+                    many.len()
+                )),
+            ));
         }
     };
 
@@ -186,7 +223,8 @@ pub fn prepare_extract_plan_for_claim(
         .iter()
         .map(|file| RepoPath::parse(&file.path))
         .collect::<Result<Vec<_>>>()?;
-    validate_no_path_collisions(&paths)?;
+    validate_no_path_collisions(&paths)
+        .map_err(|err| ExtractError::classified(ExtractRefusalKind::CaseCollision, err))?;
 
     let entries = outcome
         .files
@@ -206,6 +244,7 @@ pub fn prepare_extract_plan_for_claim(
         point: claim_id.to_string(),
         target_block_id: claim.block_id,
         provisional: outcome.provisional,
+        claim_parent_block_id: parent,
         entries,
     })
 }

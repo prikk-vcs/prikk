@@ -204,8 +204,10 @@ fn find_anchor(
                         },
                     );
                 }
-                Admission::NotUsable if distance > MAX_ANCHOR_DISTANCE => return Ok((None, None)),
-                Admission::NotUsable => continue,
+                Admission::NotUsable(_) if distance > MAX_ANCHOR_DISTANCE => {
+                    return Ok((None, None));
+                }
+                Admission::NotUsable(_) => continue,
                 Admission::Signal(finding) => {
                     #[cfg(test)]
                     SNAPSHOT_ANCHOR_LOADS.with(|loads| loads.set(loads.get() + 1));

@@ -320,6 +320,112 @@ fn claim_pre_walk_refuses_past_the_bound_without_an_admitted_anchor() {
     assert!(!allowed.files.is_empty());
 }
 
+/// 0.54.0 step 3 Part 5d: `no-checkpoint-in-reach`'s own `reason` sub-classification is genuinely
+/// new behavior, not a relabeling -- proven here by producing all three reasons, each from what
+/// [`super::search_admitted_anchor`]'s own walk actually found, not merely that *a* refusal
+/// happened:
+/// - `signer-not-adopted`: the identical 70-block, `Signing::Unadopted` fixture
+///   [`pre_walk_refuses_past_the_bound_without_an_admitted_anchor`] already builds -- every
+///   checkpoint stays in the replay-verified record (sealing itself recorded it), but the key that
+///   signed it is no longer adopted;
+/// - `not-recorded`: the identical history, still signed by a key this repository adopts, but its
+///   own replay-verified record is wiped after sealing -- every checkpoint the walk finds was
+///   simply never recorded;
+/// - `no-checkpoint`: a hand-built, 70-block chain of plain blocks that never carries a snapshot at
+///   all -- `AnchoredHistory`'s own seal path always makes genesis a checkpoint (this module's own
+///   doc, "genesis is always a checkpoint"), so this one genuinely different shape needs its own,
+///   lower-level fixture rather than a variant of the same one.
+#[test]
+fn no_checkpoint_in_reach_reports_the_right_reason_for_each_of_its_three_causes() {
+    use crate::extract_refusal::{ExtractRefusalKind, NoCheckpointReason};
+    use crate::verified_blocks::{load_verified_blocks, record_path};
+
+    {
+        let history = AnchoredHistory::standard_signed(
+            "extract-reason-signer-not-adopted",
+            70,
+            Signing::Unadopted,
+        );
+        let tip = *history.blocks.last().unwrap();
+        let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
+        let block_ids = super::super::read::single_parent_chain(&reader, tip).unwrap();
+        let trust = crate::anchor_trust::AnchorTrust::load(&history.layout);
+        let refused = replay_for_extract(&reader, &block_ids, &trust, false).unwrap_err();
+        assert_eq!(
+            refused.kind,
+            Some(ExtractRefusalKind::NoCheckpointInReach(
+                NoCheckpointReason::SignerNotAdopted
+            )),
+            "{refused}"
+        );
+    }
+
+    {
+        let history =
+            AnchoredHistory::standard_signed("extract-reason-not-recorded", 70, Signing::Adopted);
+        std::fs::remove_file(record_path(&history.layout)).unwrap();
+        assert!(load_verified_blocks(&history.layout).is_empty());
+        let tip = *history.blocks.last().unwrap();
+        let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
+        let block_ids = super::super::read::single_parent_chain(&reader, tip).unwrap();
+        let trust = crate::anchor_trust::AnchorTrust::load(&history.layout);
+        let refused = replay_for_extract(&reader, &block_ids, &trust, false).unwrap_err();
+        assert_eq!(
+            refused.kind,
+            Some(ExtractRefusalKind::NoCheckpointInReach(
+                NoCheckpointReason::NotRecorded
+            )),
+            "{refused}"
+        );
+    }
+
+    {
+        let root = unique_temp_dir("extract-reason-no-checkpoint");
+        let layout = RepositoryLayout::init(root).unwrap();
+        let mut store = FileObjectStore::new(layout.clone());
+        let mut parent_ids = Vec::new();
+        let mut tip = None;
+        for index in 0..70 {
+            let kind = if index == 0 {
+                BlockKind::Root
+            } else {
+                BlockKind::Normal
+            };
+            let block = crate::test_gates::test_support::signed_block(
+                kind,
+                parent_ids.clone(),
+                Vec::new(),
+                None,
+            );
+            let id = store.write_object(&block).unwrap();
+            parent_ids = vec![id];
+            tip = Some(id);
+        }
+        let tip = tip.unwrap();
+        let reader = ObjectReadSnapshot::open(&layout).unwrap();
+        let block_ids = super::super::read::single_parent_chain(&reader, tip).unwrap();
+        assert_eq!(
+            block_ids.len(),
+            70,
+            "fixture sanity: a plain 70-block chain"
+        );
+        let trust = crate::anchor_trust::AnchorTrust::load(&layout);
+        let refused = replay_for_extract(&reader, &block_ids, &trust, false).unwrap_err();
+        assert_eq!(
+            refused.kind,
+            Some(ExtractRefusalKind::NoCheckpointInReach(
+                NoCheckpointReason::NoCheckpoint
+            )),
+            "{refused}"
+        );
+
+        let allowed = replay_for_extract(&reader, &block_ids, &trust, true).unwrap();
+        assert!(allowed.provisional);
+        assert!(allowed.files.is_empty(), "no patch ever created a file");
+        let _ = std::fs::remove_dir_all(layout.root());
+    }
+}
+
 /// `ReplaceBinary` must not accept a `new_blob_id` whose actual, stored kind is not binary -- a
 /// patch's own claim is not proof (the same reasoning the trust-rule test above applies to a
 /// forged snapshot, applied here to a forged operation instead). `apply.rs`'s shared replay

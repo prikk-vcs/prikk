@@ -144,6 +144,11 @@ fn prepare_extract_plan_refuses_case_colliding_paths() {
         message.contains("case-insensitive") || message.contains("collision"),
         "{message}"
     );
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::CaseCollision),
+        "{err}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -356,6 +361,11 @@ fn prepare_extract_plan_for_claim_refuses_a_claim_with_more_than_one_parent() {
         message.contains("does not yet support a claim about a merge block"),
         "{message}"
     );
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::ClaimHasSeveralParents { count: 2 }),
+        "{err}"
+    );
 }
 
 /// "The case-collision refusal matters most here" (the handoff's own words): a pending claim's own
@@ -422,5 +432,53 @@ fn prepare_extract_plan_for_claim_refuses_case_colliding_paths() {
     assert!(
         message.contains("case-insensitive") || message.contains("collision"),
         "{message}"
+    );
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::CaseCollision),
+        "{err}"
+    );
+}
+
+/// 0.54.0 step 3 Part 5d, item 4 (first bullet): an unknown claim id used to read `integrity
+/// error`; it is now `Precondition`, classified `claim-not-found` -- a caller precondition (the
+/// id was simply never written here), not stored damage.
+#[test]
+fn prepare_extract_plan_for_claim_refuses_an_unknown_claim_id_as_a_precondition() {
+    let (layout, _maintainer, _author, _genesis_block) =
+        admitted_repo_for_claim_fixtures("extract-claim-unknown-id");
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let unknown = ObjectId::from_bytes([0x99; 32]);
+    let err = prepare_extract_plan_for_claim(&layout, &reader, unknown, false).unwrap_err();
+    assert!(
+        matches!(err.error, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("does not exist"), "{err}");
+    assert_eq!(err.kind, Some(crate::ExtractRefusalKind::ClaimNotFound));
+}
+
+/// 0.54.0 step 3 Part 5d, item 4 (second bullet): a real object of another type (a `Block`) named
+/// by `--claim` used to let `PrikkError::ObjectTypeMismatch` bubble straight through
+/// `read_typed`'s own shared default; it is now caught at this one call site and reclassified to
+/// `Precondition`, `not-a-claim` -- without touching `read_typed` itself (`object_store.rs`'s own
+/// default implementation, shared by every other caller that still wants the generic mismatch).
+#[test]
+fn prepare_extract_plan_for_claim_refuses_a_block_id_as_not_a_claim() {
+    let (layout, _maintainer, _author, genesis_block) =
+        admitted_repo_for_claim_fixtures("extract-claim-not-a-claim");
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, genesis_block, false).unwrap_err();
+    assert!(
+        matches!(err.error, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::NotAClaim {
+            expected: "recognition-claim".to_string(),
+            actual: "block".to_string(),
+        }),
+        "{err}"
     );
 }

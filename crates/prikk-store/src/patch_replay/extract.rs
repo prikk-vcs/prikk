@@ -47,7 +47,10 @@ use std::collections::BTreeMap;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{NodeId, NodeKind, ObjectId, text_span_hash};
 
-use crate::anchor_trust::{Admission, AnchorSite, AnchorTrust, MAX_ANCHOR_DISTANCE};
+use crate::anchor_trust::{
+    Admission, AnchorSite, AnchorTrust, MAX_ANCHOR_DISTANCE, NotUsableReason,
+};
+use crate::extract_refusal::{ExtractError, ExtractRefusalKind, NoCheckpointReason};
 use crate::object_store::ObjectReader;
 use crate::snapshot::SnapshotManifest;
 use crate::state_root::StateRootContent;
@@ -104,19 +107,21 @@ pub(crate) struct ExtractReplayOutcome {
 ///
 /// # Errors
 ///
-/// Refuses (`Precondition`) past the distance bound without `allow_full_replay`; otherwise, the
-/// replay's own failures -- an unsupported operation, a missing object, or an integrity mismatch.
+/// Refuses (`Precondition`, `no-checkpoint-in-reach`) past the distance bound without
+/// `allow_full_replay`; otherwise, the replay's own failures -- an unsupported operation, a
+/// missing object, or an integrity mismatch (carried with no classification, `ExtractError::kind`
+/// is `None`).
 pub(crate) fn replay_for_extract(
     reader: &impl ObjectReader,
     block_ids: &[ObjectId],
     trust: &AnchorTrust,
     allow_full_replay: bool,
-) -> Result<ExtractReplayOutcome> {
+) -> std::result::Result<ExtractReplayOutcome, ExtractError> {
     let (anchor, provisional) =
         match search_admitted_anchor(reader, block_ids, trust, AnchorSite::Extract)? {
             AnchorSearch::Admitted { index, manifest } => (Some((index, manifest)), false),
-            AnchorSearch::GaveUp => {
-                refuse_past_the_bound_unless_allowed(block_ids.len(), allow_full_replay)?;
+            AnchorSearch::GaveUp { reason } => {
+                refuse_past_the_bound_unless_allowed(block_ids.len(), allow_full_replay, reason)?;
                 (None, true)
             }
         };
@@ -163,7 +168,12 @@ enum AnchorSearch {
         index: usize,
         manifest: SnapshotManifest,
     },
-    GaveUp,
+    /// 0.54.0 step 3 Part 5d: `reason` is `extract`'s own `no-checkpoint-in-reach` sub-classification,
+    /// computed across the whole walk regardless of why it ended (ran out of blocks, the distance
+    /// bound, or a `Signal`) -- see [`classify_no_checkpoint_reason`]. The caller decides whether this
+    /// is actually a refusal at all (`refuse_past_the_bound_unless_allowed` checks the *chain's* own
+    /// total length, not where the walk itself gave up).
+    GaveUp { reason: NoCheckpointReason },
 }
 
 /// [`super::anchor::find_anchor`]'s own decision (same walk, Block envelopes first, admission only
@@ -181,22 +191,68 @@ fn search_admitted_anchor(
     trust: &AnchorTrust,
     site: AnchorSite,
 ) -> Result<AnchorSearch> {
+    // 0.54.0 step 3 Part 5d: evidence gathered across the whole walk, over every candidate that
+    // carried a snapshot (`block.snapshot_blob_ref.is_some()`), regardless of how the walk itself
+    // ends -- `classify_no_checkpoint_reason`'s own priority order is checked once, after the walk,
+    // not in walk order.
+    let mut saw_snapshot_candidate = false;
+    let mut saw_signer_not_adopted = false;
     for (index, block_id) in block_ids.iter().enumerate().rev() {
         let block = read_block(reader, *block_id)?;
         if block.snapshot_blob_ref.is_none() {
             continue;
         }
+        saw_snapshot_candidate = true;
         let distance = block_ids.len() - 1 - index;
         match trust.admit(reader, *block_id, distance, site) {
             Admission::Usable(manifest) => return Ok(AnchorSearch::Admitted { index, manifest }),
-            Admission::NotUsable if distance > MAX_ANCHOR_DISTANCE => {
-                return Ok(AnchorSearch::GaveUp);
+            Admission::NotUsable(NotUsableReason::TooFar) => {
+                return Ok(AnchorSearch::GaveUp {
+                    reason: classify_no_checkpoint_reason(
+                        saw_snapshot_candidate,
+                        saw_signer_not_adopted,
+                    ),
+                });
             }
-            Admission::NotUsable => continue,
-            Admission::Signal(_finding) => return Ok(AnchorSearch::GaveUp),
+            Admission::NotUsable(NotUsableReason::SignerNotAdopted) => {
+                saw_signer_not_adopted = true;
+            }
+            Admission::NotUsable(
+                NotUsableReason::NotRecorded | NotUsableReason::OtherNotUsable,
+            ) => {}
+            Admission::Signal(_finding) => {
+                return Ok(AnchorSearch::GaveUp {
+                    reason: classify_no_checkpoint_reason(
+                        saw_snapshot_candidate,
+                        saw_signer_not_adopted,
+                    ),
+                });
+            }
         }
     }
-    Ok(AnchorSearch::GaveUp)
+    Ok(AnchorSearch::GaveUp {
+        reason: classify_no_checkpoint_reason(saw_snapshot_candidate, saw_signer_not_adopted),
+    })
+}
+
+/// `no-checkpoint-in-reach`'s own three-way reason, from what [`search_admitted_anchor`]'s own walk
+/// found (0.54.0 step 3 Part 5d): `signer-not-adopted` if a recorded checkpoint's signer was ever
+/// found untrusted anywhere in the walk (the most specific, actionable reason, so checked first
+/// regardless of where in the walk it occurred); else `not-recorded` if any block carried a
+/// snapshot at all (whether it was simply never recorded, or failed some other admission check --
+/// `NotUsableReason::OtherNotUsable`/a `Signal` fold into this same bucket, since no caller needs a
+/// fourth reason today); else `no-checkpoint`.
+fn classify_no_checkpoint_reason(
+    saw_snapshot_candidate: bool,
+    saw_signer_not_adopted: bool,
+) -> NoCheckpointReason {
+    if saw_signer_not_adopted {
+        NoCheckpointReason::SignerNotAdopted
+    } else if saw_snapshot_candidate {
+        NoCheckpointReason::NotRecorded
+    } else {
+        NoCheckpointReason::NoCheckpoint
+    }
 }
 
 /// The pre-walk's own bound check (0.54.0 step 3 Part 3b, factored out so the `--claim` path can
@@ -204,14 +260,22 @@ fn search_admitted_anchor(
 /// anywhere in it, refuse by name unless `allow_full_replay` is set -- the same refusal
 /// `replay_for_extract`'s own inline check already gave, now shared verbatim with
 /// `replay_for_extract_claim`'s own pre-walk over the claimed parent's chain.
-fn refuse_past_the_bound_unless_allowed(chain_len: usize, allow_full_replay: bool) -> Result<()> {
+fn refuse_past_the_bound_unless_allowed(
+    chain_len: usize,
+    allow_full_replay: bool,
+    reason: NoCheckpointReason,
+) -> std::result::Result<(), ExtractError> {
     if !allow_full_replay && chain_len > MAX_ANCHOR_DISTANCE + 1 {
-        return Err(PrikkError::Precondition(format!(
-            "no admitted snapshot within {MAX_ANCHOR_DISTANCE} blocks of this point; its own \
-             history reaches back {chain_len} blocks without one -- older or crafted history, per \
-             this repository's own checkpoint cadence; refusing before reading a single patch, to \
-             avoid an unbounded replay from genesis -- pass --allow-full-replay to read it anyway"
-        )));
+        return Err(ExtractError::classified(
+            ExtractRefusalKind::NoCheckpointInReach(reason),
+            PrikkError::Precondition(format!(
+                "no admitted snapshot within {MAX_ANCHOR_DISTANCE} blocks of this point; its own \
+                 history reaches back {chain_len} blocks without one -- older or crafted history, \
+                 per this repository's own checkpoint cadence; refusing before reading a single \
+                 patch, to avoid an unbounded replay from genesis -- pass --allow-full-replay to \
+                 read it anyway"
+            )),
+        ));
     }
     Ok(())
 }
@@ -616,7 +680,7 @@ pub(crate) fn replay_for_extract_claim(
     parent: Option<ObjectId>,
     patch_ids: &[ObjectId],
     allow_full_replay: bool,
-) -> Result<ExtractReplayOutcome> {
+) -> std::result::Result<ExtractReplayOutcome, ExtractError> {
     // 0.54.0 step 3 Part 3b (R1): ruling 2's own depth bound applies to the whole command, not only
     // the ref/block-id path -- a claim's declared parent with no admitted checkpoint within reach
     // must refuse the same way, before a single Patch or Blob is read. A root claim (`parent` is
@@ -624,11 +688,10 @@ pub(crate) fn replay_for_extract_claim(
     if let Some(parent_id) = parent {
         let chain = super::read::single_parent_chain(reader, parent_id)?;
         let trust = crate::anchor_trust::AnchorTrust::load(layout);
-        if matches!(
-            search_admitted_anchor(reader, &chain, &trust, AnchorSite::ExtractClaim)?,
-            AnchorSearch::GaveUp
-        ) {
-            refuse_past_the_bound_unless_allowed(chain.len(), allow_full_replay)?;
+        if let AnchorSearch::GaveUp { reason } =
+            search_admitted_anchor(reader, &chain, &trust, AnchorSite::ExtractClaim)?
+        {
+            refuse_past_the_bound_unless_allowed(chain.len(), allow_full_replay, reason)?;
         }
     }
 
@@ -640,10 +703,23 @@ pub(crate) fn replay_for_extract_claim(
         crate::block_state::StateAnchoring::Anchored(AnchorSite::ExtractClaim),
     )
     .map_err(|err| match err {
-        crate::block_state::CandidateStateDerivationError::Lineage(err) => err,
+        // 0.54.0 step 3 Part 5d: `derive_candidate`'s own `entries_from_state` already runs the
+        // identical `validate_no_path_collisions` check this function's own caller
+        // (`prepare_extract_plan_for_claim`) would otherwise run a second time on the same entries
+        // -- for a claim, this is where the collision is actually caught first, under the
+        // `Lineage` arm (never `Patch`: `entries_from_state`'s own call happens after patches are
+        // already applied, over the resulting state, not the patches themselves). Classified here,
+        // at this exact call site, rather than guessed from `PrikkError::InvalidName`'s own message
+        // text elsewhere: within this one arm, an `InvalidName` can only be this check (a malformed
+        // path would already have failed earlier, decoding the patch itself).
+        crate::block_state::CandidateStateDerivationError::Lineage(
+            err @ PrikkError::InvalidName(_),
+        ) => ExtractError::classified(ExtractRefusalKind::CaseCollision, err),
+        crate::block_state::CandidateStateDerivationError::Lineage(err) => err.into(),
         crate::block_state::CandidateStateDerivationError::Patch(err) => PrikkError::Integrity(
             format!("extract --claim refused: the claim's own patches do not apply cleanly to its declared parent's state ({err})"),
-        ),
+        )
+        .into(),
     })?;
 
     let mut files = Vec::with_capacity(derived.entries.len());
@@ -652,7 +728,8 @@ pub(crate) fn replay_for_extract_claim(
             return Err(PrikkError::UnsupportedObjectType(format!(
                 "claimed state holds symlink {}; extract supports the file-level subset only",
                 entry.path.as_str()
-            )));
+            ))
+            .into());
         };
         let content = match derived.text_cache.get(&entry.node_id) {
             Some(bytes) => ExtractContent::Resident(bytes.clone()),

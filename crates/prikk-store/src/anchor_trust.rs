@@ -109,14 +109,37 @@ impl AnchorSite {
     }
 }
 
+/// Finer-grained than a plain yes/no "not usable" answer (0.54.0 step 3 Part 5d): `extract`'s own
+/// `no-checkpoint-in-reach` reason classification needs to tell these apart across a whole
+/// backward walk over candidates (`patch_replay::extract::search_admitted_anchor`'s own job).
+/// Every other caller of [`AnchorTrust::admit`] still only cares about the yes/no distinction and
+/// keeps matching `Admission::NotUsable(_)`, ignoring the reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotUsableReason {
+    /// Farther back than [`MAX_ANCHOR_DISTANCE`] allows.
+    TooFar,
+    /// Not in the replay-verified record at all.
+    NotRecorded,
+    /// Recorded, but its signature does not verify against a key this repository has adopted
+    /// (untrusted, not invalid -- an invalid signature on a recorded block is
+    /// [`Admission::Signal`] instead).
+    SignerNotAdopted,
+    /// Recorded and signed by an adopted key, but something else keeps it from being usable: an
+    /// unreadable or wrong-type object, or a manifest `validate_snapshot_manifest` itself reports
+    /// as merely not usable (`Ok(None)`). Not damage (a [`Admission::Signal`] already covers that) --
+    /// just not an anchor, folded together since no caller needs these two told apart individually
+    /// today.
+    OtherNotUsable,
+}
+
 /// What the anchor-trust function answered for one block.
 #[derive(Debug)]
 pub(crate) enum Admission {
     /// All four conditions hold. The validated manifest, so the caller does not validate it a second time.
     Usable(SnapshotManifest),
     /// Not an anchor, and **silently**: the caller looks further back (within the distance bound) or runs the full
-    /// derivation.
-    NotUsable,
+    /// derivation. The reason, for a caller that needs to tell these apart (0.54.0 step 3 Part 5d).
+    NotUsable(NotUsableReason),
     /// A **recorded** anchor that fails validation or whose signature does not verify against an adopted key: an
     /// integrity signal. The caller names the finding and runs the full derivation; it does not look further back.
     Signal(String),
@@ -157,19 +180,19 @@ impl AnchorTrust {
     ) -> Admission {
         // 4. Near enough.
         if distance > MAX_ANCHOR_DISTANCE {
-            return Admission::NotUsable;
+            return Admission::NotUsable(NotUsableReason::TooFar);
         }
         // 1. In the record.
         if !self.verified.contains(&block_id) {
-            return Admission::NotUsable;
+            return Admission::NotUsable(NotUsableReason::NotRecorded);
         }
         // 2. Signed by an adopted maintainer key. An unreadable or non-Block object is simply not usable: the full
         //    derivation reads it too and reports what is wrong.
         let Ok(Some(envelope)) = reader.read_object(block_id) else {
-            return Admission::NotUsable;
+            return Admission::NotUsable(NotUsableReason::OtherNotUsable);
         };
         if envelope.object_type != prikk_object::ObjectType::Block {
-            return Admission::NotUsable;
+            return Admission::NotUsable(NotUsableReason::OtherNotUsable);
         }
         match verify_trusted_publication_envelope(&self.policy, &envelope) {
             Ok(_adopted_key_id) => {}
@@ -177,7 +200,7 @@ impl AnchorTrust {
                 return Admission::Signal(issue.message);
             }
             // Untrusted: no signature by a key this repository has adopted. Adoption is local, so this is not damage.
-            Err(_) => return Admission::NotUsable,
+            Err(_) => return Admission::NotUsable(NotUsableReason::SignerNotAdopted),
         }
         // 3. The snapshot passes the loader.
         let Ok(payload) = BlockPayload::decode_canonical(&envelope.canonical_payload) else {
@@ -188,7 +211,7 @@ impl AnchorTrust {
                 count_use(site);
                 Admission::Usable(manifest)
             }
-            Ok(None) => Admission::NotUsable,
+            Ok(None) => Admission::NotUsable(NotUsableReason::OtherNotUsable),
             Err(err) => Admission::Signal(err.to_string()),
         }
     }

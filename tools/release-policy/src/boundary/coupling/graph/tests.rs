@@ -160,7 +160,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // `prikk extract`'s own streamed replay): 164 -> 166.
     // 0.54.0 step 3 Part 5 added `received::remove`, `prikk received remove`'s own store-level
     // write sequence: 166 -> 167.
-    assert_eq!(modules.len(), 167, "modules: {modules:?}");
+    // 0.54.0 step 3 Part 5d added `extract_refusal`, `extract`'s own refusal classification shared
+    // by `extract` (upper) and `patch_replay::extract` (lower): 167 -> 168.
+    assert_eq!(modules.len(), 168, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

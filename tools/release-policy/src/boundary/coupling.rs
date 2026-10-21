@@ -121,7 +121,7 @@ const UPPER_LAYER: [&str; 29] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 37] = [
+const LOWER_LAYER: [&str; 38] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -170,6 +170,15 @@ const LOWER_LAYER: [&str; 37] = [
     // `worktree_status` so a report cannot contradict the commit it describes. It depends only on
     // `foundation`, `path`, `blob_access` and `rename_declaration`, and both callers sit above it.
     "declaration_resolution",
+    // 0.54.0 step 3 Part 5d: `extract`'s own refusal classification (`ExtractError`,
+    // `ExtractRefusalKind`, `NoCheckpointReason`), carried out of `PrikkError`'s message text so the
+    // CLI's `refusal-v1` document does not have to recover it from words. Depends only on
+    // `prikk_error`. Sits here, not in `extract` (upper), because `patch_replay::extract` (lower)
+    // must construct it too (the pre-walk's own `no-checkpoint-in-reach` classification happens
+    // inside the replay itself, not only at `extract`'s own upper-layer call site) -- the identical
+    // reason `anchor_trust` sits here rather than beside `merge`/`seal_from_accepted`, which only
+    // name its `AnchorSite`.
+    "extract_refusal",
     // RFC 156 §4: which carried signatures may join a stored object. Depends only on `author` and
     // `trust`; its callers, `bundle` and `patch_exchange`, sit above it.
     "signature_admission",

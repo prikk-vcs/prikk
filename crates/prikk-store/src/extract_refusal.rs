@@ -1,0 +1,124 @@
+//! `prikk extract`'s own refusal classification (0.54.0 step 3 Part 5d).
+//!
+//! `prikk-cli`'s own `refusal-v1` document (`crates/prikk-cli/src/extract.rs`) needs to tell apart
+//! several conditions that [`prepare_extract_plan`](crate::extract::prepare_extract_plan)/
+//! [`prepare_extract_plan_for_claim`](crate::extract::prepare_extract_plan_for_claim) can all raise
+//! as the identical [`prikk_error::PrikkError`] variant (most of them `Precondition`) -- the same
+//! problem `PrikkError::IncompletePublication` exists apart from `PrikkError::Precondition` to
+//! solve, rather than recovering the distinction later by matching the message's own words
+//! (`prikk-error/src/lib.rs`'s own doc: "an edit to the text could silently drop the
+//! classification"). [`ExtractError`] carries the classification out of this crate's own
+//! extract-building functions, computed at the exact point each condition is raised, never
+//! recovered afterward from text.
+//!
+//! **Confined to `extract`.** No other command's refusal is classified this way (yet) -- `extract`
+//! is this project's first machine-readable refusal document, designed as a precedent other
+//! commands adopt when next touched, not a retrofit onto every existing refusal today.
+//!
+//! **Deliberately not `#[non_exhaustive]`.** [`ExtractRefusalKind`] is new in this very release
+//! cycle (unreleased), has exactly the five members `prikk-cli`'s own classifying `match` needs,
+//! and growing it is this command's own `prikk-store` change to make alongside the match that
+//! reads it -- there is no cross-crate compatibility reason yet to force every reader to carry a
+//! wildcard arm, and the whole point of `refusal-v1`'s own "exhaustive by construction" design is
+//! that a `match` over the refusal ids has none.
+
+use prikk_error::PrikkError;
+
+/// Which of `no-checkpoint-in-reach`'s own three reasons applied (0.54.0 step 3 Part 5d): the
+/// first that applies, checked in priority order, across the whole admitted-anchor search within
+/// reach (`patch_replay::extract::search_admitted_anchor`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoCheckpointReason {
+    /// A recorded checkpoint was found within reach, but its signer is not a key this repository
+    /// has adopted -- the most specific, actionable reason: the remedy is to adopt the key.
+    SignerNotAdopted,
+    /// A block carrying a snapshot was found within reach, but none was ever recorded by
+    /// `verify`/`seal` (or one was recorded but failed some other admission check) -- the remedy
+    /// is to run `verify`.
+    NotRecorded,
+    /// No block within reach carried a snapshot at all -- the remedy is `--allow-full-replay`.
+    NoCheckpoint,
+}
+
+/// What kind of refusal one of `extract`'s own plan-building functions raised, carried alongside
+/// the ordinary [`PrikkError`] so a caller can classify it without reading its message. Four of
+/// `extract`'s eleven documented `refusal-v1` ids are classified here, at the exact point each is
+/// raised; the rest are either raised directly by the CLI itself (unambiguous at their own call
+/// site -- `over-max-bytes`, `over-max-files`, `destination-exists`, `temporary-sibling-exists`),
+/// come from the point resolver unchanged (`point-not-found`), or fall back to a classification of
+/// the underlying [`PrikkError`]'s own variant (`damaged-repository`, `io-failure`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractRefusalKind {
+    /// `claim-not-found`: no such claim.
+    ClaimNotFound,
+    /// `not-a-claim`: the id names another object type.
+    NotAClaim {
+        /// What was expected (`RecognitionClaim`).
+        expected: String,
+        /// What the stored object's own type actually is.
+        actual: String,
+    },
+    /// `claim-has-several-parents`: a merge claim.
+    ClaimHasSeveralParents {
+        /// How many parents the claim declared.
+        count: usize,
+    },
+    /// `case-collision`: two of the point's own resolved paths collide under ASCII case folding.
+    CaseCollision,
+    /// `no-checkpoint-in-reach`: the pre-walk bound, carrying its own `reason` sub-classification.
+    NoCheckpointInReach(NoCheckpointReason),
+}
+
+/// [`prepare_extract_plan`](crate::extract::prepare_extract_plan)/
+/// [`prepare_extract_plan_for_claim`](crate::extract::prepare_extract_plan_for_claim)'s own error:
+/// the ordinary [`PrikkError`] (`Display`'s text is exactly what stderr already printed before this
+/// round -- this type changes nothing about it), paired with a classification when the raise site
+/// already knows one. `kind: None` means "not specially classified here" -- the CLI's own fallback
+/// then classifies by `error`'s own `PrikkError` variant (`Io` -> `io-failure`, everything else
+/// that names a persisted-data problem -> `damaged-repository`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractError {
+    /// The refusal kind, when the raise site already knows it.
+    pub kind: Option<ExtractRefusalKind>,
+    /// The ordinary error.
+    pub error: PrikkError,
+}
+
+impl ExtractError {
+    /// Build a classified error: `error`'s own `Display` text is unchanged, `kind` is attached
+    /// alongside it.
+    pub(crate) fn classified(kind: ExtractRefusalKind, error: PrikkError) -> Self {
+        Self {
+            kind: Some(kind),
+            error,
+        }
+    }
+}
+
+impl std::fmt::Display for ExtractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl std::error::Error for ExtractError {}
+
+/// An error not otherwise classified here propagates with `kind: None` -- the ordinary case for
+/// every call this module's own functions make into the rest of this crate (`read_block`,
+/// `read_patch`, `decode_patch_operations`, ...), via `?`.
+impl From<PrikkError> for ExtractError {
+    fn from(error: PrikkError) -> Self {
+        Self { kind: None, error }
+    }
+}
+
+/// The inverse: a caller that only wants the ordinary error (a test's own `.to_string()`, or
+/// `?` into a function that still returns `prikk_error::Result`) gets exactly what it always did.
+impl From<ExtractError> for PrikkError {
+    fn from(value: ExtractError) -> Self {
+        value.error
+    }
+}
+
+#[cfg(test)]
+mod tests;

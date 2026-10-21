@@ -335,7 +335,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // and `patch_replay/extract/tests.rs` are both `cfg(test)`-invisible: 165 -> 167.
     // 0.54.0 step 3 Part 5 added `received/remove.rs`; its own `received/remove/tests.rs` is
     // `cfg(test)`-invisible: 167 -> 168.
-    assert_eq!(store.production_files, 168);
+    // 0.54.0 step 3 Part 5d added `extract_refusal.rs`; its own `extract_refusal/tests.rs` is
+    // `cfg(test)`-invisible: 168 -> 169.
+    assert_eq!(store.production_files, 169);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.
