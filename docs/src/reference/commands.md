@@ -218,24 +218,29 @@ shared, dominant cost every path pays: streaming the point's own largest file on
 [Current State](current-state.md) for the measured figures, both the planning-only comparison and the
 whole command. See [Reading a point](../guide/tree-and-cat.md).
 
-**`refusal-v1`: a machine-readable refusal document (0.54.0 step 3 Part 5d).** Under `--format json`,
-*every* refusal `extract` exits `1` for — never a usage error, exit `2`, which prints no document — writes
-exactly one JSON document to **stdout** (never stderr; stderr's own text and the exit code are entirely
-unchanged by this):
+**`refusal-v1`: a machine-readable refusal document.** Under `--format json`, *every* refusal `extract`
+exits `1` for — never a usage error, exit `2`, which prints no document — writes exactly one JSON document
+to **stdout** (never stderr; stderr's own text and the exit code are entirely unchanged by this). This is a
+structural guarantee at `extract`'s own command boundary, not merely a property each refusal happens to
+have today: a refusal reached by a path this document's own list does not yet name still gets a document,
+classified by a fallback, rather than exiting `1` under `--format json` with nothing on stdout.
 
 ```json
 {"schema_version": "refusal-v1", "command": "extract", "refusal": "<id>", "reason": "<id>|null", "message": "<the stderr text>"}
 ```
 
-`refusal` is one of eleven stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
+`refusal` is one of thirteen stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
 `destination-exists`, `temporary-sibling-exists`, `point-not-found`, `claim-not-found`, `not-a-claim`,
-`claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `damaged-repository`, `io-failure`.
-`reason` is set only for `no-checkpoint-in-reach`, naming which of three conditions the admitted-anchor
-search found in reach, the first that applies: `signer-not-adopted` (a recorded checkpoint whose signer
-this repository has not adopted — adopt the key), `not-recorded` (a checkpoint in reach, never recorded by
-`verify`/`seal` — run `verify`), or `no-checkpoint` (none at all — `--allow-full-replay`). Every other id
-carries `reason: null`. `message` is the identical text `CliError::message()` already puts on stderr — the
-JSON document never paraphrases it.
+`claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `not-a-repository`,
+`damaged-repository`, `io-failure`. `reason` is set only for `no-checkpoint-in-reach`, naming which of
+three conditions the admitted-anchor search found in reach — **one cause at a time**: the first blocker
+the search meets, not necessarily the only one. Fix it and run again; the next refusal names the next
+cause, if any. In priority order: `signer-not-adopted` (a recorded checkpoint whose signer this repository
+has not adopted — adopt the key), `not-recorded` (a checkpoint in reach, never recorded by `verify`/`seal`
+— run `verify`), or `no-checkpoint` (none at all — `--allow-full-replay`). Every other id carries
+`reason: null`. `message` is stderr's own text, without its leading `error: ` prefix — the generic framing
+applied to every command's own error, never part of the refusal's own text itself; the JSON document never
+paraphrases it.
 
 **This is this project's own, reusable form for a JSON refusal** — `refusal-v1` is `extract`'s own
 document today, but its shape (`schema_version`, `command`, `refusal`, `reason`, `message`) is designed as

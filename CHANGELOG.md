@@ -77,12 +77,17 @@
   *recognizes*; no command printed a claim's own parent before this round). Under `--format json`, every
   refusal that exits `1` (never a usage error, exit `2`, which prints no document) now also writes one
   `refusal-v1` JSON document to stdout — stderr's own text and every exit code are entirely unchanged —
-  naming one of eleven stable ids (`over-max-bytes`, `over-max-files`, `destination-exists`,
+  naming one of thirteen stable ids (`over-max-bytes`, `over-max-files`, `destination-exists`,
   `temporary-sibling-exists`, `point-not-found`, `claim-not-found`, `not-a-claim`,
-  `claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `damaged-repository`,
-  `io-failure`), exhaustive by construction (an enum with one variant per id, matched with no wildcard, so
-  a twelfth refusal cannot go unclassified). `no-checkpoint-in-reach` alone also carries a `reason`,
-  naming which of three conditions the admitted-anchor search found in reach — `signer-not-adopted`, a
+  `claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `not-a-repository`,
+  `damaged-repository`, `io-failure`), exhaustive by construction (an enum with one variant per id,
+  matched with no wildcard, so a fourteenth refusal cannot go unclassified) — **Part 5e** adds
+  `not-a-repository` and a structural catch at `extract`'s own command boundary, so a refusal reached by a
+  path not yet classified at its own raise site still gets a document instead of silently printing nothing;
+  an unreadable current-branch pointer falls through this catch as `damaged-repository`.
+  `no-checkpoint-in-reach` alone also carries a `reason` — one cause at a time: the first blocker the
+  admitted-anchor search meets in reach, not necessarily the only one; fix it and run again, and the next
+  refusal (if any) names the next cause. In priority order: `signer-not-adopted`, a
   recorded checkpoint whose signer this repository has not adopted; `not-recorded`, a checkpoint in reach
   never recorded by `verify`/`seal`; or `no-checkpoint`, none at all — new plumbing through
   `AnchorTrust::admit`'s own `NotUsable` answer and the pre-walk's own search, not merely a relabeling.
