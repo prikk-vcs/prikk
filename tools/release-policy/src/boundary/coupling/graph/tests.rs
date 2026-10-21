@@ -158,7 +158,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // store's container decode now runs through (RFC 155 §9.4): 163 -> 164.
     // 0.54.0 step 3 Part 2 added `extract` (upper layer) and `patch_replay::extract` (lower,
     // `prikk extract`'s own streamed replay): 164 -> 166.
-    assert_eq!(modules.len(), 166, "modules: {modules:?}");
+    // 0.54.0 step 3 Part 5 added `received::remove`, `prikk received remove`'s own store-level
+    // write sequence: 166 -> 167.
+    assert_eq!(modules.len(), 167, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

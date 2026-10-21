@@ -145,7 +145,7 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
         id: "received-remove-recovery-save",
         status: ScopeStatus::Intentional,
         reason: "`received remove` (0.54.0 step 3 Part 5, B2a) reads the whole target slot and generation log once, on                  every real run, not only a deduced one, to save both to the recovery log before overwriting them -- it                  discards a pointer a read path depends on, unlike ordinary compaction, so every run must be restorable,                  and the saved copy is the way back, so it must be the whole file, not a range",
-        reference: "0.54.0-step-2-B-design-round-2-report.md question 1, step 4",
+        reference: "RFC 168's own restore contract (0.54.0-step-2-B-design-round-2-report.md question 1, step 4)",
     },
     DeclaredScope {
         id: "archive-import-cancel-save",
